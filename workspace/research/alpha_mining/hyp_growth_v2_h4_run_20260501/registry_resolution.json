@@ -1,0 +1,62 @@
+{
+  "formal_hits": 3,
+  "candidate_hits": 0,
+  "new_objects_created": 0,
+  "unresolved_objects": [],
+  "resolved_objects": [
+    {
+      "requested": {
+        "object_type": "factor",
+        "object_name": "grow_opprofit_qoq",
+        "object_id": "",
+        "version": null,
+        "definition_hash": "",
+        "payload": {},
+        "allow_new": false
+      },
+      "status": "resolved",
+      "source_layer": "formal",
+      "object_type": "factor",
+      "canonical_id": "grow_opprofit_qoq",
+      "version": 1,
+      "definition_hash": "4be320cfbf4550422e3b1dbb56419aa615a47b58d10990458f2b05eea87ba6c3",
+      "can_publish": false
+    },
+    {
+      "requested": {
+        "object_type": "factor",
+        "object_name": "grow_roe_yoy",
+        "object_id": "",
+        "version": null,
+        "definition_hash": "",
+        "payload": {},
+        "allow_new": false
+      },
+      "status": "resolved",
+      "source_layer": "formal",
+      "object_type": "factor",
+      "canonical_id": "grow_roe_yoy",
+      "version": 1,
+      "definition_hash": "0504b97ac1af0ec7943fb62bde5b76023f6f67abfec268423cf44f993260dd74",
+      "can_publish": false
+    },
+    {
+      "requested": {
+        "object_type": "factor",
+        "object_name": "val_bp_industry_rel",
+        "object_id": "",
+        "version": null,
+        "definition_hash": "",
+        "payload": {},
+        "allow_new": false
+      },
+      "status": "resolved",
+      "source_layer": "formal",
+      "object_type": "factor",
+      "canonical_id": "val_bp_industry_rel",
+      "version": 1,
+      "definition_hash": "2c1054f9611636cfa9cd9a5c53e5dd66834e519e63ad3059c8c62dff5271ede2",
+      "can_publish": false
+    }
+  ]
+}

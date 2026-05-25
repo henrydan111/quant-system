@@ -1,0 +1,153 @@
+{
+  "_schema_id": "growth_v2_family_outcome_v1",
+  "_purpose": "Pre-registered family outcome record — companion to family_commitment_20260501.json. Records the IS verdict for all 5 variants and the family-level decision per the pre-registered protocol.",
+  "family_id": "growth_v2_family_20260501",
+  "completed_at": "2026-05-02",
+  "family_verdict": "ALL_IS_REJECTED — escalate to Phase 5",
+  "summary": {
+    "variants_authored": 5,
+    "variants_evaluated": 4,
+    "variants_dnf": 1,
+    "variants_eligible_for_oos": 0,
+    "variants_oos_claimed": 0,
+    "all_seals_remain_untouched": true
+  },
+  "variant_outcomes": [
+    {
+      "variant_id": "h1",
+      "design_hash": "8424fcb1a8468008cb086c7f8c8e4ceeca68d96c4bb9eb9673e04dbd633576e2",
+      "is_metrics": {
+        "rank_ic": 0.0480,
+        "rank_icir": 0.5328,
+        "deflated_sharpe": 1.0,
+        "cost_adjusted_sharpe": 0.7008,
+        "annual_turnover": 8.6440,
+        "max_drawdown": 0.5228,
+        "regime_pass_count": 6
+      },
+      "is_gate_decision": "rejected",
+      "floor_failures": ["max_drawdown", "max_annual_turnover"],
+      "oos_eligible": false,
+      "oos_claimed": false,
+      "seal_status": "untouched"
+    },
+    {
+      "variant_id": "h2",
+      "design_hash": "a737b8c9e58f8e7adb6b6a771f5459e2416508fb89e67969dd1d16ab1b16b6f1",
+      "is_metrics": {
+        "rank_ic": 0.0707,
+        "rank_icir": 0.5501,
+        "deflated_sharpe": 1.0,
+        "cost_adjusted_sharpe": 0.7743,
+        "annual_turnover": 9.9596,
+        "max_drawdown": 0.4734,
+        "regime_pass_count": 7
+      },
+      "is_gate_decision": "rejected",
+      "floor_failures": ["max_drawdown", "max_annual_turnover", "effect_size_must_be_in_ci"],
+      "oos_eligible": false,
+      "oos_claimed": false,
+      "seal_status": "untouched"
+    },
+    {
+      "variant_id": "h3",
+      "design_hash": "5bafe1a86cd54950ae8dae77354dfe57e72d1ba0f10686519739d57fc2ff68da",
+      "is_metrics": null,
+      "is_gate_decision": "DNF",
+      "dnf_reason": "Registry/catalog mismatch: comp_defensive and flow_net_inflow_20d are present in factor_registry/factor_master.parquet (is_current=true) but factor_library/catalog.py does not contain Qlib expressions for them. Resolver approved the components; dataset_build hard-failed at handle_validation_dataset_build with KeyError. The pre-flight registry check verified registry membership but did NOT verify catalog wiring — this is the gap to close in future pre-flights.",
+      "floor_failures": null,
+      "oos_eligible": false,
+      "oos_claimed": false,
+      "seal_status": "untouched"
+    },
+    {
+      "variant_id": "h4",
+      "design_hash": "f39c015a659cf215dee53608085a0595b357785f5c234018d3ae89fdd9f8d3ff",
+      "is_metrics": {
+        "rank_ic": 0.0480,
+        "rank_icir": 0.5328,
+        "deflated_sharpe": 1.0,
+        "cost_adjusted_sharpe": 0.6486,
+        "annual_turnover": 9.9397,
+        "max_drawdown": 0.5434,
+        "regime_pass_count": 6
+      },
+      "is_gate_decision": "rejected",
+      "floor_failures": ["max_drawdown", "max_annual_turnover"],
+      "oos_eligible": false,
+      "oos_claimed": false,
+      "seal_status": "untouched"
+    },
+    {
+      "variant_id": "h5",
+      "design_hash": "cb918ef2a5b8b75ebd32c43d65e6c58b40c993730450289cfcaa86dd7535478f",
+      "is_metrics": {
+        "rank_ic": 0.0788,
+        "rank_icir": 0.4917,
+        "deflated_sharpe": 1.0,
+        "cost_adjusted_sharpe": 0.6488,
+        "annual_turnover": 7.5038,
+        "max_drawdown": 0.4591,
+        "regime_pass_count": 7
+      },
+      "is_gate_decision": "rejected",
+      "floor_failures": ["max_drawdown", "max_annual_turnover", "effect_size_must_be_in_ci"],
+      "oos_eligible": false,
+      "oos_claimed": false,
+      "seal_status": "untouched"
+    }
+  ],
+  "ablation_findings": {
+    "h2_minus_h1_defensive_component_isolated": {
+      "delta_rank_icir": 0.0173,
+      "delta_max_drawdown": -0.0494,
+      "delta_annual_turnover": 1.3156,
+      "interpretation": "risk_vol_60d at w=0.7 lower-is-better PRESERVED signal (rank_icir grew, contradicting prior fear of growth-vs-low-vol cancellation); REDUCED DD by 9.4%; INCREASED turnover by 1.32x because 60d rolling vol updates daily and churns at the cutoff."
+    },
+    "h4_minus_h1_universe_filter_isolated": {
+      "delta_rank_icir": 0.0,
+      "delta_max_drawdown": 0.0207,
+      "delta_annual_turnover": 1.2957,
+      "interpretation": "Universe filter ret250_pctile_max=0.95 + liquidity_floor 20M->50M had ZERO effect on cross-sectional rank_icir (computed before filtering, per Layer 1 of four-layer pipeline) and ACTIVELY HURT both DD (+0.021) and turnover (+1.30). Removing top-5% trailing winners removed names that had already proved to ride the GARP signal smoothly, leaving the portfolio holding higher-vol mid-caps."
+    },
+    "h5_minus_h2_universe_plus_zscore_on_h2_components": {
+      "delta_rank_icir": -0.0584,
+      "delta_max_drawdown": -0.0143,
+      "delta_annual_turnover": -2.4558,
+      "interpretation": "Stacking the H4 universe filter and zscore composite onto H2 components dropped rank_icir by 10.6% (zscore overweighted low-vol relative to growth) and dropped DD only marginally (-3%, sub-additive with H2's defensive component because both target overlapping high-vol tails). DROPPED turnover by 2.46x — the only family member to push turnover under 8x. zscore's smoother continuous score caused FEWER threshold-crossings than rank_weighted, contrary to my pre-registered prior."
+    },
+    "structural_finding": "All 4 evaluable variants fail the 0.32 max_drawdown floor and the 3.5x annual_turnover floor. The signal side is consistently strong (DSR=1.0, rank_icir 0.49-0.55, rank_ic 0.048-0.079 vs baseline 0.038). The structural deficiency is on the risk/cost side: long-only equal-weight TopK at any feasible (topk, rebalance, composite, universe) combination within v1 hypothesis_validation knobs cannot deliver investment-grade DD or turnover for this growth signal. Defensive ballast (H2) and stacking (H5) reduced DD by 5-10% relative to frame-only (H1) — meaningful but not enough."
+  },
+  "phase_5_escalation_triggered": true,
+  "phase_5_recommendation": {
+    "path_a_strategy_improvement_factor_mix_discovery": {
+      "engineering_cost": "~0 hours (built-in profile)",
+      "expected_value": "low — strategy_improvement does factor-mix discovery within FAMILY_CAPS, but the family's DD failure was structural (long-only concentration) rather than factor-mix; auto-search across factor mixes is unlikely to clear 0.32 DD floor. Worth running as a cheap sanity check.",
+      "next_action": "Optional"
+    },
+    "path_b_custom_portfolio_overlay": {
+      "engineering_cost": "~2-3 days",
+      "expected_value": "medium — vol-targeting (e.g., 12% annualized) + per-sector caps (e.g., 25%) + position-band rebalance triggers should reduce DD by ~30-40% relative to H5's 0.459 (toward 0.27-0.30 range). Bypasses orchestrator's seal-aware path; requires manual sealed-OOS reproduction.",
+      "next_action": "Recommended next step"
+    },
+    "path_c_validation_v2_schema_extension": {
+      "engineering_cost": "~1 week",
+      "expected_value": "high — extending PortfolioSide to include market_neutral and adding score_proportional weighting addresses BOTH DD and turnover structurally. But scope is large and requires its own plan.",
+      "next_action": "Defer to separate plan after Path B"
+    }
+  },
+  "h3_remediation": {
+    "issue": "Registry/catalog mismatch: comp_defensive, flow_net_inflow_20d in factor_master.parquet but missing from factor_library/catalog.py",
+    "options": [
+      "Add catalog entries with PIT-safe Qlib expressions (must satisfy CLAUDE.md §3 — every $field wrapped in Ref())",
+      "Mark these factors as deprecated in the registry until catalog is wired",
+      "Tighten pre-flight check to verify catalog membership AND registry membership"
+    ],
+    "next_action": "Tighten pre-flight check. Decide whether comp_defensive / flow_net_inflow_20d are worth catalog-wiring effort based on Phase 5 outcomes — if Path B succeeds, these may not be needed."
+  },
+  "documentation_obligations_remaining": [
+    "Add update note to project_state.md: growth-strategy v2 family rejected, all seals preserved, Phase 5 Path B recommended",
+    "Note registry/catalog gap as a system finding worth surfacing to CLAUDE.md or scripts/run_daily_qa.py",
+    "Author Phase 5 Path B plan as a separate document"
+  ]
+}

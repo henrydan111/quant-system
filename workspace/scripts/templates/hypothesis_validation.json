@@ -1,0 +1,114 @@
+{
+  "hypothesis": {
+    "_template_note": "jolly-seeking-lollipop Gate F. Starter template for the hypothesis_validation profile. Replace example values then register with: hypothesis_cli.py register --file <path> --registered-by <name> --profile-id hypothesis_validation",
+    "hypothesis_id": "hyp_YYYYMMDD_NNN",
+    "thesis_statement": "Plain-language claim being tested.",
+    "mechanism": "Why the signal exists.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "",
+      "title": "",
+      "authors": [],
+      "url": "",
+      "publication_date": "",
+      "publisher": ""
+    },
+    "factor_refs": [
+      {"object_type": "factor", "object_name": "grow_opprofit_qoq"},
+      {"object_type": "factor", "object_name": "grow_roe_yoy"},
+      {"object_type": "factor", "object_name": "val_bp_industry_rel"}
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2025-12-31",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "10d",
+    "neutralization": ["size", "industry"],
+    "expected_sign": 1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": 0.04,
+      "ci_low": 0.025,
+      "ci_high": 0.06,
+      "horizon_days": 10
+    },
+    "expected_decay_horizon_days": 10,
+    "success_criteria": {
+      "min_rank_icir": 0.030,
+      "min_deflated_sharpe": 0.65,
+      "min_cost_adjusted_sharpe": 0.45,
+      "max_drawdown": 0.32,
+      "max_annual_turnover": 3.5,
+      "min_monotonicity_pvalue": 0.10,
+      "max_correlation_to_approved": 0.80,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "...",
+      "weakest_assumption": "...",
+      "what_would_falsify_this": "...",
+      "priors_on_cost_sensitivity": "..."
+    },
+    "pre_registered_at": "",
+    "registered_by": "",
+    "prescription": {
+      "_note": "PrescribedRecipe (jolly-seeking-lollipop Gate A). The hypothesis_validation profile runs this recipe verbatim through IS+gate+OOS+publish — no auto-search.",
+      "universe": {
+        "kind": "broad",
+        "broad_filters": {
+          "candidate_id": "growth_garp_broad",
+          "membership_source": "all_market",
+          "board_policy": "mainboard",
+          "st_mode": "exclude",
+          "min_listing_days": 250,
+          "market_cap_min": 3000000000,
+          "market_cap_max": null,
+          "price_cap": null,
+          "liquidity_floor": 20000000,
+          "revenue_floor": null,
+          "northbound_required": false,
+          "profitability_field": "n_income_attr_p",
+          "profitability_positive": true,
+          "ret250_pctile_max": null,
+          "special_filters": []
+        }
+      },
+      "components": [
+        {"factor_name": "grow_opprofit_qoq", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "grow_roe_yoy", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "val_bp_industry_rel", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"}
+      ],
+      "composite_kind": "rank_weighted",
+      "topk": 50,
+      "rebalance_days": 10,
+      "neutralization": ["size", "industry"],
+      "portfolio": {
+        "weighting_rule": "equal",
+        "side": "long_only",
+        "target_gross_exposure": 1.0,
+        "max_position_weight": 0.025,
+        "score_to_weight": "topk_equal"
+      },
+      "cost_model": {
+        "slippage_bps": 10.0,
+        "stamp_tax": true,
+        "half_spread_bps": 0.0,
+        "use_exchange_defaults": false
+      },
+      "allow_candidate_components": false
+    }
+  }
+}

@@ -1,0 +1,36 @@
+# e:\量化系统\config.yaml
+# 核心系统配置
+
+system:
+  mode: "simulation" # 'simulation' (仿真回测) or 'live' (实盘)
+  timezone: "Asia/Shanghai"
+  log_level: "INFO"
+
+data:
+  provider: "tushare_pro"
+  tushare_token: "${TUSHARE_TOKEN}"  # Loaded from .env file — do NOT hardcode real tokens here
+  start_date: "2010-01-01"
+
+storage:
+  type: "local_parquet"          # Raw data stored as hierarchical Parquet files
+  data_root: "./data"             # Root directory for all raw Parquet data
+  qlib_data_dir: "./data/qlib_data"  # Qlib .bin binary backend directory
+  
+# redis:                          # (Optional, reserved for future live-trading cache)
+#   host: "localhost"
+#   port: 6379
+#   db: 0
+
+mlops:
+  mlflow_uri: "http://localhost:5000"
+  experiment_name: "alpha_research_v1"
+
+broker:
+  name: "xtp"  # 实盘接口名称占位 (例如 XTP, CTP, 华泰等)
+  account_id: ""
+  token: ""
+
+risk:
+  max_drawdown_limit: 0.15 # 组合最大回撤限制 15%
+  max_leverage: 1.5        # 最大杠杆
+  single_stock_max_weight: 0.05 # 单日单只个股最大权重 5%

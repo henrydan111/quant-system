@@ -1,0 +1,150 @@
+# =============================================================================
+# Virtual environments
+# =============================================================================
+venv/
+.venv/
+env/
+
+# =============================================================================
+# Secrets
+# =============================================================================
+.env
+*.token
+*.pem
+*.key
+
+# =============================================================================
+# Python build / cache artifacts
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+build/
+dist/
+.eggs/
+
+# =============================================================================
+# data/ — raw and derived datasets
+# The repo documents the data system but does NOT ship the data itself.
+# The whitelist below preserves curated documentation files.
+# =============================================================================
+data/*
+!data/README.md
+!data/data_dictionary.md
+!data/data_tracker.md
+
+# Keep registry directories so READMEs survive, but exclude all data files
+!data/factor_registry/
+data/factor_registry/*
+!data/factor_registry/README.md
+
+!data/candidate_registry/
+data/candidate_registry/*
+!data/candidate_registry/README.md
+
+!data/signal_registry/
+data/signal_registry/*
+!data/signal_registry/README.md
+
+!data/model_registry/
+data/model_registry/*
+!data/model_registry/README.md
+
+!data/strategy_registry/
+data/strategy_registry/*
+!data/strategy_registry/README.md
+
+# External JoinQuant PIT cache — keep README only
+!data/external/
+data/external/*
+!data/external/jq_pit_cache/
+data/external/jq_pit_cache/*
+!data/external/jq_pit_cache/README.md
+
+# Qlib provider — keep instruments README only (universe-sidecar docs)
+!data/qlib_data/
+data/qlib_data/*
+!data/qlib_data/instruments/
+data/qlib_data/instruments/*
+!data/qlib_data/instruments/README.md
+
+# Block all registry backup snapshots
+data/*.bak_*/
+data/*_backup*/
+
+# =============================================================================
+# MLflow / experiment tracking
+# =============================================================================
+mlruns/
+workspace/mlruns/
+.mlflow/
+
+# =============================================================================
+# Logs
+# =============================================================================
+logs/
+*.log
+*.log.*
+
+# =============================================================================
+# workspace/ — research scratch space
+# Keep structure + scripts + configs; exclude generated artifacts.
+# =============================================================================
+workspace/outputs/
+workspace/research/**/outputs/
+workspace/research/**/cache/
+workspace/research/**/runs/
+workspace/research/**/*.parquet
+workspace/research/**/*.csv
+workspace/research/**/*.html
+workspace/research/**/*.pkl
+workspace/research/**/*.png
+workspace/research/**/*.jpg
+workspace/research/**/.ipynb_checkpoints/
+
+# =============================================================================
+# Backtest result archives (Chinese-named directories)
+# =============================================================================
+果仁回测明细/
+聚宽回测明细/
+Factor Catalog/
+
+# =============================================================================
+# Knowledge/ — keep markdown memos; exclude bulky CSV/parquet artifacts
+# =============================================================================
+Knowledge/聚宽回测数据/
+Knowledge/zxz_399101_pit_membership_tuesdays.csv
+Knowledge/**/*.parquet
+Knowledge/**/*.csv
+Knowledge/**/*.xlsx
+Knowledge/**/*.pkl
+
+# =============================================================================
+# Top-level transients
+# =============================================================================
+debug.txt
+stderr.txt
+stdout.txt
+*.tmp
+*.bak
+
+# =============================================================================
+# IDE / editor
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# OS / scratch
+# =============================================================================
+*.orig
+*.rej

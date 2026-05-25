@@ -1,0 +1,55 @@
+{
+  "_schema_id": "growth_v2_registration_receipt_v1",
+  "_purpose": "Audit trail of the 5-variant family registration. Captures the design_hash for each hypothesis at registration time. Companion to hyp_growth_v2_family_commitment_20260501.json.",
+  "family_id": "growth_v2_family_20260501",
+  "registered_at": "2026-05-01",
+  "registered_by": "henry",
+  "profile_id": "hypothesis_validation",
+  "backup_taken": {
+    "factor_registry": "data/factor_registry.bak_20260501",
+    "holdout_seals": "data/holdout_seals.bak_20260501"
+  },
+  "registrations": [
+    {
+      "variant_id": "h1",
+      "hypothesis_id": "hyp_growth_v2_h1_20260501",
+      "design_hash": "8424fcb1a8468008cb086c7f8c8e4ceeca68d96c4bb9eb9673e04dbd633576e2",
+      "status": "pre_registered",
+      "seal_verified": true,
+      "expect_claims": 0
+    },
+    {
+      "variant_id": "h2",
+      "hypothesis_id": "hyp_growth_v2_h2_20260501",
+      "design_hash": "a737b8c9e58f8e7adb6b6a771f5459e2416508fb89e67969dd1d16ab1b16b6f1",
+      "status": "pre_registered",
+      "seal_verified": true,
+      "expect_claims": 0
+    },
+    {
+      "variant_id": "h3",
+      "hypothesis_id": "hyp_growth_v2_h3_20260501",
+      "design_hash": "5bafe1a86cd54950ae8dae77354dfe57e72d1ba0f10686519739d57fc2ff68da",
+      "status": "pre_registered",
+      "seal_verified": true,
+      "expect_claims": 0
+    },
+    {
+      "variant_id": "h4",
+      "hypothesis_id": "hyp_growth_v2_h4_20260501",
+      "design_hash": "f39c015a659cf215dee53608085a0595b357785f5c234018d3ae89fdd9f8d3ff",
+      "status": "pre_registered",
+      "seal_verified": true,
+      "expect_claims": 0
+    },
+    {
+      "variant_id": "h5",
+      "hypothesis_id": "hyp_growth_v2_h5_20260501",
+      "design_hash": "cb918ef2a5b8b75ebd32c43d65e6c58b40c993730450289cfcaa86dd7535478f",
+      "status": "pre_registered",
+      "seal_verified": true,
+      "expect_claims": 0
+    }
+  ],
+  "next_step": "Phase 4 step 4: run IS legs in committed order h1 -> h4 -> h2 -> h3 -> h5 via research_orchestrator_cli.py run --request-file <variant>.json. Each run pauses at the IS gate (gate_concern_scoring -> gate_review) for variant-specific concern scoring."
+}

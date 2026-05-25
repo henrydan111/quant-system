@@ -1,0 +1,131 @@
+{
+  "profile_id": "hypothesis_validation",
+  "mode": "formal",
+  "consumes": [],
+  "produces": [],
+  "requested_capabilities": [],
+  "inputs": {
+    "output_dir": "E:\\量化系统\\workspace\\research\\alpha_mining\\hyp_growth_v2_h2_run_20260501"
+  },
+  "run_context": {
+    "registry_root": "E:\\量化系统\\data",
+    "candidate_registry_dir": "E:\\量化系统\\data\\candidate_registry",
+    "signal_registry_dir": "E:\\量化系统\\data\\signal_registry",
+    "hypothesis_registry_dir": "E:\\量化系统\\data\\hypothesis_registry",
+    "holdout_seal_dir": "E:\\量化系统\\data\\holdout_seals"
+  },
+  "hypothesis": {
+    "_variant_note": "v2 family member 2 of 5 (H2: defensive ballast). Adds risk_vol_60d (lower-is-better, w=0.7) to the 3-leg GARP recipe to shrink max_drawdown. Frame is moderate (TopK=100, 20d rebalance) — between H1 stretch and the rejected baseline.",
+    "hypothesis_id": "hyp_growth_v2_h2_20260501",
+    "thesis_statement": "Pairing the 3-leg GARP composite with a low-volatility leg (risk_vol_60d, lower_is_better, weight 0.7) reduces max_drawdown below 32% while preserving rank_icir>=0.20 and meeting the 3.5x annual_turnover floor at TopK=100/rebalance=20d.",
+    "mechanism": "The low-vol anomaly is the cheapest known DD-reduction tool in long-only A-share research (B-grade screening: rank_icir=-0.31 monotonic on risk_vol_60d). Adding it as a lower-is-better leg pushes the composite toward names with lower trailing 60-day return volatility, which historically have shallower drawdowns in 2018Q4-style growth-pullback regimes. Frame moves to 20d cadence + TopK=100 to also pull turnover under floor.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "growth_v2_family_20260501",
+      "title": "Growth-strategy v2 variant family — H2 defensive ballast",
+      "authors": ["Claude"],
+      "url": "",
+      "publication_date": "2026-05-01",
+      "publisher": "internal"
+    },
+    "factor_refs": [
+      {"object_type": "factor", "object_name": "grow_opprofit_qoq"},
+      {"object_type": "factor", "object_name": "grow_roe_yoy"},
+      {"object_type": "factor", "object_name": "val_bp_industry_rel"},
+      {"object_type": "factor", "object_name": "risk_vol_60d"}
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2025-12-31",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "20d",
+    "neutralization": ["size", "industry"],
+    "expected_sign": 1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": 0.030,
+      "ci_low": 0.018,
+      "ci_high": 0.050,
+      "horizon_days": 20
+    },
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.030,
+      "min_deflated_sharpe": 0.65,
+      "min_cost_adjusted_sharpe": 0.45,
+      "max_drawdown": 0.32,
+      "max_annual_turnover": 3.5,
+      "min_monotonicity_pvalue": 0.10,
+      "max_correlation_to_approved": 0.80,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "High-growth A-share names are typically high-volatility (small/mid-cap with earnings surprise sensitivity). risk_vol_60d as a lower-is-better leg may inversely correlate with grow_opprofit_qoq and grow_roe_yoy at the cross-sectional rank level, neutralizing the composite. Symptom: rank_icir collapses from prior 0.466 toward 0.10-0.20. Still passes the 0.030 floor, but signal degradation may cancel the DD benefit.",
+      "weakest_assumption": "weight=0.7 on risk_vol_60d is heuristic. Too low: defensive effect is washed out by GARP rank weight (3.0 total). Too high: signal degradation dominates. Cannot grid-search inside hypothesis_validation; this is a one-shot frozen weight commitment.",
+      "what_would_falsify_this": "IS gate rejection on (max_drawdown > 0.32) means low-vol pairing is insufficient; H3's multi-component approach or H5's universe-filter combo are required. IS gate rejection on (rank_icir < 0.030) means the low-vol leg is destructive at this weight and needs to be removed or down-weighted.",
+      "priors_on_cost_sensitivity": "20d rebalance at TopK=100 should produce ~3-5x turnover similar to H1; cost drag ~60-100 bps. The defensive leg may slightly increase turnover if vol regimes shift quarterly more than fundamentals do."
+    },
+    "pre_registered_at": "",
+    "registered_by": "",
+    "prescription": {
+      "_note": "v2 H2 defensive ballast: GARP x 3 (w=1) + risk_vol_60d (w=0.7, lower_is_better). TopK=100, rebalance=20d, max_pos=0.015 (feasibility: 0.015 * 100 = 1.5 >= 1.0).",
+      "universe": {
+        "kind": "broad",
+        "broad_filters": {
+          "candidate_id": "growth_garp_broad",
+          "membership_source": "all_market",
+          "board_policy": "mainboard",
+          "st_mode": "exclude",
+          "min_listing_days": 250,
+          "market_cap_min": 3000000000,
+          "market_cap_max": null,
+          "price_cap": null,
+          "liquidity_floor": 20000000,
+          "revenue_floor": null,
+          "northbound_required": false,
+          "profitability_field": "n_income_attr_p",
+          "profitability_positive": true,
+          "ret250_pctile_max": null,
+          "special_filters": []
+        }
+      },
+      "components": [
+        {"factor_name": "grow_opprofit_qoq", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "grow_roe_yoy", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "val_bp_industry_rel", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "risk_vol_60d", "weight": 0.7, "kind": "raw", "direction": "lower_is_better"}
+      ],
+      "composite_kind": "rank_weighted",
+      "topk": 100,
+      "rebalance_days": 20,
+      "neutralization": ["size", "industry"],
+      "portfolio": {
+        "weighting_rule": "equal",
+        "side": "long_only",
+        "target_gross_exposure": 1.0,
+        "max_position_weight": 0.015,
+        "score_to_weight": "topk_equal"
+      },
+      "cost_model": {
+        "slippage_bps": 10.0,
+        "stamp_tax": true,
+        "half_spread_bps": 0.0,
+        "use_exchange_defaults": false
+      },
+      "allow_candidate_components": false
+    }
+  }
+}

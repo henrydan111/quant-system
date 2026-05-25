@@ -1,0 +1,41 @@
+{
+  "_schema_id": "gate_concern_scores_v1",
+  "scores": [
+    {
+      "concern_id": "most_likely_failure_mode",
+      "concern_text": "OOS Sharpe drops below 1.0 due to (a) 2014-2015 microcap windfall absence from sealed OOS — the JoinQuant +234,625% was dominated by this one regime; (b) realistic 10bps slippage drag costs ~16% annual at 11.6x turnover; (c) shell-value decay post 国九条 enforcement reducing the structural size premium (Liu, Stambaugh & Yuan 2019, JFE).",
+      "keyed_to_rule_id": "min_deflated_sharpe",
+      "measured_evidence_against_concern": "Concern PARTIALLY CONFIRMED in IS already, before reaching OOS. Raw IS Sharpe = 0.926 (well below JoinQuant claim 2.995); cost-adjusted = 0.906; deflated_sharpe = 1.000 (capped). Bootstrap Sharpe 95% CI = [0.293, 1.552] is extremely wide — true IS Sharpe could plausibly be near zero. IS INCLUDES the 2014-2015 windfall, so OOS without it will likely be worse. This is leading evidence the OOS Sharpe < 1.0 prediction will materialize.",
+      "quantitative_anchor": {"deflated_sharpe": 1.0},
+      "confirmed": false,
+      "severity": "high"
+    },
+    {
+      "concern_id": "weakest_assumption",
+      "concern_text": "The mapping from JoinQuant 中小综 (399101, frozen 2021-04 after 深市主板 merger, ~800 names) to local engine sc_u4-equivalent broad universe (all_market + market_cap 10亿-100亿 + mainboard + ST-excluded + listing >= 375d + liquidity floor 20M RMB) is approximate. board_policy=mainboard excludes 创业板 (300xxx) whereas G5_A2's filter_kcbj_stock KEEPS 创业板. A 'failure' here might reflect the missing 创业板 microcap names.",
+      "keyed_to_rule_id": "max_drawdown",
+      "measured_evidence_against_concern": "Concern NOT FALSIFIED — we cannot attribute the gap between predicted MDD (-45 to -55%) and actual MDD (-54.3%) to universe mismatch without a sensitivity-test variant. MDD ended at the upper end of my predicted range, suggesting universe matters but is consistent. Recommended follow-up: register a sc_u5-equivalent (cap up to 200亿) sensitivity hypothesis AND a 创业板-included broad variant to isolate universe contribution from intrinsic strategy fragility.",
+      "quantitative_anchor": {"max_drawdown": 0.5430346534290877},
+      "confirmed": false,
+      "severity": "high"
+    },
+    {
+      "concern_id": "what_would_falsify_this",
+      "concern_text": "Stitched OOS Sharpe < 1.0 OR max_drawdown > -55% OR any single IS test fold underperforms benchmark by > -10% AND no fold delivers > +20% excess. Any of these falsifies 'the size sort delivers deployable alpha out of sample.'",
+      "keyed_to_rule_id": "max_drawdown",
+      "measured_evidence_against_concern": "Concern PARTIALLY TRIGGERED in IS. Measured max_drawdown = 54.30% is within 0.70pp of the -55% falsification threshold. The 2024-Q1 微盘 雪崩 is in the sealed OOS window — one bad fold there could push past -55%. IS Sharpe = 0.926 is already below the 1.0 OOS threshold even with windfall included. Two of the three falsification clauses (Sharpe < 1.0; MDD > -55%) are already at or beyond their thresholds before OOS even runs.",
+      "quantitative_anchor": {"max_drawdown": 0.5430346534290877},
+      "confirmed": true,
+      "severity": "high"
+    },
+    {
+      "concern_id": "priors_on_cost_sensitivity",
+      "concern_text": "G5_A2 turnover is ~11.6x/year per JoinQuant. At 10bps slippage + 0.1% stamp tax on sells, cost drag is ~30bps/rebalance x 52 rebalances ~= 16% annual gross drag. Cost-adjusted Sharpe should be ~60-70% of gross Sharpe. If cost-adjusted Sharpe is < 0.7, the strategy is not deployable even if gross Sharpe looks healthy.",
+      "keyed_to_rule_id": "max_annual_turnover",
+      "measured_evidence_against_concern": "Concern PREDICTIONS BOTH WRONG, in opposite directions. Measured annual_turnover = 25.46x is 2.2x the predicted 11.6x. Measured cost_adjusted_sharpe / raw Sharpe = 0.906 / 0.926 = 97.8%, NOT the 60-70% predicted. Either the cost model under-applies turnover drag (system question — does 10bps slippage actually fire on every leg?) OR the gross strategy is more profitable than I expected so the dollar cost drag is a smaller fraction of returns. Estimated cost from turnover: 25.46 round-trips × 10bps × 2 sides ≈ 5.1% annual drag, which would shave ~10-15% off Sharpe, not 2%. The cost-adjusted Sharpe number warrants system audit before being trusted.",
+      "quantitative_anchor": {"annual_turnover": 25.464316963157156},
+      "confirmed": true,
+      "severity": "high"
+    }
+  ]
+}

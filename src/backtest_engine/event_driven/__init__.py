@@ -1,0 +1,321 @@
+"""
+Event-Driven A-Share Backtester
+
+A realistic event-driven backtester for China A-shares that operates
+independently of Qlib. Handles T+1, lot sizes, multi-tier price limits,
+corporate actions, and date-aware transaction costs.
+
+Usage:
+    from src.backtest_engine.event_driven import (
+        EventDrivenBacktester,
+        QlibDataFeeder, Exchange, CostConfig,
+        Strategy, Order, BacktestContext, BacktestResult,
+        FixedSlippage, PctSlippage, NoSlippage,
+    )
+
+    bt = EventDrivenBacktester(data_dir='data')
+    result = bt.run(
+        strategy=MyStrategy(),
+        start_time='2015-01-01',
+        end_time='2025-12-31',
+        benchmark='000852.SH',
+        account=100_000,
+    )
+    print(pd.Series(result.summary).to_string())
+"""
+
+import os
+import logging
+from typing import Any
+import pandas as pd
+
+from .data_feeder import QlibDataFeeder
+from .portfolio import Portfolio, Position
+from .exchange import (
+    Exchange, CostConfig,
+    SlippageModel, NoSlippage, FixedSlippage, PctSlippage,
+    JOINQUANT_DEFAULT_SLIPPAGE, CONSERVATIVE_SLIPPAGE_10BPS,
+)
+from .corporate_actions import CorporateActionHandler
+from .strategy import Strategy, BacktestContext, Order
+from .engine import BacktestEngine, BacktestResult
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    'EventDrivenBacktester',
+    'QlibDataFeeder', 'Portfolio', 'Position',
+    'Exchange', 'CostConfig',
+    'SlippageModel', 'NoSlippage', 'FixedSlippage', 'PctSlippage',
+    'JOINQUANT_DEFAULT_SLIPPAGE', 'CONSERVATIVE_SLIPPAGE_10BPS',
+    'CorporateActionHandler',
+    'Strategy', 'BacktestContext', 'Order',
+    'BacktestEngine', 'BacktestResult',
+]
+
+
+class EventDrivenBacktester:
+    """High-level API for running event-driven backtests.
+
+    Wraps all component creation and wiring into a single entry point.
+    Compatible with the result_analysis module.
+
+    Args:
+        data_dir: Root data directory (default: auto-detect from config).
+        config_path: Path to config.yaml (optional).
+    """
+
+    def __init__(self, data_dir: str = None, config_path: str = None):
+        if data_dir is None:
+            # Try to auto-detect
+            if config_path and os.path.exists(config_path):
+                import yaml
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                data_dir = config.get('data_dir', 'data')
+            else:
+                data_dir = 'data'
+        self.data_dir = data_dir
+
+    def run(self, strategy: Strategy,
+            start_time: str, end_time: str,
+            benchmark: str = None,
+            account: float = 100_000,
+            exchange_config: CostConfig = None,
+            slippage: SlippageModel = None,
+            volume_limit: float = 0.25,
+            preload_fields: list[str] = None,
+            time_split: dict | None = None,
+            holdout_context: Any | None = None,
+            preload_strict: bool = False,
+            instrumentation_path: str | None = None,
+            fill_mode: str = 'open_close') -> BacktestResult:
+        """Run a backtest with the given strategy.
+
+        Args:
+            strategy: Strategy instance to run.
+            start_time: Start date ('YYYY-MM-DD').
+            end_time: End date ('YYYY-MM-DD').
+            benchmark: Benchmark index code (e.g., '000852.SH').
+            account: Initial cash in ¥.
+            exchange_config: Custom cost configuration.
+            slippage: Slippage model to use.
+            volume_limit: Max fraction of daily volume per order.
+            preload_strict: When True, re-raise on preload failure instead of
+                silently degrading to per-day ``D.features`` queries. Formal
+                validation handlers must pass ``True``. Plan
+                ``snappy-buzzing-meerkat`` v5 Phase 2.a.
+            instrumentation_path: When set, write a harness-instrumentation
+                JSON report to this path after the run completes. Required by
+                the v5 verification gate; captures preload_status / cache-hit
+                / fallback / per-day timing / cache-event design_hashes.
+            fill_mode: ``'open_close'`` (default) fills before_market_open
+                orders at OPEN and on_bar orders at CLOSE — closest to live
+                execution.  ``'jq_daily_avg'`` fills BOTH phases at the day's
+                average price ``(open + close) / 2`` — matches JoinQuant's
+                daily-backtest fill model (API doc line 1252). Use the latter
+                when local CAGR must predict JoinQuant daily-backtest CAGR.
+
+        Returns:
+            BacktestResult with all outputs.
+        """
+        if time_split:
+            stage = str(time_split.get("stage", "") or "")
+            allowed_start = str(time_split.get("oos_start" if stage == "oos_test" else "is_start", "") or "")
+            allowed_end = str(time_split.get("oos_end" if stage == "oos_test" else "is_end", "") or "")
+            if allowed_start and pd.Timestamp(start_time) < pd.Timestamp(allowed_start):
+                raise ValueError(f"TimeSplit violation: start_time {start_time} is before allowed window {allowed_start}")
+            if allowed_end and pd.Timestamp(end_time) > pd.Timestamp(allowed_end):
+                raise ValueError(f"TimeSplit violation: end_time {end_time} is after allowed window {allowed_end}")
+            if stage == "oos_test":
+                if holdout_context is None:
+                    raise ValueError(
+                        "Engine backstop: time_split.stage='oos_test' requires a holdout_context. "
+                        "Sandbox mode cannot touch the holdout window."
+                    )
+                from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+                store = HoldoutSealStore(holdout_context.seal_store_dir)
+                events = store.list_events(design_hash=holdout_context.design_hash)
+                matching = events[
+                    (events["run_dir"] == holdout_context.run_dir)
+                    & (events["step_id"] == holdout_context.step_id)
+                ]
+                if matching.empty:
+                    raise ValueError(
+                        f"Engine backstop: OOS run on design_hash={holdout_context.design_hash} "
+                        f"but no seal claim found for run_dir={holdout_context.run_dir}, "
+                        f"step_id={holdout_context.step_id}. Did you call SealedBacktestRunner?"
+                    )
+
+        # Create components.
+        # Part E (plan snappy-buzzing-meerkat v5): derive feeder stage from
+        # time_split.stage so cache-manifest rows carry the correct stage
+        # label. Without this, OOS runs would mislabel rows as is_only.
+        feeder_stage = "is_only"
+        if time_split:
+            ts_stage = str(time_split.get("stage", "") or "")
+            if ts_stage:
+                feeder_stage = ts_stage
+        feeder = QlibDataFeeder(self.data_dir, stage=feeder_stage)
+
+        # Preload cache if requested
+        if preload_fields:
+            # Expand start_time to include the previous trading day for Day 1 warmup
+            try:
+                # We need one day prior to start_time
+                prev_date = feeder.get_prev_trading_day(pd.Timestamp(start_time))
+                preload_start = prev_date.strftime('%Y-%m-%d') if prev_date else start_time
+            except Exception as e:
+                logger.warning(f"Failed to pad preload start date: {e}")
+                preload_start = start_time
+
+            # We fetch 'all' domain to ensure we have every stock for the backtest
+            feeder.preload_features(
+                'all', preload_fields, preload_start, end_time,
+                strict=preload_strict,
+            )
+
+        st_path = os.path.join(
+            self.data_dir, 'qlib_data', 'instruments', 'st_stocks.txt'
+        )
+        if not os.path.exists(st_path):
+            st_path = None
+
+        suspension_ranges_path = os.path.join(
+            self.data_dir, 'market', 'suspension', 'suspension_ranges.parquet'
+        )
+        if not os.path.exists(suspension_ranges_path):
+            logger.warning(
+                "Authoritative suspension ranges not found at %s; Exchange will fall back "
+                "to vol==0 suspension detection.",
+                suspension_ranges_path,
+            )
+            suspension_ranges_path = None
+
+        exchange = Exchange(
+            cost_config=exchange_config,
+            st_data_path=st_path,
+            feeder=feeder,
+            volume_limit=volume_limit,
+            slippage_model=slippage,
+            suspension_ranges_path=suspension_ranges_path,
+        )
+
+        dividends_dir = os.path.join(self.data_dir, 'corporate', 'dividends')
+        corp_handler = None
+        if os.path.isdir(dividends_dir):
+            corp_handler = CorporateActionHandler(dividends_dir)
+
+        engine = BacktestEngine(
+            feeder=feeder,
+            exchange=exchange,
+            strategy=strategy,
+            initial_cash=account,
+            corp_action_handler=corp_handler,
+            fill_mode=fill_mode,
+        )
+
+        import time as _time
+        _run_t0 = _time.perf_counter()
+        try:
+            result = engine.run(start_time, end_time, benchmark_code=benchmark)
+        finally:
+            _run_wall = _time.perf_counter() - _run_t0
+            if instrumentation_path:
+                try:
+                    self._write_instrumentation_report(
+                        instrumentation_path,
+                        feeder=feeder,
+                        engine=engine,
+                        feeder_stage=feeder_stage,
+                        wall_seconds=_run_wall,
+                        start_time=start_time,
+                        end_time=end_time,
+                        preload_strict=preload_strict,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to write instrumentation report to %s: %s",
+                        instrumentation_path, exc,
+                    )
+        return result
+
+    @staticmethod
+    def _write_instrumentation_report(
+        path: str,
+        *,
+        feeder: QlibDataFeeder,
+        engine: BacktestEngine,
+        feeder_stage: str,
+        wall_seconds: float,
+        start_time: str,
+        end_time: str,
+        preload_strict: bool,
+    ) -> None:
+        """Write the harness-instrumentation JSON expected by the v5 verification gate."""
+        import json
+        from pathlib import Path
+        from src.research_orchestrator.cache_manifest import CacheManifestStore
+
+        per_day = list(getattr(engine, "_day_wall_seconds", []))
+        if per_day:
+            sorted_per_day = sorted(per_day)
+            n = len(sorted_per_day)
+
+            def _pct(p):
+                if n == 0:
+                    return None
+                idx = min(n - 1, int(round(p * (n - 1))))
+                return float(sorted_per_day[idx])
+
+            timing = {
+                "p50": _pct(0.50),
+                "p95": _pct(0.95),
+                "max": float(max(per_day)),
+                "min": float(min(per_day)),
+                "mean": float(sum(per_day) / n),
+                "n_days": n,
+            }
+        else:
+            timing = {"p50": None, "p95": None, "max": None, "min": None, "mean": None, "n_days": 0}
+
+        # Read the live cache manifest to surface which design_hashes our
+        # preload + per-day fetches recorded — required by the gate to
+        # confirm Part D propagation worked end-to-end.
+        try:
+            manifest = CacheManifestStore()
+            recent = manifest.list_events()
+            design_hashes = sorted(
+                {str(h) for h in recent["design_hash"].tolist() if str(h)}
+            )
+            stages_by_window = sorted(
+                {str(s) for s in recent["stage"].tolist() if str(s)}
+            )
+        except Exception:  # noqa: BLE001
+            design_hashes = []
+            stages_by_window = []
+
+        report = {
+            "tool": "EventDrivenBacktester._write_instrumentation_report",
+            "plan": "snappy-buzzing-meerkat v5",
+            "window": [start_time, end_time],
+            "feeder_stage": feeder_stage,
+            "preload_strict": preload_strict,
+            "preload_status": getattr(feeder, "_preload_status", "not_attempted"),
+            "preload_wall_seconds": round(
+                float(getattr(feeder, "_preload_wall_seconds", 0.0)), 4,
+            ),
+            "cache_hit_count": int(getattr(feeder, "_cache_hit_count", 0)),
+            "direct_fallback_count": int(getattr(feeder, "_direct_fallback_count", 0)),
+            "per_day_timing_seconds": timing,
+            "total_wall_seconds": round(float(wall_seconds), 4),
+            "cache_events_design_hashes_seen": design_hashes,
+            "cache_events_stages_seen": stages_by_window,
+        }
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        logger.info("Wrote instrumentation report to %s", path)

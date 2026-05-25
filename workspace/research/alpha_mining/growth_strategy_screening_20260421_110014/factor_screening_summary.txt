@@ -1,0 +1,10 @@
+Growth-Strategy Phase 1 Quick-Kill Screening
+============================================================
+Generated: 2026-04-21T11:03:20.257446
+Window: 2014-01-01 to 2026-02-27
+Horizons: [5, 10, 20]
+Base factors: 17, Composites: 3
+Grade counts: {'C': 11, 'D': 6}
+
+Factor-grade table (sorted by |rank_icir_5d| desc):
+------------------------------------------------------------

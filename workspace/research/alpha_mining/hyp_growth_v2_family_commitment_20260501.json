@@ -1,0 +1,130 @@
+{
+  "_schema_id": "growth_v2_family_commitment_v1",
+  "_purpose": "Pre-registered multiple-testing protocol for the hyp_growth_v2_h1..h5 variant family. Authored 2026-05-01 BEFORE any IS leg has been run. Anchors the OOS-eligibility margin, selection rule, and anomaly-halt rule so post-hoc HARKing is not possible. Companion to the 5 hyp_growth_v2_h{1..5}_20260501.json request files.",
+  "family_id": "growth_v2_family_20260501",
+  "authored_at": "2026-05-01",
+  "authored_by": "Claude (pending human registration)",
+  "baseline": {
+    "rejected_hypothesis_id": "hyp_growth_garp_3leg_20260428",
+    "rejected_design_hash": "7c2389c5...",
+    "rejected_seal_status": "untouched",
+    "is_metrics_observed": {
+      "rank_ic": 0.0384,
+      "rank_icir": 0.4663,
+      "deflated_sharpe": 1.0,
+      "cost_adjusted_sharpe": 0.7245,
+      "max_drawdown": 0.4623,
+      "annual_turnover": 11.825,
+      "regime_pass_count": 7
+    },
+    "rejection_floors_failed": ["max_drawdown", "max_annual_turnover"]
+  },
+  "variants": [
+    {
+      "id": "h1",
+      "request_file": "hyp_growth_v2_h1_20260501.json",
+      "primary_lever": "frame_only",
+      "deltas_vs_baseline": ["topk: 50->120", "rebalance_days: 10->20", "max_position_weight: 0.025->0.012"]
+    },
+    {
+      "id": "h2",
+      "request_file": "hyp_growth_v2_h2_20260501.json",
+      "primary_lever": "defensive_component",
+      "deltas_vs_baseline": ["add risk_vol_60d (lower_is_better, w=0.7)", "topk: 50->100", "rebalance_days: 10->20", "max_position_weight: 0.025->0.015"]
+    },
+    {
+      "id": "h3",
+      "request_file": "hyp_growth_v2_h3_20260501.json",
+      "primary_lever": "multi_component",
+      "deltas_vs_baseline": ["val_bp_industry_rel weight: 1.0->0.5", "add comp_defensive (w=1.0)", "add flow_net_inflow_20d (w=0.5)", "topk: 50->100", "rebalance_days: 10->20", "max_position_weight: 0.025->0.015"]
+    },
+    {
+      "id": "h4",
+      "request_file": "hyp_growth_v2_h4_20260501.json",
+      "primary_lever": "universe_filter",
+      "deltas_vs_baseline": ["topk: 50->120", "rebalance_days: 10->20", "max_position_weight: 0.025->0.012", "ret250_pctile_max: null->0.95", "liquidity_floor: 20M->50M"]
+    },
+    {
+      "id": "h5",
+      "request_file": "hyp_growth_v2_h5_20260501.json",
+      "primary_lever": "combined",
+      "deltas_vs_baseline": ["add risk_vol_60d (lower_is_better, w=0.7)", "topk: 50->120", "rebalance_days: 10->20", "max_position_weight: 0.025->0.012", "ret250_pctile_max: null->0.95", "liquidity_floor: 20M->50M", "composite_kind: rank_weighted->zscore_weighted"]
+    }
+  ],
+  "ablation_design": {
+    "h5_minus_h2": "isolates universe-filter contribution (H5 has H4 universe; H2 has baseline universe) AND composite_kind contribution (H5 zscore vs H2 rank). Confounded by both. To cleanly isolate universe alone, compare H4 vs H1 (both have rank_weighted, same components, only universe differs).",
+    "h5_minus_h4": "isolates defensive-component contribution AND composite_kind contribution. Confounded by both. To cleanly isolate component alone, compare H2 vs H1 (both have rank_weighted, baseline universe, only components differ).",
+    "h2_minus_h1": "clean isolation of defensive-component effect (rank_weighted, baseline universe).",
+    "h4_minus_h1": "clean isolation of universe-tightening effect (rank_weighted, 3-leg GARP).",
+    "h5_minus_h2_minus_h4_plus_h1": "approximation of composite_kind effect (zscore vs rank), isolated via difference-in-differences. Imperfect because H5 stacks BOTH H2 and H4 changes; difference-in-differences assumes additivity which the H5 weakest_assumption pre-registration acknowledges is unlikely to hold."
+  },
+  "execution_protocol": {
+    "step_0_backup": {
+      "command": "cp -r data/factor_registry data/factor_registry.bak_20260501 && cp -r data/holdout_seals data/holdout_seals.bak_20260501",
+      "required_before_any_run": true
+    },
+    "step_1_pre_flight_registry_check": {
+      "purpose": "Confirm all 6 distinct factor_ids across H1-H5 are present in factor_registry as is_current=True before authoring runs.",
+      "factor_ids_required": ["grow_opprofit_qoq", "grow_roe_yoy", "val_bp_industry_rel", "risk_vol_60d", "comp_defensive", "flow_net_inflow_20d"],
+      "verified_at": "2026-05-01",
+      "verified_status": "all 6 present, is_current=True, status=draft (acceptable; baseline used same status)"
+    },
+    "step_2_register_all_5": {
+      "command_pattern": "venv/Scripts/python.exe workspace/scripts/hypothesis_cli.py register --file workspace/research/alpha_mining/hyp_growth_v2_h{N}_20260501.json --registered-by henry --profile-id hypothesis_validation",
+      "loop": "N in {1,2,3,4,5}"
+    },
+    "step_3_verify_seals_untouched": {
+      "command_pattern": "venv/Scripts/python.exe workspace/scripts/hypothesis_cli.py verify-seal --hypothesis-id hyp_growth_v2_h{N}_20260501 --expect-claims 0",
+      "expect_exit_code": 0,
+      "fail_action": "ABORT family — do not run any IS leg until seals are verified untouched."
+    },
+    "step_4_run_is_legs": {
+      "order": ["h1", "h4", "h2", "h3", "h5"],
+      "halt_on_success": false,
+      "rationale": "Halt-on-success introduces selection-on-IS bias against later variants. Run all 5 IS legs to enable clean within-family comparison."
+    },
+    "step_5_score_concerns_and_decide_is_gates": {
+      "per_variant": "Read the variant-specific pre_registered_concerns; score each against measured IS evidence; write gate_concern_scores.json; approve/reject/quarantine the IS gate."
+    }
+  },
+  "oos_eligibility_margin": {
+    "rationale": "Tighter than gate floor because (a) A-share long-only OOS metrics historically degrade 5-15% Sharpe vs IS, so a variant that JUST passes IS gate is unlikely to pass OOS; (b) OOS budget is one shot per design_hash and this commitment fixes the bar before any measurement. Margin is anchored to general OOS-shrinkage priors, NOT to the specific IS measurements of this family.",
+    "thresholds": {
+      "max_drawdown_lt_or_eq": 0.30,
+      "annual_turnover_lt_or_eq": 4.0,
+      "deflated_sharpe_gt_or_eq": 0.75,
+      "regime_pass_count_gt_or_eq": 5,
+      "rank_icir_gt_or_eq": 0.05
+    },
+    "all_thresholds_must_pass": true
+  },
+  "selection_rule": {
+    "primary": "Among IS-eligible variants (those passing both the gate floor and the OOS-eligibility margin above), select the one with highest deflated_sharpe.",
+    "tie_break_1_within_5pct": "Prefer fewer components (parsimony).",
+    "tie_break_2": "Prefer smaller annual_turnover.",
+    "tie_break_3": "Prefer rank_weighted over zscore_weighted (closer to baseline composite_kind).",
+    "result": "EXACTLY ONE variant claims OOS. Non-survivors keep seals untouched and may be re-tested as separate hypotheses later."
+  },
+  "anomaly_halt_rule": {
+    "trigger_conditions_any": [
+      "is_rank_icir > 0.70 on any variant",
+      "is_deflated_sharpe > 1.50 on any variant",
+      "is_max_drawdown < 0.10 on any variant",
+      "is_annual_turnover < 1.0 on any variant"
+    ],
+    "rationale": "Step-function jumps from baseline (rank_icir 0.466, DSR 1.0, DD 0.46, turnover 11.8) signal possible leakage, build mismatch, or a measurement bug. Baseline values bound the plausible range for related variants.",
+    "action": "STOP family execution; do NOT score concerns; investigate. Resume only after root-cause is identified and ruled benign."
+  },
+  "escalation_if_zero_eligible": {
+    "trigger": "0 of 5 variants pass both IS gate floor AND OOS-eligibility margin",
+    "action": "Do NOT claim OOS on any seal; preserve all 5 design_hashes for future re-testing under a different family. Move to Phase 5 of the v2 plan: Path A (strategy_improvement profile factor-mix discovery) first; Path B (custom PortfolioOptimizer integration) second; Path C (validation v2 schema extension) third — Path C requires its own plan."
+  },
+  "documentation_obligations": {
+    "after_family_completion": [
+      "ONE update to project_state.md summarizing all 5 IS verdicts + the OOS outcome of the survivor (or escalation taken).",
+      "ONE post-hoc summary in workspace/outputs/hyp_growth_v2_summary_<date>.md covering ablation findings (using the ablation_design above).",
+      "Update CLAUDE.md hard invariants ONLY if a structural finding emerges (e.g., 'rank_weighted at TopK<100 produces >=10x turnover irrespective of rebalance cadence')."
+    ]
+  },
+  "attestation": "I, the agent authoring this commitment, attest that no IS leg of any of the 5 variants has been executed at the time of authoring. Any IS metrics referenced are exclusively from the rejected baseline hyp_growth_garp_3leg_20260428."
+}

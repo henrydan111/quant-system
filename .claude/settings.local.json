@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "TodoWrite",
+      "NotebookEdit",
+      "Bash(gh repo:*)",
+      "WebFetch(domain:github.com)",
+      "Read(//c/Users/henry/.claude/plugins/marketplaces//**)",
+      "Read(//c/Users/henry/.claude/plugins//**)",
+      "Bash(du -sh */)",
+      "Skill(update-config)",
+      "Bash(mkdir -p \"C:/Users/henry/.claude/skills\")",
+      "Bash(cp -r \"E:/量化系统/.codex/skills/joinquant-web-research\" \"C:/Users/henry/.claude/skills/\")",
+      "Read(//c/Users/henry/.claude/skills/**)",
+      "Bash(rm -rf \"C:/Users/henry/.claude/skills/joinquant-web-research/agents\" && rm -rf \"E:/量化系统/.codex/skills/joinquant-web-research/agents\" && ls -la \"C:/Users/henry/.claude/skills/joinquant-web-research/\" \"E:/量化系统/.codex/skills/joinquant-web-research/\")",
+      "Bash(cp \"C:/Users/henry/.claude/skills/joinquant-web-research/SKILL.md\" \"E:/量化系统/.codex/skills/joinquant-web-research/SKILL.md\")",
+      "Bash(cp \"C:/Users/henry/.claude/skills/joinquant-web-research/references/\"*.md \"E:/量化系统/.codex/skills/joinquant-web-research/references/\")",
+      "Bash(cp \"C:/Users/henry/.claude/skills/joinquant-web-research/scripts/jq_resource_scan.py\" \"E:/量化系统/.codex/skills/joinquant-web-research/scripts/jq_resource_scan.py\")",
+      "Bash(cp \"C:\\\\Users\\\\henry\\\\.claude\\\\skills\\\\joinquant-web-research\\\\scripts\\\\backtest_evaluator_template.py\" \"C:\\\\Users\\\\henry\\\\Desktop\\\\聚宽回测系统\\\\templates\\\\evaluator_template.py\")",
+      "Read(//c/Users/henry/Desktop/聚宽回测系统/templates/**)"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Quant system session bootstrap (E:\\\\量化系统): before any non-trivial work, read these 5 canonical files in order and trust them over memorized facts — (1) project_state.md (durable system memory; check Last Updated), (2) CLAUDE.md (operating contract), (3) src/system.md (module architecture), (4) data/data_dictionary.md (column definitions), (5) data/data_tracker.md (data sync status). project_state.md is the source of truth — verify factor counts, registry sizes, research outcomes, and data coverage against it rather than recalling them.\"}}'"
+          }
+        ]
+      }
+    ]
+  },
+  "spinnerTipsEnabled": true
+}

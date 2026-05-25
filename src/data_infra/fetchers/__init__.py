@@ -1,0 +1,831 @@
+"""
+Tushare Pro Data Fetcher
+Handles downloading market data, fundamental data, and reference data from Tushare.
+"""
+import tushare as ts
+import pandas as pd
+import yaml
+import logging
+import time
+import os
+
+DEFAULT_STATEMENT_LIMIT = 2000
+VIP_ALL_STOCK_LIMIT = 10000
+FINE_INDICATOR_LIMIT = 100
+
+class TushareFetcher:
+    def __init__(self, config_path="config.yaml", max_retries=3, base_sleep=1.5):
+        # Load .env file if python-dotenv is available
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass  # dotenv not installed — rely on system env vars
+
+        # Load config
+        with open(config_path, "r", encoding="utf-8") as f:
+            self.config = yaml.safe_load(f)
+        
+        # Resolve token: prefer env var, fall back to config value
+        token = os.environ.get("TUSHARE_TOKEN") or self.config["data"]["tushare_token"]
+        try:
+            ts.set_token(token)
+            self.pro = ts.pro_api()
+        except PermissionError:
+            logging.warning(
+                "tushare.set_token() could not write the local token cache; "
+                "falling back to ts.pro_api(token)"
+            )
+            self.pro = ts.pro_api(token)
+        self.max_retries = max_retries
+        self.base_sleep = base_sleep
+        
+        logging.info("Tushare API initialized.")
+
+    def _safe_api_call(self, api_func, **kwargs):
+        """Wrapper for Tushare API calls to handle rate limits and temporary failures."""
+        for attempt in range(self.max_retries):
+            try:
+                df = api_func(**kwargs)
+                time.sleep(self.base_sleep) # proactive sleep to respect 2000 points rate limit (e.g. 100/min)
+                return df
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "daily request" in error_msg or "frequent" in error_msg or "limit" in error_msg:
+                    sleep_time = self.base_sleep * (2 ** attempt) + 30 # Back off significantly if rate limited
+                    logging.warning(f"Rate limit hit. Sleeping for {sleep_time}s... (Attempt {attempt+1}/{self.max_retries})")
+                else:
+                    sleep_time = self.base_sleep * (2 ** attempt)
+                    logging.warning(f"API Error: {e}. Sleeping for {sleep_time}s... (Attempt {attempt+1}/{self.max_retries})")
+                
+                if attempt == self.max_retries - 1:
+                    func_name = getattr(api_func, '__name__', str(api_func))
+                    logging.error(f"Max retries reached for {func_name} with args {kwargs}")
+                    raise
+                time.sleep(sleep_time)
+        return pd.DataFrame()
+        
+    def _fetch_paginated(self, api_func, limit=100, **kwargs):
+        """Fetch all pages for an endpoint, falling back to offset pagination only when needed."""
+        all_data = []
+        offset = 0
+        while True:
+            df = self._safe_api_call(api_func, limit=limit, offset=offset, **kwargs)
+            if df is None or df.empty:
+                break
+            all_data.append(df)
+            if len(df) < limit:
+                break
+            offset += limit
+            
+        if not all_data:
+            return pd.DataFrame()
+        if len(all_data) == 1:
+            return all_data[0].reset_index(drop=True)
+        return pd.concat(all_data, ignore_index=True)
+
+    def _statement_kwargs(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> dict:
+        """Build a clean kwargs payload for Tushare statement-style endpoints."""
+        kwargs = {}
+        for key, value in {
+            "ts_code": ts_code,
+            "period": period,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ann_date": ann_date,
+            "report_type": report_type,
+            "comp_type": comp_type,
+            "fields": fields,
+        }.items():
+            if value is not None:
+                kwargs[key] = value
+        return kwargs
+
+    def _fetch_statement(
+        self,
+        api_func,
+        *,
+        limit: int,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch a statement-style endpoint with optional pagination and report-type filters."""
+        kwargs = self._statement_kwargs(
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+        return self._fetch_paginated(api_func, limit=limit, **kwargs)
+
+    def _fetch_statement_report_types(
+        self,
+        api_func,
+        report_types,
+        *,
+        limit: int,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch multiple report types and concatenate them into one dataframe."""
+        frames = []
+        for report_type in report_types:
+            df = self._fetch_statement(
+                api_func,
+                limit=limit,
+                ts_code=ts_code,
+                period=period,
+                start_date=start_date,
+                end_date=end_date,
+                ann_date=ann_date,
+                report_type=str(report_type),
+                comp_type=comp_type,
+                fields=fields,
+            )
+            if df is not None and not df.empty:
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def fetch_stock_basic(self) -> pd.DataFrame:
+        """Fetch list of all stocks, including delisted and ST (L, D, P)."""
+        logging.info("Fetching stock basics (L, D, P)...")
+        return self._safe_api_call(self.pro.stock_basic, exchange='', list_status='L,D,P', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
+
+    def fetch_trade_cal(self, start_date=None, end_date=None) -> pd.DataFrame:
+        """Fetch trading calendar."""
+        logging.info(f"Fetching trade calendar from {start_date} to {end_date}...")
+        return self._safe_api_call(self.pro.trade_cal, start_date=start_date, end_date=end_date, is_open='1')
+
+    def fetch_daily_data(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily price/volume data (OHLCV)."""
+        return self._safe_api_call(self.pro.daily, trade_date=trade_date, ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+    def fetch_adj_factor(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily adjustment factors for restoration pricing."""
+        return self._safe_api_call(self.pro.adj_factor, trade_date=trade_date, ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+    def fetch_suspend_d(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily suspension info."""
+        return self._safe_api_call(self.pro.suspend_d, trade_date=trade_date, ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+    def fetch_fundamentals(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily valuation metrics (PE, PB, PS, Turnover)."""
+        return self._safe_api_call(self.pro.daily_basic, trade_date=trade_date, ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+    def fetch_index_basic(self, market: str = 'SSE') -> pd.DataFrame:
+        """Fetch index basics for a market (e.g., SSE, SZSE)."""
+        return self._safe_api_call(self.pro.index_basic, market=market)
+
+    def fetch_index_daily(self, ts_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily index data (e.g. 000001.SH, 000300.SH)."""
+        return self._safe_api_call(self.pro.index_daily, ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+    def fetch_index_weight(self, index_code: str, trade_date: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch constituent weights for an index (e.g. 000300.SH weights)."""
+        return self._safe_api_call(self.pro.index_weight, index_code=index_code, trade_date=trade_date, start_date=start_date, end_date=end_date)
+        
+    def fetch_income(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """
+        Fetch income statements (Revenue, Net Income, Gross Profit, etc.).
+        
+        Note: Paginates automatically up to limit (2000).
+        
+        Args:
+            ts_code (str, optional): Tushare stock code (e.g., '000001.SZ').
+            period (str, optional): Reporting period (e.g., '20231231').
+            start_date (str, optional): Start date for announcement (YYYYMMDD).
+            end_date (str, optional): End date for announcement (YYYYMMDD).
+            
+        Returns:
+            pd.DataFrame: A dataframe containing income statements.
+        """
+        return self._fetch_statement(
+            self.pro.income,
+            limit=DEFAULT_STATEMENT_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_income_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch income statements via the VIP endpoint for all-stock or report-type queries."""
+        return self._fetch_statement(
+            self.pro.income_vip,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_income_quarterly_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        comp_type: str = None,
+        fields: str = None,
+        report_types=("2", "3"),
+    ) -> pd.DataFrame:
+        """Fetch direct single-quarter income rows, preserving both report_type=2 and 3."""
+        return self._fetch_statement_report_types(
+            self.pro.income_vip,
+            report_types=report_types,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_balancesheet(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """
+        Fetch balance sheets (Assets, Liabilities, Equity).
+        
+        Note: Paginates automatically up to limit (2000).
+        
+        Args:
+            ts_code (str, optional): Tushare stock code (e.g., '000001.SZ').
+            period (str, optional): Reporting period (e.g., '20231231').
+            start_date (str, optional): Start date for announcement (YYYYMMDD).
+            end_date (str, optional): End date for announcement (YYYYMMDD).
+            
+        Returns:
+            pd.DataFrame: A dataframe containing balance sheets.
+        """
+        return self._fetch_statement(
+            self.pro.balancesheet,
+            limit=DEFAULT_STATEMENT_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_balancesheet_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch balance sheets via the VIP endpoint."""
+        return self._fetch_statement(
+            self.pro.balancesheet_vip,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_balancesheet_quarterly_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        comp_type: str = None,
+        fields: str = None,
+        report_types=("2", "3"),
+    ) -> pd.DataFrame:
+        """Fetch direct single-quarter balance-sheet rows, preserving report_type variants."""
+        return self._fetch_statement_report_types(
+            self.pro.balancesheet_vip,
+            report_types=report_types,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_fina_indicator(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """
+        Fetch financial indicators (ROE, ROA, Current Ratio, etc.).
+        
+        Args:
+            ts_code (str, optional): Tushare stock code (e.g., '000001.SZ').
+            period (str, optional): Reporting period (e.g., '20231231').
+            start_date (str, optional): Start date for announcement (YYYYMMDD).
+            end_date (str, optional): End date for announcement (YYYYMMDD).
+            
+        Returns:
+            pd.DataFrame: A dataframe containing requested financial indicators.
+        """
+        # Standard fina_indicator remains a low-limit endpoint.
+        return self._fetch_statement(
+            self.pro.fina_indicator,
+            limit=FINE_INDICATOR_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            fields=fields,
+        )
+
+    def fetch_fina_indicator_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch financial indicators via the VIP endpoint for all-stock PIT refreshes."""
+        return self._fetch_statement(
+            self.pro.fina_indicator_vip,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            fields=fields,
+        )
+
+    def fetch_index_classify(self, level: str = None, src: str = 'SW2021') -> pd.DataFrame:
+        """Fetch Shenwan or CITIC industry classifications. src: 'SW2021' or 'CITICS'"""
+        return self._safe_api_call(self.pro.index_classify, level=level, src=src)
+
+    def fetch_index_member_all(self, industry_code: str = None, ts_code: str = None,
+                                is_new: str = None) -> pd.DataFrame:
+        """Fetch Shenwan index constituent history (VIP tier).
+
+        Returns the per-stock membership rows of an L1 (or L2/L3) Shenwan
+        index, including the in_date / out_date interval and is_new flag.
+        Combine `is_new='Y'` (current) + `is_new='N'` (historical) to get
+        full history; calling with `is_new=None` returns only current
+        members (verified against pro.index_member_all on 2026-04-27).
+
+        Args:
+            industry_code: Neutral kwarg for the L1/L2/L3 index code, e.g.
+                '801780.SI' for Shenwan 银行. Internally maps to Tushare's
+                `l1_code` parameter (verified by A0 probe at
+                workspace/scripts/probe_index_member_all.py on 2026-04-27).
+            ts_code: Filter to one stock's industry history.
+            is_new: 'Y' = current members only, 'N' = historical only,
+                None = current only (Tushare default behavior).
+
+        Returns:
+            DataFrame with columns: l1_code, l1_name, l2_code, l2_name,
+                l3_code, l3_name, ts_code, name, in_date, out_date, is_new.
+        """
+        tushare_kwargs = {}
+        if industry_code is not None:
+            tushare_kwargs['l1_code'] = industry_code
+        if ts_code is not None:
+            tushare_kwargs['ts_code'] = ts_code
+        if is_new is not None:
+            tushare_kwargs['is_new'] = is_new
+        return self._safe_api_call(self.pro.index_member_all, **tushare_kwargs)
+
+    def fetch_namechange(self, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch historical stock name change records.
+
+        Used to construct ST universe by tracking when stocks were renamed
+        to/from ST, *ST, S*ST, etc.
+
+        Args:
+            ts_code: Tushare stock code (e.g., '600848.SH').
+            start_date: Announcement start date (YYYYMMDD).
+            end_date: Announcement end date (YYYYMMDD).
+
+        Returns:
+            DataFrame with columns: ts_code, name, start_date, end_date,
+                ann_date, change_reason.
+        """
+        logging.info("Fetching namechange data (ts_code=%s)...", ts_code)
+        return self._safe_api_call(
+            self.pro.namechange,
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+            fields='ts_code,name,start_date,end_date,ann_date,change_reason',
+        )
+
+    def fetch_dividend(self, ts_code: str = None, ann_date: str = None, record_date: str = None, imp_ann_date: str = None) -> pd.DataFrame:
+        """Fetch dividend and corporate actions."""
+        return self._safe_api_call(self.pro.dividend, ts_code=ts_code, ann_date=ann_date, record_date=record_date, imp_ann_date=imp_ann_date)
+
+    # ------------------------------------------------------------------ #
+    #  Phase 3: Factor Research Data Sources (7 new endpoints)            #
+    # ------------------------------------------------------------------ #
+
+    def fetch_cashflow(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch cash flow statements (quarterly/annual).
+
+        Key fields: n_cashflow_act (OCF), n_cashflow_inv_act (investing CF),
+        n_cash_flows_fnc_act (financing CF), c_pay_acq_const_fiolta (CapEx).
+        Contains ann_date for PIT alignment.
+
+        Args:
+            ts_code: Tushare stock code (e.g., '000001.SZ').
+            period: Reporting period (e.g., '20231231').
+            start_date: Announcement start date (YYYYMMDD).
+            end_date: Announcement end date (YYYYMMDD).
+
+        Returns:
+            DataFrame with cash flow statement data.
+        """
+        return self._fetch_statement(
+            self.pro.cashflow,
+            limit=DEFAULT_STATEMENT_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_cashflow_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        report_type: str = None,
+        comp_type: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """Fetch cash flow statements via the VIP endpoint."""
+        return self._fetch_statement(
+            self.pro.cashflow_vip,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            report_type=report_type,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_cashflow_quarterly_vip(
+        self,
+        ts_code: str = None,
+        period: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        ann_date: str = None,
+        comp_type: str = None,
+        fields: str = None,
+        report_types=("2", "3"),
+    ) -> pd.DataFrame:
+        """Fetch direct single-quarter cashflow rows, preserving report_type variants."""
+        return self._fetch_statement_report_types(
+            self.pro.cashflow_vip,
+            report_types=report_types,
+            limit=VIP_ALL_STOCK_LIMIT,
+            ts_code=ts_code,
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            ann_date=ann_date,
+            comp_type=comp_type,
+            fields=fields,
+        )
+
+    def fetch_forecast(self, ts_code: str = None, period: str = None,
+                       ann_date: str = None) -> pd.DataFrame:
+        """Fetch earnings pre-announcements / forecasts.
+
+        Key fields: type (预增/预减/略增/略减/续盈/亏损/扭亏),
+        p_change_min, p_change_max, net_profit_min, net_profit_max.
+
+        Args:
+            ts_code: Tushare stock code.
+            period: Reporting period (YYYYMMDD).
+            ann_date: Announcement date (YYYYMMDD).
+
+        Returns:
+            DataFrame with earnings forecast data.
+        """
+        return self._safe_api_call(
+            self.pro.forecast, ts_code=ts_code, period=period,
+            ann_date=ann_date
+        )
+
+    def fetch_moneyflow(self, trade_date: str = None, ts_code: str = None,
+                        start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily capital flow data (large/medium/small order splits).
+
+        Key fields: buy_lg_amount, sell_lg_amount, buy_md_amount, sell_md_amount,
+        buy_sm_amount, sell_sm_amount, net_mf_amount (net capital flow).
+
+        Args:
+            trade_date: Trade date (YYYYMMDD) — fetches all stocks for that day.
+            ts_code: Stock code — fetches time series for that stock.
+            start_date: Range start (YYYYMMDD).
+            end_date: Range end (YYYYMMDD).
+
+        Returns:
+            DataFrame with daily capital flow data.
+        """
+        return self._safe_api_call(
+            self.pro.moneyflow, trade_date=trade_date, ts_code=ts_code,
+            start_date=start_date, end_date=end_date
+        )
+
+    def fetch_hk_hold(self, trade_date: str = None, ts_code: str = None,
+                      start_date: str = None, end_date: str = None,
+                      exchange: str = None) -> pd.DataFrame:
+        """Fetch northbound (HK Stock Connect) daily holding details.
+
+        Key fields: ts_code, trade_date, vol (holding shares),
+        ratio (holding % of free float).
+
+        Args:
+            trade_date: Trade date (YYYYMMDD).
+            ts_code: Stock code.
+            start_date: Range start.
+            end_date: Range end.
+            exchange: Exchange filter ('SH' or 'SZ').
+
+        Returns:
+            DataFrame with northbound holding data.
+        """
+        return self._safe_api_call(
+            self.pro.hk_hold, trade_date=trade_date, ts_code=ts_code,
+            start_date=start_date, end_date=end_date, exchange=exchange
+        )
+
+    def fetch_margin_detail(self, trade_date: str = None, ts_code: str = None,
+                            start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily margin trading details (融资融券明细).
+
+        Key fields: rzye (margin balance), rzmre (margin buy amount),
+        rqye (short-selling balance), rqmcl (short-sell volume).
+
+        Args:
+            trade_date: Trade date (YYYYMMDD).
+            ts_code: Stock code.
+            start_date: Range start.
+            end_date: Range end.
+
+        Returns:
+            DataFrame with margin trading details.
+        """
+        return self._safe_api_call(
+            self.pro.margin_detail, trade_date=trade_date, ts_code=ts_code,
+            start_date=start_date, end_date=end_date
+        )
+
+    def fetch_stk_holdernumber(self, ts_code: str = None, enddate: str = None,
+                               start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch shareholder count data.
+
+        Key fields: ts_code, ann_date, end_date, holder_num.
+        Updated per quarter when companies disclose reports.
+
+        Args:
+            ts_code: Stock code.
+            enddate: Specific end date for the report.
+            start_date: Announcement start date.
+            end_date: Announcement end date.
+
+        Returns:
+            DataFrame with shareholder count data.
+        """
+        return self._safe_api_call(
+            self.pro.stk_holdernumber, ts_code=ts_code, enddate=enddate,
+            start_date=start_date, end_date=end_date
+        )
+
+    def fetch_stk_limit(self, trade_date: str = None, ts_code: str = None,
+                        start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch daily limit-up/limit-down prices.
+
+        Key fields: ts_code, trade_date, pre_close, up_limit, down_limit.
+
+        Args:
+            trade_date: Trade date (YYYYMMDD).
+            ts_code: Stock code.
+            start_date: Range start.
+            end_date: Range end.
+
+        Returns:
+            DataFrame with daily limit prices.
+        """
+        return self._safe_api_call(
+            self.pro.stk_limit, trade_date=trade_date, ts_code=ts_code,
+            start_date=start_date, end_date=end_date
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Phase 3 — New Alpha Endpoints (5000积分 tier)                      #
+    # ------------------------------------------------------------------ #
+
+    def fetch_top_list(self, trade_date: str = None, ts_code: str = None) -> pd.DataFrame:
+        """Fetch 龙虎榜每日明细 (hot-stock trading details).
+
+        Daily after market close. Most days have 10-50 entries.
+        Key signal fields: net_amount, l_buy, l_sell, reason.
+
+        Args:
+            trade_date: Trade date (YYYYMMDD, required for per-date fetch).
+            ts_code: Optional stock filter.
+
+        Returns:
+            DataFrame with top_list entries for the date.
+        """
+        return self._safe_api_call(
+            self.pro.top_list, trade_date=trade_date, ts_code=ts_code
+        )
+
+    def fetch_top_inst(self, trade_date: str = None, ts_code: str = None) -> pd.DataFrame:
+        """Fetch 龙虎榜机构明细 (institutional trading on hot-stock days).
+
+        Requires 5000积分. Daily after market close.
+        Key signal fields: side, buy, sell, net_buy.
+
+        Args:
+            trade_date: Trade date (YYYYMMDD, required for per-date fetch).
+            ts_code: Optional stock filter.
+
+        Returns:
+            DataFrame with institutional seat-level entries.
+        """
+        return self._safe_api_call(
+            self.pro.top_inst, trade_date=trade_date, ts_code=ts_code
+        )
+
+    def fetch_block_trade(self, trade_date: str = None, ts_code: str = None,
+                          start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """Fetch 大宗交易 (block/negotiated trades).
+
+        Daily after market close. Off-exchange large transactions.
+        Key signal fields: price, vol, amount, buyer, seller.
+
+        Args:
+            trade_date: Trade date (YYYYMMDD).
+            ts_code: Optional stock filter.
+            start_date: Range start.
+            end_date: Range end.
+
+        Returns:
+            DataFrame with block trade entries.
+        """
+        return self._safe_api_call(
+            self.pro.block_trade, trade_date=trade_date, ts_code=ts_code,
+            start_date=start_date, end_date=end_date
+        )
+
+    def fetch_stk_holdertrade(self, ts_code: str = None, ann_date: str = None,
+                              start_date: str = None, end_date: str = None,
+                              trade_type: str = None, holder_type: str = None) -> pd.DataFrame:
+        """Fetch 股东增减持 (insider/major shareholder buy/sell transactions).
+
+        Event-driven, disclosed via announcements. One of the strongest
+        documented alpha signals in A-shares.
+        Key signal fields: in_de, change_vol, change_ratio, after_ratio, avg_price.
+
+        Args:
+            ts_code: Stock code (for per-stock fetch).
+            ann_date: Announcement date (YYYYMMDD).
+            start_date: Range start for ann_date.
+            end_date: Range end for ann_date.
+            trade_type: Trade type filter (IN=增持, DE=减持).
+            holder_type: Holder type filter (G=高管, P=个人, C=公司).
+
+        Returns:
+            DataFrame with shareholder trading disclosure entries.
+        """
+        return self._safe_api_call(
+            self.pro.stk_holdertrade, ts_code=ts_code, ann_date=ann_date,
+            start_date=start_date, end_date=end_date,
+            trade_type=trade_type, holder_type=holder_type
+        )
+
+    def fetch_cyq_perf(self, ts_code: str, start_date: str = None,
+                       end_date: str = None) -> pd.DataFrame:
+        """Fetch 筹码分布 (chip distribution / cost basis analysis).
+
+        Requires 5000积分. Daily frequency, per-stock API (ts_code required).
+        Key signal fields: winner_rate, cost_5pct, cost_50pct, cost_85pct,
+        cost_95pct, weight_avg.
+
+        Args:
+            ts_code: Stock code (REQUIRED for this endpoint).
+            start_date: Range start (YYYYMMDD).
+            end_date: Range end (YYYYMMDD).
+
+        Returns:
+            DataFrame with daily chip distribution metrics.
+        """
+        return self._safe_api_call(
+            self.pro.cyq_perf, ts_code=ts_code,
+            start_date=start_date, end_date=end_date
+        )

@@ -1,0 +1,36 @@
+============================================================
+  FACTOR SCREENING SUMMARY
+============================================================
+  Total factors screened: 149
+  Primary horizon: 5-day forward return
+
+  A (Graduated): 18
+  B (Strong IC): 25
+  C (Moderate): 72
+  D (Weak): 34
+
+  TOP 20 FACTORS (by |RankICIR|):
+  --------------------------------------------------------
+  liq_vol_cv_20d                           ICIR=-0.729  Mono=Y  L/S=-117.5%  [A (Graduated)]
+  liq_log_dollar_vol                       ICIR=-0.542  Mono=Y  L/S=-192.1%  [A (Graduated)]
+  rev_max_return_20d                       ICIR=-0.539  Mono=N  L/S=-80.5%  [B (Strong IC)]
+  comp_rev_low_turn                        ICIR=+0.484  Mono=Y  L/S=+118.9%  [A (Graduated)]
+  mom_intraday_20d                         ICIR=-0.479  Mono=Y  L/S=-142.9%  [A (Graduated)]
+  liq_vol_surge                            ICIR=-0.474  Mono=N  L/S=-99.4%  [B (Strong IC)]
+  liq_turnover_f_5d                        ICIR=-0.472  Mono=N  L/S=-135.6%  [B (Strong IC)]
+  liq_turnover_ratio_5_60                  ICIR=-0.466  Mono=N  L/S=-99.5%  [B (Strong IC)]
+  mom_ewm_60d                              ICIR=-0.461  Mono=Y  L/S=-131.2%  [A (Graduated)]
+  risk_skew_60d                            ICIR=-0.459  Mono=Y  L/S=-59.0%  [A (Graduated)]
+  mom_high_moment_20d                      ICIR=-0.456  Mono=N  L/S=-98.1%  [B (Strong IC)]
+  tech_skew_20d                            ICIR=-0.451  Mono=Y  L/S=-57.3%  [A (Graduated)]
+  mom_ewm_20d                              ICIR=-0.435  Mono=N  L/S=-107.7%  [B (Strong IC)]
+  mom_weighted_120d                        ICIR=-0.407  Mono=Y  L/S=-120.4%  [A (Graduated)]
+  tech_close_to_low_20d                    ICIR=-0.406  Mono=N  L/S=-70.3%  [B (Strong IC)]
+  liq_turnover_5d                          ICIR=-0.403  Mono=N  L/S=-119.8%  [B (Strong IC)]
+  risk_vol_10d                             ICIR=-0.402  Mono=N  L/S=-69.7%  [B (Strong IC)]
+  liq_turnover_f_20d                       ICIR=-0.393  Mono=N  L/S=-117.0%  [B (Strong IC)]
+  liq_vol_ratio_ma5                        ICIR=-0.387  Mono=N  L/S=-84.5%  [B (Strong IC)]
+  tech_price_to_ma60                       ICIR=-0.386  Mono=Y  L/S=-140.5%  [A (Graduated)]
+
+  Note: L/S is an overlapping-forward-return diagnostic, not an investable return estimate.
+============================================================

@@ -1,0 +1,134 @@
+{
+  "profile_id": "hypothesis_validation",
+  "mode": "formal",
+  "consumes": [],
+  "produces": [],
+  "requested_capabilities": [],
+  "inputs": {
+    "output_dir": "E:/量化系统/workspace/research/alpha_mining/hyp_20260519_003_g5a2_replication"
+  },
+  "run_context": {
+    "registry_root": "E:\\量化系统\\data",
+    "candidate_registry_dir": "E:\\量化系统\\data\\candidate_registry",
+    "signal_registry_dir": "E:\\量化系统\\data\\signal_registry",
+    "hypothesis_registry_dir": "E:\\量化系统\\data\\hypothesis_registry",
+    "holdout_seal_dir": "E:\\量化系统\\data\\holdout_seals"
+  },
+  "hypothesis": {
+    "hypothesis_id": "hyp_20260519_003",
+    "thesis_statement": "JoinQuant strategy G5_A2 (pure market_cap.asc on 中小综, top 12, weekly) — its raw size-sort alpha (without calendar blackout or stoploss overlays) is deployable out-of-sample on the local engine with stitched OOS Sharpe >= 1.0 on the 2024-2026 sealed holdout.",
+    "mechanism": "Size premium in A-share microcap (Liu, Stambaugh & Yuan 2019, JFE — 'Size and value in China'). Dominated historically by 壳价值 (shell value of being publicly listed). Post 国九条 enforcement (2024-04-12), shell premium is empirically decaying. This hypothesis tests whether the residual size premium (after stripping shell value) is still tradable on the local engine's small_cap theme universe.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "BRIEFING_FOR_GPT.md §4.5 + BRIEFING_CODE_APPENDIX.md §1",
+      "title": "G5 韶华纯净小市值 (冷饭热吃之三) — JoinQuant in-sample backtest",
+      "authors": [
+        "韶华不负 (original)",
+        "user (workspace)"
+      ],
+      "url": "https://www.joinquant.com/post/47527",
+      "publication_date": "2024",
+      "publisher": "JoinQuant 聚宽社区"
+    },
+    "factor_refs": [
+      {
+        "object_type": "factor",
+        "object_name": "size_ln_mcap"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "g5a2_broad_smallcap",
+    "benchmark": "000300.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2023-12-31",
+      "oos_start": "2024-01-01",
+      "oos_end": "2026-02-27",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "5d",
+    "neutralization": [],
+    "expected_sign": -1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": -0.05,
+      "ci_low": -0.1,
+      "ci_high": -0.02,
+      "horizon_days": 5
+    },
+    "expected_decay_horizon_days": 10,
+    "success_criteria": {
+      "min_rank_icir": 0.03,
+      "min_deflated_sharpe": 1.0,
+      "min_cost_adjusted_sharpe": 0.7,
+      "max_drawdown": 0.35,
+      "max_annual_turnover": 4.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": false,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "OOS Sharpe drops below 1.0 due to (a) 2014-2015 microcap windfall absence from sealed OOS — the JoinQuant +234,625% was dominated by this one regime; (b) realistic 10bps slippage drag costs ~16% annual at 11.6x turnover; (c) shell-value decay post 国九条 enforcement reducing the structural size premium (Liu, Stambaugh & Yuan 2019, JFE).",
+      "weakest_assumption": "The mapping from JoinQuant 中小综 (399101, frozen 2021-04 after 深市主板 merger, ~800 names) to local engine small_cap theme sc_u4 (all_market + market_cap 10亿-100亿 + mainboard + ST-excluded + listing >= 375d + liquidity floor 20M RMB) is approximate. sc_u4 likely includes more 主板小盘 names that 中小综 did not, and excludes some legacy 中小板 names. min_listing_days=375 exactly matches G5_A2's filter_new_stock(375), so the listing-age filter is identical. A 'failure' here might reflect universe mismatch, not strategy failure — consider sc_u5 (cap up to 200亿) as a sensitivity test.",
+      "what_would_falsify_this": "Stitched OOS Sharpe < 1.0 OR max_drawdown > -55% OR any single IS test fold underperforms benchmark by > -10% AND no fold delivers > +20% excess. Any of these falsifies 'the size sort delivers deployable alpha out of sample.'",
+      "priors_on_cost_sensitivity": "G5_A2 turnover is ~11.6x/year per JoinQuant. At 10bps slippage + 0.1% stamp tax on sells, cost drag is ~30bps/rebalance x 52 rebalances ~= 16% annual gross drag. Cost-adjusted Sharpe should be ~60-70% of gross Sharpe. If cost-adjusted Sharpe is < 0.7, the strategy is not deployable even if gross Sharpe looks healthy."
+    },
+    "pre_registered_at": "2026-05-19",
+    "registered_by": "henry",
+    "prescription": {
+      "universe": {
+        "kind": "broad",
+        "broad_filters": {
+          "candidate_id": "g5a2_broad_smallcap",
+          "membership_source": "all_market",
+          "board_policy": "mainboard",
+          "st_mode": "exclude",
+          "min_listing_days": 375,
+          "market_cap_min": 1000000000,
+          "market_cap_max": 10000000000,
+          "price_cap": null,
+          "liquidity_floor": 20000000,
+          "revenue_floor": null,
+          "northbound_required": false,
+          "profitability_field": null,
+          "profitability_positive": false,
+          "ret250_pctile_max": null,
+          "special_filters": []
+        }
+      },
+      "components": [
+        {
+          "factor_name": "size_ln_mcap",
+          "weight": 1.0,
+          "kind": "raw",
+          "direction": "lower_is_better"
+        }
+      ],
+      "composite_kind": "rank_weighted",
+      "topk": 12,
+      "rebalance_days": 5,
+      "neutralization": [],
+      "portfolio": {
+        "weighting_rule": "equal",
+        "side": "long_only",
+        "target_gross_exposure": 1.0,
+        "max_position_weight": 0.084,
+        "score_to_weight": "topk_equal"
+      },
+      "cost_model": {
+        "slippage_bps": 10.0,
+        "stamp_tax": true,
+        "half_spread_bps": 0.0,
+        "use_exchange_defaults": false
+      },
+      "allow_candidate_components": false
+    }
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "2021-01-04": [
+    {
+      "code": "S00.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 199500.0
+    },
+    {
+      "code": "S01.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 199500.0
+    },
+    {
+      "code": "S02.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 199500.0
+    },
+    {
+      "code": "S03.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 142000.0
+    },
+    {
+      "code": "S04.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 199500.0
+    }
+  ],
+  "2021-01-07": [
+    {
+      "code": "S00.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 202500.0
+    },
+    {
+      "code": "S01.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 202500.0
+    },
+    {
+      "code": "S02.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 202500.0
+    },
+    {
+      "code": "S03.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 130000.0
+    },
+    {
+      "code": "S05.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 202500.0
+    }
+  ],
+  "2021-01-12": [
+    {
+      "code": "S03.SZ",
+      "direction": "sell",
+      "reason": "rebalance_exit",
+      "target_shares": 0,
+      "target_value": 0.0
+    },
+    {
+      "code": "S00.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 200500.0
+    },
+    {
+      "code": "S01.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 200500.0
+    },
+    {
+      "code": "S02.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 200500.0
+    },
+    {
+      "code": "S04.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 200500.0
+    },
+    {
+      "code": "S05.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 200500.0
+    }
+  ],
+  "2021-01-15": [
+    {
+      "code": "S03.SZ",
+      "direction": "sell",
+      "reason": "rebalance_exit",
+      "target_shares": 0,
+      "target_value": 0.0
+    },
+    {
+      "code": "S00.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 203500.0
+    },
+    {
+      "code": "S01.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 203500.0
+    },
+    {
+      "code": "S05.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 203500.0
+    },
+    {
+      "code": "S06.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 203500.0
+    },
+    {
+      "code": "S07.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 203500.0
+    }
+  ],
+  "2021-01-20": [
+    {
+      "code": "S03.SZ",
+      "direction": "sell",
+      "reason": "rebalance_exit",
+      "target_shares": 0,
+      "target_value": 0.0
+    },
+    {
+      "code": "S00.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 201500.0
+    },
+    {
+      "code": "S05.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 201500.0
+    },
+    {
+      "code": "S06.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 201500.0
+    },
+    {
+      "code": "S08.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 201500.0
+    },
+    {
+      "code": "S09.SZ",
+      "direction": "buy",
+      "reason": "rebalance_buy",
+      "target_shares": 0,
+      "target_value": 201500.0
+    }
+  ]
+}

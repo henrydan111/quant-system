@@ -1,0 +1,79 @@
+{
+  "hypothesis": {
+    "hypothesis_id": "hyp_20260421_001",
+    "thesis_statement": "A growth-weighted composite combining institutional accumulation, ROE growth, operating profit growth, EPS growth, ROE stability, and medium-term price momentum will outperform on a long-short basis in the A-share mainboard universe, because joint signals of accelerating profitability AND informed buying are systematically underweighted by retail-dominated price formation.",
+    "mechanism": "Behavioral under-reaction to growth persistence combined with institutional confirmation. Phase 1 quick-kill screening (2014-2026, horizons 5/10/20d) on the post-republish provider showed that single growth factors with positive rank_icir often have NEGATIVE long-short Sharpe, indicating the cross-sectional ordering signal concentrates in untradable tails. The 6 components selected for this composite are the only ones that exhibit BOTH positive rank_icir AND positive long-short Sharpe, which are: alpha_inst_net_buy_20d (ICIR 0.29, Sharpe +3.23), grow_roe_yoy (ICIR 0.18, Sharpe +1.89), grow_opprofit_yoy (ICIR 0.13, Sharpe +1.58), grow_eps_yoy (ICIR 0.15, Sharpe +1.51), grow_opprofit_qoq (ICIR 0.13, Sharpe +1.43), grow_netprofit_yoy (ICIR 0.12, Sharpe +1.43). The composite combines these with two confirmation layers (qual_roe_stability, mom_return_60d) to reduce false positives from one-quarter spikes. Note: alpha_inst_net_buy_20d coverage is sparse (~20/1210 in blue-chip sample 2024) so the +3.23 Sharpe is on a small sample; weighted at 0.20 to cap sample-size risk.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "growth_strategy_screening_20260421_110014",
+      "title": "Phase 1 quick-kill screening for growth-stock hypothesis-driven plan",
+      "authors": [
+        "Claude (research_orchestrator + factor_eval)"
+      ],
+      "url": "",
+      "publication_date": "2026-04-21",
+      "publisher": "internal"
+    },
+    "factor_refs": [
+      {"object_type": "factor", "object_name": "alpha_inst_net_buy_20d"},
+      {"object_type": "factor", "object_name": "grow_roe_yoy"},
+      {"object_type": "factor", "object_name": "grow_opprofit_yoy"},
+      {"object_type": "factor", "object_name": "grow_eps_yoy"},
+      {"object_type": "factor", "object_name": "grow_opprofit_qoq"},
+      {"object_type": "factor", "object_name": "grow_netprofit_yoy"},
+      {"object_type": "factor", "object_name": "qual_roe_stability"},
+      {"object_type": "factor", "object_name": "mom_return_60d"}
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2025-12-31",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "10d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": 0.04,
+      "ci_low": 0.025,
+      "ci_high": 0.06,
+      "horizon_days": 10
+    },
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.030,
+      "min_deflated_sharpe": 0.65,
+      "min_cost_adjusted_sharpe": 0.45,
+      "max_drawdown": 0.32,
+      "max_annual_turnover": 3.5,
+      "min_monotonicity_pvalue": 0.10,
+      "max_correlation_to_approved": 0.80,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": [
+        "composite_must_beat_equal_weight_average_of_components_by_0.005_rank_icir"
+      ]
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "The composite collapses to alpha_inst_net_buy_20d's signal because the alpha factor's standalone Sharpe (+3.23) dominates the others, and the underlying coverage is too sparse (~20/1210 non-null in blue-chip 2024 probe) to be statistically reliable when applied to the broad universe. If alpha_inst_net_buy_20d's signal is sample-size artifact rather than genuine alpha, the composite degrades to the weighted average of the 5 weaker growth components which collectively carry rank_icir < 0.20.",
+      "weakest_assumption": "That positive long-short Sharpe observed on individual growth components in Phase 1 sandbox screening (without trading costs, full universe, no industry/size neutralization) survives in the formal IS run with realistic costs, mainboard universe filtering, and size+industry neutralization.",
+      "what_would_falsify_this": "Falsified if formal IS rank_icir < 0.025, OR composite Sharpe < equal-weight-component average by >0.005 absolute (the baseline-beat custom rule), OR cost-adjusted Sharpe goes negative, OR sealed OOS rank_ic falls outside [0.025, 0.06] CI.",
+      "priors_on_cost_sensitivity": "Moderately cost-sensitive. The 10-day rebalance keeps annual turnover ~3.0-3.5x. Phase 1 LS Sharpes were measured WITHOUT costs; realistic 10bps slippage + stamp tax + transfer fee will reduce Sharpe by ~0.2-0.4. Expected to remain positive but the cost-adjusted floor (0.45) is intentionally set below the deflated-Sharpe floor (0.65) to accommodate this."
+    },
+    "pre_registered_at": "",
+    "registered_by": "henrydan111@gmail.com"
+  }
+}

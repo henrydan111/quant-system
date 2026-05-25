@@ -1,0 +1,26 @@
+{
+  "formal_hits": 1,
+  "candidate_hits": 0,
+  "new_objects_created": 0,
+  "unresolved_objects": [],
+  "resolved_objects": [
+    {
+      "requested": {
+        "object_type": "factor",
+        "object_name": "size_ln_mcap",
+        "object_id": "",
+        "version": null,
+        "definition_hash": "",
+        "payload": {},
+        "allow_new": false
+      },
+      "status": "resolved",
+      "source_layer": "formal",
+      "object_type": "factor",
+      "canonical_id": "size_ln_mcap",
+      "version": 1,
+      "definition_hash": "f0cf96a315895b4a68fef557da8571c0be35d364aaa44ae08eb0ebb546bc6f1e",
+      "can_publish": false
+    }
+  ]
+}

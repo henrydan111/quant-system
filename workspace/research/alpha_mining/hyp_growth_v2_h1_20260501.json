@@ -1,0 +1,129 @@
+{
+  "profile_id": "hypothesis_validation",
+  "mode": "formal",
+  "consumes": [],
+  "produces": [],
+  "requested_capabilities": [],
+  "inputs": {
+    "output_dir": "E:\\量化系统\\workspace\\research\\alpha_mining\\hyp_growth_v2_h1_run_20260501"
+  },
+  "run_context": {
+    "registry_root": "E:\\量化系统\\data",
+    "candidate_registry_dir": "E:\\量化系统\\data\\candidate_registry",
+    "signal_registry_dir": "E:\\量化系统\\data\\signal_registry",
+    "hypothesis_registry_dir": "E:\\量化系统\\data\\hypothesis_registry",
+    "holdout_seal_dir": "E:\\量化系统\\data\\holdout_seals"
+  },
+  "hypothesis": {
+    "_variant_note": "v2 family member 1 of 5 (H1: frame-only stretch). Same 3-leg GARP recipe as the rejected baseline (hyp_growth_garp_3leg_20260428); only TopK and rebalance cadence change. Tests whether the IS turnover failure was a frame artifact rather than a signal-mix problem.",
+    "hypothesis_id": "hyp_growth_v2_h1_20260501",
+    "thesis_statement": "The 3-leg GARP composite (grow_opprofit_qoq, grow_roe_yoy, val_bp_industry_rel) on broad mainboard universe with TopK=120 + 20-day rebalance delivers cost-adjusted excess return vs CSI500 with max_drawdown<=32% and annual_turnover<=3.5x — i.e., the prior 11.83x turnover was a TopK=50/rebalance=10d frame artifact, not a signal-mix problem.",
+    "mechanism": "Doubling rebalance cadence halves the count of rebalance events per year. Tripling TopK widens the cutoff margin so single-name reorderings inside the basket are absorbed without forcing a swap. Both effects directly reduce turnover; signal-side mechanism (operating-profit growth + ROE growth + industry-relative B/P) is unchanged from the rejected baseline that already measured rank_icir=0.466.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "growth_v2_family_20260501",
+      "title": "Growth-strategy v2 variant family — H1 frame-only",
+      "authors": ["Claude"],
+      "url": "",
+      "publication_date": "2026-05-01",
+      "publisher": "internal"
+    },
+    "factor_refs": [
+      {"object_type": "factor", "object_name": "grow_opprofit_qoq"},
+      {"object_type": "factor", "object_name": "grow_roe_yoy"},
+      {"object_type": "factor", "object_name": "val_bp_industry_rel"}
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2025-12-31",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "20d",
+    "neutralization": ["size", "industry"],
+    "expected_sign": 1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": 0.035,
+      "ci_low": 0.022,
+      "ci_high": 0.055,
+      "horizon_days": 20
+    },
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.030,
+      "min_deflated_sharpe": 0.65,
+      "min_cost_adjusted_sharpe": 0.45,
+      "max_drawdown": 0.32,
+      "max_annual_turnover": 3.5,
+      "min_monotonicity_pvalue": 0.10,
+      "max_correlation_to_approved": 0.80,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "Tripling TopK from 50 to 120 widens the swap-distance margin around the cutoff but ALSO makes more names eligible to swap. Net turnover effect is empirically uncertain and may settle in the 4-7x range, still above the 3.5x floor. If so, H1 alone does not solve the turnover problem and H2/H4/H5 (composite or universe changes) become required.",
+      "weakest_assumption": "The rank_icir=0.466 measured with TopK=50 is assumed to survive at TopK=120. Diluting the basket by 2.4x typically reduces extreme-tail spread; rank_icir could shrink toward 0.3-0.4. Still well above the 0.030 floor, but worth measuring vs the H4-tightened-universe baseline to attribute IC change to TopK vs filter.",
+      "what_would_falsify_this": "IS gate rejection on (annual_turnover > 3.5x) — that falsifies the frame-only hypothesis. IS gate rejection on (max_drawdown > 0.32) means TopK=120 alone does not provide enough diversification ballast and a defensive component is required.",
+      "priors_on_cost_sensitivity": "At 4-7x predicted turnover and 10 bps slippage + stamp tax, expected annual cost drag is ~80-160 bps. cost_adjusted_sharpe=0.724 in the prior 11.83x run corresponds to ~240 bps drag; halving turnover should restore ~100 bps of drag, lifting cost_adjusted_sharpe toward ~0.85-0.95 IF rank_icir holds."
+    },
+    "pre_registered_at": "",
+    "registered_by": "",
+    "prescription": {
+      "_note": "v2 H1 frame-only stretch: TopK 50->120, rebalance 10->20, max_pos 0.025->0.012 (feasibility: 0.012 * 120 = 1.44 >= 1.0). Components and universe unchanged from the rejected baseline.",
+      "universe": {
+        "kind": "broad",
+        "broad_filters": {
+          "candidate_id": "growth_garp_broad",
+          "membership_source": "all_market",
+          "board_policy": "mainboard",
+          "st_mode": "exclude",
+          "min_listing_days": 250,
+          "market_cap_min": 3000000000,
+          "market_cap_max": null,
+          "price_cap": null,
+          "liquidity_floor": 20000000,
+          "revenue_floor": null,
+          "northbound_required": false,
+          "profitability_field": "n_income_attr_p",
+          "profitability_positive": true,
+          "ret250_pctile_max": null,
+          "special_filters": []
+        }
+      },
+      "components": [
+        {"factor_name": "grow_opprofit_qoq", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "grow_roe_yoy", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"},
+        {"factor_name": "val_bp_industry_rel", "weight": 1.0, "kind": "raw", "direction": "higher_is_better"}
+      ],
+      "composite_kind": "rank_weighted",
+      "topk": 120,
+      "rebalance_days": 20,
+      "neutralization": ["size", "industry"],
+      "portfolio": {
+        "weighting_rule": "equal",
+        "side": "long_only",
+        "target_gross_exposure": 1.0,
+        "max_position_weight": 0.012,
+        "score_to_weight": "topk_equal"
+      },
+      "cost_model": {
+        "slippage_bps": 10.0,
+        "stamp_tax": true,
+        "half_spread_bps": 0.0,
+        "use_exchange_defaults": false
+      },
+      "allow_candidate_components": false
+    }
+  }
+}

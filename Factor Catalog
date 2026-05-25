@@ -1,0 +1,514 @@
+# 50 Industry-Standard Quantitative Factors
+
+A comprehensive catalog of the most commonly used alpha factors in quantitative equity research, mapped to our database.
+
+---
+
+## Database Feasibility Summary
+
+| Category | Factors | ✅ Constructible | ⚠️ Partial | ❌ Missing |
+|----------|---------|-------------------|------------|------------|
+| Momentum | 7 | 7 | 0 | 0 |
+| Value | 7 | 7 | 0 | 0 |
+| Quality | 7 | 7 | 0 | 0 |
+| Growth | 6 | 6 | 0 | 0 |
+| Size | 4 | 4 | 0 | 0 |
+| Volatility / Risk | 6 | 6 | 0 | 0 |
+| Liquidity / Volume | 6 | 6 | 0 | 0 |
+| Reversal / Technical | 7 | 7 | 0 | 0 |
+| **Total** | **50** | **50** | **0** | **0** |
+
+> [!TIP]
+> All 50 factors can be fully constructed from the current database. Daily price/volume data is in Qlib `.bin` format; fundamentals are available as both raw Parquet and PIT-aligned Qlib `.bin` features.
+
+---
+
+## Factor Catalog
+
+### Category 1: Momentum (动量因子)
+
+| # | Factor Name | Formula | Qlib Fields | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 1 | **Return_20d** | `close(t) / close(t-20) - 1` | `close` | ✅ |
+| 2 | **Return_60d** | `close(t) / close(t-60) - 1` | `close` | ✅ |
+| 3 | **Return_120d** | `close(t) / close(t-120) - 1` | `close` | ✅ |
+| 4 | **Return_250d** | `close(t) / close(t-250) - 1` | `close` | ✅ |
+| 5 | **Momentum_Skip1M** | `close(t-21) / close(t-252) - 1` — 12-1 month momentum (skip recent month) | `close` | ✅ |
+| 6 | **Weighted_Momentum** | `Σ(w_i × r_i)` where `w_i = i / Σi`, `r_i = daily return` over 120d — recency-weighted | `close` | ✅ |
+| 7 | **Overnight_Return** | `open(t) / close(t-1) - 1` averaged over 20d | `open`, `close` | ✅ |
+
+**Notes:** All momentum factors use backward-adjusted close prices (`close × adj_factor`). Factor 5 is the classic Jegadeesh & Titman (1993) 12-1 momentum.
+
+---
+
+### Category 2: Value (价值因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 8 | **EP_TTM** | `1 / pe_ttm` — Earnings-to-Price | `pe_ttm` (daily) | ✅ |
+| 9 | **BP** | `1 / pb` — Book-to-Price | `pb` (daily) | ✅ |
+| 10 | **SP_TTM** | `1 / ps_ttm` — Sales-to-Price | `ps_ttm` (daily) | ✅ |
+| 11 | **CFTP** | `ocfps / close` — Cash-Flow-to-Price | `ocfps` (indicators), `close` | ✅ |
+| 12 | **Dividend_Yield** | `dv_ttm / 100` — Trailing 12M dividend yield | `dv_ttm` (daily) | ✅ |
+| 13 | **EV_EBITDA** | `(total_mv + netdebt) / ebitda` — Enterprise Value to EBITDA | `total_mv` (daily), `netdebt`, `ebitda` (indicators) | ✅ |
+| 14 | **EBIT_EV** | `ebit / (total_mv + interestdebt - money_cap)` — EBIT yield | `ebit` (indicators), `total_mv`, `interestdebt`, `money_cap` (balance sheet) | ✅ |
+
+**Notes:** Value factors 8–12 are directly available as daily Qlib features. Factors 13–14 require cross-referencing daily market data with PIT fundamentals using `merge_asof`.
+
+---
+
+### Category 3: Quality (质量因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 15 | **ROE** | `n_income_attr_p / total_hldr_eqy_exc_min_int` (annualized) | `roe` (indicators) | ✅ |
+| 16 | **ROA** | `n_income / total_assets` (annualized) | `roa` (indicators) | ✅ |
+| 17 | **ROIC** | `ebit × (1 - tax_rate) / invest_capital` | `roic` (indicators) | ✅ |
+| 18 | **Gross_Margin** | `(revenue - oper_cost) / revenue` | `grossprofit_margin` (indicators) | ✅ |
+| 19 | **Net_Profit_Margin** | `n_income / revenue` | `netprofit_margin` (indicators) | ✅ |
+| 20 | **Asset_Turnover** | `total_revenue / total_assets` (annualized) | `assets_turn` (indicators) | ✅ |
+| 21 | **Accruals_Ratio** | `(Δworking_capital - Δcash) / avg(total_assets)` — low accruals = higher quality | `working_capital`, `money_cap`, `total_assets` (balance sheet) | ✅ |
+
+**Notes:** Factors 15–20 are pre-computed in the Tushare `indicators` dataset and already available as PIT-aligned Qlib `.bin` features. Factor 21 requires computing changes across consecutive reporting periods.
+
+---
+
+### Category 4: Growth (成长因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 22 | **Revenue_Growth_YoY** | `revenue(Q) / revenue(Q-4) - 1` — Year-over-year revenue growth | `or_yoy` (indicators) | ✅ |
+| 23 | **NetProfit_Growth_YoY** | `n_income(Q) / n_income(Q-4) - 1` | `netprofit_yoy` (indicators) | ✅ |
+| 24 | **OpProfit_Growth_QoQ** | `operate_profit(Q) / operate_profit(Q-1) - 1` | `q_op_qoq` (indicators) | ✅ |
+| 25 | **EPS_Growth_YoY** | `eps(Q) / eps(Q-4) - 1` | `basic_eps_yoy` (indicators) | ✅ |
+| 26 | **ROE_Change** | `roe(Q) - roe(Q-4)` — YoY change in profitability | `roe_yoy` (indicators) | ✅ |
+| 27 | **Revenue_Acceleration** | `revenue_growth(Q) - revenue_growth(Q-4)` — is growth accelerating? | `or_yoy` (indicators, compute delta) | ✅ |
+
+**Notes:** Most growth metrics are pre-computed as YoY or QoQ ratios in the Tushare financial indicators dataset.
+
+---
+
+### Category 5: Size (规模因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 28 | **Ln_MarketCap** | `ln(total_mv × 10000)` — log market cap | `total_mv` (daily) | ✅ |
+| 29 | **Ln_CircMV** | `ln(circ_mv × 10000)` — log circulating market cap | `circ_mv` (daily) | ✅ |
+| 30 | **Ln_Revenue** | `ln(total_revenue)` | `total_revenue` (income) | ✅ |
+| 31 | **Ln_TotalAssets** | `ln(total_assets)` | `total_assets` (balance sheet) | ✅ |
+
+**Notes:** Size factors are typically used as control (neutralization) variables rather than alpha sources. Log transformation reduces skewness.
+
+---
+
+### Category 6: Volatility / Risk (波动率/风险因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 32 | **Volatility_20d** | `std(daily_return, 20)` — 20-day realized volatility | `close` | ✅ |
+| 33 | **Volatility_60d** | `std(daily_return, 60)` — 60-day realized volatility | `close` | ✅ |
+| 34 | **Idiosyncratic_Vol** | Residual std from regression: `r_stock = α + β × r_market + ε`, `σ(ε)` over 60d | `close`, index `close` | ✅ |
+| 35 | **Downside_Vol** | `std(min(r, 0), 60)` — only considers negative returns | `close` | ✅ |
+| 36 | **Beta_60d** | `cov(r_stock, r_market, 60) / var(r_market, 60)` | `close`, index `close` | ✅ |
+| 37 | **Max_Drawdown_60d** | `max(1 - price(t) / cummax(price, 60d))` over 60 trading days | `close` | ✅ |
+
+**Notes:** Factor 34 requires regressing stock returns against a market benchmark (e.g. CSI 300). All use adjusted close prices.
+
+---
+
+### Category 7: Liquidity / Volume (流动性/成交量因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 38 | **Turnover_20d** | `mean(turnover_rate, 20)` — average daily turnover rate | `turnover_rate` (daily) | ✅ |
+| 39 | **Turnover_Ratio** | `mean(turnover_rate, 5) / mean(turnover_rate, 60)` — short vs. long-term activity | `turnover_rate` | ✅ |
+| 40 | **Amihud_Illiquidity** | `mean(|r| / amount, 20)` — Amihud (2002) illiquidity measure | `pct_chg`, `amount` | ✅ |
+| 41 | **Volume_CV** | `std(vol, 20) / mean(vol, 20)` — volume coefficient of variation | `vol` | ✅ |
+| 42 | **Volume_Ratio_MA** | `mean(volume_ratio, 5)` — smoothed intraday volume ratio | `volume_ratio` | ✅ |
+| 43 | **Log_Dollar_Volume** | `ln(mean(amount × 1000, 20))` — 20d avg dollar volume | `amount` | ✅ |
+
+**Notes:** Amihud illiquidity (factor 40) is one of the most robust liquidity proxies in academic literature. Higher = less liquid.
+
+---
+
+### Category 8: Reversal / Technical (反转/技术因子)
+
+| # | Factor Name | Formula | Data Source | Constructible |
+|---|-------------|---------|-------------|:---:|
+| 44 | **Short_Reversal_5d** | `-1 × (close(t) / close(t-5) - 1)` — negated 5-day return | `close` | ✅ |
+| 45 | **RSI_14** | `100 - 100 / (1 + avg_gain(14) / avg_loss(14))` — Relative Strength Index | `close` | ✅ |
+| 46 | **Close_to_High_20d** | `close(t) / max(high, 20d) - 1` — distance from 20d high | `close`, `high` | ✅ |
+| 47 | **VWAP_Deviation** | `close - Σ(amount) / Σ(vol) / close` over 20d — deviation from VWAP | `amount`, `vol`, `close` | ✅ |
+| 48 | **Price_to_MA60** | `close / SMA(close, 60) - 1` — deviation from 60d moving average | `close` | ✅ |
+| 49 | **Return_Skewness_20d** | `skewness(daily_return, 20)` — asymmetry of return distribution | `close` | ✅ |
+| 50 | **Return_Kurtosis_20d** | `kurtosis(daily_return, 20)` — tail thickness of returns | `close` | ✅ |
+
+**Notes:** Factor 44 captures the well-documented short-term reversal effect in A-shares. RSI is included despite being a "technical" indicator because it has shown statistical alpha in academic studies.
+
+---
+
+## Database Field Mapping
+
+The table below summarizes the raw data fields required across all 50 factors and confirms their availability.
+
+### Daily Market Data (Qlib `.bin`, 26 fields) — All Available ✅
+
+| Required Field | Used By Factors |
+|----------------|-----------------|
+| `close` | 1–7, 32–37, 44–50 |
+| `open` | 7 |
+| `high` | 46 |
+| `vol` | 41–43, 47 |
+| `amount` | 40, 43, 47 |
+| `pct_chg` | 40 |
+| `turnover_rate` | 38, 39 |
+| `volume_ratio` | 42 |
+| `pe_ttm` | 8 |
+| `pb` | 9 |
+| `ps_ttm` | 10 |
+| `dv_ttm` | 12 |
+| `total_mv` | 13, 14, 28 |
+| `circ_mv` | 29 |
+| `adj_factor` | All price-based factors |
+
+### Fundamental Indicators (PIT-aligned Qlib `.bin`) — All Available ✅
+
+| Required Field | Used By Factors |
+|----------------|-----------------|
+| `roe` / `roe_yoy` | 15, 26 |
+| `roa` | 16 |
+| `roic` | 17 |
+| `grossprofit_margin` | 18 |
+| `netprofit_margin` | 19 |
+| `assets_turn` | 20 |
+| `ocfps` | 11 |
+| `or_yoy` / `netprofit_yoy` | 22, 23, 27 |
+| `q_op_qoq` | 24 |
+| `basic_eps_yoy` | 25 |
+| `ebit` / `ebitda` | 13, 14 |
+| `netdebt` / `interestdebt` | 13, 14 |
+| `total_revenue` / `total_assets` | 30, 31 |
+| `working_capital` / `money_cap` | 21 |
+
+---
+
+## Step-by-Step Factor Analysis Guide
+
+This guide explains how to rigorously evaluate each factor from raw computation through production graduation.
+
+### Step 1: Environment Setup
+
+```python
+# In workspace/research/alpha_factors/
+import qlib
+from qlib.data import D
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+qlib.init(provider_uri="e:/量化系统/data/qlib_data")
+
+# Load universe — use all_stocks (includes delisted) to avoid survivorship bias
+instruments = D.instruments(market="all_stocks")
+fields = ["$close", "$open", "$high", "$low", "$vol", "$amount",
+          "$turnover_rate", "$pe_ttm", "$pb", "$total_mv", "$adj_factor"]
+df = D.features(instruments, fields, start_time="2012-01-01", end_time="2025-12-31")
+```
+
+> [!IMPORTANT]
+> Always use the `all_stocks` universe (includes delisted stocks) to prevent survivorship bias. See [research-integrity.md](file:///e:/%E9%87%8F%E5%8C%96%E7%B3%BB%E7%BB%9F/.agents/rules/research-integrity.md) §7.
+
+---
+
+### Step 2: Factor Computation
+
+Compute the factor cross-sectionally for each trading day.
+
+```python
+# Example: 20-day Momentum
+adj_close = df["$close"] * df["$adj_factor"]
+factor = adj_close / adj_close.shift(20) - 1
+factor.name = "mom_return_20d"
+```
+
+**Rules:**
+- Use **adjusted prices** for all price-based factors: `close × adj_factor`
+- Fundamental factors must use PIT-aligned data (already enforced in Qlib backend)
+- Apply `shift(1)` to any factor before evaluating against forward returns to prevent same-day leakage
+- Name factors following convention: `{category}_{name}_{lookback}` (e.g., `mom_return_20d`, `val_pb_ttm`)
+
+---
+
+### Step 3: Forward Return Computation
+
+Define the prediction target: forward N-day stock returns.
+
+```python
+# Forward returns (1d, 5d, 10d, 20d)
+for horizon in [1, 5, 10, 20]:
+    fwd_ret = adj_close.shift(-horizon) / adj_close - 1
+    fwd_ret.name = f"fwd_return_{horizon}d"
+```
+
+> [!CAUTION]
+> Forward returns must use a negative shift (looking into the future). This is only valid for the evaluation target — never include forward returns in factor construction.
+
+---
+
+### Step 4: IC Analysis (Information Coefficient)
+
+The core metric: does the factor predict future returns?
+
+```python
+def compute_ic_series(factor, forward_return):
+    """Compute daily cross-sectional IC (Pearson) and RankIC (Spearman)."""
+    ic_results = []
+    for date in factor.index.get_level_values(0).unique():
+        f = factor.loc[date].dropna()
+        r = forward_return.loc[date].dropna()
+        common = f.index.intersection(r.index)
+        if len(common) < 30:
+            continue
+        pearson_ic = f[common].corr(r[common])
+        spearman_ic, _ = stats.spearmanr(f[common], r[common])
+        ic_results.append({"date": date, "IC": pearson_ic, "RankIC": spearman_ic})
+    return pd.DataFrame(ic_results).set_index("date")
+```
+
+**Key metrics to compute:**
+
+| Metric | Formula | Good Threshold |
+|--------|---------|----------------|
+| **Mean IC** | `mean(IC_t)` | \|IC\| > 0.02 |
+| **Mean RankIC** | `mean(RankIC_t)` | \|RankIC\| > 0.03 |
+| **ICIR** | `mean(IC) / std(IC)` | ICIR > 0.3 |
+| **IC Hit Rate** | `% of days where sign(IC) == expected` | > 55% |
+
+> [!WARNING]
+> Per [research-integrity.md](file:///e:/%E9%87%8F%E5%8C%96%E7%B3%BB%E7%BB%9F/.agents/rules/research-integrity.md) §4: **A factor with ICIR < 0.3 should be questioned. ICIR < 0.1 should be discarded.**
+
+---
+
+### Step 5: Quantile Portfolio Analysis
+
+Group stocks by factor rank and measure return differences.
+
+```python
+def quantile_analysis(factor, forward_return, n_quantiles=5):
+    """Compute quantile portfolio returns."""
+    results = []
+    for date in factor.index.get_level_values(0).unique():
+        f = factor.loc[date].dropna()
+        r = forward_return.loc[date].dropna()
+        common = f.index.intersection(r.index)
+        if len(common) < 50:
+            continue
+        f_common = f[common]
+        r_common = r[common]
+        quantile_labels = pd.qcut(f_common, n_quantiles, labels=False, duplicates="drop")
+        for q in range(n_quantiles):
+            mask = quantile_labels == q
+            results.append({
+                "date": date,
+                "quantile": q + 1,
+                "mean_return": r_common[mask].mean(),
+                "count": mask.sum()
+            })
+    return pd.DataFrame(results)
+```
+
+**What to look for:**
+- **Monotonic spread**: Q1→Q5 returns should be monotonically increasing (or decreasing)
+- **Long-short return**: `Q5 - Q1` (or `Q1 - Q5`) should be consistently positive
+- **Hit rate**: The top/bottom quantile should outperform/underperform in >55% of periods
+- **Stability**: The spread should hold in sub-periods (2012–2016, 2016–2020, 2020–2025)
+
+---
+
+### Step 6: Factor Neutralization
+
+Remove unwanted exposures (size, industry) to isolate pure alpha signal.
+
+```python
+def neutralize_factor(factor, industry, market_cap):
+    """Cross-sectional regression neutralization."""
+    import statsmodels.api as sm
+
+    neutralized = pd.Series(index=factor.index, dtype=float)
+    for date in factor.index.get_level_values(0).unique():
+        f = factor.loc[date].dropna()
+        ind = pd.get_dummies(industry.loc[date].reindex(f.index))
+        size = np.log(market_cap.loc[date].reindex(f.index))
+        X = pd.concat([ind, size.rename("log_mcap")], axis=1).dropna()
+        common = f.index.intersection(X.index)
+        if len(common) < 50:
+            continue
+        X_common = sm.add_constant(X.loc[common])
+        model = sm.OLS(f[common], X_common).fit()
+        neutralized.loc[(date, slice(None))].update(
+            pd.Series(model.resid, index=common)
+        )
+    return neutralized
+```
+
+**Neutralization variants to test:**
+1. **Raw factor** — no neutralization
+2. **Size-neutralized** — remove log(market_cap) exposure
+3. **Industry-neutralized** — remove Shenwan L1 industry dummies
+4. **Size + Industry neutralized** — remove both
+
+> [!NOTE]
+> Use `industry_sw2021.parquet` for Shenwan 2021 industry classifications.
+
+---
+
+### Step 7: Factor Decay Analysis
+
+How fast does the factor lose predictive power?
+
+```python
+def decay_analysis(factor, adj_close, horizons=[1, 2, 3, 5, 10, 20, 40, 60]):
+    """Compute IC at various forward return horizons."""
+    decay_results = {}
+    for h in horizons:
+        fwd_ret = adj_close.shift(-h) / adj_close - 1
+        ic_series = compute_ic_series(factor, fwd_ret)
+        decay_results[f"{h}d"] = {
+            "mean_IC": ic_series["IC"].mean(),
+            "mean_RankIC": ic_series["RankIC"].mean(),
+            "ICIR": ic_series["IC"].mean() / ic_series["IC"].std()
+        }
+    return pd.DataFrame(decay_results).T
+```
+
+**Interpretation:**
+- **Fast-decaying factors** (peak at 1–5d): Better for high-frequency strategies
+- **Slow-decaying factors** (peak at 20–60d): Better for monthly rebalancing
+- **Optimal holding period**: The horizon with the highest ICIR
+
+---
+
+### Step 8: Cross-Factor Correlation Analysis
+
+Identify redundant factors and maximize diversification before combining.
+
+```python
+def correlation_matrix(factor_dict):
+    """Compute cross-sectional correlation between factors."""
+    # Align all factors to same dates/stocks
+    aligned = pd.DataFrame(factor_dict)
+    # Average cross-sectional correlation across all dates
+    corr_by_date = []
+    for date in aligned.index.get_level_values(0).unique():
+        daily = aligned.loc[date].dropna()
+        if len(daily) > 50:
+            corr_by_date.append(daily.corr())
+    return pd.concat(corr_by_date).groupby(level=0).mean()
+```
+
+**Guidelines:**
+- Correlation > 0.7 between two factors → keep only the one with higher ICIR
+- Group highly correlated factors into "themes" (e.g., all momentum variants)
+- Target final multi-factor model with average pairwise |correlation| < 0.3
+
+---
+
+### Step 9: Portfolio Backtest
+
+Test factor-sorted portfolios with realistic constraints.
+
+```python
+# Temporal split per research-integrity.md §2
+train_end = "2020-12-31"
+val_end   = "2023-12-31"
+test_start = "2024-01-01"
+
+# Qlib TopkDropout backtest
+from qlib.contrib.strategy import TopkDropoutStrategy
+
+strategy_config = {
+    "topk": 50,             # Hold top 50 stocks
+    "n_drop": 5,            # Drop 5 per rebalance to limit turnover
+    "signal": factor_name,
+    "market": "csi300"      # or all_stocks/csi500/csi1000
+}
+```
+
+**Metrics to track (per research-integrity.md §6):**
+
+| Metric | Formula | Target |
+|--------|---------|--------|
+| **Annualized Return** | `(1 + total_return) ^ (252/days) - 1` | > 10% excess |
+| **Sharpe Ratio** | `√252 × mean(r) / std(r)` | > 1.0 |
+| **Max Drawdown** | `max(peak-to-trough loss)` | < 20% |
+| **Turnover** | `mean(daily_holdings_change)` | < 30% monthly |
+| **Win Rate** | `% profitable months` | > 55% |
+| **Long-Short Return** | `Q5 - Q1 annualized` | > 8% |
+
+> [!IMPORTANT]
+> All experiments must be logged to MLflow via `ExperimentTracker`. Log parameters (universe, date range, factor list), metrics (IC, ICIR, Sharpe, MDD), and artifacts (feature importance).
+
+---
+
+### Step 10: Production Graduation Criteria
+
+A factor graduates from research to the production factor library when it meets **all** of the following:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GRADUATION CHECKLIST                     │
+├─────────────────────────────────────────────────────────────┤
+│ □ ICIR > 0.3 on validation set (2021–2023)                 │
+│ □ ICIR > 0.2 on test set (2024+) — out-of-sample           │
+│ □ Quantile spread is monotonic in both train and test       │
+│ □ Factor survives industry + size neutralization            │
+│ □ Correlation < 0.5 with all existing production factors    │
+│ □ Turnover is reasonable for target rebalance frequency     │
+│ □ Results logged in MLflow with experiment ID               │
+│ □ Factor code has docstring, formula, data source           │
+│ □ PIT compliance verified (no lookahead bias)               │
+│ □ Factor tested across CSI300, CSI500, and all_stocks       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Once graduated, implement the factor in `src/alpha_research/factor_library/{category}/` following the naming convention and documentation standards in [research-integrity.md](file:///e:/%E9%87%8F%E5%8C%96%E7%B3%BB%E7%BB%9F/.agents/rules/research-integrity.md) §5.
+
+---
+
+## Recommended Research Workflow
+
+```mermaid
+graph TD
+    A["1. Compute Factor<br/>(workspace/research/alpha_factors/)"] --> B["2. IC / RankIC / ICIR<br/>Analysis"]
+    B --> C{"ICIR > 0.3?"}
+    C -->|No| D["Discard or Transform"]
+    C -->|Yes| E["3. Quantile Spread<br/>Analysis"]
+    E --> F["4. Neutralize<br/>(Size + Industry)"]
+    F --> G{"Still Significant?"}
+    G -->|No| D
+    G -->|Yes| H["5. Decay Analysis"]
+    H --> I["6. Cross-Factor<br/>Correlation Check"]
+    I --> J["7. Portfolio Backtest<br/>(Train/Val Split)"]
+    J --> K{"Sharpe > 1.0?<br/>MDD < 20%?"}
+    K -->|No| L["Iterate Parameters"]
+    L --> A
+    K -->|Yes| M["8. Out-of-Sample Test<br/>(2024+ — run ONCE)"]
+    M --> N{"Pass Graduation<br/>Criteria?"}
+    N -->|No| D
+    N -->|Yes| O["9. Add to<br/>src/alpha_research/<br/>factor_library/"]
+    O --> P["10. Log in MLflow"]
+```
+
+---
+
+## Quick-Start: First 5 Factors to Analyze
+
+For a new researcher, start with these well-documented, high-signal factors:
+
+1. **EP_TTM** (#8) — simple, strong value signal in A-shares
+2. **Return_20d** (#1) — short-term momentum, fast to compute
+3. **Turnover_20d** (#38) — liquidity factor, strong in A-shares
+4. **ROE** (#15) — fundamental quality anchor
+5. **Short_Reversal_5d** (#44) — well-documented A-share reversal effect
+
+These cover 4 different categories with low mutual correlation, providing an ideal starting point for multi-factor model development.

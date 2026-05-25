@@ -1,0 +1,761 @@
+"""
+A-Share Exchange Simulator for Event-Driven Backtester
+
+Handles:
+- Multi-tier price limits (Main/ST/ChiNext/STAR/BSE, date-aware)
+- Tradability checks (suspension, limit-up/down, IPO period)
+- Transaction cost calculation (date-aware stamp tax)
+- Volume limits (default 25% of daily volume)
+- Slippage models
+- Lot sizes (100 for main/ChiNext/STAR, 200 for BSE)
+- ST stock detection from st_stocks.txt
+"""
+
+import logging
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Optional
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+# ─── Configuration ────────────────────────────────────────────────
+
+@dataclass
+class CostBreakdown:
+    """Itemized cost breakdown from Exchange.compute_*_cost_breakdown().
+
+    All values are in ¥ (absolute amounts, not rates). Use ``total`` as
+    the single source of truth for cash deduction in ``portfolio.buy()``
+    or ``portfolio.sell()``. The individual components are available for
+    audit and cost-attribution analysis.
+    """
+    commission: float
+    stamp: float
+    transfer_fee: float
+    total: float
+
+
+@dataclass
+class CostConfig:
+    """Transaction cost configuration.
+
+    The DEFAULT values match JoinQuant's standard ``OrderCost`` so a local
+    backtest run with default costs produces results directly comparable to
+    a JoinQuant deployment. Specifically the JoinQuant defaults are:
+
+      OrderCost(open_tax=0, close_tax=0.001, open_commission=2.5/10000,
+                close_commission=2.5/10000, close_today_commission=0,
+                min_commission=5)
+
+    Which translates to: stamp tax 0.1% constant on sells (no 2023-08-28
+    cut), 2.5 bps commission both sides, no transfer fee, ¥5 min commission.
+
+    For backtests intended to reflect the ACTUAL Chinese exchange rules
+    (including the 2023-08-28 stamp-tax cut from 0.1% → 0.05% and the
+    0.2 bps transfer fee on both sides), use the
+    ``CostConfig.realistic_china()`` factory instead.
+
+    Attributes:
+        buy_commission: Commission rate for buy orders (JQ default 0.025%).
+        sell_commission: Commission rate for sell orders (JQ default 0.025%).
+        stamp_tax: Stamp tax rate on sells. JQ default is 0.1% (constant);
+            ``realistic_china()`` uses 0.05% post-2023-08-28.
+        stamp_tax_pre_20230828: Pre-2023 stamp tax. JQ default ignores the
+            change (same as ``stamp_tax``); ``realistic_china()`` uses 0.1%.
+        min_commission: Minimum commission per trade in ¥.
+        transfer_fee: Transfer fee (过户费) rate. JoinQuant does NOT model
+            it (default 0); ``realistic_china()`` charges 0.002% (2 bps).
+
+    Defaults changed 2026-05-22 from realistic-China to JoinQuant. See
+    CLAUDE.md §3 (Exchange cost source of truth + Exchange default slippage)
+    for the rationale: JoinQuant is the deployment medium, so local backtest
+    defaults align with JoinQuant defaults. The realistic-China preset
+    remains available via the factory below.
+    """
+    buy_commission: float = 0.00025
+    sell_commission: float = 0.00025
+    stamp_tax: float = 0.001                 # JoinQuant close_tax constant
+    stamp_tax_pre_20230828: float = 0.001    # JoinQuant ignores the 2023 cut
+    min_commission: float = 5.0
+    transfer_fee: float = 0.0                # JoinQuant does NOT model 过户费
+
+    @classmethod
+    def joinquant_default(cls) -> 'CostConfig':
+        """Explicit JoinQuant default — same as ``CostConfig()``."""
+        return cls()
+
+    @classmethod
+    def realistic_china(cls) -> 'CostConfig':
+        """Actual Chinese exchange rules: 2023-08-28 stamp tax cut +
+        0.2 bps transfer fee on both sides. Use this for backtests intended
+        to reflect the real exchange rather than a JoinQuant simulator.
+
+        Returns:
+            CostConfig with stamp_tax=0.0005 (post-2023), stamp_tax_pre=0.001,
+            transfer_fee=0.00002.
+        """
+        return cls(
+            buy_commission=0.00025,
+            sell_commission=0.00025,
+            stamp_tax=0.0005,
+            stamp_tax_pre_20230828=0.001,
+            min_commission=5.0,
+            transfer_fee=0.00002,
+        )
+
+
+# ─── Slippage Models ─────────────────────────────────────────────
+
+class SlippageModel(ABC):
+    """Base slippage model. Override for custom behavior."""
+
+    @abstractmethod
+    def apply(self, price: float, direction: str,
+              value: float, row: pd.Series) -> float:
+        """Apply slippage to a fill price.
+
+        Args:
+            price: Raw fill price (open or close).
+            direction: 'buy' or 'sell'.
+            value: Trade value in ¥.
+            row: Full daily data row for the stock.
+
+        Returns:
+            Adjusted price after slippage.
+        """
+
+
+class NoSlippage(SlippageModel):
+    """No slippage — fills at exact price."""
+
+    def apply(self, price: float, direction: str,
+              value: float, row: pd.Series) -> float:
+        """No adjustment.
+
+        Args:
+            price: Raw fill price.
+            direction: Trade direction.
+            value: Trade value.
+            row: Daily data row.
+
+        Returns:
+            Unchanged price.
+        """
+        return price
+
+
+class FixedSlippage(SlippageModel):
+    """Fixed per-share slippage (matches JoinQuant's FixedSlippage convention).
+
+    Adds/subtracts a fixed ¥-amount per share from the fill price:
+      buy: price + spread, sell: max(price - spread, 0.01).
+
+    The default ``spread=0.01`` ¥ per share matches JoinQuant's convention.
+    Use ``spread=0.02`` for conservative stress-testing.
+
+    Args:
+        spread: Price spread per share in ¥ (default 0.01).
+    """
+
+    def __init__(self, spread: float = 0.01):
+        self.spread = spread
+
+    def apply(self, price: float, direction: str,
+              value: float, row: pd.Series) -> float:
+        """Apply fixed spread.
+
+        Args:
+            price: Raw fill price.
+            direction: 'buy' or 'sell'.
+            value: Trade value.
+            row: Daily data row.
+
+        Returns:
+            Price +/- spread.
+        """
+        if direction == 'buy':
+            return price + self.spread
+        return max(price - self.spread, 0.01)
+
+
+class PctSlippage(SlippageModel):
+    """Percentage-based slippage.
+
+    Args:
+        rate: Slippage rate (e.g., 0.001 = 0.1%).
+    """
+
+    def __init__(self, rate: float = 0.001):
+        self.rate = rate
+
+    def apply(self, price: float, direction: str,
+              value: float, row: pd.Series) -> float:
+        """Apply percentage slippage.
+
+        Args:
+            price: Raw fill price.
+            direction: 'buy' or 'sell'.
+            value: Trade value.
+            row: Daily data row.
+
+        Returns:
+            Price * (1 +/- rate).
+        """
+        if direction == 'buy':
+            return price * (1 + self.rate)
+        return price * (1 - self.rate)
+
+
+# ─── Named slippage presets (added 2026-05-22) ────────────────────
+#
+# JOINQUANT_DEFAULT_SLIPPAGE matches JoinQuant's set_slippage(FixedSlippage(3/10000))
+# — 0.0003 ¥/share = ~0.3 bps on a ¥10 stock. This is the NEW Exchange()
+# default for JoinQuant-deployment parity (was PctSlippage(0.001) = 10 bps).
+#
+# CONSERVATIVE_SLIPPAGE_10BPS is the prior default, preserved as a named
+# constant for research code that genuinely needs the conservative model.
+# Pass it explicitly: ``Exchange(slippage_model=CONSERVATIVE_SLIPPAGE_10BPS)``.
+#
+# IMPORTANT — DOCUMENTATION-ERROR PROTECTION: PctSlippage(0.0003) is NOT the
+# same as FixedSlippage(0.0003). PctSlippage(0.0003) = 0.03% = 3 bps, while
+# FixedSlippage(0.0003) = ~0.3 bps for a ¥10 stock. The two differ by ~10×
+# for typical microcap prices. Tests assert this in
+# tests/backtest_engine/test_joinquant_parity.py.
+JOINQUANT_DEFAULT_SLIPPAGE: 'SlippageModel'   # forward type ref; instantiated below
+CONSERVATIVE_SLIPPAGE_10BPS: 'SlippageModel'
+
+
+# ─── Exchange ─────────────────────────────────────────────────────
+
+# Stamp tax change date threshold
+_STAMP_TAX_CHANGE_DATE = pd.Timestamp('2023-08-28')
+
+
+def _round_half_up_2dp(value: float) -> float:
+    """Round to 2 decimal places using round-half-up (not banker's rounding).
+
+    This matches the Shanghai/Shenzhen exchange convention for computing
+    daily limit-up and limit-down prices. Python's built-in ``round()``
+    uses round-half-to-even, which misclassifies borderline `.xx5` values
+    (e.g., ``round(10.125, 2)`` → ``10.12`` instead of ``10.13``).
+
+    Uses ``Decimal(str(value))`` to avoid float→Decimal representation
+    errors per Codex cross-review finding #9.
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+# Board reform dates
+_CHINEXT_REFORM_DATE = pd.Timestamp('2020-08-24')
+_STAR_LAUNCH_DATE = pd.Timestamp('2019-07-22')
+
+
+class Exchange:
+    """A-share exchange simulator.
+
+    Handles tradability checks, limit detection, cost computation,
+    and volume constraints. All checks are date-aware.
+
+    Args:
+        cost_config: Transaction cost parameters.
+        st_data_path: Path to st_stocks.txt (Qlib instrument format).
+        feeder: QlibDataFeeder instance for list_date lookups.
+        volume_limit: Max fraction of daily volume for a single order.
+        slippage_model: Slippage model to use.
+    """
+
+    def __init__(self, cost_config: Optional[CostConfig] = None,
+                 st_data_path: Optional[str] = None,
+                 feeder: Optional['QlibDataFeeder'] = None,
+                 volume_limit: float = 0.25,
+                 slippage_model: Optional[SlippageModel] = None,
+                 suspension_ranges_path: Optional[str] = None):
+        """Initialize the exchange simulator.
+
+        Args:
+            cost_config: Transaction cost parameters.
+            st_data_path: Path to st_stocks.txt (Qlib instrument format).
+            feeder: QlibDataFeeder instance for list_date lookups.
+            volume_limit: Max fraction of daily volume for a single order.
+            slippage_model: Slippage model to use.
+            suspension_ranges_path: Path to ``data/market/suspension/suspension_ranges.parquet``
+                (P1-1). When provided, is_suspended() prefers the authoritative
+                Tushare suspend_d table and falls back to ``vol == 0`` only
+                when the table lacks coverage for the (ts_code, date) query.
+                When None (default), the backtester uses the legacy
+                ``vol == 0`` proxy only.
+        """
+        self.cost_config = cost_config or CostConfig()
+        self.volume_limit = volume_limit
+        # 2026-05-22: Default slippage changed from PctSlippage(0.001)=10bps
+        # to FixedSlippage(0.0003)=0.3bps to align with JoinQuant's standard
+        # FixedSlippage(3/10000), which is the deployment medium for this
+        # project. Research that wants the prior conservative default must
+        # pass slippage_model=CONSERVATIVE_SLIPPAGE_10BPS (or equivalent)
+        # explicitly. Zero-cost research must still explicitly pass
+        # slippage_model=NoSlippage(). See CLAUDE.md §3 for the rationale.
+        self.slippage_model = slippage_model if slippage_model is not None else FixedSlippage(0.0003)
+        self._feeder = feeder
+
+        # Load ST ranges
+        self._st_map: dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+        if st_data_path:
+            self._st_map = self._load_st_ranges(st_data_path)
+
+        # P1-1: Load authoritative suspension lookup if available
+        self._suspension_lookup = None
+        if suspension_ranges_path:
+            try:
+                # Import here to avoid circular imports on exchange module load
+                import sys as _sys
+                from pathlib import Path as _Path
+                _src_root = _Path(__file__).resolve().parents[3] / "src"
+                if str(_src_root) not in _sys.path:
+                    _sys.path.insert(0, str(_src_root))
+                from data_infra.provider_metadata import SuspensionLookup
+                self._suspension_lookup = SuspensionLookup.from_ranges_file(suspension_ranges_path)
+                logger.info("Loaded authoritative suspension lookup from %s", suspension_ranges_path)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load suspension lookup at %s: %s. "
+                    "Falling back to vol==0 proxy.",
+                    suspension_ranges_path,
+                    exc,
+                )
+                self._suspension_lookup = None
+
+    def _load_st_ranges(self, path: str) -> dict:
+        """Load st_stocks.txt into a dict for fast is_st() queries.
+
+        Note: st_stocks.txt uses Qlib format (000004_SZ) with tab
+        delimiter and YYYY-MM-DD dates. All parquet data uses Tushare
+        format (000004.SZ). Convert on load.
+
+        Args:
+            path: Path to st_stocks.txt.
+
+        Returns:
+            Dict {ts_code: [(start, end), ...]} of ST periods.
+        """
+        st_map = defaultdict(list)
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 3:
+                    continue
+                qlib_code, start_str, end_str = parts[0], parts[1], parts[2]
+                ts_code = qlib_code.replace('_', '.')  # 000004_SZ -> 000004.SZ
+                start = pd.Timestamp(start_str)
+                end = pd.Timestamp(end_str)
+                st_map[ts_code].append((start, end))
+        logger.info('Loaded ST ranges for %d stocks', len(st_map))
+        return dict(st_map)
+
+    # ─── ST Detection ─────────────────────────────────────────────
+
+    def is_st(self, code: str, date: pd.Timestamp) -> bool:
+        """Check if a stock is ST on the given date.
+
+        Args:
+            code: Tushare ts_code (e.g., '000001.SZ').
+            date: Trading date.
+
+        Returns:
+            True if stock is ST/\u002AST on this date.
+        """
+        ranges = self._st_map.get(code, [])
+        for start, end in ranges:
+            if start <= date <= end:
+                return True
+        return False
+
+    # ─── Price Limits ─────────────────────────────────────────────
+
+    def get_limit_pct(self, code: str, is_st: bool,
+                      date: pd.Timestamp) -> float:
+        """Get price limit percentage for a stock on a given date.
+
+        Multi-tier limits:
+        - ST: ±5%
+        - ChiNext (300/301): ±20% since 2020-08-24, else ±10%
+        - STAR (688/689): ±20% since 2019-07-22, else ±10%
+        - BSE (83/87/43/92): ±30%
+        - Main board: ±10%
+
+        Args:
+            code: Tushare ts_code (e.g., '300001.SZ').
+            is_st: Whether stock is ST on this date.
+            date: Trading date.
+
+        Returns:
+            Limit percentage as float (e.g., 0.10 for ±10%).
+        """
+        if is_st:
+            return 0.05
+        prefix = code[:3]
+        if prefix in ('300', '301'):  # ChiNext (创业板)
+            return 0.20 if date >= _CHINEXT_REFORM_DATE else 0.10
+        if prefix in ('688', '689'):  # STAR (科创板)
+            return 0.20 if date >= _STAR_LAUNCH_DATE else 0.10
+        if code[:2] in ('83', '87', '43', '92'):  # BSE (北交所)
+            return 0.30
+        return 0.10  # Main board (主板) default
+
+    def compute_limit_prices(self, pre_close: float,
+                             limit_pct: float) -> tuple[float, float]:
+        """Compute limit-up and limit-down prices.
+
+        Uses Shanghai/Shenzhen exchange convention: **round half up** to
+        2 decimal places (分). Python's default ``round()`` uses banker's
+        rounding (round-half-to-even) which can misclassify borderline
+        limit prices by ±0.01 ¥. The explicit round-half-up here matches
+        the exchange's published convention.
+
+        Args:
+            pre_close: Previous close price (ex-rights adjusted on ex-dates).
+            limit_pct: Limit percentage (e.g., 0.10).
+
+        Returns:
+            (limit_up_price, limit_down_price) tuple.
+        """
+        limit_up = _round_half_up_2dp(pre_close * (1 + limit_pct))
+        limit_down = _round_half_up_2dp(pre_close * (1 - limit_pct))
+        limit_down = max(limit_down, 0.01)  # Minimum price is 1分
+        return limit_up, limit_down
+
+    def is_limit_up(self, row: pd.Series, code: str,
+                    date: pd.Timestamp) -> bool:
+        """Check if a stock closed at limit-up.
+
+        Cannot buy at limit-up (no sellers). Can still sell.
+
+        Args:
+            row: Daily data row with 'close' and 'pre_close'.
+            code: Stock ts_code.
+            date: Trading date.
+
+        Returns:
+            True if close is at limit-up price.
+        """
+        is_st = self.is_st(code, date)
+        limit_pct = self.get_limit_pct(code, is_st, date)
+        pre_close = row.get('raw_pre_close', row['pre_close'])
+        close = row.get('raw_close', row['close'])
+        limit_up, _ = self.compute_limit_prices(pre_close, limit_pct)
+        return abs(close - limit_up) < 0.005  # within half a fen
+
+    def is_limit_down(self, row: pd.Series, code: str,
+                      date: pd.Timestamp) -> bool:
+        """Check if a stock closed at limit-down.
+
+        Cannot sell at limit-down (no buyers). Can still buy.
+
+        Args:
+            row: Daily data row with 'close' and 'pre_close'.
+            code: Stock ts_code.
+            date: Trading date.
+
+        Returns:
+            True if close is at limit-down price.
+        """
+        is_st = self.is_st(code, date)
+        limit_pct = self.get_limit_pct(code, is_st, date)
+        pre_close = row.get('raw_pre_close', row['pre_close'])
+        close = row.get('raw_close', row['close'])
+        _, limit_down = self.compute_limit_prices(pre_close, limit_pct)
+        return abs(close - limit_down) < 0.005
+
+    def is_suspended(
+        self,
+        row: pd.Series,
+        code: Optional[str] = None,
+        date: Optional[pd.Timestamp] = None,
+    ) -> bool:
+        """Check if a stock is suspended.
+
+        P1-1 contract: prefer the authoritative Tushare suspend_d lookup
+        when available (requires ``suspension_ranges_path`` to have been
+        passed to the Exchange constructor AND ``code`` + ``date`` args to
+        be provided here). Fall back to the legacy ``vol == 0`` proxy when
+        the authoritative table lacks coverage for the (code, date) query.
+
+        Args:
+            row: Daily data row with 'vol' column (used for fallback).
+            code: Stock ts_code (optional; required for authoritative lookup).
+            date: Trading date (optional; required for authoritative lookup).
+
+        Returns:
+            True if stock is suspended.
+        """
+        if self._suspension_lookup is not None and code is not None and date is not None:
+            result = self._suspension_lookup.is_suspended(code, date)
+            if result is not None:
+                return result
+        vol = row.get('vol', 0)
+        if pd.isna(vol) or vol == 0:
+            return True
+        return False
+
+    def is_ipo_period(self, code: str, date: pd.Timestamp) -> bool:
+        """Check if a stock is in its IPO no-limit period.
+
+        IPO no-limit periods (no price limit on these days):
+        - Main Board (沪深主板): 1 day (listing day only)
+        - ChiNext (创业板, 300/301): 5 days since 2020-08-24
+        - STAR (科创板, 688/689): 5 days since launch
+        - BSE (北交所): 1 day
+
+        Args:
+            code: Stock ts_code.
+            date: Trading date.
+
+        Returns:
+            True if stock is in its IPO no-limit period.
+        """
+        if self._feeder is None:
+            return False
+
+        sb = self._feeder.get_stock_basic()
+        stock = sb[sb['ts_code'] == code]
+        if stock.empty:
+            return False
+
+        list_date = stock.iloc[0]['list_date']
+        if pd.isna(list_date):
+            return False
+
+        # Count trading days since listing.
+        # count_trading_days(list_date, date) is INCLUSIVE on both ends,
+        # so listing day counts as 1. Verified against
+        # data_feeder.py:307-309 (2026-04-14, P1-2 verification pass).
+        #
+        # Convention:
+        #   ChiNext (300/301) post-2020-08-24 reform: 5 trading days
+        #   STAR (688/689): 5 trading days
+        #   Main board, BSE: 1 trading day (listing day only)
+        # All counts include the listing day itself.
+        trading_days_since = self._feeder.count_trading_days(list_date, date)
+
+        prefix = code[:3]
+        if prefix in ('300', '301') and date >= _CHINEXT_REFORM_DATE:
+            return trading_days_since <= 5
+        if prefix in ('688', '689'):
+            return trading_days_since <= 5
+        # Main board and BSE: 1 day (listing day only)
+        return trading_days_since <= 1
+
+    # ─── Tradability ──────────────────────────────────────────────
+
+    def can_buy(self, row: pd.Series, code: str,
+                date: pd.Timestamp) -> bool:
+        """Check if a stock can be bought.
+
+        Cannot buy if:
+        - Suspended (vol == 0)
+        - Limit-up (no sellers), UNLESS in IPO period
+
+        Args:
+            row: Daily data row.
+            code: Stock ts_code.
+            date: Trading date.
+
+        Returns:
+            True if stock is buyable.
+        """
+        if self.is_suspended(row, code=code, date=date):
+            return False
+        if self.is_limit_up(row, code, date):
+            if not self.is_ipo_period(code, date):
+                return False
+        return True
+
+    def can_sell(self, row: pd.Series, code: str,
+                 date: pd.Timestamp) -> bool:
+        """Check if a stock can be sold.
+
+        Cannot sell if:
+        - Suspended (vol == 0)
+        - Limit-down (no buyers)
+
+        Args:
+            row: Daily data row.
+            code: Stock ts_code.
+            date: Trading date.
+
+        Returns:
+            True if stock is sellable.
+        """
+        if self.is_suspended(row, code=code, date=date):
+            return False
+        if self.is_limit_down(row, code, date):
+            return False
+        return True
+
+    # ─── Volume Constraints ───────────────────────────────────────
+
+    def max_buyable_value(self, row: pd.Series) -> float:
+        """Maximum value that can be bought for a single stock.
+
+        Capped at volume_limit fraction of daily volume.
+        vol is in 手 (lots of 100 shares).
+
+        Args:
+            row: Daily data row with 'vol' and 'open'.
+
+        Returns:
+            Maximum buy value in ¥.
+        """
+        vol = row.get('vol', 0)
+        if pd.isna(vol) or vol <= 0:
+            return 0.0
+        max_shares = vol * 100 * self.volume_limit  # vol in 手 -> shares
+        price = row.get('raw_open', row.get('open', 0))
+        return max_shares * price
+
+    def max_sellable_shares(self, row: pd.Series) -> int:
+        """Maximum shares that can be sold in one order.
+
+        Capped at volume_limit fraction of daily volume.
+
+        Args:
+            row: Daily data row with 'vol'.
+
+        Returns:
+            Maximum sellable shares.
+        """
+        vol = row.get('vol', 0)
+        if pd.isna(vol) or vol <= 0:
+            return 0
+        return int(vol * 100 * self.volume_limit)
+
+    # ─── Execution ────────────────────────────────────────────────
+
+    def apply_slippage(self, price: float, direction: str,
+                       row: pd.Series, value: float = 0) -> float:
+        """Apply slippage to a fill price.
+
+        Args:
+            price: Raw fill price (open or close).
+            direction: 'buy' or 'sell'.
+            row: Daily data row.
+            value: Trade value (used by some slippage models).
+
+        Returns:
+            Adjusted price.
+        """
+        return self.slippage_model.apply(price, direction, value, row)
+
+    def compute_buy_cost(self, value: float, date: pd.Timestamp) -> float:
+        """Compute total cost for a buy trade (scalar, backward-compatible).
+
+        Delegates to ``compute_buy_cost_breakdown()`` and returns the total.
+        Existing callers that only need the scalar are unaffected.
+        """
+        return self.compute_buy_cost_breakdown(value, date).total
+
+    def compute_buy_cost_breakdown(self, value: float, date: pd.Timestamp) -> CostBreakdown:
+        """Compute itemized cost for a buy trade.
+
+        Buy cost = commission + transfer fee (no stamp tax on buys).
+
+        This is the **single source of truth** for buy-side costs. The
+        engine passes ``breakdown.total`` to ``portfolio.buy()`` so the
+        logged cost and the actual cash deduction always agree. See
+        ``CLAUDE.md §3`` "Hard Invariants" for the full contract.
+
+        Args:
+            value: Trade value in ¥.
+            date: Trade date.
+
+        Returns:
+            CostBreakdown with commission, stamp=0, transfer_fee, total.
+        """
+        commission = max(value * self.cost_config.buy_commission,
+                         self.cost_config.min_commission)
+        transfer_fee = value * self.cost_config.transfer_fee
+        return CostBreakdown(
+            commission=commission,
+            stamp=0.0,
+            transfer_fee=transfer_fee,
+            total=commission + transfer_fee,
+        )
+
+    def compute_sell_cost(self, value: float, date: pd.Timestamp) -> float:
+        """Compute total cost for a sell trade (scalar, backward-compatible).
+
+        Delegates to ``compute_sell_cost_breakdown()`` and returns the total.
+        Existing callers that only need the scalar are unaffected.
+        """
+        return self.compute_sell_cost_breakdown(value, date).total
+
+    def compute_sell_cost_breakdown(self, value: float, date: pd.Timestamp) -> CostBreakdown:
+        """Compute itemized cost for a sell trade.
+
+        Sell cost = commission + stamp tax (date-aware) + transfer fee.
+
+        This is the **single source of truth** for sell-side costs. The
+        engine passes ``breakdown.total`` to ``portfolio.sell()`` so the
+        logged cost and the actual cash deduction always agree. See
+        ``CLAUDE.md §3`` "Hard Invariants" for the full contract.
+
+        The ``_STAMP_TAX_CHANGE_DATE`` module constant is the single
+        location for the 2023-08-28 rate-change boundary. Do NOT
+        duplicate this date check elsewhere in the codebase.
+
+        Args:
+            value: Trade value in ¥.
+            date: Trade date.
+
+        Returns:
+            CostBreakdown with commission, stamp, transfer_fee, total.
+        """
+        commission = max(value * self.cost_config.sell_commission,
+                         self.cost_config.min_commission)
+        stamp_rate = (self.cost_config.stamp_tax
+                      if date >= _STAMP_TAX_CHANGE_DATE
+                      else self.cost_config.stamp_tax_pre_20230828)
+        stamp = value * stamp_rate
+        transfer_fee = value * self.cost_config.transfer_fee
+        return CostBreakdown(
+            commission=commission,
+            stamp=stamp,
+            transfer_fee=transfer_fee,
+            total=commission + stamp + transfer_fee,
+        )
+
+    # ─── Lot Size ─────────────────────────────────────────────────
+
+    def get_lot_size(self, code: str) -> int:
+        """Get the lot size for a stock.
+
+        Main board, ChiNext, STAR: 100 shares.
+        BSE (北交所): 100 shares (simplified; actual is 100).
+
+        Args:
+            code: Stock ts_code.
+
+        Returns:
+            Lot size in shares.
+        """
+        # All A-share boards use 100-share lots
+        return 100
+
+
+# ─── Slippage preset instantiations (must appear after class defs) ───────
+#
+# These are the actual instances referenced by the forward declarations near
+# the top of the module. Strategies should prefer the named presets over
+# inlining ``FixedSlippage(0.0003)`` etc. so a future preset change applies
+# everywhere consistently.
+JOINQUANT_DEFAULT_SLIPPAGE = FixedSlippage(0.0003)
+"""JoinQuant FixedSlippage(3/10000) — 0.0003 ¥ per share. This is the
+Exchange()-constructor default as of 2026-05-22 for JoinQuant-deployment
+parity. ≈ 0.3 bps on a ¥10 stock; ≈ 0.6 bps on a ¥5 stock."""
+
+CONSERVATIVE_SLIPPAGE_10BPS = PctSlippage(0.001)
+"""Prior Exchange() default — 0.1% percentage slippage = 10 bps. Use this
+when conservatism matters more than JoinQuant parity:
+``Exchange(slippage_model=CONSERVATIVE_SLIPPAGE_10BPS)``."""

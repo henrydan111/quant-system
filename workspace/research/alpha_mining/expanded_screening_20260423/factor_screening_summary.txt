@@ -1,0 +1,13 @@
+Post-fix screening run generated at 2026-04-23T04:30:10
+Window: 2014-01-01 to 2026-02-27
+Horizons: [5, 10, 20]
+Factors screened: 167
+Grade counts: {'C': 81, 'D': 44, 'B': 41, 'A': 1}
+Include new data: True
+Engine: batch
+
+Notes:
+  - This run was produced by run_post_fix_screening.py (not the
+    orchestrator-routed legacy CLI) as part of follow-up plan #1.
+  - Factor library operators had same-day leakage fixed across 45+
+    operators before this screening ran.

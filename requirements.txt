@@ -1,0 +1,31 @@
+# 数据与基础设施
+pandas==2.3.3
+numpy==2.2.6
+scipy==1.15.3
+tushare==1.4.24
+pyyaml==6.0.3
+python-dotenv==1.2.1
+
+# 核心量化库
+pyqlib==0.9.7
+cvxpy==1.7.5
+
+# 机器学习与深度学习
+scikit-learn==1.7.2
+lightgbm==4.6.0
+xgboost==3.2.0
+torch==2.10.0
+pytorch-tabnet==4.1.0
+
+# MLOps与追踪
+mlflow==3.10.0
+
+# 调度与监控
+apache-airflow==3.1.7
+schedule==1.2.2
+
+# 开发工具
+jupyterlab==4.5.5
+pytest==9.0.2
+black==26.1.0
+flake8==7.3.0

@@ -1,0 +1,108 @@
+{
+  "profile_id": "theme_strategy",
+  "mode": "formal",
+  "consumes": [],
+  "produces": [],
+  "requested_capabilities": [],
+  "inputs": {
+    "theme": "growth",
+    "stage": "all",
+    "output_dir": "E:\\量化系统\\workspace\\research\\alpha_mining\\hyp_b_run_20260422"
+  },
+  "run_context": {
+    "registry_root": "E:\\量化系统\\data",
+    "candidate_registry_dir": "E:\\量化系统\\data\\candidate_registry",
+    "signal_registry_dir": "E:\\量化系统\\data\\signal_registry",
+    "hypothesis_registry_dir": "E:\\量化系统\\data\\hypothesis_registry",
+    "holdout_seal_dir": "E:\\量化系统\\data\\holdout_seals"
+  },
+  "hypothesis": {
+    "hypothesis_id": "hyp_20260421_002",
+    "thesis_statement": "A Growth-at-Reasonable-Price composite ranking A-share mainboard stocks by joint signals of net profit growth, revenue trend, value (earnings yield), and quality (ROE + margin trend) will outperform on a long-short basis because the market overpays for pure growth and undervalues cheap growth, and the multi-component composite is more robust to single-factor noise than PEG ratio alone.",
+    "mechanism": "Classic GARP insight: market overpays for pure growth (high P/E growth stocks) and undervalues cheap growth (moderate P/E + sustained growth). PEG (price/earnings/growth) is the simplest expression but vulnerable to single-quarter noise. A weighted multi-factor composite combining current growth (grow_netprofit_yoy, Phase 1 Sharpe +1.43), growth persistence (grow_rev_trend), value (val_ep_ttm), and quality (qual_roe + qual_margin_trend) is structurally more diversified. This hypothesis runs on the broad eligible universe (no growth filter at Layer 2) and lets the composite signal do the selection.",
+    "source": {
+      "source_type": "internal_research",
+      "identifier": "growth_strategy_screening_20260421_110014",
+      "title": "Phase 1 quick-kill screening for growth-stock hypothesis-driven plan",
+      "authors": [
+        "Claude (research_orchestrator + factor_eval)"
+      ],
+      "url": "",
+      "publication_date": "2026-04-21",
+      "publisher": "internal"
+    },
+    "factor_refs": [
+      {
+        "object_type": "factor",
+        "object_name": "grow_netprofit_yoy"
+      },
+      {
+        "object_type": "factor",
+        "object_name": "grow_rev_trend"
+      },
+      {
+        "object_type": "factor",
+        "object_name": "val_ep_ttm"
+      },
+      {
+        "object_type": "factor",
+        "object_name": "qual_roe"
+      },
+      {
+        "object_type": "factor",
+        "object_name": "qual_margin_trend"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2014-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2025-12-31",
+      "walk_forward_config": {
+        "train_years": 5,
+        "validation_years": 2,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "10d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 1,
+    "expected_effect": {
+      "statistic": "rank_ic",
+      "point_estimate": 0.035,
+      "ci_low": 0.02,
+      "ci_high": 0.05,
+      "horizon_days": 10
+    },
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.03,
+      "min_deflated_sharpe": 0.65,
+      "min_cost_adjusted_sharpe": 0.45,
+      "max_drawdown": 0.3,
+      "max_annual_turnover": 3.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "min_regime_pass_count": 3,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": [
+        "garp_composite_must_beat_existing_comp_val_qual_by_0.010_rank_icir"
+      ]
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "The GARP composite collapses to a value-dominated signal (val_ep_ttm carries most of the load) because grow_rev_trend has Phase 1 LS Sharpe of -0.84 and grow_netprofit_yoy has only +1.43. If the value leg dominates, the hypothesis becomes structurally indistinguishable from the existing comp_val_qual factor, which would fail the baseline-beat custom rule.",
+      "weakest_assumption": "That equal-ish weighting across growth/value/quality (approximately 0.40 growth + 0.25 value + 0.35 quality) captures a genuine GARP premium rather than just replicating the existing comp_val_qual composite which already ranks well in the catalog. Also assumes that grow_rev_trend's negative LS Sharpe in Phase 1 sandbox is mitigated by neutralization and broader universe in formal IS.",
+      "what_would_falsify_this": "Falsified if formal IS rank_icir < 0.025, OR GARP composite rank_icir is not at least 0.010 absolute higher than comp_val_qual rank_icir on the same window (the baseline-beat custom rule), OR cost-adjusted Sharpe is negative, OR sealed OOS rank_ic falls outside [0.020, 0.050] CI.",
+      "priors_on_cost_sensitivity": "Lower cost sensitivity than Hypothesis A because the broader universe and 10-day rebalance keep turnover below 3.0x annually. Expected to remain positive after 10-15 bps round-trip costs. The 5B market cap floor reduces impact costs vs micro-caps."
+    },
+    "pre_registered_at": "",
+    "registered_by": "henrydan111@gmail.com"
+  }
+}
