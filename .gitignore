@@ -93,19 +93,36 @@ logs/
 
 # =============================================================================
 # workspace/ — research scratch space
-# Keep structure + scripts + configs; exclude generated artifacts.
+# Keep structure + scripts + notebooks + configs; exclude run artifacts.
 # =============================================================================
 workspace/outputs/
 workspace/research/**/outputs/
 workspace/research/**/cache/
 workspace/research/**/runs/
+workspace/research/**/steps/
+workspace/research/**/dag_plan.json
+workspace/research/**/dag_state.json
+workspace/research/**/run_metadata.json
+workspace/research/**/artifact_manifest.json
+workspace/research/**/produced_objects.json
+workspace/research/**/review_summary.json
+workspace/research/**/eligible_map.json
+workspace/research/**/console.log
+workspace/research/**/run_console.log
 workspace/research/**/*.parquet
 workspace/research/**/*.csv
 workspace/research/**/*.html
 workspace/research/**/*.pkl
 workspace/research/**/*.png
 workspace/research/**/*.jpg
+workspace/research/**/*.pdf
 workspace/research/**/.ipynb_checkpoints/
+
+# =============================================================================
+# Claude Code / Codex local tooling cache (binaries, sessions)
+# =============================================================================
+.codex/
+.claude/
 
 # =============================================================================
 # Backtest result archives (Chinese-named directories)
