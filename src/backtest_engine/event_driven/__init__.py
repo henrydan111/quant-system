@@ -39,6 +39,14 @@ from .exchange import (
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
 from .engine import BacktestEngine, BacktestResult
+from src.data_infra.provider_manifest import (
+    ProviderManifestError,
+    load_provider_manifest,
+)
+from src.research_orchestrator.artifact_provenance import (
+    ArtifactProvenance,
+    attach_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +97,9 @@ class EventDrivenBacktester:
             holdout_context: Any | None = None,
             preload_strict: bool = False,
             instrumentation_path: str | None = None,
-            fill_mode: str = 'open_close') -> BacktestResult:
+            fill_mode: str = 'open_close',
+            calendar_policy_id: str | None = None,
+            require_provider_manifest: bool = False) -> BacktestResult:
         """Run a backtest with the given strategy.
 
         Args:
@@ -115,9 +125,20 @@ class EventDrivenBacktester:
                 average price ``(open + close) / 2`` — matches JoinQuant's
                 daily-backtest fill model (API doc line 1252). Use the latter
                 when local CAGR must predict JoinQuant daily-backtest CAGR.
+            calendar_policy_id: Identifier of the calendar policy this run was
+                explicitly authorized under (see config/calendar_policies/).
+                Recorded into result.config via ArtifactProvenance. Formal runs
+                must pass an explicit value; sandbox runs may leave None.
+            require_provider_manifest: When True, raise if the local Qlib
+                provider has no data/qlib_data/metadata/provider_build.json.
+                Formal validation handlers should pass True; sandbox/historical
+                investigation scripts may leave the default False so the
+                wrapper still tolerates a pre-PR1 environment.
 
         Returns:
-            BacktestResult with all outputs.
+            BacktestResult with all outputs.  ``result.config['artifact_provenance']``
+            carries provider_build_id, calendar_policy_id, and (post PR 3)
+            execution_profile_*; missing fields make the artifact legacy.
         """
         if time_split:
             stage = str(time_split.get("stage", "") or "")
@@ -216,6 +237,20 @@ class EventDrivenBacktester:
             fill_mode=fill_mode,
         )
 
+        # Load provider manifest (best-effort unless require_provider_manifest=True).
+        # The provenance block is attached to result.config after engine.run() returns.
+        provider_build_id: str | None = None
+        try:
+            manifest = load_provider_manifest(os.path.join(self.data_dir, 'qlib_data'))
+            provider_build_id = manifest.provider_build_id
+        except ProviderManifestError as exc:
+            if require_provider_manifest:
+                raise
+            logger.warning(
+                "Provider manifest unavailable (%s). Result will be marked legacy_artifact=True.",
+                exc,
+            )
+
         import time as _time
         _run_t0 = _time.perf_counter()
         try:
@@ -239,6 +274,25 @@ class EventDrivenBacktester:
                         "Failed to write instrumentation report to %s: %s",
                         instrumentation_path, exc,
                     )
+
+        # Stamp provenance onto result.config. PR 1 covers provider_build_id +
+        # calendar_policy_id; execution_profile_* fields are filled by PR 3.
+        # Defensive guard: wiring tests that mock engine.run() to return a bare
+        # object (no .config) are tolerated — we skip the attach instead of
+        # raising, since those tests assert identity of the returned object.
+        provenance = ArtifactProvenance(
+            provider_build_id=provider_build_id,
+            calendar_policy_id=calendar_policy_id,
+        )
+        provenance = ArtifactProvenance.from_dict(provenance.to_dict())
+        config = getattr(result, "config", None)
+        if isinstance(config, dict):
+            attach_provenance(config, provenance)
+        else:
+            logger.debug(
+                "Skipping provenance attach: result has no dict config (type=%s)",
+                type(result).__name__,
+            )
         return result
 
     @staticmethod

@@ -1,0 +1,36 @@
+# Calendar policy: frozen window during system construction.
+#
+# This is the canonical policy for the current build phase. The trading
+# calendar is intentionally frozen at 2026-02-27 because the system is still
+# under active construction (per CLAUDE.md §6.2a). Formal research runs must
+# acknowledge this explicitly via --calendar-policy frozen_20260227_system_build
+# rather than treating the frozen window as accidental staleness.
+#
+# When the freeze ends, replace `frozen: true` with `frozen: false` and add a
+# `max_calendar_lag_days` field. The runtime calendar_policy module already
+# branches on `frozen` so no code change is required to thaw.
+
+policy_id: frozen_20260227_system_build
+policy_schema_version: 1
+
+calendar_start_date: 2008-01-02
+calendar_end_date: 2026-02-27
+data_end_date: 2026-02-27
+
+frozen: true
+reason: system_construction
+established_at: 2026-05-26
+
+allowed_modes:
+  - sandbox
+  - joinquant_replication
+  - formal_research_with_explicit_freeze
+
+# Default behavior when a formal run does NOT pass --calendar-policy.
+default_formal_behavior: require_explicit_policy
+
+# Notes for human reviewers — not consumed by code.
+notes:
+  - "Provider rebuilt 2026-04-21 against this calendar."
+  - "Downstream revalidation completed 2026-04-23."
+  - "Existing JoinQuant-parity research relies on this frozen window."

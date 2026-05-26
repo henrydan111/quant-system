@@ -67,6 +67,67 @@ def _run(cmd: list[str], label: str) -> dict:
     }
 
 
+def _provider_manifest_check() -> dict:
+    """Validate the local provider_build.json against the live Qlib calendar.
+
+    PR 1: Formal runs require the manifest; daily QA fails loudly if it is
+    missing or inconsistent with the on-disk provider.
+    """
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT / "src"))
+        # Resolve qlib_dir from config.yaml's storage block.
+        import yaml as _yaml
+        with open(PROJECT_ROOT / "config.yaml", "r", encoding="utf-8") as handle:
+            config = _yaml.safe_load(handle) or {}
+        storage = config.get("storage", {})
+        qlib_dir = storage.get("qlib_data_dir", "./data/qlib_data")
+        if not Path(qlib_dir).is_absolute():
+            qlib_dir = str(PROJECT_ROOT / qlib_dir.lstrip("./"))
+
+        from data_infra.provider_manifest import (
+            load_provider_manifest,
+            validate_provider_manifest_against_qlib,
+        )
+        from research_orchestrator.calendar_policy import load_calendar_policy
+
+        manifest = load_provider_manifest(qlib_dir)
+
+        # Read live calendar end-date directly from the file.
+        calendar_path = Path(qlib_dir) / "calendars" / "day.txt"
+        with open(calendar_path, "r", encoding="utf-8") as handle:
+            cal_lines = [line.strip() for line in handle if line.strip()]
+        live_calendar_end = cal_lines[-1] if cal_lines else ""
+
+        # Cross-check against the calendar policy.
+        policy = load_calendar_policy(manifest.calendar_policy_id)
+        # When the policy is frozen, a mismatch IS expected (the policy permits it).
+        # When non-frozen, mismatch beyond max_calendar_lag_days fails.
+        allow_mismatch = policy.frozen
+        validate_provider_manifest_against_qlib(
+            manifest, live_calendar_end, allow_calendar_mismatch=allow_mismatch
+        )
+
+        return {
+            "label": "provider_manifest_check",
+            "ok": True,
+            "exit_code": 0,
+            "provider_build_id": manifest.provider_build_id,
+            "calendar_policy_id": manifest.calendar_policy_id,
+            "calendar_end_date": manifest.provider.calendar_end_date,
+            "live_calendar_end": live_calendar_end,
+            "retroactive_manifest": manifest.retroactive_manifest,
+            "namespacing_status": manifest.event_endpoint_namespacing.status,
+        }
+    except Exception as exc:
+        logger.warning("provider_manifest_check failed: %s", exc)
+        return {
+            "label": "provider_manifest_check",
+            "ok": False,
+            "exit_code": 1,
+            "error": str(exc),
+        }
+
+
 def _audit_daily_files_inprocess() -> dict:
     """Run DataAuditor in-process on the live data/market/daily tree."""
     try:
@@ -106,6 +167,10 @@ def main() -> int:
     python = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
     checks = []
+
+    # 0. Provider manifest (PR 1) — runs first so downstream checks can rely
+    # on a known calendar_policy_id and provider_build_id being recorded.
+    checks.append(_provider_manifest_check())
 
     # 1. DataAuditor
     checks.append(_audit_daily_files_inprocess())

@@ -2966,7 +2966,12 @@ class StagedQlibBackendBuilder:
         self._backfill_provenance.clear()
         return written
 
-    def publish(self) -> None:
+    def publish(
+        self,
+        *,
+        calendar_policy_id: str = "frozen_20260227_system_build",
+        emit_manifest: bool = True,
+    ) -> None:
         """Atomically promote the staged provider into ``data/qlib_data``.
 
         Uses ``os.replace()`` which is atomic ONLY when both paths live on the
@@ -2978,6 +2983,11 @@ class StagedQlibBackendBuilder:
         if the staged provider and target live on different drives, publish is
         refused with remediation guidance. See CLAUDE.md §6.3 "Backend Rebuild
         Discipline" for the full contract.
+
+        After the atomic swap, a ``provider_build.json`` manifest is emitted
+        under ``<qlib_dir>/metadata/`` so every formal artifact downstream can
+        record ``provider_build_id``. Disable with ``emit_manifest=False`` only
+        for hot-restore drills where attestation is not desired.
         """
         if not os.path.isdir(self.paths.provider_dir):
             raise BuildGateError("Cannot publish: staged provider directory is missing")
@@ -3010,6 +3020,55 @@ class StagedQlibBackendBuilder:
             os.replace(self.paths.qlib_dir, backup_dir)
         os.replace(self.paths.provider_dir, self.paths.qlib_dir)
         logger.info("Published staged provider to %s", self.paths.qlib_dir)
+
+        if emit_manifest:
+            self._emit_provider_manifest_at_publish(calendar_policy_id=calendar_policy_id)
+
+    def _emit_provider_manifest_at_publish(self, *, calendar_policy_id: str) -> None:
+        """Emit data/qlib_data/metadata/provider_build.json after publish.
+
+        Pulls calendar bounds from the freshly-published Qlib provider's
+        ``calendars/day.txt`` so the manifest reflects the actual on-disk
+        state, not the builder's intended range. Resolves the source git
+        commit best-effort.
+        """
+        try:
+            calendars_path = os.path.join(self.paths.qlib_dir, "calendars", "day.txt")
+            with open(calendars_path, "r", encoding="utf-8") as handle:
+                lines = [line.strip() for line in handle if line.strip()]
+            if not lines:
+                logger.warning("Calendars file empty; skipping manifest emission")
+                return
+            calendar_start = lines[0]
+            calendar_end = lines[-1]
+        except OSError as exc:
+            logger.warning("Failed to read calendars/day.txt for manifest emission: %s", exc)
+            return
+
+        source_commit: str | None = None
+        try:
+            import subprocess
+            source_commit = (
+                subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() or None
+            )
+        except (OSError, subprocess.CalledProcessError):
+            source_commit = None
+
+        from src.data_infra.provider_manifest import emit_manifest_at_publish
+        try:
+            emit_manifest_at_publish(
+                qlib_dir=self.paths.qlib_dir,
+                provider_build_id=self.build_id,
+                calendar_policy_id=calendar_policy_id,
+                calendar_start_date=calendar_start,
+                calendar_end_date=calendar_end,
+                data_end_date=calendar_end,
+                source_git_commit=source_commit,
+                builder_mode="all",
+                builder_stage="full",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to emit provider manifest at publish: %s", exc)
 
     def run(
         self,

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "provider_build_id": "prod_full_20260421_namespace_v1",
+  "provider_published_at": "2026-04-21T00:00:00",
+  "downstream_revalidated_at": "2026-04-23T00:00:00",
+  "source_git_commit": null,
+  "builder": {
+    "entrypoint": "src/data_infra/pipeline/build_qlib_backend.py",
+    "builder_version": null,
+    "mode": "all",
+    "stage": "full"
+  },
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "provider": {
+    "path": "data/qlib_data",
+    "region": "REG_CN",
+    "calendar_start_date": "2008-01-02",
+    "calendar_end_date": "2026-02-27",
+    "data_end_date": "2026-02-27"
+  },
+  "event_endpoint_namespacing": {
+    "status": "enforced",
+    "affected_datasets": ["top_list", "top_inst", "block_trade", "cyq_perf"],
+    "prefix_rule": "{dataset}__{column}",
+    "canonical_kline_fields_protected": ["$open", "$high", "$low", "$close", "$vol", "$amount"]
+  },
+  "canonical_kline_hash": {
+    "method": "sha256_over_selected_sentinel_D_features",
+    "sentinel_instruments": ["000001_SZ", "600000_SH", "300001_SZ"],
+    "sentinel_dates": ["2014-01-02", "2020-08-24", "2024-12-31"],
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "validation": {
+    "namespace_tests_passed": true,
+    "provider_boundary_tests_passed": true,
+    "pit_live_provider_tests_passed": true,
+    "daily_qa_passed": true
+  },
+  "retroactive_manifest": true,
+  "retroactive_manifest_evidence": [
+    "README.md status snapshot dated 2026-05-26: 'Live Qlib provider rebuilt 2026-04-21'",
+    "project_state.md downstream revalidation note 2026-04-23",
+    "tests/data_infra/test_event_like_daily_namespace.py (passing)",
+    "tests/data_infra/test_event_like_provider_contract.py (passing)",
+    "tests/data_infra/test_pit_live_provider.py (passing)"
+  ]
+}

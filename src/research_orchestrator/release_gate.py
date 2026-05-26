@@ -5,7 +5,12 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+from src.research_orchestrator.artifact_provenance import (
+    ArtifactProvenance,
+    read_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -162,6 +167,84 @@ def write_release_gate_artifacts(*, gate_root: Path, result: ReleaseGateResult) 
         ),
         encoding="utf-8",
     )
+
+
+@dataclass(frozen=True)
+class ArtifactGateResult:
+    """Per-artifact gate decision driven by ArtifactProvenance.
+
+    Distinct from the audit-CSV-driven :class:`ReleaseGateResult` because the
+    two evaluate different things: audit-CSV gates inspect the theme-strategy
+    audit bundle, while artifact gates inspect a single result/registry
+    artifact's provenance block.
+
+    Legacy artifacts (those missing the provenance block entirely or missing
+    provider_build_id / calendar_policy_id) are readable and comparable but
+    cannot pass the formal gate. They surface here with
+    ``status="failed_legacy"`` and a populated ``reasons`` list.
+    """
+    eligible: bool
+    status: str
+    reasons: tuple[str, ...]
+    provider_build_id: str | None
+    calendar_policy_id: str | None
+    execution_profile_id: str | None
+    execution_profile_hash: str | None
+    legacy_artifact: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_artifact_provenance(
+    artifact_config: Mapping[str, Any] | None,
+) -> ArtifactGateResult:
+    """Decide whether a single artifact is formally eligible for publication.
+
+    Accepts either a ``BacktestResult.config``-style dict or any mapping that
+    carries an ``artifact_provenance`` key. Missing / malformed provenance
+    yields ``status="failed_legacy"`` rather than raising — viewers and
+    historical-comparison tools can still display the artifact, but the
+    release gate refuses it.
+    """
+    provenance = read_provenance(artifact_config)
+    eligible, reasons = provenance.is_formal_eligible()
+    if eligible:
+        status = "passed"
+    elif provenance.legacy_artifact:
+        status = "failed_legacy"
+    else:
+        status = "failed"
+    return ArtifactGateResult(
+        eligible=eligible,
+        status=status,
+        reasons=tuple(reasons),
+        provider_build_id=provenance.provider_build_id,
+        calendar_policy_id=provenance.calendar_policy_id,
+        execution_profile_id=provenance.execution_profile_id,
+        execution_profile_hash=provenance.execution_profile_hash,
+        legacy_artifact=provenance.legacy_artifact,
+    )
+
+
+def assert_formal_artifact_eligible(
+    artifact_config: Mapping[str, Any] | None,
+    *,
+    artifact_label: str = "artifact",
+) -> ArtifactGateResult:
+    """Strict variant of :func:`evaluate_artifact_provenance` for formal paths.
+
+    Raises ``ValueError`` if the artifact is not formal-eligible. Returns the
+    :class:`ArtifactGateResult` for callers that want to log/record it.
+    """
+    result = evaluate_artifact_provenance(artifact_config)
+    if not result.eligible:
+        raise ValueError(
+            f"Formal release blocked for {artifact_label}: "
+            f"status={result.status}, reasons={list(result.reasons)}. "
+            "Re-run with a current provider manifest and explicit calendar policy."
+        )
+    return result
 
 
 def run_release_gate(
