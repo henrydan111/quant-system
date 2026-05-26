@@ -534,6 +534,13 @@ def handle_validation_event_backtest_is(context: StepExecutionContext) -> StepEx
 
     capital = float(prescription.portfolio.target_gross_exposure) * 2_000_000.0  # default capital
     instrumentation_path = str(context.step_dir / "harness_instrumentation.json")
+    # PR 8c Blocker 2: formal IS validation must drive the EventDrivenBacktester
+    # through the formal runtime contract (is_formal=True → strict preload +
+    # require_preloaded + require_provider_manifest + manifest/calendar
+    # validation). Pre-PR-8c the handler passed only preload_strict=True
+    # and the rest of the formal-runtime guards were inert. The prescription's
+    # exchange_config / slippage_rate count as overrides on top of the
+    # joinquant_daily_sim profile, hence the override_reason.
     result = _run_with_cache_context(
         context,
         run_event_driven_window,
@@ -548,6 +555,16 @@ def handle_validation_event_backtest_is(context: StepExecutionContext) -> StepEx
         holdout_context=_holdout_context_for_step(context),
         preload_strict=True,
         instrumentation_path=instrumentation_path,
+        # PR 8c Blocker 2: formal runtime contract enabled.
+        execution_profile="joinquant_daily_sim",
+        calendar_policy_id="frozen_20260227_system_build",
+        run_mode="formal",
+        preload_required=True,
+        require_provider_manifest=True,
+        override_reason=(
+            "Prescription-supplied exchange_config + slippage_rate override "
+            "joinquant_daily_sim profile defaults for this hypothesis validation IS leg."
+        ),
     )
     # Persist the standard outputs the diagnostics step reads.
     report = getattr(result, "report", None) if result is not None else None
@@ -652,6 +669,11 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
     # ensures the OOS rows carry stage="oos_test" rather than the legacy
     # hardcoded "is_only".
     instrumentation_path = str(context.step_dir / "harness_instrumentation.json")
+    # PR 8c Blocker 2: same formal-runtime contract as the IS handler, but
+    # with run_mode='oos_test' so the engine's seal-claim backstop fires.
+    # The seal claim itself happens earlier (SealedBacktestRunner._claim_if_oos
+    # via the upstream pipeline); the engine independently re-checks it via
+    # the time_split.stage='oos_test' backstop in EventDrivenBacktester.run.
     result = _run_with_cache_context(
         context,
         run_event_driven_window,
@@ -666,6 +688,16 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
         holdout_context=_holdout_context_for_step(context),
         preload_strict=True,
         instrumentation_path=instrumentation_path,
+        # PR 8c Blocker 2: formal runtime contract enabled.
+        execution_profile="joinquant_daily_sim",
+        calendar_policy_id="frozen_20260227_system_build",
+        run_mode="oos_test",
+        preload_required=True,
+        require_provider_manifest=True,
+        override_reason=(
+            "Prescription-supplied exchange_config + slippage_rate override "
+            "joinquant_daily_sim profile defaults for this hypothesis validation OOS leg."
+        ),
     )
 
     report = getattr(result, "report", None) if result is not None else None

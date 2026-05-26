@@ -113,19 +113,62 @@ def _serialize_slippage(slip: SlippageModel) -> dict[str, Any]:
     return {"class": type(slip).__name__, "params": params}
 
 
+def _read_provider_calendar_end(qlib_dir: str | os.PathLike[str]) -> str:
+    """Read the provider's last trading day directly from calendars/day.txt.
+
+    PR 8c Blocker 1: pre-PR-8c the runtime validator used ``D.calendar()``,
+    which requires ``qlib.init(...)`` to have already run. PR 8b moved the
+    validator BEFORE feeder construction (which is what calls qlib.init),
+    so on a fresh process the call could fail with "Qlib not initialized"
+    even when the provider on disk was perfectly fine.
+
+    Reading the file directly mirrors what ``scripts/run_daily_qa.py``
+    already does and avoids depending on global Qlib state. The on-disk
+    format is one ISO date per line, sorted ascending; the last non-empty
+    line is the live calendar end.
+    """
+    from pathlib import Path
+    calendar_path = Path(qlib_dir) / "calendars" / "day.txt"
+    if not calendar_path.exists():
+        raise RuntimeError(
+            f"Provider calendar file not found at {calendar_path}. "
+            "The Qlib provider may not be initialized; verify the qlib_dir "
+            "argument points at a published provider tree."
+        )
+    lines = [
+        line.strip()
+        for line in calendar_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        raise RuntimeError(
+            f"Provider calendar file is empty: {calendar_path}. "
+            "Provider rebuild appears to have failed; re-run "
+            "build_qlib_backend or restore the provider tree."
+        )
+    return lines[-1]
+
+
 def _validate_provider_at_runtime(
     *,
     manifest: Any,
     calendar_policy_id: str,
     run_mode: str,
+    qlib_dir: str | os.PathLike[str] | None = None,
 ) -> None:
-    """Formal-runtime provider/calendar validation (PR 8 fix #3).
+    """Formal-runtime provider/calendar validation (PR 8 fix #3 + PR 8c).
 
     For a frozen policy, the observed Qlib calendar end-date MUST match the
     policy's calendar_end_date AND the manifest's calendar_end_date — the
     blanket "policy.frozen → allow any mismatch" was too loose. Mode-level
     permission is also checked: the run_mode (or profile deployment_target)
     must be in policy.allowed_modes.
+
+    PR 8c Blocker 1: the live calendar end is now read directly from the
+    provider's ``calendars/day.txt`` via :func:`_read_provider_calendar_end`,
+    so the validator does not depend on ``qlib.init(...)`` having run yet.
+    This is important because PR 8b moved the validator BEFORE feeder
+    creation (which is what initializes Qlib).
     """
     from src.research_orchestrator.calendar_policy import load_calendar_policy
     from src.data_infra.provider_manifest import (
@@ -156,21 +199,20 @@ def _validate_provider_at_runtime(
 
     policy.assert_run_mode_allowed(run_mode)
 
-    # Read live calendar end via Qlib.
-    # PR 8a fix #4: previously this swallowed errors and returned silently,
-    # which made a formal validator no-op if Qlib was unavailable. Formal
-    # enforcement must raise rather than skip — if the validator cannot
-    # inspect the calendar, the run has no business proceeding.
+    # PR 8c Blocker 1: read calendar end from disk, not via D.calendar().
+    # qlib_dir defaults to the manifest's recorded path when caller didn't
+    # supply one explicitly.
+    if qlib_dir is None:
+        qlib_dir = manifest.provider.path
     try:
-        from qlib.data import D as _D
-        cal = _D.calendar(start_time="1990-01-01", end_time="2099-12-31")
-        live_calendar_end = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
-    except Exception as exc:
+        live_calendar_end = _read_provider_calendar_end(qlib_dir)
+    except RuntimeError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(
-            "Formal provider/calendar validation could not read the live "
-            f"Qlib calendar: {exc}. The validator must not silently skip "
-            "the mismatch check on formal runs; verify Qlib is initialized "
-            "and the provider directory is reachable."
+            f"Formal provider/calendar validation could not read the "
+            f"calendar from {qlib_dir}: {exc}. The validator must not "
+            "silently skip the mismatch check on formal runs."
         ) from exc
 
     if policy.frozen:
@@ -447,6 +489,10 @@ class EventDrivenBacktester:
                     run_mode=run_mode or (
                         profile_obj.deployment_target if profile_obj else "sandbox"
                     ),
+                    # PR 8c Blocker 1: pass the qlib_dir explicitly so the
+                    # validator can read calendars/day.txt directly without
+                    # depending on qlib.init() having run.
+                    qlib_dir=os.path.join(self.data_dir, 'qlib_data'),
                 )
         except ProviderManifestError as exc:
             if effective_require_provider_manifest:

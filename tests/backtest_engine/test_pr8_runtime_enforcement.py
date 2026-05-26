@@ -153,12 +153,15 @@ class TestFix3ProviderRuntimeValidation:
             event_endpoint_namespacing=MagicMock(status="enforced"),
             calendar_policy_id="frozen_20260227_system_build",
         )
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             _validate_provider_at_runtime(
                 manifest=manifest,
                 calendar_policy_id="frozen_20260227_system_build",
                 run_mode="joinquant_replication",
+                qlib_dir="/tmp/fake_qlib",
             )
 
     def test_frozen_policy_with_stale_calendar_raises(self) -> None:
@@ -168,13 +171,17 @@ class TestFix3ProviderRuntimeValidation:
             event_endpoint_namespacing=MagicMock(status="enforced"),
             calendar_policy_id="frozen_20260227_system_build",
         )
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-01-15")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-01-15",
+        ):
             with pytest.raises(RuntimeError, match="Frozen calendar policy"):
                 _validate_provider_at_runtime(
                     manifest=manifest,
                     calendar_policy_id="frozen_20260227_system_build",
                     run_mode="joinquant_replication",
+                    qlib_dir="/tmp/fake_qlib",
                 )
 
     def test_disallowed_run_mode_raises(self) -> None:
@@ -185,13 +192,17 @@ class TestFix3ProviderRuntimeValidation:
             event_endpoint_namespacing=MagicMock(status="enforced"),
             calendar_policy_id="frozen_20260227_system_build",
         )
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             with pytest.raises(CalendarPolicyError, match="not in this policy"):
                 _validate_provider_at_runtime(
                     manifest=manifest,
                     calendar_policy_id="frozen_20260227_system_build",
                     run_mode="live_paper",
+                    qlib_dir="/tmp/fake_qlib",
                 )
 
 
