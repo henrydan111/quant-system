@@ -338,49 +338,58 @@ class BacktestEngine:
                 end=end,
                 require_zero_fallback=True,
             )
-            # PR 8c Blocker 3: flip strict_cache_only ON immediately after
-            # assert_preloaded — BEFORE warmup _fetch_day_data and BEFORE
-            # strategy.initialize. Pre-PR-8c the strict-mode enable happened
-            # right before the day loop, so warmup + initialize could still
-            # silently fall back on a non-preloaded field. The intent of
-            # require_preloaded=True is that NO feeder access after the
-            # assertion may bypass the cache.
+            # PR 8c Blocker 3 + PR 8d Blocker 2: flip strict_cache_only ON
+            # immediately after assert_preloaded — BEFORE warmup
+            # _fetch_day_data and BEFORE strategy.initialize. The try/finally
+            # below ALSO wraps benchmark load + warmup + initialize so an
+            # exception in any of them still restores strict_cache_only.
+            # Pre-PR-8d the try/finally wrapped only the day loop, leaking
+            # strict-mode state if initialize raised.
             self.feeder.set_strict_cache_only(True)
 
-        # Load benchmark
-        if benchmark_code:
-            self._benchmark_returns = self._load_benchmark(
-                benchmark_code, calendar
-            )
-
-        total_days = len(calendar)
-
-        # Warmup: fetch day before start for before_market_open context.
-        # PR 8c Blocker 3: when require_preloaded=True, this fetch runs
-        # under strict_cache_only — a non-preloaded field here raises
-        # PreloadCoverageError instead of silently falling back.
-        prev_day_data = (self._fetch_day_data(prev_date)
-                         if prev_date else pd.DataFrame())
-
-        # Initialize strategy. PR 8c Blocker 3: strategy.initialize runs
-        # under strict_cache_only when require_preloaded=True — strategies
-        # that read non-preloaded fields during init now raise loudly.
-        init_context = BacktestContext(
-            date=calendar[0],
-            day_data=pd.DataFrame(),
-            day_data_indexed=pd.DataFrame(),
-            prev_day_data=prev_day_data,
-            portfolio=self.portfolio,
-            exchange=self.exchange,
-            feeder=self.feeder,
-            total_days=total_days,
-        )
-        self.strategy.initialize(init_context)
-
-        # Main loop.
+        # PR 8d Blocker 2: the try/finally now wraps benchmark load + warmup
+        # + strategy.initialize + the day loop. Any exception inside this
+        # block restores the feeder's strict_cache_only setting. Pre-PR-8d
+        # the try started at the day loop, so an exception during initialize
+        # (e.g. PreloadCoverageError on a non-preloaded field) leaked strict
+        # mode on the feeder object.
         import time as _time
         loop_exception: BaseException | None = None
         try:
+          # Load benchmark
+          if benchmark_code:
+              self._benchmark_returns = self._load_benchmark(
+                  benchmark_code, calendar
+              )
+
+          total_days = len(calendar)
+
+          # Warmup: fetch day before start for before_market_open context.
+          # PR 8c Blocker 3: when require_preloaded=True, this fetch runs
+          # under strict_cache_only — a non-preloaded field here raises
+          # PreloadCoverageError instead of silently falling back, and the
+          # finally below restores strict_cache_only.
+          prev_day_data = (self._fetch_day_data(prev_date)
+                           if prev_date else pd.DataFrame())
+
+          # Initialize strategy. PR 8c Blocker 3 + PR 8d Blocker 2:
+          # strategy.initialize runs under strict_cache_only when
+          # require_preloaded=True — strategies that read non-preloaded
+          # fields during init now raise loudly AND the finally below
+          # restores strict_cache_only on the way out.
+          init_context = BacktestContext(
+              date=calendar[0],
+              day_data=pd.DataFrame(),
+              day_data_indexed=pd.DataFrame(),
+              prev_day_data=prev_day_data,
+              portfolio=self.portfolio,
+              exchange=self.exchange,
+              feeder=self.feeder,
+              total_days=total_days,
+          )
+          self.strategy.initialize(init_context)
+
+          # Main loop.
           for i, date in enumerate(calendar):
             _day_t0 = _time.perf_counter()
             self._current_date = date
