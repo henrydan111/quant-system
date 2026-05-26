@@ -1,0 +1,21 @@
+# Example execution profile YAML — illustrative only.
+#
+# The canonical profile registry lives in src/backtest_engine/execution_profiles.py
+# (Python). This file documents the schema for human reviewers and shows what
+# the built-in `joinquant_daily_sim` profile looks like when serialized.
+
+profile_id: joinquant_daily_sim
+profile_schema_version: 1
+profile_version: "2026-05-26.v1"
+deployment_target: joinquant_daily
+backend: event_driven
+fill_mode: jq_daily_avg
+cost_config_factory: joinquant_default
+slippage_preset: JOINQUANT_DEFAULT_SLIPPAGE
+volume_limit: 0.25
+allowed_for_formal: true
+notes: |
+  Faithful local twin of JoinQuant's daily-frequency backtest path.
+  Use this for any research that will be deployed via JoinQuant daily.
+  See project_state.md 2026-05-22 alignment notes for the residual
+  ~5pp cross-stack noise floor on long microcap windows.

@@ -15,11 +15,15 @@ breaking older artifacts.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-PROVENANCE_SCHEMA_VERSION = 1
+# v1 (PR 1): provider_build_id + calendar_policy_id required.
+# v2 (PR 3): adds execution_profile_id + execution_profile_hash. Artifacts
+#   produced post-PR-3 must populate the v2 fields to pass formal gate; v1
+#   artifacts remain readable but become legacy.
+PROVENANCE_SCHEMA_VERSION = 2
 PROVENANCE_KEY = "artifact_provenance"
 
 
@@ -34,6 +38,14 @@ class ArtifactProvenance:
     ``legacy_artifact`` is True when one or more of the formal fields below
     is missing on disk. Legacy artifacts can be viewed and compared
     historically; they cannot pass the formal release gate.
+
+    Schema versions
+    ===============
+    * v1 (PR 1) — provider_build_id + calendar_policy_id required.
+    * v2 (PR 3) — adds execution_profile_id + execution_profile_hash, plus
+      the optional override block (manual_override + override_reason +
+      override_diff). v1 artifacts read with ``from_dict`` are surfaced as
+      ``legacy_artifact=True`` so they cannot pass post-PR-3 formal gate.
     """
     provenance_schema_version: int = PROVENANCE_SCHEMA_VERSION
     legacy_artifact: bool = False
@@ -42,6 +54,11 @@ class ArtifactProvenance:
     execution_profile_id: Optional[str] = None
     execution_profile_version: Optional[str] = None
     execution_profile_hash: Optional[str] = None
+    # v2 override block. manual_override defaults to False; when True both
+    # override_reason and override_diff must be populated.
+    manual_override: bool = False
+    override_reason: Optional[str] = None
+    override_diff: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,12 +87,22 @@ class ArtifactProvenance:
                 f"reader version={PROVENANCE_SCHEMA_VERSION}. Upgrade the reader."
             )
 
-        # If any of the formal-mandatory fields is missing/None, the artifact
-        # is treated as legacy regardless of how the producer flagged it.
+        # PR 3 (v2): formal-eligible artifacts also need execution_profile_*.
+        # v1-on-disk artifacts (no execution_profile fields) are NOT
+        # promoted to legacy purely on that basis here — is_formal_eligible
+        # handles the formal-gate decision. This keeps reader-side semantics
+        # simple: legacy_artifact = "missing one of the v1 mandatory fields,
+        # i.e. fundamentally lacks provenance scaffolding".
         provider_build_id = payload.get("provider_build_id")
         calendar_policy_id = payload.get("calendar_policy_id")
         formal_complete = bool(provider_build_id) and bool(calendar_policy_id)
         legacy = bool(payload.get("legacy_artifact", False)) or not formal_complete
+
+        override_diff = payload.get("override_diff") or {}
+        if not isinstance(override_diff, Mapping):
+            raise ArtifactProvenanceError(
+                f"override_diff must be a mapping, got {type(override_diff).__name__}"
+            )
 
         return cls(
             provenance_schema_version=version,
@@ -85,13 +112,20 @@ class ArtifactProvenance:
             execution_profile_id=payload.get("execution_profile_id"),
             execution_profile_version=payload.get("execution_profile_version"),
             execution_profile_hash=payload.get("execution_profile_hash"),
+            manual_override=bool(payload.get("manual_override", False)),
+            override_reason=payload.get("override_reason"),
+            override_diff=dict(override_diff),
         )
 
     def is_formal_eligible(self) -> tuple[bool, list[str]]:
         """Return (eligible, reasons) — reasons is empty when eligible.
 
-        PR 1: requires provider_build_id and calendar_policy_id.
-        PR 3 will extend this to additionally require execution_profile_*.
+        Requirements post-PR-3 (provenance_schema_version=2):
+          * provider_build_id present
+          * calendar_policy_id present
+          * execution_profile_id AND execution_profile_hash present
+          * if manual_override=True then override_reason AND override_diff
+            both populated.
         """
         reasons: list[str] = []
         if self.legacy_artifact:
@@ -100,6 +134,15 @@ class ArtifactProvenance:
             reasons.append("missing_provider_build_id")
         if not self.calendar_policy_id:
             reasons.append("missing_calendar_policy_id")
+        if not self.execution_profile_id:
+            reasons.append("missing_execution_profile_id")
+        if not self.execution_profile_hash:
+            reasons.append("missing_execution_profile_hash")
+        if self.manual_override:
+            if not self.override_reason:
+                reasons.append("manual_override_without_override_reason")
+            if not self.override_diff:
+                reasons.append("manual_override_without_override_diff")
         return (len(reasons) == 0, reasons)
 
 
