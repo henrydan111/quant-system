@@ -204,6 +204,9 @@ class ArtifactGateResult:
     manual_override: bool = False
     override_reason: str | None = None
     override_diff_keys: tuple[str, ...] = ()
+    # PR 8 fix #5: True when execution_profile_hash equals the current
+    # registry profile_hash. None means "no profile or could not resolve".
+    profile_hash_matches_current: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -231,6 +234,13 @@ def evaluate_artifact_provenance(
     # PR 3: cross-check the profile registry. If the artifact names a known
     # profile but that profile is allowed_for_formal=False, fail the gate
     # even if every other field is present.
+    # PR 8 fix #5: also compare the artifact's execution_profile_hash against
+    # the current canonical profile_hash. A mismatch means the profile was
+    # bumped since the artifact was produced, so the artifact is no longer
+    # bit-for-bit reproducible against the current profile registry. We
+    # surface this as a distinct reason rather than rolling it into the
+    # allowed_for_formal failure, so reviewers can decide whether the
+    # mismatch is a planned profile bump or accidental drift.
     if provenance.execution_profile_id:
         try:
             from src.backtest_engine.execution_profiles import (
@@ -242,6 +252,15 @@ def evaluate_artifact_provenance(
                 eligible = False
                 if "execution_profile_not_allowed_for_formal" not in reasons:
                     reasons.append("execution_profile_not_allowed_for_formal")
+            # Hash mismatch — only check when artifact carries a hash to
+            # compare. Legacy artifacts without a hash already fail elsewhere
+            # via missing_execution_profile_hash.
+            if provenance.execution_profile_hash and (
+                provenance.execution_profile_hash != profile.profile_hash
+            ):
+                eligible = False
+                if "execution_profile_hash_mismatch" not in reasons:
+                    reasons.append("execution_profile_hash_mismatch")
         except ExecutionProfileError:
             # Unknown profile id is a hard fail.
             eligible = False
@@ -254,6 +273,19 @@ def evaluate_artifact_provenance(
         status = "failed_legacy"
     else:
         status = "failed"
+    # Compute profile_hash_matches_current for the result. None when we
+    # couldn't look up the profile (unknown id, missing hash, etc.).
+    profile_hash_matches_current: bool | None = None
+    if provenance.execution_profile_id and provenance.execution_profile_hash:
+        try:
+            from src.backtest_engine.execution_profiles import get_profile
+            current_profile = get_profile(provenance.execution_profile_id)
+            profile_hash_matches_current = (
+                provenance.execution_profile_hash == current_profile.profile_hash
+            )
+        except Exception:  # noqa: BLE001 - unknown profile already in reasons
+            profile_hash_matches_current = None
+
     return ArtifactGateResult(
         eligible=eligible,
         status=status,
@@ -266,6 +298,7 @@ def evaluate_artifact_provenance(
         manual_override=provenance.manual_override,
         override_reason=provenance.override_reason,
         override_diff_keys=tuple(sorted(provenance.override_diff.keys())),
+        profile_hash_matches_current=profile_hash_matches_current,
     )
 
 

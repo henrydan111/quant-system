@@ -333,6 +333,11 @@ class BacktestEngine:
                 end=end,
                 require_zero_fallback=True,
             )
+            # PR 8 fix #2: after the pre-loop assertion, flip strict-cache-only
+            # so any mid-loop cache miss raises PreloadCoverageError at the
+            # first offending access. Pre-PR-8 the assertion only caught
+            # state-at-start; mid-loop fallbacks slipped through.
+            self.feeder.set_strict_cache_only(True)
 
         # Load benchmark
         if benchmark_code:
