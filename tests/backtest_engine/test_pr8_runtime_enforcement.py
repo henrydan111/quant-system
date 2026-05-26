@@ -49,6 +49,8 @@ def _run_with_mocks(tmp_path: Path, **run_kwargs):
         feeder = feeder_cls.return_value
         engine = engine_cls.return_value
         engine.run.return_value = MagicMock(config={})
+        # PR 8a fix #1: formal runs require calendar_policy_id.
+        run_kwargs.setdefault("calendar_policy_id", "frozen_20260227_system_build")
         EventDrivenBacktester(data_dir=str(tmp_path)).run(
             strategy=strategy,
             start_time="2024-01-02",

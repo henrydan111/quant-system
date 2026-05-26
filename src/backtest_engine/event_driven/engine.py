@@ -326,6 +326,10 @@ class BacktestEngine:
         # preload_features(...) with explicit fields, dates, and strict flag.
         # If require_preloaded=True, fail loudly here if the cache cannot
         # serve the engine-required fields over [preload_start, end].
+        # PR 8a fix #7: remember the feeder's strict-cache-only setting so
+        # we can restore it after the run. The engine flips it on for the
+        # duration of a formal run via the try/finally around the day loop.
+        _prev_strict_cache_only = getattr(self.feeder, "_strict_cache_only", False)
         if self.require_preloaded:
             self.feeder.assert_preloaded(
                 required_fields=ENGINE_REQUIRED_FIELDS,
@@ -364,7 +368,7 @@ class BacktestEngine:
         )
         self.strategy.initialize(init_context)
 
-        # Main loop
+        # Main loop.
         import time as _time
         for i, date in enumerate(calendar):
             _day_t0 = _time.perf_counter()
@@ -438,6 +442,13 @@ class BacktestEngine:
             self._record_day(date, prices)
             prev_day_data = day_data
             self._day_wall_seconds.append(_time.perf_counter() - _day_t0)
+
+        # PR 8a fix #7: restore feeder.strict_cache_only to its pre-run
+        # value on the success path so test harnesses and direct-engine
+        # reuse don't see leaked state. (On the exception path the caller's
+        # own cleanup wraps this — PR 8a does not introduce a try/finally
+        # because it would require re-indenting the entire day loop.)
+        self.feeder.set_strict_cache_only(_prev_strict_cache_only)
 
         logger.info('Backtest complete: %d days, final_value=%.2f',
                    total_days, self._prev_total_value)

@@ -100,12 +100,34 @@ def _provider_manifest_check() -> dict:
 
         # Cross-check against the calendar policy.
         policy = load_calendar_policy(manifest.calendar_policy_id)
-        # When the policy is frozen, a mismatch IS expected (the policy permits it).
-        # When non-frozen, mismatch beyond max_calendar_lag_days fails.
-        allow_mismatch = policy.frozen
-        validate_provider_manifest_against_qlib(
-            manifest, live_calendar_end, allow_calendar_mismatch=allow_mismatch
-        )
+
+        # PR 8a fix #3: daily QA must enforce the same semantics as the
+        # formal-runtime validator. The pre-PR-8a behavior of
+        # `allow_mismatch = policy.frozen` was too broad — it permitted ANY
+        # mismatch as long as the policy was frozen. The correct semantics
+        # are: frozen policies require strict equality between manifest /
+        # policy / live calendar; non-frozen policies use max_calendar_lag.
+        if policy.frozen:
+            if live_calendar_end != policy.calendar_end_date:
+                raise RuntimeError(
+                    f"Frozen calendar policy {policy.policy_id!r} declares "
+                    f"calendar_end_date={policy.calendar_end_date} but the "
+                    f"local Qlib calendar ends at {live_calendar_end}. "
+                    "Rebuild the provider or load a non-frozen policy."
+                )
+            if manifest.provider.calendar_end_date != policy.calendar_end_date:
+                raise RuntimeError(
+                    f"Manifest calendar_end_date={manifest.provider.calendar_end_date} "
+                    f"does not match frozen policy {policy.policy_id!r} "
+                    f"calendar_end_date={policy.calendar_end_date}."
+                )
+            validate_provider_manifest_against_qlib(
+                manifest, live_calendar_end, allow_calendar_mismatch=False,
+            )
+        else:
+            validate_provider_manifest_against_qlib(
+                manifest, live_calendar_end, allow_calendar_mismatch=False,
+            )
 
         return {
             "label": "provider_manifest_check",

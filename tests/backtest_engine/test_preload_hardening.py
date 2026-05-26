@@ -202,6 +202,10 @@ class TestWrapperPreloadCondition:
             feeder = feeder_cls.return_value
             engine = engine_cls.return_value
             engine.run.return_value = MagicMock(config={})
+            # PR 8a fix #1: formal runs now require calendar_policy_id.
+            # Default to the committed frozen policy so the existing
+            # formal-mode tests continue to exercise the right path.
+            run_kwargs.setdefault("calendar_policy_id", "frozen_20260227_system_build")
             EventDrivenBacktester(data_dir=str(tmp_path)).run(
                 strategy=strategy,
                 start_time="2024-01-02",

@@ -311,7 +311,8 @@ class QlibDataFeeder:
                 try:
                     idx = pd.IndexSlice
                     # Intersect available instruments to avoid KeyError
-                    avail_inst = list(set(instruments).intersection(self._cache_df.index.levels[0]))
+                    cache_instruments = set(self._cache_df.index.levels[0])
+                    avail_inst = list(set(instruments).intersection(cache_instruments))
                     if avail_inst:
                         sliced = self._cache_df.loc[idx[avail_inst, start_ts:end_ts], fields]
                         if sliced.empty:
@@ -326,11 +327,31 @@ class QlibDataFeeder:
                         # Instrumentation: cache hit path (fast path).
                         self._cache_hit_count += 1
                         return sliced.copy()
-                    # Empty intersection still counts as cache-hit path
-                    # (no fallback to D.features fired) — the caller asked
-                    # for instruments not in the cache, which is normal.
+                    # PR 8a fix #6: when strict_cache_only is on and the
+                    # requested instruments have zero intersection with the
+                    # cache, that's a real coverage gap that pre-PR-8a hid
+                    # by returning an empty DataFrame. Raise instead so
+                    # formal runs fail loudly at the first all-missing read.
+                    if self._strict_cache_only:
+                        raise PreloadCoverageError(
+                            "Strict cache-only mode is enabled but the "
+                            "requested instruments have empty intersection "
+                            f"with the cache. Requested instruments[0:3]={list(instruments)[:3]} "
+                            f"({len(instruments)} total). Cache covers "
+                            f"{len(cache_instruments)} distinct instruments. "
+                            "Either expand the preload universe (the wrapper "
+                            "uses 'all' by default) or disable strict_cache_only."
+                        )
+                    # Empty intersection in non-strict mode still counts as
+                    # cache-hit path (no fallback to D.features fired) — the
+                    # caller asked for instruments not in the cache, which
+                    # is normal for sandbox.
                     self._cache_hit_count += 1
                     return pd.DataFrame()
+                except PreloadCoverageError:
+                    # Re-raise without dressing — this is the strict-mode
+                    # signal, not a generic cache failure.
+                    raise
                 except Exception as e:
                     logger.warning(f"Cache slice failed, falling back to D.features: {e}")
             else:
