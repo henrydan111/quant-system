@@ -137,6 +137,7 @@ class TestFix4ValidatorRaisesOnQlibFailure:
         manifest = MagicMock(
             provider=MagicMock(calendar_end_date="2026-02-27"),
             event_endpoint_namespacing=MagicMock(status="enforced"),
+            calendar_policy_id="frozen_20260227_system_build",  # PR 8b Blocker 3
         )
         with patch("qlib.data.D") as mock_d:
             mock_d.calendar.side_effect = OSError("provider directory unreachable")
@@ -197,7 +198,9 @@ class TestFix6StrictCacheOnlyMissingInstrument:
         feeder = self._make_feeder_with_cache()
         feeder.set_strict_cache_only(True)
         # 'NEVER_IN_CACHE_SZ' is not in the cache's instrument index.
-        with pytest.raises(PreloadCoverageError, match="empty intersection"):
+        # PR 8b fix #4 changed the message to use the unified "not present
+        # in cache" phrasing for both all-missing and partial-missing.
+        with pytest.raises(PreloadCoverageError, match="not present in cache"):
             feeder.get_features(
                 instruments=["NEVER_IN_CACHE_SZ"],
                 fields=["$close"],  # field IS in cache

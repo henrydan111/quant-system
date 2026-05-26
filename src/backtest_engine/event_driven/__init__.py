@@ -140,6 +140,20 @@ def _validate_provider_at_runtime(
             f"but loading failed: {exc}"
         ) from exc
 
+    # PR 8b Blocker 3: the manifest's own calendar_policy_id MUST match
+    # the policy id the run claims to operate under. Without this check, a
+    # caller could pass a different policy id with the same dates and
+    # silently stamp a mismatched policy into the artifact, defeating the
+    # self-attestation contract.
+    if manifest.calendar_policy_id != calendar_policy_id:
+        raise RuntimeError(
+            f"Provider manifest declares calendar_policy_id="
+            f"{manifest.calendar_policy_id!r} but the run was launched with "
+            f"calendar_policy_id={calendar_policy_id!r}. The two must match — "
+            "either pass the manifest's policy id explicitly or rebuild the "
+            "provider under the intended policy."
+        )
+
     policy.assert_run_mode_allowed(run_mode)
 
     # Read live calendar end via Qlib.
@@ -387,17 +401,6 @@ class EventDrivenBacktester:
                         f"step_id={holdout_context.step_id}. Did you call SealedBacktestRunner?"
                     )
 
-        # Create components.
-        # Part E (plan snappy-buzzing-meerkat v5): derive feeder stage from
-        # time_split.stage so cache-manifest rows carry the correct stage
-        # label. Without this, OOS runs would mislabel rows as is_only.
-        feeder_stage = "is_only"
-        if time_split:
-            ts_stage = str(time_split.get("stage", "") or "")
-            if ts_stage:
-                feeder_stage = ts_stage
-        feeder = QlibDataFeeder(self.data_dir, stage=feeder_stage)
-
         # PR 2 corrected preload condition + PR 8 fix #1: is_formal already
         # computed above considering BOTH run_mode and profile.allowed_for_formal.
         # Formal profiles (joinquant_daily_sim, joinquant_open_close_replica)
@@ -413,6 +416,56 @@ class EventDrivenBacktester:
         # PR 8 fix #3: formal runs require a current provider manifest. Sandbox
         # runs may leave the default False so legacy environments still work.
         effective_require_provider_manifest = require_provider_manifest or is_formal
+
+        # PR 8b Blocker 1: governance preconditions MUST fire BEFORE any
+        # feeder creation or preload — pre-PR-8b, the check ran after
+        # feeder.preload_features() so a formal run without a policy still
+        # touched Qlib and burned cache work before failing.
+        if effective_require_provider_manifest and not calendar_policy_id:
+            raise RuntimeError(
+                "Formal run requires calendar_policy_id but received None. "
+                "Pass calendar_policy_id='frozen_20260227_system_build' "
+                "(or another committed policy) explicitly. The policy is "
+                "what authorizes a formal run to operate against the current "
+                "calendar window; without it the manifest validator cannot "
+                "run and the artifact cannot be formally attested."
+            )
+
+        # PR 8b: load + validate the provider manifest BEFORE feeder/preload
+        # so a stale calendar or wrong policy id fails immediately, not
+        # after feature data has been loaded into memory. Sandbox runs
+        # tolerate missing manifests (warn + legacy provenance).
+        provider_build_id: str | None = None
+        manifest = None
+        try:
+            manifest = load_provider_manifest(os.path.join(self.data_dir, 'qlib_data'))
+            provider_build_id = manifest.provider_build_id
+            if effective_require_provider_manifest:
+                _validate_provider_at_runtime(
+                    manifest=manifest,
+                    calendar_policy_id=calendar_policy_id,
+                    run_mode=run_mode or (
+                        profile_obj.deployment_target if profile_obj else "sandbox"
+                    ),
+                )
+        except ProviderManifestError as exc:
+            if effective_require_provider_manifest:
+                raise
+            logger.warning(
+                "Provider manifest unavailable (%s). Result will be marked legacy_artifact=True.",
+                exc,
+            )
+
+        # Create components.
+        # Part E (plan snappy-buzzing-meerkat v5): derive feeder stage from
+        # time_split.stage so cache-manifest rows carry the correct stage
+        # label. Without this, OOS runs would mislabel rows as is_only.
+        feeder_stage = "is_only"
+        if time_split:
+            ts_stage = str(time_split.get("stage", "") or "")
+            if ts_stage:
+                feeder_stage = ts_stage
+        feeder = QlibDataFeeder(self.data_dir, stage=feeder_stage)
 
         if should_preload:
             # Expand start_time to include the previous trading day for Day 1 warmup
@@ -475,43 +528,8 @@ class EventDrivenBacktester:
             require_preloaded=effective_require_preloaded,
         )
 
-        # PR 8 fix #3 + PR 8a fix #1: formal-runtime provider/calendar
-        # enforcement. Formal runs (require_provider_manifest=True OR
-        # is_formal) MUST also supply calendar_policy_id — without it, the
-        # _validate_provider_at_runtime call below would be silently skipped
-        # and the artifact would stamp legacy provenance, defeating the
-        # purpose of formal-mode enforcement. PR 8a converts the previous
-        # quiet skip into a hard fail.
-        if effective_require_provider_manifest and not calendar_policy_id:
-            raise RuntimeError(
-                "Formal run requires calendar_policy_id but received None. "
-                "Pass calendar_policy_id='frozen_20260227_system_build' "
-                "(or another committed policy) explicitly. The policy is "
-                "what authorizes a formal run to operate against the current "
-                "calendar window; without it the manifest validator cannot "
-                "run and the artifact cannot be formally attested."
-            )
-
-        provider_build_id: str | None = None
-        try:
-            manifest = load_provider_manifest(os.path.join(self.data_dir, 'qlib_data'))
-            provider_build_id = manifest.provider_build_id
-            if effective_require_provider_manifest:
-                _validate_provider_at_runtime(
-                    manifest=manifest,
-                    calendar_policy_id=calendar_policy_id,
-                    run_mode=run_mode or (
-                        profile_obj.deployment_target if profile_obj else "sandbox"
-                    ),
-                )
-        except ProviderManifestError as exc:
-            if effective_require_provider_manifest:
-                raise
-            logger.warning(
-                "Provider manifest unavailable (%s). Result will be marked legacy_artifact=True.",
-                exc,
-            )
-
+        # PR 8b: provider manifest + calendar validation moved above (before
+        # feeder + preload). provider_build_id is already populated.
         import time as _time
         _run_t0 = _time.perf_counter()
         try:
