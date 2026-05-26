@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.research_orchestrator.file_lock import file_lock
+
 SEAL_COLUMNS = [
     "event_id",
     "recorded_at",
@@ -96,36 +98,48 @@ class HoldoutSealStore:
         stage: str = "oos_test",
         allow_same_run: bool = False,
     ) -> dict[str, Any]:
-        frame = self.list_events(design_hash=design_hash)
-        normalized_run_dir = str(Path(run_dir).resolve())
-        if not frame.empty:
-            first_row = frame.iloc[0].to_dict()
-            same_run = (
-                str(first_row.get("run_dir", "")) == normalized_run_dir
-                and str(first_row.get("step_id", "")) == str(step_id)
-            )
-            if allow_same_run and same_run:
-                return first_row
-            raise ValueError(
-                "Holdout sealed for design_hash "
-                f"{design_hash}; first access was {first_row.get('recorded_at')} "
-                f"by {first_row.get('run_dir')}"
-            )
+        """Claim OOS access for a design_hash; raise if already sealed.
 
-        recorded_at = _now_str()
-        row = {
-            "event_id": hashlib.sha256(
-                f"{design_hash}|{normalized_run_dir}|{step_id}|{recorded_at}".encode("utf-8")
-            ).hexdigest()[:16],
-            "recorded_at": recorded_at,
-            "design_hash": str(design_hash),
-            "hypothesis_id": str(hypothesis_id),
-            "structural_family": str(structural_family),
-            "profile_id": str(profile_id),
-            "run_dir": normalized_run_dir,
-            "step_id": str(step_id),
-            "stage": str(stage),
-        }
-        frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
-        _atomic_write_dataframe(frame, self.log_path)
-        return row
+        PR 4 of the 2026-05-26 freeze plan: the entire read-check-write
+        sequence runs inside ``file_lock`` so two concurrent processes that
+        attempt to claim the same design_hash CANNOT both pass the
+        ``frame.empty`` check and both write a seal event. Without the lock,
+        the only protection was atomic-write at the end, which prevents
+        partial-file corruption but does NOT prevent duplicate seal events.
+
+        Lock file: ``<root_dir>/holdout_events.lock``.
+        """
+        normalized_run_dir = str(Path(run_dir).resolve())
+        with file_lock(self.root_dir / "holdout_events.lock"):
+            frame = self.list_events(design_hash=design_hash)
+            if not frame.empty:
+                first_row = frame.iloc[0].to_dict()
+                same_run = (
+                    str(first_row.get("run_dir", "")) == normalized_run_dir
+                    and str(first_row.get("step_id", "")) == str(step_id)
+                )
+                if allow_same_run and same_run:
+                    return first_row
+                raise ValueError(
+                    "Holdout sealed for design_hash "
+                    f"{design_hash}; first access was {first_row.get('recorded_at')} "
+                    f"by {first_row.get('run_dir')}"
+                )
+
+            recorded_at = _now_str()
+            row = {
+                "event_id": hashlib.sha256(
+                    f"{design_hash}|{normalized_run_dir}|{step_id}|{recorded_at}".encode("utf-8")
+                ).hexdigest()[:16],
+                "recorded_at": recorded_at,
+                "design_hash": str(design_hash),
+                "hypothesis_id": str(hypothesis_id),
+                "structural_family": str(structural_family),
+                "profile_id": str(profile_id),
+                "run_dir": normalized_run_dir,
+                "step_id": str(step_id),
+                "stage": str(stage),
+            }
+            frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
+            _atomic_write_dataframe(frame, self.log_path)
+            return row

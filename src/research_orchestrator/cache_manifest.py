@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.research_orchestrator.file_lock import file_lock
+
 
 DEFAULT_CACHE_MANIFEST_DIR = Path("data/hypothesis_cache_manifest")
 
@@ -150,6 +152,17 @@ class CacheManifestStore:
         window_start: str,
         window_end: str,
     ) -> dict[str, Any]:
+        """Append a cache-write event to the manifest.
+
+        PR 4 of the 2026-05-26 freeze plan: the entire read-append-write
+        sequence runs inside ``file_lock`` so concurrent processes do not
+        lose rows. Without the lock, two simultaneous calls would each call
+        ``_load`` and observe the same baseline frame, each append their own
+        row, and the second ``_atomic_write_dataframe`` would overwrite the
+        first one's row.
+
+        Lock file: ``<root_dir>/cache_events.lock``.
+        """
         recorded_at = _now_str()
         row = {
             "manifest_id": hashlib.sha256(
@@ -181,8 +194,9 @@ class CacheManifestStore:
             "window_start": str(window_start),
             "window_end": str(window_end),
         }
-        frame = _append_row(self._load(), row)
-        _atomic_write_dataframe(frame, self.log_path)
+        with file_lock(self.root_dir / "cache_events.lock"):
+            frame = _append_row(self._load(), row)
+            _atomic_write_dataframe(frame, self.log_path)
         return row
 
     def assert_cache_reusable(
