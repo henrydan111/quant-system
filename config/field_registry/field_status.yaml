@@ -1,0 +1,187 @@
+# Field-status registry for the Qlib provider.
+#
+# Every Qlib field ($field) referenced inside a factor expression is resolved
+# to its owning dataset here, and the dataset's status controls which research
+# stages may consume the field. Formal validation, OOS test, and registry
+# publication refuse to consume any field whose effective status disallows
+# them.
+#
+# Schema: schemas/field_status.schema.json
+# Plan:   PR 5 of the 2026-05-26 freeze plan.
+
+schema_version: 1
+
+statuses:
+  approved:
+    description: "Fully reviewed; safe at every stage."
+    allowed:
+      sandbox_screening: true
+      vectorized_screening: true
+      formal_validation: true
+      oos_test: true
+      registry_publish: true
+
+  pending_review:
+    description: "Downloaded and structurally validated; anomaly review WIP. May be used for exploration but not for formal publication."
+    allowed:
+      sandbox_screening: true
+      vectorized_screening: true
+      formal_validation: false
+      oos_test: false
+      registry_publish: false
+
+  quarantine:
+    description: "Known-suspect or unreviewed. Blocked from every stage until promoted via the approval workflow under config/field_registry/approvals/."
+    allowed:
+      sandbox_screening: false
+      vectorized_screening: false
+      formal_validation: false
+      oos_test: false
+      registry_publish: false
+
+  deprecated:
+    description: "Field exists in the provider but should no longer be used in research."
+    allowed:
+      sandbox_screening: false
+      vectorized_screening: false
+      formal_validation: false
+      oos_test: false
+      registry_publish: false
+
+# Unknown-field policy: behavior when a referenced field matches NO registered
+# dataset. Conservative-fail at formal/oos/publish (per PR 5 amendment #7);
+# warn in screening/sandbox so exploration is not blocked.
+unknown_field_policy:
+  sandbox_screening: warn
+  vectorized_screening: warn
+  formal_validation: fail
+  oos_test: fail
+  registry_publish: fail
+
+approval_log_path: config/field_registry/field_approval_log.jsonl
+approvals_dir: config/field_registry/approvals
+
+# ─────────────────────────────────────────────────────────────────────────
+# Dataset entries
+#
+# Each entry declares the dataset's status and EITHER:
+#   * fields:         explicit Qlib expression names ("$open", "$pe_ttm", ...)
+#   * field_prefixes: namespaced prefix that catches every column in the
+#                     dataset (e.g. "$top_list__" matches "$top_list__close").
+#
+# A dataset may declare both — the resolver checks fields first, then prefixes.
+# ─────────────────────────────────────────────────────────────────────────
+datasets:
+  market_daily:
+    status: approved
+    reason: "Canonical OHLCV from Tushare daily endpoint; fully validated and namespace-protected via the event-like-daily fix (project_state 2026-04-23)."
+    fields:
+      - $open
+      - $close
+      - $high
+      - $low
+      - $vol
+      - $amount
+      - $pre_close
+      - $adj_factor
+      - $pct_chg
+      - $change
+
+  daily_basic:
+    status: approved
+    reason: "Tushare daily_basic indicators (valuation + turnover ratios). Used pervasively in approved factor library."
+    fields:
+      - $pe
+      - $pe_ttm
+      - $pb
+      - $ps
+      - $ps_ttm
+      - $dv_ratio
+      - $dv_ttm
+      - $total_share
+      - $float_share
+      - $free_share
+      - $total_mv
+      - $circ_mv
+      - $turnover_rate
+      - $turnover_rate_f
+      - $volume_ratio
+
+  pit_fundamentals:
+    status: approved
+    reason: "PIT-anchored fundamental fields produced by pit_backend (ann_date / max(ann_date, f_ann_date) visibility). Approved per CLAUDE.md §3 PIT contract."
+    fields:
+      - $pit_or_yoy
+      - $pit_netprofit_yoy
+      - $pit_q_op_qoq
+      - $pit_q_sales_yoy
+      - $pit_q_profit_yoy
+      - $pit_q_dt_eps
+      - $pit_eps_basic
+      - $pit_total_revenue
+      - $pit_n_income_attr_p
+      - $pit_total_cogs
+      - $pit_op_income
+    field_prefixes:
+      - $pit_
+
+  reference:
+    status: approved
+    reason: "Reference panels: industry membership (SW2021), suspension ranges, ST flags. Sourced from canonical files in data/reference/."
+    fields:
+      - $industry
+      - $sw2021_l1
+      - $sw2021_l2
+      - $is_st
+
+  # ─── Quarantined: downloaded but pending anomaly review ──────────────
+  moneyflow:
+    status: quarantine
+    reason: "Tushare moneyflow endpoint; downloaded but pending anomaly review before production publish (project_state 2026-05-26)."
+    field_prefixes:
+      - $moneyflow_
+
+  hk_hold:
+    status: quarantine
+    reason: "Northbound holdings (hk_hold endpoint); downloaded but pending anomaly review."
+    field_prefixes:
+      - $hk_hold_
+      - $northbound_
+
+  margin_detail:
+    status: quarantine
+    reason: "Margin trading detail (margin_detail endpoint); downloaded but pending anomaly review."
+    field_prefixes:
+      - $margin_detail_
+      - $margin_
+
+  stk_limit:
+    status: quarantine
+    reason: "Stock limit-up/limit-down price (stk_limit endpoint); downloaded but pending anomaly review. Note: limit detection in backtester uses $pct_chg, not these fields."
+    field_prefixes:
+      - $stk_limit_
+
+  # ─── Pending review: event-like daily endpoints (post-2026-04-20 namespacing) ──
+  top_list:
+    status: pending_review
+    reason: "Tushare top_list endpoint (龙虎榜). Namespace-protected via $top_list__* prefix per PR 4 (2026-04-20). Anomaly review WIP."
+    field_prefixes:
+      - $top_list__
+
+  top_inst:
+    status: pending_review
+    reason: "Tushare top_inst endpoint (机构席位). Namespace-protected via $top_inst__* prefix. Anomaly review WIP."
+    field_prefixes:
+      - $top_inst__
+
+  block_trade:
+    status: pending_review
+    reason: "Tushare block_trade endpoint (大宗交易). Namespace-protected via $block_trade__* prefix. Anomaly review WIP."
+    field_prefixes:
+      - $block_trade__
+
+  cyq_perf:
+    status: pending_review
+    reason: "Tushare cyq_perf endpoint (筹码分布). Namespace-protected via $cyq_perf__* prefix. Anomaly review WIP."
+    field_prefixes:
+      - $cyq_perf__

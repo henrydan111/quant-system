@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-system.local/schemas/field_status.schema.json",
+  "title": "Field-Status Registry",
+  "description": "Per-dataset approval state for Qlib fields used in factor expressions. Formal validation, OOS test, and registry-publish stages refuse to consume any field whose dataset is not 'approved' (or whose status's allowed[<stage>] is false). Lives at config/field_registry/field_status.yaml. Plan PR 5 of the 2026-05-26 freeze plan.",
+  "type": "object",
+  "required": ["schema_version", "statuses", "datasets", "unknown_field_policy"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+
+    "statuses": {
+      "type": "object",
+      "description": "Per-status stage allowlists. Every dataset references one of these by name.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["allowed"],
+        "additionalProperties": false,
+        "properties": {
+          "description": {"type": "string"},
+          "allowed": {
+            "type": "object",
+            "required": [
+              "sandbox_screening",
+              "vectorized_screening",
+              "formal_validation",
+              "oos_test",
+              "registry_publish"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "sandbox_screening":   {"type": "boolean"},
+              "vectorized_screening":{"type": "boolean"},
+              "formal_validation":   {"type": "boolean"},
+              "oos_test":            {"type": "boolean"},
+              "registry_publish":    {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+
+    "datasets": {
+      "type": "object",
+      "description": "Map of dataset_id → entry. Entries declare their status, optional reason, and either fields (explicit list) or field_prefixes (catch-all match).",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status"],
+        "additionalProperties": false,
+        "properties": {
+          "status": {"type": "string"},
+          "reason": {"type": "string"},
+          "fields":         {"type": "array", "items": {"type": "string"}},
+          "field_prefixes": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+
+    "unknown_field_policy": {
+      "type": "object",
+      "description": "Behavior when a referenced field matches NO registered dataset. 'warn' allows the run; 'fail' raises FieldApprovalError. Conservative default: warn in screening/sandbox; fail in formal/oos/publish.",
+      "required": [
+        "sandbox_screening",
+        "vectorized_screening",
+        "formal_validation",
+        "oos_test",
+        "registry_publish"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sandbox_screening":    {"enum": ["warn", "fail"]},
+        "vectorized_screening": {"enum": ["warn", "fail"]},
+        "formal_validation":    {"enum": ["warn", "fail"]},
+        "oos_test":             {"enum": ["warn", "fail"]},
+        "registry_publish":     {"enum": ["warn", "fail"]}
+      }
+    },
+
+    "approval_log_path": {
+      "type": "string",
+      "description": "Relative path to the append-only text approval log (default: config/field_registry/field_approval_log.jsonl)."
+    },
+
+    "approvals_dir": {
+      "type": "string",
+      "description": "Relative path to per-promotion YAML evidence files (default: config/field_registry/approvals/)."
+    }
+  }
+}
