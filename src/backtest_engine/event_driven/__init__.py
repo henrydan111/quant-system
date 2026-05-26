@@ -39,6 +39,7 @@ from .exchange import (
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
 from .engine import BacktestEngine, BacktestResult
+from .constants import ENGINE_REQUIRED_FIELDS, FORMAL_RUN_MODES
 from src.data_infra.provider_manifest import (
     ProviderManifestError,
     load_provider_manifest,
@@ -59,6 +60,7 @@ __all__ = [
     'CorporateActionHandler',
     'Strategy', 'BacktestContext', 'Order',
     'BacktestEngine', 'BacktestResult',
+    'ENGINE_REQUIRED_FIELDS', 'FORMAL_RUN_MODES',
 ]
 
 
@@ -96,10 +98,12 @@ class EventDrivenBacktester:
             time_split: dict | None = None,
             holdout_context: Any | None = None,
             preload_strict: bool = False,
+            preload_required: bool = False,
             instrumentation_path: str | None = None,
             fill_mode: str = 'open_close',
             calendar_policy_id: str | None = None,
-            require_provider_manifest: bool = False) -> BacktestResult:
+            require_provider_manifest: bool = False,
+            run_mode: str | None = None) -> BacktestResult:
         """Run a backtest with the given strategy.
 
         Args:
@@ -134,6 +138,15 @@ class EventDrivenBacktester:
                 Formal validation handlers should pass True; sandbox/historical
                 investigation scripts may leave the default False so the
                 wrapper still tolerates a pre-PR1 environment.
+            preload_required: PR 2 of the 2026-05-26 freeze plan. When True,
+                always preload (even if ``preload_fields`` is None) AND have
+                the engine assert that the cache covers ENGINE_REQUIRED_FIELDS
+                with zero direct fallbacks before the day loop. Auto-set to
+                True when ``run_mode`` is in FORMAL_RUN_MODES.
+            run_mode: Optional execution-mode tag (e.g., 'formal', 'oos_test',
+                'joinquant_replication', 'sandbox'). When set to any value in
+                FORMAL_RUN_MODES the wrapper auto-enables preload and strict.
+                PR 3 will expand this into a full ExecutionProfile contract.
 
         Returns:
             BacktestResult with all outputs.  ``result.config['artifact_provenance']``
@@ -180,8 +193,23 @@ class EventDrivenBacktester:
                 feeder_stage = ts_stage
         feeder = QlibDataFeeder(self.data_dir, stage=feeder_stage)
 
-        # Preload cache if requested
-        if preload_fields:
+        # PR 2 of the 2026-05-26 freeze plan: corrected preload condition.
+        # Previously `if preload_fields:` could skip preload entirely for formal
+        # runs that didn't pass strategy-specific factor fields, leaving the
+        # engine to do a per-day D.features fallback for every OHLCV read.
+        # The new condition unions whatever the caller asked for with the
+        # canonical ENGINE_REQUIRED_FIELDS so the engine path always has its
+        # eight OHLCV fields cached.
+        is_formal = run_mode in FORMAL_RUN_MODES if run_mode else False
+        should_preload = (
+            preload_required
+            or preload_fields is not None
+            or is_formal
+        )
+        effective_strict = preload_strict or is_formal
+        effective_require_preloaded = preload_required or is_formal
+
+        if should_preload:
             # Expand start_time to include the previous trading day for Day 1 warmup
             try:
                 # We need one day prior to start_time
@@ -191,10 +219,14 @@ class EventDrivenBacktester:
                 logger.warning(f"Failed to pad preload start date: {e}")
                 preload_start = start_time
 
+            requested_fields = list(preload_fields or [])
+            all_preload_fields = list(
+                dict.fromkeys([*requested_fields, *ENGINE_REQUIRED_FIELDS])
+            )
             # We fetch 'all' domain to ensure we have every stock for the backtest
             feeder.preload_features(
-                'all', preload_fields, preload_start, end_time,
-                strict=preload_strict,
+                'all', all_preload_fields, preload_start, end_time,
+                strict=effective_strict,
             )
 
         st_path = os.path.join(
@@ -235,6 +267,7 @@ class EventDrivenBacktester:
             initial_cash=account,
             corp_action_handler=corp_handler,
             fill_mode=fill_mode,
+            require_preloaded=effective_require_preloaded,
         )
 
         # Load provider manifest (best-effort unless require_provider_manifest=True).

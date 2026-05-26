@@ -1,0 +1,172 @@
+"""PR 2 workspace audit — classify direct-engine usage in workspace/scripts/.
+
+Walks every .py under workspace/scripts/, looks for direct usage patterns
+that bypass the formal preload contract, and emits a markdown classification
+file at ``workspace/scripts/_audit/direct_engine_classification.md``.
+
+Classification is heuristic (filename + pattern presence). Each row is the
+author's starting point — PR 7 will add a ``SCRIPT_STATUS`` header block to
+every kept script and archive the D-class ones.
+
+Patterns checked
+----------------
+
+* ``BacktestEngine(``                 — direct engine construction
+* ``QlibDataFeeder(``                 — direct feeder construction
+* ``feeder.preload(``                 — calls the now-NotImplementedError stub
+* ``feeder.preload_features(``        — explicit cache priming (good)
+* ``D.features(``                     — bare provider read (PR 6 will lint)
+* ``EventDrivenBacktester(``          — high-level wrapper (preferred path)
+
+Classification scheme
+---------------------
+
+A — keep, route through EventDrivenBacktester (uses lower-level pieces but
+    no real reason; likely a quick refactor).
+B — keep direct, but must add explicit ``preload_features(..., strict=True)``
+    and PR 7 ``SCRIPT_STATUS=formal_candidate`` header.
+C — keep sandbox-only, mark as ``historical_investigation`` in PR 7.
+D — superseded; archive under ``workspace/scripts/archive/`` in PR 7.
+"""
+
+from __future__ import annotations
+
+import csv
+import re
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = PROJECT_ROOT / "workspace" / "scripts"
+OUT_DIR = SCRIPTS_DIR / "_audit"
+OUT_FILE = OUT_DIR / "direct_engine_classification.md"
+
+PATTERNS = {
+    "EventDrivenBacktester(": re.compile(r"\bEventDrivenBacktester\s*\("),
+    "BacktestEngine(": re.compile(r"\bBacktestEngine\s*\("),
+    "QlibDataFeeder(": re.compile(r"\bQlibDataFeeder\s*\("),
+    "feeder.preload(": re.compile(r"\.preload\s*\("),
+    "feeder.preload_features(": re.compile(r"\.preload_features\s*\("),
+    "D.features(": re.compile(r"\bD\.features\s*\("),
+    "run_mode=": re.compile(r"\brun_mode\s*="),
+}
+
+
+def _classify(name: str, hits: dict[str, int]) -> tuple[str, str]:
+    """Return (class_letter, rationale)."""
+    is_mimic = name.startswith("p1_jq_g5a2_mimic")
+    is_audit = any(s in name for s in ("_audit", "_check", "_compare", "_integrity"))
+    is_generator = name.startswith("generate_")
+    is_runner = name.startswith(("run_", "cross_platform_", "fixed_universe_"))
+
+    # Mimic v18+ ladder is referenced in project_state but superseded by v21.
+    if is_mimic:
+        match = re.match(r"p1_jq_g5a2_mimic_v(\d+)", name)
+        if match:
+            ver = int(match.group(1))
+            if ver < 18:
+                return "D", f"mimic_v{ver}: superseded by v21 (project_state)"
+            elif ver < 21:
+                return "C", f"mimic_v{ver}: investigation reference; keep sandbox"
+            else:
+                return "C", f"mimic_v{ver}: most recent reference; keep sandbox"
+        return "C", "mimic root: investigation; keep sandbox"
+
+    if is_audit:
+        return "C", "audit/diagnostic script: keep sandbox; one-shot historical use"
+
+    if is_generator and hits.get("D.features(", 0) == 0 and hits.get("BacktestEngine(", 0) == 0:
+        # Generators that emit notebooks but don't run backtests are fine.
+        return "C", "notebook generator: sandbox utility"
+
+    if is_runner:
+        # Validation runners use the wrapper but may need run_mode='formal'.
+        if hits.get("EventDrivenBacktester(", 0) > 0 and hits.get("BacktestEngine(", 0) == 0:
+            return "A", "validation runner already on wrapper; add run_mode='formal' in PR 3"
+        return "B", "validation runner with direct engine; add preload_features+strict"
+
+    if hits.get("BacktestEngine(", 0) > 0:
+        return "B", "direct BacktestEngine use; add preload_features+strict header"
+
+    if hits.get("QlibDataFeeder(", 0) > 0 and hits.get("EventDrivenBacktester(", 0) == 0:
+        return "B", "direct QlibDataFeeder use; add preload_features+strict header"
+
+    if hits.get("D.features(", 0) > 0:
+        return "C", "bare D.features (PR 6 will lint); keep sandbox for now"
+
+    return "C", "other helper; default sandbox"
+
+
+def _scan(path: Path) -> dict[str, int]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return {name: len(pat.findall(text)) for name, pat in PATTERNS.items()}
+
+
+def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rows: list[tuple[str, dict[str, int], str, str]] = []
+
+    for path in sorted(SCRIPTS_DIR.glob("*.py")):
+        hits = _scan(path)
+        if not any(hits.values()):
+            continue
+        cls, rationale = _classify(path.name, hits)
+        rows.append((path.name, hits, cls, rationale))
+
+    # Markdown output
+    lines: list[str] = [
+        "# Direct-Engine Construction — PR 2 Workspace Audit",
+        "",
+        f"Generated by `scripts/audit_direct_engine_use.py` (PR 2 of 2026-05-26 freeze plan).",
+        f"Scanned {len(rows)} files under `workspace/scripts/` with at least one match.",
+        "",
+        "## Classification scheme",
+        "",
+        "- **A** — keep, route through `EventDrivenBacktester` (refactor).",
+        "- **B** — keep direct, add `preload_features(..., strict=True)` + PR 7 `SCRIPT_STATUS=formal_candidate`.",
+        "- **C** — sandbox-only; PR 7 `SCRIPT_STATUS=historical_investigation`.",
+        "- **D** — superseded; PR 7 moves to `workspace/scripts/archive/`.",
+        "",
+        "## Files",
+        "",
+        "| Class | File | EDB | BE | Feeder | preload | preload_features | D.features | run_mode | Rationale |",
+        "|:---:|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|",
+    ]
+    # Sort by class then name so D-bucket is visible at the top of each section.
+    rows.sort(key=lambda r: (r[2], r[0]))
+    for name, hits, cls, rationale in rows:
+        lines.append(
+            f"| **{cls}** | `{name}` | "
+            f"{hits.get('EventDrivenBacktester(', 0)} | "
+            f"{hits.get('BacktestEngine(', 0)} | "
+            f"{hits.get('QlibDataFeeder(', 0)} | "
+            f"{hits.get('feeder.preload(', 0)} | "
+            f"{hits.get('feeder.preload_features(', 0)} | "
+            f"{hits.get('D.features(', 0)} | "
+            f"{hits.get('run_mode=', 0)} | "
+            f"{rationale} |"
+        )
+
+    # Summary counts
+    counts: dict[str, int] = {}
+    for _, _, cls, _ in rows:
+        counts[cls] = counts.get(cls, 0) + 1
+    lines.extend(["", "## Counts by class", ""])
+    for cls in sorted(counts):
+        lines.append(f"- **{cls}**: {counts[cls]}")
+    lines.append("")
+
+    OUT_FILE.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote {OUT_FILE} ({len(rows)} files; counts={counts})")
+
+    # Also emit a CSV for programmatic consumption (PR 7 will read this).
+    csv_path = OUT_DIR / "direct_engine_classification.csv"
+    with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["file", "class", "rationale", *PATTERNS.keys()])
+        for name, hits, cls, rationale in rows:
+            writer.writerow([name, cls, rationale, *(hits[k] for k in PATTERNS)])
+    print(f"Wrote {csv_path}")
+
+
+if __name__ == "__main__":
+    main()

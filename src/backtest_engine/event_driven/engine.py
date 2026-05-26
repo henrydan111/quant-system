@@ -21,6 +21,7 @@ from .portfolio import Portfolio
 from .exchange import Exchange
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
+from .constants import ENGINE_REQUIRED_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,8 @@ class BacktestEngine:
                  strategy: Strategy,
                  initial_cash: float = 100_000,
                  corp_action_handler: Optional[CorporateActionHandler] = None,
-                 fill_mode: str = 'open_close'):
+                 fill_mode: str = 'open_close',
+                 require_preloaded: bool = False):
         if fill_mode not in self._FILL_MODES:
             raise ValueError(
                 f"fill_mode must be one of {self._FILL_MODES}, got {fill_mode!r}"
@@ -271,6 +273,13 @@ class BacktestEngine:
         self.initial_cash = initial_cash
         self.portfolio = Portfolio(initial_cash)
         self.corp_action_handler = corp_action_handler
+        # PR 2 of the 2026-05-26 freeze plan: when True, the engine asserts
+        # that the feeder's preload cache fully covers ENGINE_REQUIRED_FIELDS
+        # over [prev_trading_day(start), end] before the day loop starts.
+        # Formal runs (validation handlers) pass True; sandbox/historical
+        # investigation scripts may leave the default False so the engine
+        # still tolerates legacy direct-construction patterns.
+        self.require_preloaded = require_preloaded
 
         # Internal state
         self._current_date: Optional[pd.Timestamp] = None
@@ -309,10 +318,21 @@ class BacktestEngine:
 
         # Get prev_date for before_market_open context
         prev_date = self.feeder.get_prev_trading_day(calendar[0])
-
-        # Preload all daily data (INCLUDING prev_date)
         preload_start = prev_date if prev_date else start
-        self.feeder.preload(preload_start, end)
+
+        # PR 2 of the 2026-05-26 freeze plan: the deprecated no-op
+        # `self.feeder.preload(preload_start, end)` call was removed here.
+        # The high-level wrapper (EventDrivenBacktester) now owns preload via
+        # preload_features(...) with explicit fields, dates, and strict flag.
+        # If require_preloaded=True, fail loudly here if the cache cannot
+        # serve the engine-required fields over [preload_start, end].
+        if self.require_preloaded:
+            self.feeder.assert_preloaded(
+                required_fields=ENGINE_REQUIRED_FIELDS,
+                start=preload_start,
+                end=end,
+                require_zero_fallback=True,
+            )
 
         # Load benchmark
         if benchmark_code:
