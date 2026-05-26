@@ -1,3 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────
+# PR 7 of 2026-05-26 freeze plan — SCRIPT_STATUS header block.
+# script_status: historical_investigation
+# formal_research_allowed: false
+# deployment_target: joinquant_attribution_only
+# requires_provider_manifest: false
+# requires_preload_strict: false
+# pr2_audit_class: C
+# notes: |
+#   Sandbox / one-shot diagnostic script. NOT a formal research
+#   surface. Bare D.features calls inside this file are tolerated
+#   per scripts/lint_no_bare_qlib_features.py allowlist semantics
+#   (PR 6) but the script's output is not eligible for the formal
+#   release gate.
+# ──────────────────────────────────────────────────────────────────────
 """Compare market_cap rankings on a specific 2024 Tuesday between v9 and JoinQuant.
 
 If JQ picked stocks v9 didn't (and both filter the same way), one of:

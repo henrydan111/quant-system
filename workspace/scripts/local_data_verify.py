@@ -1,3 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────
+# PR 7 of 2026-05-26 freeze plan — SCRIPT_STATUS header block.
+# script_status: formal_candidate
+# formal_research_allowed: true
+# deployment_target: joinquant_daily
+# execution_profile: joinquant_daily_sim
+# requires_provider_manifest: true
+# requires_preload_strict: true
+# pr2_audit_class: B
+# notes: |
+#   Uses QlibDataFeeder directly. Must call
+#   feeder.preload_features(..., strict=True) for engine-required
+#   fields before any get_features call. See
+#   src/backtest_engine/event_driven/constants.py::ENGINE_REQUIRED_FIELDS.
+# ──────────────────────────────────────────────────────────────────────
 """
 Local Data Dump — matches jq_data_verify.py output format.
 Dumps PE_TTM, market_cap, close, volume, 20d momentum for CSI300 main-board stocks

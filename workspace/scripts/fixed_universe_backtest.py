@@ -1,3 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────
+# PR 7 of 2026-05-26 freeze plan — SCRIPT_STATUS header block.
+# script_status: formal_candidate
+# formal_research_allowed: true
+# deployment_target: joinquant_daily
+# execution_profile: joinquant_daily_sim
+# requires_provider_manifest: true
+# requires_preload_strict: true
+# pr2_audit_class: A
+# notes: |
+#   Validation runner already on EventDrivenBacktester. PR 3's
+#   ExecutionProfile contract is now available — when this script is
+#   next touched, pass execution_profile='joinquant_daily_sim'
+#   instead of composing fill_mode + cost + slippage individually.
+# ──────────────────────────────────────────────────────────────────────
 """
 Fixed-Universe Validation: Pure Engine Comparison
 

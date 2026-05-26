@@ -1,3 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────
+# PR 7 of 2026-05-26 freeze plan — SCRIPT_STATUS header block.
+# script_status: historical_investigation
+# formal_research_allowed: false
+# deployment_target: joinquant_attribution_only
+# requires_provider_manifest: false
+# requires_preload_strict: false
+# pr2_audit_class: C
+# notes: |
+#   Sandbox / one-shot diagnostic script. NOT a formal research
+#   surface. Bare D.features calls inside this file are tolerated
+#   per scripts/lint_no_bare_qlib_features.py allowlist semantics
+#   (PR 6) but the script's output is not eligible for the formal
+#   release gate.
+# ──────────────────────────────────────────────────────────────────────
 """Check whether v9's top-12 picks on 2024-02-06 were at limit-down,
 which would explain why JQ's filter_limitdown_stock excluded them and JQ picked higher-ranked names."""
 
