@@ -12,6 +12,9 @@ from src.research_orchestrator.cache_manifest import (
     CacheManifestStore,
     get_cache_context,
 )
+from src.research_orchestrator.research_access_context import (
+    get_research_access_context,
+)
 
 
 def _deterministic_cache_path(freq: str, fields: list[str], start: str, end: str) -> str:
@@ -52,6 +55,20 @@ def qlib_windowed_features(
         ]
     ):
         effective_context = inherited_context
+    # PR 6 of 2026-05-26 freeze plan: data-layer enforcement of the formal
+    # research access context. When a ResearchAccessContext is active (set
+    # by SealedBacktestRunner.run_workspace_pipeline or a formal validation
+    # handler), every read through this wrapper must satisfy its window /
+    # seal / allowed_fields constraints. Sandbox/no-context calls skip this
+    # check unchanged.
+    research_ctx = get_research_access_context()
+    if research_ctx is not None:
+        research_ctx.validate_read(
+            start_time=start_time,
+            end_time=end_time,
+            fields=list(fields),
+        )
+
     manifest = CacheManifestStore(cache_manifest_dir)
     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)
     cache_path = cache_key
@@ -64,7 +81,7 @@ def qlib_windowed_features(
         window_end=end_time,
         cache_type="qlib_features",
     )
-    frame = D.features(
+    frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
         instruments,
         list(fields),
         start_time=start_time,

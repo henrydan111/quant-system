@@ -172,6 +172,16 @@ def main() -> int:
     # on a known calendar_policy_id and provider_build_id being recorded.
     checks.append(_provider_manifest_check())
 
+    # 0a. No-bare-Qlib-features lint (PR 6) — banned outside the canonical
+    # wrapper so the ResearchAccessContext can enforce window/seal/field
+    # constraints at the data-access layer.
+    checks.append(
+        _run(
+            [python, "scripts/lint_no_bare_qlib_features.py", "src/"],
+            "no_bare_qlib_features_lint",
+        )
+    )
+
     # 1. DataAuditor
     checks.append(_audit_daily_files_inprocess())
 

@@ -297,7 +297,12 @@ def compute_canonical_kline_hash(
     for inst in instruments:
         for date in dates:
             try:
-                frame = D.features([inst], list(fields_t), start_time=date, end_time=date)
+                # noqa: bare-qlib-features — privileged admin call computing the
+                # provider attestation hash itself. Intentionally bypasses
+                # qlib_windowed_features (no ResearchAccessContext applies to a
+                # provider-attestation operation; it runs at manifest-emit time,
+                # outside any research stage).
+                frame = D.features([inst], list(fields_t), start_time=date, end_time=date)  # noqa: bare-qlib-features
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("sentinel read failed for %s @ %s: %s", inst, date, exc)
                 payload_parts.append(f"{inst}|{date}|UNREADABLE")
