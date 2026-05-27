@@ -73,6 +73,100 @@ __all__ = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# PR 8 fix helpers — keep above the class so the wrapper can call them.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _serialize_cost_config(cfg: CostConfig) -> dict[str, Any]:
+    """Replayable serialization of a CostConfig override (PR 8 fix #6).
+
+    Returns ``{"class": "CostConfig", "params": {...}}`` so the artifact
+    contains every field needed to reconstruct the exact instance.
+    """
+    from dataclasses import asdict, is_dataclass
+    if is_dataclass(cfg):
+        params = {k: v for k, v in asdict(cfg).items()}
+    else:
+        params = {k: getattr(cfg, k) for k in dir(cfg)
+                  if not k.startswith("_") and not callable(getattr(cfg, k))}
+    return {"class": type(cfg).__name__, "params": params}
+
+
+def _serialize_slippage(slip: SlippageModel) -> dict[str, Any]:
+    """Replayable serialization of a SlippageModel override (PR 8 fix #6)."""
+    params: dict[str, Any] = {}
+    for attr in ("rate", "value", "bps", "fixed_amount"):
+        if hasattr(slip, attr):
+            params[attr] = getattr(slip, attr)
+    return {"class": type(slip).__name__, "params": params}
+
+
+def _validate_provider_at_runtime(
+    *,
+    manifest: Any,
+    calendar_policy_id: str,
+    run_mode: str,
+) -> None:
+    """Formal-runtime provider/calendar validation (PR 8 fix #3).
+
+    For a frozen policy, the observed Qlib calendar end-date MUST match the
+    policy's calendar_end_date AND the manifest's calendar_end_date — the
+    blanket "policy.frozen → allow any mismatch" was too loose. Mode-level
+    permission is also checked: the run_mode (or profile deployment_target)
+    must be in policy.allowed_modes.
+    """
+    from src.research_orchestrator.calendar_policy import load_calendar_policy
+    from src.data_infra.provider_manifest import (
+        validate_provider_manifest_against_qlib,
+    )
+
+    try:
+        policy = load_calendar_policy(calendar_policy_id)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Formal run requires calendar_policy_id={calendar_policy_id!r} "
+            f"but loading failed: {exc}"
+        ) from exc
+
+    policy.assert_run_mode_allowed(run_mode)
+
+    # Read live calendar end via Qlib.
+    try:
+        from qlib.data import D as _D
+        cal = _D.calendar(start_time="1990-01-01", end_time="2099-12-31")
+        live_calendar_end = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
+    except Exception as exc:
+        logger.warning(
+            "Could not read live Qlib calendar (%s); skipping mismatch check.",
+            exc,
+        )
+        return
+
+    if policy.frozen:
+        if policy.calendar_end_date != live_calendar_end:
+            raise RuntimeError(
+                f"Frozen calendar policy {calendar_policy_id!r} declares "
+                f"calendar_end_date={policy.calendar_end_date} but live Qlib "
+                f"calendar ends at {live_calendar_end}. Either rebuild the "
+                "provider or load a non-frozen policy."
+            )
+        if manifest.provider.calendar_end_date != policy.calendar_end_date:
+            raise RuntimeError(
+                f"Manifest calendar_end_date={manifest.provider.calendar_end_date} "
+                f"does not match frozen policy {calendar_policy_id!r} "
+                f"calendar_end_date={policy.calendar_end_date}."
+            )
+        # Both ends agree; namespacing still must be enforced.
+        validate_provider_manifest_against_qlib(
+            manifest, live_calendar_end, allow_calendar_mismatch=False,
+        )
+    else:
+        validate_provider_manifest_against_qlib(
+            manifest, live_calendar_end, allow_calendar_mismatch=False,
+        )
+
+
 class EventDrivenBacktester:
     """High-level API for running event-driven backtests.
 
@@ -164,14 +258,17 @@ class EventDrivenBacktester:
             carries provider_build_id, calendar_policy_id, and (post PR 3)
             execution_profile_*; missing fields make the artifact legacy.
         """
-        # PR 3 of 2026-05-26 freeze plan: resolve the execution profile up
-        # front so the rest of the wrapper works with concrete fill_mode /
-        # cost_config / slippage / volume_limit values. Callers that supply
-        # explicit overrides (fill_mode=, slippage=, exchange_config=,
-        # volume_limit=) on TOP of a profile produce an override_diff; formal
-        # runs require override_reason in that case.
+        # PR 3 of 2026-05-26 freeze plan + PR 8 fixup: resolve the execution
+        # profile up front so the rest of the wrapper works with concrete
+        # fill_mode / cost_config / slippage / volume_limit values. PR 8
+        # critical fix: compute is_formal ONCE here, considering BOTH
+        # run_mode AND profile.allowed_for_formal — previously the wrapper
+        # computed it twice and the second computation overwrote the
+        # profile-aware version, so a caller passing
+        # `execution_profile='joinquant_daily_sim', run_mode=None` got
+        # JoinQuant fill semantics without strict preload enforcement.
         profile_obj: ExecutionProfile | None = None
-        override_diff_record: dict[str, list[Any]] = {}
+        override_diff_record: dict[str, Any] = {}
         explicit_fill_mode = fill_mode
         explicit_slippage_obj = slippage
         explicit_cost_config_obj = exchange_config
@@ -186,25 +283,29 @@ class EventDrivenBacktester:
                     "Use VectorizedBacktester for screening profiles."
                 )
             # Compute the diff WITHOUT yet using the explicit values to override.
-            override_diff_record = detect_override_diff(
+            override_diff_record = dict(detect_override_diff(
                 profile=profile_obj,
                 explicit_fill_mode=explicit_fill_mode,
                 explicit_cost_config_factory=None,  # caller passes objects, not factory names
                 explicit_slippage_preset=None,
                 explicit_volume_limit=explicit_volume_limit,
-            )
-            # Object-form overrides (exchange_config=, slippage=) cannot be
-            # diffed by factory-name so we record their presence directly.
+            ))
+            # PR 8 fix #6: replayable object-form override records.
+            # Previously we stored opaque '<caller-supplied CostConfig instance>'
+            # strings. Now we serialize the full class + params so the override
+            # is reconstructable from the artifact alone.
             if explicit_cost_config_obj is not None:
-                override_diff_record["cost_config_object"] = [
-                    profile_obj.cost_config_factory,
-                    "<caller-supplied CostConfig instance>",
-                ]
+                override_diff_record["cost_config_object"] = {
+                    "from": {
+                        "factory": profile_obj.cost_config_factory,
+                    },
+                    "to": _serialize_cost_config(explicit_cost_config_obj),
+                }
             if explicit_slippage_obj is not None:
-                override_diff_record["slippage_object"] = [
-                    profile_obj.slippage_preset,
-                    "<caller-supplied SlippageModel instance>",
-                ]
+                override_diff_record["slippage_object"] = {
+                    "from": {"preset": profile_obj.slippage_preset},
+                    "to": _serialize_slippage(explicit_slippage_obj),
+                }
 
             # Apply profile defaults where caller did not supply explicit values.
             if explicit_fill_mode is None:
@@ -215,19 +316,6 @@ class EventDrivenBacktester:
                 exchange_config = resolve_cost_config(profile_obj.cost_config_factory)
             if explicit_slippage_obj is None:
                 slippage = resolve_slippage_preset(profile_obj.slippage_preset)
-
-            # Formal runs reject overrides unless override_reason is supplied.
-            is_formal = (
-                profile_obj.allowed_for_formal
-                or (run_mode in FORMAL_RUN_MODES if run_mode else False)
-            )
-            if is_formal and override_diff_record and not override_reason:
-                raise OverrideRequiresReasonError(
-                    f"Formal execution_profile={execution_profile!r} received "
-                    f"overrides {sorted(override_diff_record)} without an "
-                    "override_reason. Pass override_reason='...' to document "
-                    "why the formal contract is being deliberately overridden."
-                )
         else:
             # No profile supplied. Backwards-compatible: apply legacy defaults
             # if the caller didn't set them. These keep PR 2 behavior intact
@@ -236,6 +324,23 @@ class EventDrivenBacktester:
                 fill_mode = "open_close"
             if volume_limit is None:
                 volume_limit = 0.25
+
+        # PR 8 fix #1: SINGLE is_formal computation considering BOTH run_mode
+        # and profile.allowed_for_formal. Used uniformly below for preload
+        # condition, strict preload, require_preloaded, and provider-manifest
+        # requirement.
+        mode_is_formal = run_mode in FORMAL_RUN_MODES if run_mode else False
+        profile_is_formal = bool(profile_obj and profile_obj.allowed_for_formal)
+        is_formal = mode_is_formal or profile_is_formal
+
+        # Formal runs reject overrides unless override_reason is supplied.
+        if profile_obj is not None and is_formal and override_diff_record and not override_reason:
+            raise OverrideRequiresReasonError(
+                f"Formal execution_profile={execution_profile!r} received "
+                f"overrides {sorted(override_diff_record)} without an "
+                "override_reason. Pass override_reason='...' to document "
+                "why the formal contract is being deliberately overridden."
+            )
 
         if time_split:
             stage = str(time_split.get("stage", "") or "")
@@ -277,14 +382,11 @@ class EventDrivenBacktester:
                 feeder_stage = ts_stage
         feeder = QlibDataFeeder(self.data_dir, stage=feeder_stage)
 
-        # PR 2 of the 2026-05-26 freeze plan: corrected preload condition.
-        # Previously `if preload_fields:` could skip preload entirely for formal
-        # runs that didn't pass strategy-specific factor fields, leaving the
-        # engine to do a per-day D.features fallback for every OHLCV read.
-        # The new condition unions whatever the caller asked for with the
-        # canonical ENGINE_REQUIRED_FIELDS so the engine path always has its
-        # eight OHLCV fields cached.
-        is_formal = run_mode in FORMAL_RUN_MODES if run_mode else False
+        # PR 2 corrected preload condition + PR 8 fix #1: is_formal already
+        # computed above considering BOTH run_mode and profile.allowed_for_formal.
+        # Formal profiles (joinquant_daily_sim, joinquant_open_close_replica)
+        # now correctly auto-enable preload + strict + require_preloaded even
+        # when the caller leaves run_mode=None.
         should_preload = (
             preload_required
             or preload_fields is not None
@@ -292,6 +394,9 @@ class EventDrivenBacktester:
         )
         effective_strict = preload_strict or is_formal
         effective_require_preloaded = preload_required or is_formal
+        # PR 8 fix #3: formal runs require a current provider manifest. Sandbox
+        # runs may leave the default False so legacy environments still work.
+        effective_require_provider_manifest = require_provider_manifest or is_formal
 
         if should_preload:
             # Expand start_time to include the previous trading day for Day 1 warmup
@@ -354,14 +459,26 @@ class EventDrivenBacktester:
             require_preloaded=effective_require_preloaded,
         )
 
-        # Load provider manifest (best-effort unless require_provider_manifest=True).
-        # The provenance block is attached to result.config after engine.run() returns.
+        # PR 8 fix #3: formal-runtime provider/calendar enforcement.
+        # When require_provider_manifest=True (or it implies via is_formal),
+        # we (a) load and validate the manifest against the live Qlib
+        # calendar under the selected calendar policy, and (b) fail the run
+        # if the policy doesn't permit the observed mismatch. Sandbox runs
+        # keep the best-effort behavior (warn, mark legacy).
         provider_build_id: str | None = None
         try:
             manifest = load_provider_manifest(os.path.join(self.data_dir, 'qlib_data'))
             provider_build_id = manifest.provider_build_id
+            if effective_require_provider_manifest and calendar_policy_id:
+                _validate_provider_at_runtime(
+                    manifest=manifest,
+                    calendar_policy_id=calendar_policy_id,
+                    run_mode=run_mode or (
+                        profile_obj.deployment_target if profile_obj else "sandbox"
+                    ),
+                )
         except ProviderManifestError as exc:
-            if require_provider_manifest:
+            if effective_require_provider_manifest:
                 raise
             logger.warning(
                 "Provider manifest unavailable (%s). Result will be marked legacy_artifact=True.",

@@ -22,6 +22,15 @@ from src.research_orchestrator.qlib_windowed_features import qlib_windowed_featu
 logger = logging.getLogger(__name__)
 
 
+class PreloadCoverageError(RuntimeError):
+    """Raised when strict_cache_only is on and a get_features call cache-misses.
+
+    Added in PR 8 fix #2 of the 2026-05-26 freeze plan to close the gap where
+    a formal backtest could pass ``assert_preloaded`` pre-loop and still
+    silently degrade to per-day D.features fallback mid-loop.
+    """
+
+
 class QlibDataFeeder:
     """Feeds market and fundamental data from Qlib.
 
@@ -90,6 +99,14 @@ class QlibDataFeeder:
         self._preload_wall_seconds: float = 0.0
         self._cache_hit_count: int = 0
         self._direct_fallback_count: int = 0
+
+        # PR 8 fix #2: strict_cache_only mode. When enabled, get_features()
+        # raises PreloadCoverageError on the FIRST cache miss instead of
+        # silently falling through to the per-day D.features path. Formal
+        # runs (BacktestEngine(require_preloaded=True)) flip this on so a
+        # mid-loop coverage gap fails loudly rather than producing a
+        # backtest that silently used direct fallback data.
+        self._strict_cache_only: bool = False
         
     def _to_qlib_code(self, code: str) -> str:
         """Convert '000001.SZ' to '000001_SZ'"""
@@ -100,6 +117,16 @@ class QlibDataFeeder:
         """Convert '000001_SZ' to '000001.SZ'"""
         if pd.isna(qlib_code): return qlib_code
         return str(qlib_code).replace('_', '.')
+
+    def set_strict_cache_only(self, enabled: bool) -> None:
+        """Toggle strict-cache-only mode (PR 8 fix #2).
+
+        When True, :meth:`get_features` raises ``PreloadCoverageError`` on the
+        first cache miss instead of falling back to a per-day Qlib query. The
+        engine sets this on whenever ``require_preloaded=True`` so formal
+        runs fail at the first coverage gap rather than at end-of-run.
+        """
+        self._strict_cache_only = bool(enabled)
 
     def preload(self, start: pd.Timestamp, end: pd.Timestamp) -> None:
         """REMOVED in PR 2 of the 2026-05-26 freeze plan.
@@ -308,6 +335,18 @@ class QlibDataFeeder:
                     logger.warning(f"Cache slice failed, falling back to D.features: {e}")
             else:
                 logger.debug(f"Cache miss for fields {missing_fields}, fetching from Qlib.")
+
+        # PR 8 fix #2: strict_cache_only mode short-circuits the fallback.
+        # Without this, a formal run could silently degrade DURING the day
+        # loop even though the pre-loop assert_preloaded passed.
+        if self._strict_cache_only:
+            raise PreloadCoverageError(
+                "Strict cache-only mode is enabled but a cache miss occurred. "
+                f"Requested fields={list(fields)} for instruments[0:3]="
+                f"{list(instruments)[:3]} over {start_ts}..{end_ts}. "
+                "Preload these fields explicitly before the day loop, or "
+                "disable strict_cache_only for sandbox runs."
+            )
 
         # Fallback to direct D.features query
         # Instrumentation: increment fallback counter — the validation gate

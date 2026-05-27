@@ -68,6 +68,20 @@ class FieldAccessViolation(RuntimeError):
     """Raised when a data read requests fields outside the context's allowed_fields."""
 
 
+class MissingResearchAccessContextError(RuntimeError):
+    """Raised when a formal stage runs without an active ResearchAccessContext.
+
+    Added in PR 8 fix #8 of the 2026-05-26 freeze plan. Formal validation
+    handlers call :func:`require_research_access_context` to confirm a
+    context is installed BEFORE they touch any data; sandbox runs do not.
+    """
+
+
+FORMAL_STAGES: frozenset[str] = frozenset(
+    {"formal_validation", "oos_test", "registry_publish"}
+)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Context dataclass
 # ─────────────────────────────────────────────────────────────────────────
@@ -225,3 +239,28 @@ def research_access_context(
         yield ctx
     finally:
         reset_research_access_context(token)
+
+
+def require_research_access_context(stage: str) -> ResearchAccessContext:
+    """PR 8 fix #8 — formal stages MUST run with an active context.
+
+    Raises :class:`MissingResearchAccessContextError` if the current stage is
+    in :data:`FORMAL_STAGES` and ``get_research_access_context()`` returns
+    None. Sandbox/screening stages return the current context (which may be
+    None — they are explicitly tolerant).
+
+    Call from every formal-validation handler before touching feature data:
+
+        ctx = require_research_access_context(step.stage)
+
+    Returns the active context so callers can also use the fields (run_id,
+    design_hash, etc.) for logging.
+    """
+    current = get_research_access_context()
+    if stage in FORMAL_STAGES and current is None:
+        raise MissingResearchAccessContextError(
+            f"Formal stage={stage!r} runs MUST install a ResearchAccessContext "
+            "before touching feature data. Wrap the call in "
+            "`with research_access_context(ResearchAccessContext.from_split(...))`."
+        )
+    return current  # type: ignore[return-value]

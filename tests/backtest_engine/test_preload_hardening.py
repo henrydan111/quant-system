@@ -177,10 +177,28 @@ class TestWrapperPreloadCondition:
     """EventDrivenBacktester.run() — should_preload + field union + strict promotion."""
 
     def _run_with_mocked_components(self, tmp_path: Path, **run_kwargs):
+        """Helper that mocks every external collaborator so the test can
+        assert wrapper-level kwargs without touching real Qlib / parquet.
+
+        PR 8 fix #1 promotion: formal-mode tests now skip the provider-
+        manifest requirement by mocking ``load_provider_manifest`` to
+        return a stub. The tests here are checking wrapper preload
+        plumbing, not provider validation (see test_provider_manifest.py
+        for that).
+        """
         strategy = MagicMock()
+        stub_manifest = MagicMock(
+            provider_build_id="prod_test_001",
+            provider=MagicMock(calendar_end_date="2026-02-27"),
+            event_endpoint_namespacing=MagicMock(status="enforced"),
+        )
         with patch("src.backtest_engine.event_driven.QlibDataFeeder") as feeder_cls, patch(
             "src.backtest_engine.event_driven.Exchange"
-        ), patch("src.backtest_engine.event_driven.BacktestEngine") as engine_cls:
+        ), patch("src.backtest_engine.event_driven.BacktestEngine") as engine_cls, patch(
+            "src.backtest_engine.event_driven.load_provider_manifest", return_value=stub_manifest,
+        ), patch(
+            "src.backtest_engine.event_driven._validate_provider_at_runtime"
+        ):
             feeder = feeder_cls.return_value
             engine = engine_cls.return_value
             engine.run.return_value = MagicMock(config={})
