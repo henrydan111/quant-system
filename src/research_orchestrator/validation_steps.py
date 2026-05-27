@@ -130,15 +130,118 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
             "candidate-stage factors, set prescription.allow_candidate_components=True."
         )
 
+    # PR 9 of 2026-05-26 freeze plan: field-dependency gate.
+    # After the resolver confirms every prescribed component lives in the
+    # formal factor layer, walk each resolved factor's Qlib expression and
+    # refuse the IS leg if ANY referenced $field is disallowed at
+    # ``formal_validation`` stage (quarantined / pending_review / unknown
+    # per config/field_registry/field_status.yaml). This catches the failure
+    # mode where a candidate "factor lives in factor_registry, expressions
+    # parse, BUT one of its $fields is moneyflow / northbound / etc." Pre-PR-9
+    # such candidates would only get caught at release-gate time after
+    # spending the full IS leg's compute budget.
+    field_dependency_report = _validate_factor_field_dependencies(
+        factor_names=[c.factor_name for c in prescription.components],
+        stage="formal_validation",
+        artifact_label=str(hypothesis.hypothesis_id),
+    )
+
     outputs = {
         # The shape runtime.py:407 expects (matches handle_object_resolver):
         "registry_resolution": raw_resolution,
         # Convenience: pass the synthesized consumes downstream so dataset_build
         # doesn't need to re-derive it from prescription.
         "consumes": [c.to_dict() for c in consumes],
+        # PR 9: record the field-dependency check result on the artifact so
+        # reviewers can audit which $fields the resolver approved.
+        "field_dependency_report": field_dependency_report,
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _validate_factor_field_dependencies(
+    *,
+    factor_names: list[str],
+    stage: str,
+    artifact_label: str,
+) -> dict[str, Any]:
+    """PR 9 helper: refuse formal candidates whose factor expressions touch
+    any quarantined / pending_review / unknown ``$field``.
+
+    Looks up each ``factor_name`` in ``get_factor_catalog`` and (for
+    industry-relative composites) ``get_industry_relative_defs``; collects
+    the resulting Qlib expressions; runs them through
+    ``assert_field_dependencies_eligible`` which loads
+    ``config/field_registry/field_status.yaml`` and raises
+    :class:`FieldApprovalError` on disallowed-field references.
+
+    Returns a serializable report (also written into the step's outputs)
+    so reviewers can audit which $fields were checked + the registry's
+    answer for each.
+
+    Industry-relative composites: the registry uses time-varying SW2021
+    labels for the post-transform but the ``$field`` references come from
+    the ``base`` factor's expression. Including the base's expression in
+    the field-dependency check covers PIT-safety inheritance correctly.
+    """
+    from src.alpha_research.factor_library.catalog import (
+        get_factor_catalog,
+        get_industry_relative_defs,
+    )
+    from src.research_orchestrator.release_gate import (
+        assert_field_dependencies_eligible,
+    )
+
+    catalog = get_factor_catalog(include_new_data=True)
+    industry_defs = {d["name"]: d for d in get_industry_relative_defs()}
+
+    expressions: list[str] = []
+    expression_sources: list[dict[str, str]] = []
+    for name in factor_names:
+        if name in catalog:
+            expressions.append(catalog[name])
+            expression_sources.append({"factor_name": name, "source": "factor_catalog"})
+        elif name in industry_defs:
+            base = str(industry_defs[name].get("base", ""))
+            if base and base in catalog:
+                expressions.append(catalog[base])
+                expression_sources.append({
+                    "factor_name": name,
+                    "source": "industry_relative_base",
+                    "base_factor": base,
+                })
+            else:
+                expression_sources.append({
+                    "factor_name": name,
+                    "source": "industry_relative_unresolved_base",
+                    "base_factor": base,
+                })
+        else:
+            # The resolver already accepted this factor against the registry,
+            # but it's not in the runtime catalog or industry-relative defs.
+            # Record this for review — we can't field-check what we can't see.
+            expression_sources.append({"factor_name": name, "source": "no_expression_found"})
+
+    # assert_field_dependencies_eligible loads the committed registry by
+    # default. Raises FieldApprovalError on any disallowed field; the
+    # error string lists every violating field so the operator can fix
+    # field_status.yaml or change the prescription.
+    gate_result = assert_field_dependencies_eligible(
+        expressions=expressions,
+        stage=stage,
+        artifact_label=artifact_label,
+    )
+
+    return {
+        "stage": stage,
+        "eligible": gate_result.eligible,
+        "fields_checked": list(gate_result.fields_checked),
+        "disallowed_fields": list(gate_result.disallowed_fields),
+        "unknown_fields": list(gate_result.unknown_fields),
+        "reasons": list(gate_result.reasons),
+        "expression_sources": expression_sources,
+    }
 
 
 # ── dataset_build ────────────────────────────────────────────────────────
