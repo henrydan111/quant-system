@@ -5,11 +5,17 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from src.research_orchestrator.artifact_provenance import (
     ArtifactProvenance,
     read_provenance,
+)
+from src.data_infra.field_registry import (
+    FieldApprovalError,
+    FieldRegistryError,
+    FieldStatusRegistry,
+    load_field_registry,
 )
 
 
@@ -279,6 +285,111 @@ def assert_formal_artifact_eligible(
             f"Formal release blocked for {artifact_label}: "
             f"status={result.status}, reasons={list(result.reasons)}. "
             "Re-run with a current provider manifest and explicit calendar policy."
+        )
+    return result
+
+
+@dataclass(frozen=True)
+class FieldDependencyGateResult:
+    """Per-stage decision driven by the field-status registry.
+
+    PR 5 of the 2026-05-26 freeze plan. Distinct from
+    :class:`ArtifactGateResult` so callers can combine artifact-provenance
+    and field-dependency checks into one fail/pass decision.
+    """
+    stage: str
+    eligible: bool
+    fields_checked: tuple[str, ...]
+    disallowed_fields: tuple[str, ...]
+    unknown_fields: tuple[str, ...]
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_field_dependencies(
+    *,
+    fields: Iterable[str] = (),
+    expressions: Iterable[str] = (),
+    stage: str,
+    registry: FieldStatusRegistry | None = None,
+) -> FieldDependencyGateResult:
+    """Decide whether a set of fields / expressions is admissible at ``stage``.
+
+    Accepts EITHER bare ``$field`` tokens via ``fields`` OR full Qlib
+    expressions via ``expressions`` (the parser pulls every ``$field`` out
+    of each expression). Combines both. Loads the committed registry on
+    demand unless ``registry`` is supplied (tests inject custom registries).
+    """
+    if registry is None:
+        try:
+            registry = load_field_registry()
+        except FieldRegistryError as exc:
+            return FieldDependencyGateResult(
+                stage=stage,
+                eligible=False,
+                fields_checked=(),
+                disallowed_fields=(),
+                unknown_fields=(),
+                reasons=(f"field_registry_load_failed:{exc}",),
+            )
+
+    # Resolve every field individually; unknown-policy gates raise-or-pass
+    # decisions per stage. We intentionally call resolve_field (not
+    # validate_expression) so we collect ALL problems before reporting.
+    seen: dict[str, Any] = {}
+    for f in fields:
+        if f and f not in seen:
+            seen[f] = registry.resolve_field(f, stage)
+    from src.data_infra.field_registry import extract_qlib_fields
+    for expr in expressions:
+        for f in extract_qlib_fields(expr):
+            if f not in seen:
+                seen[f] = registry.resolve_field(f, stage)
+
+    disallowed: list[str] = []
+    unknowns: list[str] = []
+    reasons: list[str] = []
+    for f, resolution in seen.items():
+        if resolution.is_unknown:
+            unknowns.append(f)
+            if not resolution.allowed:
+                disallowed.append(f)
+                reasons.append(f"{f}: unknown_field (policy[{stage}]=fail)")
+        elif not resolution.allowed:
+            disallowed.append(f)
+            reasons.append(
+                f"{f}: dataset={resolution.dataset_id} status={resolution.status_id} blocked at {stage}"
+            )
+
+    return FieldDependencyGateResult(
+        stage=stage,
+        eligible=len(disallowed) == 0,
+        fields_checked=tuple(sorted(seen.keys())),
+        disallowed_fields=tuple(sorted(disallowed)),
+        unknown_fields=tuple(sorted(unknowns)),
+        reasons=tuple(reasons),
+    )
+
+
+def assert_field_dependencies_eligible(
+    *,
+    fields: Iterable[str] = (),
+    expressions: Iterable[str] = (),
+    stage: str,
+    registry: FieldStatusRegistry | None = None,
+    artifact_label: str = "factor",
+) -> FieldDependencyGateResult:
+    """Strict variant of :func:`evaluate_field_dependencies` for formal paths."""
+    result = evaluate_field_dependencies(
+        fields=fields, expressions=expressions, stage=stage, registry=registry,
+    )
+    if not result.eligible:
+        raise FieldApprovalError(
+            f"Field-dependency gate blocked {artifact_label} at stage={stage}: "
+            f"disallowed={list(result.disallowed_fields)}, "
+            f"reasons={list(result.reasons)}"
         )
     return result
 
