@@ -981,11 +981,22 @@ def run_event_driven_window(
     volume_limit: float = 0.10,
     preload_strict: bool = False,
     instrumentation_path: str | None = None,
+    # PR 8c Blocker 2: formal-mode kwargs forwarded to EventDrivenBacktester.
+    # Validation handlers pass execution_profile + calendar_policy_id +
+    # run_mode + preload_required + require_provider_manifest so the formal
+    # runtime contract actually engages. Discovery callers omit them and
+    # keep legacy sandbox behavior.
+    execution_profile: str | None = None,
+    calendar_policy_id: str | None = None,
+    run_mode: str | None = None,
+    preload_required: bool = False,
+    require_provider_manifest: bool = False,
+    override_reason: str | None = None,
 ) -> Any:
     """Run the ScheduledLongOnlyStrategy over a date window.
 
     The hypothesis_validation profile (jolly-seeking-lollipop Gate D.2) calls
-    this with explicit `time_split` and `holdout_context` so the underlying
+    this with explicit ``time_split`` and ``holdout_context`` so the underlying
     EventDrivenBacktester enforces stage-aware window/seal checks. Existing
     discovery callers (event_driven_strategy_research.py and theme_strategy)
     omit those kwargs and get the legacy behavior.
@@ -994,6 +1005,12 @@ def run_event_driven_window(
     passed through to ``EventDrivenBacktester.run``. Validation handlers
     must set ``True``; discovery callers keep the default ``False`` so a
     cache-manifest collision degrades to logged ERROR + best-effort fallback.
+
+    PR 8c Blocker 2: formal validation handlers also pass execution_profile,
+    calendar_policy_id, run_mode, preload_required, and
+    require_provider_manifest so the wrapper's formal runtime contract
+    (is_formal computation → strict preload + require_preloaded + provider
+    manifest validation) actually engages on the validation path.
     """
     backtester = EventDrivenBacktester(data_dir=str(PROJECT_ROOT / "data"))
     strategy = ScheduledLongOnlyStrategy(schedule)
@@ -1011,6 +1028,13 @@ def run_event_driven_window(
         holdout_context=holdout_context,
         preload_strict=preload_strict,
         instrumentation_path=instrumentation_path,
+        # PR 8c Blocker 2: pass formal kwargs through verbatim.
+        execution_profile=execution_profile,
+        calendar_policy_id=calendar_policy_id,
+        run_mode=run_mode,
+        preload_required=preload_required,
+        require_provider_manifest=require_provider_manifest,
+        override_reason=override_reason,
     )
 
 

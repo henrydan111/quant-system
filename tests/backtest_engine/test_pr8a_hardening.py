@@ -139,14 +139,22 @@ class TestFix4ValidatorRaisesOnQlibFailure:
             event_endpoint_namespacing=MagicMock(status="enforced"),
             calendar_policy_id="frozen_20260227_system_build",  # PR 8b Blocker 3
         )
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.side_effect = OSError("provider directory unreachable")
-            # PR 8a fix #4: must raise, not return silently.
-            with pytest.raises(RuntimeError, match="could not read the live"):
+        # PR 8c Blocker 1: validator now reads calendars/day.txt directly,
+        # so the failure mode is file-read failure, not Qlib failure. The
+        # safety guarantee is the same: validator must raise, not silently
+        # skip the mismatch check.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            side_effect=RuntimeError(
+                "Provider calendar file not found at /nope/calendars/day.txt"
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="Provider calendar file not found"):
                 _validate_provider_at_runtime(
                     manifest=manifest,
                     calendar_policy_id="frozen_20260227_system_build",
                     run_mode="joinquant_daily",
+                    qlib_dir="/nope",
                 )
 
 

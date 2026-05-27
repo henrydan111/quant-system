@@ -76,23 +76,31 @@ class TestBlocker2FormalModesAllowed:
     def test_formal_run_mode_with_frozen_policy_validates(self) -> None:
         from src.backtest_engine.event_driven import _validate_provider_at_runtime
         manifest = _stub_manifest()
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             _validate_provider_at_runtime(
                 manifest=manifest,
                 calendar_policy_id="frozen_20260227_system_build",
                 run_mode="formal",
+                qlib_dir="/tmp/fake_qlib",
             )
 
     def test_oos_test_run_mode_with_frozen_policy_validates(self) -> None:
         from src.backtest_engine.event_driven import _validate_provider_at_runtime
         manifest = _stub_manifest()
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             _validate_provider_at_runtime(
                 manifest=manifest,
                 calendar_policy_id="frozen_20260227_system_build",
                 run_mode="oos_test",
+                qlib_dir="/tmp/fake_qlib",
             )
 
 
@@ -100,24 +108,32 @@ class TestBlocker3ManifestPolicyMismatch:
     def test_mismatch_raises(self) -> None:
         from src.backtest_engine.event_driven import _validate_provider_at_runtime
         manifest = _stub_manifest(policy_id="some_other_policy")
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             with pytest.raises(RuntimeError, match="manifest declares calendar_policy_id"):
                 _validate_provider_at_runtime(
                     manifest=manifest,
                     calendar_policy_id="frozen_20260227_system_build",
                     run_mode="joinquant_daily",
+                    qlib_dir="/tmp/fake_qlib",
                 )
 
     def test_match_passes(self) -> None:
         from src.backtest_engine.event_driven import _validate_provider_at_runtime
         manifest = _stub_manifest(policy_id="frozen_20260227_system_build")
-        with patch("qlib.data.D") as mock_d:
-            mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
+        # PR 8c Blocker 1: validator reads day.txt directly.
+        with patch(
+            "src.backtest_engine.event_driven._read_provider_calendar_end",
+            return_value="2026-02-27",
+        ):
             _validate_provider_at_runtime(
                 manifest=manifest,
                 calendar_policy_id="frozen_20260227_system_build",
                 run_mode="joinquant_daily",
+                qlib_dir="/tmp/fake_qlib",
             )
 
 

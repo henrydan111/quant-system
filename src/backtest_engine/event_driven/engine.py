@@ -338,6 +338,14 @@ class BacktestEngine:
                 end=end,
                 require_zero_fallback=True,
             )
+            # PR 8c Blocker 3: flip strict_cache_only ON immediately after
+            # assert_preloaded — BEFORE warmup _fetch_day_data and BEFORE
+            # strategy.initialize. Pre-PR-8c the strict-mode enable happened
+            # right before the day loop, so warmup + initialize could still
+            # silently fall back on a non-preloaded field. The intent of
+            # require_preloaded=True is that NO feeder access after the
+            # assertion may bypass the cache.
+            self.feeder.set_strict_cache_only(True)
 
         # Load benchmark
         if benchmark_code:
@@ -347,11 +355,16 @@ class BacktestEngine:
 
         total_days = len(calendar)
 
-        # Warmup: fetch day before start for before_market_open context
+        # Warmup: fetch day before start for before_market_open context.
+        # PR 8c Blocker 3: when require_preloaded=True, this fetch runs
+        # under strict_cache_only — a non-preloaded field here raises
+        # PreloadCoverageError instead of silently falling back.
         prev_day_data = (self._fetch_day_data(prev_date)
                          if prev_date else pd.DataFrame())
 
-        # Initialize strategy
+        # Initialize strategy. PR 8c Blocker 3: strategy.initialize runs
+        # under strict_cache_only when require_preloaded=True — strategies
+        # that read non-preloaded fields during init now raise loudly.
         init_context = BacktestContext(
             date=calendar[0],
             day_data=pd.DataFrame(),
@@ -363,20 +376,6 @@ class BacktestEngine:
             total_days=total_days,
         )
         self.strategy.initialize(init_context)
-
-        # PR 8 fix #2 + PR 8b fix #5: flip strict-cache-only via the
-        # strict_cache_mode context manager, which restores the previous
-        # value on BOTH success and exception paths. Pre-PR-8b the engine
-        # restored only on the success path, leaking strict-cache state
-        # whenever the strategy raised mid-loop.
-        #
-        # Implementation note: we enter the context manager here and rely
-        # on the FINALLY-equivalent in `_run_day_loop` to fire when the
-        # loop completes or raises. Callers that want to wrap their own
-        # engine.run() in additional cleanup can use the module-level
-        # ``strict_cache_mode`` helper from data_feeder.
-        if self.require_preloaded:
-            self.feeder.set_strict_cache_only(True)
 
         # Main loop.
         import time as _time
