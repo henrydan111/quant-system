@@ -1,0 +1,303 @@
+{
+  "counts": {
+    "A": 5,
+    "B": 1,
+    "C": 26,
+    "D": 14,
+    "skipped": 0
+  },
+  "generated_at": "2026-05-26T08:14:23.463458Z",
+  "mode": "apply",
+  "rows": [
+    {
+      "action": "header_added",
+      "class": "A",
+      "file": "cross_platform_backtest.py",
+      "rationale": "validation runner already on wrapper; add run_mode='formal' in PR 3"
+    },
+    {
+      "action": "header_added",
+      "class": "A",
+      "file": "fixed_universe_backtest.py",
+      "rationale": "validation runner already on wrapper; add run_mode='formal' in PR 3"
+    },
+    {
+      "action": "header_added",
+      "class": "A",
+      "file": "run_multifactor_validation.py",
+      "rationale": "validation runner already on wrapper; add run_mode='formal' in PR 3"
+    },
+    {
+      "action": "header_added",
+      "class": "A",
+      "file": "run_validation_backtest.py",
+      "rationale": "validation runner already on wrapper; add run_mode='formal' in PR 3"
+    },
+    {
+      "action": "header_added",
+      "class": "A",
+      "file": "run_verified_validation.py",
+      "rationale": "validation runner already on wrapper; add run_mode='formal' in PR 3"
+    },
+    {
+      "action": "header_added",
+      "class": "B",
+      "file": "local_data_verify.py",
+      "rationale": "direct QlibDataFeeder use; add preload_features+strict header"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "check_qlib_nulls.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "generate_factor_notebook.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "generate_ml_strategy_notebook.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "generate_smallcap_notebook.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "generate_st_notebook.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "generate_strategy_notebook.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_freshbuy_rank.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_limitdown_audit.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_marketcap_compare_2024.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_marketcap_rank_audit.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_mimic.py",
+      "rationale": "mimic root: investigation; keep sandbox"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_mimic_v18_no_trim.py",
+      "rationale": "mimic_v18: investigation reference; keep sandbox"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_mimic_v19_nan_fix.py",
+      "rationale": "mimic_v19: investigation reference; keep sandbox"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_mimic_v20_v11_nanfix.py",
+      "rationale": "mimic_v20: investigation reference; keep sandbox"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_mimic_v21_fixedslip.py",
+      "rationale": "mimic_v21: most recent reference; keep sandbox"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_price_source_impact.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_selection_edge_audit.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_stoploss_0819_check.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_susp_audit.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_suspended_pull_up.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_total_mv_integrity.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_total_mv_vs_marketcap_rank.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_universe_mean_compare.py",
+      "rationale": "audit/diagnostic script: keep sandbox; one-shot historical use"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_v16_pure_mtm.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "p1_jq_g5a2_v17_nav_reconstruction.py",
+      "rationale": "bare D.features (PR 6 will lint); keep sandbox for now"
+    },
+    {
+      "action": "header_added",
+      "class": "C",
+      "file": "reproduce_preload_collision.py",
+      "rationale": "other helper; default sandbox"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v10_limitdown.py",
+      "file": "p1_jq_g5a2_mimic_v10_limitdown.py",
+      "rationale": "mimic_v10: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v11_topk100.py",
+      "file": "p1_jq_g5a2_mimic_v11_topk100.py",
+      "rationale": "mimic_v11: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v12_no_survivor.py",
+      "file": "p1_jq_g5a2_mimic_v12_no_survivor.py",
+      "rationale": "mimic_v12: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v13_jq_universe.py",
+      "file": "p1_jq_g5a2_mimic_v13_jq_universe.py",
+      "rationale": "mimic_v13: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v14_jq_replay.py",
+      "file": "p1_jq_g5a2_mimic_v14_jq_replay.py",
+      "rationale": "mimic_v14: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v15_jq_slippage.py",
+      "file": "p1_jq_g5a2_mimic_v15_jq_slippage.py",
+      "rationale": "mimic_v15: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v2.py",
+      "file": "p1_jq_g5a2_mimic_v2.py",
+      "rationale": "mimic_v2: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v3_survivor.py",
+      "file": "p1_jq_g5a2_mimic_v3_survivor.py",
+      "rationale": "mimic_v3: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v4_ranked.py",
+      "file": "p1_jq_g5a2_mimic_v4_ranked.py",
+      "rationale": "mimic_v4: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v5_atopen.py",
+      "file": "p1_jq_g5a2_mimic_v5_atopen.py",
+      "rationale": "mimic_v5: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v6_yesterday_hl.py",
+      "file": "p1_jq_g5a2_mimic_v6_yesterday_hl.py",
+      "rationale": "mimic_v6: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v7_no_volcap.py",
+      "file": "p1_jq_g5a2_mimic_v7_no_volcap.py",
+      "rationale": "mimic_v7: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v8_100k_capital.py",
+      "file": "p1_jq_g5a2_mimic_v8_100k_capital.py",
+      "rationale": "mimic_v8: superseded by v21 (project_state)"
+    },
+    {
+      "action": "archived",
+      "class": "D",
+      "dest": "workspace\\scripts\\archive\\p1_jq_g5a2_investigation_2026_05\\p1_jq_g5a2_mimic_v9_jq_stoploss_parity.py",
+      "file": "p1_jq_g5a2_mimic_v9_jq_stoploss_parity.py",
+      "rationale": "mimic_v9: superseded by v21 (project_state)"
+    }
+  ]
+}
