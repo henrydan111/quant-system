@@ -40,6 +40,15 @@ from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
 from .engine import BacktestEngine, BacktestResult
 from .constants import ENGINE_REQUIRED_FIELDS, FORMAL_RUN_MODES
+from src.backtest_engine.execution_profiles import (
+    ExecutionProfile,
+    ExecutionProfileError,
+    OverrideRequiresReasonError,
+    detect_override_diff,
+    get_profile,
+    resolve_cost_config,
+    resolve_slippage_preset,
+)
 from src.data_infra.provider_manifest import (
     ProviderManifestError,
     load_provider_manifest,
@@ -93,17 +102,19 @@ class EventDrivenBacktester:
             account: float = 100_000,
             exchange_config: CostConfig = None,
             slippage: SlippageModel = None,
-            volume_limit: float = 0.25,
+            volume_limit: float | None = None,
             preload_fields: list[str] = None,
             time_split: dict | None = None,
             holdout_context: Any | None = None,
             preload_strict: bool = False,
             preload_required: bool = False,
             instrumentation_path: str | None = None,
-            fill_mode: str = 'open_close',
+            fill_mode: str | None = None,
             calendar_policy_id: str | None = None,
             require_provider_manifest: bool = False,
-            run_mode: str | None = None) -> BacktestResult:
+            run_mode: str | None = None,
+            execution_profile: str | None = None,
+            override_reason: str | None = None) -> BacktestResult:
         """Run a backtest with the given strategy.
 
         Args:
@@ -153,6 +164,79 @@ class EventDrivenBacktester:
             carries provider_build_id, calendar_policy_id, and (post PR 3)
             execution_profile_*; missing fields make the artifact legacy.
         """
+        # PR 3 of 2026-05-26 freeze plan: resolve the execution profile up
+        # front so the rest of the wrapper works with concrete fill_mode /
+        # cost_config / slippage / volume_limit values. Callers that supply
+        # explicit overrides (fill_mode=, slippage=, exchange_config=,
+        # volume_limit=) on TOP of a profile produce an override_diff; formal
+        # runs require override_reason in that case.
+        profile_obj: ExecutionProfile | None = None
+        override_diff_record: dict[str, list[Any]] = {}
+        explicit_fill_mode = fill_mode
+        explicit_slippage_obj = slippage
+        explicit_cost_config_obj = exchange_config
+        explicit_volume_limit = volume_limit
+
+        if execution_profile is not None:
+            profile_obj = get_profile(execution_profile)
+            if profile_obj.backend != "event_driven":
+                raise ExecutionProfileError(
+                    f"execution_profile={execution_profile!r} has backend={profile_obj.backend!r} "
+                    "but EventDrivenBacktester only accepts event_driven profiles. "
+                    "Use VectorizedBacktester for screening profiles."
+                )
+            # Compute the diff WITHOUT yet using the explicit values to override.
+            override_diff_record = detect_override_diff(
+                profile=profile_obj,
+                explicit_fill_mode=explicit_fill_mode,
+                explicit_cost_config_factory=None,  # caller passes objects, not factory names
+                explicit_slippage_preset=None,
+                explicit_volume_limit=explicit_volume_limit,
+            )
+            # Object-form overrides (exchange_config=, slippage=) cannot be
+            # diffed by factory-name so we record their presence directly.
+            if explicit_cost_config_obj is not None:
+                override_diff_record["cost_config_object"] = [
+                    profile_obj.cost_config_factory,
+                    "<caller-supplied CostConfig instance>",
+                ]
+            if explicit_slippage_obj is not None:
+                override_diff_record["slippage_object"] = [
+                    profile_obj.slippage_preset,
+                    "<caller-supplied SlippageModel instance>",
+                ]
+
+            # Apply profile defaults where caller did not supply explicit values.
+            if explicit_fill_mode is None:
+                fill_mode = profile_obj.fill_mode
+            if explicit_volume_limit is None:
+                volume_limit = profile_obj.volume_limit
+            if explicit_cost_config_obj is None:
+                exchange_config = resolve_cost_config(profile_obj.cost_config_factory)
+            if explicit_slippage_obj is None:
+                slippage = resolve_slippage_preset(profile_obj.slippage_preset)
+
+            # Formal runs reject overrides unless override_reason is supplied.
+            is_formal = (
+                profile_obj.allowed_for_formal
+                or (run_mode in FORMAL_RUN_MODES if run_mode else False)
+            )
+            if is_formal and override_diff_record and not override_reason:
+                raise OverrideRequiresReasonError(
+                    f"Formal execution_profile={execution_profile!r} received "
+                    f"overrides {sorted(override_diff_record)} without an "
+                    "override_reason. Pass override_reason='...' to document "
+                    "why the formal contract is being deliberately overridden."
+                )
+        else:
+            # No profile supplied. Backwards-compatible: apply legacy defaults
+            # if the caller didn't set them. These keep PR 2 behavior intact
+            # for sandbox / historical_investigation runs.
+            if fill_mode is None:
+                fill_mode = "open_close"
+            if volume_limit is None:
+                volume_limit = 0.25
+
         if time_split:
             stage = str(time_split.get("stage", "") or "")
             allowed_start = str(time_split.get("oos_start" if stage == "oos_test" else "is_start", "") or "")
@@ -308,15 +392,20 @@ class EventDrivenBacktester:
                         instrumentation_path, exc,
                     )
 
-        # Stamp provenance onto result.config. PR 1 covers provider_build_id +
-        # calendar_policy_id; execution_profile_* fields are filled by PR 3.
-        # Defensive guard: wiring tests that mock engine.run() to return a bare
-        # object (no .config) are tolerated — we skip the attach instead of
-        # raising, since those tests assert identity of the returned object.
-        provenance = ArtifactProvenance(
-            provider_build_id=provider_build_id,
-            calendar_policy_id=calendar_policy_id,
-        )
+        # Stamp provenance onto result.config — PR 1 (provider/calendar) +
+        # PR 3 (execution_profile + override block).
+        provenance_kwargs: dict[str, Any] = {
+            "provider_build_id": provider_build_id,
+            "calendar_policy_id": calendar_policy_id,
+        }
+        if profile_obj is not None:
+            provenance_kwargs.update(profile_obj.to_provenance_dict())
+            if override_diff_record:
+                provenance_kwargs["manual_override"] = True
+                provenance_kwargs["override_reason"] = override_reason
+                provenance_kwargs["override_diff"] = dict(override_diff_record)
+
+        provenance = ArtifactProvenance(**provenance_kwargs)
         provenance = ArtifactProvenance.from_dict(provenance.to_dict())
         config = getattr(result, "config", None)
         if isinstance(config, dict):

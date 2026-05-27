@@ -222,6 +222,8 @@ class VectorizedBacktester:
         forbid_all_trade_at_limit: bool = False,
         time_split: dict | None = None,
         holdout_context: Any | None = None,
+        execution_profile: str | None = None,
+        calendar_policy_id: str | None = None,
     ) -> BacktestResult:
         """Run a backtest with full Qlib integration.
 
@@ -254,6 +256,34 @@ class VectorizedBacktester:
             ValueError: If predictions is empty or date range is invalid.
             RuntimeError: If Qlib backtest execution fails.
         """
+        # PR 3 of 2026-05-26 freeze plan: profile resolution. Only screening
+        # profiles (backend='vectorized', allowed_for_formal=False) may be
+        # passed to the vectorized backtester. Formal event-driven profiles
+        # are rejected loudly so callers cannot accidentally run a JoinQuant
+        # parity profile on the vectorized stack.
+        profile_obj = None
+        if execution_profile is not None:
+            from src.backtest_engine.execution_profiles import (
+                ExecutionProfileError,
+                get_profile,
+            )
+            profile_obj = get_profile(execution_profile)
+            if profile_obj.backend != "vectorized":
+                raise ExecutionProfileError(
+                    f"execution_profile={execution_profile!r} has backend={profile_obj.backend!r} "
+                    "but VectorizedBacktester only accepts vectorized profiles. "
+                    "Formal profiles target the event-driven engine."
+                )
+            if profile_obj.allowed_for_formal:
+                # Defensive: a vectorized profile flagged allowed_for_formal=True
+                # would be a contract bug — formal == event_driven only.
+                raise ExecutionProfileError(
+                    f"execution_profile={execution_profile!r} declares "
+                    "allowed_for_formal=True with backend=vectorized — formal "
+                    "runs require the event-driven backend. Fix the profile "
+                    "definition or pass it to EventDrivenBacktester instead."
+                )
+
         self._ensure_qlib_init()
         from qlib.backtest import backtest
 
@@ -391,6 +421,40 @@ class VectorizedBacktester:
             positions = portfolio_metric_dict[1] if len(portfolio_metric_dict) > 1 else None
 
         logger.info("Backtest completed: %d trading days", len(report) if report is not None else 0)
+
+        # PR 1 + PR 3: stamp provenance onto bt_config so vectorized results
+        # carry the same artifact_provenance shape as event-driven results.
+        # Vectorized profiles are screening-only by contract — the artifact
+        # is legacy-eligible-for-formal-gate=False on purpose.
+        from src.research_orchestrator.artifact_provenance import (
+            ArtifactProvenance,
+            attach_provenance,
+        )
+        from src.data_infra.provider_manifest import (
+            ProviderManifestError,
+            load_provider_manifest,
+        )
+
+        provider_build_id: str | None = None
+        try:
+            qlib_dir = self._qlib_dir
+            manifest = load_provider_manifest(qlib_dir)
+            provider_build_id = manifest.provider_build_id
+        except ProviderManifestError as exc:
+            logger.warning(
+                "Vectorized provider manifest unavailable (%s). Result marked legacy_artifact.",
+                exc,
+            )
+
+        provenance_kwargs: dict[str, Any] = {
+            "provider_build_id": provider_build_id,
+            "calendar_policy_id": calendar_policy_id,
+        }
+        if profile_obj is not None:
+            provenance_kwargs.update(profile_obj.to_provenance_dict())
+        provenance = ArtifactProvenance(**provenance_kwargs)
+        provenance = ArtifactProvenance.from_dict(provenance.to_dict())
+        attach_provenance(bt_config, provenance)
 
         return BacktestResult(
             report=report,

@@ -225,12 +225,21 @@ class FillModeTests(unittest.TestCase):
         self.assertAlmostEqual(out.loc['A', 'raw_avg'], 99.0)
 
     def test_event_driven_run_accepts_fill_mode_kwarg(self):
-        """API contract: EventDrivenBacktester.run() must accept fill_mode."""
+        """API contract: EventDrivenBacktester.run() must accept fill_mode.
+
+        PR 3 of the 2026-05-26 freeze plan changed the default from the
+        literal 'open_close' to None so that an ExecutionProfile can supply
+        the fill_mode when one is passed. When no profile and no explicit
+        fill_mode are given, the wrapper falls back to 'open_close' for
+        backwards-compatible sandbox behavior — same effective default,
+        different signature default.
+        """
         import inspect
         from src.backtest_engine.event_driven import EventDrivenBacktester
         sig = inspect.signature(EventDrivenBacktester.run)
         self.assertIn('fill_mode', sig.parameters)
-        self.assertEqual(sig.parameters['fill_mode'].default, 'open_close')
+        # PR 3: default is now None (profile-or-fallback semantics).
+        self.assertIsNone(sig.parameters['fill_mode'].default)
 
 
 if __name__ == '__main__':

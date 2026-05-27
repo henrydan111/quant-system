@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-system.local/schemas/execution_profile.schema.json",
+  "title": "Execution Profile",
+  "description": "Named, immutable execution profile that aggregates fill_mode, cost_config, slippage, and volume_limit into a single auditable contract. Every formal BacktestResult and registry artifact records execution_profile_id + execution_profile_version + execution_profile_hash so reviewers can reproduce or diff the exact execution semantics. Plan PR 3 of 2026-05-26 freeze plan.",
+  "type": "object",
+  "required": [
+    "profile_id",
+    "profile_schema_version",
+    "profile_version",
+    "deployment_target",
+    "backend",
+    "fill_mode",
+    "cost_config_factory",
+    "slippage_preset",
+    "volume_limit",
+    "allowed_for_formal"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier (e.g., 'joinquant_daily_sim'). Recorded into every formal artifact."
+    },
+    "profile_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "profile_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Date-stamped revision tag (e.g., '2026-05-26.v1'). Bumped whenever an execution-relevant field changes."
+    },
+    "deployment_target": {
+      "enum": [
+        "joinquant_daily",
+        "joinquant_minute_replica",
+        "joinquant_open_close_replica",
+        "local_stress",
+        "screening_only"
+      ],
+      "description": "Which downstream deployment this profile is faithful to. Used by reviewers to confirm a profile matches the live target."
+    },
+    "backend": {
+      "enum": ["event_driven", "vectorized"],
+      "description": "Which backtest engine this profile targets. Formal runs MUST use event_driven; vectorized is screening-only."
+    },
+    "fill_mode": {
+      "enum": ["open_close", "jq_daily_avg"],
+      "description": "Engine fill model. open_close = pre-market orders at OPEN, on_bar orders at CLOSE. jq_daily_avg = both phases fill at (open+close)/2 (JoinQuant daily backtest parity)."
+    },
+    "cost_config_factory": {
+      "enum": ["joinquant_default", "realistic_china"],
+      "description": "Resolves to a CostConfig instance. joinquant_default = JoinQuant OrderCost equivalent (stamp tax constant, no transfer fee). realistic_china = actual Chinese exchange with 2023-08-28 stamp-tax cut and 0.2 bps transfer fee."
+    },
+    "slippage_preset": {
+      "enum": [
+        "JOINQUANT_DEFAULT_SLIPPAGE",
+        "CONSERVATIVE_SLIPPAGE_10BPS",
+        "NO_SLIPPAGE"
+      ],
+      "description": "Named slippage model. JOINQUANT_DEFAULT_SLIPPAGE = FixedSlippage(0.0003) = 0.3 bps on ¥10 stocks. CONSERVATIVE_SLIPPAGE_10BPS = PctSlippage(0.001) = 10 bps."
+    },
+    "volume_limit": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Max fraction of daily volume per order (e.g., 0.25 = 25%)."
+    },
+    "allowed_for_formal": {
+      "type": "boolean",
+      "description": "When true, this profile may produce artifacts that pass the formal release gate. Screening-only profiles set this to false so a vectorized screening run cannot accidentally publish as formal."
+    },
+    "notes": {
+      "type": "string",
+      "default": "",
+      "description": "Free-text reviewer notes — included in profile_hash so changing the note bumps the hash (forcing a profile_version bump too)."
+    }
+  }
+}

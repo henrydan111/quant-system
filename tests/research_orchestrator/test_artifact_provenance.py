@@ -23,11 +23,20 @@ from src.research_orchestrator.release_gate import (
 
 
 def _complete_provenance() -> ArtifactProvenance:
+    """Return a fully-populated v2 provenance instance for happy-path tests.
+
+    Post PR 3, formal-eligible artifacts must also carry execution_profile_id
+    + execution_profile_hash, so the helper now includes them. Tests that
+    specifically exercise missing-field paths build their own instances.
+    """
     return ArtifactProvenance(
         provenance_schema_version=PROVENANCE_SCHEMA_VERSION,
         legacy_artifact=False,
         provider_build_id="prod_test_001",
         calendar_policy_id="frozen_20260227_system_build",
+        execution_profile_id="joinquant_daily_sim",
+        execution_profile_version="2026-05-26.v1",
+        execution_profile_hash="0" * 64,
     )
 
 

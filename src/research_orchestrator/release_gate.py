@@ -182,6 +182,10 @@ class ArtifactGateResult:
     provider_build_id / calendar_policy_id) are readable and comparable but
     cannot pass the formal gate. They surface here with
     ``status="failed_legacy"`` and a populated ``reasons`` list.
+
+    Post-PR-3 the gate additionally requires execution_profile_id +
+    execution_profile_hash and (when manual_override=True) override_reason +
+    override_diff. Profiles with allowed_for_formal=False also fail formal.
     """
     eligible: bool
     status: str
@@ -191,6 +195,9 @@ class ArtifactGateResult:
     execution_profile_id: str | None
     execution_profile_hash: str | None
     legacy_artifact: bool
+    manual_override: bool = False
+    override_reason: str | None = None
+    override_diff_keys: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -206,9 +213,35 @@ def evaluate_artifact_provenance(
     yields ``status="failed_legacy"`` rather than raising — viewers and
     historical-comparison tools can still display the artifact, but the
     release gate refuses it.
+
+    Post-PR-3 additional gate: if the artifact's execution profile has
+    ``allowed_for_formal=False`` (resolved by id), the artifact also fails
+    with reason ``execution_profile_not_allowed_for_formal``. This catches
+    the case where a screening profile slips into a publication artifact.
     """
     provenance = read_provenance(artifact_config)
     eligible, reasons = provenance.is_formal_eligible()
+
+    # PR 3: cross-check the profile registry. If the artifact names a known
+    # profile but that profile is allowed_for_formal=False, fail the gate
+    # even if every other field is present.
+    if provenance.execution_profile_id:
+        try:
+            from src.backtest_engine.execution_profiles import (
+                ExecutionProfileError,
+                get_profile,
+            )
+            profile = get_profile(provenance.execution_profile_id)
+            if not profile.allowed_for_formal:
+                eligible = False
+                if "execution_profile_not_allowed_for_formal" not in reasons:
+                    reasons.append("execution_profile_not_allowed_for_formal")
+        except ExecutionProfileError:
+            # Unknown profile id is a hard fail.
+            eligible = False
+            if "unknown_execution_profile_id" not in reasons:
+                reasons.append("unknown_execution_profile_id")
+
     if eligible:
         status = "passed"
     elif provenance.legacy_artifact:
@@ -224,6 +257,9 @@ def evaluate_artifact_provenance(
         execution_profile_id=provenance.execution_profile_id,
         execution_profile_hash=provenance.execution_profile_hash,
         legacy_artifact=provenance.legacy_artifact,
+        manual_override=provenance.manual_override,
+        override_reason=provenance.override_reason,
+        override_diff_keys=tuple(sorted(provenance.override_diff.keys())),
     )
 
 
