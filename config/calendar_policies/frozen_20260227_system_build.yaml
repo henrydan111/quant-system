@@ -32,6 +32,13 @@ allowed_modes:
   # frozen window applies equally to all JoinQuant-aligned deployment paths.
   - joinquant_daily
   - joinquant_open_close_replica
+  # PR 8b Blocker 2: canonical FORMAL_RUN_MODES values
+  # (src/backtest_engine/event_driven/constants.py). PR 8a covered the
+  # profile-driven path (joinquant_daily, joinquant_open_close_replica) but
+  # left `run_mode='formal'` and `run_mode='oos_test'` rejected. Both are
+  # explicit, intentional formal modes — keep them literal in the artifact.
+  - formal
+  - oos_test
 
 # Default behavior when a formal run does NOT pass --calendar-policy.
 default_formal_behavior: require_explicit_policy

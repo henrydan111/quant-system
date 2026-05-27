@@ -146,9 +146,12 @@ class TestFix2StrictCacheOnly:
 class TestFix3ProviderRuntimeValidation:
     def test_frozen_policy_with_matching_calendar_passes(self) -> None:
         from src.backtest_engine.event_driven import _validate_provider_at_runtime
+        # PR 8b Blocker 3: manifest.calendar_policy_id must match the run's
+        # policy id, so mocks need to set it explicitly.
         manifest = MagicMock(
             provider=MagicMock(calendar_end_date="2026-02-27"),
             event_endpoint_namespacing=MagicMock(status="enforced"),
+            calendar_policy_id="frozen_20260227_system_build",
         )
         with patch("qlib.data.D") as mock_d:
             mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
@@ -163,6 +166,7 @@ class TestFix3ProviderRuntimeValidation:
         manifest = MagicMock(
             provider=MagicMock(calendar_end_date="2026-02-27"),
             event_endpoint_namespacing=MagicMock(status="enforced"),
+            calendar_policy_id="frozen_20260227_system_build",
         )
         with patch("qlib.data.D") as mock_d:
             mock_d.calendar.return_value = [pd.Timestamp("2026-01-15")]
@@ -179,6 +183,7 @@ class TestFix3ProviderRuntimeValidation:
         manifest = MagicMock(
             provider=MagicMock(calendar_end_date="2026-02-27"),
             event_endpoint_namespacing=MagicMock(status="enforced"),
+            calendar_policy_id="frozen_20260227_system_build",
         )
         with patch("qlib.data.D") as mock_d:
             mock_d.calendar.return_value = [pd.Timestamp("2026-02-27")]
