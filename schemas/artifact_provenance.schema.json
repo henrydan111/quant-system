@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-system.local/schemas/artifact_provenance.schema.json",
+  "title": "Artifact Provenance Block",
+  "description": "Provenance block stamped onto every formal BacktestResult, validation step output, and registry publication starting with PR 1. Older artifacts that pre-date this contract are legacy_artifact=true; they remain readable for comparison but cannot pass formal release gates.",
+  "type": "object",
+  "required": [
+    "provenance_schema_version",
+    "legacy_artifact"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "provenance_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "legacy_artifact": {
+      "type": "boolean",
+      "description": "True for artifacts produced before PR 1 landed (i.e. missing one or more of the formal provenance fields below). Legacy artifacts can be viewed and compared historically but cannot pass formal release gates."
+    },
+    "provider_build_id": {
+      "type": ["string", "null"]
+    },
+    "calendar_policy_id": {
+      "type": ["string", "null"]
+    },
+    "execution_profile_id": {
+      "type": ["string", "null"],
+      "description": "Filled in by PR 3. Until then this field may be null and formal runs use a transitional 'pre_pr3_default' value."
+    },
+    "execution_profile_version": {
+      "type": ["string", "null"]
+    },
+    "execution_profile_hash": {
+      "type": ["string", "null"],
+      "description": "sha256 hex digest computed from the ExecutionProfile excluding profile_hash itself. Filled in by PR 3."
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-system.local/schemas/provider_build.schema.json",
+  "title": "Provider Build Manifest",
+  "description": "Self-attesting manifest emitted by the Qlib provider builder at publish time. Lives at data/qlib_data/metadata/provider_build.json on each host (the qlib_data tree itself is gitignored). Every formal backtest, validation run, and registry publication MUST record provider_build_id taken from this file. Plan PR 1.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider_build_id",
+    "provider_published_at",
+    "calendar_policy_id",
+    "provider",
+    "event_endpoint_namespacing"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version of this manifest file. Increment whenever required fields change."
+    },
+    "provider_build_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier for this published provider build. Recommended form: 'prod_<mode>_<yyyymmdd>_<short-purpose>'. Recorded into every formal artifact for reproducibility."
+    },
+    "provider_published_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this provider was atomically published into data/qlib_data/. For retroactive manifests this is the historical publication date."
+    },
+    "downstream_revalidated_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when downstream revalidation (factor screens, tests) completed against this provider. Distinct from provider_published_at so research can cite either the build or the revalidation date explicitly."
+    },
+    "source_git_commit": {
+      "type": ["string", "null"],
+      "description": "Git SHA of the source tree that built this provider. Null when the build predates the manifest contract (retroactive manifest)."
+    },
+    "builder": {
+      "type": "object",
+      "required": ["entrypoint", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "entrypoint": {"type": "string"},
+        "builder_version": {"type": ["string", "null"]},
+        "mode": {"enum": ["all", "update"]},
+        "stage": {"enum": ["full", "upstream-only", "provider-only"]}
+      }
+    },
+    "calendar_policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the calendar policy under which this provider was built (see config/calendar_policies/*.yaml). Formal runs cross-check this against their own --calendar-policy argument."
+    },
+    "provider": {
+      "type": "object",
+      "required": ["path", "region", "calendar_start_date", "calendar_end_date", "data_end_date"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string"},
+        "region": {"type": "string"},
+        "calendar_start_date": {"type": "string", "format": "date"},
+        "calendar_end_date": {"type": "string", "format": "date"},
+        "data_end_date": {"type": "string", "format": "date"}
+      }
+    },
+    "event_endpoint_namespacing": {
+      "type": "object",
+      "required": ["status", "affected_datasets", "prefix_rule", "canonical_kline_fields_protected"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["enforced", "unenforced", "pending"]},
+        "affected_datasets": {"type": "array", "items": {"type": "string"}},
+        "prefix_rule": {"type": "string"},
+        "canonical_kline_fields_protected": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "canonical_kline_hash": {
+      "type": ["object", "null"],
+      "required": ["method", "sentinel_instruments", "sentinel_dates", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "method": {"type": "string"},
+        "sentinel_instruments": {"type": "array", "items": {"type": "string"}},
+        "sentinel_dates": {"type": "array", "items": {"type": "string", "format": "date"}},
+        "sha256": {"type": "string", "minLength": 64, "maxLength": 64}
+      },
+      "description": "Tamper-evidence hash over a small fixed set of (instrument, date, field) sentinel readings. Lets formal runs detect that the provider has been replaced or corrupted since publication."
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "namespace_tests_passed": {"type": "boolean"},
+        "provider_boundary_tests_passed": {"type": "boolean"},
+        "pit_live_provider_tests_passed": {"type": "boolean"},
+        "daily_qa_passed": {"type": "boolean"}
+      }
+    },
+    "retroactive_manifest": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when this manifest was emitted AFTER the original publication rather than during it. Indicates the attestation is post-hoc."
+    },
+    "retroactive_manifest_evidence": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "When retroactive_manifest is true, list the evidence sources (e.g., 'README status snapshot', 'project_state downstream revalidation note', 'tests/data_infra/test_event_like_daily_namespace.py output', 'provider field inventory hash'). Required when retroactive_manifest is true."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"retroactive_manifest": {"const": true}}, "required": ["retroactive_manifest"]},
+      "then": {"required": ["retroactive_manifest_evidence"]}
+    }
+  ]
+}
