@@ -94,11 +94,22 @@ def _serialize_cost_config(cfg: CostConfig) -> dict[str, Any]:
 
 
 def _serialize_slippage(slip: SlippageModel) -> dict[str, Any]:
-    """Replayable serialization of a SlippageModel override (PR 8 fix #6)."""
+    """Replayable serialization of a SlippageModel override (PR 8 fix #6 +
+    PR 8a fix #5).
+
+    PR 8 hardcoded an attribute allow-list (``rate, value, bps, fixed_amount``)
+    that missed ``FixedSlippage.spread``, so a JoinQuant-style FixedSlippage
+    override was serialized as ``{"class": "FixedSlippage", "params": {}}``
+    — not replayable. PR 8a inspects ``vars(slip)`` and keeps every
+    JSON-safe value so any future SlippageModel subclass round-trips.
+    """
     params: dict[str, Any] = {}
-    for attr in ("rate", "value", "bps", "fixed_amount"):
-        if hasattr(slip, attr):
-            params[attr] = getattr(slip, attr)
+    raw = getattr(slip, "__dict__", None) or {}
+    for k, v in raw.items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, (int, float, str, bool, type(None))):
+            params[k] = v
     return {"class": type(slip).__name__, "params": params}
 
 
@@ -132,16 +143,21 @@ def _validate_provider_at_runtime(
     policy.assert_run_mode_allowed(run_mode)
 
     # Read live calendar end via Qlib.
+    # PR 8a fix #4: previously this swallowed errors and returned silently,
+    # which made a formal validator no-op if Qlib was unavailable. Formal
+    # enforcement must raise rather than skip — if the validator cannot
+    # inspect the calendar, the run has no business proceeding.
     try:
         from qlib.data import D as _D
         cal = _D.calendar(start_time="1990-01-01", end_time="2099-12-31")
         live_calendar_end = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
     except Exception as exc:
-        logger.warning(
-            "Could not read live Qlib calendar (%s); skipping mismatch check.",
-            exc,
-        )
-        return
+        raise RuntimeError(
+            "Formal provider/calendar validation could not read the live "
+            f"Qlib calendar: {exc}. The validator must not silently skip "
+            "the mismatch check on formal runs; verify Qlib is initialized "
+            "and the provider directory is reachable."
+        ) from exc
 
     if policy.frozen:
         if policy.calendar_end_date != live_calendar_end:
@@ -459,17 +475,28 @@ class EventDrivenBacktester:
             require_preloaded=effective_require_preloaded,
         )
 
-        # PR 8 fix #3: formal-runtime provider/calendar enforcement.
-        # When require_provider_manifest=True (or it implies via is_formal),
-        # we (a) load and validate the manifest against the live Qlib
-        # calendar under the selected calendar policy, and (b) fail the run
-        # if the policy doesn't permit the observed mismatch. Sandbox runs
-        # keep the best-effort behavior (warn, mark legacy).
+        # PR 8 fix #3 + PR 8a fix #1: formal-runtime provider/calendar
+        # enforcement. Formal runs (require_provider_manifest=True OR
+        # is_formal) MUST also supply calendar_policy_id — without it, the
+        # _validate_provider_at_runtime call below would be silently skipped
+        # and the artifact would stamp legacy provenance, defeating the
+        # purpose of formal-mode enforcement. PR 8a converts the previous
+        # quiet skip into a hard fail.
+        if effective_require_provider_manifest and not calendar_policy_id:
+            raise RuntimeError(
+                "Formal run requires calendar_policy_id but received None. "
+                "Pass calendar_policy_id='frozen_20260227_system_build' "
+                "(or another committed policy) explicitly. The policy is "
+                "what authorizes a formal run to operate against the current "
+                "calendar window; without it the manifest validator cannot "
+                "run and the artifact cannot be formally attested."
+            )
+
         provider_build_id: str | None = None
         try:
             manifest = load_provider_manifest(os.path.join(self.data_dir, 'qlib_data'))
             provider_build_id = manifest.provider_build_id
-            if effective_require_provider_manifest and calendar_policy_id:
+            if effective_require_provider_manifest:
                 _validate_provider_at_runtime(
                     manifest=manifest,
                     calendar_policy_id=calendar_policy_id,

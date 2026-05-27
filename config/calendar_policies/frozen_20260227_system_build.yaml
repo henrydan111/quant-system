@@ -25,6 +25,13 @@ allowed_modes:
   - sandbox
   - joinquant_replication
   - formal_research_with_explicit_freeze
+  # PR 8a fix #2: ExecutionProfile.deployment_target values. Without these,
+  # a profile-driven formal run with calendar_policy_id="frozen_20260227_..."
+  # passed profile_obj.deployment_target to policy.assert_run_mode_allowed
+  # and got rejected even though the profile is faithful to JoinQuant. The
+  # frozen window applies equally to all JoinQuant-aligned deployment paths.
+  - joinquant_daily
+  - joinquant_open_close_replica
 
 # Default behavior when a formal run does NOT pass --calendar-policy.
 default_formal_behavior: require_explicit_policy
