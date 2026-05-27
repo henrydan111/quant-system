@@ -621,15 +621,26 @@ def _emit_skipped_due_to_is_gate(
 
 
 def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepExecutionResult:
-    """Run the event-driven backtest on the OOS window, claiming the holdout
-    seal via SealedBacktestRunner. Short-circuits if the upstream IS gate
+    """Run the event-driven backtest on the OOS window after explicitly
+    claiming the holdout seal. Short-circuits if the upstream IS gate
     decision was not 'approved' (Codex round-2 #2 + round-3 + round-4).
 
-    The seal claim happens inside SealedBacktestRunner._claim_if_oos when
-    time_split.stage == 'oos_test'. The event-driven backtester then
-    independently re-checks the claim (event_driven/__init__.py:103). Direct
-    EventDrivenBacktester(...).run(...) calls would either fail the backstop
-    or bypass the protection — the wrapper is the only correct path.
+    PR 8d Blocker 1: the docstring previously claimed the seal claim
+    happened "inside SealedBacktestRunner._claim_if_oos", but this handler
+    calls ``run_event_driven_window`` directly without going through
+    ``SealedBacktestRunner``. The result was that the seal was NOT being
+    claimed before the OOS run, and the EventDrivenBacktester's OOS
+    backstop (event_driven/__init__.py) would correctly refuse to proceed
+    — failing safely, but leaving the formal OOS validation path
+    fundamentally broken in production.
+
+    PR 8d wires the explicit seal claim through
+    ``_claim_holdout_access_if_needed(context)`` from ``steps.py``. The
+    helper builds the same design_hash + run_dir + step_id identifiers
+    that the EventDrivenBacktester backstop later checks for the
+    matching seal event. Without this claim, the backstop would raise
+    ``Engine backstop: OOS run on design_hash=... but no seal claim
+    found``.
 
     Plan ref: jolly-seeking-lollipop Gate E.
     """
@@ -638,6 +649,7 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
         return _emit_skipped_due_to_is_gate(context, is_decision=is_decision)
 
     from src.research_orchestrator.steps import (
+        _claim_holdout_access_if_needed,
         _holdout_context_for_step,
         _run_with_cache_context,
         _time_split_payload_for_step,
@@ -650,6 +662,14 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
     if hypothesis is None or hypothesis.prescription is None:
         raise ValueError("handle_validation_event_backtest_oos requires hypothesis.prescription")
     prescription = hypothesis.prescription
+
+    # PR 8d Blocker 1: claim the holdout seal BEFORE invoking
+    # run_event_driven_window. The claim uses hypothesis.design_hash() +
+    # context.run_dir + context.step.step_id, which is exactly what the
+    # EventDrivenBacktester OOS backstop later cross-checks. Without this
+    # call the backstop would refuse the OOS run with a "no seal claim
+    # found" error.
+    _claim_holdout_access_if_needed(context)
 
     pc_step_dir = context.run_dir / "steps" / "validation_portfolio_construction"
     schedule_df = pd.read_parquet(pc_step_dir / "target_weights_schedule.parquet")
@@ -669,11 +689,9 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
     # ensures the OOS rows carry stage="oos_test" rather than the legacy
     # hardcoded "is_only".
     instrumentation_path = str(context.step_dir / "harness_instrumentation.json")
-    # PR 8c Blocker 2: same formal-runtime contract as the IS handler, but
-    # with run_mode='oos_test' so the engine's seal-claim backstop fires.
-    # The seal claim itself happens earlier (SealedBacktestRunner._claim_if_oos
-    # via the upstream pipeline); the engine independently re-checks it via
-    # the time_split.stage='oos_test' backstop in EventDrivenBacktester.run.
+    # PR 8c Blocker 2 + PR 8d Blocker 1: formal-runtime contract enabled,
+    # AND the seal has been claimed above so EventDrivenBacktester's
+    # OOS backstop will find the matching seal event.
     result = _run_with_cache_context(
         context,
         run_event_driven_window,
