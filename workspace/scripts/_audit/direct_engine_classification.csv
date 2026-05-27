@@ -1,0 +1,47 @@
+file,class,rationale,EventDrivenBacktester(,BacktestEngine(,QlibDataFeeder(,feeder.preload(,feeder.preload_features(,D.features(,run_mode=
+cross_platform_backtest.py,A,validation runner already on wrapper; add run_mode='formal' in PR 3,1,0,0,0,0,0,0
+fixed_universe_backtest.py,A,validation runner already on wrapper; add run_mode='formal' in PR 3,1,0,0,0,0,0,0
+run_multifactor_validation.py,A,validation runner already on wrapper; add run_mode='formal' in PR 3,1,0,0,0,0,0,0
+run_validation_backtest.py,A,validation runner already on wrapper; add run_mode='formal' in PR 3,1,0,0,0,0,0,0
+run_verified_validation.py,A,validation runner already on wrapper; add run_mode='formal' in PR 3,1,0,0,0,0,0,0
+local_data_verify.py,B,direct QlibDataFeeder use; add preload_features+strict header,0,0,1,0,1,0,0
+check_qlib_nulls.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+generate_factor_notebook.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,2,0
+generate_ml_strategy_notebook.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,3,0
+generate_smallcap_notebook.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,2,0
+generate_st_notebook.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,2,0
+generate_strategy_notebook.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_freshbuy_rank.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_limitdown_audit.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_marketcap_compare_2024.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_marketcap_rank_audit.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_mimic.py,C,mimic root: investigation; keep sandbox,1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v18_no_trim.py,C,mimic_v18: investigation reference; keep sandbox,1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v19_nan_fix.py,C,mimic_v19: investigation reference; keep sandbox,1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v20_v11_nanfix.py,C,mimic_v20: investigation reference; keep sandbox,1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v21_fixedslip.py,C,mimic_v21: most recent reference; keep sandbox,1,0,0,0,0,2,0
+p1_jq_g5a2_price_source_impact.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_selection_edge_audit.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_stoploss_0819_check.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_susp_audit.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_suspended_pull_up.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_total_mv_integrity.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_total_mv_vs_marketcap_rank.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_universe_mean_compare.py,C,audit/diagnostic script: keep sandbox; one-shot historical use,0,0,0,0,0,1,0
+p1_jq_g5a2_v16_pure_mtm.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+p1_jq_g5a2_v17_nav_reconstruction.py,C,bare D.features (PR 6 will lint); keep sandbox for now,0,0,0,0,0,1,0
+reproduce_preload_collision.py,C,other helper; default sandbox,0,0,0,0,1,0,0
+p1_jq_g5a2_mimic_v10_limitdown.py,D,mimic_v10: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v11_topk100.py,D,mimic_v11: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v12_no_survivor.py,D,mimic_v12: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v13_jq_universe.py,D,mimic_v13: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v14_jq_replay.py,D,mimic_v14: superseded by v21 (project_state),1,0,0,0,0,0,0
+p1_jq_g5a2_mimic_v15_jq_slippage.py,D,mimic_v15: superseded by v21 (project_state),1,0,0,0,0,0,0
+p1_jq_g5a2_mimic_v2.py,D,mimic_v2: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v3_survivor.py,D,mimic_v3: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v4_ranked.py,D,mimic_v4: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v5_atopen.py,D,mimic_v5: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v6_yesterday_hl.py,D,mimic_v6: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v7_no_volcap.py,D,mimic_v7: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v8_100k_capital.py,D,mimic_v8: superseded by v21 (project_state),1,0,0,0,0,2,0
+p1_jq_g5a2_mimic_v9_jq_stoploss_parity.py,D,mimic_v9: superseded by v21 (project_state),1,0,0,0,0,2,0

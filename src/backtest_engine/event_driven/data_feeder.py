@@ -10,7 +10,7 @@ All date comparisons use pd.Timestamp internally.
 
 import os
 import logging
-from typing import Optional, Union
+from typing import Iterable, Optional, Union
 
 import pandas as pd
 import qlib
@@ -102,8 +102,93 @@ class QlibDataFeeder:
         return str(qlib_code).replace('_', '.')
 
     def preload(self, start: pd.Timestamp, end: pd.Timestamp) -> None:
-        """Deprecated: Use preload_features for Qlib."""
-        pass
+        """REMOVED in PR 2 of the 2026-05-26 freeze plan.
+
+        The original implementation was a silent no-op that left ``_cache_df``
+        as None and forced the engine into a per-day ``D.features`` fallback.
+        That produced the ~100x slowdown discovered in plan
+        ``snappy-buzzing-meerkat`` v5. Callers MUST use :meth:`preload_features`
+        with explicit fields, dates, and ``strict`` flag.
+
+        After PR 2 lands, this raises so any straggling caller is loud.
+        """
+        raise NotImplementedError(
+            "QlibDataFeeder.preload(start, end) was a no-op and has been removed. "
+            "Use preload_features(index_name, fields, start_time, end_time, "
+            "strict=True) instead. Formal runs should go through "
+            "EventDrivenBacktester.run(run_mode='formal', ...) which threads "
+            "ENGINE_REQUIRED_FIELDS in automatically."
+        )
+
+    def assert_preloaded(
+        self,
+        *,
+        required_fields: Iterable[str],
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+        require_zero_fallback: bool = True,
+    ) -> None:
+        """Hard-fail if the in-memory cache cannot serve [start, end] x required_fields.
+
+        Called by ``BacktestEngine.run()`` when ``require_preloaded=True`` so
+        formal runs cannot accidentally degrade into the per-day fallback path.
+
+        Raises:
+            RuntimeError: with a precise message naming which gate failed
+                (preload never attempted / failed; missing fields; window
+                shorter than required; non-zero fallback count).
+        """
+        if self._preload_status != "success":
+            raise RuntimeError(
+                f"assert_preloaded: preload_status={self._preload_status!r} "
+                "(expected 'success'). Call preload_features(...) with "
+                "strict=True before the backtest day loop starts."
+            )
+        if self._cache_df is None or self._cache_df.empty:
+            raise RuntimeError(
+                "assert_preloaded: in-memory cache is empty. preload_features "
+                "did not populate _cache_df — check the cache-manifest log."
+            )
+
+        required = list(required_fields)
+        cache_cols = set(self._cache_df.columns)
+        missing_fields = [f for f in required if f not in cache_cols]
+        if missing_fields:
+            raise RuntimeError(
+                f"assert_preloaded: missing required fields {missing_fields}. "
+                f"Preloaded fields={sorted(cache_cols)!r}, required={required!r}. "
+                "Pass the missing fields into preload_features(...) explicitly "
+                "or via ENGINE_REQUIRED_FIELDS for the standard set."
+            )
+
+        if isinstance(self._cache_df.index, pd.MultiIndex):
+            cache_dates = self._cache_df.index.get_level_values("datetime")
+        else:
+            cache_dates = self._cache_df.index
+        cache_min = pd.Timestamp(cache_dates.min())
+        cache_max = pd.Timestamp(cache_dates.max())
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+        if cache_min > start_ts:
+            raise RuntimeError(
+                f"assert_preloaded: cache_min={cache_min} > requested start={start_ts}. "
+                "Extend preload_features start_time to at least the previous "
+                "trading day before backtest start."
+            )
+        if cache_max < end_ts:
+            raise RuntimeError(
+                f"assert_preloaded: cache_max={cache_max} < requested end={end_ts}. "
+                "Extend preload_features end_time to at least the backtest end."
+            )
+
+        if require_zero_fallback and self._direct_fallback_count > 0:
+            raise RuntimeError(
+                f"assert_preloaded: direct_fallback_count={self._direct_fallback_count} > 0. "
+                "The feeder already served fields outside the cache, which "
+                "indicates a coverage gap. Re-check fields/dates passed to "
+                "preload_features and ensure no get_features call asks for "
+                "fields not preloaded."
+            )
 
     def preload_features(self, index_name: str, fields: list[str],
                          start_time: Union[str, pd.Timestamp],
