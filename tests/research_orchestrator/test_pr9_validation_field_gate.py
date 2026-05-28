@@ -1094,6 +1094,310 @@ class TestFormalIndicatorPITLagContract:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# PR 9b universe raw-field gate (GPT 5.5 Pro round-4 review)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPR9bUniverseFieldGate:
+    """PR 9b closes the universe raw-field bypass GPT 5.5 Pro identified:
+
+    pre-PR-9b ``handle_validation_object_resolver`` validated only the
+    factor expressions of ``prescription.components``. But
+    ``handle_validation_dataset_build`` independently constructs
+    ``raw_field_exprs`` from ``prescription.universe.broad_filters.profitability_field``
+    and turns it into ``Ref(${profit_field}, 1)``. A formal prescription
+    with all-approved factor components could pass the factor gate AND
+    still consume a quarantined ``$ratio`` (hk_hold) through the universe
+    path.
+
+    PR 9b adds two checks:
+
+    1. Resolver-time: a new ``_validate_prescription_universe_field_dependencies``
+       helper enumerates the same canonical raw_field set + the optional
+       ``profitability_field`` and runs them through
+       ``assert_field_dependencies_eligible``. Called from
+       ``handle_validation_object_resolver`` immediately after the factor
+       check.
+    2. Dataset_build-time defense-in-depth: before ``QlibFieldProvider.load_named_expressions``,
+       the handler validates ``raw_field_exprs.values()`` so a future
+       addition to that dict cannot bypass the gate even if someone
+       forgets to mirror it into the resolver-side helper.
+    """
+
+    def _helper(self):
+        from src.research_orchestrator.validation_steps import (
+            _validate_prescription_universe_field_dependencies,
+        )
+        return _validate_prescription_universe_field_dependencies
+
+    def _broad_prescription(self, profitability_field: str | None):
+        """Build a minimal mock prescription with a broad universe whose
+        broad_filters carries the given profitability_field (or None)."""
+        broad_filters = MagicMock(profitability_field=profitability_field)
+        universe = MagicMock(kind="broad", broad_filters=broad_filters)
+        return MagicMock(universe=universe)
+
+    # ── Helper-direct: positive paths ────────────────────────────────────
+    def test_universe_helper_passes_with_no_profitability_field(self) -> None:
+        helper = self._helper()
+        prescription = self._broad_prescription(profitability_field=None)
+        report = helper(
+            prescription=prescription,
+            stage="formal_validation",
+            artifact_label="hyp_pr9b_no_profit_field",
+        )
+        assert report["eligible"] is True
+        # Canonical 4 universe fields were checked.
+        for f in ("$close", "$adj_factor", "$total_mv", "$amount"):
+            assert f in report["fields_checked"]
+        # No profitability_field source recorded.
+        sources = report["expression_sources"]
+        assert not any(
+            s["source"] == "broad_filters.profitability_field" for s in sources
+        )
+
+    def test_universe_helper_passes_with_approved_profitability_field(self) -> None:
+        helper = self._helper()
+        # $roe is approved under the indicators dataset (PR 9a).
+        prescription = self._broad_prescription(profitability_field="roe")
+        report = helper(
+            prescription=prescription,
+            stage="formal_validation",
+            artifact_label="hyp_pr9b_approved_profit_field",
+        )
+        assert report["eligible"] is True
+        assert "$roe" in report["fields_checked"]
+        sources = report["expression_sources"]
+        assert any(
+            s["source"] == "broad_filters.profitability_field" and s["field"] == "$roe"
+            for s in sources
+        )
+
+    def test_universe_helper_handles_theme_universe(self) -> None:
+        """Theme universes have no broad_filters; helper must still
+        validate the canonical OHLCV/market_cap/amount set without raising."""
+        helper = self._helper()
+        prescription = MagicMock(universe=MagicMock(kind="theme", broad_filters=None))
+        report = helper(
+            prescription=prescription,
+            stage="formal_validation",
+            artifact_label="hyp_pr9b_theme",
+        )
+        assert report["eligible"] is True
+        # Theme universe still uses the canonical raw fields downstream.
+        for f in ("$close", "$adj_factor", "$total_mv", "$amount"):
+            assert f in report["fields_checked"]
+
+    # ── Helper-direct: negative paths ────────────────────────────────────
+    def test_universe_helper_blocks_quarantined_profitability_field(self) -> None:
+        helper = self._helper()
+        # $ratio is the hk_hold quarantined field.
+        prescription = self._broad_prescription(profitability_field="ratio")
+        with pytest.raises(FieldApprovalError, match=r"\$ratio"):
+            helper(
+                prescription=prescription,
+                stage="formal_validation",
+                artifact_label="hyp_pr9b_quarantined",
+            )
+
+    def test_universe_helper_blocks_pending_review_profitability_field(self) -> None:
+        helper = self._helper()
+        # Any pending_review event-like field — use a real one from
+        # field_status.yaml: $top_list__net_rate.
+        prescription = self._broad_prescription(profitability_field="top_list__net_rate")
+        with pytest.raises(FieldApprovalError, match=r"top_list"):
+            helper(
+                prescription=prescription,
+                stage="formal_validation",
+                artifact_label="hyp_pr9b_pending",
+            )
+
+    def test_universe_helper_blocks_unknown_profitability_field(self) -> None:
+        helper = self._helper()
+        prescription = self._broad_prescription(profitability_field="ghost_xyz_field")
+        with pytest.raises(FieldApprovalError, match=r"ghost_xyz_field"):
+            helper(
+                prescription=prescription,
+                stage="formal_validation",
+                artifact_label="hyp_pr9b_unknown",
+            )
+
+    def test_universe_helper_blocks_at_oos_stage(self) -> None:
+        helper = self._helper()
+        prescription = self._broad_prescription(profitability_field="ratio")
+        with pytest.raises(FieldApprovalError):
+            helper(
+                prescription=prescription,
+                stage="oos_test",
+                artifact_label="hyp_pr9b_oos",
+            )
+
+    # ── Resolver-handler integration: end-to-end behavior ────────────────
+    def _make_resolver_context(
+        self,
+        tmp_path: Path,
+        *,
+        profitability_field: str | None,
+    ):
+        """Build a resolver-handler context whose prescription components are
+        approved (qual_roe) but whose universe carries the given
+        profitability_field."""
+        from src.research_orchestrator.hypothesis import PrescribedComponent
+        broad_filters = MagicMock(profitability_field=profitability_field)
+        universe = MagicMock(kind="broad", broad_filters=broad_filters)
+        prescription = MagicMock(
+            components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
+            allow_candidate_components=False,
+            universe=universe,
+        )
+        hypothesis = MagicMock(
+            prescription=prescription,
+            hypothesis_id="hyp_pr9b_resolver_integration",
+        )
+        context = MagicMock()
+        context.request.hypothesis = hypothesis
+        context.step_dir = tmp_path / "step"
+        context.step_dir.mkdir(parents=True)
+        context.registry_dirs = {
+            "factor_registry_dir": str(tmp_path / "factor_registry"),
+            "candidate_registry_dir": str(tmp_path / "candidate_registry"),
+            "signal_registry_dir": str(tmp_path / "signal_registry"),
+            "model_registry_dir": str(tmp_path / "model_registry"),
+            "strategy_registry_dir": str(tmp_path / "strategy_registry"),
+        }
+        context.profile.profile_id = "hypothesis_validation"
+        return context
+
+    def test_resolver_handler_blocks_quarantined_universe_field(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: a formal prescription with approved components but
+        broad_filters.profitability_field='ratio' must FAIL at the
+        resolver, BEFORE the IS leg ever begins."""
+        from src.research_orchestrator.validation_steps import (
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_resolver_context(tmp_path, profitability_field="ratio")
+        resolver_payload = {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": "formal",
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=resolver_payload,
+        ):
+            with pytest.raises(FieldApprovalError, match=r"\$ratio"):
+                handle_validation_object_resolver(context)
+
+    def test_resolver_handler_passes_with_approved_universe_field(
+        self, tmp_path: Path
+    ) -> None:
+        """Approved factor components + approved profitability_field=$roe
+        must pass and persist both reports."""
+        from src.research_orchestrator.validation_steps import (
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_resolver_context(tmp_path, profitability_field="roe")
+        resolver_payload = {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": "formal",
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=resolver_payload,
+        ):
+            result = handle_validation_object_resolver(context)
+
+        # Both reports persisted into outputs AND into registry_resolution.json.
+        assert "field_dependency_report" in result.outputs
+        assert "universe_field_dependency_report" in result.outputs
+        assert (context.step_dir / "registry_resolution.json").exists()
+        import json
+        persisted = json.loads(
+            (context.step_dir / "registry_resolution.json").read_text(encoding="utf-8")
+        )
+        assert "universe_field_dependency_report" in persisted
+        # The universe report should have $roe + canonical 4 universe fields.
+        ufdr = persisted["universe_field_dependency_report"]
+        assert ufdr["eligible"] is True
+        assert "$roe" in ufdr["fields_checked"]
+
+    # ── Dataset_build defense-in-depth ───────────────────────────────────
+    def test_dataset_build_has_defense_in_depth_check(self) -> None:
+        """Source-level proof that handle_validation_dataset_build runs
+        assert_field_dependencies_eligible on raw_field_exprs.values() at
+        formal stages BEFORE the raw_field_exprs Qlib load.
+
+        Note: handle_validation_dataset_build also has an EARLIER
+        ``provider.load_named_expressions({"market_cap": "Ref($total_mv, 1)"})``
+        call inside the industry-relative composite branch. That call uses
+        a hardcoded approved field (``$total_mv``) and is structurally
+        constrained — there is no user-controllable path to inject a
+        different field into it. The defense-in-depth gate therefore only
+        needs to cover the second, user-controllable
+        ``load_named_expressions(raw_field_exprs, ...)`` site.
+        """
+        src = Path("src/research_orchestrator/validation_steps.py").read_text(
+            encoding="utf-8"
+        )
+        # Find the dataset_build handler body.
+        ds_start = src.index("def handle_validation_dataset_build")
+        next_def = src.find("\ndef ", ds_start + 1)
+        ds_body = src[ds_start:next_def if next_def > 0 else len(src)]
+        # Defense-in-depth call signature must exist.
+        assert "assert_field_dependencies_eligible(" in ds_body, (
+            "PR 9b: handle_validation_dataset_build must call "
+            "assert_field_dependencies_eligible on raw_field_exprs.values() "
+            "before the raw_field_exprs Qlib load."
+        )
+        idx_assert = ds_body.index("assert_field_dependencies_eligible(")
+        # Locate the SPECIFIC user-controllable raw_field_exprs load — NOT
+        # the earlier hardcoded market_cap load. We anchor on the
+        # ``load_named_expressions(`` followed by ``raw_field_exprs`` token.
+        idx_raw_load = ds_body.find("load_named_expressions(\n        raw_field_exprs")
+        if idx_raw_load < 0:
+            # Tolerate light formatting variation (indentation, line breaks).
+            import re
+            m = re.search(
+                r"load_named_expressions\s*\(\s*raw_field_exprs",
+                ds_body,
+            )
+            assert m is not None, (
+                "PR 9b: could not locate the raw_field_exprs Qlib load "
+                "(load_named_expressions(raw_field_exprs, ...)) — has the "
+                "handler been refactored? Update this test in lock-step."
+            )
+            idx_raw_load = m.start()
+        assert idx_assert < idx_raw_load, (
+            "PR 9b: defense-in-depth gate must fire BEFORE the raw_field_exprs "
+            f"Qlib load. Observed positions: assert@{idx_assert} "
+            f"raw_load@{idx_raw_load}"
+        )
+        # Mirror-contract docstring callout: the helper docstring must
+        # explicitly tell future maintainers that adding a field to
+        # raw_field_exprs requires updating the helper too.
+        helper_idx = src.index("def _validate_prescription_universe_field_dependencies")
+        helper_next = src.find("\ndef ", helper_idx + 1)
+        helper_body = src[helper_idx:helper_next if helper_next > 0 else len(src)]
+        assert "Mirror contract" in helper_body or "mirror contract" in helper_body, (
+            "PR 9b helper must carry the mirror-contract callout so future "
+            "additions to dataset_build raw_field_exprs are mirrored here."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Behavioral OOS handler test (GPT 8d carry-over)
 # ─────────────────────────────────────────────────────────────────────────
 

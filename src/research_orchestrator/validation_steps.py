@@ -146,6 +146,20 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         artifact_label=str(hypothesis.hypothesis_id),
     )
 
+    # PR 9b (2026-05-28, GPT 5.5 Pro round-4 review): the factor field gate
+    # above only covers prescription.components. But validation_dataset_build
+    # later turns prescription.universe.broad_filters.profitability_field
+    # into ``Ref(${profit_field}, 1)`` and feeds it into Qlib. A formal
+    # prescription with only approved factors but
+    # ``broad_filters.profitability_field="ratio"`` would PASS the factor
+    # gate and then load the quarantined hk_hold $ratio at dataset_build
+    # time. PR 9b closes this with an explicit universe-side check.
+    universe_field_dependency_report = _validate_prescription_universe_field_dependencies(
+        prescription=prescription,
+        stage="formal_validation",
+        artifact_label=str(hypothesis.hypothesis_id),
+    )
+
     outputs = {
         # The shape runtime.py:407 expects (matches handle_object_resolver):
         "registry_resolution": raw_resolution,
@@ -155,6 +169,9 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         # PR 9: record the field-dependency check result on the artifact so
         # reviewers can audit which $fields the resolver approved.
         "field_dependency_report": field_dependency_report,
+        # PR 9b: separate report for universe raw fields so reviewers can
+        # see exactly which non-factor $fields were authorized.
+        "universe_field_dependency_report": universe_field_dependency_report,
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
@@ -306,6 +323,92 @@ def _validate_factor_field_dependencies(
     }
 
 
+def _validate_prescription_universe_field_dependencies(
+    *,
+    prescription: Any,
+    stage: str,
+    artifact_label: str,
+) -> dict[str, Any]:
+    """PR 9b helper (2026-05-28, GPT 5.5 Pro round-4 review): refuse formal
+    prescriptions whose ``universe.broad_filters`` reference a quarantined /
+    pending_review / unknown ``$field`` through paths other than
+    ``prescription.components``.
+
+    The factor field gate in :func:`_validate_factor_field_dependencies`
+    only sees factor expressions. But
+    :func:`handle_validation_dataset_build` independently constructs
+    ``raw_field_exprs`` for universe materialization — currently the
+    canonical OHLCV / market_cap / amount set PLUS an optional
+    ``Ref(${broad_filters.profitability_field}, 1)``. A formal prescription
+    with only approved factor components could pass the factor gate AND
+    still consume a quarantined ``$ratio`` through the universe path.
+
+    This helper enumerates the SAME ``raw_field_exprs`` that dataset_build
+    will build and runs them through ``assert_field_dependencies_eligible``
+    so the formal IS leg refuses to start.
+
+    Mirror contract: if dataset_build's ``raw_field_exprs`` construction
+    ever changes (e.g., starts loading ``$ratio`` to honor
+    ``northbound_required``, or ``$revenue_q`` to honor ``revenue_floor``),
+    update BOTH this helper AND the dataset_build defense-in-depth check
+    so the resolver-time gate stays in sync with the runtime load. The
+    defense-in-depth call in dataset_build will fail loudly on drift
+    even if this helper is forgotten.
+
+    Returns a serializable report mirroring the factor-side
+    ``field_dependency_report`` so reviewers can audit which non-factor
+    ``$fields`` the resolver approved.
+    """
+    from src.data_infra.field_registry import FieldApprovalError
+    from src.research_orchestrator.release_gate import (
+        assert_field_dependencies_eligible,
+    )
+
+    # Canonical universe-side $field set — must match the dict built in
+    # handle_validation_dataset_build::raw_field_exprs.
+    expressions: list[str] = [
+        "Ref($close, 1)",
+        "Ref($adj_factor, 1)",
+        "Ref($total_mv, 1)",
+        "Ref($amount, 1)",
+    ]
+    universe_sources: list[dict[str, str]] = [
+        {"source": "universe_canonical", "field": tok}
+        for tok in ("$close", "$adj_factor", "$total_mv", "$amount")
+    ]
+
+    universe = getattr(prescription, "universe", None)
+    if universe is not None and getattr(universe, "kind", None) == "broad":
+        broad_filters = getattr(universe, "broad_filters", None)
+        if broad_filters is not None:
+            profit_field = getattr(broad_filters, "profitability_field", None)
+            if profit_field:
+                # Mirror dataset_build line ~441 exactly. The expression
+                # contributes a single $field token to the gate.
+                expressions.append(f"Ref(${profit_field}, 1)")
+                universe_sources.append({
+                    "source": "broad_filters.profitability_field",
+                    "field": f"${profit_field}",
+                })
+
+    # The strict variant raises FieldApprovalError on any disallowed field.
+    gate_result = assert_field_dependencies_eligible(
+        expressions=expressions,
+        stage=stage,
+        artifact_label=f"{artifact_label}::universe_fields",
+    )
+
+    return {
+        "stage": stage,
+        "eligible": gate_result.eligible,
+        "fields_checked": list(gate_result.fields_checked),
+        "disallowed_fields": list(gate_result.disallowed_fields),
+        "unknown_fields": list(gate_result.unknown_fields),
+        "reasons": list(gate_result.reasons),
+        "expression_sources": universe_sources,
+    }
+
+
 # ── dataset_build ────────────────────────────────────────────────────────
 def handle_validation_dataset_build(context: StepExecutionContext) -> StepExecutionResult:
     """Build the per-(date, instrument) factor frame + the date-indexed
@@ -439,6 +542,27 @@ def handle_validation_dataset_build(context: StepExecutionContext) -> StepExecut
     )
     if profit_field:
         raw_field_exprs[profit_field] = f"Ref(${profit_field}, 1)"
+
+    # PR 9b defense-in-depth (2026-05-28, GPT 5.5 Pro round-4 review): the
+    # resolver-time universe gate in handle_validation_object_resolver already
+    # validates the same field set, but this second check fires at the
+    # actual Qlib-load site so a future addition to raw_field_exprs
+    # (e.g. starting to load $ratio for northbound_required, or
+    # $revenue_q for revenue_floor) cannot bypass the field gate even if
+    # someone forgets to mirror the addition into
+    # _validate_prescription_universe_field_dependencies. Formal stages
+    # raise FieldApprovalError BEFORE the Qlib load runs.
+    formal_stages = {"formal_validation", "oos_test", "registry_publish"}
+    if stage in formal_stages:
+        from src.research_orchestrator.release_gate import (
+            assert_field_dependencies_eligible,
+        )
+        assert_field_dependencies_eligible(
+            expressions=list(raw_field_exprs.values()),
+            stage=stage,
+            artifact_label=f"{hypothesis.hypothesis_id}::dataset_build_raw_fields",
+        )
+
     raw_fields = QlibFieldProvider(qlib_dir=support.project_paths.qlib_dir).load_named_expressions(
         raw_field_exprs, start_date, end_date, stage=stage,
     )

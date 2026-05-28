@@ -137,7 +137,7 @@ datasets:
   # explicitly reviewed.
   indicators:
     status: approved
-    reason: "Tushare fina_indicator_vip snapshot fields (profitability, leverage, growth, per-share). PIT-anchored on ann_date per CLAUDE.md §3. Approved 2026-05-27 by PR 9a — see config/field_registry/approvals/2026-05-27_indicators_approved.yaml for the formal-factor catalog references that drove this promotion."
+    reason: "Tushare fina_indicator_vip snapshot fields (profitability, leverage, growth, per-share). PIT-anchored on ann_date per CLAUDE.md §3. Approved 2026-05-27 by PR 9a — see config/field_registry/approvals/2026-05-27_indicators_unlisted_to_approved.yaml for the formal-factor catalog references that drove this promotion."
     fields:
       # Profitability
       - $roe
