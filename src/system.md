@@ -46,7 +46,7 @@ Notes:
 - `factor_library/`: Phase 3 two-layer factor framework
   - `hypothesis_factors.py`: immutable hypothesis YAML factor specs
   - `operators.py`: Layer 1 Qlib expression operators plus Layer 2 pandas transforms
-  - `catalog.py`: central registry of the 191-factor catalog
+  - `catalog.py`: central registry of the 171-factor catalog (147 base + 4 industry-relative + 20 Layer-2 composites; see catalog.py module docstring for the per-API breakdown)
   - `qlib_expr_guide.md`: expression syntax rules and edge cases
   - `__init__.py`: public entry points: `get_factor_catalog()`, `get_composite_defs()`, `get_industry_relative_defs()`, `compute_factors()`, `add_composites()`, `add_industry_relative_composites()`. The two industry-relative APIs added 2026-04-27 expose Layer 2 industry-mean-subtract / size+industry-neutralize composites that consume time-varying SW2021 industry labels from `provider_metadata.build_industry_series_asof`.
 - `factor_eval/`: IC, quantile, neutralization, decay, correlation, plotting, statistical tests, cost-aware evaluation, and regime diagnostics

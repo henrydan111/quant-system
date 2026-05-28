@@ -9,7 +9,7 @@ For the operator-facing step-by-step workflow, see [RUNBOOK.md](E:\量化系统\
 ```text
 init_market_data.py        # Phase 1 bootstrap: prices, valuation, reference data
 init_fundamentals_data.py  # Phase 2 bootstrap: financials, corporate data, universes
-init_factor_data.py        # Phase 3 bootstrap: extra datasets for the 191-factor catalog
+init_factor_data.py        # Phase 3 bootstrap: extra datasets for the 171-factor catalog
 refresh_indicator_history.py # Historical VIP indicator refresh with staged raw swap
 build_qlib_backend.py      # Compile Parquet data into the Qlib backend
 update_daily_data.py       # Routine daily maintenance and incremental Qlib refresh
@@ -38,7 +38,7 @@ verify_database.py         # Data audit wrapper
 
 ### `init_factor_data.py`
 
-- Downloads the additional Phase 3 datasets needed for the 191-factor catalog:
+- Downloads the additional Phase 3 datasets needed for the 171-factor catalog:
   - `cashflow`
   - `forecast`
   - `moneyflow`

@@ -150,6 +150,54 @@ def _provider_manifest_check() -> dict:
         }
 
 
+def _approval_evidence_binding_check() -> dict:
+    """PR 10 follow-up: scan config/field_registry/approvals/*.yaml and
+    verify each binding (provider_build_id + calendar_policy_id) matches
+    the current data/qlib_data/metadata/provider_build.json.
+
+    A drift means an approval's on-disk evidence was verified against a
+    different provider build than the one currently published. The
+    approval must be re-verified before formal use of the affected
+    dataset's fields. See PR 9a round-3's indicators approval YAML for
+    the binding contract.
+    """
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT / "src"))
+        from data_infra.approval_evidence import (
+            evaluate_approval_evidence_bindings,
+        )
+
+        approvals_dir = PROJECT_ROOT / "config" / "field_registry" / "approvals"
+        manifest_path = (
+            PROJECT_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json"
+        )
+        drifts = evaluate_approval_evidence_bindings(
+            approvals_dir=approvals_dir, manifest_path=manifest_path,
+        )
+        n_total = len(drifts)
+        drifted = [d for d in drifts if d.drift]
+        n_drifted = len(drifted)
+        ok = n_drifted == 0
+        reasons = [r for d in drifted for r in d.reasons()]
+        return {
+            "label": "approval_evidence_binding",
+            "ok": ok,
+            "exit_code": 0 if ok else 1,
+            "n_approvals_with_binding": n_total,
+            "n_drifted": n_drifted,
+            "drifted_approvals": [d.binding.approval_id for d in drifted],
+            "reasons": reasons[:10],  # keep the report compact
+        }
+    except Exception as exc:  # noqa: BLE001 — defensive in QA runner
+        logger.warning("approval_evidence_binding check failed: %s", exc)
+        return {
+            "label": "approval_evidence_binding",
+            "ok": False,
+            "exit_code": 1,
+            "error": str(exc),
+        }
+
+
 def _audit_daily_files_inprocess() -> dict:
     """Run DataAuditor in-process on the live data/market/daily tree."""
     try:
@@ -203,6 +251,13 @@ def main() -> int:
             "no_bare_qlib_features_lint",
         )
     )
+
+    # 0b. Approval-evidence binding drift (PR 10 follow-up to PR 9c) —
+    # every field-registry approval YAML pins a provider_build_id +
+    # calendar_policy_id; this check ensures the current provider build
+    # has not drifted from any approval's binding without an explicit
+    # re-verification.
+    checks.append(_approval_evidence_binding_check())
 
     # 1. DataAuditor
     checks.append(_audit_daily_files_inprocess())
