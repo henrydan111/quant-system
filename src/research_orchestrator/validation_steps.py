@@ -166,19 +166,31 @@ def _validate_factor_field_dependencies(
     stage: str,
     artifact_label: str,
 ) -> dict[str, Any]:
-    """PR 9 helper: refuse formal candidates whose factor expressions touch
-    any quarantined / pending_review / unknown ``$field``.
+    """PR 9 / PR 9a helper: refuse formal candidates whose factor expressions
+    touch any quarantined / pending_review / unknown ``$field``.
 
-    Looks up each ``factor_name`` in ``get_factor_catalog`` and (for
-    industry-relative composites) ``get_industry_relative_defs``; collects
-    the resulting Qlib expressions; runs them through
-    ``assert_field_dependencies_eligible`` which loads
-    ``config/field_registry/field_status.yaml`` and raises
+    Looks up each ``factor_name`` in ``get_industry_relative_defs`` first
+    (composites take precedence so they always inherit their base
+    expression) and then in ``get_factor_catalog``; collects the resulting
+    Qlib expressions; runs them through ``assert_field_dependencies_eligible``
+    which loads ``config/field_registry/field_status.yaml`` and raises
     :class:`FieldApprovalError` on disallowed-field references.
 
-    Returns a serializable report (also written into the step's outputs)
-    so reviewers can audit which $fields were checked + the registry's
-    answer for each.
+    PR 9a fail-closed contract (post-GPT 5.5 round-2 review). At
+    ``formal_validation`` / ``oos_test`` / ``registry_publish`` stages the
+    helper raises :class:`FieldApprovalError` in any of these situations,
+    BEFORE delegating to ``assert_field_dependencies_eligible``:
+
+      * a requested factor is not found in EITHER the factor catalog OR
+        ``get_industry_relative_defs`` (``no_expression_found``);
+      * an industry-relative composite's ``base`` is missing from the
+        catalog (``industry_relative_unresolved_base``);
+      * the final collected expression list is empty — no $field tokens
+        means an empty downstream check that would return eligible.
+
+    Pre-PR-9a these cases recorded a source-tag note and continued, so
+    the strict gate ran with an empty / partial expression set and could
+    return eligible — defeating the purpose of the field-dependency gate.
 
     Industry-relative composites: the registry uses time-varying SW2021
     labels for the post-transform but the ``$field`` references come from
@@ -189,6 +201,7 @@ def _validate_factor_field_dependencies(
         get_factor_catalog,
         get_industry_relative_defs,
     )
+    from src.data_infra.field_registry import FieldApprovalError
     from src.research_orchestrator.release_gate import (
         assert_field_dependencies_eligible,
     )
@@ -196,13 +209,23 @@ def _validate_factor_field_dependencies(
     catalog = get_factor_catalog(include_new_data=True)
     industry_defs = {d["name"]: d for d in get_industry_relative_defs()}
 
+    # PR 9a: formal stages must fail closed on lookup gaps. Sandbox /
+    # vectorized screening stages keep the pre-PR-9 lenient behavior so
+    # exploration is not blocked.
+    formal_stages = {"formal_validation", "oos_test", "registry_publish"}
+    strict_stage = stage in formal_stages
+
     expressions: list[str] = []
     expression_sources: list[dict[str, str]] = []
+    missing_expressions: list[str] = []
+    unresolved_industry_bases: list[dict[str, str]] = []
+
     for name in factor_names:
-        if name in catalog:
-            expressions.append(catalog[name])
-            expression_sources.append({"factor_name": name, "source": "factor_catalog"})
-        elif name in industry_defs:
+        # PR 9a: industry-relative composites take precedence so they
+        # always inherit their base expression even if a same-named entry
+        # somehow appeared in the catalog. The base lookup is what
+        # delivers PIT inheritance — see catalog.py:get_industry_relative_defs.
+        if name in industry_defs:
             base = str(industry_defs[name].get("base", ""))
             if base and base in catalog:
                 expressions.append(catalog[base])
@@ -217,11 +240,50 @@ def _validate_factor_field_dependencies(
                     "source": "industry_relative_unresolved_base",
                     "base_factor": base,
                 })
+                unresolved_industry_bases.append({
+                    "factor_name": name, "base_factor": base,
+                })
+        elif name in catalog:
+            expressions.append(catalog[name])
+            expression_sources.append({"factor_name": name, "source": "factor_catalog"})
         else:
             # The resolver already accepted this factor against the registry,
             # but it's not in the runtime catalog or industry-relative defs.
-            # Record this for review — we can't field-check what we can't see.
+            # Pre-PR-9a this was recorded as a note and the helper continued
+            # — that defeats the gate because we'd then pass a possibly-empty
+            # expressions list to the strict assert and the assert would
+            # return eligible. PR 9a fails closed on formal stages.
             expression_sources.append({"factor_name": name, "source": "no_expression_found"})
+            missing_expressions.append(name)
+
+    if strict_stage:
+        if missing_expressions:
+            raise FieldApprovalError(
+                f"Field-dependency gate cannot validate {artifact_label} at "
+                f"stage={stage}: no factor-library expression found for "
+                f"{missing_expressions}. Formal validation fails closed when a "
+                "resolved factor lacks a runtime expression — fix the "
+                "factor_library catalog or remove the factor from the "
+                "prescription."
+            )
+        if unresolved_industry_bases:
+            details = ", ".join(
+                f"{u['factor_name']!r}->{u['base_factor']!r}"
+                for u in unresolved_industry_bases
+            )
+            raise FieldApprovalError(
+                f"Field-dependency gate cannot validate {artifact_label} at "
+                f"stage={stage}: industry-relative composite(s) reference "
+                f"missing base factor(s): {details}. Add the base to "
+                "factor_library.catalog or remove the composite from the "
+                "prescription."
+            )
+        if not expressions:
+            raise FieldApprovalError(
+                f"Field-dependency gate received empty expression list for "
+                f"{artifact_label} at stage={stage}; refusing to pass an empty "
+                "check at a formal stage."
+            )
 
     # assert_field_dependencies_eligible loads the committed registry by
     # default. Raises FieldApprovalError on any disallowed field; the

@@ -339,9 +339,85 @@ class TestLiveRegistry:
         assert r.dataset_id == "market_daily"
 
     def test_moneyflow_is_quarantined_for_formal(self, reg) -> None:
-        r = reg.resolve_field("$moneyflow_buy_sm_vol", "formal_validation")
+        # PR 9a (2026-05-27): moneyflow fields are written into Qlib with
+        # BARE column names (no `$moneyflow_` namespace prefix) because the
+        # endpoint is not in EVENT_LIKE_DAILY_DATASETS. Field names match the
+        # raw Tushare moneyflow schema — see field_status.yaml::moneyflow.fields.
+        r = reg.resolve_field("$net_mf_amount", "formal_validation")
         assert r.allowed is False
         assert r.status_id == "quarantine"
+        assert r.dataset_id == "moneyflow"
+        r2 = reg.resolve_field("$buy_sm_vol", "formal_validation")
+        assert r2.allowed is False
+        assert r2.status_id == "quarantine"
+
+    # PR 9a round-3 (GPT 5.5 Pro): one explicit per-family regression so the
+    # prefix→bare-name fix becomes a permanent guardrail. If the registry
+    # ever silently regresses to the unmatched `$moneyflow_` style, these
+    # tests fail loudly with a precise dataset-id check rather than a vague
+    # `unknown_field` outcome.
+    def test_hk_hold_bare_field_quarantined_for_formal(self, reg) -> None:
+        # Northbound foreign-holding ratio (hk_hold endpoint, bare $ratio).
+        r = reg.resolve_field("$ratio", "formal_validation")
+        assert r.allowed is False
+        assert r.status_id == "quarantine"
+        assert r.dataset_id == "hk_hold"
+
+    def test_margin_detail_bare_fields_quarantined_for_formal(self, reg) -> None:
+        # margin_detail uses bare column names: $rzye / $rqye / $rzmre / $rzche.
+        for field in ("$rzye", "$rqye", "$rzmre", "$rzche"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is False, (
+                f"{field} should be quarantined under margin_detail; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == "margin_detail"
+            assert r.status_id == "quarantine"
+
+    def test_stk_limit_bare_fields_quarantined_for_formal(self, reg) -> None:
+        # stk_limit endpoint: $up_limit / $down_limit.
+        for field in ("$up_limit", "$down_limit"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is False
+            assert r.dataset_id == "stk_limit"
+            assert r.status_id == "quarantine"
+
+    def test_stk_holdertrade_bare_fields_pending_review_for_formal(self, reg) -> None:
+        # stk_holdertrade aggregator emits bare-named summary columns; PR 9a
+        # registered it as pending_review alongside the other alpha endpoints.
+        for field in (
+            "$holdertrade_net_vol",
+            "$holdertrade_gross_vol",
+            "$holdertrade_net_ratio",
+            "$holdertrade_events",
+        ):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is False, (
+                f"{field} should be blocked at formal_validation; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == "stk_holdertrade"
+            assert r.status_id == "pending_review"
+
+    def test_indicators_bare_fields_approved_for_formal(self, reg) -> None:
+        # PR 9a indicators dataset (Tushare fina_indicator_vip) — every
+        # field added in 2026-05-27_indicators_unlisted_to_approved.yaml must
+        # resolve to indicators/approved.
+        for field in (
+            "$roe", "$roa", "$roic",
+            "$grossprofit_margin", "$netprofit_margin", "$assets_turn",
+            "$ocfps", "$bps", "$eps",
+            "$debt_to_assets", "$current_ratio", "$quick_ratio",
+            "$netprofit_yoy", "$or_yoy", "$op_yoy",
+            "$basic_eps_yoy", "$roe_yoy", "$q_op_qoq",
+        ):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is True, (
+                f"{field} should be approved under indicators; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == "indicators"
+            assert r.status_id == "approved"
 
     def test_top_list_is_pending_for_formal(self, reg) -> None:
         r = reg.resolve_field("$top_list__close", "formal_validation")
