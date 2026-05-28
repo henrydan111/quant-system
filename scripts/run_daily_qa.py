@@ -67,6 +67,36 @@ def _run(cmd: list[str], label: str) -> dict:
     }
 
 
+def _resolve_qlib_dir_from_config(project_root: Path | None = None) -> Path:
+    """Resolve the configured Qlib provider directory from ``config.yaml``.
+
+    PR 10a (post-PR-10 review): factored out of ``_provider_manifest_check``
+    so the same path resolution is shared by every audit block that needs
+    to find ``provider_build.json``. Pre-PR-10a the approval-evidence
+    audit block hardcoded ``data/qlib_data/metadata/provider_build.json``,
+    which created a real divergence with ``_provider_manifest_check``
+    whenever ``config.yaml::storage.qlib_data_dir`` pointed to a non-default
+    location.
+
+    ``project_root`` defaults to ``None`` (NOT ``PROJECT_ROOT`` directly,
+    because Python evaluates default args at function-definition time —
+    using ``PROJECT_ROOT`` as the default would freeze the original value
+    and ignore any runtime monkey-patch of ``run_daily_qa.PROJECT_ROOT``
+    by behavioral tests). The sentinel pattern resolves to the current
+    module-level ``PROJECT_ROOT`` at every call.
+    """
+    root = project_root if project_root is not None else PROJECT_ROOT
+    import yaml as _yaml
+    with open(root / "config.yaml", "r", encoding="utf-8") as handle:
+        config = _yaml.safe_load(handle) or {}
+    storage = config.get("storage", {})
+    qlib_dir = storage.get("qlib_data_dir", "./data/qlib_data")
+    qlib_path = Path(qlib_dir)
+    if not qlib_path.is_absolute():
+        qlib_path = root / str(qlib_dir).lstrip("./")
+    return qlib_path
+
+
 def _provider_manifest_check() -> dict:
     """Validate the local provider_build.json against the live Qlib calendar.
 
@@ -75,14 +105,9 @@ def _provider_manifest_check() -> dict:
     """
     try:
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
-        # Resolve qlib_dir from config.yaml's storage block.
-        import yaml as _yaml
-        with open(PROJECT_ROOT / "config.yaml", "r", encoding="utf-8") as handle:
-            config = _yaml.safe_load(handle) or {}
-        storage = config.get("storage", {})
-        qlib_dir = storage.get("qlib_data_dir", "./data/qlib_data")
-        if not Path(qlib_dir).is_absolute():
-            qlib_dir = str(PROJECT_ROOT / qlib_dir.lstrip("./"))
+        # PR 10a: shared resolver so the approval-evidence audit block
+        # validates against the same provider path.
+        qlib_dir = str(_resolve_qlib_dir_from_config())
 
         from data_infra.provider_manifest import (
             load_provider_manifest,
@@ -150,26 +175,37 @@ def _provider_manifest_check() -> dict:
         }
 
 
-def _approval_evidence_binding_check() -> dict:
+def _approval_evidence_binding_check(project_root: Path | None = None) -> dict:
     """PR 10 follow-up: scan config/field_registry/approvals/*.yaml and
     verify each binding (provider_build_id + calendar_policy_id) matches
-    the current data/qlib_data/metadata/provider_build.json.
+    the live ``provider_build.json`` at the configured qlib_data_dir.
 
     A drift means an approval's on-disk evidence was verified against a
     different provider build than the one currently published. The
     approval must be re-verified before formal use of the affected
     dataset's fields. See PR 9a round-3's indicators approval YAML for
     the binding contract.
+
+    PR 10a: shares :func:`_resolve_qlib_dir_from_config` with
+    ``_provider_manifest_check`` so both audit blocks validate against
+    the same provider tree. ``project_root=None`` resolves to the
+    module-level ``PROJECT_ROOT`` at call time so behavioral tests can
+    monkey-patch it (see the default-arg-evaluation comment on
+    :func:`_resolve_qlib_dir_from_config`).
     """
+    root = project_root if project_root is not None else PROJECT_ROOT
     try:
-        sys.path.insert(0, str(PROJECT_ROOT / "src"))
+        sys.path.insert(0, str(root / "src"))
         from data_infra.approval_evidence import (
+            ApprovalEvidenceConfigError,
             evaluate_approval_evidence_bindings,
         )
 
-        approvals_dir = PROJECT_ROOT / "config" / "field_registry" / "approvals"
+        approvals_dir = root / "config" / "field_registry" / "approvals"
         manifest_path = (
-            PROJECT_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json"
+            _resolve_qlib_dir_from_config(root)
+            / "metadata"
+            / "provider_build.json"
         )
         drifts = evaluate_approval_evidence_bindings(
             approvals_dir=approvals_dir, manifest_path=manifest_path,
@@ -185,6 +221,7 @@ def _approval_evidence_binding_check() -> dict:
             "exit_code": 0 if ok else 1,
             "n_approvals_with_binding": n_total,
             "n_drifted": n_drifted,
+            "manifest_path": str(manifest_path),
             "drifted_approvals": [d.binding.approval_id for d in drifted],
             "reasons": reasons[:10],  # keep the report compact
         }

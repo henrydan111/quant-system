@@ -33,6 +33,7 @@ import pytest
 from src.data_infra.approval_evidence import (
     ApprovalBinding,
     ApprovalBindingDrift,
+    ApprovalEvidenceConfigError,
     ApprovalEvidenceDriftError,
     DEFAULT_APPROVALS_DIR,
     DEFAULT_PROVIDER_MANIFEST,
@@ -220,10 +221,13 @@ to_status: approved
         ) == []
 
 
-class TestPartialBinding:
-    def test_yaml_with_only_provider_build_id(self, tmp_path: Path) -> None:
-        """An approval with only one of the two bindings should be
-        included in the scan; the missing one is treated as a wildcard."""
+class TestPartialBindingFailsClosed:
+    """PR 10a (GPT 5.5 Pro round-6 review): partial bindings used to be
+    treated as wildcard on the missing axis — a fail-open path that
+    silently weakened the contract from two dimensions to one. PR 10a
+    raises ApprovalEvidenceConfigError instead."""
+
+    def test_provider_build_id_without_calendar_policy_raises(self, tmp_path: Path) -> None:
         approvals = tmp_path / "approvals"
         approvals.mkdir()
         _write_yaml(approvals / "2026-05-27_pb_only.yaml", """
@@ -234,21 +238,90 @@ to_status: approved
 provider_build_id: prod_full_20260421_namespace_v1
 # no calendar_policy_id declared
 """.strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "provider_build_id" in msg
+        assert "calendar_policy_id" in msg
+        # Diagnostic must point at the offending file path.
+        assert "2026-05-27_pb_only.yaml" in msg
+
+    def test_calendar_policy_without_provider_build_id_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "2026-05-27_cp_only.yaml", """
+approval_id: 2026-05-27_cp_only
+date: 2026-05-27
+dataset_id: partial_dataset
+to_status: approved
+calendar_policy_id: frozen_20260227_system_build
+# no provider_build_id declared
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "calendar_policy_id" in msg
+        assert "provider_build_id" in msg
+        # Remediation guidance in the error message.
+        assert "BOTH" in msg or "both" in msg
+
+    def test_eval_propagates_partial_binding_error(self, tmp_path: Path) -> None:
+        """The strict-assert wrapper must also surface partial-binding errors
+        (they're raised at load_approval_bindings, so evaluate_* inherits)."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "partial.yaml", """
+approval_id: partial
+dataset_id: x
+to_status: approved
+provider_build_id: x
+""".strip())
         manifest = tmp_path / "manifest.json"
-        _write_manifest(
-            manifest,
-            provider_build_id="prod_full_20260421_namespace_v1",
-            calendar_policy_id="anything_at_all",
-        )
-        drifts = evaluate_approval_evidence_bindings(
-            approvals_dir=approvals, manifest_path=manifest,
-        )
-        assert len(drifts) == 1
-        d = drifts[0]
-        # Declared pb matches, declared cp is None → treated as wildcard match
-        assert d.drift is False
-        assert d.provider_build_id_match is True
-        assert d.calendar_policy_id_match is True
+        _write_manifest(manifest, provider_build_id="x", calendar_policy_id="y")
+        with pytest.raises(ApprovalEvidenceConfigError):
+            evaluate_approval_evidence_bindings(
+                approvals_dir=approvals, manifest_path=manifest,
+            )
+
+
+class TestMalformedYamlFailsClosed:
+    """PR 10a: pre-PR-10a malformed YAMLs were logged-and-skipped, a
+    fail-open path that could silently disappear an approval from the
+    drift check. PR 10a raises ApprovalEvidenceConfigError."""
+
+    def test_malformed_yaml_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        # Use a token that yaml.safe_load actually rejects: ``: just colons :``
+        # produces a YAMLError; an unbalanced bracket like ``[unterminated``
+        # would also work.
+        _write_yaml(approvals / "broken.yaml", "key: value\n: bad: : indent\n  ::oops")
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "broken.yaml" in msg
+        assert "Malformed" in msg or "malformed" in msg
+
+    def test_non_dict_top_level_raises(self, tmp_path: Path) -> None:
+        """YAMLs that parse to a list / scalar are governance errors."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "as_list.yaml", "- item_one\n- item_two\n")
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "as_list.yaml" in msg
+        assert "mapping" in msg.lower()
+
+    def test_empty_yaml_treated_as_legacy_skip(self, tmp_path: Path) -> None:
+        """An empty YAML parses to None and would historically fail the
+        isinstance(dict) check. PR 10a raises (since None isn't a mapping)
+        rather than silently skipping."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "empty.yaml", "")
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
 
 
 class TestMissingManifest:
@@ -410,8 +483,8 @@ class TestLiveRegistrySmoke:
 class TestDailyQAWiring:
     def test_run_daily_qa_invokes_approval_evidence_check(self) -> None:
         """``scripts/run_daily_qa.py`` must include the new audit block
-        so the check fires automatically. Source-level proof; a
-        behavioral end-to-end is heavier (needs full Qlib layout)."""
+        so the check fires automatically. Source-level proof; the
+        behavioral end-to-end lives in TestDailyQABehavioral below."""
         src = Path("scripts/run_daily_qa.py").read_text(encoding="utf-8")
         assert "_approval_evidence_binding_check" in src, (
             "scripts/run_daily_qa.py must define and call "
@@ -428,3 +501,191 @@ class TestDailyQAWiring:
         assert '"approval_evidence_binding"' in src, (
             "Audit-block label must be 'approval_evidence_binding'."
         )
+
+    def test_pr10a_resolver_helper_is_used_in_both_audit_blocks(self) -> None:
+        """PR 10a: both _provider_manifest_check and
+        _approval_evidence_binding_check must consume the same
+        _resolve_qlib_dir_from_config helper. Pre-PR-10a the latter
+        hardcoded data/qlib_data, creating a real divergence whenever
+        storage.qlib_data_dir pointed to a non-default location."""
+        src = Path("scripts/run_daily_qa.py").read_text(encoding="utf-8")
+        assert "def _resolve_qlib_dir_from_config" in src, (
+            "PR 10a: scripts/run_daily_qa.py must define "
+            "_resolve_qlib_dir_from_config so both audit blocks share "
+            "the same path resolution."
+        )
+        # _provider_manifest_check must use the helper.
+        pm_start = src.index("def _provider_manifest_check")
+        pm_next = src.find("\ndef ", pm_start + 1)
+        pm_body = src[pm_start:pm_next if pm_next > 0 else len(src)]
+        assert "_resolve_qlib_dir_from_config" in pm_body, (
+            "PR 10a: _provider_manifest_check must call "
+            "_resolve_qlib_dir_from_config (the shared helper)."
+        )
+        # _approval_evidence_binding_check must use the helper.
+        ae_start = src.index("def _approval_evidence_binding_check")
+        ae_next = src.find("\ndef ", ae_start + 1)
+        ae_body = src[ae_start:ae_next if ae_next > 0 else len(src)]
+        assert "_resolve_qlib_dir_from_config" in ae_body, (
+            "PR 10a: _approval_evidence_binding_check must call "
+            "_resolve_qlib_dir_from_config (the shared helper)."
+        )
+        # And the hardcoded path is gone.
+        assert 'PROJECT_ROOT / "data" / "qlib_data"' not in ae_body, (
+            "PR 10a: _approval_evidence_binding_check must NOT hardcode "
+            "PROJECT_ROOT / 'data' / 'qlib_data'. Use the shared "
+            "_resolve_qlib_dir_from_config helper instead."
+        )
+
+
+class TestDailyQABehavioral:
+    """PR 10a: behavioral proof that _approval_evidence_binding_check
+    honours config.yaml::storage.qlib_data_dir. Pre-PR-10a the check
+    silently used the hardcoded default even when config.yaml pointed
+    elsewhere — so a daily-QA run on a non-default provider host could
+    falsely report ok=True against an unrelated manifest."""
+
+    def _setup_temp_project(
+        self,
+        tmp_path: Path,
+        *,
+        custom_qlib_subdir: str,
+        manifest_provider_build_id: str,
+        manifest_calendar_policy_id: str,
+    ) -> None:
+        """Construct a temp project root with config.yaml pointing at a
+        non-default qlib_data tree, plus a fake provider_build.json and
+        one approval YAML."""
+        # 1. config.yaml with custom storage.qlib_data_dir
+        config_content = f"""
+storage:
+  qlib_data_dir: ./{custom_qlib_subdir}
+""".lstrip()
+        (tmp_path / "config.yaml").write_text(config_content, encoding="utf-8")
+
+        # 2. fake qlib tree with manifest
+        manifest_dir = tmp_path / custom_qlib_subdir / "metadata"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "provider_build.json").write_text(
+            json.dumps(
+                {
+                    "provider_build_id": manifest_provider_build_id,
+                    "calendar_policy_id": manifest_calendar_policy_id,
+                    "provider": {"calendar_end_date": "2026-02-27"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # 3. one approval YAML under the expected committed path
+        approvals_dir = tmp_path / "config" / "field_registry" / "approvals"
+        approvals_dir.mkdir(parents=True)
+        (approvals_dir / "2026-05-27_pr10a_behavioral.yaml").write_text(
+            f"""approval_id: 2026-05-27_pr10a_behavioral
+date: 2026-05-27
+dataset_id: pr10a_test_dataset
+to_status: approved
+provider_build_id: {manifest_provider_build_id}
+calendar_policy_id: {manifest_calendar_policy_id}
+""",
+            encoding="utf-8",
+        )
+
+        # 4. minimum src tree so the helper's sys.path.insert(0, src) finds
+        # the approval_evidence module. Create a symlink-equivalent by
+        # copying via Path operations would be expensive; instead the
+        # daily-QA helper inserts project_root/src into sys.path BUT
+        # imports approval_evidence as `data_infra.approval_evidence`. We
+        # need that import path to resolve — since we already imported it
+        # for this test file from the real src/, it stays in sys.modules
+        # and re-importing works.
+
+    def test_approval_evidence_check_uses_configured_qlib_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Set storage.qlib_data_dir to a non-default subdirectory. The
+        check must find the manifest there and report ok=True against a
+        matched approval binding."""
+        import sys
+        import scripts.run_daily_qa as qa_module
+
+        # The daily-QA helper does ``sys.path.insert(0, project_root / "src")``
+        # and then ``from data_infra.approval_evidence import ...``. In tests
+        # the project_root we pass is tmp_path (no src/ there), so we must
+        # pre-load the real src/ onto sys.path or the import will fail. This
+        # is exactly how the helper is intended to be invoked in production
+        # (PROJECT_ROOT/src is the real src tree).
+        real_src = Path(__file__).resolve().parent.parent.parent / "src"
+        monkeypatch.syspath_prepend(str(real_src))
+
+        # Inject a temp PROJECT_ROOT so the shared helper resolves into
+        # tmp_path/<custom_qlib_subdir>, not the real data/qlib_data tree.
+        custom = "tmp_qlib_data_for_pr10a"
+        self._setup_temp_project(
+            tmp_path,
+            custom_qlib_subdir=custom,
+            manifest_provider_build_id="bid_pr10a_match",
+            manifest_calendar_policy_id="cp_pr10a_match",
+        )
+
+        # Drive the parameterised helper directly with the temp root. This
+        # avoids monkey-patching the module-level PROJECT_ROOT and keeps
+        # the test scope tight.
+        result = qa_module._approval_evidence_binding_check(project_root=tmp_path)
+
+        # Must have found the matching approval and reported ok.
+        assert result["ok"] is True, (
+            f"Expected ok=True, got {result!r}. The check must consume "
+            f"config.yaml::storage.qlib_data_dir, not the hardcoded default."
+        )
+        assert result["n_approvals_with_binding"] == 1
+        assert result["n_drifted"] == 0
+        # Manifest path should reflect the configured qlib_data_dir, NOT
+        # the legacy hardcoded data/qlib_data.
+        assert custom in result["manifest_path"], (
+            f"manifest_path={result['manifest_path']!r} did not include the "
+            f"configured custom subdir {custom!r}; the helper is not consuming "
+            "config.yaml::storage.qlib_data_dir."
+        )
+
+    def test_approval_evidence_check_surfaces_drift_against_configured_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Invert the manifest's provider_build_id. With the configured
+        path resolution, the check must surface drift (ok=False), not
+        silently revalidate against the hardcoded default."""
+        import scripts.run_daily_qa as qa_module
+
+        # Make the real src/ importable for the helper's sys.path dance.
+        real_src = Path(__file__).resolve().parent.parent.parent / "src"
+        monkeypatch.syspath_prepend(str(real_src))
+
+        custom = "tmp_qlib_data_for_pr10a_drift"
+        self._setup_temp_project(
+            tmp_path,
+            custom_qlib_subdir=custom,
+            manifest_provider_build_id="bid_NEW_rebuild",   # ← drifted!
+            manifest_calendar_policy_id="cp_pr10a_match",
+        )
+        # The approval YAML still pins the OLD build_id; rewrite it now to
+        # carry "bid_OLD_evidence" so the drift is observable.
+        approvals_dir = tmp_path / "config" / "field_registry" / "approvals"
+        (approvals_dir / "2026-05-27_pr10a_behavioral.yaml").write_text(
+            """approval_id: 2026-05-27_pr10a_behavioral
+date: 2026-05-27
+dataset_id: pr10a_drift_dataset
+to_status: approved
+provider_build_id: bid_OLD_evidence
+calendar_policy_id: cp_pr10a_match
+""",
+            encoding="utf-8",
+        )
+
+        result = qa_module._approval_evidence_binding_check(project_root=tmp_path)
+
+        assert result["ok"] is False
+        assert result["n_drifted"] == 1
+        # Diagnostic must name both declared (old) and current (new) ids.
+        joined_reasons = " ".join(result.get("reasons", []))
+        assert "bid_OLD_evidence" in joined_reasons
+        assert "bid_NEW_rebuild" in joined_reasons

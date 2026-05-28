@@ -66,6 +66,19 @@ class ApprovalEvidenceDriftError(RuntimeError):
     """Raised by :func:`assert_no_approval_evidence_drift` on any drift."""
 
 
+class ApprovalEvidenceConfigError(RuntimeError):
+    """Raised by :func:`load_approval_bindings` on malformed approval YAMLs.
+
+    PR 10a (post-PR-10 review): pre-PR-10a the scanner logged a warning
+    and silently skipped (a) YAMLs that failed to parse, (b) YAMLs whose
+    top level was not a mapping, and (c) YAMLs declaring exactly one of
+    ``provider_build_id`` / ``calendar_policy_id`` (treated as wildcard
+    on the missing axis). All three are fail-open paths for a governance
+    artifact and PR 10a converts them to hard failures. Legacy YAMLs
+    with BOTH binding keys absent are still silently skipped because
+    they predate the binding contract."""
+
+
 @dataclass(frozen=True)
 class ApprovalBinding:
     """A single approval YAML's binding to a provider build + calendar policy.
@@ -142,9 +155,25 @@ def load_approval_bindings(
 ) -> list[ApprovalBinding]:
     """Scan an approvals directory for YAML files and extract bindings.
 
-    YAMLs that don't carry at least one of ``provider_build_id`` or
-    ``calendar_policy_id`` are silently skipped — those predate the PR 9a
-    round-3 binding contract and cannot be drift-checked.
+    Contract (PR 10a, post-PR-10 review):
+
+      * BOTH ``provider_build_id`` AND ``calendar_policy_id`` absent →
+        legacy approval, silently skipped.
+      * BOTH binding keys present → validated.
+      * Exactly ONE present → :class:`ApprovalEvidenceConfigError` —
+        partial bindings would silently reduce the contract from two
+        dimensions to one (wildcard on the missing axis), a fail-open
+        path that PR 10a removes.
+
+    Other fail-closed conditions:
+
+      * YAML parse failure → :class:`ApprovalEvidenceConfigError`.
+      * Top-level structure that is not a mapping (e.g. a list or
+        scalar) → :class:`ApprovalEvidenceConfigError`.
+
+    The strictness is intentional: ``config/field_registry/approvals/``
+    is a governance directory. A malformed or partial YAML cannot weaken
+    the daily-QA gate by silently disappearing from the scan.
     """
     # Lazy yaml import so the module is importable in minimal envs.
     import yaml
@@ -156,16 +185,36 @@ def load_approval_bindings(
     for path in sorted(root.glob("*.yaml")):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 — defensive scan
-            logger.warning("Skipping malformed approval YAML %s: %s", path, exc)
-            continue
+        except Exception as exc:  # noqa: BLE001 — re-raise as governance error
+            raise ApprovalEvidenceConfigError(
+                f"Malformed approval YAML at {path}: {exc}. "
+                "PR 10a requires every approval YAML to be parseable; fix the "
+                "file or remove it before re-running daily QA."
+            ) from exc
         if not isinstance(data, dict):
-            continue
+            raise ApprovalEvidenceConfigError(
+                f"Approval YAML at {path} must parse to a mapping (dict), "
+                f"got {type(data).__name__}. PR 10a requires every approval "
+                "YAML to be a top-level mapping."
+            )
         pb_id = data.get("provider_build_id")
         cp_id = data.get("calendar_policy_id")
         if pb_id is None and cp_id is None:
             # Legacy YAML without binding — silently skip.
             continue
+        if (pb_id is None) ^ (cp_id is None):
+            # Exactly one declared — fail closed. Partial bindings would
+            # silently weaken the drift check to one axis, a fail-open
+            # path PR 10a closes.
+            missing = "calendar_policy_id" if pb_id is not None else "provider_build_id"
+            present = "provider_build_id" if pb_id is not None else "calendar_policy_id"
+            raise ApprovalEvidenceConfigError(
+                f"Approval YAML at {path} declares {present!r} but not "
+                f"{missing!r}. PR 10a requires approval evidence to bind "
+                "BOTH provider_build_id AND calendar_policy_id, or omit "
+                "both as a legacy approval. Add the missing key or remove "
+                f"{present!r} to mark this approval legacy."
+            )
         out.append(
             ApprovalBinding(
                 approval_id=str(data.get("approval_id") or path.stem),
@@ -173,8 +222,8 @@ def load_approval_bindings(
                 dataset_id=str(data.get("dataset_id") or ""),
                 to_status=str(data.get("to_status") or ""),
                 date=str(data.get("date") or ""),
-                declared_provider_build_id=(str(pb_id) if pb_id is not None else None),
-                declared_calendar_policy_id=(str(cp_id) if cp_id is not None else None),
+                declared_provider_build_id=str(pb_id),
+                declared_calendar_policy_id=str(cp_id),
             )
         )
     return out
@@ -220,14 +269,13 @@ def evaluate_approval_evidence_bindings(
 
     out: list[ApprovalBindingDrift] = []
     for b in bindings:
-        pb_match = (
-            b.declared_provider_build_id is None
-            or b.declared_provider_build_id == current_pb
-        )
-        cp_match = (
-            b.declared_calendar_policy_id is None
-            or b.declared_calendar_policy_id == current_cp
-        )
+        # PR 10a contract: load_approval_bindings guarantees both
+        # declared_provider_build_id and declared_calendar_policy_id are
+        # non-None for any binding it returns (partial bindings raise at
+        # load time). The match logic is therefore a literal equality
+        # check, NOT a "None means wildcard" relaxation.
+        pb_match = b.declared_provider_build_id == current_pb
+        cp_match = b.declared_calendar_policy_id == current_cp
         out.append(
             ApprovalBindingDrift(
                 binding=b,
@@ -278,6 +326,7 @@ def assert_no_approval_evidence_drift(
 __all__ = [
     "ApprovalBinding",
     "ApprovalBindingDrift",
+    "ApprovalEvidenceConfigError",
     "ApprovalEvidenceDriftError",
     "DEFAULT_APPROVALS_DIR",
     "DEFAULT_PROVIDER_MANIFEST",
