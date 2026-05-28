@@ -543,23 +543,46 @@ def handle_validation_dataset_build(context: StepExecutionContext) -> StepExecut
     if profit_field:
         raw_field_exprs[profit_field] = f"Ref(${profit_field}, 1)"
 
-    # PR 9b defense-in-depth (2026-05-28, GPT 5.5 Pro round-4 review): the
-    # resolver-time universe gate in handle_validation_object_resolver already
-    # validates the same field set, but this second check fires at the
-    # actual Qlib-load site so a future addition to raw_field_exprs
-    # (e.g. starting to load $ratio for northbound_required, or
-    # $revenue_q for revenue_floor) cannot bypass the field gate even if
-    # someone forgets to mirror the addition into
-    # _validate_prescription_universe_field_dependencies. Formal stages
-    # raise FieldApprovalError BEFORE the Qlib load runs.
-    formal_stages = {"formal_validation", "oos_test", "registry_publish"}
-    if stage in formal_stages:
+    # PR 9b defense-in-depth + PR 9c IS-stage mapping (2026-05-28, GPT 5.5
+    # Pro round-5 review): the resolver-time universe gate in
+    # handle_validation_object_resolver already validates the same field
+    # set, but this second check fires at the actual Qlib-load site so a
+    # future addition to raw_field_exprs (e.g. starting to load $ratio
+    # for northbound_required, or $revenue_q for revenue_floor) cannot
+    # bypass the field gate even if someone forgets to mirror the addition
+    # into _validate_prescription_universe_field_dependencies.
+    #
+    # PR 9c stage-mapping fix: ``stage = _gate_stage(context)`` returns
+    # ``"is_only"`` for the IS leg by default (steps.py:132), and the
+    # pre-PR-9c check ``if stage in {"formal_validation","oos_test","registry_publish"}``
+    # silently skipped the IS path. Since handle_validation_dataset_build
+    # is itself the formal-validation handler, the IS leg MUST map to
+    # ``formal_validation`` for field-gate purposes; the OOS leg keeps
+    # ``oos_test``. Everything else is sandbox/exploration and stays
+    # ungated.
+    field_gate_stage: str | None
+    if stage == "oos_test":
+        field_gate_stage = "oos_test"
+    elif stage == "is_only":
+        # Hypothesis-validation IS leg is still a formal stage for the
+        # field-status registry; map to formal_validation.
+        field_gate_stage = "formal_validation"
+    elif stage in {"formal_validation", "registry_publish"}:
+        field_gate_stage = stage
+    else:
+        # Sandbox / discovery stages — leave ungated. Currently this
+        # branch is unused because handle_validation_dataset_build is
+        # only wired into the hypothesis_validation profile, but we keep
+        # the mapping explicit for future profile additions.
+        field_gate_stage = None
+
+    if field_gate_stage is not None:
         from src.research_orchestrator.release_gate import (
             assert_field_dependencies_eligible,
         )
         assert_field_dependencies_eligible(
             expressions=list(raw_field_exprs.values()),
-            stage=stage,
+            stage=field_gate_stage,
             artifact_label=f"{hypothesis.hypothesis_id}::dataset_build_raw_fields",
         )
 
