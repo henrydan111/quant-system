@@ -1,0 +1,177 @@
+# Field-registry approval evidence (PR 9a round-2 hardened, 2026-05-27)
+#
+# Promotes the bare Tushare fina_indicator_vip fields from "unlisted" (and
+# therefore conservative-fail at formal stages via unknown_field_policy) to
+# "approved" under a new `indicators` dataset entry in field_status.yaml.
+#
+# Per CLAUDE.md §3 invariants the indicators family is PIT-anchored on
+# ann_date — same PIT pipeline that produces the curated $pit_* aliases. The
+# on-disk pipeline did NOT change; only the registry now reflects what the
+# factor library has always consumed.
+
+approval_id: 2026-05-27_indicators_unlisted_to_approved
+date: 2026-05-27
+dataset_id: indicators
+source_endpoint: tushare.fina_indicator_vip
+from_status: unlisted
+to_status: approved
+reviewer: henrydan111
+related_pr: pr9a-fail-closed-resolver-compat
+related_findings_id: null
+
+# Bind this approval to the exact provider build + calendar policy under
+# which the on-disk verification was performed. A future provider rebuild
+# whose `calendar_policy_id` or `provider_build_id` differs from these
+# values means the approval evidence must be re-verified before formal use.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+# Per-stage scope — every flag here mirrors the `approved` status row in
+# config/field_registry/field_status.yaml. Listed explicitly so this YAML
+# is self-contained for audit purposes.
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# PIT-safety contract for this dataset. The field registry approves field
+# *eligibility*; the PIT contract approves how the field MUST be referenced
+# inside a factor expression. Both must hold for the indicator factors to
+# remain formal-eligible.
+pit_contract:
+  availability_column: ann_date
+  availability_anchor_rule: "max(ann_date, f_ann_date) is NOT applicable — indicators raw schema has no f_ann_date column (CLAUDE.md §3)"
+  provider_transform: pit_aligned_by_announcement_date_with_shift1
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_snapshot_dataset
+  expression_lag_required: true
+  approved_usage_pattern: "Ref($field, 1) or stricter"
+  same_day_raw_usage_allowed: false
+  # The factor_library catalog uses this contract consistently — every
+  # operator that touches an indicators field returns an expression wrapped
+  # in `Ref($field, 1)`. See operators.py::fundamental(),
+  # fundamental_delta(), fundamental_slope(), fundamental_stability(),
+  # fundamental_ratio(), leverage_field(), bps_to_price(), ocf_yield(),
+  # deleverage().
+
+# Structured evidence supporting the promotion.
+evidence:
+  field_inventory:
+    instruments_checked:
+      - "000001_sz"
+      - "600000_sh"
+    fields_expected: 18
+    fields_present: 18
+    verification_method: "on-disk listing of data/qlib_data/features/<instr>/<field>.day.bin"
+  tests:
+    # Existing PIT-safety tests that already enforce expression-level lag
+    # discipline across the entire catalog (includes the indicator factors).
+    - test_id: tests/alpha_research/test_factor_library_pit_safety.py::FactorCatalogPITSafety::test_catalog_has_no_pit_violations
+      asserts: "Every $field in get_factor_catalog(include_new_data=True) is wrapped in a Ref(...) frame."
+    - test_id: tests/alpha_research/test_factor_library_pit_safety.py::FactorCatalogPITSafety::test_public_operators_have_no_pit_violations
+      asserts: "Every public Layer 1 operator returns a PIT-safe expression string."
+    - test_id: tests/alpha_research/test_operator_expressions.py
+      asserts: "Per-operator expression-lock tests pin the exact post-fix Ref(..., 1) strings."
+    - test_id: tests/alpha_research/test_operator_behavioral_pit.py
+      asserts: "Behavioral test confirms factor[T] does not depend on close[T] on a synthetic Qlib fixture."
+    # New PR 9a indicator-specific compatibility test (this approval YAML).
+    - test_id: tests/research_orchestrator/test_pr9_validation_field_gate.py::TestFormalIndicatorPITLagContract::test_formal_indicator_factors_use_ref_lag
+      asserts: "Every formal-eligible factor expression that touches an indicators-family $field wraps that $field inside a Ref(..., 1) (or stricter) frame."
+    # Compatibility integration test that PR 9a added — proves the registry
+    # update does not regress any historical formal factor.
+    - test_id: tests/research_orchestrator/test_pr9_validation_field_gate.py::TestFormalFactorCompatibility::test_every_formal_factor_resolves_at_formal_validation
+      asserts: "Every factor in get_factor_catalog(include_new_data=True) either passes the formal field gate OR is explicitly enumerated in KNOWN_NON_FORMAL_FACTORS with a documented reason."
+
+# Fields added to the indicators dataset entry. Each field is materialized by
+# pit_backend._materialize_snapshot_dataset under the ann_date PIT contract
+# and is referenced by the listed formal factor through a Ref(..., 1) frame.
+fields_added:
+  # Profitability
+  - field: $roe
+    referenced_by:
+      - qual_roe
+      - qual_roe_stability
+      - qual_roe_change
+      - grow_roe_improvement
+  - field: $roa
+    referenced_by: [qual_roa]
+  - field: $roic
+    referenced_by: [qual_roic]
+  - field: $grossprofit_margin
+    referenced_by:
+      - qual_gross_margin
+      - qual_margin_stability
+      - grow_gross_margin_chg
+      - qual_margin_trend
+  - field: $netprofit_margin
+    referenced_by: [qual_net_margin]
+  - field: $assets_turn
+    referenced_by: [qual_asset_turnover]
+  # Per-share metrics
+  - field: $ocfps
+    referenced_by:
+      - val_cftp
+      - qual_accruals
+  - field: $bps
+    referenced_by: [val_bps_to_price]
+  - field: $eps
+    referenced_by:
+      - qual_accruals
+      - earn_surprise_eps
+  # Leverage / solvency
+  - field: $debt_to_assets
+    referenced_by:
+      - qual_leverage
+      - lev_debt_to_assets
+      - lev_deleverage
+      - lev_debt_capacity
+  - field: $current_ratio
+    referenced_by:
+      - qual_current_ratio
+      - lev_current_ratio
+  - field: $quick_ratio
+    referenced_by:
+      - qual_quick_ratio
+      - lev_quick_ratio
+  # Growth (YoY / QoQ on indicator snapshot — distinct from $pit_*
+  # quarter-derived aliases; both PIT-anchored, both approved)
+  - field: $netprofit_yoy
+    referenced_by:
+      - grow_netprofit_yoy
+      - grow_profit_acceleration
+      - grow_consistency
+      - grow_profit_trend
+      - grow_peg
+      - earn_earnings_momentum
+  - field: $or_yoy
+    referenced_by:
+      - grow_revenue_yoy
+      - grow_rev_acceleration
+      - grow_rev_trend
+      - earn_surprise_revenue
+  - field: $op_yoy
+    referenced_by: [grow_opprofit_yoy]
+  - field: $basic_eps_yoy
+    referenced_by: [grow_eps_yoy]
+  - field: $roe_yoy
+    referenced_by: [grow_roe_yoy]
+  - field: $q_op_qoq
+    referenced_by: [grow_opprofit_qoq]
+
+notes: |
+  Promoted by PR 9a (2026-05-27, branch pr9a-fail-closed-resolver-compat) after
+  GPT 5.5 Pro's round-2 review of PR 9 surfaced the registry/catalog
+  incompatibility: PR 5 seeded only $pit_* aliases under pit_fundamentals,
+  but the live formal factor catalog has always used the BARE indicator-family
+  field names ($roe, $or_yoy, $netprofit_yoy, etc.). Without this promotion
+  PR 9's fail-closed gate would have rejected ~30 historically-approved
+  formal factors as `unknown_field` at the validation resolver.
+
+  Round-3 review (GPT 5.5 Pro) flagged that on-disk presence is necessary but
+  insufficient for formal approval — the approval record must also bind the
+  promotion to provider build + calendar policy + PIT contract. This YAML now
+  carries all five evidence dimensions: source identity, PIT visibility,
+  provider namespace + build, shift/lag contract, and structured test refs.

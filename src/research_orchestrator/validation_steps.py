@@ -130,15 +130,283 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
             "candidate-stage factors, set prescription.allow_candidate_components=True."
         )
 
+    # PR 9 of 2026-05-26 freeze plan: field-dependency gate.
+    # After the resolver confirms every prescribed component lives in the
+    # formal factor layer, walk each resolved factor's Qlib expression and
+    # refuse the IS leg if ANY referenced $field is disallowed at
+    # ``formal_validation`` stage (quarantined / pending_review / unknown
+    # per config/field_registry/field_status.yaml). This catches the failure
+    # mode where a candidate "factor lives in factor_registry, expressions
+    # parse, BUT one of its $fields is moneyflow / northbound / etc." Pre-PR-9
+    # such candidates would only get caught at release-gate time after
+    # spending the full IS leg's compute budget.
+    field_dependency_report = _validate_factor_field_dependencies(
+        factor_names=[c.factor_name for c in prescription.components],
+        stage="formal_validation",
+        artifact_label=str(hypothesis.hypothesis_id),
+    )
+
+    # PR 9b (2026-05-28, GPT 5.5 Pro round-4 review): the factor field gate
+    # above only covers prescription.components. But validation_dataset_build
+    # later turns prescription.universe.broad_filters.profitability_field
+    # into ``Ref(${profit_field}, 1)`` and feeds it into Qlib. A formal
+    # prescription with only approved factors but
+    # ``broad_filters.profitability_field="ratio"`` would PASS the factor
+    # gate and then load the quarantined hk_hold $ratio at dataset_build
+    # time. PR 9b closes this with an explicit universe-side check.
+    universe_field_dependency_report = _validate_prescription_universe_field_dependencies(
+        prescription=prescription,
+        stage="formal_validation",
+        artifact_label=str(hypothesis.hypothesis_id),
+    )
+
     outputs = {
         # The shape runtime.py:407 expects (matches handle_object_resolver):
         "registry_resolution": raw_resolution,
         # Convenience: pass the synthesized consumes downstream so dataset_build
         # doesn't need to re-derive it from prescription.
         "consumes": [c.to_dict() for c in consumes],
+        # PR 9: record the field-dependency check result on the artifact so
+        # reviewers can audit which $fields the resolver approved.
+        "field_dependency_report": field_dependency_report,
+        # PR 9b: separate report for universe raw fields so reviewers can
+        # see exactly which non-factor $fields were authorized.
+        "universe_field_dependency_report": universe_field_dependency_report,
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _validate_factor_field_dependencies(
+    *,
+    factor_names: list[str],
+    stage: str,
+    artifact_label: str,
+) -> dict[str, Any]:
+    """PR 9 / PR 9a helper: refuse formal candidates whose factor expressions
+    touch any quarantined / pending_review / unknown ``$field``.
+
+    Looks up each ``factor_name`` in ``get_industry_relative_defs`` first
+    (composites take precedence so they always inherit their base
+    expression) and then in ``get_factor_catalog``; collects the resulting
+    Qlib expressions; runs them through ``assert_field_dependencies_eligible``
+    which loads ``config/field_registry/field_status.yaml`` and raises
+    :class:`FieldApprovalError` on disallowed-field references.
+
+    PR 9a fail-closed contract (post-GPT 5.5 round-2 review). At
+    ``formal_validation`` / ``oos_test`` / ``registry_publish`` stages the
+    helper raises :class:`FieldApprovalError` in any of these situations,
+    BEFORE delegating to ``assert_field_dependencies_eligible``:
+
+      * a requested factor is not found in EITHER the factor catalog OR
+        ``get_industry_relative_defs`` (``no_expression_found``);
+      * an industry-relative composite's ``base`` is missing from the
+        catalog (``industry_relative_unresolved_base``);
+      * the final collected expression list is empty — no $field tokens
+        means an empty downstream check that would return eligible.
+
+    Pre-PR-9a these cases recorded a source-tag note and continued, so
+    the strict gate ran with an empty / partial expression set and could
+    return eligible — defeating the purpose of the field-dependency gate.
+
+    Industry-relative composites: the registry uses time-varying SW2021
+    labels for the post-transform but the ``$field`` references come from
+    the ``base`` factor's expression. Including the base's expression in
+    the field-dependency check covers PIT-safety inheritance correctly.
+    """
+    from src.alpha_research.factor_library.catalog import (
+        get_factor_catalog,
+        get_industry_relative_defs,
+    )
+    from src.data_infra.field_registry import FieldApprovalError
+    from src.research_orchestrator.release_gate import (
+        assert_field_dependencies_eligible,
+    )
+
+    catalog = get_factor_catalog(include_new_data=True)
+    industry_defs = {d["name"]: d for d in get_industry_relative_defs()}
+
+    # PR 9a: formal stages must fail closed on lookup gaps. Sandbox /
+    # vectorized screening stages keep the pre-PR-9 lenient behavior so
+    # exploration is not blocked.
+    formal_stages = {"formal_validation", "oos_test", "registry_publish"}
+    strict_stage = stage in formal_stages
+
+    expressions: list[str] = []
+    expression_sources: list[dict[str, str]] = []
+    missing_expressions: list[str] = []
+    unresolved_industry_bases: list[dict[str, str]] = []
+
+    for name in factor_names:
+        # PR 9a: industry-relative composites take precedence so they
+        # always inherit their base expression even if a same-named entry
+        # somehow appeared in the catalog. The base lookup is what
+        # delivers PIT inheritance — see catalog.py:get_industry_relative_defs.
+        if name in industry_defs:
+            base = str(industry_defs[name].get("base", ""))
+            if base and base in catalog:
+                expressions.append(catalog[base])
+                expression_sources.append({
+                    "factor_name": name,
+                    "source": "industry_relative_base",
+                    "base_factor": base,
+                })
+            else:
+                expression_sources.append({
+                    "factor_name": name,
+                    "source": "industry_relative_unresolved_base",
+                    "base_factor": base,
+                })
+                unresolved_industry_bases.append({
+                    "factor_name": name, "base_factor": base,
+                })
+        elif name in catalog:
+            expressions.append(catalog[name])
+            expression_sources.append({"factor_name": name, "source": "factor_catalog"})
+        else:
+            # The resolver already accepted this factor against the registry,
+            # but it's not in the runtime catalog or industry-relative defs.
+            # Pre-PR-9a this was recorded as a note and the helper continued
+            # — that defeats the gate because we'd then pass a possibly-empty
+            # expressions list to the strict assert and the assert would
+            # return eligible. PR 9a fails closed on formal stages.
+            expression_sources.append({"factor_name": name, "source": "no_expression_found"})
+            missing_expressions.append(name)
+
+    if strict_stage:
+        if missing_expressions:
+            raise FieldApprovalError(
+                f"Field-dependency gate cannot validate {artifact_label} at "
+                f"stage={stage}: no factor-library expression found for "
+                f"{missing_expressions}. Formal validation fails closed when a "
+                "resolved factor lacks a runtime expression — fix the "
+                "factor_library catalog or remove the factor from the "
+                "prescription."
+            )
+        if unresolved_industry_bases:
+            details = ", ".join(
+                f"{u['factor_name']!r}->{u['base_factor']!r}"
+                for u in unresolved_industry_bases
+            )
+            raise FieldApprovalError(
+                f"Field-dependency gate cannot validate {artifact_label} at "
+                f"stage={stage}: industry-relative composite(s) reference "
+                f"missing base factor(s): {details}. Add the base to "
+                "factor_library.catalog or remove the composite from the "
+                "prescription."
+            )
+        if not expressions:
+            raise FieldApprovalError(
+                f"Field-dependency gate received empty expression list for "
+                f"{artifact_label} at stage={stage}; refusing to pass an empty "
+                "check at a formal stage."
+            )
+
+    # assert_field_dependencies_eligible loads the committed registry by
+    # default. Raises FieldApprovalError on any disallowed field; the
+    # error string lists every violating field so the operator can fix
+    # field_status.yaml or change the prescription.
+    gate_result = assert_field_dependencies_eligible(
+        expressions=expressions,
+        stage=stage,
+        artifact_label=artifact_label,
+    )
+
+    return {
+        "stage": stage,
+        "eligible": gate_result.eligible,
+        "fields_checked": list(gate_result.fields_checked),
+        "disallowed_fields": list(gate_result.disallowed_fields),
+        "unknown_fields": list(gate_result.unknown_fields),
+        "reasons": list(gate_result.reasons),
+        "expression_sources": expression_sources,
+    }
+
+
+def _validate_prescription_universe_field_dependencies(
+    *,
+    prescription: Any,
+    stage: str,
+    artifact_label: str,
+) -> dict[str, Any]:
+    """PR 9b helper (2026-05-28, GPT 5.5 Pro round-4 review): refuse formal
+    prescriptions whose ``universe.broad_filters`` reference a quarantined /
+    pending_review / unknown ``$field`` through paths other than
+    ``prescription.components``.
+
+    The factor field gate in :func:`_validate_factor_field_dependencies`
+    only sees factor expressions. But
+    :func:`handle_validation_dataset_build` independently constructs
+    ``raw_field_exprs`` for universe materialization — currently the
+    canonical OHLCV / market_cap / amount set PLUS an optional
+    ``Ref(${broad_filters.profitability_field}, 1)``. A formal prescription
+    with only approved factor components could pass the factor gate AND
+    still consume a quarantined ``$ratio`` through the universe path.
+
+    This helper enumerates the SAME ``raw_field_exprs`` that dataset_build
+    will build and runs them through ``assert_field_dependencies_eligible``
+    so the formal IS leg refuses to start.
+
+    Mirror contract: if dataset_build's ``raw_field_exprs`` construction
+    ever changes (e.g., starts loading ``$ratio`` to honor
+    ``northbound_required``, or ``$revenue_q`` to honor ``revenue_floor``),
+    update BOTH this helper AND the dataset_build defense-in-depth check
+    so the resolver-time gate stays in sync with the runtime load. The
+    defense-in-depth call in dataset_build will fail loudly on drift
+    even if this helper is forgotten.
+
+    Returns a serializable report mirroring the factor-side
+    ``field_dependency_report`` so reviewers can audit which non-factor
+    ``$fields`` the resolver approved.
+    """
+    from src.data_infra.field_registry import FieldApprovalError
+    from src.research_orchestrator.release_gate import (
+        assert_field_dependencies_eligible,
+    )
+
+    # Canonical universe-side $field set — must match the dict built in
+    # handle_validation_dataset_build::raw_field_exprs.
+    expressions: list[str] = [
+        "Ref($close, 1)",
+        "Ref($adj_factor, 1)",
+        "Ref($total_mv, 1)",
+        "Ref($amount, 1)",
+    ]
+    universe_sources: list[dict[str, str]] = [
+        {"source": "universe_canonical", "field": tok}
+        for tok in ("$close", "$adj_factor", "$total_mv", "$amount")
+    ]
+
+    universe = getattr(prescription, "universe", None)
+    if universe is not None and getattr(universe, "kind", None) == "broad":
+        broad_filters = getattr(universe, "broad_filters", None)
+        if broad_filters is not None:
+            profit_field = getattr(broad_filters, "profitability_field", None)
+            if profit_field:
+                # Mirror dataset_build line ~441 exactly. The expression
+                # contributes a single $field token to the gate.
+                expressions.append(f"Ref(${profit_field}, 1)")
+                universe_sources.append({
+                    "source": "broad_filters.profitability_field",
+                    "field": f"${profit_field}",
+                })
+
+    # The strict variant raises FieldApprovalError on any disallowed field.
+    gate_result = assert_field_dependencies_eligible(
+        expressions=expressions,
+        stage=stage,
+        artifact_label=f"{artifact_label}::universe_fields",
+    )
+
+    return {
+        "stage": stage,
+        "eligible": gate_result.eligible,
+        "fields_checked": list(gate_result.fields_checked),
+        "disallowed_fields": list(gate_result.disallowed_fields),
+        "unknown_fields": list(gate_result.unknown_fields),
+        "reasons": list(gate_result.reasons),
+        "expression_sources": universe_sources,
+    }
 
 
 # ── dataset_build ────────────────────────────────────────────────────────
@@ -274,6 +542,50 @@ def handle_validation_dataset_build(context: StepExecutionContext) -> StepExecut
     )
     if profit_field:
         raw_field_exprs[profit_field] = f"Ref(${profit_field}, 1)"
+
+    # PR 9b defense-in-depth + PR 9c IS-stage mapping (2026-05-28, GPT 5.5
+    # Pro round-5 review): the resolver-time universe gate in
+    # handle_validation_object_resolver already validates the same field
+    # set, but this second check fires at the actual Qlib-load site so a
+    # future addition to raw_field_exprs (e.g. starting to load $ratio
+    # for northbound_required, or $revenue_q for revenue_floor) cannot
+    # bypass the field gate even if someone forgets to mirror the addition
+    # into _validate_prescription_universe_field_dependencies.
+    #
+    # PR 9c stage-mapping fix: ``stage = _gate_stage(context)`` returns
+    # ``"is_only"`` for the IS leg by default (steps.py:132), and the
+    # pre-PR-9c check ``if stage in {"formal_validation","oos_test","registry_publish"}``
+    # silently skipped the IS path. Since handle_validation_dataset_build
+    # is itself the formal-validation handler, the IS leg MUST map to
+    # ``formal_validation`` for field-gate purposes; the OOS leg keeps
+    # ``oos_test``. Everything else is sandbox/exploration and stays
+    # ungated.
+    field_gate_stage: str | None
+    if stage == "oos_test":
+        field_gate_stage = "oos_test"
+    elif stage == "is_only":
+        # Hypothesis-validation IS leg is still a formal stage for the
+        # field-status registry; map to formal_validation.
+        field_gate_stage = "formal_validation"
+    elif stage in {"formal_validation", "registry_publish"}:
+        field_gate_stage = stage
+    else:
+        # Sandbox / discovery stages — leave ungated. Currently this
+        # branch is unused because handle_validation_dataset_build is
+        # only wired into the hypothesis_validation profile, but we keep
+        # the mapping explicit for future profile additions.
+        field_gate_stage = None
+
+    if field_gate_stage is not None:
+        from src.research_orchestrator.release_gate import (
+            assert_field_dependencies_eligible,
+        )
+        assert_field_dependencies_eligible(
+            expressions=list(raw_field_exprs.values()),
+            stage=field_gate_stage,
+            artifact_label=f"{hypothesis.hypothesis_id}::dataset_build_raw_fields",
+        )
+
     raw_fields = QlibFieldProvider(qlib_dir=support.project_paths.qlib_dir).load_named_expressions(
         raw_field_exprs, start_date, end_date, stage=stage,
     )

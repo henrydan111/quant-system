@@ -1,0 +1,21 @@
+date: 2026-05-27
+dataset_id: moneyflow, hk_hold, margin_detail, stk_limit, stk_holdertrade
+from_status: quarantine (existing) / pending_review (stk_holdertrade)
+to_status: quarantine (unchanged) / pending_review (stk_holdertrade, new entry)
+reviewer: henrydan111
+evidence:
+  - "On-disk verification on data/qlib_data/features/000001_sz/ and 600000_sh/ shows moneyflow / hk_hold / margin_detail / stk_holdertrade fields are written with BARE column names (e.g. $net_mf_amount, $ratio, $rzye, $holdertrade_net_ratio), NOT under a dataset prefix."
+  - "Audit: only datasets in EVENT_LIKE_DAILY_DATASETS (top_list/top_inst/block_trade/cyq_perf) are namespaced — see src/data_infra/pit_backend.py:84-86 + CLAUDE.md §3 'Event-like daily endpoint namespacing'."
+  - "Pre-PR-9a field_status.yaml declared `field_prefixes: [$moneyflow_, $hk_hold_, $northbound_, $margin_detail_, $margin_]` which match NOTHING actually in the provider. The conservative `unknown_field_policy[formal_validation]=fail` still blocked formal-stage use of these fields, so safety was preserved, but the diagnostic message said `unknown_field` rather than the dataset-specific quarantine reason."
+notes: |
+  No actual status change — every dataset retains its existing seed status.
+  This entry is a coverage fix: PR 9a replaced the unmatched prefixes with
+  explicit `fields:` lists drawn from the live Qlib provider so the
+  field-dependency gate names the dataset cleanly when it blocks a factor.
+
+  stk_holdertrade is a NEW entry (not in the 2026-05-26 seed) covering the
+  custom aggregator output (`_materialize_stk_holdertrade`). Its sibling
+  alpha endpoints (top_list/top_inst/block_trade/cyq_perf) are
+  pending_review; stk_holdertrade joins them under the same status.
+related_findings_id: null
+related_pr: pr9a-fail-closed-resolver-compat
