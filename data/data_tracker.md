@@ -122,7 +122,7 @@ Binary data converted from Parquet for Qlib's backtesting and factor research en
 
 ## 8. Phase 3: Factor Research Data (audited 2026-03-30)
 
-Additional data sources downloaded via `init_factor_data.py` for the 191-factor research catalog.
+Additional data sources downloaded via `init_factor_data.py` for the 171-factor research catalog.
 
 ### Per-Stock Data (Fundamental)
 
