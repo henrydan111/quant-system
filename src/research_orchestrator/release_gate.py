@@ -427,6 +427,225 @@ def assert_field_dependencies_eligible(
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Promotion gate — independent PIT-correct reproduction (PIT-prevention step 11)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The raw-ledger bypass that caused the v33/val_heavy lookahead is now contained
+# (loader chokepoint + lint + QA gate). The remaining decision-layer control:
+# no strategy may receive a PRIVILEGED label unless its signal/factor inputs were
+# **independently reconstructed through a PIT-correct data path**. A sandbox-loader
+# panel — even the parity-verified pit_research_loader — is NOT sufficient: it is
+# typically the primary path, and "independent" means a different, audited path
+# whose disagreement would expose a path-specific bug. (Ref:
+# Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md §6.7.)
+
+# Privileged REGISTRY STATUSES (the typed-registry `set_status` vocabulary) vs
+# forward-looking PROMOTION LABELS — kept distinct (GPT PR #22 review): "approved"
+# is a real registry status whose transition is enforced by
+# StrategyRegistryStore.set_status; the labels are manual/external deployment tags.
+PRIVILEGED_REGISTRY_STATUSES = frozenset({"approved"})
+PRIVILEGED_PROMOTION_LABELS = frozenset(
+    {"champion", "deployment_candidate", "live_candidate"}
+)
+# Sources that count as an INDEPENDENT PIT-correct reconstruction of the signal
+# panel. Anything else (None, "", "sandbox", "pit_research_loader", ...) fails.
+VALID_INDEPENDENT_REPRODUCTION_SOURCES = frozenset(
+    {
+        "qlib_windowed_features",  # formal provider path via the windowed wrapper
+        "joinquant_native_pit",    # JoinQuant get_fundamentals(date=) + pubDate filtering
+        "audited_pit_source",      # another audited PIT source — REQUIRES source_name + audit_artifact
+    }
+)
+# The v5 §6.7 promotion-artifact checks REQUIRED for a privileged promotion —
+# each must be explicitly "passed". Fail-closed: a MISSING key fails (a promotion
+# artifact must positively attest every check, not omit it).
+_REQUIRED_PASSED_CHECKS = (
+    "unsafe_pit_dates_lint",
+    "synthetic_lookahead_canary",
+    "restatement_canary",
+    "q0_canary_multiperiod",
+    "q0_canary_stateful_restatement",
+    "q0_canary_missing_field",
+    "availability_assertion",
+)
+
+
+class PromotionGateError(RuntimeError):
+    """A privileged promotion status/label lacks valid independent-reproduction evidence."""
+
+
+@dataclass(frozen=True)
+class PromotionGateResult:
+    """Decision on whether a strategy may carry a privileged registry status or
+    promotion label. Exploratory statuses/labels are always eligible."""
+    status: str
+    label: str
+    privileged: bool
+    reproduction_source: str | None
+    eligible: bool
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _is_privileged(status: str | None, label: str | None) -> bool:
+    return (
+        (status or "").strip().lower() in PRIVILEGED_REGISTRY_STATUSES
+        or (label or "").strip().lower() in PRIVILEGED_PROMOTION_LABELS
+    )
+
+
+def evaluate_promotion_eligibility(
+    *,
+    status: str | None = None,
+    label: str | None = None,
+    reproduction_source: str | None = None,
+    reproduction_evidence: Mapping[str, Any] | None = None,
+) -> PromotionGateResult:
+    """Core source-level check: a privileged ``status`` (e.g. registry "approved")
+    OR ``label`` (champion/deployment_candidate/live_candidate) requires
+    ``reproduction_source`` ∈ VALID_INDEPENDENT_REPRODUCTION_SOURCES. The
+    ``audited_pit_source`` source additionally requires a named source + audit
+    artifact in ``reproduction_evidence``."""
+    status_norm = (status or "").strip().lower()
+    label_norm = (label or "").strip().lower()
+    privileged = _is_privileged(status, label)
+    src = (reproduction_source or "").strip()
+    ev = reproduction_evidence or {}
+    reasons: list[str] = []
+    if privileged:
+        if not src:
+            reasons.append(
+                "privileged promotion requires an independent PIT-correct reproduction "
+                "source; none supplied"
+            )
+        elif src not in VALID_INDEPENDENT_REPRODUCTION_SOURCES:
+            reasons.append(
+                f"reproduction source '{src}' is not an INDEPENDENT PIT-correct path "
+                f"(a sandbox/loader panel is insufficient). Allowed: "
+                f"{sorted(VALID_INDEPENDENT_REPRODUCTION_SOURCES)}"
+            )
+        elif src == "audited_pit_source" and not (
+            isinstance(ev, Mapping) and ev.get("source_name") and ev.get("audit_artifact")
+        ):
+            reasons.append(
+                "audited_pit_source requires a named 'source_name' + 'audit_artifact' in "
+                "independent_reproduction evidence (a bare magic string is insufficient)"
+            )
+    return PromotionGateResult(
+        status=status_norm, label=label_norm, privileged=privileged,
+        reproduction_source=reproduction_source,
+        eligible=len(reasons) == 0, reasons=tuple(reasons),
+    )
+
+
+def evaluate_promotion_artifact(
+    artifact: Mapping[str, Any] | None,
+    *,
+    current_git_sha: str | None = None,
+) -> PromotionGateResult:
+    """Evaluate the full v5 §6.7 promotion artifact: source + lint/canary/parity
+    statuses + clean git state. For a privileged promotion, fails unless the
+    independent reproduction is valid AND ``unsafe_pit_dates_lint``=="passed" AND
+    ``live_provider_parity`` is "passed" (or a legal "not_required_for_label" with
+    NO pit_research_loader anywhere) AND ``dirty_tree`` is not True AND (when
+    ``current_git_sha`` is supplied) ``git_sha`` matches."""
+    cfg = artifact or {}
+    status = cfg.get("promotion_status")
+    label = cfg.get("promotion_label")
+    repro = cfg.get("independent_reproduction") if isinstance(cfg.get("independent_reproduction"), Mapping) else {}
+    source = repro.get("source")
+    base = evaluate_promotion_eligibility(
+        status=status, label=label, reproduction_source=source, reproduction_evidence=repro,
+    )
+    reasons: list[str] = list(base.reasons)
+    if base.privileged:
+        for key in _REQUIRED_PASSED_CHECKS:
+            if cfg.get(key) != "passed":
+                reasons.append(f"{key} != 'passed' (got {cfg.get(key)!r}); required for privileged promotion")
+        # live_provider_parity may be 'not_required_for_label' ONLY if NO
+        # pit_research_loader panel entered the primary OR reproduction path.
+        used_loader = (
+            bool(cfg.get("primary_used_pit_research_loader"))
+            or bool(cfg.get("reproduction_used_pit_research_loader"))
+            or bool(repro.get("used_pit_research_loader"))
+            or source == "pit_research_loader"
+        )
+        lpp = cfg.get("live_provider_parity")
+        if lpp == "not_required_for_label":
+            if used_loader:
+                reasons.append(
+                    "live_provider_parity='not_required_for_label' is illegal: a "
+                    "pit_research_loader panel entered the primary or reproduction path"
+                )
+        elif lpp != "passed":
+            reasons.append(f"live_provider_parity != 'passed' (got {lpp!r})")
+        # Fail-closed on clean-state evidence: dirty_tree MUST be explicitly False.
+        if cfg.get("dirty_tree") is not False:
+            reasons.append(
+                f"dirty_tree must be explicitly false for privileged promotion (got {cfg.get('dirty_tree')!r})"
+            )
+        # When a current SHA is supplied, the artifact MUST carry a matching git_sha.
+        if current_git_sha is not None:
+            git_sha = cfg.get("git_sha")
+            if not git_sha:
+                reasons.append("git_sha is required when current_git_sha is supplied")
+            elif git_sha != current_git_sha:
+                reasons.append(f"git_sha {git_sha!r} != current {current_git_sha!r}")
+    return PromotionGateResult(
+        status=base.status, label=base.label, privileged=base.privileged,
+        reproduction_source=source, eligible=len(reasons) == 0, reasons=tuple(reasons),
+    )
+
+
+# Back-compat thin reader (now delegates to the full artifact evaluator).
+def evaluate_promotion_from_artifact(
+    artifact_config: Mapping[str, Any] | None,
+) -> PromotionGateResult:
+    return evaluate_promotion_artifact(artifact_config)
+
+
+def assert_promotion_eligible(
+    *,
+    status: str | None = None,
+    label: str | None = None,
+    reproduction_source: str | None = None,
+    reproduction_evidence: Mapping[str, Any] | None = None,
+    artifact_label: str = "strategy",
+) -> PromotionGateResult:
+    """Strict source-level check — raises :class:`PromotionGateError` on an
+    ineligible privileged status/label."""
+    result = evaluate_promotion_eligibility(
+        status=status, label=label, reproduction_source=reproduction_source,
+        reproduction_evidence=reproduction_evidence,
+    )
+    if not result.eligible:
+        raise PromotionGateError(
+            f"Promotion gate blocked {artifact_label} (status={result.status!r} "
+            f"label={result.label!r}): {list(result.reasons)}"
+        )
+    return result
+
+
+def assert_promotion_artifact_eligible(
+    artifact: Mapping[str, Any] | None,
+    *,
+    current_git_sha: str | None = None,
+    artifact_label: str = "strategy",
+) -> PromotionGateResult:
+    """Strict full-artifact check — raises on any failed evidence requirement.
+    This is what enforces a privileged registry status transition."""
+    result = evaluate_promotion_artifact(artifact, current_git_sha=current_git_sha)
+    if not result.eligible:
+        raise PromotionGateError(
+            f"Promotion gate blocked {artifact_label} (status={result.status!r} "
+            f"label={result.label!r}): {list(result.reasons)}"
+        )
+    return result
+
+
 def run_release_gate(
     *,
     gate_root: Path,
