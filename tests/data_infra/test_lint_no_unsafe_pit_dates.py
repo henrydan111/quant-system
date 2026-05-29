@@ -52,14 +52,146 @@ def test_provider_metadata_is_not_flagged():
     assert pit002 == []
 
 
-def test_pit001_warns_on_date_stringify(tmp_path):
+def test_pit001_flags_date_stringify(tmp_path):
     p = _write(tmp_path, "w.py",
                'df["effective_date"] = df["effective_date"].astype(str)\n'
                'df["trade_date"].dt.strftime("%Y%m%d")\n'
-               'df["roa"] = df["roa"].astype(str)\n')  # non-date col -> not warned
+               'df["roa"] = df["roa"].astype(str)\n')  # non-date col -> not flagged
     _, pit001 = lint.scan_file(p)
-    lines = {ln for ln, _ in pit001}
+    lines = {ln for ln, _, _ in pit001}
     assert 1 in lines and 2 in lines and 3 not in lines
+
+
+def test_pit001_severity_is_column_aware(tmp_path):
+    # FUNDAMENTAL date column (dashed-ISO source) -> ERROR; trade_date -> warning.
+    p = _write(tmp_path, "sev.py",
+               'a = df["effective_date"].astype(str)\n'   # fundamental -> error
+               'b = df["ann_date"].map(str)\n'            # fundamental -> error
+               'c = df["trade_date"].astype(str)\n'       # market index -> warning
+               'd = df["f_ann_date"].dt.strftime("%Y%m%d")\n')  # fundamental -> error
+    _, pit001 = lint.scan_file(p)
+    sev = {ln: s for ln, _, s in pit001}
+    assert sev == {1: "error", 2: "error", 3: "warning", 4: "error"}
+
+
+def test_pit001_datetime_as_string_flagged(tmp_path):
+    p = _write(tmp_path, "npas.py",
+               'import numpy as np\n'
+               'x = np.datetime_as_string(df["ann_date"])\n')
+    _, pit001 = lint.scan_file(p)
+    assert any(s == "error" for _, _, s in pit001)
+
+
+def test_pit001_bare_noqa_does_not_suppress(tmp_path):
+    # A REASONLESS "# noqa: unsafe-pit-dates" must NOT suppress — a structured
+    # reason is required so every suppression is self-documenting.
+    p = _write(tmp_path, "bare.py",
+               'a = df["effective_date"].astype(str)  # noqa: unsafe-pit-dates\n')
+    _, pit001 = lint.scan_file(p)
+    assert [(ln, sev) for ln, _, sev in pit001] == [(1, "error")]
+
+
+def test_pit001_reasoned_noqa_suppresses(tmp_path):
+    # A reason-carrying noqa suppresses; the next (un-annotated) line is still flagged.
+    p = _write(tmp_path, "reasoned.py",
+               'a = df["effective_date"].astype(str)  # noqa: unsafe-pit-dates[PIT001] reason: compact market-date export only\n'
+               'b = df["ann_date"].astype(str)\n')  # still flagged
+    _, pit001 = lint.scan_file(p)
+    lines = {ln for ln, _, _ in pit001}
+    assert lines == {2}
+
+
+def test_pit001_reasoned_noqa_without_tag_suppresses(tmp_path):
+    # The [PIT001] tag is optional; "reason:" + a real reason is what matters.
+    p = _write(tmp_path, "reasoned2.py",
+               'a = df["ann_date"].astype(str)  # noqa: unsafe-pit-dates reason: audited safe export path\n')
+    _, pit001 = lint.scan_file(p)
+    assert pit001 == []
+
+
+def test_pit001_noqa_does_not_rescue_pit002(tmp_path):
+    # The PIT001 reason-noqa never suppresses a PIT002 raw-ledger read on the same line.
+    p = _write(tmp_path, "mixed.py",
+               'a = pd.read_parquet("data/pit_ledger/x.parquet")  # noqa: unsafe-pit-dates reason: I really want this\n')
+    pit002, _ = lint.scan_file(p)
+    assert len(pit002) == 1  # PIT002 still fires
+
+
+def test_scan_notebook_flags_ledger_read():
+    """A code cell that reads the raw ledger is a PIT002 violation; a markdown
+    cell mentioning the ledger is not."""
+    import json as _json
+    nb = {
+        "cells": [
+            {"cell_type": "markdown", "source": ["see data/pit_ledger/ for the raw tables\n"]},
+            {"cell_type": "code", "source": ["%matplotlib inline\n",
+                                              "df = pd.read_parquet('data/pit_ledger/indicators/x.parquet')\n"]},
+            {"cell_type": "code", "source": ["x = df['effective_date'].astype(str)\n"]},
+        ],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "nb.ipynb"
+        p.write_text(_json.dumps(nb), encoding="utf-8")
+        pit002, pit001 = lint.scan_notebook(p)
+    assert len(pit002) == 1                       # only the code-cell ledger read
+    assert any(s == "error" for _, _, s in pit001)  # fundamental-date stringify in a code cell
+
+
+def test_scan_notebook_flags_ledger_in_magic_and_shell_lines():
+    """Executable %magic / !shell lines that read the raw ledger must NOT slip
+    past the magic-strip — they are real ledger reads, not prose."""
+    import json as _json, tempfile
+    nb = {
+        "cells": [
+            {"cell_type": "code", "source": ['%time df = pd.read_parquet("data/pit_ledger/indicators/x.parquet")\n']},
+            {"cell_type": "code", "source": ['!python -c "import pandas as pd; pd.read_parquet(\'data/pit_ledger/indicators/x.parquet\')"\n']},
+            {"cell_type": "code", "source": ['# %fake data/pit_ledger comment in a code line is a comment, not flagged\n', 'y = 1\n']},
+        ],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "nb.ipynb"
+        p.write_text(_json.dumps(nb), encoding="utf-8")
+        pit002, _ = lint.scan_notebook(p)
+    # Cell 0 (%time) and cell 1 (!python) are both real ledger reads; cell 2 is a comment.
+    assert len(pit002) == 2
+
+
+def test_scan_notebook_tolerates_non_notebook_json(tmp_path):
+    # Valid JSON that is not a notebook shape must not raise (returns empty).
+    p = _write(tmp_path, "weird.ipynb", '{"cells": "not-a-list"}')
+    assert lint.scan_notebook(p) == ([], [])
+    p2 = _write(tmp_path, "weird2.ipynb", '[1, 2, 3]')
+    assert lint.scan_notebook(p2) == ([], [])
+
+
+def test_iter_target_files_includes_notebooks(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "b.ipynb").write_text('{"cells": []}\n', encoding="utf-8")
+    (tmp_path / "c.txt").write_text("ignore me\n", encoding="utf-8")
+    found = {p.name for p in lint._iter_target_files([tmp_path])}
+    assert found == {"a.py", "b.ipynb"}
+
+
+def _run_main(monkeypatch, *targets, quiet=True):
+    argv = ["lint", *[str(t) for t in targets]]
+    if quiet:
+        argv.append("--quiet-warnings")
+    monkeypatch.setattr("sys.argv", argv)
+    return lint.main()
+
+
+def test_main_exits_1_on_fundamental_stringify(tmp_path, monkeypatch):
+    _write(tmp_path, "bad.py", 'x = df["ann_date"].astype(str)\n')
+    assert _run_main(monkeypatch, tmp_path) == 1
+
+
+def test_main_exits_0_on_trade_date_only(tmp_path, monkeypatch):
+    # trade_date stringify is a WARNING only -> exit 0 (clean).
+    _write(tmp_path, "ok.py", 'x = df["trade_date"].astype(str)\n')
+    assert _run_main(monkeypatch, tmp_path) == 0
 
 
 def test_allowlist_valid(tmp_path):
