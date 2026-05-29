@@ -159,8 +159,13 @@ def test_pit_lookahead_legacy_archive_not_referenced_by_live_code() -> None:
     """
     import re
 
-    archive_path_token = "archive/pit_lookahead_legacy_2026_05"
+    archive_path_token = "archive/pit_lookahead_legacy_2026_05"      # slash path ref
+    archive_dotted_token = "archive.pit_lookahead_legacy_2026_05"    # dotted package import
     sandbox_import = re.compile(r"^[ \t]*(?:from|import)[ \t]+sandbox_v\w*", re.MULTILINE)
+    # dynamic references: importlib.import_module("sandbox_v..."), runpy, subprocess.
+    # Requires the bare module name in quotes; a quoted "...sandbox_v....py" path is
+    # caught by the archive path token, and prose like ``sandbox_v*`` is not matched.
+    sandbox_string = re.compile(r"""["']sandbox_v\w+["']""")
 
     failures: list[str] = []
     for root in ("src", "workspace"):
@@ -172,10 +177,10 @@ def test_pit_lookahead_legacy_archive_not_referenced_by_live_code() -> None:
                 continue
             text = py_file.read_text(encoding="utf-8", errors="replace")
             rel = py_file.relative_to(PROJECT_ROOT)
-            if sandbox_import.search(text):
-                failures.append(f"{rel}: imports a sandbox_v* module (invalidated/archived lineage)")
-            if archive_path_token in text:
-                failures.append(f"{rel}: path-references the pit_lookahead legacy archive")
+            if sandbox_import.search(text) or sandbox_string.search(text):
+                failures.append(f"{rel}: imports / dynamically references a sandbox_v* module (archived lineage)")
+            if archive_path_token in text or archive_dotted_token in text:
+                failures.append(f"{rel}: path/package-references the pit_lookahead legacy archive")
     if failures:
         pytest.fail(
             "Live code references the frozen PIT-lookahead legacy archive — that "

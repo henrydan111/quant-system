@@ -56,6 +56,26 @@ KNOWN_DATE_COLS = {
 }
 _FSTRING_MIDDLE = getattr(tokenize, "FSTRING_MIDDLE", None)
 
+# Sanctioned frozen-script archive ROOTS skipped during directory recursion.
+# Root-specific (NOT "any dir named archive") so a future src/foo/archive/ or
+# workspace/research/archive/ cannot silently escape the lint. New sanctioned
+# archives must be added here explicitly (reviewed).
+ARCHIVE_SKIP_ROOTS = (
+    PROJECT_ROOT / "workspace" / "scripts" / "archive" / "pit_lookahead_legacy_2026_05",
+    PROJECT_ROOT / "workspace" / "scripts" / "archive" / "p1_jq_g5a2_investigation_2026_05",
+)
+
+
+def _is_skipped_archive(path: Path) -> bool:
+    rp = path.resolve()
+    for root in ARCHIVE_SKIP_ROOTS:
+        try:
+            rp.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
 
 class AllowlistError(RuntimeError):
     """Malformed, expired, or dangling allowlist entry."""
@@ -186,10 +206,12 @@ def _iter_python_files(targets: Iterable[Path]) -> Iterable[Path]:
             yield p  # explicit file: scanned even under archive/ (intentional override)
         elif p.is_dir():
             for f in sorted(p.rglob("*.py")):
-                # Skip frozen historical archives during directory recursion.
-                # Archived scripts are not live code; test_dormant_module_boundaries.py
-                # enforces that no live src/ or workspace/ code references them.
-                if "archive" in f.parts:
+                # Skip ONLY the sanctioned frozen-archive roots (root-specific,
+                # NOT any dir named 'archive') so a future src/foo/archive/ or
+                # workspace/research/archive/ cannot escape the lint.
+                # test_dormant_module_boundaries.py enforces that no live src/ or
+                # workspace/ code references the sanctioned archive.
+                if _is_skipped_archive(f):
                     continue
                 yield f
 

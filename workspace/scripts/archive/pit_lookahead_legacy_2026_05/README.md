@@ -21,12 +21,19 @@ README is the tracked manifest** — the version-controlled record of what was
 archived, even though the dead code itself is not in git.
 
 ## Containment (committed enforcement)
-- `scripts/lint_no_unsafe_pit_dates.py` skips any `archive/` directory: these
-  scripts still contain raw `pit_ledger` reads and would otherwise trip PIT002.
+The committed mechanism is: **tracked manifest (this file) + gitignored local
+archive + root-specific lint skip + a live-reference architecture test** (NOT an
+"exact-path allowlist" — the dead scripts are not committed, so there is nothing
+to allowlist).
+- `.gitignore` ignores `workspace/scripts/archive/pit_lookahead_legacy_2026_05/*.py`
+  (this README stays tracked) so the dead lineage cannot be accidentally `git add`ed back.
+- `scripts/lint_no_unsafe_pit_dates.py` skips the **sanctioned archive roots only**
+  (`ARCHIVE_SKIP_ROOTS`, root-specific — a generic `archive/` dir elsewhere is still
+  linted): these scripts still contain raw `pit_ledger` reads and would otherwise trip PIT002.
 - `tests/architecture/test_dormant_module_boundaries.py::
-  test_pit_lookahead_legacy_archive_not_referenced_by_live_code` enforces that
-  no live `src/` or `workspace/` code imports `sandbox_v*` or path-references
-  this archive directory.
+  test_pit_lookahead_legacy_archive_not_referenced_by_live_code` enforces that no
+  live `src/` or `workspace/` code imports `sandbox_v*` (incl. dotted/dynamic forms)
+  or path-references this archive directory.
 
 ## Manifest (73 files)
 - `sandbox_v10_breadth.py`
