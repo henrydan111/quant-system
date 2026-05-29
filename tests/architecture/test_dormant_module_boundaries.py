@@ -146,6 +146,44 @@ def test_archive_directory_exists_and_has_d_class_scripts() -> None:
     )
 
 
+def test_pit_lookahead_legacy_archive_not_referenced_by_live_code() -> None:
+    """Live src/ and workspace/ code (outside any ``archive/``) must not import
+    a ``sandbox_v*`` module or path-reference the PIT-lookahead legacy archive.
+
+    The archived scripts (``workspace/scripts/archive/pit_lookahead_legacy_2026_05/``)
+    are the INVALIDATED ``build_pit_pivot`` lineage, kept locally/untracked. This
+    scans LIVE code so it enforces even on a fresh clone where the untracked
+    archive is absent. Precise patterns only — prose mentions of "sandbox_v*" in
+    docstrings/comments are allowed (e.g. pit_alignment_core's explanation of why
+    it exists); actual import statements and archive path references are not.
+    """
+    import re
+
+    archive_path_token = "archive/pit_lookahead_legacy_2026_05"
+    sandbox_import = re.compile(r"^[ \t]*(?:from|import)[ \t]+sandbox_v\w*", re.MULTILINE)
+
+    failures: list[str] = []
+    for root in ("src", "workspace"):
+        base = PROJECT_ROOT / root
+        if not base.exists():
+            continue
+        for py_file in base.rglob("*.py"):
+            if "archive" in py_file.parts:
+                continue
+            text = py_file.read_text(encoding="utf-8", errors="replace")
+            rel = py_file.relative_to(PROJECT_ROOT)
+            if sandbox_import.search(text):
+                failures.append(f"{rel}: imports a sandbox_v* module (invalidated/archived lineage)")
+            if archive_path_token in text:
+                failures.append(f"{rel}: path-references the pit_lookahead legacy archive")
+    if failures:
+        pytest.fail(
+            "Live code references the frozen PIT-lookahead legacy archive — that "
+            "lineage is invalidated; use src/data_infra/pit_research_loader.py:\n"
+            + "\n".join(failures)
+        )
+
+
 def test_workspace_scripts_outside_archive_carry_script_status_header() -> None:
     """Every workspace/scripts/*.py that the PR 2 audit classified must
     carry the PR 7 SCRIPT_STATUS header block (or be in archive/).

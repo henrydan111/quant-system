@@ -183,9 +183,15 @@ def _iter_python_files(targets: Iterable[Path]) -> Iterable[Path]:
         if not p.is_absolute():
             p = PROJECT_ROOT / p
         if p.is_file() and p.suffix == ".py":
-            yield p
+            yield p  # explicit file: scanned even under archive/ (intentional override)
         elif p.is_dir():
-            yield from sorted(p.rglob("*.py"))
+            for f in sorted(p.rglob("*.py")):
+                # Skip frozen historical archives during directory recursion.
+                # Archived scripts are not live code; test_dormant_module_boundaries.py
+                # enforces that no live src/ or workspace/ code references them.
+                if "archive" in f.parts:
+                    continue
+                yield f
 
 
 def main() -> int:

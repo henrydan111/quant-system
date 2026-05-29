@@ -108,6 +108,20 @@ def test_allowlist_non_bool_permanent_raises(tmp_path):
         lint.load_allowlist(al)
 
 
+def test_archive_directories_skipped_in_recursion(tmp_path):
+    # Frozen archives are not live code: directory recursion must skip any path
+    # with an 'archive' component, while non-archive files are still scanned.
+    (tmp_path / "live.py").write_text(
+        'import pandas as pd\npd.read_parquet("data/pit_ledger/x.parquet")\n', encoding="utf-8")
+    arch = tmp_path / "archive" / "legacy"
+    arch.mkdir(parents=True)
+    (arch / "dead.py").write_text(
+        'import pandas as pd\npd.read_parquet("data/pit_ledger/x.parquet")\n', encoding="utf-8")
+    found = {p.name for p in lint._iter_python_files([tmp_path])}
+    assert "live.py" in found
+    assert "dead.py" not in found  # under archive/ -> skipped
+
+
 def test_committed_allowlist_loads():
     """The real committed allowlist must satisfy its own schema."""
     allowed = lint.load_allowlist()
