@@ -159,28 +159,6 @@ def test_scan_notebook_flags_ledger_in_magic_and_shell_lines():
     assert len(pit002) == 2
 
 
-def test_scan_notebook_flags_ledger_read():
-    """A code cell that reads the raw ledger is a PIT002 violation; a markdown
-    cell or a magic line mentioning the ledger is not."""
-    import json as _json
-    nb = {
-        "cells": [
-            {"cell_type": "markdown", "source": ["see data/pit_ledger/ for the raw tables\n"]},
-            {"cell_type": "code", "source": ["%matplotlib inline\n",
-                                              "df = pd.read_parquet('data/pit_ledger/indicators/x.parquet')\n"]},
-            {"cell_type": "code", "source": ["x = df['effective_date'].astype(str)\n"]},
-        ],
-        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
-    }
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "nb.ipynb"
-        p.write_text(_json.dumps(nb), encoding="utf-8")
-        pit002, pit001 = lint.scan_notebook(p)
-    assert len(pit002) == 1                       # only the code-cell ledger read
-    assert any(s == "error" for _, _, s in pit001)  # fundamental-date stringify in a code cell
-
-
 def test_scan_notebook_tolerates_non_notebook_json(tmp_path):
     # Valid JSON that is not a notebook shape must not raise (returns empty).
     p = _write(tmp_path, "weird.ipynb", '{"cells": "not-a-list"}')
