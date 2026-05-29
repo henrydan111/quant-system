@@ -14,13 +14,18 @@ Scenarios covered:
   2. Mismatched ``provider_build_id`` → drift reported.
   3. Mismatched ``calendar_policy_id`` → drift reported.
   4. Both mismatched → both reasons surfaced.
-  5. Legacy YAML without bindings → silently skipped.
+  5. Unbound YAML without an explicit ``binding_exempt`` marker →
+     ApprovalEvidenceConfigError (PR 10c). The ONLY skipped records are
+     those that declare ``binding_exempt: true`` + a non-empty reason.
   6. Missing manifest → FileNotFoundError raised.
   7. Missing approvals directory → empty result, no raise.
   8. Strict variant (:func:`assert_no_approval_evidence_drift`) raises
      ApprovalEvidenceDriftError with a precise diagnostic.
   9. Live registry smoke: the committed approval YAMLs do not drift
      against the committed provider_build.json.
+ 10. Fail-closed edge cases (PR 10a/10b/10c): partial bindings, null /
+     blank / non-string values, malformed / non-mapping YAML, both-absent
+     without exemption, and bound-plus-exempt contradiction all raise.
 """
 
 from __future__ import annotations
@@ -191,11 +196,11 @@ calendar_policy_id: frozen_20260227_system_build
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Edge cases — legacy YAML, missing files
+# Edge cases — unbound YAML (exempt vs. fail-closed), missing files
 # ─────────────────────────────────────────────────────────────────────────
 
 
-class TestLegacyYamlSkipped:
+class TestUnboundYamlContract:
     def test_yaml_without_bindings_and_without_exemption_raises(self, tmp_path: Path) -> None:
         """PR 10c: a YAML missing BOTH binding keys and lacking an explicit
         binding_exempt marker now FAILS closed. Pre-PR-10c this silently
@@ -334,10 +339,10 @@ class TestMalformedYamlFailsClosed:
         assert "as_list.yaml" in msg
         assert "mapping" in msg.lower()
 
-    def test_empty_yaml_treated_as_legacy_skip(self, tmp_path: Path) -> None:
-        """An empty YAML parses to None and would historically fail the
-        isinstance(dict) check. PR 10a raises (since None isn't a mapping)
-        rather than silently skipping."""
+    def test_empty_yaml_raises(self, tmp_path: Path) -> None:
+        """An empty YAML parses to None, which is not a mapping. PR 10a
+        raises (None isn't a dict) rather than silently skipping — an
+        empty governance file must not disappear from the scan."""
         approvals = tmp_path / "approvals"
         approvals.mkdir()
         _write_yaml(approvals / "empty.yaml", "")

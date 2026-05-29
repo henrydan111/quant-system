@@ -81,25 +81,43 @@ class ApprovalEvidenceDriftError(RuntimeError):
 
 
 class ApprovalEvidenceConfigError(RuntimeError):
-    """Raised by :func:`load_approval_bindings` on malformed approval YAMLs.
+    """Raised by :func:`load_approval_bindings` on malformed / fail-open
+    approval YAMLs.
 
-    PR 10a (post-PR-10 review): pre-PR-10a the scanner logged a warning
-    and silently skipped (a) YAMLs that failed to parse, (b) YAMLs whose
-    top level was not a mapping, and (c) YAMLs declaring exactly one of
-    ``provider_build_id`` / ``calendar_policy_id`` (treated as wildcard
-    on the missing axis). All three are fail-open paths for a governance
-    artifact and PR 10a converts them to hard failures. Legacy YAMLs
-    with BOTH binding keys absent are still silently skipped because
-    they predate the binding contract."""
+    The scanner fails closed on every fail-open path surfaced across the
+    PR 10a → PR 10c review rounds:
+
+      * YAML that fails to parse, or whose top level is not a mapping
+        (PR 10a).
+      * Exactly one of ``provider_build_id`` / ``calendar_policy_id``
+        declared — a partial binding (PR 10a).
+      * Either binding value null / empty / blank / non-string (PR 10b).
+      * BOTH binding keys absent WITHOUT an explicit
+        ``binding_exempt: true`` + non-empty ``binding_exempt_reason``
+        marker (PR 10c) — this is the final contract: a record with no
+        binding must declare its exemption explicitly, so a new approval
+        that accidentally omits both keys can no longer silently skip.
+      * BOTH binding keys present alongside ``binding_exempt: true`` — a
+        contradiction (PR 10c).
+
+    The ONLY records skipped from the drift scan are those that explicitly
+    declare ``binding_exempt: true`` with a non-empty reason (non-provider-
+    bound administrative entries such as coverage / diagnostic fixes)."""
 
 
 @dataclass(frozen=True)
 class ApprovalBinding:
     """A single approval YAML's binding to a provider build + calendar policy.
 
-    Fields with ``None`` values mean the source YAML did not declare that
-    key. Bindings with BOTH declared values None are filtered out by
-    :func:`load_approval_bindings` (treated as legacy / pre-contract).
+    Post-PR-10c invariant: every :class:`ApprovalBinding` that
+    :func:`load_approval_bindings` RETURNS carries non-empty (stripped)
+    string values for both ``declared_provider_build_id`` and
+    ``declared_calendar_policy_id``. A YAML missing either key, or with a
+    null / blank / non-string value, never produces a binding — it either
+    raises :class:`ApprovalEvidenceConfigError` or (for an explicitly
+    ``binding_exempt: true`` record) is skipped entirely. The ``| None``
+    on the field annotations is the schema floor, not a state the loader
+    ever emits.
     """
 
     approval_id: str
@@ -276,9 +294,10 @@ def load_approval_bindings(
                 f"Approval YAML at {path} declares {present!r} but not "
                 f"{missing!r}. Approval evidence must bind BOTH "
                 "provider_build_id AND calendar_policy_id (with non-empty "
-                "string values), or omit BOTH keys as a legacy approval. "
-                f"Add {missing!r} or remove {present!r} to mark this "
-                "approval legacy."
+                "string values), OR omit both keys and set "
+                "'binding_exempt: true' with a 'binding_exempt_reason' for a "
+                f"non-provider-bound record. Add {missing!r}, or remove "
+                f"{present!r} and add the binding_exempt marker."
             )
         # PR 10c: both keys present AND binding_exempt: true is
         # contradictory — a provider-bound approval cannot be exempt.
@@ -305,7 +324,8 @@ def load_approval_bindings(
                     f"Approval YAML at {path} declares {key!r} but its value "
                     f"is null / empty / blank / non-string ({value!r}). "
                     "Approval evidence must bind both axes to non-empty "
-                    "string values, or omit BOTH keys as a legacy approval. "
+                    "string values, OR omit both keys and set "
+                    "'binding_exempt: true' with a 'binding_exempt_reason'. "
                     "A value-blanked binding cannot silently skip the "
                     "drift check."
                 )
