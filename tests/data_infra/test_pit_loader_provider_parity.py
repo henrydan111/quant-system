@@ -32,9 +32,14 @@ _needs_provider = pytest.mark.skipif(
     reason="Qlib provider absent (live-local only)",
 )
 
-# Plain cumulative indicator ratios that (a) are field-registry-approved and
-# (b) exist as provider bins, and do NOT need single-quarter derivation.
-PARITY_FIELDS = ["roa", "roe", "netprofit_margin"]
+# Field-registry-approved indicator columns that exist as provider bins.
+# Includes the five added 2026-05-29 (approvals/2026-05-29_indicators_loader_qfields.yaml),
+# incl. single-quarter q_roe/q_dt_roe — Tushare supplies those already
+# single-quarter, so provider and kernel both store them at q0 (no derivation).
+PARITY_FIELDS = [
+    "roa", "roe", "netprofit_margin",
+    "roe_waa", "roe_dt", "q_roe", "q_dt_roe", "dt_netprofit_yoy",
+]
 PARITY_TS = ["600519.SH", "000001.SZ"]  # dotted (loader) <-> underscore (provider)
 START, END = "20170101", "20191231"
 
