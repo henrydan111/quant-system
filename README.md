@@ -40,7 +40,7 @@ and a pre-registered hypothesis lifecycle (IS → seal → OOS).
 | Module | Responsibility |
 |---|---|
 | [src/data_infra/](src/data_infra/) | Tushare ingestion, Parquet storage, normalization, PIT ledger, Qlib backend builder, verification |
-| [src/alpha_research/](src/alpha_research/) | Factor library (191-catalog + composites), factor evaluation toolkit, theme strategy framework, model zoo, MLflow tracker, registries |
+| [src/alpha_research/](src/alpha_research/) | Factor library (171 named factors: 147 base + 4 industry-relative + 20 Layer-2 composites), factor evaluation toolkit, theme strategy framework, model zoo, MLflow tracker, registries |
 | [src/backtest_engine/](src/backtest_engine/) | `VectorizedBacktester` (Qlib wrapper for fast screening) and `EventDrivenBacktester` (realistic A-share simulator with T+1, multi-tier limits, corporate actions, JoinQuant-parity defaults) |
 | [src/portfolio_risk/](src/portfolio_risk/) | `PortfolioOptimizer` (cvxpy), cost models, risk models |
 | [src/result_analysis/](src/result_analysis/) | Canonical metrics, `BacktestReport`, plotters |
