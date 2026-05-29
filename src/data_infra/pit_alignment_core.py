@@ -79,23 +79,38 @@ def _as_datetime(series: pd.Series) -> pd.Series:
 
 
 def _check_case_c(frame: pd.DataFrame, field: str) -> None:
-    """Raise on a true same-period value conflict (Case C). Restatements across
-    DIFFERENT effective_dates are NOT conflicts — only multiple rows sharing the
-    exact ``(ts_code, effective_date, end_date)`` with differing non-null values.
+    """Raise on a true same-period conflict (Case C). Restatements across
+    DIFFERENT effective_dates are NOT conflicts. A conflict is any group sharing
+    the exact ``(ts_code, effective_date, end_date)`` that either:
+
+    * carries >1 distinct non-null value, OR
+    * mixes null and non-null values (``[10.0, NaN]``).
+
+    The mixed null/non-null case MUST fail closed: the downstream stateful walk
+    uses last-write-wins within a group, so a ``[10.0, NaN]`` group resolves to
+    10.0 or NaN depending on row order — exactly the silent, order-dependent
+    collapse this kernel exists to prevent. Resolving it correctly needs the
+    provider's dataset-specific canonicalization (not implemented here). Only
+    fully-identical duplicates (all the same value, or all NaN) are safe to
+    de-duplicate. Found via GPT 5.5 Pro PR #18 review.
     """
-    sub = frame[["ts_code", "effective_date", "end_date", field]].dropna(subset=[field])
-    if sub.empty:
-        return
-    nun = sub.groupby(["ts_code", "effective_date", "end_date"])[field].nunique()
-    conflict = nun[nun > 1]
-    if not conflict.empty:
-        ts, eff, end = conflict.index[0]
+    sub = frame[["ts_code", "effective_date", "end_date", field]]
+    grp = sub.groupby(["ts_code", "effective_date", "end_date"], sort=False)[field]
+    total = grp.size()
+    nonnull = grp.count()
+    ndistinct = grp.nunique()  # distinct non-null (dropna=True)
+    mixed = (nonnull > 0) & (nonnull < total)        # some null AND some non-null
+    conflict = (ndistinct > 1) | mixed
+    bad = conflict[conflict]
+    if not bad.empty:
+        ts, eff, end = bad.index[0]
         raise DuplicateConflictError(
             f"Case-C same-period conflict for field {field!r}: "
-            f"{int(len(conflict))} (ts_code, effective_date, end_date) group(s) carry "
-            f"conflicting non-null values (first: ts_code={ts}, effective_date={eff!r}, "
-            f"end_date={end!r}). Resolving these needs the provider's dataset-specific "
-            f"canonicalization (not implemented in the kernel). Fail closed."
+            f"{int(bad.sum())} (ts_code, effective_date, end_date) group(s) carry "
+            f"conflicting (differing non-null, or mixed null/non-null) values "
+            f"(first: ts_code={ts}, effective_date={eff!r}, end_date={end!r}). "
+            f"Resolving these needs the provider's dataset-specific canonicalization "
+            f"(not implemented in the kernel). Fail closed."
         )
 
 

@@ -43,7 +43,10 @@ from typing import Iterable
 
 import yaml
 
-DEFAULT_TARGETS = ("src", "workspace", "scripts")
+# v5 §6.3 scope: src + workspace (NOT scripts by default — scripts/ contains
+# this linter, whose detection literal is the token itself; scanning scripts/ is
+# opt-in via explicit args, and the linter is self-allowlisted besides).
+DEFAULT_TARGETS = ("src", "workspace")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ALLOWLIST_PATH = PROJECT_ROOT / "config" / "lint" / "unsafe_pit_dates_allowlist.yaml"
 LEDGER_TOKEN = "pit_ledger"

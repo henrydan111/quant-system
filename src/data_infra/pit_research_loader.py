@@ -22,6 +22,22 @@ same contract as ``provider_metadata.stock_basic_bounds``) because direct PIT-
 ledger consumers bypass the instruments-sidecar guard and must apply it
 themselves. Both return provider-compatible **q0 aliases** only (slot-depth
 fields like ``roa_q1`` are out of scope for v1).
+
+Duplicate policy (deliberate, documented per GPT 5.5 Pro review — "Option B"):
+the **kernel** default is fail-closed ``"error"``, but the **public loader**
+defaults to ``"provider_stateful_q0"`` because multi-fiscal-period visibility
+(Case A) is the normal, provider-equivalent path for fundamentals — erroring by
+default would make the loader unusable. A true same-period conflict (Case C)
+still fails closed under both. "Fail-closed default" therefore means: kernel =
+error; loader = provider_stateful_q0 (Case A) + hard-fail on Case C.
+
+Field governance is fail-closed: a requested field must POSITIVELY resolve in
+the field registry (unknown or quarantined fields are refused even at
+``sandbox_screening``). NOTE (registry-coverage gap, 2026-05-29): the indicator
+columns ``roe_waa, q_roe, q_dt_roe, roe_dt, dt_netprofit_yoy`` are not yet listed
+in ``field_status.yaml`` and are therefore refused by this loader until
+registered (a governed follow-up). This is intentional — the v33/val_heavy
+champions consumed those un-governed fields, which this loader now refuses.
 """
 from __future__ import annotations
 
@@ -111,19 +127,38 @@ def _validate_sim_dates(sim_dates: Sequence[str], calendar: pd.DatetimeIndex) ->
     return idx
 
 
+def _normalize_field(f: str) -> str:
+    """Return the bare ledger column name, stripping a single leading ``$`` so
+    ``"roa"`` and ``"$roa"`` are the SAME identity (no ``"$$roa"`` bug)."""
+    s = str(f)
+    s = s[1:] if s.startswith("$") else s
+    if not s or s.startswith("$"):
+        raise PitResearchLoaderError(f"invalid field name {f!r}")
+    return s
+
+
 def _validate_fields(fields: list[str], stage: str) -> None:
+    """Fail-closed field governance for the sanctioned loader.
+
+    Unlike the general factor-expression path (whose ``unknown_field_policy``
+    only *warns* in sandbox), the sanctioned raw PIT loader requires a POSITIVE
+    registry match: a field that is unknown OR not allowed at ``stage`` is
+    refused — even in ``sandbox_screening``. ``fields`` are bare names already
+    normalized by :func:`_normalize_field`; we resolve the ``$``-prefixed token
+    so a bare name cannot bypass governance by dropping the ``$``.
+    """
     reg = load_field_registry()
     disallowed: list[str] = []
     for f in fields:
-        # Prepend '$' so a bare ledger field resolves to the SAME governed
-        # identity as the Qlib token '$roa' — a raw field cannot bypass
-        # field-status governance merely by lacking the '$' prefix.
-        res = reg.resolve_field(f"${f}", stage)
-        if not res.allowed:
-            disallowed.append(f"${f} ({res.reason})")
+        token = f"${f}"
+        res = reg.resolve_field(token, stage)
+        if res.is_unknown or not res.allowed:
+            disallowed.append(f"{token} ({res.reason})")
     if disallowed:
         raise FieldApprovalError(
-            f"field(s) not allowed at stage={stage!r}: {disallowed}"
+            f"field(s) not PIT-approved at stage={stage!r} — the sanctioned loader "
+            f"requires a positive field-registry match (unknown/quarantined fields are "
+            f"refused, even in sandbox): {disallowed}"
         )
 
 
@@ -152,7 +187,7 @@ def _load(
     stage: str,
     instruments: Sequence[str] | None,
 ) -> dict[str, pd.DataFrame]:
-    fields = list(fields)
+    fields = [_normalize_field(f) for f in fields]
     if not fields:
         raise PitResearchLoaderError("fields is empty")
     calendar = _trading_calendar()

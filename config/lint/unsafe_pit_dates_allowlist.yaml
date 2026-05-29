@@ -25,3 +25,13 @@
     is the source of truth the research loader is parity-tested against.
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
+
+- path: scripts/lint_no_unsafe_pit_dates.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    The linter implementation OWNS the literal detection token ("pit_ledger");
+    self-allowlisted so an explicit scan of scripts/ does not flag the tool
+    itself.
+  permanent: true
+  link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md

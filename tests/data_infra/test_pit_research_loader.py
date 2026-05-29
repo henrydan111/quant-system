@@ -74,6 +74,38 @@ def test_field_governance_blocks_quarantined_field_at_formal_stage():
         load_pit_asof_panel(["net_mf_amount"], sim, instruments=["600519.SH"], stage="formal_validation")
 
 
+@_needs_ref
+def test_loader_rejects_unknown_field_even_at_sandbox():
+    # GPT PR#18 blocking-1: the sanctioned loader must fail closed on a
+    # registry-unknown field even at sandbox_screening (where the general
+    # unknown_field_policy merely warns).
+    cal = L._trading_calendar()
+    sim = [d.strftime("%Y%m%d") for d in cal if 20180101 <= int(d.strftime("%Y%m%d")) <= 20180201]
+    with pytest.raises(FieldApprovalError):
+        load_pit_asof_panel(["totally_fake_xyz"], sim, instruments=["600519.SH"])
+
+
+@_needs_ref
+def test_loader_rejects_quarantine_field_at_sandbox():
+    cal = L._trading_calendar()
+    sim = [d.strftime("%Y%m%d") for d in cal if 20180101 <= int(d.strftime("%Y%m%d")) <= 20180201]
+    with pytest.raises(FieldApprovalError):
+        load_pit_asof_panel(["net_mf_amount"], sim, instruments=["600519.SH"])
+
+
+@_needs_ledger
+def test_dollar_prefix_normalized_same_as_bare():
+    # GPT PR#18 smaller-note: "$roa" must behave identically to "roa" (no "$$roa").
+    cal = L._trading_calendar()
+    sim = [d.strftime("%Y%m%d") for d in cal if 20180101 <= int(d.strftime("%Y%m%d")) <= 20181231]
+    bare = load_pit_asof_panel(["roa"], sim, instruments=["600519.SH"])
+    dollar = load_pit_asof_panel(["$roa"], sim, instruments=["600519.SH"])
+    assert "roa" in bare and "roa" in dollar  # $-prefix normalized to bare key
+    b = bare["roa"]["600519.SH"].to_numpy()
+    d = dollar["roa"]["600519.SH"].to_numpy()
+    assert np.allclose(b, d, equal_nan=True)
+
+
 @_needs_ledger
 def test_vectorized_bounds_match_canonical_helper():
     # The loader's precomputed bounds map must equal provider_metadata.stock_basic_bounds

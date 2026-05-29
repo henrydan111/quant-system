@@ -83,6 +83,27 @@ def test_case_c_same_period_conflict_fails_closed():
         _q0(rows)
 
 
+def test_case_c_nan_vs_value_conflict_fails_closed():
+    # Mixed null/non-null for the SAME (ts, eff, end, field): last-write-wins
+    # would make q0 order-dependent (10.0 or NaN). Must fail closed. (GPT PR#18)
+    rows = [
+        ("W", "2020-05-01", "2020-03-31", 10.0),
+        ("W", "2020-05-01", "2020-03-31", np.nan),
+    ]
+    with pytest.raises(DuplicateConflictError):
+        _q0(rows)
+
+
+def test_identical_duplicate_is_safe_not_conflict():
+    # Fully-identical same-period duplicate (same value) is safe to de-dup.
+    rows = [
+        ("U", "2020-05-01", "2020-03-31", 10.0),
+        ("U", "2020-05-01", "2020-03-31", 10.0),
+    ]
+    w = _q0(rows)  # must NOT raise
+    assert _val(w, "2020-06-01", "U") == 10.0
+
+
 def test_error_policy_refuses_same_day_multi_period():
     # Annual + Q1 disclosed on the SAME effective_date (real Case A, the 29% pool).
     rows = [
