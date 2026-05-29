@@ -1,0 +1,76 @@
+name: CI (PIT-prevention gate)
+
+# Merge-time safety net for the PIT-lookahead prevention plan (v5 §6.4).
+#
+# This workflow is deliberately OFFLINE: the quant data (Tushare raw, the Qlib
+# provider tree, data/pit_ledger/) is gitignored and never present on a runner,
+# so CI runs only the PIT lints plus a curated set of tests whose entire
+# transitive import closure needs nothing heavier than pandas/numpy/pyarrow/yaml.
+# Tests that require the ledger or provider are skipif-guarded and skip cleanly
+# here; this catches PIT regressions (date-stringify, raw-ledger reads, promotion
+# without independent reproduction, factor-library lookahead) at merge time —
+# the local `scripts/run_daily_qa.py` gate stays the full-data complement.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# A newer push to the same branch/PR cancels the older in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  offline-pit-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install minimal offline dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+
+      # --- PIT lints (mirror scripts/run_daily_qa.py invocations) ---------------
+      - name: PIT002/PIT001 lint (no unsafe ledger reads / date stringify)
+        run: python scripts/lint_no_unsafe_pit_dates.py src workspace --quiet-warnings
+
+      - name: Bare-D.features lint (formal reads must use the windowed wrapper)
+        run: python scripts/lint_no_bare_qlib_features.py src/
+
+      # --- Curated offline test selection ---------------------------------------
+      # Explicit list (not the whole suite) because most of tests/ needs the
+      # gitignored data dir. Every file below was verified offline-safe AND
+      # minimal-dependency in a throwaway venv holding ONLY requirements-ci.txt.
+      #
+      # Deliberately EXCLUDED: tests/data_infra/test_pit_loader_provider_parity.py.
+      # Its tests are skipif-guarded on the Qlib provider tree (absent in CI), so
+      # every case would skip here — zero coverage — and its fixture does
+      # `import qlib` (the parity oracle), which is not in the minimal dep set.
+      # That parity check runs locally via scripts/run_daily_qa.py instead.
+      #
+      # When you add a new offline-safe PIT test, add it here.
+      - name: Offline PIT-prevention test suite
+        run: >
+          python -m pytest -q
+          tests/data_infra/test_pit_alignment_core.py
+          tests/data_infra/test_pit_research_loader.py
+          tests/data_infra/test_lint_no_unsafe_pit_dates.py
+          tests/alpha_research/test_factor_library_pit_safety.py
+          tests/alpha_research/test_operator_expressions.py
+          tests/research_orchestrator/test_promotion_gate.py
+          tests/architecture/test_dormant_module_boundaries.py
