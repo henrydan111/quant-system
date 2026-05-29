@@ -1,0 +1,7 @@
+# Force LF on CI-critical files regardless of a contributor's core.autocrlf.
+# GitHub Actions runs on Linux; a CRLF in a `run:` block would append a stray
+# \r to every shell command and break the step. The repo blobs are already LF
+# (autocrlf=true normalized them); this makes that guarantee explicit.
+/.github/**/*.yml   text eol=lf
+/.github/**/*.yaml  text eol=lf
+/requirements-ci.txt text eol=lf
