@@ -77,7 +77,12 @@ def main() -> None:
             except Exception:
                 pass
     raw = pd.concat(chunks, ignore_index=True)
-    raw["trade_date"] = raw["trade_date"].astype(str)  # noqa: unsafe-pit-dates[PIT001] reason: trade_date display/index only, never joined to a dashed date
+    raw["trade_date"] = raw["trade_date"].astype(str)  # noqa: unsafe-pit-dates[PIT001] reason: compact market-date index only; NOT joined/unioned/ffilled against any fundamental effective_date
+    # Safe-stringify guard: these are compact YYYYMMDD market dates compared only
+    # against compact SIM_START/SIM_END and used as a pivot index — never mixed
+    # with a dashed fundamental effective_date (the original-bug pattern).
+    if not raw["trade_date"].str.fullmatch(r"\d{8}").all():
+        raise ValueError("daily trade_date must be compact YYYYMMDD")
     raw = raw[(raw["trade_date"] >= SIM_START) & (raw["trade_date"] <= SIM_END)]
     ret = raw.pivot_table(index="trade_date", columns="ts_code", values="pct_chg", aggfunc="first").sort_index() / 100.0
     pb = raw.pivot_table(index="trade_date", columns="ts_code", values="pb", aggfunc="first").sort_index()
@@ -149,6 +154,22 @@ def main() -> None:
     print("  path independently reproduces the weak de-contaminated profile.")
     print("  ERGONOMICS PROOF: build_pit_pivot replaced by one load_pit_signal_panel call;")
     print("  this script is PIT002-clean and consumes the PR#19-registered dt_netprofit_yoy.")
+
+    # ─── Leakage sentinel (NOT an optimization target). The original failure
+    # was that phantom numbers got recorded instead of quarantined. If the
+    # PIT-correct loader path ever reproduces phantom-like strength, that signals
+    # leakage or material semantics drift — fail loudly, do not print-and-pass.
+    # Threshold (30%) sits far above the true de-contaminated profile
+    # (OOS ~2-10%, WF ~0%) and far below the invalidated +81.9%/+82.4% phantom.
+    PHANTOM_GUARD = 0.30
+    if cagr_oos > PHANTOM_GUARD or wf_avg > PHANTOM_GUARD:
+        raise AssertionError(
+            f"val_heavy loader proof produced unexpectedly strong results "
+            f"(OOS CAGR={cagr_oos:.1%}, WF avg={wf_avg:.1%}) above the {PHANTOM_GUARD:.0%} "
+            f"phantom-leakage sentinel. The PIT-correct path should be WEAK; this likely "
+            f"indicates reintroduced lookahead or a semantics drift — investigate before "
+            f"recording any result."
+        )
 
 
 if __name__ == "__main__":
