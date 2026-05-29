@@ -129,25 +129,45 @@ def test_artifact_failed_canary_blocks():
 
 
 # ── enforced registry transition (the real call site) ───────────────────
+_FULL_OK_SHA = {**_FULL_OK, "git_sha": "abc123"}
+
+
+def test_strategy_set_status_approved_requires_current_git_sha(tmp_path):
+    # Even with full passing evidence, omitting current_git_sha must FAIL —
+    # the approval must be bound to a committed HEAD (GPT round-3).
+    store = StrategyRegistryStore(tmp_path)
+    with pytest.raises(PromotionGateError):
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence=_FULL_OK_SHA)  # current_git_sha omitted
+
+
 def test_strategy_set_status_approved_blocked_without_evidence(tmp_path):
     store = StrategyRegistryStore(tmp_path)
     # gate fires BEFORE the object lookup, so a missing object still raises the gate error
     with pytest.raises(PromotionGateError):
-        store.set_status(object_id="s1", status="approved", reason="promote")
+        store.set_status(object_id="s1", status="approved", reason="promote", current_git_sha="abc123")
     with pytest.raises(PromotionGateError):
-        store.set_status(object_id="s1", status="approved", reason="promote",
+        store.set_status(object_id="s1", status="approved", reason="promote", current_git_sha="abc123",
                          promotion_evidence={"independent_reproduction": {"source": "pit_research_loader"}})
 
 
-def test_strategy_set_status_approved_passes_gate_with_evidence(tmp_path):
+def test_strategy_set_status_approved_passes_gate_with_matching_sha(tmp_path):
     store = StrategyRegistryStore(tmp_path)
-    # valid evidence -> gate passes -> KeyError for the (absent) object proves we got PAST the gate
+    # full evidence + matching SHA -> gate passes -> KeyError for the absent object proves we got PAST it
     with pytest.raises(KeyError):
-        store.set_status(object_id="missing", status="approved", reason="promote", promotion_evidence=_FULL_OK)
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123")
+
+
+def test_strategy_set_status_approved_sha_mismatch_blocked(tmp_path):
+    store = StrategyRegistryStore(tmp_path)
+    with pytest.raises(PromotionGateError):
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence=_FULL_OK_SHA, current_git_sha="def456")
 
 
 def test_strategy_set_status_nonprivileged_not_gated(tmp_path):
     store = StrategyRegistryStore(tmp_path)
-    # a non-privileged status is NOT gated -> proceeds to lookup -> KeyError (not PromotionGateError)
+    # a non-privileged status is NOT gated (no current_git_sha needed) -> lookup -> KeyError
     with pytest.raises(KeyError):
         store.set_status(object_id="missing", status="rejected", reason="reject")
