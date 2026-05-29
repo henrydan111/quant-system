@@ -1,0 +1,27 @@
+# Allowlist for scripts/lint_no_unsafe_pit_dates.py (rule PIT002 = raw
+# data/pit_ledger/* read). This committed file is the ONLY sanctioned way to
+# exempt a path from PIT002 — there is NO inline `# noqa` escape hatch for raw
+# ledger reads (prevention plan v5 §6.4).
+#
+# Each entry requires: path, rule, owner, reason. Optional: permanent (bool),
+# expires (YYYY-MM-DD; required when permanent is false/absent), link.
+# The lint fails (exit 2) on a malformed entry, an entry whose path no longer
+# exists, or an expired entry.
+
+- path: src/data_infra/pit_research_loader.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Blessed sandbox loader — the ONLY sanctioned raw pit_ledger reader for
+    research. All other workspace/research code must go through it.
+  permanent: true
+  link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
+
+- path: src/data_infra/pit_backend.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    PIT ledger builder / oracle. Constructs and reads ledger paths; this module
+    is the source of truth the research loader is parity-tested against.
+  permanent: true
+  link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
