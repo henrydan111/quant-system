@@ -78,6 +78,16 @@ def load_allowlist(path: Path = ALLOWLIST_PATH) -> set[str]:
         for key in ("path", "rule", "owner", "reason"):
             if not entry.get(key):
                 raise AllowlistError(f"{path}[{i}]: missing required key {key!r}")
+        # The allowlist is the ONLY PIT002 escape hatch, so validate strictly.
+        if entry["rule"] != "PIT002":
+            raise AllowlistError(
+                f"{path}[{i}]: unsupported rule {entry['rule']!r} (only 'PIT002' is allowlistable)"
+            )
+        if "permanent" in entry and not isinstance(entry["permanent"], bool):
+            raise AllowlistError(
+                f"{path}[{i}] ({entry['path']}): 'permanent' must be a boolean, "
+                f"got {type(entry['permanent']).__name__}"
+            )
         permanent = bool(entry.get("permanent", False))
         expires = entry.get("expires")
         if not permanent:

@@ -92,6 +92,22 @@ def test_allowlist_dangling_path_raises(tmp_path):
         lint.load_allowlist(al)
 
 
+def test_allowlist_unsupported_rule_raises(tmp_path):
+    al = _write(tmp_path, "al.yaml",
+                '- path: src/data_infra/pit_backend.py\n  rule: PIT999\n  owner: x\n'
+                '  reason: typo rule\n  permanent: true\n')
+    with pytest.raises(lint.AllowlistError):
+        lint.load_allowlist(al)
+
+
+def test_allowlist_non_bool_permanent_raises(tmp_path):
+    al = _write(tmp_path, "al.yaml",
+                '- path: src/data_infra/pit_backend.py\n  rule: PIT002\n  owner: x\n'
+                '  reason: x\n  permanent: "yes"\n')
+    with pytest.raises(lint.AllowlistError):
+        lint.load_allowlist(al)
+
+
 def test_committed_allowlist_loads():
     """The real committed allowlist must satisfy its own schema."""
     allowed = lint.load_allowlist()
