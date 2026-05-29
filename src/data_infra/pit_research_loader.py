@@ -33,11 +33,13 @@ error; loader = provider_stateful_q0 (Case A) + hard-fail on Case C.
 
 Field governance is fail-closed: a requested field must POSITIVELY resolve in
 the field registry (unknown or quarantined fields are refused even at
-``sandbox_screening``). NOTE (registry-coverage gap, 2026-05-29): the indicator
-columns ``roe_waa, q_roe, q_dt_roe, roe_dt, dt_netprofit_yoy`` are not yet listed
-in ``field_status.yaml`` and are therefore refused by this loader until
-registered (a governed follow-up). This is intentional — the v33/val_heavy
-champions consumed those un-governed fields, which this loader now refuses.
+``sandbox_screening``). The indicator columns ``roe_waa, q_roe, q_dt_roe,
+roe_dt, dt_netprofit_yoy`` — consumed by the now-invalidated v33/val_heavy
+champions, and exposed as unregistered when this fail-closed gate landed — were
+registered 2026-05-29 via the governed indicators approval
+(``approvals/2026-05-29_indicators_loader_qfields.yaml``) after live parity
+verification. Any OTHER indicator column remains fail-closed until likewise
+registered.
 """
 from __future__ import annotations
 

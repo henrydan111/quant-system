@@ -419,6 +419,21 @@ class TestLiveRegistry:
             assert r.dataset_id == "indicators"
             assert r.status_id == "approved"
 
+    def test_indicators_loader_qfields_approved_for_formal(self, reg) -> None:
+        # Phase-2 (2026-05-29_indicators_loader_qfields.yaml): the five
+        # parity-verified indicator columns the loader needs must resolve to
+        # indicators/approved at formal stage. Offline coverage for the
+        # registration (the live parity test is separate value-level evidence).
+        for field in ("$roe_waa", "$roe_dt", "$q_roe", "$q_dt_roe", "$dt_netprofit_yoy"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is True, (
+                f"{field} should be approved under indicators; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == "indicators"
+            assert r.status_id == "approved"
+            assert r.is_unknown is False
+
     def test_top_list_is_pending_for_formal(self, reg) -> None:
         r = reg.resolve_field("$top_list__close", "formal_validation")
         assert r.allowed is False
