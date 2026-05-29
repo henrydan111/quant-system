@@ -1,0 +1,96 @@
+# Field-registry approval evidence (2026-05-29, PIT-prevention phase 2)
+#
+# Adds five more Tushare fina_indicator_vip columns to the already-`approved`
+# `indicators` dataset entry in field_status.yaml:
+#   $roe_waa, $roe_dt, $q_roe, $q_dt_roe, $dt_netprofit_yoy
+#
+# WHY NOW: PR #18 made the sanctioned `pit_research_loader` fail closed on any
+# registry-unknown field (even at sandbox_screening). That correctly exposed
+# that these five indicator-family columns were never registered — and they are
+# exactly the columns the INVALIDATED v33/val_heavy sandbox champions consumed
+# (i.e. the champion ran on un-governed fields). To let the loader serve them
+# for legitimate research (and to enable migrating a proof script onto the
+# loader), they are registered here — but only after PARITY verification.
+#
+# These belong to the same fina_indicator_vip / ann_date PIT pipeline as the
+# already-approved $roe/$roa/etc. The on-disk pipeline did NOT change.
+
+approval_id: 2026-05-29_indicators_loader_qfields
+date: 2026-05-29
+dataset_id: indicators
+source_endpoint: tushare.fina_indicator_vip
+from_status: approved          # dataset already approved; this EXTENDS its field list
+to_status: approved
+reviewer: henrydan111
+related_pr: pit-prevention-phase2-parity
+related_findings_id: v33_PIT_lookahead_bug_report
+
+# Bind to the exact provider build + calendar policy under which the parity
+# verification was performed. A future provider rebuild with a different
+# provider_build_id / calendar_policy_id requires re-verifying parity.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Inherits the indicators-family PIT contract (ann_date anchored; must be
+# referenced with Ref($field, 1) or stricter; no same-day raw use).
+pit_contract:
+  availability_column: ann_date
+  provider_transform: pit_aligned_by_announcement_date_with_shift1
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_snapshot_dataset
+  expression_lag_required: true
+  approved_usage_pattern: "Ref($field, 1) or stricter"
+  same_day_raw_usage_allowed: false
+
+# PRIMARY evidence for this promotion: each field's value served by the
+# research loader's alignment kernel (provider_stateful_q0, availability_lag=0)
+# is byte-equal (float32 tolerance) to the live provider's $field. This makes
+# the promotion parity-backed, not merely on-disk-present.
+evidence:
+  parity_verification:
+    method: >-
+      pit_research_loader (q0, provider_stateful_q0) vs live Qlib provider
+      D.features($field) over 2017-2019, across 3 securities — 600519.SH,
+      000001.SZ, and IPO-edge 603080.SH (listed 2018-01-03) — for BOTH lag-0
+      (as-of) and lag-1 (signal = provider as-of shifted one trading bar).
+      rtol=1e-4 atol=1e-3, full-grid coverage asserted, per-field non-all-NaN
+      evidence floor.
+    result: MATCH for all five fields across the grid (incl. single-quarter
+      q_roe/q_dt_roe — Tushare supplies these already single-quarter; provider
+      and kernel both store them at q0, so no derivation discrepancy).
+  tests:
+    - test_id: tests/data_infra/test_pit_loader_provider_parity.py::test_loader_matches_provider_asof
+      asserts: >-
+        load_pit_asof_panel(lag=0, apply_provider_bounds=False) reproduces the
+        provider $field exactly across the PARITY_FIELDS grid, which now
+        includes these five fields.
+    - test_id: tests/data_infra/test_field_registry.py::TestLiveRegistry::test_indicators_bare_fields_approved_for_formal
+      asserts: "Indicators bare fields resolve to dataset_id=indicators, status=approved."
+
+fields_added:
+  - field: $roe_waa
+    note: "Weighted-average ROE. Sandbox lineage: F11_ROEWAA champion (now invalidated)."
+  - field: $roe_dt
+    note: "ROE after deducting non-recurring items."
+  - field: $q_roe
+    note: "Single-quarter ROE (Tushare-supplied single-quarter; no derivation)."
+  - field: $q_dt_roe
+    note: "Single-quarter deducted ROE."
+  - field: $dt_netprofit_yoy
+    note: "Deducted net-profit YoY growth."
+
+notes: |
+  No on-disk or pipeline change — registry coverage only. These columns flow
+  through the identical ann_date-anchored snapshot path as the existing
+  approved indicators fields, and are parity-verified equal to the provider.
+  Registering them lets the sanctioned loader serve them so future migration of
+  the (corrected) v33/val_heavy-style scripts onto the loader does not require
+  weakening the loader's fail-closed field governance.

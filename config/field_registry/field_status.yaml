@@ -162,6 +162,16 @@ datasets:
       - $basic_eps_yoy
       - $roe_yoy
       - $q_op_qoq
+      # Added 2026-05-29 (loader phase 2): same fina_indicator_vip family,
+      # PARITY-VERIFIED equal to the provider $field (incl. the single-quarter
+      # q_roe/q_dt_roe). Needed by the sanctioned pit_research_loader, which
+      # (post-PR-18 fail-closed governance) refused them while unregistered.
+      # See approvals/2026-05-29_indicators_loader_qfields.yaml.
+      - $roe_waa
+      - $roe_dt
+      - $q_roe
+      - $q_dt_roe
+      - $dt_netprofit_yoy
 
   reference:
     status: approved

@@ -323,6 +323,17 @@ def main() -> int:
         )
     )
 
+    # 5. PIT research-loader <-> provider parity (prevention plan v5 step 6) —
+    # the drift guard that the sandbox loader's alignment kernel still matches
+    # the provider oracle. Skips cleanly (pytest exit 0) when the Qlib provider
+    # is absent, so it is safe on non-provider hosts.
+    checks.append(
+        _run(
+            [python, "-m", "pytest", "tests/data_infra/test_pit_loader_provider_parity.py", "-q"],
+            "pit_loader_provider_parity",
+        )
+    )
+
     # Report
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
