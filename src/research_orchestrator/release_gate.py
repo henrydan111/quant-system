@@ -457,13 +457,17 @@ VALID_INDEPENDENT_REPRODUCTION_SOURCES = frozenset(
         "audited_pit_source",      # another audited PIT source — REQUIRES source_name + audit_artifact
     }
 )
-# Artifact-evidence checks (the v5 §6.7 promotion artifact schema). Keys that,
-# when present, must equal "passed"; lint + parity are additionally REQUIRED for
-# a privileged promotion.
-_REQUIRED_PASSED_CHECKS = ("unsafe_pit_dates_lint",)
-_IF_PRESENT_PASSED_CHECKS = (
-    "synthetic_lookahead_canary", "restatement_canary",
-    "q0_canary", "availability_assertion",
+# The v5 §6.7 promotion-artifact checks REQUIRED for a privileged promotion —
+# each must be explicitly "passed". Fail-closed: a MISSING key fails (a promotion
+# artifact must positively attest every check, not omit it).
+_REQUIRED_PASSED_CHECKS = (
+    "unsafe_pit_dates_lint",
+    "synthetic_lookahead_canary",
+    "restatement_canary",
+    "q0_canary_multiperiod",
+    "q0_canary_stateful_restatement",
+    "q0_canary_missing_field",
+    "availability_assertion",
 )
 
 
@@ -561,24 +565,35 @@ def evaluate_promotion_artifact(
         for key in _REQUIRED_PASSED_CHECKS:
             if cfg.get(key) != "passed":
                 reasons.append(f"{key} != 'passed' (got {cfg.get(key)!r}); required for privileged promotion")
-        for key in _IF_PRESENT_PASSED_CHECKS:
-            if key in cfg and cfg.get(key) != "passed":
-                reasons.append(f"{key} != 'passed' (got {cfg.get(key)!r})")
-        used_loader = bool(cfg.get("primary_used_pit_research_loader")) or source == "pit_research_loader"
+        # live_provider_parity may be 'not_required_for_label' ONLY if NO
+        # pit_research_loader panel entered the primary OR reproduction path.
+        used_loader = (
+            bool(cfg.get("primary_used_pit_research_loader"))
+            or bool(cfg.get("reproduction_used_pit_research_loader"))
+            or bool(repro.get("used_pit_research_loader"))
+            or source == "pit_research_loader"
+        )
         lpp = cfg.get("live_provider_parity")
         if lpp == "not_required_for_label":
             if used_loader:
                 reasons.append(
-                    "live_provider_parity='not_required_for_label' is illegal because "
-                    "pit_research_loader was used in the primary or reproduction path"
+                    "live_provider_parity='not_required_for_label' is illegal: a "
+                    "pit_research_loader panel entered the primary or reproduction path"
                 )
         elif lpp != "passed":
             reasons.append(f"live_provider_parity != 'passed' (got {lpp!r})")
-        if cfg.get("dirty_tree") is True:
-            reasons.append("dirty_tree=true (uncommitted changes in scanned paths)")
-        git_sha = cfg.get("git_sha")
-        if current_git_sha is not None and git_sha and git_sha != current_git_sha:
-            reasons.append(f"git_sha {git_sha!r} != current {current_git_sha!r}")
+        # Fail-closed on clean-state evidence: dirty_tree MUST be explicitly False.
+        if cfg.get("dirty_tree") is not False:
+            reasons.append(
+                f"dirty_tree must be explicitly false for privileged promotion (got {cfg.get('dirty_tree')!r})"
+            )
+        # When a current SHA is supplied, the artifact MUST carry a matching git_sha.
+        if current_git_sha is not None:
+            git_sha = cfg.get("git_sha")
+            if not git_sha:
+                reasons.append("git_sha is required when current_git_sha is supplied")
+            elif git_sha != current_git_sha:
+                reasons.append(f"git_sha {git_sha!r} != current {current_git_sha!r}")
     return PromotionGateResult(
         status=base.status, label=base.label, privileged=base.privileged,
         reproduction_source=source, eligible=len(reasons) == 0, reasons=tuple(reasons),

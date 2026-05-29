@@ -24,7 +24,14 @@ from src.research_orchestrator.release_gate import (
 _FULL_OK = {
     "independent_reproduction": {"source": "qlib_windowed_features"},
     "unsafe_pit_dates_lint": "passed",
+    "synthetic_lookahead_canary": "passed",
+    "restatement_canary": "passed",
+    "q0_canary_multiperiod": "passed",
+    "q0_canary_stateful_restatement": "passed",
+    "q0_canary_missing_field": "passed",
+    "availability_assertion": "passed",
     "live_provider_parity": "passed",
+    "dirty_tree": False,
 }
 
 
@@ -68,36 +75,56 @@ def test_audited_source_requires_named_evidence():
     assert r.eligible
 
 
-# ── full artifact evaluator ─────────────────────────────────────────────
-def test_artifact_requires_lint_and_parity():
+# ── full artifact evaluator (fail-closed on MISSING evidence) ────────────
+def test_artifact_full_set_eligible():
+    assert evaluate_promotion_artifact({**_FULL_OK, "promotion_status": "approved"}).eligible
+
+
+def test_artifact_missing_lint_or_parity_blocks():
     base = {"promotion_status": "approved", "independent_reproduction": {"source": "qlib_windowed_features"}}
-    # missing lint + parity -> ineligible
-    assert not evaluate_promotion_artifact(base).eligible
-    # full -> eligible
-    assert evaluate_promotion_artifact({**base, "unsafe_pit_dates_lint": "passed", "live_provider_parity": "passed"}).eligible
+    assert not evaluate_promotion_artifact(base).eligible  # missing everything
+
+
+def test_artifact_missing_required_canary_blocks():
+    # A privileged artifact that OMITS a required canary fails (fail-closed).
+    for drop in ("synthetic_lookahead_canary", "restatement_canary",
+                 "q0_canary_stateful_restatement", "availability_assertion"):
+        art = {k: v for k, v in _FULL_OK.items() if k != drop}
+        art["promotion_status"] = "approved"
+        assert not evaluate_promotion_artifact(art).eligible, f"omitting {drop} should fail"
 
 
 def test_artifact_parity_not_required_only_without_loader():
-    art = {
-        "promotion_label": "deployment_candidate",
-        "independent_reproduction": {"source": "joinquant_native_pit"},
-        "unsafe_pit_dates_lint": "passed",
-        "live_provider_parity": "not_required_for_label",
-    }
-    assert evaluate_promotion_artifact(art).eligible  # no loader used -> legal
-    art["primary_used_pit_research_loader"] = True
-    assert not evaluate_promotion_artifact(art).eligible  # loader used -> illegal
+    art = {**_FULL_OK, "promotion_label": "deployment_candidate",
+           "independent_reproduction": {"source": "joinquant_native_pit"},
+           "live_provider_parity": "not_required_for_label"}
+    assert evaluate_promotion_artifact(art).eligible  # no loader -> legal
+    assert not evaluate_promotion_artifact({**art, "primary_used_pit_research_loader": True}).eligible
+    assert not evaluate_promotion_artifact({**art, "reproduction_used_pit_research_loader": True}).eligible
+    assert not evaluate_promotion_artifact(
+        {**art, "independent_reproduction": {"source": "joinquant_native_pit", "used_pit_research_loader": True}}
+    ).eligible
 
 
-def test_artifact_dirty_tree_and_git_sha():
-    art = {**_FULL_OK, "promotion_status": "approved", "git_sha": "abc123", "dirty_tree": False}
+def test_artifact_dirty_tree_fail_closed():
+    art = {**_FULL_OK, "promotion_status": "approved"}
+    assert evaluate_promotion_artifact(art).eligible            # dirty_tree=False present
+    assert not evaluate_promotion_artifact({**art, "dirty_tree": True}).eligible
+    no_dirty = {k: v for k, v in art.items() if k != "dirty_tree"}
+    assert not evaluate_promotion_artifact(no_dirty).eligible   # MISSING dirty_tree -> fail-closed
+
+
+def test_artifact_git_sha_fail_closed():
+    art = {**_FULL_OK, "promotion_status": "approved", "git_sha": "abc123"}
     assert evaluate_promotion_artifact(art, current_git_sha="abc123").eligible
-    assert not evaluate_promotion_artifact(art, current_git_sha="def456").eligible  # sha mismatch
-    assert not evaluate_promotion_artifact({**art, "dirty_tree": True}, current_git_sha="abc123").eligible
+    assert not evaluate_promotion_artifact(art, current_git_sha="def456").eligible  # mismatch
+    no_sha = {k: v for k, v in art.items() if k != "git_sha"}
+    assert not evaluate_promotion_artifact(no_sha, current_git_sha="abc123").eligible  # missing when required
+    assert evaluate_promotion_artifact(no_sha).eligible  # no current_git_sha supplied -> not required
 
 
 def test_artifact_failed_canary_blocks():
-    art = {**_FULL_OK, "promotion_status": "approved", "q0_canary": "FAILED"}
+    art = {**_FULL_OK, "promotion_status": "approved", "q0_canary_missing_field": "FAILED"}
     assert not evaluate_promotion_artifact(art).eligible
 
 
