@@ -196,9 +196,11 @@ calendar_policy_id: frozen_20260227_system_build
 
 
 class TestLegacyYamlSkipped:
-    def test_yaml_without_bindings_is_skipped(self, tmp_path: Path) -> None:
-        """Pre-PR-9a-round-3 approval YAMLs don't carry the binding
-        contract; they must be silently skipped, not raise."""
+    def test_yaml_without_bindings_and_without_exemption_raises(self, tmp_path: Path) -> None:
+        """PR 10c: a YAML missing BOTH binding keys and lacking an explicit
+        binding_exempt marker now FAILS closed. Pre-PR-10c this silently
+        skipped, which could not distinguish a true unbound record from a
+        new approval that accidentally omitted the binding."""
         approvals = tmp_path / "approvals"
         approvals.mkdir()
         _write_yaml(approvals / "2024-01-01_legacy.yaml", """
@@ -206,7 +208,26 @@ approval_id: 2024-01-01_legacy
 date: 2024-01-01
 dataset_id: legacy_dataset
 to_status: approved
-# No provider_build_id, no calendar_policy_id — predates PR 9a round-3
+# No provider_build_id, no calendar_policy_id, no binding_exempt marker
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "2024-01-01_legacy.yaml" in msg
+        assert "binding_exempt" in msg
+
+    def test_yaml_with_explicit_exemption_is_skipped(self, tmp_path: Path) -> None:
+        """PR 10c: an unbound administrative record with an explicit
+        binding_exempt: true + reason is skipped from the drift scan."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "2026-05-27_coverage_fix.yaml", """
+approval_id: 2026-05-27_coverage_fix
+date: 2026-05-27
+dataset_id: moneyflow
+to_status: quarantine (unchanged)
+binding_exempt: true
+binding_exempt_reason: "Coverage/diagnostic fix only; no formal-use promotion."
 """.strip())
         manifest = tmp_path / "manifest.json"
         _write_manifest(
@@ -426,20 +447,20 @@ calendar_policy_id: frozen_20260227_system_build
         with pytest.raises(ApprovalEvidenceConfigError):
             load_approval_bindings(approvals)
 
-    def test_true_legacy_neither_key_still_skipped(self, tmp_path: Path) -> None:
-        """A YAML with NEITHER binding key (true legacy) must still be
-        silently skipped — PR 10b only tightens the value validation for
-        YAMLs that DECLARE the keys."""
+    def test_neither_key_without_exemption_raises(self, tmp_path: Path) -> None:
+        """PR 10c: a YAML with NEITHER binding key and NO binding_exempt
+        marker now FAILS closed (was a silent skip in PR 10a/10b). This is
+        the last fail-open path GPT 5.5 Pro flagged in round-7."""
         approvals = tmp_path / "approvals"
         approvals.mkdir()
-        _write_yaml(approvals / "true_legacy.yaml", """
-approval_id: true_legacy
+        _write_yaml(approvals / "unmarked.yaml", """
+approval_id: unmarked
 date: 2024-01-01
 dataset_id: legacy_dataset
 to_status: approved
 """.strip())
-        # No raise; binding list is empty (skipped).
-        assert load_approval_bindings(approvals) == []
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
 
     def test_valid_nonempty_strings_pass_and_stripped(self, tmp_path: Path) -> None:
         """Both keys present with non-empty string values pass — and the
@@ -473,6 +494,152 @@ calendar_policy_id: frozen_20260227_system_build
         )
         assert len(drifts) == 1
         assert drifts[0].drift is False
+
+
+class TestBindingExemptContract:
+    """PR 10c (GPT 5.5 Pro round-7 review): both-absent YAMLs no longer
+    silently skip as "legacy". An unbound administrative record MUST
+    declare ``binding_exempt: true`` (strict bool) with a non-empty
+    ``binding_exempt_reason``; everything else fails closed. This closes
+    the last fail-open path where a new approval that accidentally omitted
+    both binding keys was indistinguishable from a true unbound record."""
+
+    def test_both_absent_no_exemption_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "no_exempt.yaml", """
+approval_id: no_exempt
+dataset_id: x
+to_status: approved
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "no_exempt.yaml" in msg
+        assert "binding_exempt" in msg
+
+    def test_exempt_without_reason_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "exempt_no_reason.yaml", """
+approval_id: exempt_no_reason
+dataset_id: x
+to_status: quarantine
+binding_exempt: true
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "binding_exempt_reason" in msg
+
+    def test_exempt_with_blank_reason_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "exempt_blank_reason.yaml", """
+approval_id: exempt_blank_reason
+dataset_id: x
+to_status: quarantine
+binding_exempt: true
+binding_exempt_reason: "   "
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_exempt_with_reason_is_skipped(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "exempt_ok.yaml", """
+approval_id: exempt_ok
+dataset_id: x
+to_status: quarantine
+binding_exempt: true
+binding_exempt_reason: "Coverage/diagnostic fix only; no formal-use promotion."
+""".strip())
+        # Skipped — not in the returned bindings.
+        assert load_approval_bindings(approvals) == []
+
+    def test_exempt_false_with_no_keys_raises(self, tmp_path: Path) -> None:
+        """binding_exempt: false (falsy) with no binding keys must NOT
+        exempt — it falls through to the both-absent fail-closed path."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "exempt_false.yaml", """
+approval_id: exempt_false
+dataset_id: x
+to_status: approved
+binding_exempt: false
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_exempt_string_true_does_not_exempt(self, tmp_path: Path) -> None:
+        """binding_exempt: "true" (string, not bool) must NOT exempt — a
+        non-bool value can't silently disable the gate via truthiness."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "exempt_string.yaml", """
+approval_id: exempt_string
+dataset_id: x
+to_status: approved
+binding_exempt: "true"
+binding_exempt_reason: "trying to sneak past with a string"
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_both_keys_present_with_exemption_raises_contradiction(self, tmp_path: Path) -> None:
+        """A provider-bound approval cannot also be exempt — contradictory."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "contradiction.yaml", """
+approval_id: contradiction
+dataset_id: indicators
+to_status: approved
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+binding_exempt: true
+binding_exempt_reason: "should not be allowed alongside bindings"
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "contradict" in msg.lower()
+
+
+class TestCommittedApprovalsSatisfyContract:
+    """PR 10c: the committed approval YAMLs under
+    config/field_registry/approvals/ MUST satisfy the post-PR-10c contract
+    — load_approval_bindings on the real directory must not raise. This is
+    a guardrail proving the indicators YAML carries a valid binding and the
+    quarantine_prefix_fix YAML carries the explicit binding_exempt marker
+    (NOT a silent both-absent skip)."""
+
+    def test_committed_approvals_load_without_raising(self) -> None:
+        if not DEFAULT_APPROVALS_DIR.exists():
+            pytest.skip("no approvals directory on this host")
+        # Must not raise ApprovalEvidenceConfigError.
+        bindings = load_approval_bindings(DEFAULT_APPROVALS_DIR)
+        # The indicators approval YAML carries a real binding, so at least
+        # one binding must be present (the quarantine_prefix_fix YAML is
+        # binding_exempt and therefore skipped).
+        approval_ids = {b.approval_id for b in bindings}
+        assert any("indicators" in aid for aid in approval_ids), (
+            f"Expected the indicators approval to produce a binding; "
+            f"got approval_ids={approval_ids}"
+        )
+
+    def test_quarantine_prefix_fix_is_exempt_not_bound(self) -> None:
+        """The committed quarantine_prefix_fix YAML must be binding_exempt
+        (skipped), NOT produce a binding — it is a coverage/diagnostic fix,
+        not a formal-use promotion."""
+        if not DEFAULT_APPROVALS_DIR.exists():
+            pytest.skip("no approvals directory on this host")
+        bindings = load_approval_bindings(DEFAULT_APPROVALS_DIR)
+        for b in bindings:
+            assert "quarantine_prefix_fix" not in b.approval_file, (
+                "quarantine_prefix_fix YAML must be binding_exempt (skipped), "
+                "not produce a provider-bound binding."
+            )
 
 
 class TestMissingManifest:

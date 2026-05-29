@@ -3,6 +3,17 @@ dataset_id: moneyflow, hk_hold, margin_detail, stk_limit, stk_holdertrade
 from_status: quarantine (existing) / pending_review (stk_holdertrade)
 to_status: quarantine (unchanged) / pending_review (stk_holdertrade, new entry)
 reviewer: henrydan111
+# PR 10c: this record is a coverage / diagnostic fix, NOT a promotion to
+# formal use. No dataset gains formal-stage access here (everything stays
+# quarantine / pending_review), so there is no provider-bound formal-use
+# evidence to record. It is therefore explicitly exempt from the
+# approval-evidence provider-build binding check.
+binding_exempt: true
+binding_exempt_reason: >-
+  Coverage/diagnostic fix only — replaces unmatched field_prefixes with
+  explicit bare-name field lists and registers stk_holdertrade at
+  pending_review. No dataset is promoted to formal use, so there is no
+  provider-bound formal-use evidence to bind to a provider_build_id.
 evidence:
   - "On-disk verification on data/qlib_data/features/000001_sz/ and 600000_sh/ shows moneyflow / hk_hold / margin_detail / stk_holdertrade fields are written with BARE column names (e.g. $net_mf_amount, $ratio, $rzye, $holdertrade_net_ratio), NOT under a dataset prefix."
   - "Audit: only datasets in EVENT_LIKE_DAILY_DATASETS (top_list/top_inst/block_trade/cyq_perf) are namespaced — see src/data_infra/pit_backend.py:84-86 + CLAUDE.md §3 'Event-like daily endpoint namespacing'."

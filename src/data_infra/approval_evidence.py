@@ -35,21 +35,26 @@ Wired into
   publishing a formal artifact whose dataset dependencies overlap with
   approved field-registry datasets.
 
-Schema contract (PR 10a + PR 10b)
-=================================
+Schema contract (PR 10a + PR 10b + PR 10c)
+==========================================
 
 Each approval YAML under ``config/field_registry/approvals/`` is held to
 the following contract (enforced by :func:`load_approval_bindings`):
 
   * Modern approval YAMLs MUST carry BOTH ``provider_build_id`` AND
     ``calendar_policy_id`` keys with non-empty string values.
-  * Legacy YAMLs predating the PR 9a round-3 binding contract may omit
-    BOTH keys; they are silently skipped because they cannot be
-    validated.
-  * Partial (exactly one key), null / empty / blank / non-string valued,
-    malformed (unparseable), or non-mapping YAMLs FAIL daily QA with
-    :class:`ApprovalEvidenceConfigError`. None of these can silently
-    disappear from the drift scan.
+  * Non-provider-bound administrative records (coverage / diagnostic
+    fixes, status registrations that do not promote a dataset to formal
+    use) MUST declare ``binding_exempt: true`` (strict bool) with a
+    non-empty ``binding_exempt_reason``. These are skipped from the drift
+    scan with an explicit, auditable marker.
+  * Everything else FAILS daily QA with
+    :class:`ApprovalEvidenceConfigError`: partial bindings (exactly one
+    key), null / empty / blank / non-string values, BOTH keys absent
+    without a valid exemption, BOTH keys present alongside
+    ``binding_exempt: true`` (contradiction), malformed (unparseable),
+    or non-mapping YAMLs. None of these can silently disappear from the
+    drift scan.
 
 The schema documentation lives at
 ``config/field_registry/approvals/README.md``.
@@ -164,12 +169,10 @@ def load_approval_bindings(
 ) -> list[ApprovalBinding]:
     """Scan an approvals directory for YAML files and extract bindings.
 
-    Contract (PR 10a, hardened by PR 10b):
+    Contract (PR 10a, hardened by PR 10b + PR 10c):
 
-      * BOTH ``provider_build_id`` AND ``calendar_policy_id`` keys absent
-        → legacy approval, silently skipped.
-      * BOTH binding keys present with non-empty string values →
-        validated.
+      * BOTH ``provider_build_id`` AND ``calendar_policy_id`` keys present
+        with non-empty string values → validated.
       * Exactly ONE key present → :class:`ApprovalEvidenceConfigError` —
         partial bindings would silently reduce the contract from two
         dimensions to one (wildcard on the missing axis), a fail-open
@@ -180,6 +183,19 @@ def load_approval_bindings(
         null value" into the same ``None``, so a YAML that kept the keys
         but blanked their values (e.g. during a manual provider rebuild)
         was silently skipped as legacy — a fail-open path PR 10b closes.
+      * BOTH keys absent AND ``binding_exempt: true`` (strict bool) with a
+        non-empty ``binding_exempt_reason`` → skipped. This is the
+        explicit escape hatch for non-provider-bound administrative
+        records (coverage / diagnostic fixes, status registrations).
+      * BOTH keys absent WITHOUT a valid exemption →
+        :class:`ApprovalEvidenceConfigError` (PR 10c). Pre-PR-10c both-absent
+        silently skipped as "legacy", which could not distinguish a true
+        unbound record from a new approval that ACCIDENTALLY omitted both
+        keys — the last fail-open path, closed by requiring the explicit
+        marker.
+      * BOTH keys present AND ``binding_exempt: true`` →
+        :class:`ApprovalEvidenceConfigError` (PR 10c) — contradictory; a
+        provider-bound approval cannot be exempt.
 
     Other fail-closed conditions:
 
@@ -188,9 +204,9 @@ def load_approval_bindings(
         scalar) → :class:`ApprovalEvidenceConfigError`.
 
     The strictness is intentional: ``config/field_registry/approvals/``
-    is a governance directory. A malformed, partial, or value-blanked
-    YAML cannot weaken the daily-QA gate by silently disappearing from
-    the scan.
+    is a governance directory. A malformed, partial, value-blanked, or
+    silently-unbound YAML cannot weaken the daily-QA gate by disappearing
+    from the scan.
     """
     # Lazy yaml import so the module is importable in minimal envs.
     import yaml
@@ -220,9 +236,37 @@ def load_approval_bindings(
         # presence and validate the value separately.
         has_pb = "provider_build_id" in data
         has_cp = "calendar_policy_id" in data
+        # PR 10c: ``binding_exempt`` is the explicit escape hatch for
+        # non-provider-bound administrative records (coverage / diagnostic
+        # fixes, status registrations). Must be strict bool ``True`` — a
+        # string "true" or any other truthy value does NOT exempt, so a
+        # typo can't silently disable the gate.
+        exempt = data.get("binding_exempt") is True
         if not has_pb and not has_cp:
-            # True legacy YAML predating the binding contract — skip.
-            continue
+            # PR 10c: no binding keys. Pre-PR-10c this silently skipped as
+            # "legacy", which could not distinguish a true unbound record
+            # from a new approval that ACCIDENTALLY omitted both keys. Now
+            # an unbound record MUST declare ``binding_exempt: true`` with
+            # a non-empty ``binding_exempt_reason``; otherwise fail closed.
+            if exempt:
+                reason = data.get("binding_exempt_reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    raise ApprovalEvidenceConfigError(
+                        f"Approval YAML at {path} sets binding_exempt: true but "
+                        "binding_exempt_reason is missing / empty / non-string. "
+                        "An exempt record MUST state why it is not "
+                        "provider-bound (e.g. 'coverage/diagnostic fix only')."
+                    )
+                # Legitimately exempt — skip the drift check.
+                continue
+            raise ApprovalEvidenceConfigError(
+                f"Approval YAML at {path} omits both provider_build_id and "
+                "calendar_policy_id. Modern approvals MUST bind BOTH axes "
+                "(with non-empty string values). If this record is a "
+                "non-provider-bound administrative entry (coverage fix, "
+                "status registration), set 'binding_exempt: true' with a "
+                "'binding_exempt_reason'."
+            )
         if has_pb != has_cp:
             # Exactly one key declared — fail closed. Partial bindings
             # would silently weaken the drift check to one axis.
@@ -235,6 +279,17 @@ def load_approval_bindings(
                 "string values), or omit BOTH keys as a legacy approval. "
                 f"Add {missing!r} or remove {present!r} to mark this "
                 "approval legacy."
+            )
+        # PR 10c: both keys present AND binding_exempt: true is
+        # contradictory — a provider-bound approval cannot be exempt.
+        # Fail closed so a confused author can't leave an ambiguous record.
+        if exempt:
+            raise ApprovalEvidenceConfigError(
+                f"Approval YAML at {path} declares provider_build_id + "
+                "calendar_policy_id AND binding_exempt: true. These are "
+                "contradictory — a provider-bound approval cannot be exempt. "
+                "Remove binding_exempt, or remove the binding keys to mark "
+                "this an unbound administrative record."
             )
         # Both keys present — values MUST be non-empty strings. A null /
         # empty / blank / non-string value is a governance error, NOT a
