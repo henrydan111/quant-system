@@ -427,6 +427,117 @@ def assert_field_dependencies_eligible(
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Promotion gate — independent PIT-correct reproduction (PIT-prevention step 11)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The raw-ledger bypass that caused the v33/val_heavy lookahead is now contained
+# (loader chokepoint + lint + QA gate). The remaining decision-layer control:
+# no strategy may receive a PRIVILEGED label unless its signal/factor inputs were
+# **independently reconstructed through a PIT-correct data path**. A sandbox-loader
+# panel — even the parity-verified pit_research_loader — is NOT sufficient: it is
+# typically the primary path, and "independent" means a different, audited path
+# whose disagreement would expose a path-specific bug. (Ref:
+# Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md §6.7.)
+
+PRIVILEGED_PROMOTION_LABELS = frozenset(
+    {"champion", "deployment_candidate", "live_candidate", "approved"}
+)
+# Sources that count as an INDEPENDENT PIT-correct reconstruction of the signal
+# panel. Anything else (None, "", "sandbox", "pit_research_loader", ...) fails.
+VALID_INDEPENDENT_REPRODUCTION_SOURCES = frozenset(
+    {
+        "qlib_windowed_features",  # formal provider path via the windowed wrapper
+        "joinquant_native_pit",    # JoinQuant get_fundamentals(date=) + pubDate filtering
+        "audited_pit_source",      # another audited PIT source, named in provenance
+    }
+)
+
+
+class PromotionGateError(RuntimeError):
+    """A privileged promotion label lacks a valid independent reproduction."""
+
+
+@dataclass(frozen=True)
+class PromotionGateResult:
+    """Decision on whether a strategy may carry a privileged promotion label.
+
+    Exploratory labels (anything not in PRIVILEGED_PROMOTION_LABELS) are always
+    eligible — research is free. A privileged label requires
+    ``reproduction_source`` to be one of VALID_INDEPENDENT_REPRODUCTION_SOURCES.
+    """
+    label: str
+    privileged: bool
+    reproduction_source: str | None
+    eligible: bool
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_promotion_eligibility(
+    *, label: str | None, reproduction_source: str | None
+) -> PromotionGateResult:
+    """Decide whether ``label`` may be assigned given the reproduction source."""
+    label_norm = (label or "").strip().lower()
+    privileged = label_norm in PRIVILEGED_PROMOTION_LABELS
+    src = (reproduction_source or "").strip()
+    reasons: list[str] = []
+    if privileged:
+        if not src:
+            reasons.append(
+                f"privileged label '{label_norm}' requires an independent PIT-correct "
+                f"reproduction source; none supplied"
+            )
+        elif src not in VALID_INDEPENDENT_REPRODUCTION_SOURCES:
+            reasons.append(
+                f"reproduction source '{src}' is not an INDEPENDENT PIT-correct path "
+                f"(a sandbox/loader panel is insufficient). Allowed: "
+                f"{sorted(VALID_INDEPENDENT_REPRODUCTION_SOURCES)}"
+            )
+    return PromotionGateResult(
+        label=label_norm,
+        privileged=privileged,
+        reproduction_source=reproduction_source,
+        eligible=len(reasons) == 0,
+        reasons=tuple(reasons),
+    )
+
+
+def evaluate_promotion_from_artifact(
+    artifact_config: Mapping[str, Any] | None,
+) -> PromotionGateResult:
+    """Read ``promotion_label`` + ``independent_reproduction.source`` from an
+    artifact/registry record and evaluate. Missing keys → treated as an
+    unprivileged label with no reproduction (eligible only if not privileged)."""
+    cfg = artifact_config or {}
+    label = cfg.get("promotion_label")
+    repro = cfg.get("independent_reproduction") or {}
+    source = repro.get("source") if isinstance(repro, Mapping) else None
+    return evaluate_promotion_eligibility(label=label, reproduction_source=source)
+
+
+def assert_promotion_eligible(
+    *,
+    label: str | None,
+    reproduction_source: str | None,
+    artifact_label: str = "strategy",
+) -> PromotionGateResult:
+    """Strict variant — raises :class:`PromotionGateError` on an ineligible
+    privileged label. Call this at the point a strategy is labeled
+    champion / deployment_candidate / live_candidate / approved."""
+    result = evaluate_promotion_eligibility(
+        label=label, reproduction_source=reproduction_source
+    )
+    if not result.eligible:
+        raise PromotionGateError(
+            f"Promotion gate blocked {artifact_label} for label='{result.label}': "
+            f"{list(result.reasons)}"
+        )
+    return result
+
+
 def run_release_gate(
     *,
     gate_root: Path,
