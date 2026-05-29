@@ -70,6 +70,7 @@ jobs:
           tests/data_infra/test_pit_alignment_core.py
           tests/data_infra/test_pit_research_loader.py
           tests/data_infra/test_lint_no_unsafe_pit_dates.py
+          tests/data_infra/test_field_registry.py
           tests/alpha_research/test_factor_library_pit_safety.py
           tests/alpha_research/test_operator_expressions.py
           tests/research_orchestrator/test_promotion_gate.py
