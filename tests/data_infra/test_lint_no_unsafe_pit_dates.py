@@ -108,6 +108,27 @@ def test_allowlist_non_bool_permanent_raises(tmp_path):
         lint.load_allowlist(al)
 
 
+def test_archive_skip_is_root_specific(tmp_path):
+    # A GENERIC 'archive' dir (not a sanctioned root) must NOT be skipped — only
+    # the enumerated ARCHIVE_SKIP_ROOTS are. This blocks the broad-skip bypass
+    # (src/foo/archive/, workspace/research/archive/, ...).
+    (tmp_path / "live.py").write_text("x = 1\n", encoding="utf-8")
+    arch = tmp_path / "archive" / "legacy"
+    arch.mkdir(parents=True)
+    (arch / "dead.py").write_text("x = 1\n", encoding="utf-8")
+    found = {p.name for p in lint._iter_python_files([tmp_path])}
+    assert "live.py" in found
+    assert "dead.py" in found  # generic archive/ is NOT a sanctioned skip root
+
+
+def test_sanctioned_archive_root_predicate():
+    # The predicate skips files under a sanctioned archive root, not elsewhere.
+    legacy_root = lint.PROJECT_ROOT / "workspace" / "scripts" / "archive" / "pit_lookahead_legacy_2026_05"
+    assert lint._is_skipped_archive(legacy_root / "sandbox_v15o_val_heavy_confirm.py") is True
+    assert lint._is_skipped_archive(lint.PROJECT_ROOT / "src" / "data_infra" / "pit_research_loader.py") is False
+    assert lint._is_skipped_archive(lint.PROJECT_ROOT / "workspace" / "research" / "archive" / "bad.py") is False
+
+
 def test_committed_allowlist_loads():
     """The real committed allowlist must satisfy its own schema."""
     allowed = lint.load_allowlist()

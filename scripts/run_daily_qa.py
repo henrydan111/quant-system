@@ -289,6 +289,17 @@ def main() -> int:
         )
     )
 
+    # 0a2. Unsafe-PIT-dates lint (PIT-lookahead prevention, step 10) — bans raw
+    # data/pit_ledger reads (PIT002) outside the sanctioned pit_research_loader.
+    # Now a HARD gate: the invalidated build_pit_pivot sandbox lineage has been
+    # archived (archive/ dirs are skipped), so src + workspace scan clean.
+    checks.append(
+        _run(
+            [python, "scripts/lint_no_unsafe_pit_dates.py", "src", "workspace", "--quiet-warnings"],
+            "unsafe_pit_dates_lint",
+        )
+    )
+
     # 0b. Approval-evidence binding drift (PR 10 follow-up to PR 9c) —
     # every field-registry approval YAML pins a provider_build_id +
     # calendar_policy_id; this check ensures the current provider build

@@ -146,6 +146,49 @@ def test_archive_directory_exists_and_has_d_class_scripts() -> None:
     )
 
 
+def test_pit_lookahead_legacy_archive_not_referenced_by_live_code() -> None:
+    """Live src/ and workspace/ code (outside any ``archive/``) must not import
+    a ``sandbox_v*`` module or path-reference the PIT-lookahead legacy archive.
+
+    The archived scripts (``workspace/scripts/archive/pit_lookahead_legacy_2026_05/``)
+    are the INVALIDATED ``build_pit_pivot`` lineage, kept locally/untracked. This
+    scans LIVE code so it enforces even on a fresh clone where the untracked
+    archive is absent. Precise patterns only — prose mentions of "sandbox_v*" in
+    docstrings/comments are allowed (e.g. pit_alignment_core's explanation of why
+    it exists); actual import statements and archive path references are not.
+    """
+    import re
+
+    archive_path_token = "archive/pit_lookahead_legacy_2026_05"      # slash path ref
+    archive_dotted_token = "archive.pit_lookahead_legacy_2026_05"    # dotted package import
+    sandbox_import = re.compile(r"^[ \t]*(?:from|import)[ \t]+sandbox_v\w*", re.MULTILINE)
+    # dynamic references: importlib.import_module("sandbox_v..."), runpy, subprocess.
+    # Requires the bare module name in quotes; a quoted "...sandbox_v....py" path is
+    # caught by the archive path token, and prose like ``sandbox_v*`` is not matched.
+    sandbox_string = re.compile(r"""["']sandbox_v\w+["']""")
+
+    failures: list[str] = []
+    for root in ("src", "workspace"):
+        base = PROJECT_ROOT / root
+        if not base.exists():
+            continue
+        for py_file in base.rglob("*.py"):
+            if "archive" in py_file.parts:
+                continue
+            text = py_file.read_text(encoding="utf-8", errors="replace")
+            rel = py_file.relative_to(PROJECT_ROOT)
+            if sandbox_import.search(text) or sandbox_string.search(text):
+                failures.append(f"{rel}: imports / dynamically references a sandbox_v* module (archived lineage)")
+            if archive_path_token in text or archive_dotted_token in text:
+                failures.append(f"{rel}: path/package-references the pit_lookahead legacy archive")
+    if failures:
+        pytest.fail(
+            "Live code references the frozen PIT-lookahead legacy archive — that "
+            "lineage is invalidated; use src/data_infra/pit_research_loader.py:\n"
+            + "\n".join(failures)
+        )
+
+
 def test_workspace_scripts_outside_archive_carry_script_status_header() -> None:
     """Every workspace/scripts/*.py that the PR 2 audit classified must
     carry the PR 7 SCRIPT_STATUS header block (or be in archive/).

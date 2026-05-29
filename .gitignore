@@ -96,6 +96,10 @@ logs/
 # Keep structure + scripts + notebooks + configs; exclude run artifacts.
 # =============================================================================
 workspace/outputs/
+# Local-only PIT-lookahead legacy sandbox archive: the 73 invalidated
+# build_pit_pivot scripts are kept untracked (the README.md manifest stays
+# tracked). Prevents an accidental `git add` from reintroducing the dead lineage.
+workspace/scripts/archive/pit_lookahead_legacy_2026_05/*.py
 workspace/research/**/outputs/
 workspace/research/**/cache/
 workspace/research/**/runs/
