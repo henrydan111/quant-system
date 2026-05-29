@@ -1,4 +1,4 @@
-# Archived — PIT-lookahead legacy sandbox scripts (2026-05-29)
+# Archived — PIT-lookahead legacy scripts (2026-05-29 sandbox loaders; 2026-05-30 JQ deploy mimics)
 
 The **73** scripts listed below are the **INVALIDATED** research lineage
 that produced the v31/v32/v33 + val_heavy "champions". They used a hand-rolled
@@ -109,3 +109,28 @@ to allowlist).
 - `sandbox_v8_lo_v2.py`
 - `sandbox_v9_ml.py`
 - `v33_factor_alignment_dump.py`
+
+## JoinQuant deployment mimics (6 files, added 2026-05-30)
+
+A distinct category from the 73 sandbox loaders above: these are JoinQuant
+**deployment** scripts (`from jqdata import *`, `get_fundamentals`) — the
+deploy-side end products of the same invalidated effort. They do **not** contain
+raw `pit_ledger` reads (they consume JoinQuant's own PIT `get_fundamentals`), but
+every performance figure in their headers was lifted from the contaminated
+pre-2026-05-29 sandbox and is therefore **inflated by the lookahead bug**. None
+were ever committed; they were loose in `workspace/scripts/` and archived here on
+2026-05-30.
+
+**Status: FROZEN — DO NOT DEPLOY.** Each is a near-deployment artifact of a
+"champion" whose numbers do not survive PIT-correct measurement (claimed figures
+are all from `sandbox simulation 2014-2026-02-27`):
+- `jq_deploy_earnings_momentum_v1.py` — PIT Earnings Momentum, 3-factor baseline (claimed CAGR +65.6%, WF +68.7%)
+- `jq_deploy_earnings_momentum_v2.py` — **val_heavy** 5-factor (claimed CAGR +81.9%, WF +82.4%; true PIT ≈ +9.6% with negative walk-forward — the exact strategy this prevention plan exists to catch)
+- `jq_11f_roewaa_strategy.py` — 11-factor roe_waa value-growth (claimed IS 283.7%, OOS 192.7%)
+- `jq_deploy_roa_quality_v3.py` — ROA-quality v15aa series (claimed BEST_B CAGR 133.6%, OOS 102.8%)
+- `jq_deploy_roa_quality_v4.py` — 4-factor ROA+q_roe (claimed 4F_K5 CAGR 143.5%, OOS 120.0%)
+- `jq_deploy_roa_quality_v5.py` — 6-factor ROA-quality (claimed CAGR 179.3%, OOS 137.1%)
+
+Containment is identical to the sandbox section: `.gitignore` line 102 ignores
+`*.py` here (this README stays tracked), the PIT lint skips this sanctioned root,
+and `test_dormant_module_boundaries.py` forbids live code referencing the archive.
