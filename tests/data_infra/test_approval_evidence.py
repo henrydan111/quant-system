@@ -324,6 +324,157 @@ class TestMalformedYamlFailsClosed:
             load_approval_bindings(approvals)
 
 
+class TestNullOrBlankBindingFailsClosed:
+    """PR 10b (GPT 5.5 Pro round-7 review): pre-PR-10b ``data.get(...)``
+    collapsed "key absent" and "key present with null value" into the
+    same ``None``, so an approval YAML that KEPT the binding keys but
+    blanked their values (e.g. during a manual provider rebuild) was
+    silently skipped as legacy. PR 10b distinguishes key absence (via
+    ``in``) from a null / empty / blank / non-string value, and fails
+    closed on the latter."""
+
+    def test_both_keys_null_raises(self, tmp_path: Path) -> None:
+        """Keys present but both values null (`key:` with no value).
+        Pre-PR-10b this was the silent-skip fail-open path."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "null_values.yaml", """
+approval_id: null_values
+date: 2026-05-27
+dataset_id: indicators
+to_status: approved
+provider_build_id:
+calendar_policy_id:
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "null_values.yaml" in msg
+        # The diagnostic must flag the value, not claim the key is absent.
+        assert "null" in msg.lower() or "blank" in msg.lower() or "empty" in msg.lower()
+
+    def test_both_keys_empty_string_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "empty_str.yaml", """
+approval_id: empty_str
+dataset_id: indicators
+to_status: approved
+provider_build_id: ""
+calendar_policy_id: ""
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_both_keys_whitespace_raises(self, tmp_path: Path) -> None:
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "whitespace.yaml", """
+approval_id: whitespace
+dataset_id: indicators
+to_status: approved
+provider_build_id: "   "
+calendar_policy_id: "   "
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_one_key_present_null_other_absent_raises(self, tmp_path: Path) -> None:
+        """provider_build_id present with null value, calendar_policy_id
+        entirely absent. The partial-key check fires first (exactly one
+        key present), which is still a fail-closed outcome."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "one_null_one_absent.yaml", """
+approval_id: one_null_one_absent
+dataset_id: indicators
+to_status: approved
+provider_build_id:
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_one_key_valid_other_null_raises(self, tmp_path: Path) -> None:
+        """Both keys present, one valid, one null. Must fail closed —
+        a half-blanked binding cannot validate against the manifest."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "half_blank.yaml", """
+approval_id: half_blank
+dataset_id: indicators
+to_status: approved
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id:
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError) as exc_info:
+            load_approval_bindings(approvals)
+        msg = str(exc_info.value)
+        assert "calendar_policy_id" in msg
+
+    def test_non_string_value_raises(self, tmp_path: Path) -> None:
+        """A binding value that parses to a non-string (e.g. a number or
+        a list) is a governance error."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "non_string.yaml", """
+approval_id: non_string
+dataset_id: indicators
+to_status: approved
+provider_build_id: 12345
+calendar_policy_id: frozen_20260227_system_build
+""".strip())
+        with pytest.raises(ApprovalEvidenceConfigError):
+            load_approval_bindings(approvals)
+
+    def test_true_legacy_neither_key_still_skipped(self, tmp_path: Path) -> None:
+        """A YAML with NEITHER binding key (true legacy) must still be
+        silently skipped — PR 10b only tightens the value validation for
+        YAMLs that DECLARE the keys."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "true_legacy.yaml", """
+approval_id: true_legacy
+date: 2024-01-01
+dataset_id: legacy_dataset
+to_status: approved
+""".strip())
+        # No raise; binding list is empty (skipped).
+        assert load_approval_bindings(approvals) == []
+
+    def test_valid_nonempty_strings_pass_and_stripped(self, tmp_path: Path) -> None:
+        """Both keys present with non-empty string values pass — and the
+        stored values are stripped of surrounding whitespace so a binding
+        with trailing spaces still matches a clean manifest value."""
+        approvals = tmp_path / "approvals"
+        approvals.mkdir()
+        _write_yaml(approvals / "valid.yaml", """
+approval_id: valid
+dataset_id: indicators
+to_status: approved
+provider_build_id: "  prod_full_20260421_namespace_v1  "
+calendar_policy_id: frozen_20260227_system_build
+""".strip())
+        bindings = load_approval_bindings(approvals)
+        assert len(bindings) == 1
+        # Stored value is stripped.
+        assert bindings[0].declared_provider_build_id == "prod_full_20260421_namespace_v1"
+        assert bindings[0].declared_calendar_policy_id == "frozen_20260227_system_build"
+
+        # And it matches a clean manifest value (drift=False) — proving the
+        # strip is applied before comparison.
+        manifest = tmp_path / "manifest.json"
+        _write_manifest(
+            manifest,
+            provider_build_id="prod_full_20260421_namespace_v1",
+            calendar_policy_id="frozen_20260227_system_build",
+        )
+        drifts = evaluate_approval_evidence_bindings(
+            approvals_dir=approvals, manifest_path=manifest,
+        )
+        assert len(drifts) == 1
+        assert drifts[0].drift is False
+
+
 class TestMissingManifest:
     def test_missing_manifest_raises(self, tmp_path: Path) -> None:
         """A formal-mode caller cannot validate against an absent manifest

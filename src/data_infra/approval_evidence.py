@@ -35,13 +35,22 @@ Wired into
   publishing a formal artifact whose dataset dependencies overlap with
   approved field-registry datasets.
 
-Schema contract
-===============
+Schema contract (PR 10a + PR 10b)
+=================================
 
-Each approval YAML under ``config/field_registry/approvals/`` SHOULD
-carry both ``provider_build_id`` and ``calendar_policy_id`` keys at the
-top level. YAMLs predating the PR 9a round-3 binding contract (those
-without either key) are silently skipped — they cannot be validated.
+Each approval YAML under ``config/field_registry/approvals/`` is held to
+the following contract (enforced by :func:`load_approval_bindings`):
+
+  * Modern approval YAMLs MUST carry BOTH ``provider_build_id`` AND
+    ``calendar_policy_id`` keys with non-empty string values.
+  * Legacy YAMLs predating the PR 9a round-3 binding contract may omit
+    BOTH keys; they are silently skipped because they cannot be
+    validated.
+  * Partial (exactly one key), null / empty / blank / non-string valued,
+    malformed (unparseable), or non-mapping YAMLs FAIL daily QA with
+    :class:`ApprovalEvidenceConfigError`. None of these can silently
+    disappear from the drift scan.
+
 The schema documentation lives at
 ``config/field_registry/approvals/README.md``.
 """
@@ -155,15 +164,22 @@ def load_approval_bindings(
 ) -> list[ApprovalBinding]:
     """Scan an approvals directory for YAML files and extract bindings.
 
-    Contract (PR 10a, post-PR-10 review):
+    Contract (PR 10a, hardened by PR 10b):
 
-      * BOTH ``provider_build_id`` AND ``calendar_policy_id`` absent →
-        legacy approval, silently skipped.
-      * BOTH binding keys present → validated.
-      * Exactly ONE present → :class:`ApprovalEvidenceConfigError` —
+      * BOTH ``provider_build_id`` AND ``calendar_policy_id`` keys absent
+        → legacy approval, silently skipped.
+      * BOTH binding keys present with non-empty string values →
+        validated.
+      * Exactly ONE key present → :class:`ApprovalEvidenceConfigError` —
         partial bindings would silently reduce the contract from two
         dimensions to one (wildcard on the missing axis), a fail-open
         path that PR 10a removes.
+      * BOTH keys present but EITHER value is null / empty / blank /
+        non-string → :class:`ApprovalEvidenceConfigError` (PR 10b). Pre-PR-10b
+        ``data.get(...)`` collapsed "key absent" and "key present with
+        null value" into the same ``None``, so a YAML that kept the keys
+        but blanked their values (e.g. during a manual provider rebuild)
+        was silently skipped as legacy — a fail-open path PR 10b closes.
 
     Other fail-closed conditions:
 
@@ -172,8 +188,9 @@ def load_approval_bindings(
         scalar) → :class:`ApprovalEvidenceConfigError`.
 
     The strictness is intentional: ``config/field_registry/approvals/``
-    is a governance directory. A malformed or partial YAML cannot weaken
-    the daily-QA gate by silently disappearing from the scan.
+    is a governance directory. A malformed, partial, or value-blanked
+    YAML cannot weaken the daily-QA gate by silently disappearing from
+    the scan.
     """
     # Lazy yaml import so the module is importable in minimal envs.
     import yaml
@@ -197,24 +214,46 @@ def load_approval_bindings(
                 f"got {type(data).__name__}. PR 10a requires every approval "
                 "YAML to be a top-level mapping."
             )
-        pb_id = data.get("provider_build_id")
-        cp_id = data.get("calendar_policy_id")
-        if pb_id is None and cp_id is None:
-            # Legacy YAML without binding — silently skip.
+        # PR 10b: distinguish KEY ABSENCE from a key present with a
+        # null / blank value. ``data.get(...)`` returns None for both,
+        # which let a value-blanked YAML skip as legacy. Use ``in`` for
+        # presence and validate the value separately.
+        has_pb = "provider_build_id" in data
+        has_cp = "calendar_policy_id" in data
+        if not has_pb and not has_cp:
+            # True legacy YAML predating the binding contract — skip.
             continue
-        if (pb_id is None) ^ (cp_id is None):
-            # Exactly one declared — fail closed. Partial bindings would
-            # silently weaken the drift check to one axis, a fail-open
-            # path PR 10a closes.
-            missing = "calendar_policy_id" if pb_id is not None else "provider_build_id"
-            present = "provider_build_id" if pb_id is not None else "calendar_policy_id"
+        if has_pb != has_cp:
+            # Exactly one key declared — fail closed. Partial bindings
+            # would silently weaken the drift check to one axis.
+            missing = "calendar_policy_id" if has_pb else "provider_build_id"
+            present = "provider_build_id" if has_pb else "calendar_policy_id"
             raise ApprovalEvidenceConfigError(
                 f"Approval YAML at {path} declares {present!r} but not "
-                f"{missing!r}. PR 10a requires approval evidence to bind "
-                "BOTH provider_build_id AND calendar_policy_id, or omit "
-                "both as a legacy approval. Add the missing key or remove "
-                f"{present!r} to mark this approval legacy."
+                f"{missing!r}. Approval evidence must bind BOTH "
+                "provider_build_id AND calendar_policy_id (with non-empty "
+                "string values), or omit BOTH keys as a legacy approval. "
+                f"Add {missing!r} or remove {present!r} to mark this "
+                "approval legacy."
             )
+        # Both keys present — values MUST be non-empty strings. A null /
+        # empty / blank / non-string value is a governance error, NOT a
+        # legacy skip (PR 10b).
+        pb_id = data["provider_build_id"]
+        cp_id = data["calendar_policy_id"]
+        for key, value in (
+            ("provider_build_id", pb_id),
+            ("calendar_policy_id", cp_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ApprovalEvidenceConfigError(
+                    f"Approval YAML at {path} declares {key!r} but its value "
+                    f"is null / empty / blank / non-string ({value!r}). "
+                    "Approval evidence must bind both axes to non-empty "
+                    "string values, or omit BOTH keys as a legacy approval. "
+                    "A value-blanked binding cannot silently skip the "
+                    "drift check."
+                )
         out.append(
             ApprovalBinding(
                 approval_id=str(data.get("approval_id") or path.stem),
@@ -222,8 +261,8 @@ def load_approval_bindings(
                 dataset_id=str(data.get("dataset_id") or ""),
                 to_status=str(data.get("to_status") or ""),
                 date=str(data.get("date") or ""),
-                declared_provider_build_id=str(pb_id),
-                declared_calendar_policy_id=str(cp_id),
+                declared_provider_build_id=pb_id.strip(),
+                declared_calendar_policy_id=cp_id.strip(),
             )
         )
     return out
