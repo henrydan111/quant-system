@@ -22,14 +22,18 @@ Rules
   (``"2018-10-30"``), which lexically mis-sorts against compact trade dates —
   this is the exact lookahead vector that produced the val_heavy artifact, so it
   is a **HARD ERROR (exit 1)**. ``trade_date`` is the compact market-date index
-  whose stringify is benign → **WARNING (display-only)**. An inline
-  ``# noqa: unsafe-pit-dates`` comment suppresses a PIT001 finding when a
-  reviewer has confirmed it safe (PIT002 has NO inline escape — allowlist only).
+  whose stringify is benign → **WARNING (display-only)**. A PIT001 finding can be
+  suppressed inline ONLY with a structured, reason-carrying comment —
+  ``# noqa: unsafe-pit-dates[PIT001] reason: <why this is safe>`` — so every
+  suppression is self-documenting; a bare ``# noqa: unsafe-pit-dates`` does NOT
+  suppress. PIT002 has NO inline escape at all (allowlist only).
 
 Targets
 -------
-Both ``.py`` files and Jupyter ``.ipynb`` notebooks (code cells, magics stripped)
-are scanned.
+Both ``.py`` files and Jupyter ``.ipynb`` notebooks are scanned. In notebooks,
+executable Jupyter *magic* / *shell* lines (``%``, ``!``, ``?``) are excluded from
+the Python AST scan, but are still line-scanned for raw ``pit_ledger`` references
+(a ``!python -c "...pit_ledger..."`` cell is a real ledger read, not prose).
 
 Allowlist
 ---------
@@ -49,6 +53,7 @@ import argparse
 import ast
 import datetime as _dt
 import io
+import re
 import sys
 import tokenize
 from pathlib import Path
@@ -74,7 +79,14 @@ KNOWN_DATE_COLS = {
 # benign side (warning only).
 FUNDAMENTAL_DATE_COLS = KNOWN_DATE_COLS - {"trade_date"}
 # Inline suppression for PIT001 only (PIT002 has NO inline escape — allowlist only).
-_PIT001_NOQA = "noqa: unsafe-pit-dates"
+# A bare "# noqa: unsafe-pit-dates" is intentionally NOT enough: a structured
+# reason is required so every suppression is self-documenting and auditable (v5
+# governance contract). Accepts an optional [PIT001] tag, then "reason:" followed
+# by a non-trivial (>= 9 char) explanation.
+#   e.g.  # noqa: unsafe-pit-dates[PIT001] reason: compact market-date export only
+_PIT001_NOQA_RE = re.compile(
+    r"#\s*noqa:\s*unsafe-pit-dates(?:\[PIT001\])?\s+reason:\s*\S.{8,}"
+)
 _FSTRING_MIDDLE = getattr(tokenize, "FSTRING_MIDDLE", None)
 
 # Sanctioned frozen-script archive ROOTS skipped during directory recursion.
@@ -183,16 +195,17 @@ def _date_col_of(node: ast.AST) -> str | None:
 def _pit001_findings(tree: ast.AST, source_lines: list[str]) -> list[tuple[int, str, str]]:
     """Detect date-column stringify. Returns (lineno, snippet, severity) where
     severity is "error" for a FUNDAMENTAL date column (the dashed-ISO lookahead
-    vector) or "warning" for trade_date / compact dates. An inline
-    ``# noqa: unsafe-pit-dates`` on the line suppresses the finding entirely."""
+    vector) or "warning" for trade_date / compact dates. A reason-carrying
+    ``# noqa: unsafe-pit-dates[PIT001] reason: ...`` on the line suppresses the
+    finding; a bare ``# noqa`` does not (see _PIT001_NOQA_RE)."""
     out: list[tuple[int, str, str]] = []
 
     def _emit(lineno: int, col: str | None, kind: str) -> None:
         if col is None:
             return
         line = source_lines[lineno - 1] if 0 <= lineno - 1 < len(source_lines) else ""
-        if _PIT001_NOQA in line:
-            return  # explicitly suppressed (reason expected in the comment)
+        if _PIT001_NOQA_RE.search(line):
+            return  # explicitly suppressed with a documented reason
         if col in FUNDAMENTAL_DATE_COLS:
             out.append((lineno, f"{kind} on FUNDAMENTAL date column '{col}' (dashed-ISO; lookahead vector)", "error"))
         else:
@@ -241,10 +254,14 @@ def scan_file(path: Path) -> tuple[list[tuple[int, str]], list[tuple[int, str, s
 def scan_notebook(path: Path) -> tuple[list[tuple[int, str]], list[tuple[int, str, str]]]:
     """PIT002/PIT001 scan of a Jupyter .ipynb (parsed as JSON; stdlib only).
 
-    Code cells are scanned individually (after stripping Jupyter magics / shell
-    lines). If a cell does not parse as Python (fragments), PIT002 falls back to
-    a comment-stripped line scan for the ledger token. ``lineno`` is reported as
-    ``cell_index`` since cell line numbers are not globally meaningful."""
+    Code cells are scanned individually. Executable Jupyter magic / shell lines
+    (``%``, ``!``, ``?``) are excluded from the Python AST scan (they are not valid
+    Python) but are FIRST line-scanned for the raw ``pit_ledger`` token — a
+    ``!python -c "...pit_ledger..."`` cell is a real ledger read, not prose, and
+    must not hide behind the magic-strip. The remaining real Python is AST-scanned;
+    if it does not parse (fragments), PIT002 falls back to a comment-stripped line
+    scan. ``lineno`` is reported as ``cell_index`` since cell line numbers are not
+    globally meaningful."""
     import json as _json
 
     data = _json.loads(path.read_text(encoding="utf-8"))
@@ -258,7 +275,15 @@ def scan_notebook(path: Path) -> tuple[list[tuple[int, str]], list[tuple[int, st
             continue
         src = cell.get("source", "")
         text = "".join(src) if isinstance(src, list) else str(src)
-        code_lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith(("%", "!", "?"))]
+        magic_lines: list[str] = []
+        code_lines: list[str] = []
+        for ln in text.splitlines():
+            (magic_lines if ln.lstrip().startswith(("%", "!", "?")) else code_lines).append(ln)
+        # Magic / shell lines are stripped from the AST scan but still line-scanned
+        # for a raw ledger read (comment-stripped) so they cannot hide a PIT002.
+        for ln in magic_lines:
+            if LEDGER_TOKEN in ln.split("#", 1)[0]:
+                pit002.append((ci, f"raw {LEDGER_TOKEN!r} reference in magic/shell line (cell {ci})"))
         code = "\n".join(code_lines)
         try:
             cell_pit002, cell_pit001 = _scan_source(code)
@@ -347,8 +372,9 @@ def main() -> int:
         for lineno, snippet, severity in pit001:
             if severity == "error":
                 print(
-                    f"{rel_posix}:{lineno}: PIT001 (error): {snippet} — convert via the PIT loader "
-                    f"or wrap intentionally-safe uses with `# noqa: unsafe-pit-dates`.",
+                    f"{rel_posix}:{lineno}: PIT001 (error): {snippet} — convert via the PIT loader, "
+                    f"or if provably safe annotate with a reason: "
+                    f"`# noqa: unsafe-pit-dates[PIT001] reason: <why>`.",
                     file=sys.stderr,
                 )
                 n_pit001_err += 1

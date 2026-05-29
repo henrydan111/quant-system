@@ -82,14 +82,81 @@ def test_pit001_datetime_as_string_flagged(tmp_path):
     assert any(s == "error" for _, _, s in pit001)
 
 
-def test_pit001_noqa_suppresses(tmp_path):
-    # An inline `# noqa: unsafe-pit-dates` removes the finding entirely.
-    p = _write(tmp_path, "noqa.py",
-               'a = df["effective_date"].astype(str)  # noqa: unsafe-pit-dates\n'
+def test_pit001_bare_noqa_does_not_suppress(tmp_path):
+    # A REASONLESS "# noqa: unsafe-pit-dates" must NOT suppress — a structured
+    # reason is required so every suppression is self-documenting.
+    p = _write(tmp_path, "bare.py",
+               'a = df["effective_date"].astype(str)  # noqa: unsafe-pit-dates\n')
+    _, pit001 = lint.scan_file(p)
+    assert [(ln, sev) for ln, _, sev in pit001] == [(1, "error")]
+
+
+def test_pit001_reasoned_noqa_suppresses(tmp_path):
+    # A reason-carrying noqa suppresses; the next (un-annotated) line is still flagged.
+    p = _write(tmp_path, "reasoned.py",
+               'a = df["effective_date"].astype(str)  # noqa: unsafe-pit-dates[PIT001] reason: compact market-date export only\n'
                'b = df["ann_date"].astype(str)\n')  # still flagged
     _, pit001 = lint.scan_file(p)
     lines = {ln for ln, _, _ in pit001}
     assert lines == {2}
+
+
+def test_pit001_reasoned_noqa_without_tag_suppresses(tmp_path):
+    # The [PIT001] tag is optional; "reason:" + a real reason is what matters.
+    p = _write(tmp_path, "reasoned2.py",
+               'a = df["ann_date"].astype(str)  # noqa: unsafe-pit-dates reason: audited safe export path\n')
+    _, pit001 = lint.scan_file(p)
+    assert pit001 == []
+
+
+def test_pit001_noqa_does_not_rescue_pit002(tmp_path):
+    # The PIT001 reason-noqa never suppresses a PIT002 raw-ledger read on the same line.
+    p = _write(tmp_path, "mixed.py",
+               'a = pd.read_parquet("data/pit_ledger/x.parquet")  # noqa: unsafe-pit-dates reason: I really want this\n')
+    pit002, _ = lint.scan_file(p)
+    assert len(pit002) == 1  # PIT002 still fires
+
+
+def test_scan_notebook_flags_ledger_read():
+    """A code cell that reads the raw ledger is a PIT002 violation; a markdown
+    cell mentioning the ledger is not."""
+    import json as _json
+    nb = {
+        "cells": [
+            {"cell_type": "markdown", "source": ["see data/pit_ledger/ for the raw tables\n"]},
+            {"cell_type": "code", "source": ["%matplotlib inline\n",
+                                              "df = pd.read_parquet('data/pit_ledger/indicators/x.parquet')\n"]},
+            {"cell_type": "code", "source": ["x = df['effective_date'].astype(str)\n"]},
+        ],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "nb.ipynb"
+        p.write_text(_json.dumps(nb), encoding="utf-8")
+        pit002, pit001 = lint.scan_notebook(p)
+    assert len(pit002) == 1                       # only the code-cell ledger read
+    assert any(s == "error" for _, _, s in pit001)  # fundamental-date stringify in a code cell
+
+
+def test_scan_notebook_flags_ledger_in_magic_and_shell_lines():
+    """Executable %magic / !shell lines that read the raw ledger must NOT slip
+    past the magic-strip — they are real ledger reads, not prose."""
+    import json as _json, tempfile
+    nb = {
+        "cells": [
+            {"cell_type": "code", "source": ['%time df = pd.read_parquet("data/pit_ledger/indicators/x.parquet")\n']},
+            {"cell_type": "code", "source": ['!python -c "import pandas as pd; pd.read_parquet(\'data/pit_ledger/indicators/x.parquet\')"\n']},
+            {"cell_type": "code", "source": ['# %fake data/pit_ledger comment in a code line is a comment, not flagged\n', 'y = 1\n']},
+        ],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "nb.ipynb"
+        p.write_text(_json.dumps(nb), encoding="utf-8")
+        pit002, _ = lint.scan_notebook(p)
+    # Cell 0 (%time) and cell 1 (!python) are both real ledger reads; cell 2 is a comment.
+    assert len(pit002) == 2
 
 
 def test_scan_notebook_flags_ledger_read():
