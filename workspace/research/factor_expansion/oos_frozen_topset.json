@@ -1,0 +1,28 @@
+{
+  "frozen_at": "2026-05-31T00:59:22",
+  "rule": "workspace/research/factor_expansion/oos_topset_selection_rule.md",
+  "is_screen": "screening_is_50",
+  "frozen_topset": [
+    "grow_n_income_attr_p_yoy_accel_q",
+    "grow_operate_profit_yoy_accel_q",
+    "grow_total_revenue_yoy_accel_q",
+    "grow_operate_profit_yoy_q",
+    "grow_n_income_attr_p_yoy_q",
+    "rev_turnover_spike_5d",
+    "qual_piotroski_fscore_9pt",
+    "acc_cash_roa_ttm",
+    "acc_cfo_to_ni_ttm",
+    "val_retearn_yield",
+    "liq_zero_ret_days_10d",
+    "val_fcf_ev_ttm",
+    "val_ebit_ev_ttm"
+  ],
+  "count": 13,
+  "redundancy_pruned": [
+    {
+      "dropped": "grow_revenue_yoy_accel_q",
+      "kept": "grow_total_revenue_yoy_accel_q"
+    }
+  ],
+  "oos_run": "NOT YET RUN"
+}
