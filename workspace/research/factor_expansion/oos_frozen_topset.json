@@ -24,5 +24,11 @@
       "kept": "grow_total_revenue_yoy_accel_q"
     }
   ],
-  "oos_run": "NOT YET RUN"
+  "oos_run": "COMPLETE (2026-05-31, one-shot, screening_oos/)",
+  "oos_outcome": {
+    "registered": 6,
+    "deferred": 2,
+    "rejected": 5
+  },
+  "registration_boundary": "register_validated = recorded in candidate artifacts + oos_results_and_registration.md. NOT written to data/factor_registry/ master tables (privileged production path per CLAUDE.md \u00a79; requires orchestrator publish + strategy-level promotion gate). Conservative per /goal irreversible-change caution."
 }

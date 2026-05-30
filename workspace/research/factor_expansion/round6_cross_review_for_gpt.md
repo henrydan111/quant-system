@@ -1,5 +1,18 @@
 # Round-6 Cross-Review for GPT 5.5 Pro — post-merge + Wave-1 promotion
 
+> **POST-ROUND-6 UPDATE (2026-05-31, GPT conditions executed):** GPT's Round-6
+> conditional GO was actioned in full. (1) Structural-zero audit confirmed
+> goodwill/lt_borr/st_borr encode true-zero as NaN → `acc_goodwill_ratio` +
+> `acc_noa_scaled` excluded. (2) Wave-2 promoted only the 3 indicator margin
+> ratios (holder_num + forecast deferred); formal-eligible 47→50. (3) Predeclared
+> selection rule frozen, applied to the Wave-2 IS screen → **13-factor frozen top
+> set** (commit `73d556a`, pre-OOS). (4) **Sealed OOS run ONCE** (2021-2026): **6
+> factors registered** (validated), 2 deferred, 5 rejected. Full evidence in
+> [oos_results_and_registration.md](oos_results_and_registration.md). The
+> earnings-acceleration cluster generalized (decayed but sign-stable); the YoY
+> *level* + most accruals/EV-value factors collapsed OOS. See that doc for the
+> decision table and caveats.
+
 **Date:** 2026-05-31.
 **Scope:** everything changed since the Round-5 verdict (`5e467f8` → now). Three things to
 cross-review: (1) the Round-5 production fixes as MERGED to main, (2) the Wave-1
