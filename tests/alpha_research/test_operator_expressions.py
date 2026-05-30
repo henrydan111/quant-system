@@ -119,9 +119,12 @@ class MomentumReversalOperatorTests(unittest.TestCase):
         )
 
     def test_up_down_ratio_uses_fixed_daily_ret(self):
+        # Factor audit 2026-05-30 (F1/F4): switched Count → Sum(If(...,1,0))
+        # because Qlib Count(cond, N) in this build returns N (ignores the
+        # condition). GPT 5.5 Pro Round-5 mandatory fix.
         self.assertEqual(
             operators.up_down_ratio(20),
-            f"Count({operators.DAILY_RET} > 0, 20) / 20",
+            f"Sum(If({operators.DAILY_RET} > 0, 1, 0), 20) / 20",
         )
 
 
@@ -240,9 +243,11 @@ class LiquidityOperatorTests(unittest.TestCase):
         )
 
     def test_zero_trade_pct_wraps_vol(self):
+        # Factor audit 2026-05-30 (F1/F4): switched Count → Sum(If(...,1,0))
+        # (Qlib Count is broken in this build). GPT 5.5 Pro Round-5.
         self.assertEqual(
             operators.zero_trade_pct(20),
-            "Count(Ref($vol, 1) < 1, 20) / 20",
+            "Sum(If(Ref($vol, 1) < 1, 1, 0), 20) / 20",
         )
 
     def test_spread_proxy_wraps_inner_in_ref(self):
