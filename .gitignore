@@ -131,6 +131,10 @@ workspace/research/**/.ipynb_checkpoints/
 # Factor-expansion handoff: track the machine-readable candidate lists next to the
 # proposal markdown so the GPT review has the full artifact set in-repo.
 !workspace/research/factor_expansion/*.csv
+# Audit + IS-screening artifacts (read-only evidence, no compute side-effects):
+!workspace/research/factor_expansion/screening_is/
+!workspace/research/factor_expansion/screening_is/*.csv
+!workspace/research/factor_expansion/screening_is/*.parquet
 
 # =============================================================================
 # Claude Code / Codex local tooling cache (binaries, sessions)

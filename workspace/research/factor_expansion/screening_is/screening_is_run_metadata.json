@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-05-30T20:07:49",
+  "window": {
+    "is_start": "2014-01-01",
+    "is_end": "2020-12-31",
+    "oos_status": "SEALED (2021+ untouched)"
+  },
+  "horizons": [
+    5,
+    10,
+    20
+  ],
+  "factor_count": 21,
+  "grade_counts": {
+    "C": 12,
+    "B": 5,
+    "D": 4
+  },
+  "source": "factor_candidates_merged.csv (formal_eligible == yes)",
+  "qlib_dir": "E:\\\u91cf\u5316\u7cfb\u7edf\\data\\qlib_data",
+  "stage": "is_only",
+  "timing_seconds": {
+    "compute_factors": 174.92,
+    "run_batch_screening": 68.27
+  }
+}

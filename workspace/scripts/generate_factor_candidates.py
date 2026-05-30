@@ -499,13 +499,19 @@ def build_families() -> list[dict]:
     ))
 
     # ─────────── LIQUIDITY / MICROSTRUCTURE (extend) ───────────
+    # NOTE (screening diagnostic 2026-05-30): Qlib `Count(cond, N)` in this build
+    # returns N (count of non-NaN obs), IGNORING the condition — verified
+    # empirically (Count(ret>0,20) ≡ 20 for all stocks). It collapses any
+    # Count-based factor to a cross-sectional constant (zero RankIC days). Use
+    # `Sum(If(cond, 1, 0), N)` for conditional counts instead.
     for w in W_SHORT:
         fams.append(dict(
             name_tmpl=f"liq_zero_ret_days_{w}d",
-            expr_fn=(lambda ww=w: f"Count(Abs({RET}) < 0.0001, {ww}) / {ww}"),
+            expr_fn=(lambda ww=w: f"Sum(If(Abs({RET}) < 0.0001, 1, 0), {ww}) / {ww}"),
             category="Liquidity", price_basis="adjusted",
             sign="-", decay_days=20, neutralize="size",
-            rationale="Zero-return days (Lesmond illiquidity).",
+            rationale="Zero-return days (Lesmond illiquidity); Sum(If(...)) form — "
+                      "Qlib Count() ignores the condition in this build.",
             requires=["close", "adj_factor"],
         ))
 
@@ -615,14 +621,16 @@ def build_families() -> list[dict]:
         # §G fix: the un-Abs'd form ranked smooth losers high because Sign<0 × count<0
         # → positive). Abs() on the up-minus-down count restores the intended sign:
         # continuous winners high, continuous losers low.
+        # Count() is broken in this Qlib build (ignores the condition, returns N) —
+        # use Sum(If(cond,1,0),N) for the up/down day counts. Verified 2026-05-30.
         expr_fn=lambda: (
             f"Sign(Ref({op.ADJ_CLOSE}, 1) / Ref({op.ADJ_CLOSE}, 253) - 1) "
-            f"* Abs((Count({RET} > 0, 252) - Count({RET} < 0, 252)) / 252)"
+            f"* Abs((Sum(If({RET} > 0, 1, 0), 252) - Sum(If({RET} < 0, 1, 0), 252)) / 252)"
         ),
         category="Momentum", price_basis="adjusted",
         sign="+", decay_days=60, neutralize="industry",
         rationale="Directional information-discreteness (frog-in-the-pan); smooth "
-                  "trends rank by direction. GPT Round-3 sign fix.",
+                  "trends rank by direction. GPT Round-3 sign fix + Sum(If) count fix.",
         requires=["close", "adj_factor"],
     ))
 
