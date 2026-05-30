@@ -256,25 +256,24 @@ def build_families() -> list[dict]:
     ))
 
     # ─────────── QUALITY / PROFITABILITY (large expansion) ───────────
+    # average total assets (stock) for flow/avg-assets ratios
+    _AVG_TA = "((Ref($total_assets_q0, 1) + Ref($total_assets_q4, 1)) / 2)"
+    # GPT Round-3 §B: gross profitability must use TTM single-quarter flows over
+    # AVERAGE assets, not _cum_q0 (YTD, quarter-seasonal) over end assets. Decay
+    # 120→250 (structural quality, not a short event signal).
     fams.append(dict(
-        name_tmpl="qual_gross_profitability",
+        name_tmpl="qual_gross_profitability_ttm",
         expr_fn=lambda: (
-            "(Ref($total_revenue_cum_q0, 1) - Ref($oper_cost_cum_q0, 1)) "
-            "/ Ref($total_assets_q0, 1)"
+            f"({_ttm('total_revenue')} - {_ttm('oper_cost')}) / {_AVG_TA}"
         ),
         category="Quality", price_basis="raw",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="Novy-Marx gross profitability (gross profit / total assets).",
+        sign="+", decay_days=250, neutralize="industry",
+        rationale="Novy-Marx gross profitability (TTM gross profit / avg assets); "
+                  "TTM + avg-assets per GPT Round-3 (was _cum_q0/end-assets).",
         requires=["total_revenue", "oper_cost", "total_assets"],
     ))
-    fams.append(dict(
-        name_tmpl="qual_cash_roa",
-        expr_fn=lambda: "Ref($n_cashflow_act_cum_q0, 1) / Ref($total_assets_q0, 1)",
-        category="Quality", price_basis="raw",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="Cash return on assets (OCF / total assets).",
-        requires=["n_cashflow_act", "total_assets"],
-    ))
+    # GPT Round-3 §C: qual_cash_roa DROPPED — it was _cum_q0/end-assets and is
+    # redundant with acc_cash_roa_ttm (TTM OCF / avg assets) below. Do not keep both.
     # NOTE (GPT review §4 dedup): qual_dupont_margin / qual_dupont_turnover and
     # the qual_margin_{grossprofit_margin,netprofit_margin} ladder members were
     # DROPPED — they duplicate existing catalog factors qual_net_margin /
@@ -415,14 +414,17 @@ def build_families() -> list[dict]:
         ))
         fams.append(dict(
             name_tmpl=f"grow_{f}_yoy_accel_q",
+            # GPT Round-3 §D: the previous `q0/q4 - q1/q4` was NOT YoY accel (prior-
+            # quarter YoY needs q1/q5, and _sq_q5 is not materialized). Correct form
+            # is a 1-quarter (~63 trading day) time-series Delta of the current YoY
+            # rate — equivalent to (YoY_now - YoY_one_quarter_ago) without needing q5.
             expr_fn=(lambda fld=f: (
-                f"(Ref(${fld}_sq_q0, 1) / Ref(${fld}_sq_q4, 1) - 1) "
-                f"- (Ref(${fld}_sq_q1, 1) / Ref(${fld}_sq_q4, 1) - 1)"
+                f"Delta(Ref(${fld}_sq_q0, 1) / Ref(${fld}_sq_q4, 1) - 1, 63)"
             )),
             category="Growth", price_basis="raw",
             sign="+", decay_days=60, neutralize="industry",
-            rationale=f"YoY-growth acceleration of {f} (quarter-on-quarter change "
-                      f"in YoY rate; seasonality-neutral).",
+            rationale=f"YoY-growth acceleration of {f}: 1-quarter Delta of the YoY "
+                      f"rate (GPT Round-3 fix; avoids the unmaterialized _sq_q5).",
             requires=[f],
         ))
 
@@ -481,9 +483,10 @@ def build_families() -> list[dict]:
                 f"Mean(Power(Log({op.ADJ_HIGH_T1} / {op.ADJ_LOW_T1}), 2), {ww})"
             )),
             category="Volatility", price_basis="adjusted",
-            sign="-", decay_days=20, neutralize="size",
-            rationale="True Parkinson log high-low range variance (fixes the "
-                      "range-ratio mislabel flagged in GPT review §4).",
+            # GPT Round-3 §D: decay should track the lookback window, not a flat 20.
+            sign="-", decay_days=w, neutralize="size",
+            rationale=f"True Parkinson log high-low range variance ({w}d); fixes the "
+                      "range-ratio mislabel (GPT review §4) + per-window decay (§D).",
             requires=["high", "low", "adj_factor"],
         ))
     fams.append(dict(
@@ -507,25 +510,48 @@ def build_families() -> list[dict]:
         ))
 
     # ─────────── CAPITAL FLOW (moneyflow — quarantine) ───────────
+    # GPT Round-3 §F unit fix: moneyflow amount fields are in 万元 (10k yuan)
+    # while daily $amount is in 千元 (thousand yuan) — a factor-of-10 mismatch.
+    # Divide by ($amount / 10) so numerator and denominator share the 万元 basis.
     for w in W_SHORT:
         fams.append(dict(
             name_tmpl=f"flow_elg_net_pct_{w}d",
             expr_fn=(lambda ww=w: (
-                f"Mean(Ref((($buy_elg_amount - $sell_elg_amount) / $amount), 1), {ww})"
+                f"Mean(Ref((($buy_elg_amount - $sell_elg_amount) / ($amount / 10)), 1), {ww})"
             )),
             category="CapitalFlow", price_basis="raw",
             sign="+", decay_days=10, neutralize="size",
-            rationale="Extra-large order net inflow share (institutional flow).",
+            rationale="Extra-large order net inflow share (institutional flow); "
+                      "unit-corrected ($amount/10 to match 万元 moneyflow basis).",
             requires=["buy_elg_amount", "sell_elg_amount", "amount"],
         ))
+    # Institutional-minus-retail order-flow divergence (GPT Round-3 add, unit-fixed):
+    # (large+elg net) - (small net), normalized by 万元-basis amount.
+    fams.append(dict(
+        name_tmpl="flow_inst_retail_divergence_20d",
+        expr_fn=lambda: (
+            "Mean(Ref(((($buy_lg_amount + $buy_elg_amount - $sell_lg_amount "
+            "- $sell_elg_amount) - ($buy_sm_amount - $sell_sm_amount)) "
+            "/ ($amount / 10)), 1), 20)"
+        ),
+        category="CapitalFlow", price_basis="raw",
+        sign="+", decay_days=10, neutralize="size",
+        rationale="Institutional (large+elg) minus retail (small) net order-flow "
+                  "divergence; unit-corrected ($amount/10). GPT Round-3 add.",
+        requires=["buy_lg_amount", "buy_elg_amount", "sell_lg_amount",
+                  "sell_elg_amount", "buy_sm_amount", "sell_sm_amount", "amount"],
+    ))
 
     # ─────────── MARGIN (margin_detail — quarantine) ───────────
+    # GPT Round-3 §E unit fix: rzmre/rzche are in 元 (yuan) while circ_mv is in
+    # 万元 (10k yuan) — scale circ_mv by 10000 so the ratio is dimensionless.
     fams.append(dict(
         name_tmpl="margin_net_buy_ratio_20d",
-        expr_fn=lambda: "Mean(Ref(($rzmre - $rzche), 1), 20) / Ref($circ_mv, 1)",
+        expr_fn=lambda: "Mean(Ref(($rzmre - $rzche), 1), 20) / (Ref($circ_mv, 1) * 10000)",
         category="Margin", price_basis="raw",
         sign="+", decay_days=20, neutralize="size",
-        rationale="Net financing-buy intensity scaled by float cap.",
+        rationale="Net financing-buy intensity scaled by float cap; unit-corrected "
+                  "(circ_mv * 10000 to match the 元 margin basis).",
         requires=["rzmre", "rzche", "circ_mv"],
     ))
 
@@ -547,6 +573,58 @@ def build_families() -> list[dict]:
     # already covered by approved `dv_ttm` / `dv_ratio` in the existing catalog
     # (val_div_yield / val_div_ratio). A raw payout ratio needs the dividends
     # endpoint registered + event-timing validation before use.
+
+    # ─────────── GPT Round-3 approved additions (price/volume only) ───────────
+    # All use only approved OHLCV / daily_basic fields → formal-eligible today.
+    fams.append(dict(
+        name_tmpl="mom_skip5d_120d",
+        expr_fn=lambda: f"Ref({op.ADJ_CLOSE}, 6) / Ref({op.ADJ_CLOSE}, 121) - 1",
+        category="Momentum", price_basis="adjusted",
+        sign="+", decay_days=60, neutralize="industry",
+        rationale="Skip-last-week 120d momentum; drops the most recent 5 days to "
+                  "reduce short-term-reversal / T+1-crowding contamination.",
+        requires=["close", "adj_factor"],
+    ))
+    fams.append(dict(
+        name_tmpl="risk_garman_klass_20d",
+        expr_fn=lambda: (
+            "Mean(0.5 * Power(Log(" + op.ADJ_HIGH_T1 + " / " + op.ADJ_LOW_T1 + "), 2) "
+            "- 0.38629436112 * Power(Log(" + op.ADJ_CLOSE_T1 + " / " + op.ADJ_OPEN_T1 + "), 2), 20)"
+        ),
+        category="Volatility", price_basis="adjusted",
+        sign="-", decay_days=20, neutralize="industry",
+        rationale="Garman-Klass OHLC volatility estimator; uses open-close info on "
+                  "top of the high-low range (GPT Round-3 add).",
+        requires=["high", "low", "close", "open", "adj_factor"],
+    ))
+    fams.append(dict(
+        name_tmpl="rev_turnover_spike_5d",
+        expr_fn=lambda: (
+            f"0 - ((Ref({op.ADJ_CLOSE}, 1) / Ref({op.ADJ_CLOSE}, 6) - 1) "
+            "* (Mean(Ref($turnover_rate_f, 1), 5) / Mean(Ref($turnover_rate_f, 1), 60)))"
+        ),
+        category="Reversal", price_basis="adjusted",
+        sign="+", decay_days=5, neutralize="industry",
+        rationale="5d reversal conditioned on a free-float turnover spike; targets "
+                  "retail/crowding overreaction (GPT Round-3 add).",
+        requires=["close", "adj_factor", "turnover_rate_f"],
+    ))
+    fams.append(dict(
+        name_tmpl="mom_continuous_info_252d_dir",
+        # Da-Gurun-Warachka information discreteness, direction-correct (GPT Round-3
+        # §G fix: the un-Abs'd form ranked smooth losers high because Sign<0 × count<0
+        # → positive). Abs() on the up-minus-down count restores the intended sign:
+        # continuous winners high, continuous losers low.
+        expr_fn=lambda: (
+            f"Sign(Ref({op.ADJ_CLOSE}, 1) / Ref({op.ADJ_CLOSE}, 253) - 1) "
+            f"* Abs((Count({RET} > 0, 252) - Count({RET} < 0, 252)) / 252)"
+        ),
+        category="Momentum", price_basis="adjusted",
+        sign="+", decay_days=60, neutralize="industry",
+        rationale="Directional information-discreteness (frog-in-the-pan); smooth "
+                  "trends rank by direction. GPT Round-3 sign fix.",
+        requires=["close", "adj_factor"],
+    ))
 
     return fams
 

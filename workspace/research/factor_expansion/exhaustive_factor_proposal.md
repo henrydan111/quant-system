@@ -1,12 +1,41 @@
 # Exhaustive Factor Proposal — A-Share Multi-Factor System
 
-**Status:** research proposal for GPT 5.5 Pro review (not wired into the catalog).
+**Status:** research proposal — Rounds 1 (Claude) + 2 + 3 (GPT 5.5 Pro review integrated). Not wired into the catalog.
 **Date:** 2026-05-30.
-**Author:** Claude (handoff prep).
+**Author:** Claude (handoff prep), reviewed and complemented by GPT 5.5 Pro (2 rounds).
 **Companion artifacts (same repo):**
-- [`factor_candidates.csv`](factor_candidates.csv) — machine-readable family expansion (51 representative instances), each stamped with live field-registry status.
+- [`factor_candidates_merged.csv`](factor_candidates_merged.csv) — **canonical merged set: 70 unique factors** (51 Claude-v2 + 19 GPT, deduplicated), each re-stamped with live field-registry status + a `source` column. **Source of truth for exact expressions.** All rows pass raw-field-existence + PIT-safety validation. **21 formal-eligible.**
+- [`factor_candidates.csv`](factor_candidates.csv) — the Claude-generated set (51 rows, post Round-2/3 fixes).
+- [`../../../Knowledge/factor_expansion_gpt_review_new_candidates.csv`](../../../Knowledge/factor_expansion_gpt_review_new_candidates.csv) — GPT's Round-2 candidates.
+- [`../../../Knowledge/factor_candidates_round3_additions_corrections.csv`](../../../Knowledge/factor_candidates_round3_additions_corrections.csv) — GPT's Round-3 corrections/additions.
 - [`../../../data/factor_research/field_inventory.md`](../../../data/factor_research/field_inventory.md) — the 518 base field stems / 3,649 raw bins materialized in the live Qlib provider (ground-truth snapshot).
-- [`../../scripts/generate_factor_candidates.py`](../../scripts/generate_factor_candidates.py) — read-only generator that produced the two files above from the live backend + field registry.
+- [`../../scripts/generate_factor_candidates.py`](../../scripts/generate_factor_candidates.py) — read-only generator (hardened raw-token field-existence gate).
+- [`../../scripts/validate_factor_candidates.py`](../../scripts/validate_factor_candidates.py) — read-only validator (raw-token existence + PIT parser + registry status).
+- [`../../scripts/merge_factor_candidates.py`](../../scripts/merge_factor_candidates.py) — read-only merge/dedup producing the canonical merged set.
+
+---
+
+## Review rounds — what changed
+
+**Round 2 (GPT 5.5 Pro).** Found a real defect: `val_payout_ratio` referenced the
+non-existent `$cash_div_q0` (dividends endpoint has no `_q0..q4` variants). Root-cause
+fix: the field-existence gate now validates every **raw `$field` token** against the
+materialized bin set, not collapsed base stems. Applied: `_cum_q0`→TTM `_sq`-sum rewrites
+(EV value, accruals, cash-ROA, capex/R&D, net-debt/EBITDA, interest coverage); QoQ→YoY+
+acceleration; DuPont/margin dedup; true log-range Parkinson. Merged GPT's 27 candidates.
+
+**Round 3 (GPT 5.5 Pro).** Verified the integration and caught residual issues, all fixed:
+(a) `qual_gross_profitability` still used `_cum_q0`/end-assets → replaced with TTM/avg-assets
+(`qual_gross_profitability_ttm`, decay 250); (b) `qual_cash_roa` dropped (redundant with
+`acc_cash_roa_ttm`); (c) the YoY-acceleration rows were mis-specified (needed the
+unmaterialized `_sq_q5`) → rewritten as `Delta(YoY, 63)`; (d) **moneyflow unit fix** —
+amounts are 万元 vs daily `$amount` 千元 → divide by `($amount/10)`; (e) **margin unit fix**
+— `rzmre/rzche` 元 vs `circ_mv` 万元 → `* 10000`; (f) `mom_continuous_info_252d` sign bug
+(smooth losers ranked high) → `mom_continuous_info_252d_dir` with `Abs()`; (g)
+`risk_parkinson_logrange_{60,120}d` decay now tracks the window. Added 4 approved
+price/volume families (`mom_skip5d_120d`, `risk_garman_klass_20d`, `rev_turnover_spike_5d`,
+`mom_continuous_info_252d_dir`), lifting formal-eligible to **21**. §3 below is Round-1 and
+**superseded** — see the merged CSV.
 
 ---
 
@@ -103,10 +132,21 @@ new-data fields (moneyflow / northbound / margin / alpha endpoints) behind
 
 ## 3. Factor families by category
 
+> ⚠️ **SUPERSEDED — historical / non-authoritative (retained for audit trail).**
+> The skeletons in §3 are the **Round-1** expressions and contain known issues that
+> were fixed in Round 2/3: `val_payout_ratio` referenced the non-existent
+> `$cash_div_q0`; the EV/cashflow/accrual/leverage rows used `_cum_q0` (YTD,
+> quarter-seasonal) instead of TTM `_sq` sums; the "Parkinson" row was a range
+> ratio; the moneyflow/margin ratios had unit-scale bugs. **Do not copy expressions
+> from §3.** The single source of truth for exact, validated expressions is
+> [`factor_candidates_merged.csv`](factor_candidates_merged.csv) (70 rows, every
+> row passes raw-field-existence + PIT-safety validation). §3 is kept only to show
+> the original family taxonomy and rationale.
+
 Notation: expressions are Qlib strings. `ADJ` = `($close * $adj_factor)`. Status is the
 **worst-case** registry status across the fields the family touches (formal-eligible only
-if *all* fields are `approved`). Representative concrete instances are in
-[`factor_candidates.csv`](factor_candidates.csv).
+if *all* fields are `approved`). **For current expressions see the merged CSV, not these
+tables.**
 
 ### 3.1 Value (extend) — EV / cashflow yields
 
@@ -271,17 +311,23 @@ moneyflow/margin/alpha until their anomaly reviews complete.
 
 ## 5. Verification performed
 
-- **PIT-safety:** all 51 expressions passed the project's own
+Applies to the canonical [`factor_candidates_merged.csv`](factor_candidates_merged.csv)
+(70 rows) via [`validate_factor_candidates.py`](../../scripts/validate_factor_candidates.py):
+
+- **PIT-safety:** all 70 merged expressions pass the project's own
   `find_unwrapped_field_references` parser (from
   [`test_factor_library_pit_safety.py`](../../../tests/alpha_research/test_factor_library_pit_safety.py)) —
   zero unwrapped `$field`.
-- **Field existence:** every `$field` referenced exists in the verified 518-stem inventory
-  (0 families skipped for missing fields).
+- **Field existence (hardened in Round 2):** every raw `$field` token in every expression
+  exists in the materialized **3,649-bin** set — not just the collapsed 518 base stems.
+  This is the check that catches non-existent PIT variants like `$cash_div_q0`. 0 failures.
 - **Status stamping:** resolved via the live registry
-  ([`field_registry.py`](../../../src/data_infra/field_registry.py)) — spot-checked:
-  `mom_52w_high_proximity`→approved/yes, `flow_elg_net_pct_5d`→quarantine/no,
-  `qual_gross_profitability`→unknown_field/no, `alpha_chip_winner_rate_level`→pending_review/no.
-- **No system mutation:** only the three handoff files were written; `data/qlib_data/`,
+  ([`field_registry.py`](../../../src/data_infra/field_registry.py)) — 21 approved /
+  formal-eligible, 38 unknown_field, 8 quarantine, 3 pending_review.
+- **Caveat — STATIC validation only.** No Qlib parser/runtime execution yet. Expressions
+  are confirmed field-valid + PIT-safe + registry-resolved, but not yet computed. Runtime
+  screening is the next phase (gated behind promoting the Wave-1 statement fields per §7).
+- **No system mutation:** only the handoff files were written; `data/qlib_data/`,
   `config/`, `src/`, and all registries untouched.
 
 ---

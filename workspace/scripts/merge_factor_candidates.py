@@ -37,9 +37,26 @@ from tests.alpha_research.test_factor_library_pit_safety import (
 
 CLAUDE_CSV = PROJECT_ROOT / "workspace/research/factor_expansion/factor_candidates.csv"
 GPT_CSV = PROJECT_ROOT / "Knowledge/factor_expansion_gpt_review_new_candidates.csv"
+GPT_R3_CSV = PROJECT_ROOT / "Knowledge/factor_candidates_round3_additions_corrections.csv"
 OUT_CSV = PROJECT_ROOT / "workspace/research/factor_expansion/factor_candidates_merged.csv"
 FEATURES_DIR = PROJECT_ROOT / "data" / "qlib_data" / "features"
 FORMAL_STAGE = "formal_validation"
+
+# Rows superseded by the Round-3 fixes (now baked into the regenerated claude_v2
+# set under corrected names). The merge skips them so the buggy originals do not
+# re-enter from the Round-2 GPT CSV.
+#   mom_continuous_info_252d  -> replaced by mom_continuous_info_252d_dir (sign fix)
+# The GPT Round-3 CSV rows whose names already match a claude_v2 row
+# (qual_gross_profitability_ttm, margin_net_buy_ratio_20d, flow_inst_retail_*)
+# dedup automatically by name; the *_unitfix/*_scaled aliases are skipped as dups.
+SUPERSEDED_NAMES = {"mom_continuous_info_252d"}
+# GPT Round-3 alias rows that duplicate a canonical claude_v2 row already carrying
+# the same fix — skip to avoid near-duplicate names in the merged set.
+R3_ALIAS_SKIP = {
+    "margin_net_buy_ratio_20d_scaled",      # == margin_net_buy_ratio_20d (fixed)
+    "flow_elg_net_pct_20d_unitfix",         # == flow_elg_net_pct_20d (fixed)
+    "flow_inst_retail_divergence_20d_unitfix",  # == flow_inst_retail_divergence_20d
+}
 
 COLS = [
     "name", "category", "qlib_expression", "fields_used", "price_basis",
@@ -93,9 +110,19 @@ def main() -> int:
 
     merged: dict[str, dict] = {}
     counts = Counter()
-    for path, source in [(CLAUDE_CSV, "claude_v2"), (GPT_CSV, "gpt_review")]:
+    for path, source in [
+        (CLAUDE_CSV, "claude_v2"),
+        (GPT_CSV, "gpt_review"),
+        (GPT_R3_CSV, "gpt_round3"),
+    ]:
         for r in csv.DictReader(open(path, encoding="utf-8")):
             name = r["name"]
+            if name in SUPERSEDED_NAMES:
+                print(f"  superseded: '{name}' from {source} — skipped (Round-3 fix)")
+                continue
+            if name in R3_ALIAS_SKIP:
+                print(f"  alias-skip: '{name}' from {source} — canonical row already carries the fix")
+                continue
             if name in merged:
                 print(f"  dedup: '{name}' from {source} duplicates {merged[name]['source']} — skipped")
                 continue

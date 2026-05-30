@@ -154,9 +154,10 @@ Knowledge/**/*.parquet
 Knowledge/**/*.csv
 Knowledge/**/*.xlsx
 Knowledge/**/*.pkl
-# Factor-expansion GPT 5.5 Pro review CSV — tracked so the handoff artifact set is
+# Factor-expansion GPT 5.5 Pro review CSVs — tracked so the handoff artifact set is
 # complete in-repo (referenced by the factor_expansion proposal + README).
 !Knowledge/factor_expansion_gpt_review_new_candidates.csv
+!Knowledge/factor_candidates_round3_additions_corrections.csv
 
 # =============================================================================
 # Top-level transients
