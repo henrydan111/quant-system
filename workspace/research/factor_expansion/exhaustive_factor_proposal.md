@@ -37,6 +37,17 @@ price/volume families (`mom_skip5d_120d`, `risk_garman_klass_20d`, `rev_turnover
 `mom_continuous_info_252d_dir`), lifting formal-eligible to **21**. §3 below is Round-1 and
 **superseded** — see the merged CSV.
 
+**Round 4 (GPT 5.5 Pro) — GO.** Confirmed all 7 Round-3 fixes + 4 additions landed correctly
+in the merged set at commit `0ef2ed2`; no remaining static blocker; no Round-4 patch needed.
+Verdict: **GO for static-validated screening of the 21 formal-eligible rows only**, keeping
+the 49 `unknown_field`/`quarantine`/`pending_review` rows gated behind the Wave-1 field
+promotions / anomaly reviews. Two interpretation notes GPT asked to preserve: (a)
+`grow_*_yoy_accel_q` = a 63-trading-day Δ of the as-of PIT YoY signal, not a literal fiscal
+`q1/q5` acceleration; (b) the EV-yield denominator is a **gross-liabilities proxy**
+(`total_mv·10000 + total_liab_q0 − money_cap_q0`), not clean EV, until `interestdebt`/
+`netdebt` are promoted. Next phase = Qlib runtime screening on the 21 rows via the sanctioned
+`compute_factors()` → `qlib_windowed_features` path.
+
 ---
 
 ## 0. Purpose & how to read this
