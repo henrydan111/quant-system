@@ -1,5 +1,19 @@
 # Wave-1 Statement-Field Promotion Plan
 
+> ✅ **EXECUTED 2026-05-31** (branch `wave1-field-promotion`). 53 statement
+> line-item variants promoted `unknown_field → approved` across income (24) /
+> balancesheet (17) / cashflow (12). Evidence: live coverage audit (all ≥50%
+> non-null; `ebitda`/`fin_exp_int_exp`/`rd_exp` EXCLUDED for sparse coverage)
+> + independent-recompute provider parity (15,351 cells, 0 mismatch via
+> [verify_statement_provider_parity.py](../../scripts/verify_statement_provider_parity.py)).
+> Registry: [field_status.yaml](../../../config/field_registry/field_status.yaml)
+> + [approval YAML](../../../config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml)
+> + JSONL log + guardrail tests
+> ([test_field_registry.py](../../../tests/data_infra/test_field_registry.py)
+> `test_statement_fields_approved_for_formal` / `test_excluded_statement_fields_not_approved`).
+> **Outcome: merged-candidate formal-eligible 21 → 47.** Approval-evidence drift
+> check + 86 registry tests + 52 field-gate tests all pass.
+
 **Status:** plan only — NOT executed. Promotion requires running the parity harness +
 anomaly review below and is gated on GPT's Round-4 go and owner approval.
 **Goal:** move the income / balancesheet / cashflow line-item fields the formal-eligible

@@ -434,6 +434,49 @@ class TestLiveRegistry:
             assert r.status_id == "approved"
             assert r.is_unknown is False
 
+    def test_statement_fields_approved_for_formal(self, reg) -> None:
+        # Wave-1 statement promotion (2026-05-31_statements_unknown_to_approved.yaml):
+        # income/balancesheet/cashflow _sq_q*/_q* derived variants must resolve to
+        # their family + approved at formal stage. Coverage-gated + independent-
+        # recompute provider parity (workspace/scripts/verify_statement_provider_parity.py).
+        expected = {
+            # income
+            "$total_revenue_sq_q0": "income", "$ebit_sq_q3": "income",
+            "$n_income_sq_q0": "income", "$n_income_attr_p_sq_q0": "income",
+            "$oper_cost_sq_q4": "income", "$operate_profit_sq_q0": "income",
+            "$revenue_sq_q4": "income",
+            # balancesheet
+            "$total_assets_q0": "balancesheet", "$total_liab_q4": "balancesheet",
+            "$money_cap_q0": "balancesheet", "$goodwill_q0": "balancesheet",
+            "$inventories_q0": "balancesheet", "$st_borr_q0": "balancesheet",
+            "$lt_borr_q0": "balancesheet", "$retained_earnings_q0": "balancesheet",
+            "$total_cur_assets_q4": "balancesheet", "$total_cur_liab_q0": "balancesheet",
+            "$accounts_receiv_q4": "balancesheet",
+            # cashflow
+            "$n_cashflow_act_sq_q0": "cashflow",
+            "$c_pay_acq_const_fiolta_sq_q3": "cashflow",
+            "$c_fr_sale_sg_sq_q0": "cashflow",
+        }
+        for field, family in expected.items():
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is True, (
+                f"{field} should be approved under {family}; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == family, f"{field} -> {r.dataset_id}, expected {family}"
+            assert r.status_id == "approved"
+            assert r.is_unknown is False
+
+    def test_excluded_statement_fields_not_approved(self, reg) -> None:
+        # Coverage-gate exclusions (GPT Round-5 F5): ebitda / fin_exp_int_exp were
+        # NOT promoted (3.3% / 0% live coverage). They must NOT resolve approved.
+        for field in ("$ebitda_sq_q0", "$fin_exp_int_exp_sq_q0", "$rd_exp_sq_q1"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is False, (
+                f"{field} was excluded by the coverage gate and must not be "
+                f"formal-approved; got allowed={r.allowed} dataset={r.dataset_id}"
+            )
+
     def test_top_list_is_pending_for_formal(self, reg) -> None:
         r = reg.resolve_field("$top_list__close", "formal_validation")
         assert r.allowed is False

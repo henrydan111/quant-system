@@ -278,3 +278,86 @@ datasets:
     reason: "Tushare cyq_perf endpoint (筹码分布). Namespace-protected via $cyq_perf__* prefix. Anomaly review WIP."
     field_prefixes:
       - $cyq_perf__
+
+  # ─── Approved: statement line-items (Wave-1 promotion 2026-05-31) ────────────
+  # The income / balancesheet / cashflow STATEMENT FAMILIES anchor visibility on
+  # max(ann_date, f_ann_date) (CLAUDE.md §3) — distinct from the indicators
+  # family's ann_date-only anchor. These single-quarter (_sq_q*) and snapshot
+  # (_q*) variants are produced by the staged PIT backend's quarter-canonical
+  # serving and flow through the SAME disclosure-anchored pipeline as the
+  # already-approved indicators/$pit_* fields. Promoted after:
+  #   (1) live coverage audit — every listed field ≥ 50% non-null on 2018 full
+  #       market (worst: goodwill 56.6%, lt_borr 53.8%; core 96-99.9%);
+  #   (2) live loader↔provider parity (lag-0 + lag-1) — see
+  #       tests/data_infra/test_pit_loader_provider_parity.py.
+  # Fields are listed EXPLICITLY (not prefix-matched) so the registry fails
+  # closed on any new unreviewed statement variant — same discipline as the
+  # indicators entry. Evidence + binding:
+  #   config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
+  income:
+    status: approved
+    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
+    fields:
+      - $ebit_sq_q0
+      - $ebit_sq_q1
+      - $ebit_sq_q2
+      - $ebit_sq_q3
+      - $n_income_attr_p_sq_q0
+      - $n_income_attr_p_sq_q4
+      - $n_income_sq_q0
+      - $n_income_sq_q1
+      - $n_income_sq_q2
+      - $n_income_sq_q3
+      - $oper_cost_sq_q0
+      - $oper_cost_sq_q1
+      - $oper_cost_sq_q2
+      - $oper_cost_sq_q3
+      - $oper_cost_sq_q4
+      - $operate_profit_sq_q0
+      - $operate_profit_sq_q4
+      - $revenue_sq_q0
+      - $revenue_sq_q4
+      - $total_revenue_sq_q0
+      - $total_revenue_sq_q1
+      - $total_revenue_sq_q2
+      - $total_revenue_sq_q3
+      - $total_revenue_sq_q4
+
+  balancesheet:
+    status: approved
+    reason: "Tushare balance-sheet line-items (period-end _q* snapshots). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
+    fields:
+      - $accounts_receiv_q0
+      - $accounts_receiv_q4
+      - $goodwill_q0
+      - $inventories_q0
+      - $inventories_q4
+      - $lt_borr_q0
+      - $money_cap_q0
+      - $retained_earnings_q0
+      - $st_borr_q0
+      - $total_assets_q0
+      - $total_assets_q4
+      - $total_cur_assets_q0
+      - $total_cur_assets_q4
+      - $total_cur_liab_q0
+      - $total_cur_liab_q4
+      - $total_liab_q0
+      - $total_liab_q4
+
+  cashflow:
+    status: approved
+    reason: "Tushare cashflow statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
+    fields:
+      - $c_fr_sale_sg_sq_q0
+      - $c_fr_sale_sg_sq_q1
+      - $c_fr_sale_sg_sq_q2
+      - $c_fr_sale_sg_sq_q3
+      - $c_pay_acq_const_fiolta_sq_q0
+      - $c_pay_acq_const_fiolta_sq_q1
+      - $c_pay_acq_const_fiolta_sq_q2
+      - $c_pay_acq_const_fiolta_sq_q3
+      - $n_cashflow_act_sq_q0
+      - $n_cashflow_act_sq_q1
+      - $n_cashflow_act_sq_q2
+      - $n_cashflow_act_sq_q3
