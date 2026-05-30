@@ -207,15 +207,12 @@ def build_families() -> list[dict]:
     # EV bridge reused across EV-yield families. Stock terms use _q0 snapshot;
     # flow terms use TTM (_sq sum) per the GPT review seasonality fix.
     EV = "(Ref($total_mv, 1) * 10000 + Ref($total_liab_q0, 1) - Ref($money_cap_q0, 1))"
-    fams.append(dict(
-        name_tmpl="val_ebitda_ev_ttm",
-        expr_fn=lambda: f"{_ttm('ebitda')} / {EV}",
-        category="Value", price_basis="mixed",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="EBITDA/EV yield (TTM); yield form avoids negative-denominator "
-                  "instability of EV/EBITDA. Reframed +decay per GPT review.",
-        requires=["total_liab", "money_cap", "ebitda"],
-    ))
+    # GPT Round-5 §3: DROPPED — $ebitda has 3.3% non-null coverage in the live
+    # indicators provider (verified: 6,717/202,380 in 2018). The TTM _sq_q0..q3
+    # collapses to 100% NaN. Use val_ebit_ev_ttm instead (ebit_sq_* has 98%
+    # coverage). Block until ebitda is re-materialized or rebuilt from
+    # statement line-items.
+    # fams.append(dict(name_tmpl="val_ebitda_ev_ttm", ...))
     fams.append(dict(
         name_tmpl="val_ebit_ev_ttm",
         expr_fn=lambda: f"{_ttm('ebit')} / {EV}",
@@ -429,28 +426,12 @@ def build_families() -> list[dict]:
         ))
 
     # ─────────── LEVERAGE / SOLVENCY (extend) ───────────
-    # GPT review §5: EBITDA in the denominator is a flow → TTM, not _cum_q0.
-    fams.append(dict(
-        name_tmpl="lev_net_debt_to_ebitda_ttm",
-        expr_fn=lambda: (
-            "(Ref($st_borr_q0, 1) + Ref($lt_borr_q0, 1) - Ref($money_cap_q0, 1)) "
-            f"/ {_ttm('ebitda')}"
-        ),
-        category="Leverage", price_basis="raw",
-        sign="-", decay_days=120, neutralize="industry",
-        rationale="Net debt / TTM EBITDA solvency (winsorize negative EBITDA).",
-        requires=["st_borr", "lt_borr", "money_cap", "ebitda"],
-    ))
-    fams.append(dict(
-        name_tmpl="lev_interest_coverage_ttm",
-        expr_fn=lambda: f"{_ttm('ebit')} / {_ttm('fin_exp_int_exp')}",
-        category="Leverage", price_basis="raw",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="Interest coverage (TTM EBIT / TTM financial-expense interest); "
-                  "fin_exp_int_exp preferred over bank-style int_exp for industrials "
-                  "(GPT review §5).",
-        requires=["ebit", "fin_exp_int_exp"],
-    ))
+    # GPT Round-5 §3: lev_net_debt_to_ebitda_ttm DROPPED — $ebitda is 3.3%-covered;
+    # lev_interest_coverage_ttm DROPPED — $fin_exp_int_exp is 0%-covered (bin file
+    # exists but contains no data). Both render to 100% NaN at compute time despite
+    # passing static field-existence validation (F5 blind spot). Re-introduce when
+    # the indicators provider re-materializes these fields, OR via $int_exp from
+    # the income statement after a coverage audit.
 
     # ─────────── MOMENTUM / REVERSAL (extend) ───────────
     fams.append(dict(
@@ -548,6 +529,31 @@ def build_families() -> list[dict]:
                   "sell_elg_amount", "buy_sm_amount", "sell_sm_amount", "amount"],
     ))
 
+    # ─────────── LIMIT BOARDS (stk_limit — quarantine) ───────────
+    # GPT Round-5: replaces the Round-2 Count-based limit_up_hit / limit_down_hit
+    # rows (caught by the Count lint as silently degenerate).
+    fams.append(dict(
+        name_tmpl="limit_up_hit_5d",
+        expr_fn=lambda: (
+            "Sum(If(Ref($close, 1) >= Ref($up_limit, 1) * 0.999, 1, 0), 5) / 5"
+        ),
+        category="LimitBoard", price_basis="raw",
+        sign="+", decay_days=5, neutralize="industry,size,liquidity",
+        rationale="Exact limit-board continuation candidate (Sum(If) form per F1 lint). "
+                  "Replaces the Count-based Round-2 row.",
+        requires=["close", "up_limit"],
+    ))
+    fams.append(dict(
+        name_tmpl="limit_down_hit_20d",
+        expr_fn=lambda: (
+            "Sum(If(Ref($close, 1) <= Ref($down_limit, 1) * 1.001, 1, 0), 20) / 20"
+        ),
+        category="LimitBoard", price_basis="raw",
+        sign="-", decay_days=10, neutralize="industry,size,liquidity",
+        rationale="Limit-down overhang / trading-interference risk (Sum(If) form per F1 lint).",
+        requires=["close", "down_limit"],
+    ))
+
     # ─────────── MARGIN (margin_detail — quarantine) ───────────
     # GPT Round-3 §E unit fix: rzmre/rzche are in 元 (yuan) while circ_mv is in
     # 万元 (10k yuan) — scale circ_mv by 10000 so the ratio is dimensionless.
@@ -614,6 +620,22 @@ def build_families() -> list[dict]:
         rationale="5d reversal conditioned on a free-float turnover spike; targets "
                   "retail/crowding overreaction (GPT Round-3 add).",
         requires=["close", "adj_factor", "turnover_rate_f"],
+    ))
+    # GPT Round-5 §2/§5: tech_high_breakout_age_250d (GPT Round-2) used
+    # `0 - IdxMax(...)` which is SIGN-INVERTED under this build's IdxMax
+    # convention (1-indexed from oldest: fresh high → high IdxMax → low after
+    # negation, which is backwards). Replaced by a freshness factor that
+    # ranks fresh highs HIGH using IdxMax directly. The Round-2 name is
+    # superseded by the merge script.
+    fams.append(dict(
+        name_tmpl="tech_high_breakout_freshness_250d",
+        expr_fn=lambda: f"IdxMax({op.ADJ_HIGH_T1}, 250)",
+        category="Technical", price_basis="adjusted",
+        sign="+", decay_days=30, neutralize="industry",
+        rationale="52-week-high freshness: Qlib IdxMax is 1-indexed from the "
+                  "oldest bar, so higher values mean the high occurred more "
+                  "recently. Replaces the sign-inverted tech_high_breakout_age_250d.",
+        requires=["high", "adj_factor"],
     ))
     fams.append(dict(
         name_tmpl="mom_continuous_info_252d_dir",

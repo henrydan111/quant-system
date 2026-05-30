@@ -34,6 +34,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import re as _re
+
 from src.data_infra.field_registry import extract_qlib_fields, load_field_registry
 from tests.alpha_research.test_factor_library_pit_safety import (
     find_unwrapped_field_references,
@@ -41,6 +43,17 @@ from tests.alpha_research.test_factor_library_pit_safety import (
 
 FEATURES_DIR = PROJECT_ROOT / "data" / "qlib_data" / "features"
 FORMAL_STAGE = "formal_validation"
+
+# Factor audit 2026-05-30 (F1 / GPT Round-5): Qlib `Count(cond, N)` is broken in
+# this build — it returns N (count of non-NaN obs) and IGNORES the condition.
+# Any factor expression using `Count(` is therefore at risk of being silently
+# degenerate. The audit confirmed this directly (`Count(ret>0,5) ≡ 5`). Ban
+# `Count(` in factor expressions; use `Sum(If(condition, 1, 0), N)` instead.
+_BANNED_COUNT_RE = _re.compile(r"\bCount\s*\(")
+
+
+def _has_banned_count(expr: str) -> bool:
+    return bool(_BANNED_COUNT_RE.search(expr or ""))
 
 
 def load_raw_materialized_stems() -> set[str]:
@@ -80,6 +93,7 @@ def validate_csv(path: Path, raw_stems: set[str], registry) -> list[dict]:
         tokens = [t[1:] for t in extract_qlib_fields(expr)]  # strip leading $
         missing = sorted(t for t in tokens if t not in raw_stems)
         unwrapped = find_unwrapped_field_references(expr)
+        banned_count = _has_banned_count(expr)  # F1 lint
         # registry status (worst-case across fields)
         statuses, eligible = set(), True
         for tok in extract_qlib_fields(expr):
@@ -93,6 +107,7 @@ def validate_csv(path: Path, raw_stems: set[str], registry) -> list[dict]:
             "missing_fields": missing,
             "pit_safe": not unwrapped,
             "unwrapped": unwrapped,
+            "banned_count": banned_count,
             "registry_status": (
                 "unknown_field" if "unknown_field" in statuses
                 else "quarantine" if "quarantine" in statuses
@@ -125,6 +140,7 @@ def main(argv: list[str]) -> int:
         results = validate_csv(p, raw_stems, registry)
         fail_exist = [r for r in results if not r["field_exists"]]
         fail_pit = [r for r in results if not r["pit_safe"]]
+        fail_count = [r for r in results if r["banned_count"]]
         status_mismatch = [
             r for r in results
             if r["claimed_status"] and r["claimed_status"] != r["registry_status"]
@@ -136,6 +152,9 @@ def main(argv: list[str]) -> int:
         print(f"  pit_safe FAIL: {len(fail_pit)}")
         for r in fail_pit:
             print(f"    - {r['name']}: unwrapped {r['unwrapped']}")
+        print(f"  banned_count FAIL (F1 lint): {len(fail_count)}")
+        for r in fail_count:
+            print(f"    - {r['name']}: uses Count( — replace with Sum(If(cond,1,0),N)")
         if status_mismatch:
             print(f"  status mismatch (claimed != resolved): {len(status_mismatch)}")
             for r in status_mismatch:
@@ -143,10 +162,11 @@ def main(argv: list[str]) -> int:
         print(f"  resolved status mix: {dict(Counter(r['registry_status'] for r in results))}")
         print(f"  formal-eligible: {sum(1 for r in results if r['formal_eligible'])}/{len(results)}")
         print()
-        if fail_exist or fail_pit:
+        if fail_exist or fail_pit or fail_count:
             any_fail = True
 
-    print("RESULT:", "FAIL (see above)" if any_fail else "PASS (all rows field-exist + PIT-safe)")
+    print("RESULT:", "FAIL (see above)" if any_fail
+          else "PASS (all rows field-exist + PIT-safe + no banned Count())")
     return 1 if any_fail else 0
 
 

@@ -61,7 +61,13 @@ The following operators have been validated to run correctly.
 *   `Min(x, n)`
 *   `Med(x, n)`: Rolling median.
 *   `Mad(x, n)`: Rolling mean absolute deviation.
-*   `Count(condition, n)`: Count days where condition is true. Example: `Count(ret > 0, 20)`.
+*   ~~`Count(condition, n)`~~ — **BROKEN in this Qlib build, do not use in factor
+    expressions.** Empirically `Count(cond, N)` returns `N` (the count of non-NaN
+    observations) and IGNORES the condition (factor audit 2026-05-30, F1; verified:
+    `Count(ret > 0, 5) ≡ 5` for every stock). **Use `Sum(If(condition, 1, 0), n)` instead**
+    for conditional counts. The validator at
+    `workspace/scripts/validate_factor_candidates.py` now hard-bans `Count(` in factor
+    expressions.
 
 ### Advanced Rolling Statistics
 *   `Skew(x, n)`
@@ -81,8 +87,13 @@ The following operators have been validated to run correctly.
 *   `Rsquare(x, n)`: R-squared of rolling regression.
 
 ### Index Positions
-*   `IdxMax(x, n)`: Days since max value.
-*   `IdxMin(x, n)`: Days since min value.
+*   `IdxMax(x, n)` / `IdxMin(x, n)`: **1-indexed position of the extreme within the trailing
+    window, counting from the OLDEST bar** (factor audit 2026-05-30, F2; verified empirically
+    against pandas argmax, corr=-1.0 with the naive "days since" reading). A fresh extreme
+    (today) returns `n`; an extreme `n-1` bars ago returns `1`.
+    *   "Days since extreme" = `n - IdxMax(x, n)` (0 means today is the high).
+    *   "Freshness score" = `IdxMax(x, n)` directly (higher = more recent).
+    *   Sign of any "age"-style factor must be set against `n - IdxMax(...)`, NOT `0 - IdxMax(...)`.
 
 ---
 

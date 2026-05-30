@@ -35,9 +35,18 @@ shared denominator/numerator across many candidates:
 | 11 | `total_cur_assets` | `_q0`, `_q4` | NCAV, Piotroski current ratio |
 | 12 | `total_cur_liab` | `_q0`, `_q4` | Piotroski current ratio |
 
-Plus the four already-promotable as part of Wave-1's EV/leverage closure (GPT Wave-2 head,
-but cheap to bundle): `ebit` (`_sq_q0..q3`), `ebitda` (`_sq_q0..q3`), `st_borr`/`lt_borr`
-(`_q0`), `fin_exp_int_exp` (`_sq_q0..q3`). Decide bundle-vs-defer at review time.
+Plus the EV/leverage closure (GPT Wave-2 head, cheap to bundle): `ebit` (`_sq_q0..q3`),
+`st_borr`/`lt_borr` (`_q0`).
+
+> ⚠️ **Removed from the Wave-1 bundle by factor audit (F5, 2026-05-30; GPT Round-5):**
+> - `ebitda` — 3.3% non-null in the live materialized provider. Do not promote
+>   until rematerialized or rebuilt from statement components. Use `ebit`-based
+>   yields (`val_ebit_ev_ttm` already in the candidate set) as the EV-value path.
+> - `fin_exp_int_exp` — **0% non-null** in the live materialized provider (bin
+>   file exists but contains no data). Do not promote. Replace the interest-
+>   coverage factor slot with `int_exp` from the income statement only after
+>   running a coverage audit on it. The proposal's `lev_interest_coverage_ttm`
+>   and `lev_net_debt_to_ebitda_ttm` candidates have been DROPPED for this reason.
 
 The exact variant set to register is **the union of `$field` tokens** across the merged-CSV
 rows that resolve to `unknown_field` — derive it mechanically (see §4 step 1), do not
@@ -77,17 +86,24 @@ A statement-family promotion to `approved` must satisfy ALL of:
    [tests/data_infra/test_pit_loader_provider_parity.py](../../../tests/data_infra/test_pit_loader_provider_parity.py)
    to include each promoted field (lag-0 as-of AND lag-1 signal), across the existing
    security grid + at least one delisted/IPO-edge name. Loader kernel value must equal the
-   live provider `D.features($field)` (rtol=1e-4, atol=1e-3). This is the same bar the
-   indicators `_qfields` extension met.
-2. **Anomaly review.** Null-rate, sign sanity, and unit sanity per field over 2014→2026;
-   confirm no scale surprises (statement line-items are raw 元 — document the basis next to
-   any factor that ratios them against a 万元/千元 market field, cf. the moneyflow/margin
-   unit bugs Round 3 caught).
+   live provider `D.features($field)` (rtol=1e-4, atol=1e-3).
+2. **Anomaly review.** Null-rate, sign sanity, and unit sanity per field over 2014→2026.
+   Statement line-items are raw 元 — document the basis next to any factor that ratios them
+   against a 万元/千元 market field (cf. the moneyflow/margin unit bugs Round 3 caught).
 3. **Restatement canary.** At least one known cumulative→quarterly late-restatement fixture
    showing the `_sq` derivation updates at the restatement effective date, not before.
 4. **Provider-build binding.** `provider_build_id: prod_full_20260421_namespace_v1` +
    `calendar_policy_id: frozen_20260227_system_build` (current live build) — required by the
    approval-evidence drift check (CLAUDE.md PR 10/10a/10b/10c).
+5. **NEW — Live coverage gate (F5; GPT Round-5).** Sample the live materialized provider
+   over a representative window (e.g. 2018 full market) and confirm non-null coverage above
+   threshold per the GPT Round-5 two-tier rule:
+   * **Hard-block** if coverage < 10% (clearly empty — like `fin_exp_int_exp` at 0%).
+   * **Hard-block formal use** if coverage < 50% unless the field is explicitly marked
+     `sparse_allowed` in the registry (e.g. R&D, forecasts — segment-specific by nature).
+   * **Warn** in 10–50%.
+   This step catches the F5 class (bin file present but data sparse/empty). Without it,
+   `fin_exp_int_exp` would have entered Wave-2 and silently produced all-NaN factors.
 
 ---
 

@@ -49,7 +49,20 @@ FORMAL_STAGE = "formal_validation"
 # The GPT Round-3 CSV rows whose names already match a claude_v2 row
 # (qual_gross_profitability_ttm, margin_net_buy_ratio_20d, flow_inst_retail_*)
 # dedup automatically by name; the *_unitfix/*_scaled aliases are skipped as dups.
-SUPERSEDED_NAMES = {"mom_continuous_info_252d"}
+SUPERSEDED_NAMES = {
+    # Round-3 fix: Abs() on the up-minus-down count (sign bug).
+    "mom_continuous_info_252d",
+    # Round-5 fix: `0 - IdxMax(...)` is sign-inverted under Qlib's IdxMax
+    # convention (1-indexed from oldest). Replaced by
+    # tech_high_breakout_freshness_250d (claude_v2 row).
+    "tech_high_breakout_age_250d",
+    # Round-5 / F1 lint: original Count(cond, N) is silently degenerate.
+    # Replaced by Sum(If(...,1,0),N) versions under the same name in claude_v2.
+    # NOTE: the Round-2 GPT CSV rows are superseded; the claude_v2 corrected
+    # rows publish under the SAME canonical names. We do NOT add to
+    # SUPERSEDED_NAMES because the claude_v2 same-name row loads FIRST and the
+    # gpt_review row dedup-skips on name. This entry is documentation-only.
+}
 # GPT Round-3 alias rows that duplicate a canonical claude_v2 row already carrying
 # the same fix — skip to avoid near-duplicate names in the merged set.
 R3_ALIAS_SKIP = {

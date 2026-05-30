@@ -1,6 +1,26 @@
 # Factor Construction Audit — for GPT 5.5 Pro cross-review
 
 **Date:** 2026-05-30.
+**Round-5 resolution (GPT 5.5 Pro concur + mandatory fixes APPLIED in this PR):**
+- F1: `operators.py::up_down_ratio` and `::zero_trade_pct` rewritten to `Sum(If(cond,1,0),N)`
+  (production fix); matching tests in `test_operator_expressions.py` updated; **76 operator
+  + PIT-safety tests pass**.
+- F2: `qlib_expr_guide.md` updated — `Count` documented as broken-banned, `IdxMax`/`IdxMin`
+  convention pinned (1-indexed from oldest).
+- F4: `rev_up_down_ratio_20d` automatically fixed by the F1 operator rewrite.
+- F5: 3 candidates dropped (`val_ebitda_ev_ttm`, `lev_net_debt_to_ebitda_ttm`,
+  `lev_interest_coverage_ttm`); Wave-1 plan updated to remove `ebitda` and `fin_exp_int_exp`
+  from promotion (3.3% and 0% live coverage); new live-coverage gate added as evidence
+  requirement §3.5.
+- `tech_high_breakout_age_250d` (F2 sign bug) superseded by `tech_high_breakout_freshness_250d`
+  (uses `IdxMax(...)` directly, sign `+`).
+- Validator hardened: `Count(` is now a hard-fail lint in
+  `workspace/scripts/validate_factor_candidates.py`. The lint immediately caught two more
+  Round-2 GPT rows (`limit_up_hit_5d`, `limit_down_hit_20d`) — both rewritten with `Sum(If)`.
+- Final merged set: **69 unique rows, 21 formal-eligible, 0 banned-Count failures**, all
+  rows pass field-existence + PIT-safety + Count-lint validation.
+
+
 **Scope:** every factor the system builds — the 171-factor production catalog
 ([catalog.py](../../../src/alpha_research/factor_library/catalog.py)), the Layer-1 operators
 ([operators.py](../../../src/alpha_research/factor_library/operators.py)), and the 70

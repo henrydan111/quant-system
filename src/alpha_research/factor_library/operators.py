@@ -305,7 +305,17 @@ def min_single_return(window):
 def up_down_ratio(window):
     """Ratio of up-days to total days over N days.
 
-    Uses Count(ret > 0) / window.
+    Uses ``Sum(If(ret > 0, 1, 0), window) / window``.
+
+    Implementation note (factor audit 2026-05-30, F1/F4):
+        The prior implementation used ``Count(ret > 0, window) / window``. In
+        this Qlib build, ``Count(cond, N)`` returns the count of non-NaN
+        observations (i.e. N), IGNORING the condition — verified empirically
+        (``Count(ret>0,5)≡5`` for every stock). That collapsed
+        ``rev_up_down_ratio_20d`` to a cross-sectional constant (1.0) → zero
+        rank dispersion → silently dead production factor. Fixed via the
+        equivalent ``Sum(If(cond, 1, 0), N)`` idiom (GPT 5.5 Pro Round-5
+        verdict: mandatory). Always use Sum(If()) for conditional counts.
 
     Args:
         window: Lookback window.
@@ -313,7 +323,7 @@ def up_down_ratio(window):
     Returns:
         Qlib expression string.
     """
-    return f"Count({DAILY_RET} > 0, {window}) / {window}"
+    return f"Sum(If({DAILY_RET} > 0, 1, 0), {window}) / {window}"
 
 
 # ─────────────────────── Value ───────────────────────
@@ -721,7 +731,13 @@ def turnover_skew(window):
 
 
 def zero_trade_pct(window):
-    """Percentage of zero-volume days.
+    """Percentage of zero-volume days over N days.
+
+    Uses ``Sum(If(vol < 1, 1, 0), window) / window``.
+
+    Implementation note: see ``up_down_ratio`` — Qlib ``Count`` is broken in
+    this build (ignores the condition, returns N). All conditional counts must
+    use ``Sum(If())`` (factor audit 2026-05-30, F1/F4; GPT Round-5).
 
     Args:
         window: Lookback window.
@@ -729,7 +745,7 @@ def zero_trade_pct(window):
     Returns:
         Qlib expression string.
     """
-    return f"Count(Ref($vol, 1) < 1, {window}) / {window}"
+    return f"Sum(If(Ref($vol, 1) < 1, 1, 0), {window}) / {window}"
 
 
 def spread_proxy(window):
