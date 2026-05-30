@@ -83,6 +83,32 @@ coverage_evidence:
     - "$fin_exp_int_exp*: 0% non-null — NOT promoted"
     - "$rd_exp_sq_q1..q3: ~0% — NOT promoted (rd_exp left unregistered/sparse)"
 
+# STRUCTURAL-ZERO CAVEAT (GPT 5.5 Pro Round-6 condition #1; resolved by audit).
+# goodwill / lt_borr / st_borr pass the >=50% coverage gate but their "missing"
+# fraction is NOT data failure — it is overwhelmingly TRUE-ZERO recorded as NaN.
+# Audit workspace/scripts/audit_structural_zero.py (pooled 2018-2023 annual,
+# 58,986 raw / 269,958 ledger / 70,080 provider cells, consistent across all 3
+# layers): zero% < 1.3% while nan% is 24-55% (goodwill 54%nan/0.85%zero;
+# lt_borr 48%/1.1%; st_borr 24%/0.7%; total_assets control 0%nan). CONCLUSION:
+# true-zero is INDISTINGUISHABLE from not-reported for these fields, so factors
+# dividing by / scaling on them (acc_goodwill_ratio, acc_noa_scaled) are biased
+# toward reporting firms.
+structural_zero_pending:
+  fields: ["$goodwill_q0", "$lt_borr_q0", "$st_borr_q0"]
+  status: "registry-approved (coverage+parity verified) BUT zero-semantics flagged"
+  finding: "true-zero encoded as NaN, not 0.0 — indistinguishable from not-reported"
+  audit: workspace/scripts/audit_structural_zero.py
+  consequence: >-
+    Factors that ratio/scale on these fields (acc_goodwill_ratio, acc_noa_scaled)
+    are biased toward firms that report the line item. Both are D-grade in the IS
+    screen (ICIR -0.18 / -0.05) so the bias has no current alpha cost, but they
+    are EXCLUDED from the sealed-OOS top set until a zero-vs-NaN coalescing policy
+    (e.g. If($f==$f,$f,0) only where business-logic confirms true-zero) is decided.
+  resolution_options:
+    - "Coalesce NaN->0 ONLY if domain logic confirms absence == true zero (risky; some NaN are genuine non-disclosure)."
+    - "Restrict dependent factors to a sub-universe where the line item is universally reported."
+    - "Keep as-is for non-ratio uses (the level fields themselves are fine for firms that report)."
+
 # EVIDENCE 2 — INDEPENDENT-RECOMPUTE provider parity. The provider DERIVES these
 # variants (quarter-canonical serving); they are NOT stored ledger columns, so
 # the loader↔provider harness used for the indicators approval cannot validate
