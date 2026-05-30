@@ -16,9 +16,11 @@ Step 3.
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from src.alpha_research.factor_library import operators
+from src.alpha_research.factor_library.catalog import get_factor_catalog
 
 
 class OperatorAtomsTests(unittest.TestCase):
@@ -324,6 +326,60 @@ class LabelOperatorTests(unittest.TestCase):
             operators.forward_return(5),
             "Ref(($close * $adj_factor), 0 - 5) / ($close * $adj_factor) - 1",
         )
+
+
+# Match a `Count(` call token (word boundary so it does not match e.g. a
+# hypothetical `DiscountFoo(`). Whitespace between Count and ( is tolerated.
+_COUNT_CALL_RE = re.compile(r"\bCount\s*\(")
+
+
+class CountOperatorBanTests(unittest.TestCase):
+    """Guard the PRODUCTION factor library against the broken Qlib ``Count``.
+
+    Factor audit 2026-05-30 (F1): in this Qlib build (0.9.7), ``Count(cond, N)``
+    counts non-null observations and IGNORES the boolean condition — verified
+    empirically (``Count(ret>0,5) ≡ 5`` for every stock). Any factor using it is
+    silently degenerate (constant cross-section). The fix is ``Sum(If(cond, 1, 0), N)``.
+
+    The candidate-pipeline validator (``workspace/scripts/validate_factor_candidates.py``)
+    already lints ``Count(`` out of candidate CSVs. These tests extend that guard
+    to the PRODUCTION library (``operators.py`` + ``catalog.py``) so a future
+    hand-written operator or catalog entry that reintroduces ``Count`` fails in
+    CI (this module is in the offline-pit-checks set), not just in the candidate
+    tooling.
+    """
+
+    def _assert_no_count(self, label: str, expr: str) -> None:
+        self.assertIsNotNone(expr, f"{label}: expression is None")
+        self.assertNotRegex(
+            expr,
+            _COUNT_CALL_RE,
+            f"{label} uses the broken Qlib Count() operator (counts non-null obs, "
+            f"ignores the condition in this build). Use Sum(If(cond, 1, 0), N) "
+            f"instead. Expression: {expr!r}",
+        )
+
+    def test_count_call_regex_sanity(self):
+        # The matcher catches real Count calls but not substrings of other names.
+        self.assertRegex("Count(x > 0, 20)", _COUNT_CALL_RE)
+        self.assertRegex("Sum(Count(x > 0, 5), 20)", _COUNT_CALL_RE)
+        self.assertNotRegex("Sum(If(x > 0, 1, 0), 20)", _COUNT_CALL_RE)
+        self.assertNotRegex("DiscountRate(x, 5)", _COUNT_CALL_RE)
+
+    def test_known_count_operators_are_fixed(self):
+        # The two operators the F1/F4 fix rewrote must no longer emit Count.
+        self._assert_no_count("up_down_ratio(20)", operators.up_down_ratio(20))
+        self._assert_no_count("zero_trade_pct(20)", operators.zero_trade_pct(20))
+
+    def test_no_count_in_base_catalog(self):
+        for name, expr in get_factor_catalog(include_new_data=False).items():
+            self._assert_no_count(f"catalog[{name}]", expr)
+
+    def test_no_count_in_full_catalog_with_new_data(self):
+        # include_new_data=True adds the flow/north/margin/earn/alpha-endpoint
+        # factors — the ones most likely to want a conditional count.
+        for name, expr in get_factor_catalog(include_new_data=True).items():
+            self._assert_no_count(f"catalog+new[{name}]", expr)
 
 
 if __name__ == "__main__":
