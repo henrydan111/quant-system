@@ -1,0 +1,314 @@
+# Exhaustive Factor Proposal — A-Share Multi-Factor System
+
+**Status:** research proposal for GPT 5.5 Pro review (not wired into the catalog).
+**Date:** 2026-05-30.
+**Author:** Claude (handoff prep).
+**Companion artifacts (same repo):**
+- [`factor_candidates.csv`](factor_candidates.csv) — machine-readable family expansion (51 representative instances), each stamped with live field-registry status.
+- [`../../../data/factor_research/field_inventory.md`](../../../data/factor_research/field_inventory.md) — the 518 base field stems / 3,649 raw bins materialized in the live Qlib provider (ground-truth snapshot).
+- [`../../scripts/generate_factor_candidates.py`](../../scripts/generate_factor_candidates.py) — read-only generator that produced the two files above from the live backend + field registry.
+
+---
+
+## 0. Purpose & how to read this
+
+The current factor library is **171 named factors** but consumes only **~50 of the
+518 materialized field stems**. This document maps the *entire* constructible factor
+surface from the present backend, organized as **factor families** (templates), each
+with a PIT-safe Qlib expression skeleton, the fields it consumes, its **field-registry
+status**, expected sign, decay horizon, and default neutralization.
+
+**The ask for GPT 5.5 Pro:** review this enumeration for (a) missing factor angles,
+(b) A-share-specific anomalies we have not encoded, (c) which untapped fields are the
+highest-priority to promote out of `unknown_field`/`quarantine`, and (d) redundancy /
+multicollinearity risks within the proposed set. See §6 for explicit prompts.
+
+Every expression below obeys the system's hard invariants (verified by the generator
+and the PIT-safety parser — see §5):
+- **PIT safety:** every `$field` is wrapped in `Ref(..., 1)` (or uses the `ADJ_*_T1`
+  adjusted-price atoms). Factor value at *t* uses data only through *t−1*.
+- **Negation:** `0 - Operator(...)`, never `-Operator(...)`.
+- **Adjusted vs raw:** adjusted price (`$close*$adj_factor`) for cross-day
+  returns/momentum; raw values for PIT accounting ratios.
+
+---
+
+## 1. Backend field inventory (what we can actually query)
+
+Verified by enumerating `data/qlib_data/features/<stock>/*.bin` and collapsing PIT
+suffixes (full list in [`field_inventory.md`](../../../data/factor_research/field_inventory.md)):
+
+| Source dataset | Field family | Approx. base stems | Registry status |
+|---|---|---|---|
+| `market_daily` | OHLCV, `pre_close`, `adj_factor`, `pct_chg`, `change` | 10 | **approved** |
+| `daily_basic` | `pe/pe_ttm/pb/ps/ps_ttm`, `dv_ratio/dv_ttm`, `total_mv/circ_mv`, `total_share/float_share/free_share`, `turnover_rate(_f)`, `volume_ratio` | 15 | **approved** |
+| `indicators` (`fina_indicator_vip`) | `roe/roa/roic`, margins, turnover, per-share, leverage, YoY/QoQ | ~109 | **approved** |
+| `pit_fundamentals` | curated `$pit_*` PIT-derived growth aliases | ~7 | **approved** |
+| `income` statement line-items | `total_revenue`, `oper_cost`, `ebit`, `ebitda`, `n_income`, `rd_exp`, `int_exp`, … (`_cum_q0..4`, `_q`, `_sq_q0..4`) | ~85 | **unknown_field** (materialized, unregistered) |
+| `balancesheet` line-items | `total_assets`, `total_liab`, `money_cap`, `inventories`, `accounts_receiv`, `goodwill`, `st_borr/lt_borr`, … (`_q0..4`) | ~152 | **unknown_field** |
+| `cashflow` line-items | `n_cashflow_act`, `c_pay_acq_const_fiolta`, `free_cashflow`, … (`_cum_q0..4`, `_sq_q0..4`) | ~60 | **unknown_field** |
+| `moneyflow` | `buy/sell_{sm,md,lg,elg}_{vol,amount}`, `net_mf_amount/vol` | ~18 | **quarantine** |
+| `hk_hold` (northbound) | `ratio` (foreign-holding %) | 1 | **quarantine** |
+| `margin_detail` | `rzye/rqye/rzmre/rzche/rqmcl/rqchl/rzrqye` | 7 | **quarantine** |
+| `stk_limit` | `up_limit/down_limit` | 2 | **quarantine** |
+| `top_list` / `top_inst` | 龙虎榜 per-stock + institutional (`$top_list__*`, `$top_inst__*`) | ~16 | **pending_review** |
+| `block_trade` | `$block_trade__{price,vol,amount}` | 3 | **pending_review** |
+| `cyq_perf` | chip distribution (`$cyq_perf__cost_*`, `winner_rate`, `weight_avg`) | 9 | **pending_review** |
+| `stk_holdertrade` | `$holdertrade_{net_vol,gross_vol,net_ratio,events}` | 4 | **pending_review** |
+| `reference` | `industry`, `sw2021_l1/l2`, `is_st` | 4 | **approved** |
+
+**PIT-variant grammar** (applies to every fundamental field):
+
+| Suffix | Meaning |
+|---|---|
+| `_q0 .. _q4` | snapshot value, latest → 4-period lag (balance sheet / indicators) |
+| `_cum_q0 .. _cum_q4` | cumulative period value, latest → 4-lag (income / cashflow) |
+| `_q` | single-quarter derived value |
+| `_sq_q0 .. _sq_q4` | single-quarter snapshot, latest → 4-lag |
+
+This is the lever that makes the surface combinatorial: every statement line-item
+yields level, YoY (`_sq_q0 / _sq_q4`), QoQ (`_sq_q0 / _sq_q1`), trend (`Slope` over
+`_sq_q0..q4`), and stability (`Std` over the quarter lags) variants.
+
+---
+
+## 2. Gap analysis — what the current 171-factor catalog leaves on the table
+
+**Fields the current catalog uses (~50):** OHLCV + `adj_factor`; `pe/pe_ttm/pb/ps/ps_ttm`,
+`dv_ratio/dv_ttm`, `total_mv/circ_mv/free_share`, `turnover_rate(_f)`, `volume_ratio`;
+indicator ratios `roe/roa/roic`, margins, `assets_turn`, `debt_to_assets`,
+`current_ratio/quick_ratio`, `ocfps/bps/eps`, and YoY/QoQ growth fields; plus the
+new-data fields (moneyflow / northbound / margin / alpha endpoints) behind
+`include_new_data=True`.
+
+**Entirely untapped (the opportunity):**
+
+1. **Raw statement line-items (~300 stems).** The catalog uses vendor *ratios* but never
+   the *building blocks*. This blocks every accruals, working-capital, asset-composition,
+   and EV-based factor — the single biggest gap.
+2. **Single-quarter (`_sq`) growth series.** The catalog's growth factors use the
+   indicator YoY snapshots (`or_yoy`, `netprofit_yoy`); it never builds clean
+   single-quarter YoY/QoQ/acceleration from `revenue_sq_q0..q4`.
+3. **Cashflow quality.** `n_cashflow_act`, `c_pay_acq_const_fiolta`, `free_cashflow` are
+   materialized but unused → no FCF yield, OCF/EV, cash-ROA, accruals, CapEx intensity.
+4. **EV-based value.** `total_liab` + `money_cap` + `total_mv` enable EV/EBITDA, EBIT/EV,
+   OCF/EV — none exist today (the catalog is price-multiple-only on value).
+5. **Balance-sheet composition & investment.** `goodwill`, `intan_assets`, `rd_exp`,
+   `inventories`, `accounts_receiv` → quality/earnings-management angles unused.
+6. **Path-shape & risk-adjusted price factors.** 52-week-high proximity, vol-scaled
+   momentum, Parkinson range vol, Lesmond zero-return illiquidity — standard anomalies
+   absent from the current windows-only momentum/vol families.
+
+---
+
+## 3. Factor families by category
+
+Notation: expressions are Qlib strings. `ADJ` = `($close * $adj_factor)`. Status is the
+**worst-case** registry status across the fields the family touches (formal-eligible only
+if *all* fields are `approved`). Representative concrete instances are in
+[`factor_candidates.csv`](factor_candidates.csv).
+
+### 3.1 Value (extend) — EV / cashflow yields
+
+| Family | Skeleton (PIT-safe) | Fields | Status | Sign | Decay |
+|---|---|---|---|---|---|
+| `val_ev_ebitda` | `(Ref($total_mv,1)*10000 + Ref($total_liab_q0,1) - Ref($money_cap_q0,1)) / Ref($ebitda_cum_q0,1)` | total_mv, total_liab, money_cap, ebitda | unknown_field | − | 60 |
+| `val_ebit_ev` | `Ref($ebit_cum_q0,1) / (EV)` | ebit, total_liab, money_cap, total_mv | unknown_field | + | 60 |
+| `val_fcf_yield` | `(Ref($n_cashflow_act_cum_q0,1) - Ref($c_pay_acq_const_fiolta_cum_q0,1)) / (Ref($total_mv,1)*10000)` | OCF, CapEx, total_mv | unknown_field | + | 90 |
+| `val_ocf_ev` | `Ref($n_cashflow_act_cum_q0,1) / (EV)` | OCF, EV components | unknown_field | + | 90 |
+| `val_retearn_yield` | `Ref($retained_earnings_q0,1) / (Ref($total_mv,1)*10000)` | retained_earnings, total_mv | unknown_field | + | 120 |
+| `val_ncav_to_price` | `(Ref($total_cur_assets_q0,1) - Ref($total_liab_q0,1)) / (Ref($total_mv,1)*10000)` | cur_assets, total_liab, total_mv | unknown_field | + | 120 |
+| `val_payout_ratio` | `Ref($cash_div_q0,1) / Ref($eps,1)` | cash_div, eps | unknown_field | ? | 250 |
+
+Price basis: **mixed** (raw fundamentals over market cap; market cap is a price quantity
+but used point-in-time, not cross-day, so no `adj_factor`).
+
+### 3.2 Quality / profitability (large expansion)
+
+| Family | Skeleton | Fields | Status | Sign |
+|---|---|---|---|---|
+| `qual_gross_profitability` | `(Ref($total_revenue_cum_q0,1) - Ref($oper_cost_cum_q0,1)) / Ref($total_assets_q0,1)` | revenue, oper_cost, assets | unknown_field | + |
+| `qual_cash_roa` | `Ref($n_cashflow_act_cum_q0,1) / Ref($total_assets_q0,1)` | OCF, assets | unknown_field | + |
+| `qual_dupont_margin` | `Ref($netprofit_margin,1)` | netprofit_margin | **approved** | + |
+| `qual_dupont_turnover` | `Ref($assets_turn,1)` | assets_turn | **approved** | + |
+| `qual_margin_{grossprofit_margin,netprofit_margin,op_of_gr,ebit_of_gr,profit_to_gr}` | `Ref($<f>,1)` | indicator ratios | mixed (3 approved, 2 unknown) | + |
+
+Novy-Marx gross profitability and cash-ROA are the headline additions; they require the
+raw statement line-items (currently `unknown_field`). The DuPont legs and margin-ladder
+members built from registered indicator fields are **formal-eligible today**.
+
+### 3.3 Accruals / earnings quality (NEW — the biggest gap)
+
+| Family | Skeleton | Fields | Status | Sign |
+|---|---|---|---|---|
+| `acc_total_accruals_ni_ocf` | `(Ref($n_income_cum_q0,1) - Ref($n_cashflow_act_cum_q0,1)) / Ref($total_assets_q0,1)` | NI, OCF, assets | unknown_field | − |
+| `acc_cfo_to_ni` | `Ref($n_cashflow_act_cum_q0,1) / Ref($n_income_cum_q0,1)` | OCF, NI | unknown_field | + |
+| `acc_asset_growth` | `Ref($total_assets_q0,1) / Ref($total_assets_q4,1) - 1` | assets | unknown_field | − |
+| `acc_noa_scaled` | `(assets − cash − liab + st_borr + lt_borr) / Ref($total_assets_q4,1)` | assets, money_cap, liab, borr | unknown_field | − |
+| `acc_dWC_inventory` | `(Ref($inventories_q0,1) - Ref($inventories_q4,1)) / Ref($total_assets_q4,1)` | inventories, assets | unknown_field | − |
+| `acc_dWC_receivables` | `(Ref($accounts_receiv_q0,1) - Ref($accounts_receiv_q4,1)) / Ref($total_assets_q4,1)` | AR, assets | unknown_field | − |
+| `acc_capex_intensity` | `Ref($c_pay_acq_const_fiolta_cum_q0,1) / Ref($total_assets_q0,1)` | CapEx, assets | unknown_field | − |
+| `acc_rd_intensity` | `Ref($rd_exp_cum_q0,1) / Ref($total_revenue_cum_q0,1)` | rd_exp, revenue | unknown_field | + |
+| `acc_goodwill_ratio` | `Ref($goodwill_q0,1) / Ref($total_assets_q0,1)` | goodwill, assets | unknown_field | − |
+| `acc_net_share_issuance` | `0 - (Ref($total_share,1) / Ref($total_share,251) - 1)` | total_share | **approved** | + |
+
+Canonical anomalies (Sloan accruals, Cooper asset growth, Hirshleifer NOA, Pontiff/Woodgate
+net-share-issuance). All but net-share-issuance need the unregistered statement fields.
+`acc_net_share_issuance` uses only `total_share` (daily_basic) and is **formal-eligible today**.
+
+### 3.4 Growth (single-quarter `_sq` extension)
+
+Template per field `f ∈ {revenue, operate_profit, n_income_attr_p, total_revenue}`:
+- YoY: `Ref($<f>_sq_q0,1) / Ref($<f>_sq_q4,1) - 1`
+- QoQ: `Ref($<f>_sq_q0,1) / Ref($<f>_sq_q1,1) - 1`
+
+Status `unknown_field` (single-quarter `_sq` series are statement-derived). Extends
+trivially to acceleration (`Delta` of YoY) and 4-quarter `Slope`. Expected sign +,
+decay 60–90 days. The existing catalog only has the indicator-snapshot YoY equivalents.
+
+### 3.5 Leverage / solvency (extend)
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `lev_net_debt_to_ebitda` | `(st_borr + lt_borr − money_cap) / ebitda_cum_q0` | unknown_field | − |
+| `lev_interest_coverage` | `Ref($ebit_cum_q0,1) / Ref($int_exp_cum_q0,1)` | unknown_field | + |
+
+Complements the existing registered `debt_to_assets/current_ratio/quick_ratio` factors
+with debt-service and coverage angles.
+
+### 3.6 Momentum / reversal (extend) — **all formal-eligible**
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `mom_52w_high_proximity` | `ADJ_T1 / Max(ADJ_HIGH_T1, 250)` | **approved** | + |
+| `mom_volscaled_{20,60,120}d` | `momentum(w) / (Std(DAILY_RET, w) + 1e-4)` | **approved** | + |
+
+George-Hwang 52-week-high and volatility-scaled (risk-adjusted) momentum — both buildable
+from price alone, so deployable now. Further untapped: residual/idiosyncratic momentum
+(Layer-2, needs market+industry regression), information-discreteness (Da-Gurun-Warachka).
+
+### 3.7 Volatility / risk (extend) — **all formal-eligible**
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `risk_parkinson_{20,60,120}d` | `Mean(Ref(($high-$low)/$close,1), w)` | **approved** | − |
+
+Untapped extensions (Layer-2 / multi-field): CAPM beta, idiosyncratic vol vs market,
+co-skewness, downside/upside beta, Garman-Klass range vol.
+
+### 3.8 Liquidity / microstructure (extend) — **all formal-eligible**
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `liq_zero_ret_days_{5,10,20}d` | `Count(Abs(DAILY_RET) < 1e-4, w) / w` | **approved** | − |
+
+Lesmond zero-return illiquidity. Untapped: Roll effective-spread proxy, Amihud variants
+on free-float dollar volume.
+
+### 3.9 Capital flow (`moneyflow` — quarantine)
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `flow_elg_net_pct_{5,10,20}d` | `Mean(Ref((($buy_elg_amount-$sell_elg_amount)/$amount),1), w)` | quarantine | + |
+
+Extra-large-order net inflow share (smart-money proxy). Not formal-eligible until
+`moneyflow` clears anomaly review. Untapped: order imbalance across all four size tiers,
+retail-vs-institutional divergence (`sm` vs `elg`), flow persistence/autocorrelation.
+
+### 3.10 Margin (`margin_detail` — quarantine)
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `margin_net_buy_ratio_20d` | `Mean(Ref(($rzmre-$rzche),1), 20) / Ref($circ_mv,1)` | quarantine | + |
+
+Untapped: margin balance / float, short-selling balance Δ, margin-to-short ratio.
+
+### 3.11 Alpha endpoints (`top_*`/`block_trade`/`cyq_perf`/`holdertrade` — pending_review)
+
+| Family | Skeleton | Status | Sign |
+|---|---|---|---|
+| `alpha_chip_winner_rate_level` | `Ref($cyq_perf__winner_rate,1)` | pending_review | ? |
+
+The current catalog already has ~20 alpha-endpoint factors (chip distribution, 龙虎榜
+flow, block-trade discount, insider net-buy). Untapped: cost-percentile compression as a
+breakout precursor, chip-concentration regime, institutional-vs-retail 龙虎榜 divergence.
+
+### 3.12 Composites (Layer-2)
+
+Once §3.1–3.3 land, natural composites: **Piotroski F-score** (9 binary accruals/
+profitability/leverage signals), **Quality-Minus-Junk** (profitability+growth+safety),
+**accruals-screened value** (cheap *and* clean earnings). These reuse
+`operators.add_composites` rank-blending — no new fields beyond their components.
+
+---
+
+## 4. PIT / registry caveats — what blocks formal use today
+
+Of the 51 representative instances: **15 approved (formal-eligible now)**, **31
+`unknown_field`**, **4 quarantine**, **1 pending_review**.
+
+- **`unknown_field` (statement line-items):** materialized in the provider but **not
+  listed** in [`field_status.yaml`](../../../config/field_registry/field_status.yaml).
+  They fail-closed at formal stages (`unknown_field_policy[formal_validation] = fail`).
+  **To promote:** add an `income` / `balancesheet` / `cashflow` dataset entry (status
+  `approved`, PIT-anchored on `max(ann_date, f_ann_date)` per CLAUDE.md §3) + an approval
+  YAML under `config/field_registry/approvals/`. These flow through the *same* PIT
+  pipeline as the already-approved `$pit_*` and `indicators` families, so the promotion is
+  a registry/governance step, not a data change — but it needs the PR-9a-style review
+  (per-family bare-name guardrail tests + indicator-style `Ref(...,1)` lag contract).
+- **`quarantine` (moneyflow / margin / northbound):** downloaded, pending anomaly review.
+  Usable in sandbox/vectorized screening, blocked at formal. Promotion requires the
+  anomaly review noted in `project_state` 2026-05-26.
+- **`pending_review` (alpha endpoints):** namespacing fixed (2026-04-20), anomaly review
+  WIP. Same gating as quarantine for formal stages.
+
+**Recommended sequencing:** (1) screen the 15 already-formal families immediately;
+(2) prioritize promoting the **cashflow + core balance-sheet** line-items (unlock
+accruals + FCF + EV value — the highest-conviction academic anomalies); (3) defer
+moneyflow/margin/alpha until their anomaly reviews complete.
+
+---
+
+## 5. Verification performed
+
+- **PIT-safety:** all 51 expressions passed the project's own
+  `find_unwrapped_field_references` parser (from
+  [`test_factor_library_pit_safety.py`](../../../tests/alpha_research/test_factor_library_pit_safety.py)) —
+  zero unwrapped `$field`.
+- **Field existence:** every `$field` referenced exists in the verified 518-stem inventory
+  (0 families skipped for missing fields).
+- **Status stamping:** resolved via the live registry
+  ([`field_registry.py`](../../../src/data_infra/field_registry.py)) — spot-checked:
+  `mom_52w_high_proximity`→approved/yes, `flow_elg_net_pct_5d`→quarantine/no,
+  `qual_gross_profitability`→unknown_field/no, `alpha_chip_winner_rate_level`→pending_review/no.
+- **No system mutation:** only the three handoff files were written; `data/qlib_data/`,
+  `config/`, `src/`, and all registries untouched.
+
+---
+
+## 6. Open questions for GPT 5.5 Pro
+
+1. **Missing families:** what well-established A-share / EM-equity factors are absent
+   here? (Candidates we deliberately left for you: Piotroski F-score detail, QMJ,
+   seasonality/`turn-of-quarter`, analyst-revision proxies via `forecast`, beta-arbitrage,
+   short-term-reversal conditioning on liquidity.)
+2. **A-share specificity:** which factors need A-share-specific treatment (T+1, 10%/20%
+   limit boards, ST handling, retail-dominated microstructure, state-ownership)? The
+   `cyq_perf` chip-distribution and `moneyflow` tier data are A-share-rich — what is the
+   best way to exploit them?
+3. **Promotion priority:** given the `unknown_field` statement line-items all share one
+   PIT pipeline, which 10–20 fields would you promote first to maximize incremental
+   breadth per unit of review effort?
+4. **Redundancy:** which proposed families are likely to be highly collinear with the
+   existing 171 (e.g. `qual_dupont_margin` ≈ existing `qual_net_margin`) and should be
+   dropped or merged before screening?
+5. **Sign/decay priors:** challenge any `expected_sign` / `expected_decay_days` you
+   disagree with — these are priors to be tested, not claims.
+6. **Construction correctness:** flag any expression where the `_q0/_cum_q0/_sq` variant
+   choice is wrong for the intended economic quantity (e.g. flow vs stock mismatch in EV,
+   or cumulative-vs-single-quarter in a margin).
+
+---
+
+*Generated for the GPT 5.5 Pro complement pass. The CSV is the source of truth for exact
+expressions; this markdown is the rationale + review surface.*
