@@ -172,6 +172,14 @@ datasets:
       - $q_roe
       - $q_dt_roe
       - $dt_netprofit_yoy
+      # Wave-2 (2026-05-31): margin-ladder ratios from fina_indicator_vip. Same
+      # ann_date-anchored indicators family + pipeline as the fields above;
+      # coverage 98-99.9% on 2018 full market; loader-servable (in the indicators
+      # ledger). Unlocks qual_margin_{op_of_gr,ebit_of_gr,profit_to_gr}.
+      # See approvals/2026-05-31_wave2_indicator_ratios.yaml.
+      - $op_of_gr
+      - $ebit_of_gr
+      - $profit_to_gr
 
   reference:
     status: approved

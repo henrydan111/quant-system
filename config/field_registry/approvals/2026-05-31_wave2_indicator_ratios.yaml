@@ -1,0 +1,81 @@
+# Field-registry approval evidence (2026-05-31, Wave-2 indicator margin ratios)
+#
+# Extends the already-approved `indicators` dataset entry with three
+# fina_indicator_vip margin-ladder ratios:
+#   $op_of_gr      operating profit / gross revenue
+#   $ebit_of_gr    EBIT / gross revenue
+#   $profit_to_gr  net profit / gross revenue
+#
+# WHY: GPT 5.5 Pro Round-6 sequencing call — run one tightly-scoped, IS-only
+# Wave-2 promotion before spending the single sealed-OOS shot. These three were
+# GPT's #1-priority Wave-2 candidates (lowest risk: same fina_indicator_vip /
+# ann_date family as the already-approved $roe/$netprofit_margin/etc., and
+# loader-servable). They unlock the 3 qual_margin_* factor candidates.
+#
+# SCOPE DISCIPLINE (per GPT condition #3): holder_num (stk_holdernumber family)
+# and forecast p_change_* were coverage-checked (99.9% / 84-91%) but DEFERRED —
+# they belong to separate families needing their own PIT-disclosure-semantics
+# verification, which is out of scope for a "tightly-scoped" Wave-2. Only the
+# already-approved-family indicator ratios are promoted here.
+
+approval_id: 2026-05-31_wave2_indicator_ratios
+date: 2026-05-31
+dataset_id: indicators
+source_endpoint: tushare.fina_indicator_vip
+from_status: approved          # dataset already approved; this EXTENDS its field list
+to_status: approved
+reviewer: henrydan111
+related_pr: factor-expansion-wave2-promotion
+related_findings_id: gpt_round6_sequencing
+
+# Same provider build + calendar policy binding as the other indicators approvals.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Inherits the indicators-family PIT contract (ann_date anchored; Ref($field,1)).
+pit_contract:
+  availability_column: ann_date
+  provider_transform: pit_aligned_by_announcement_date_with_shift1
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_snapshot_dataset
+  expression_lag_required: true
+  approved_usage_pattern: "Ref($field, 1) or stricter"
+  same_day_raw_usage_allowed: false
+
+coverage_evidence:
+  method: "compute_factors(Ref($field,1)) over 2018 full market, non-null fraction"
+  result:
+    - "$op_of_gr: 99.9% non-null, 0.00% zero"
+    - "$ebit_of_gr: 98.0% non-null, 0.00% zero"
+    - "$profit_to_gr: 99.9% non-null, 0.00% zero"
+  note: "These are ratio fields (already normalized by revenue) — not subject to the structural-zero NaN issue affecting goodwill/lt_borr/st_borr."
+
+# Loader-servable (in the indicators ledger), so the STANDARD loader↔provider
+# parity harness is the right evidence — unlike the provider-DERIVED statement
+# _sq/_q variants (which need verify_statement_provider_parity.py).
+parity_evidence:
+  method: >-
+    tests/data_infra/test_pit_loader_provider_parity.py — added op_of_gr /
+    ebit_of_gr / profit_to_gr to PARITY_FIELDS + NEW_FIELDS. Loader kernel
+    (provider_stateful_q0) vs provider D.features, lag-0 as-of AND lag-1 signal,
+    3 securities (600519.SH, 000001.SZ, IPO-edge 603080.SH), 2017-2019.
+  result: "PASS — both parity tests green; per-field non-all-NaN evidence floor met."
+
+fields_added:
+  - $op_of_gr
+  - $ebit_of_gr
+  - $profit_to_gr
+
+notes: |
+  No on-disk/pipeline change — registry coverage only. Same ann_date-anchored
+  fina_indicator_vip pipeline as the existing approved indicator fields, and
+  parity-verified equal to the provider. Unlocks qual_margin_op_of_gr /
+  qual_margin_ebit_of_gr / qual_margin_profit_to_gr in the candidate set.

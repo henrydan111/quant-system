@@ -477,6 +477,18 @@ class TestLiveRegistry:
                 f"formal-approved; got allowed={r.allowed} dataset={r.dataset_id}"
             )
 
+    def test_wave2_indicator_ratios_approved_for_formal(self, reg) -> None:
+        # Wave-2 (2026-05-31_wave2_indicator_ratios.yaml): the 3 margin-ladder
+        # ratios extend the approved indicators entry; loader-parity verified.
+        for field in ("$op_of_gr", "$ebit_of_gr", "$profit_to_gr"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is True, (
+                f"{field} should be approved under indicators; got "
+                f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.dataset_id == "indicators"
+            assert r.status_id == "approved"
+
     def test_top_list_is_pending_for_formal(self, reg) -> None:
         r = reg.resolve_field("$top_list__close", "formal_validation")
         assert r.allowed is False
