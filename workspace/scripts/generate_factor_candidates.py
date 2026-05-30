@@ -176,12 +176,9 @@ def _ratio_static(num_field: str, den_field: str) -> str:
 
 
 def _yoy_q(field: str) -> str:
-    """Single-quarter YoY using the _q (single-quarter) variant, lag 4 quarters.
-
-    Uses the *_q materialized single-quarter series. Ref shifts are in
-    TRADING DAYS, so a 4-quarter lag is approximated by the q-variant index;
-    we express it as the ratio of consecutive _sq_q0/_sq_q4 snapshot lags
-    which the provider already aligns per quarter.
+    """Single-quarter YoY: ratio of the latest single-quarter snapshot to the
+    same quarter one year earlier (4 quarter-lags), using the provider-aligned
+    ``_sq_q0`` / ``_sq_q4`` series.
     """
     return f"Ref(${field}_sq_q0, 1) / Ref(${field}_sq_q4, 1) - 1"
 
@@ -190,55 +187,53 @@ def _qoq_q(field: str) -> str:
     return f"Ref(${field}_sq_q0, 1) / Ref(${field}_sq_q1, 1) - 1"
 
 
+def _ttm(field: str) -> str:
+    """Trailing-twelve-month sum of a flow field from the 4 latest single-quarter
+    snapshots (``_sq_q0..q3``). Per data_tracker, ``_cum_q0`` is YTD-cumulative
+    (Q1=3mo, Q3=9mo) and therefore quarter-seasonality-contaminated; the TTM sum
+    is the seasonality-free flow quantity for ratios. (GPT 5.5 Pro review, §5.)
+    """
+    return (
+        f"(Ref(${field}_sq_q0, 1) + Ref(${field}_sq_q1, 1) "
+        f"+ Ref(${field}_sq_q2, 1) + Ref(${field}_sq_q3, 1))"
+    )
+
+
 def build_families() -> list[dict]:
     """Return the full family registry (templates, not yet expanded)."""
     fams: list[dict] = []
 
     # ─────────── VALUE (extend) ───────────
+    # EV bridge reused across EV-yield families. Stock terms use _q0 snapshot;
+    # flow terms use TTM (_sq sum) per the GPT review seasonality fix.
+    EV = "(Ref($total_mv, 1) * 10000 + Ref($total_liab_q0, 1) - Ref($money_cap_q0, 1))"
     fams.append(dict(
-        name_tmpl="val_ev_ebitda",
-        expr_fn=lambda: (
-            "(Ref($total_mv, 1) * 10000 + Ref($total_liab_q0, 1) "
-            "- Ref($money_cap_q0, 1)) / Ref($ebitda_cum_q0, 1)"
-        ),
-        category="Value",
-        price_basis="mixed",
-        sign="-", decay_days=60, neutralize="industry",
-        rationale="Enterprise value to EBITDA; cheaper firms outperform.",
+        name_tmpl="val_ebitda_ev_ttm",
+        expr_fn=lambda: f"{_ttm('ebitda')} / {EV}",
+        category="Value", price_basis="mixed",
+        sign="+", decay_days=120, neutralize="industry",
+        rationale="EBITDA/EV yield (TTM); yield form avoids negative-denominator "
+                  "instability of EV/EBITDA. Reframed +decay per GPT review.",
         requires=["total_liab", "money_cap", "ebitda"],
     ))
     fams.append(dict(
-        name_tmpl="val_ebit_ev",
-        expr_fn=lambda: (
-            "Ref($ebit_cum_q0, 1) / (Ref($total_mv, 1) * 10000 "
-            "+ Ref($total_liab_q0, 1) - Ref($money_cap_q0, 1))"
-        ),
+        name_tmpl="val_ebit_ev_ttm",
+        expr_fn=lambda: f"{_ttm('ebit')} / {EV}",
         category="Value", price_basis="mixed",
-        sign="+", decay_days=60, neutralize="industry",
-        rationale="Greenblatt earnings yield (EBIT/EV).",
+        sign="+", decay_days=120, neutralize="industry",
+        rationale="Greenblatt earnings yield (EBIT/EV), TTM single-quarter flow.",
         requires=["ebit", "total_liab", "money_cap"],
     ))
     fams.append(dict(
-        name_tmpl="val_fcf_yield",
+        name_tmpl="val_fcf_ev_ttm",
         expr_fn=lambda: (
-            "(Ref($n_cashflow_act_cum_q0, 1) - Ref($c_pay_acq_const_fiolta_cum_q0, 1)) "
-            "/ (Ref($total_mv, 1) * 10000)"
+            f"({_ttm('n_cashflow_act')} - {_ttm('c_pay_acq_const_fiolta')}) / {EV}"
         ),
         category="Value", price_basis="mixed",
-        sign="+", decay_days=90, neutralize="industry",
-        rationale="Free-cash-flow yield (OCF - CapEx) / market cap.",
-        requires=["n_cashflow_act", "c_pay_acq_const_fiolta"],
-    ))
-    fams.append(dict(
-        name_tmpl="val_ocf_ev",
-        expr_fn=lambda: (
-            "Ref($n_cashflow_act_cum_q0, 1) / (Ref($total_mv, 1) * 10000 "
-            "+ Ref($total_liab_q0, 1) - Ref($money_cap_q0, 1))"
-        ),
-        category="Value", price_basis="mixed",
-        sign="+", decay_days=90, neutralize="industry",
-        rationale="Operating-cash-flow to enterprise value.",
-        requires=["n_cashflow_act", "total_liab", "money_cap"],
+        sign="+", decay_days=120, neutralize="industry",
+        rationale="FCF/EV yield (TTM OCF - TTM CapEx); cross-capital-structure "
+                  "comparable. Replaces FCF/market-cap per GPT review.",
+        requires=["n_cashflow_act", "c_pay_acq_const_fiolta", "total_liab", "money_cap"],
     ))
     fams.append(dict(
         name_tmpl="val_retearn_yield",
@@ -280,52 +275,52 @@ def build_families() -> list[dict]:
         rationale="Cash return on assets (OCF / total assets).",
         requires=["n_cashflow_act", "total_assets"],
     ))
-    fams.append(dict(
-        name_tmpl="qual_dupont_margin",
-        expr_fn=lambda: "Ref($netprofit_margin, 1)",
-        category="Quality", price_basis="raw",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="DuPont leg 1: net profit margin.",
-        requires=["netprofit_margin"],
-    ))
-    fams.append(dict(
-        name_tmpl="qual_dupont_turnover",
-        expr_fn=lambda: "Ref($assets_turn, 1)",
-        category="Quality", price_basis="raw",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="DuPont leg 2: asset turnover.",
-        requires=["assets_turn"],
-    ))
-    # margin ladder over vendor ratios
-    for f in ["grossprofit_margin", "netprofit_margin", "op_of_gr",
-              "ebit_of_gr", "profit_to_gr"]:
+    # NOTE (GPT review §4 dedup): qual_dupont_margin / qual_dupont_turnover and
+    # the qual_margin_{grossprofit_margin,netprofit_margin} ladder members were
+    # DROPPED — they duplicate existing catalog factors qual_net_margin /
+    # qual_asset_turnover / qual_gross_margin. Only the margin-ladder members the
+    # catalog does NOT already have are retained.
+    for f in ["op_of_gr", "ebit_of_gr", "profit_to_gr"]:
         fams.append(dict(
             name_tmpl=f"qual_margin_{f}",
             expr_fn=(lambda fld=f: f"Ref(${fld}, 1)"),
             category="Quality", price_basis="raw",
             sign="+", decay_days=120, neutralize="industry",
-            rationale=f"Margin ladder member: {f}.",
+            rationale=f"Margin ladder member not in current catalog: {f}.",
             requires=[f],
         ))
 
     # ─────────── ACCRUALS / EARNINGS QUALITY (new, biggest gap) ───────────
+    # GPT review §5: flow fields in a ratio must be TTM (_sq sum), not _cum_q0
+    # (which is YTD and quarter-seasonal). Denominator total_assets is a stock →
+    # use average of current + year-ago snapshot.
+    AVG_TA = "((Ref($total_assets_q0, 1) + Ref($total_assets_q4, 1)) / 2)"
     fams.append(dict(
-        name_tmpl="acc_total_accruals_ni_ocf",
+        name_tmpl="acc_total_accruals_ttm",
         expr_fn=lambda: (
-            "(Ref($n_income_cum_q0, 1) - Ref($n_cashflow_act_cum_q0, 1)) "
-            "/ Ref($total_assets_q0, 1)"
+            f"({_ttm('n_income')} - {_ttm('n_cashflow_act')}) / {AVG_TA}"
         ),
         category="Accruals", price_basis="raw",
-        sign="-", decay_days=120, neutralize="industry",
-        rationale="Total accruals (NI - OCF)/assets; high accruals underperform.",
+        sign="-", decay_days=250, neutralize="industry",
+        rationale="Sloan total accruals (TTM NI - TTM OCF) / avg assets; "
+                  "seasonality-free per GPT review.",
         requires=["n_income", "n_cashflow_act", "total_assets"],
     ))
     fams.append(dict(
-        name_tmpl="acc_cfo_to_ni",
-        expr_fn=lambda: "Ref($n_cashflow_act_cum_q0, 1) / Ref($n_income_cum_q0, 1)",
+        name_tmpl="acc_cash_roa_ttm",
+        expr_fn=lambda: f"{_ttm('n_cashflow_act')} / {AVG_TA}",
         category="Accruals", price_basis="raw",
         sign="+", decay_days=120, neutralize="industry",
-        rationale="Cash-flow backing of earnings (OCF/NI); higher is cleaner.",
+        rationale="Cash ROA (TTM OCF / avg assets); cash-backed profitability.",
+        requires=["n_cashflow_act", "total_assets"],
+    ))
+    fams.append(dict(
+        name_tmpl="acc_cfo_to_ni_ttm",
+        expr_fn=lambda: f"{_ttm('n_cashflow_act')} / {_ttm('n_income')}",
+        category="Accruals", price_basis="raw",
+        sign="+", decay_days=120, neutralize="industry",
+        rationale="Cash-flow backing of earnings (TTM OCF / TTM NI); higher is "
+                  "cleaner. TTM form per GPT review (note: unstable when NI~0).",
         requires=["n_cashflow_act", "n_income"],
     ))
     fams.append(dict(
@@ -371,21 +366,21 @@ def build_families() -> list[dict]:
         requires=["accounts_receiv", "total_assets"],
     ))
     fams.append(dict(
-        name_tmpl="acc_capex_intensity",
-        expr_fn=lambda: (
-            "Ref($c_pay_acq_const_fiolta_cum_q0, 1) / Ref($total_assets_q0, 1)"
-        ),
+        name_tmpl="acc_capex_intensity_ttm",
+        expr_fn=lambda: f"{_ttm('c_pay_acq_const_fiolta')} / {AVG_TA}",
         category="Accruals", price_basis="raw",
         sign="-", decay_days=250, neutralize="industry",
-        rationale="CapEx intensity; high investment associated with lower returns.",
+        rationale="CapEx intensity (TTM CapEx / avg assets); industry-neutralize "
+                  "(GPT review: sign not universally negative — separate from growth).",
         requires=["c_pay_acq_const_fiolta", "total_assets"],
     ))
     fams.append(dict(
-        name_tmpl="acc_rd_intensity",
-        expr_fn=lambda: "Ref($rd_exp_cum_q0, 1) / Ref($total_revenue_cum_q0, 1)",
+        name_tmpl="acc_rd_intensity_ttm",
+        expr_fn=lambda: f"{_ttm('rd_exp')} / {_ttm('total_revenue')}",
         category="Accruals", price_basis="raw",
         sign="+", decay_days=250, neutralize="industry",
-        rationale="R&D intensity; intangible-investment premium.",
+        rationale="R&D intensity (TTM R&D / TTM revenue); intangible-investment "
+                  "premium; industry/stage-neutralize.",
         requires=["rd_exp", "total_revenue"],
     ))
     fams.append(dict(
@@ -406,43 +401,53 @@ def build_families() -> list[dict]:
     ))
 
     # ─────────── GROWTH (single-quarter YoY/QoQ extension) ───────────
+    # GPT review §5: raw QoQ statement growth is seasonality-contaminated →
+    # keep single-quarter YoY (compares same quarter) + YoY acceleration; drop
+    # the bare QoQ variants.
     for f in ["revenue", "operate_profit", "n_income_attr_p", "total_revenue"]:
         fams.append(dict(
             name_tmpl=f"grow_{f}_yoy_q",
             expr_fn=(lambda fld=f: _yoy_q(fld)),
             category="Growth", price_basis="raw",
             sign="+", decay_days=90, neutralize="industry",
-            rationale=f"Single-quarter YoY growth of {f}.",
+            rationale=f"Single-quarter YoY growth of {f} (same-quarter comparison).",
             requires=[f],
         ))
         fams.append(dict(
-            name_tmpl=f"grow_{f}_qoq_q",
-            expr_fn=(lambda fld=f: _qoq_q(fld)),
+            name_tmpl=f"grow_{f}_yoy_accel_q",
+            expr_fn=(lambda fld=f: (
+                f"(Ref(${fld}_sq_q0, 1) / Ref(${fld}_sq_q4, 1) - 1) "
+                f"- (Ref(${fld}_sq_q1, 1) / Ref(${fld}_sq_q4, 1) - 1)"
+            )),
             category="Growth", price_basis="raw",
             sign="+", decay_days=60, neutralize="industry",
-            rationale=f"Single-quarter QoQ momentum of {f}.",
+            rationale=f"YoY-growth acceleration of {f} (quarter-on-quarter change "
+                      f"in YoY rate; seasonality-neutral).",
             requires=[f],
         ))
 
     # ─────────── LEVERAGE / SOLVENCY (extend) ───────────
+    # GPT review §5: EBITDA in the denominator is a flow → TTM, not _cum_q0.
     fams.append(dict(
-        name_tmpl="lev_net_debt_to_ebitda",
+        name_tmpl="lev_net_debt_to_ebitda_ttm",
         expr_fn=lambda: (
             "(Ref($st_borr_q0, 1) + Ref($lt_borr_q0, 1) - Ref($money_cap_q0, 1)) "
-            "/ Ref($ebitda_cum_q0, 1)"
+            f"/ {_ttm('ebitda')}"
         ),
         category="Leverage", price_basis="raw",
         sign="-", decay_days=120, neutralize="industry",
-        rationale="Net debt / EBITDA solvency.",
+        rationale="Net debt / TTM EBITDA solvency (winsorize negative EBITDA).",
         requires=["st_borr", "lt_borr", "money_cap", "ebitda"],
     ))
     fams.append(dict(
-        name_tmpl="lev_interest_coverage",
-        expr_fn=lambda: "Ref($ebit_cum_q0, 1) / Ref($int_exp_cum_q0, 1)",
+        name_tmpl="lev_interest_coverage_ttm",
+        expr_fn=lambda: f"{_ttm('ebit')} / {_ttm('fin_exp_int_exp')}",
         category="Leverage", price_basis="raw",
         sign="+", decay_days=120, neutralize="industry",
-        rationale="Interest coverage (EBIT / interest expense).",
-        requires=["ebit", "int_exp"],
+        rationale="Interest coverage (TTM EBIT / TTM financial-expense interest); "
+                  "fin_exp_int_exp preferred over bank-style int_exp for industrials "
+                  "(GPT review §5).",
+        requires=["ebit", "fin_exp_int_exp"],
     ))
 
     # ─────────── MOMENTUM / REVERSAL (extend) ───────────
@@ -450,8 +455,9 @@ def build_families() -> list[dict]:
         name_tmpl="mom_52w_high_proximity",
         expr_fn=lambda: f"{C1} / Max({op.ADJ_HIGH_T1}, 250)",
         category="Momentum", price_basis="adjusted",
-        sign="+", decay_days=120, neutralize="industry",
-        rationale="George-Hwang 52-week-high proximity.",
+        sign="+", decay_days=60, neutralize="industry",
+        rationale="George-Hwang 52-week-high proximity (decay 60d per GPT review — "
+                  "medium-term anchor, not a 1y-stale signal).",
         requires=["close", "high", "adj_factor"],
     ))
     for w in W_MED:
@@ -465,15 +471,29 @@ def build_families() -> list[dict]:
         ))
 
     # ─────────── VOLATILITY / RISK (extend) ───────────
+    # GPT review §4/§5: the previous risk_parkinson_{w}d was (high-low)/close — a
+    # range RATIO that duplicates the catalog's risk_range_ratio_20d and is NOT
+    # Parkinson volatility. Replaced with the true log-range Parkinson estimator.
     for w in W_MED:
         fams.append(dict(
-            name_tmpl=f"risk_parkinson_{w}d",
-            expr_fn=(lambda ww=w: f"Mean(Ref(($high - $low) / $close, 1), {ww})"),
-            category="Volatility", price_basis="raw",
+            name_tmpl=f"risk_parkinson_logrange_{w}d",
+            expr_fn=(lambda ww=w: (
+                f"Mean(Power(Log({op.ADJ_HIGH_T1} / {op.ADJ_LOW_T1}), 2), {ww})"
+            )),
+            category="Volatility", price_basis="adjusted",
             sign="-", decay_days=20, neutralize="size",
-            rationale="Parkinson high-low range volatility.",
-            requires=["high", "low", "close"],
+            rationale="True Parkinson log high-low range variance (fixes the "
+                      "range-ratio mislabel flagged in GPT review §4).",
+            requires=["high", "low", "adj_factor"],
         ))
+    fams.append(dict(
+        name_tmpl="risk_gap_vol_20d",
+        expr_fn=lambda: f"Std({op.ADJ_OPEN_T1} / Ref({op.ADJ_CLOSE}, 2) - 1, 20)",
+        category="Volatility", price_basis="adjusted",
+        sign="-", decay_days=20, neutralize="size",
+        rationale="Overnight/T+1 gap risk; distinct from intraday vol (GPT review §1).",
+        requires=["open", "close", "adj_factor"],
+    ))
 
     # ─────────── LIQUIDITY / MICROSTRUCTURE (extend) ───────────
     for w in W_SHORT:
@@ -520,28 +540,45 @@ def build_families() -> list[dict]:
     ))
 
     # ─────────── DIVIDEND / PAYOUT ───────────
-    fams.append(dict(
-        name_tmpl="val_payout_ratio",
-        expr_fn=lambda: "Ref($cash_div_q0, 1) / Ref($eps, 1)",
-        category="Value", price_basis="raw",
-        sign="?", decay_days=250, neutralize="industry",
-        rationale="Dividend payout ratio (cash div per share / EPS).",
-        requires=["cash_div", "eps"],
-    ))
+    # GPT review finding #0: the previous `val_payout_ratio` referenced
+    # `$cash_div_q0`, which is NOT materialized — the dividends endpoint writes
+    # only flat `cash_div` / `cash_div_tax` (no _q0..q4 PIT variants, because it
+    # is event-based, not a periodic statement). DROPPED. Dividend YIELD is
+    # already covered by approved `dv_ttm` / `dv_ratio` in the existing catalog
+    # (val_div_yield / val_div_ratio). A raw payout ratio needs the dividends
+    # endpoint registered + event-timing validation before use.
 
     return fams
 
 
-def expand_families(families: list[dict], base_stems: set[str]) -> list[dict]:
-    """Expand templates into concrete candidate rows, gated on field existence."""
+def expand_families(
+    families: list[dict], base_stems: set[str], raw_stems: set[str]
+) -> list[dict]:
+    """Expand templates into concrete candidate rows, gated on field existence.
+
+    Two-layer gate (hardened after GPT 5.5 Pro review finding #0, which caught
+    ``$cash_div_q0`` — a base stem that exists but whose PIT variant was never
+    materialized):
+
+    1. ``requires`` base stems must exist (coarse pre-check).
+    2. **Every ``$field`` token in the BUILT expression must exist in the RAW
+       materialized bin set.** This is the authoritative check — it validates the
+       exact PIT variant (`_q0`, `_sq_q0`, `_cum_q0`, …), not the collapsed base.
+    """
     rows: list[dict] = []
     skipped: list[str] = []
     for fam in families:
         missing = [r for r in fam.get("requires", []) if r not in base_stems]
         if missing:
-            skipped.append(f"{fam['name_tmpl']} (missing {missing})")
+            skipped.append(f"{fam['name_tmpl']} (missing base stem {missing})")
             continue
         expr = fam["expr_fn"]()
+        # Authoritative gate: every raw $field token must be materialized.
+        tokens = [t[1:] for t in extract_qlib_fields(expr)]
+        missing_tok = sorted(t for t in tokens if t not in raw_stems)
+        if missing_tok:
+            skipped.append(f"{fam['name_tmpl']} (non-materialized variant {missing_tok})")
+            continue
         rows.append({
             "name": fam["name_tmpl"],
             "category": fam["category"],
@@ -645,7 +682,7 @@ def main() -> int:
 
     families = build_families()
     logger.info("Defined %d factor families", len(families))
-    rows = expand_families(families, set(base_stems))
+    rows = expand_families(families, set(base_stems), set(raw_stems))
     rows = stamp_registry(rows)
     write_csv(rows)
 
