@@ -82,6 +82,18 @@ class TestFrozenSelectionSetHash:
         changed = (SelectedFactor("qual_roe", 1, "h_roe_v2", "long"), a.selected[1])
         assert a.frozen_set_hash != _set(selected=changed).frozen_set_hash
 
+    def test_hash_order_independent_for_same_id_different_direction(self) -> None:
+        # GPT cross-review hardening: two members sharing (factor_id, version,
+        # definition_hash) but differing in expected_direction must hash identically
+        # regardless of insertion order (the sort key now includes direction).
+        members = (
+            SelectedFactor("x", 1, "h", "long"),
+            SelectedFactor("x", 1, "h", "short"),
+        )
+        a = _set(selected=members)
+        b = _set(selected=tuple(reversed(members)))
+        assert a.frozen_set_hash == b.frozen_set_hash
+
 
 class TestSealKeyMigration:
     def test_two_claims_same_frozen_set_hash_one_wins(self, tmp_path: Path) -> None:

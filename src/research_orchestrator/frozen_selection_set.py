@@ -72,10 +72,13 @@ class FrozenSelectionSet:
     schema_version: int = SCHEMA_VERSION
 
     def _payload(self) -> dict[str, Any]:
-        # Sort selected factors so the hash is independent of insertion order.
+        # Sort selected factors so the hash is independent of insertion order. The
+        # key is the FULL payload (incl. expected_direction, payload[3]) — GPT
+        # cross-review hardening: keying on only (factor_id, version, definition_hash)
+        # left a same-id/version/hash member with a different direction order-sensitive.
         selected_sorted = sorted(
             (factor.to_payload() for factor in self.selected),
-            key=lambda payload: (payload[0], payload[1], payload[2]),
+            key=lambda payload: (payload[0], payload[1], payload[2], payload[3]),
         )
         return {
             "schema_version": int(self.schema_version),
