@@ -54,7 +54,29 @@ Round-2 also **answered v2's 6 open questions** — resolutions encoded in §2.3
   second OOS read to manufacture that evidence would violate the seal → if absent, **do not approve the
   6 retroactively** (§8).
 
+## 0.8 PHASE 1 COMPLETE + GPT final integration review (2026-05-31, GO) — carry-forward to Phase 2+
+All five Phase-1 gates are implemented, cross-reviewed, fixed, and **merged to `wave1-field-promotion`**
+(PRs #29 + #30; final code `ce26e95`). Review arc: GPT rounds 2-6 → Codex rounds 1-5 → GPT post-impl
+(2 P0 approval-bypasses) → GPT post-impl P1.3/P1.4/P1.5 (1 must-fix + 1 hardening) → **GPT final
+integration review = GO**, no merge-blocking gap, the 5 gates compose correctly for the formal path.
+Two non-blocking carry-forward items from the final review:
+- **(addressed)** explicit drift-gate test for `source_layer="factor_registry_candidate"` (the code
+  already covered it via `layer.startswith("factor_registry")`) — added as
+  `TestPR13DefinitionBindingGate::test_factor_registry_candidate_layer_drift_is_caught` (`ce26e95`).
+- **(Phase 3/5 — when `frozen_set_hash` is wired live):** derive the seal-claim key AND
+  `HoldoutContext.seal_key` from ONE shared source, and add a non-`design_hash` seal test proving the
+  claim and the engine backstop key on the SAME frozen hash. Until that wiring lands the seal migration
+  is back-compat plumbing — immutable frozen-set OOS budgeting is not active yet. **This is the single
+  most important Phase-3/5 correctness rule.**
+
 ---
+
+## 1. Current state (UPDATED 2026-05-31 — Phase 1 done)
+Phase 1 (factor-level lifecycle ENFORCEMENT) is now merged: writer+reader gates, definition-binding,
+`seal_key` migration, ledger file-lock. What remains ad-hoc: the registry EVIDENCE schema (long-only
+metric, signal-role, provenance — Phase 2), the `get_factors()`/`sync_catalog_to_registry()` API
+(Phase 3), the ported `factor_lifecycle/` modules (Phase 4), the orchestrator profile (Phase 5), and
+the 171 + 6-candidate backfill (Phase 6). Original v2 note retained below.
 
 ## 1. Current state (unchanged from v2)
 Field-level governance is formalized + tested; factor-level lifecycle is ad-hoc scripts + markdown.
