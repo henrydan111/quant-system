@@ -230,9 +230,19 @@ def _assert_no_definition_drift(
             continue
         factor_id = str(entry.get("canonical_id") or "")
         registry_hash = str(entry.get("definition_hash") or "")
-        if not factor_id or not registry_hash:
-            continue
         checked += 1
+        if not factor_id or not registry_hash:
+            # FAIL-CLOSED (GPT cross-review): a factor-registry entry permitted into
+            # formal validation with NO stored definition_hash (or no canonical_id) —
+            # e.g. a malformed/legacy approved row — cannot be attested against the
+            # catalog. Treat it as drift and REFUSE; do NOT silently skip the gate.
+            drifted.append({
+                "factor": factor_id or "(unnamed)",
+                "registry_hash": registry_hash,
+                "code_hash": None,
+                "reason": "missing canonical_id or registry definition_hash",
+            })
+            continue
         code_hash = current.get(factor_id)
         if code_hash is None:
             drifted.append({"factor": factor_id, "registry_hash": registry_hash,
