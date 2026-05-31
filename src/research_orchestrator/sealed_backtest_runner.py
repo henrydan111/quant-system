@@ -23,6 +23,14 @@ class HoldoutContext:
     stage: str
     allow_same_run: bool
     seal_store_dir: str
+    # PR P1.4: the OOS holdout budget is keyed by seal_key; empty falls back to
+    # design_hash (existing behavior). A FrozenSelectionSet-driven run sets
+    # frozen_set_hash here so the seal is spent per frozen selection set.
+    seal_key: str = ""
+
+    @property
+    def effective_seal_key(self) -> str:
+        return self.seal_key or self.design_hash
 
 
 class SealedBacktestRunner:
@@ -48,6 +56,7 @@ class SealedBacktestRunner:
             step_id=self._ctx.step_id,
             stage=self._ctx.stage,
             allow_same_run=self._ctx.allow_same_run,
+            seal_key=self._ctx.effective_seal_key,
         )
 
     def run_vectorized(self, *, time_split: dict | None = None, **kwargs: Any) -> Any:
@@ -99,6 +108,7 @@ class SealedBacktestRunner:
             step_id=self._ctx.step_id,
             stage=self._ctx.stage,
             design_hash=self._ctx.design_hash,
+            seal_key=self._ctx.effective_seal_key,
             time_split=time_split,
             provider_build_id=provider_build_id,
             calendar_policy_id=calendar_policy_id,
