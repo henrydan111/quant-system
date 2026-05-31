@@ -22,6 +22,12 @@ from src.alpha_research.factor_library.catalog import (
 
 LOGGER = logging.getLogger(__name__)
 
+# store.py lives at src/alpha_research/factor_registry/store.py — parents[3] is the
+# project root. Used to resolve the committed field-status registry cwd-independently
+# for the P2 field-eligibility snapshot (GPT PR #31 review, finding 4).
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_FIELD_STATUS_YAML = _PROJECT_ROOT / "config" / "field_registry" / "field_status.yaml"
+
 SCHEMA_VERSION = 1
 CANDIDATE_SCREENING_GRADES = {"A (Graduated)", "B (Strong IC)"}
 VALID_STATUSES = ("draft", "candidate", "approved", "deprecated")
@@ -924,7 +930,13 @@ class FactorRegistryStore:
         selects which columns are pulled: ``catalog``/``derived`` (walk-forward IS/OOS
         ICIR + sign-consistency; ``derived`` adds the GROSS long-only metrics) and
         ``oos_report`` (maps ``ls_sharpe`` -> ``oos_ls_sharpe``). Structured CSV only —
-        no markdown (GPT cross-review)."""
+        no markdown (GPT cross-review).
+
+        ``retain_pct`` (GPT PR-#31 finding 5) is schema-reserved but DEFERRED: it is
+        absent from every current revalidation CSV and from ``screening_oos_report.csv``,
+        and the OOS-screened factors are not yet registry rows. It is populated in a
+        later phase when structured walk-forward retention inputs are wired; until then
+        the column stays null and MUST NOT be read as if populated."""
         df = pd.read_csv(path)
         out: dict[str, dict[str, Any]] = {}
         common = [("is_rank_icir", "is_rank_icir"), ("oos_rank_icir", "oos_rank_icir"),
@@ -1247,6 +1259,58 @@ class FactorRegistryStore:
             lines.append(f"  {category}: {int(count)}")
         return "\n".join(lines)
 
+    def _field_registry_cached(self):
+        """Lazily load + cache the committed field-status registry (cwd-independent
+        via ``_FIELD_STATUS_YAML``). Cached on the instance — one store run sees one
+        registry snapshot."""
+        reg = getattr(self, "_field_registry_obj", None)
+        if reg is None:
+            from src.data_infra.field_registry import load_field_registry
+            reg = load_field_registry(_FIELD_STATUS_YAML)
+            self._field_registry_obj = reg
+        return reg
+
+    def _field_eligibility_snapshot(self, *, factor_kind: str, expression: str) -> str:
+        """GPT PR-#31 cross-review finding 4: snapshot the live field-registry
+        eligibility of a factor's referenced ``$fields`` at the strict
+        ``formal_validation`` stage, as compact JSON.
+
+        BASE factors carry a real Qlib expression and resolve directly. COMPOSITE /
+        INDUSTRY_RELATIVE master expressions are PSEUDO-expressions (``COMPOSITE(...)``,
+        ``INDUSTRY_REL[...](...)``) with NO ``$field`` tokens, so their true (transitive)
+        field dependencies are DEFERRED to Phase 3 (``get_factors`` resolves composite
+        deps) — they are marked ``resolved=false`` here. **Fail-closed contract:**
+        ``resolved=false`` (composite / registry-load error) AND an empty string ('not
+        computed') MUST be treated by any consumer as NOT eligible — never as
+        ``all_allowed``. Returns the JSON string (never raises)."""
+        if factor_kind != "base":
+            return json.dumps(
+                {"resolved": False, "reason": f"transitive_deferred_{factor_kind or 'unknown'}"},
+                sort_keys=True,
+            )
+        try:
+            from src.data_infra.field_registry import extract_qlib_fields
+            registry = self._field_registry_cached()
+            tokens = extract_qlib_fields(expression)
+            fields: dict[str, str] = {}
+            all_allowed = True
+            for token in tokens:
+                resolution = registry.resolve_field(token, "formal_validation")
+                fields[token] = resolution.status_id or ("unknown" if resolution.is_unknown else "")
+                if not resolution.allowed:
+                    all_allowed = False
+            return json.dumps(
+                {"resolved": True, "stage": "formal_validation",
+                 "all_allowed": all_allowed, "fields": fields},
+                sort_keys=True,
+            )
+        except Exception as exc:  # fail-closed: never emit a misleading all_allowed=true
+            LOGGER.warning(
+                "field_eligibility snapshot failed (expression=%r): %s — emitting "
+                "resolved=false (fail-closed)", expression, exc,
+            )
+            return json.dumps({"resolved": False, "reason": "registry_error"}, sort_keys=True)
+
     def refresh_master_derived_fields(self) -> None:
         if self.factor_master.empty:
             return
@@ -1313,22 +1377,65 @@ class FactorRegistryStore:
                 latest_selected_fold_count=latest_selected_fold_count,
             )
 
-            # PR P2.2: latest GROSS long-only + OOS mirrors, and the deterministic,
-            # fail-closed provisional viability derived from them (no evidence yet ->
-            # non_viable). This does NOT change status/approval_validity (Phase-1 gates).
+            # PR P2.2 + GPT PR-#31 cross-review (findings 1-4): GROSS long-only + OOS
+            # mirrors, provenance mirrors, the deterministic fail-closed provisional
+            # viability, and the live field-eligibility snapshot. NONE of this changes
+            # status/approval_validity/definition_hash (the Phase-1 gates).
+            current_def_hash = _coerce_string(row["definition_hash"])
             latest_lo_sharpe_gross = None
             latest_lo_excess_gross = None
             latest_lo_hit = None
             latest_oos_rank_icir = None
-            if not subset.empty:
-                latest_lo_sharpe_gross = _latest_non_null(subset["lo_sharpe_gross"], _coerce_float)
-                latest_lo_excess_gross = _latest_non_null(subset["lo_excess_ann_gross"], _coerce_float)
-                latest_lo_hit = _latest_non_null(subset["lo_hit"], _coerce_float)
-                latest_oos_rank_icir = _latest_non_null(subset["oos_rank_icir"], _coerce_float)
+            latest_provider_build_id = ""
+            latest_calendar_policy_id = ""
+            last_revalidated_at = ""
+            if not subset.empty and current_def_hash:
+                # Finding 3 (fail-closed binding): only evidence whose source_hash is
+                # blank (legacy/manually-injected, never carries LO metrics) OR matches
+                # the CURRENT registry definition drives the P2 mirrors. Stale-definition
+                # evidence (nonblank source_hash != current hash — e.g. a definition
+                # changed after evidence was attached and the re-import was skip-drifted)
+                # is ignored even though it physically remains in factor_evidence.
+                source_hashes = subset["source_hash"].map(_coerce_string)
+                bound = subset[(source_hashes == "") | (source_hashes == current_def_hash)]
+                if not bound.empty:
+                    latest_oos_rank_icir = _latest_non_null(bound["oos_rank_icir"], _coerce_float)
+                    latest_provider_build_id = _coerce_string(_latest_non_null(bound["provider_build_id"]))
+                    latest_calendar_policy_id = _coerce_string(_latest_non_null(bound["calendar_policy_id"]))
+                    last_revalidated_at = _coerce_string(_latest_non_null(bound["evidence_time"]))
+                    # Finding 2 (no cross-row metric mixing): derive viability from the
+                    # SINGLE latest row that actually carries an LO Sharpe, using THAT
+                    # row's full tuple. A partial tuple on that row -> non_viable (the
+                    # _derive_long_only_viable fail-closed rule), never a resurrected
+                    # excess/hit from an older row.
+                    lo_bearing = bound[bound["lo_sharpe_gross"].notna()]
+                    if not lo_bearing.empty:
+                        lo_row = lo_bearing.iloc[-1]
+                        latest_lo_sharpe_gross = _coerce_float(lo_row["lo_sharpe_gross"])
+                        latest_lo_excess_gross = _coerce_float(lo_row["lo_excess_ann_gross"])
+                        latest_lo_hit = _coerce_float(lo_row["lo_hit"])
+            viability = _derive_long_only_viable(
+                latest_lo_sharpe_gross, latest_lo_excess_gross, latest_lo_hit
+            )
             master.at[index, "latest_lo_sharpe_gross"] = latest_lo_sharpe_gross
             master.at[index, "latest_oos_rank_icir"] = latest_oos_rank_icir
-            master.at[index, "long_only_viable_provisional"] = _derive_long_only_viable(
-                latest_lo_sharpe_gross, latest_lo_excess_gross, latest_lo_hit
+            master.at[index, "latest_provider_build_id"] = latest_provider_build_id
+            master.at[index, "latest_calendar_policy_id"] = latest_calendar_policy_id
+            master.at[index, "last_revalidated_at"] = last_revalidated_at
+            master.at[index, "long_only_viable_provisional"] = viability
+            # Finding 1: auto-SUGGEST long_only_alpha for a viable factor (spec §P2.1).
+            # NEVER touch the authoritative human-assigned `signal_role` (a separate
+            # column set only via the gated CLI).
+            master.at[index, "signal_role_suggested"] = (
+                "long_only_alpha" if viability == "viable" else "unassigned"
+            )
+            # Finding 4: live field-registry eligibility snapshot of the factor's
+            # referenced $fields. Definition-derived (not evidence-derived), so it is
+            # set for every factor. Fail-closed: composites / registry errors yield
+            # resolved=false, never a false all_allowed=true.
+            master.at[index, "field_eligibility_snapshot_json"] = self._field_eligibility_snapshot(
+                factor_kind=_coerce_string(row["factor_kind"]),
+                expression=_coerce_string(row["expression"]),
             )
 
         self.factor_master = _apply_schema(master, FACTOR_MASTER_COLUMNS, FACTOR_MASTER_SCHEMA)
