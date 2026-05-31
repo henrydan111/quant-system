@@ -151,6 +151,18 @@ def test_strategy_set_status_approved_blocked_without_evidence(tmp_path):
                          promotion_evidence={"independent_reproduction": {"source": "pit_research_loader"}})
 
 
+def test_strategy_set_status_approved_cannot_be_bypassed_via_evidence_status(tmp_path):
+    # GPT cross-review P0 (strategy mirror of the factor-registry bypass): a
+    # caller-supplied promotion_status="draft" must NOT downgrade the gate to
+    # non-privileged. set_status force-overwrites promotion_status=status, so the
+    # malicious evidence still hits the full gate -> PromotionGateError (NOT the
+    # KeyError that a passed gate would raise on the absent object).
+    store = StrategyRegistryStore(tmp_path)
+    with pytest.raises(PromotionGateError):
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence={"promotion_status": "draft"}, current_git_sha="abc123")
+
+
 def test_strategy_set_status_approved_passes_gate_with_matching_sha(tmp_path):
     store = StrategyRegistryStore(tmp_path)
     # full evidence + matching SHA -> gate passes -> KeyError for the absent object proves we got PAST it
