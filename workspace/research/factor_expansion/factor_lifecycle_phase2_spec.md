@@ -107,7 +107,9 @@ findings; all were verified against the code/real data and fixed on `factor-life
 re-confirmed: import attaches 171, all stay `draft`; status/approval_validity/definition_hash untouched;
 promotion gate never reads `factor_evidence`). The fixes harden `refresh_master_derived_fields`:
 1. **Provenance + role mirrors (finding 1).** Refresh now mirrors `latest_provider_build_id` /
-   `latest_calendar_policy_id` / `last_revalidated_at` from the bound evidence, and sets
+   `latest_calendar_policy_id` / `last_revalidated_at` from the latest bound `run_type=='revalidation'`
+   evidence ONLY (re-review fix: a plain `sync_catalog`, which writes a `catalog_sync` evidence row with
+   a blank `source_hash`, must NOT stamp `last_revalidated_at`), and sets
    `signal_role_suggested='long_only_alpha'` for a `viable` factor (spec §P2.1) — NEVER touching the
    authoritative `signal_role`.
 2. **No cross-row metric mixing (finding 2).** Viability is derived from the SINGLE latest evidence row
@@ -134,3 +136,11 @@ promotion gate never reads `factor_evidence`). The fixes harden `refresh_master_
 Regression tests (findings 1–4) added to `tests/alpha_research/test_factor_registry.py`; the finding-2 /
 finding-3 tests were proven to FAIL on the pre-fix logic (independent-latest / no-bind both derive
 `viable` where the fixed code derives `non_viable`). Full suite: 27 passed.
+
+**GPT re-review (commit `75c2e45`) — 1 residual must-fix, then GO.** GPT confirmed findings 1–5 closed but
+found that `last_revalidated_at` was set from ANY bound row, so a plain `sync_catalog(record_run=True)`
+(which writes a `catalog_sync` evidence row, blank `source_hash` → passes the carve-out) stamped all 171
+factors "revalidated" at the sync time. Fixed by scoping the P2 evidence-mirrors to `run_type=='revalidation'`
+rows only; added `test_sync_catalog_alone_leaves_revalidation_mirrors_blank` (proven to fail pre-fix: 171
+non-blank). Full suite after the re-review fix: **28 passed**; real-data probe: sync→0 non-blank,
+import_revalidation→171 (provider mirror = pbX).

@@ -1390,14 +1390,21 @@ class FactorRegistryStore:
             latest_calendar_policy_id = ""
             last_revalidated_at = ""
             if not subset.empty and current_def_hash:
-                # Finding 3 (fail-closed binding): only evidence whose source_hash is
-                # blank (legacy/manually-injected, never carries LO metrics) OR matches
-                # the CURRENT registry definition drives the P2 mirrors. Stale-definition
-                # evidence (nonblank source_hash != current hash — e.g. a definition
-                # changed after evidence was attached and the re-import was skip-drifted)
-                # is ignored even though it physically remains in factor_evidence.
+                # The P2 mirrors (provenance, last_revalidated_at, OOS/LO, viability)
+                # reflect the latest REVALIDATION evidence ONLY (GPT PR-#31 re-review):
+                #  - run_type == "revalidation": a `catalog_sync` / screening / research
+                #    row must NOT set last_revalidated_at (else a plain sync_catalog would
+                #    stamp every factor "revalidated" at the sync timestamp).
+                #  - Finding 3 (fail-closed binding): within revalidation rows, only those
+                #    whose source_hash is blank (manually-injected; never carries LO) OR
+                #    matches the CURRENT definition_hash drive the mirrors. Stale-definition
+                #    evidence (nonblank source_hash != current hash, e.g. a skip-drifted
+                #    re-import) is ignored even though it remains in factor_evidence.
                 source_hashes = subset["source_hash"].map(_coerce_string)
-                bound = subset[(source_hashes == "") | (source_hashes == current_def_hash)]
+                bound = subset[
+                    (subset["run_type"] == "revalidation")
+                    & ((source_hashes == "") | (source_hashes == current_def_hash))
+                ]
                 if not bound.empty:
                     latest_oos_rank_icir = _latest_non_null(bound["oos_rank_icir"], _coerce_float)
                     latest_provider_build_id = _coerce_string(_latest_non_null(bound["provider_build_id"]))

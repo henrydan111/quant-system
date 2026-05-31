@@ -497,6 +497,21 @@ class FactorRegistryTests(unittest.TestCase):
             self.assertEqual(row["signal_role_suggested"], "long_only_alpha")
             self.assertEqual(row["signal_role"], "unassigned")  # authoritative role untouched
 
+    def test_sync_catalog_alone_leaves_revalidation_mirrors_blank(self):
+        # GPT PR-#31 re-review: a plain sync_catalog writes a catalog_sync evidence row
+        # (blank source_hash) — it must NOT stamp last_revalidated_at / provider /
+        # calendar mirrors, which reflect REVALIDATION evidence only (run_type ==
+        # "revalidation"). (On the pre-fix any-bound-row code this found the sync
+        # timestamp on all 171 -> this test fails there.)
+        with self.make_temp_dir("factor_registry_p2_revalonly") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=True, generated_at="2026-04-04 21:00:00")
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertEqual(len(cur), 171)
+            self.assertTrue((cur["last_revalidated_at"].astype(str).str.strip() == "").all())
+            self.assertTrue((cur["latest_provider_build_id"].astype(str).str.strip() == "").all())
+            self.assertTrue((cur["latest_calendar_policy_id"].astype(str).str.strip() == "").all())
+
     def test_refresh_no_cross_row_metric_mixing(self):
         # GPT PR-#31 finding 2: a newer PARTIAL LO row (Sharpe only) must NOT inherit an
         # older row's excess/hit. Derive from the single latest LO-bearing row's tuple;
