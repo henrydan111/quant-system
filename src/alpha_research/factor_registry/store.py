@@ -10,7 +10,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -25,12 +25,18 @@ LOGGER = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 CANDIDATE_SCREENING_GRADES = {"A (Graduated)", "B (Strong IC)"}
 VALID_STATUSES = ("draft", "candidate", "approved", "deprecated")
+# approval_validity qualifies an `approved` row: is the approval still trustworthy
+# against the CURRENT provider/calendar, or has a rebuild invalidated it? Non-approved
+# rows are vacuously "valid". Fail-closed: a missing value on an `approved` row is
+# treated as requiring revalidation (see FactorRegistryStore._normalize_approval_validity).
+VALID_APPROVAL_VALIDITIES = ("valid", "requires_revalidation", "stale")
 
 FACTOR_MASTER_COLUMNS = [
     "factor_id",
     "version",
     "is_current",
     "status",
+    "approval_validity",
     "recommended_status",
     "object_type",
     "factor_kind",
@@ -107,6 +113,7 @@ FACTOR_MASTER_SCHEMA = {
     "version": "Int64",
     "is_current": "boolean",
     "status": "string",
+    "approval_validity": "string",
     "recommended_status": "string",
     "object_type": "string",
     "factor_kind": "string",
@@ -360,6 +367,7 @@ class FactorMasterRecord:
     version: int
     is_current: bool
     status: str
+    approval_validity: str
     recommended_status: str
     object_type: str
     factor_kind: str
@@ -480,6 +488,7 @@ class FactorRegistryStore:
             FACTOR_MASTER_COLUMNS,
             FACTOR_MASTER_SCHEMA,
         )
+        self._normalize_approval_validity()
         self.factor_evidence = self._load_table(
             self.factor_evidence_path,
             self.factor_evidence_csv_path,
@@ -498,6 +507,22 @@ class FactorRegistryStore:
             STATUS_HISTORY_COLUMNS,
             STATUS_HISTORY_SCHEMA,
         )
+
+    def _normalize_approval_validity(self) -> None:
+        """Fail-closed backfill of ``approval_validity`` for rows persisted before
+        the column existed (PR P1.1). A non-approved row is vacuously ``"valid"``;
+        a pre-existing ``approved`` row with no recorded validity is set to
+        ``"requires_revalidation"`` — a formal artifact must POSITIVELY attest a
+        valid approval, never silently inherit one across a schema upgrade."""
+        if self.factor_master.empty:
+            return
+        validity = self.factor_master["approval_validity"]
+        blank = validity.isna() | (validity.astype("string").str.strip().fillna("") == "")
+        if not bool(blank.any()):
+            return
+        status = self.factor_master["status"].astype("string").str.lower().str.strip().fillna("")
+        self.factor_master.loc[blank & (status == "approved"), "approval_validity"] = "requires_revalidation"
+        self.factor_master.loc[blank & (status != "approved"), "approval_validity"] = "valid"
 
     def save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -759,10 +784,44 @@ class FactorRegistryStore:
         reason: str,
         version: int | None = None,
         source_run_id: str | None = None,
+        promotion_evidence: Mapping[str, Any] | None = None,
+        current_git_sha: str | None = None,
     ) -> dict[str, Any]:
         status = status.strip().lower()
         if status not in VALID_STATUSES:
             raise ValueError(f"Unsupported status: {status}")
+
+        # Writer gate (PR P1.1): a transition to a PRIVILEGED status ("approved")
+        # is refused unless promotion_evidence proves an INDEPENDENT PIT-correct
+        # reproduction AND passes the lint/parity/clean-tree/git-sha checks, with a
+        # MANDATORY current_git_sha binding the approval to a committed HEAD. Mirrors
+        # StrategyRegistryStore.set_status. Non-privileged transitions are unchanged.
+        # Lazy import: store.py lives in alpha_research, release_gate in
+        # research_orchestrator — importing at call time avoids a module-load cycle.
+        from src.research_orchestrator.release_gate import (
+            PRIVILEGED_REGISTRY_STATUSES,
+            PromotionGateError,
+            assert_promotion_artifact_eligible,
+        )
+
+        if status in PRIVILEGED_REGISTRY_STATUSES:
+            if not current_git_sha:
+                raise PromotionGateError(
+                    f"Promotion gate blocked factor:{factor_id}: current_git_sha is "
+                    f"required for a privileged factor-registry status transition "
+                    f"(binds the approval to a committed HEAD)"
+                )
+            artifact = dict(promotion_evidence or {})
+            # Force (NOT setdefault) the transition status into the artifact: a
+            # caller-supplied promotion_status="draft"/"candidate" would otherwise
+            # make the gate evaluate the artifact as non-privileged and trivially
+            # pass — an approval bypass (GPT cross-review P0).
+            artifact["promotion_status"] = status
+            assert_promotion_artifact_eligible(
+                artifact,
+                current_git_sha=current_git_sha,
+                artifact_label=f"factor:{factor_id}",
+            )
 
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         changed_at = _now_str()
@@ -770,6 +829,9 @@ class FactorRegistryStore:
 
         self.factor_master.at[index, "status"] = status
         self.factor_master.at[index, "updated_at"] = changed_at
+        if status in PRIVILEGED_REGISTRY_STATUSES:
+            # The gate above passed, so this is a fresh, valid approval.
+            self.factor_master.at[index, "approval_validity"] = "valid"
         if status == "deprecated":
             self.factor_master.at[index, "deprecated_reason"] = reason
         elif old_status == "deprecated":
@@ -795,13 +857,77 @@ class FactorRegistryStore:
             "new_status": status,
         }
 
-    def export_current(self, output_path: str | Path, *, status: str | None = None) -> int:
+    def set_approval_validity(
+        self,
+        *,
+        factor_id: str,
+        validity: str,
+        reason: str,
+        version: int | None = None,
+    ) -> dict[str, Any]:
+        """Update ``approval_validity`` on a row (e.g. provider-rebuild drift ->
+        "stale"). Records a status_history entry (lifecycle status unchanged; the
+        reason documents the validity transition). The drift->stale path is not
+        wired into provider-rebuild detection in Phase 1."""
+        validity = validity.strip().lower()
+        if validity not in VALID_APPROVAL_VALIDITIES:
+            raise ValueError(f"Unsupported approval_validity: {validity}")
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        changed_at = _now_str()
+        current_status = _coerce_string(self.factor_master.at[index, "status"]) or "draft"
+        old_validity = _coerce_string(self.factor_master.at[index, "approval_validity"]) or "valid"
+        # This method is the drift/downgrade path (valid -> requires_revalidation /
+        # stale). Re-affirming an APPROVED row back to "valid" would re-open it as a
+        # formal factor WITHOUT the promotion gate — refuse it (GPT cross-review P0).
+        # Re-validation must go through set_status(status="approved", promotion_evidence=...,
+        # current_git_sha=...). Non-approved rows' validity is cosmetic, so unrestricted.
+        if current_status == "approved" and validity == "valid":
+            raise ValueError(
+                f"cannot set approval_validity='valid' on approved factor:{factor_id} via "
+                f"set_approval_validity; re-affirm through the promotion gate "
+                f"(set_status(status='approved', promotion_evidence=..., current_git_sha=...)). "
+                f"Downgrades (valid->requires_revalidation/stale) are allowed."
+            )
+        self.factor_master.at[index, "approval_validity"] = validity
+        self.factor_master.at[index, "updated_at"] = changed_at
+        record = StatusHistoryRecord(
+            factor_id=factor_id,
+            version=int(self.factor_master.at[index, "version"]),
+            old_status=current_status,
+            new_status=current_status,
+            reason=f"approval_validity {old_validity}->{validity}: {reason}",
+            source_run_id="",
+            changed_at=changed_at,
+        )
+        self.status_history = pd.concat(
+            [self.status_history, _apply_schema(pd.DataFrame([asdict(record)]), STATUS_HISTORY_COLUMNS, STATUS_HISTORY_SCHEMA)],
+            ignore_index=True,
+        )
+        return {
+            "factor_id": factor_id,
+            "version": int(self.factor_master.at[index, "version"]),
+            "old_approval_validity": old_validity,
+            "new_approval_validity": validity,
+        }
+
+    def export_current(
+        self,
+        output_path: str | Path,
+        *,
+        status: str | None = None,
+        include_invalid: bool = False,
+    ) -> int:
         current_df = self.factor_master[self.factor_master["is_current"].fillna(False)].copy()
         if status:
             normalized = status.strip().lower()
             if normalized not in VALID_STATUSES:
                 raise ValueError(f"Unsupported status: {status}")
             current_df = current_df[current_df["status"] == normalized].copy()
+            # Fail-closed (PR P1.1): an "approved" export is the deployable set, so it
+            # must exclude approvals invalidated by a provider rebuild unless the
+            # caller explicitly asks for stale rows (audit/review export).
+            if normalized == "approved" and not include_invalid:
+                current_df = current_df[current_df["approval_validity"] == "valid"].copy()
 
         current_df = _sort_with_version(current_df, ["factor_kind", "category", "factor_id", "version"])
         output_path = Path(output_path).resolve()
@@ -1039,6 +1165,16 @@ class FactorRegistryStore:
 
         return snapshots
 
+    def current_catalog_definition_hashes(self) -> dict[str, str]:
+        """Return ``{factor_id: definition_hash}`` computed from the CURRENT code
+        catalog using the SAME snapshot/hash algorithm ``sync_catalog`` writes
+        (``_build_catalog_snapshots``). This is the parity primitive for the P1.3
+        definition-binding gate: comparing a registry row's stored ``definition_hash``
+        against this map detects drift between the registry and ``catalog.py`` with an
+        apples-to-apples hash (covers base / composite / industry-relative). Read-only
+        — it recomputes from code and does NOT mutate ``factor_master``."""
+        return {snap.factor_id: snap.definition_hash for snap in self._build_catalog_snapshots()}
+
     def _upsert_snapshot(self, snapshot: FactorDefinitionSnapshot, generated_at: str) -> None:
         factor_view = self.factor_master[self.factor_master["factor_id"] == snapshot.factor_id]
         current_view = factor_view[factor_view["is_current"].fillna(False)]
@@ -1064,6 +1200,7 @@ class FactorRegistryStore:
             version=version,
             is_current=True,
             status="draft",
+            approval_validity="valid",
             recommended_status="draft",
             object_type="factor",
             factor_kind=snapshot.factor_kind,

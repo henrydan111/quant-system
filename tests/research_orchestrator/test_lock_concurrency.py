@@ -91,6 +91,36 @@ def _cache_worker(args: tuple[str, str, int]) -> tuple[int, str, str | None]:
         return (worker_id, "raised", f"{type(exc).__name__}: {exc}")
 
 
+def _ledger_event_worker(args: tuple[str, int]) -> tuple[int, str, str | None]:
+    """Each worker records a DISTINCT measurement event into the SAME daily shard.
+    All writes must persist (PR P1.5: the lock serializes load->append->write so no
+    second writer overwrites the first's row).
+
+    Args: (root_dir, worker_id). Returns: (worker_id, "success" | "raised", event_id).
+    """
+    root_dir, worker_id = args
+    from src.alpha_research.testing_ledger import TestingLedgerStore
+
+    store = TestingLedgerStore(root_dir)
+    try:
+        row = store.record_event(
+            hypothesis_id=f"hyp_{worker_id}",
+            design_hash=f"dh_{worker_id}",
+            prose_hash="ph",
+            structural_family="fam",
+            profile_id="prof",
+            run_id=f"run_{worker_id}",
+            run_dir=f"{root_dir}/run_{worker_id}",
+            test_name=f"test_{worker_id}",
+            stage="is_only",
+            statistic_name="rank_icir",
+            sharpe=float(worker_id),
+        )
+        return (worker_id, "success", row.get("event_id"))
+    except Exception as exc:  # noqa: BLE001
+        return (worker_id, "raised", f"{type(exc).__name__}: {exc}")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test cases
 # ─────────────────────────────────────────────────────────────────────────
@@ -188,6 +218,49 @@ class TestCacheManifestConcurrency:
         rows = store.list_events(cache_key="key_0")
         # Append-only: all 8 writes land.
         assert len(rows) == 8
+
+
+class TestTestingLedgerConcurrency:
+    """PR P1.5: 8 concurrent record_event of DISTINCT rows into the same daily shard
+    → all 8 persist (no lost update), and record_verdict does not self-deadlock."""
+
+    def test_concurrent_record_event_no_lost_rows(
+        self, tmp_path: Path, mp_context
+    ) -> None:
+        args = [(str(tmp_path), i) for i in range(8)]
+        with mp_context.Pool(processes=8) as pool:
+            results = pool.map(_ledger_event_worker, args)
+
+        successes = [r for r in results if r[1] == "success"]
+        failures = [r for r in results if r[1] == "raised"]
+        assert len(failures) == 0, f"Expected zero failures, got {failures}"
+        assert len(successes) == 8
+
+        from src.alpha_research.testing_ledger import TestingLedgerStore
+        store = TestingLedgerStore(tmp_path)
+        events = store.list_events()
+        assert len(events) == 8, f"Expected all 8 events to persist, got {len(events)}"
+        assert len(set(events["event_id"].tolist())) == 8
+
+    def test_record_verdict_no_self_deadlock(self, tmp_path: Path) -> None:
+        # record_verdict acquires the lock then appends via the UNLOCKED helper (NOT
+        # the public record_event); it must COMPLETE, not deadlock on the
+        # non-reentrant file lock. (A naive double-lock would hang here.)
+        from src.alpha_research.testing_ledger import TestingLedgerStore
+
+        store = TestingLedgerStore(tmp_path)
+        measurement = store.record_event(
+            hypothesis_id="h", design_hash="dh", prose_hash="ph", structural_family="fam",
+            profile_id="p", run_id="r", run_dir=str(tmp_path), test_name="t",
+            stage="is_only", statistic_name="ic",
+        )
+        verdict = store.record_verdict(
+            related_event_id=measurement["event_id"], design_hash="dh", verdict="pass",
+            decision_by="me", reason="ok", run_id="r", run_dir=str(tmp_path),
+        )
+        assert verdict["event_kind"] == "verdict"
+        assert verdict["related_event_id"] == measurement["event_id"]
+        assert len(store.list_events()) == 2
 
 
 class TestSingleProcessRegression:

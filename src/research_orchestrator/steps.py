@@ -449,6 +449,9 @@ def handle_object_resolver(context: StepExecutionContext) -> StepExecutionResult
         summary={
             "formal_hits": int(resolution.get("formal_hits", 0)),
             "candidate_hits": int(resolution.get("candidate_hits", 0)),
+            # PR P1.2: surface the per-layer registry hits so a discovery run's
+            # draft/stale/deprecated factor consumes stay visible in the summary.
+            "factor_registry_hits_by_layer": dict(resolution.get("factor_registry_hits_by_layer", {})),
         },
     )
 

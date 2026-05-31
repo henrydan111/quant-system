@@ -534,6 +534,223 @@ class TestResolverHandlerBehavior:
                 handle_validation_object_resolver(context)
 
 
+class TestPR12FormalAllowSet:
+    """PR P1.2: handle_validation_object_resolver enforces an EXPLICIT source-layer
+    allow-set — {formal} (+ factor_registry_candidate iff allow_candidate_components).
+    Every other resolved layer (factor_registry_draft / _stale / _deprecated AND the
+    candidate-registry "candidate" layer) is rejected BEFORE the IS leg. This is the
+    sole formal-permission point under the resolve-but-label design (Codex round-5)."""
+
+    def _make_context(self, tmp_path: Path, allow_candidate: bool = False):
+        from src.research_orchestrator.hypothesis import PrescribedComponent
+
+        prescription = MagicMock(
+            components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
+            allow_candidate_components=allow_candidate,
+        )
+        hypothesis = MagicMock(prescription=prescription, hypothesis_id="hyp_pr12_allowset")
+        context = MagicMock()
+        context.request.hypothesis = hypothesis
+        context.step_dir = tmp_path / "step"
+        context.step_dir.mkdir(parents=True)
+        context.registry_dirs = {
+            "factor_registry_dir": str(tmp_path / "factor_registry"),
+            "candidate_registry_dir": str(tmp_path / "candidate_registry"),
+            "signal_registry_dir": str(tmp_path / "signal_registry"),
+            "model_registry_dir": str(tmp_path / "model_registry"),
+            "strategy_registry_dir": str(tmp_path / "strategy_registry"),
+        }
+        context.profile.profile_id = "hypothesis_validation"
+        return context
+
+    @staticmethod
+    def _payload(layer: str):
+        return {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": layer,
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        "layer",
+        ["factor_registry_draft", "factor_registry_stale", "factor_registry_deprecated", "candidate"],
+    )
+    def test_non_formal_layer_rejected(self, tmp_path: Path, layer: str) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(layer),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_factor_registry_candidate_rejected_without_flag(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("factor_registry_candidate"),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_plain_candidate_rejected_even_with_flag(self, tmp_path: Path) -> None:
+        # allow_candidate_components admits ONLY factor_registry_candidate, never the
+        # separate candidate-registry "candidate" layer.
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("candidate"),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_formal_layer_accepted(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("formal"),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        assert "field_dependency_report" in result.outputs
+
+    def test_factor_registry_candidate_accepted_with_flag(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("factor_registry_candidate"),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        assert "field_dependency_report" in result.outputs
+
+
+class TestPR13DefinitionBindingGate:
+    """PR P1.3: handle_validation_object_resolver hard-fails with
+    FactorDefinitionDriftError BEFORE the field gate / any compute when a resolved
+    formal factor's registry definition_hash no longer matches the current code
+    catalog (registry row stale vs catalog.py)."""
+
+    def _make_context(self, tmp_path: Path):
+        from src.research_orchestrator.hypothesis import PrescribedComponent
+
+        prescription = MagicMock(
+            components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
+            allow_candidate_components=False,
+        )
+        hypothesis = MagicMock(prescription=prescription, hypothesis_id="hyp_pr13_defbind")
+        context = MagicMock()
+        context.request.hypothesis = hypothesis
+        context.step_dir = tmp_path / "step"
+        context.step_dir.mkdir(parents=True)
+        context.registry_dirs = {
+            "factor_registry_dir": str(tmp_path / "factor_registry"),
+            "candidate_registry_dir": str(tmp_path / "candidate_registry"),
+            "signal_registry_dir": str(tmp_path / "signal_registry"),
+            "model_registry_dir": str(tmp_path / "model_registry"),
+            "strategy_registry_dir": str(tmp_path / "strategy_registry"),
+        }
+        context.profile.profile_id = "hypothesis_validation"
+        return context
+
+    @staticmethod
+    def _code_hash(tmp_path: Path, factor_id: str) -> str:
+        from src.alpha_research.factor_registry import FactorRegistryStore
+
+        return FactorRegistryStore(str(tmp_path / "hashsrc")).current_catalog_definition_hashes()[factor_id]
+
+    @staticmethod
+    def _payload(definition_hash: str):
+        return {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": "formal",
+                    "canonical_id": "qual_roe",
+                    "definition_hash": definition_hash,
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+
+    def test_matching_definition_hash_passes(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path)
+        good_hash = self._code_hash(tmp_path, "qual_roe")
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(good_hash),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        report = result.outputs["definition_binding_report"]
+        assert report["checked"] == 1
+        assert report["drifted"] == []
+
+    def test_drifted_definition_hash_raises_before_field_gate(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import (
+            FactorDefinitionDriftError,
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_context(tmp_path)
+        field_gate = MagicMock()
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("0" * 64),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            field_gate,
+        ):
+            with pytest.raises(FactorDefinitionDriftError, match="drifted"):
+                handle_validation_object_resolver(context)
+        # the drift check must fire BEFORE the field gate / any compute
+        field_gate.assert_not_called()
+
+    def test_missing_definition_hash_fails_closed(self, tmp_path: Path) -> None:
+        # GPT cross-review: a formal entry permitted into validation with NO registry
+        # definition_hash (malformed/legacy row) must be treated as drift (fail-closed)
+        # and raise BEFORE the field gate — NOT silently skipped.
+        from src.research_orchestrator.validation_steps import (
+            FactorDefinitionDriftError,
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_context(tmp_path)
+        field_gate = MagicMock()
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(""),  # malformed: empty definition_hash
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            field_gate,
+        ):
+            with pytest.raises(FactorDefinitionDriftError, match="drifted"):
+                handle_validation_object_resolver(context)
+        field_gate.assert_not_called()
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Formal-factor compatibility test (GPT 5.5 Pro round-2 review #2)
 # ─────────────────────────────────────────────────────────────────────────

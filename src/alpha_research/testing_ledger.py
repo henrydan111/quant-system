@@ -118,6 +118,7 @@ class TestingLedgerStore:
     def __init__(self, root_dir: str | Path) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_path = self.root_dir / "testing_ledger.lock"
 
     def _shard_path(self, day: datetime | None = None) -> Path:
         stamp = (day or _now()).strftime("%Y%m%d")
@@ -139,7 +140,17 @@ class TestingLedgerStore:
         canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
-    def record_event(
+    def _ledger_lock(self):
+        """File lock guarding the read-check-write critical section of every ledger
+        write (PR P1.5), mirroring CacheManifestStore.record_cache_write /
+        HoldoutSealStore.claim_holdout_access. Lazy import keeps the
+        alpha_research -> research_orchestrator edge off the module-load path
+        (cycle-safe, like store.py's release_gate import)."""
+        from src.research_orchestrator.file_lock import file_lock
+
+        return file_lock(self._lock_path)
+
+    def _build_event_row(
         self,
         *,
         hypothesis_id: str,
@@ -166,10 +177,13 @@ class TestingLedgerStore:
         decision_by: str = "",
         decision_reason: str = "",
     ) -> dict[str, Any]:
+        """Build (but do NOT persist) a ledger row. Shared by record_event and
+        record_verdict so the verdict path does not re-enter the public record_event
+        (which would re-acquire the non-reentrant lock)."""
         if event_kind not in EVENT_KINDS:
             raise ValueError(f"Unsupported testing-ledger event_kind: {event_kind}")
         recorded_at = _now_str()
-        row = {
+        return {
             "event_id": self._event_id(
                 {
                     "hypothesis_id": hypothesis_id,
@@ -208,9 +222,74 @@ class TestingLedgerStore:
             "decision_reason": str(decision_reason),
             "notes": str(notes),
         }
+
+    def _append_event_unlocked(self, row: dict[str, Any]) -> None:
+        """Append a pre-built row to today's shard (load -> append -> atomic write).
+        NOT locked: callers MUST hold ``self._ledger_lock()`` around this AND any
+        read-check that precedes it. record_verdict relies on this so its
+        get_event / get_verdict_for_measurement / append run as ONE critical section
+        without re-entering the (non-reentrant) file lock via the public record_event."""
         shard_path = self._shard_path()
         shard = _append_row(self._load_shard(shard_path), row)
         _atomic_write_dataframe(shard, shard_path)
+
+    def record_event(
+        self,
+        *,
+        hypothesis_id: str,
+        design_hash: str,
+        prose_hash: str,
+        structural_family: str,
+        profile_id: str,
+        run_id: str,
+        run_dir: str,
+        test_name: str,
+        stage: str,
+        statistic_name: str,
+        statistic_value: float | None = None,
+        p_value: float | None = None,
+        n_obs: int | None = None,
+        sharpe: float | None = None,
+        cost_bps_assumed: float | None = None,
+        notes: str = "",
+        economic_family: str = "",
+        event_kind: str = "measurement",
+        related_event_id: str = "",
+        supersedes_event_id: str = "",
+        verdict: str = "",
+        decision_by: str = "",
+        decision_reason: str = "",
+    ) -> dict[str, Any]:
+        row = self._build_event_row(
+            hypothesis_id=hypothesis_id,
+            design_hash=design_hash,
+            prose_hash=prose_hash,
+            structural_family=structural_family,
+            profile_id=profile_id,
+            run_id=run_id,
+            run_dir=run_dir,
+            test_name=test_name,
+            stage=stage,
+            statistic_name=statistic_name,
+            statistic_value=statistic_value,
+            p_value=p_value,
+            n_obs=n_obs,
+            sharpe=sharpe,
+            cost_bps_assumed=cost_bps_assumed,
+            notes=notes,
+            economic_family=economic_family,
+            event_kind=event_kind,
+            related_event_id=related_event_id,
+            supersedes_event_id=supersedes_event_id,
+            verdict=verdict,
+            decision_by=decision_by,
+            decision_reason=decision_reason,
+        )
+        # PR P1.5: lock the FULL load -> append -> write (not just the atomic write),
+        # so two concurrent record_event calls can't each load the same shard and
+        # overwrite each other (lost update).
+        with self._ledger_lock():
+            self._append_event_unlocked(row)
         return row
 
     def record_verdict(
@@ -224,35 +303,44 @@ class TestingLedgerStore:
         run_id: str,
         run_dir: str,
     ) -> dict[str, Any]:
-        measurement = self.get_event(related_event_id)
-        if measurement is None:
-            raise KeyError(f"Measurement event not found: {related_event_id}")
-        prior = self.get_verdict_for_measurement(related_event_id)
-        return self.record_event(
-            hypothesis_id=str(measurement.get("hypothesis_id", "")),
-            design_hash=str(design_hash),
-            prose_hash=str(measurement.get("prose_hash", "")),
-            structural_family=str(measurement.get("structural_family", "")),
-            economic_family=str(measurement.get("economic_family", "")),
-            profile_id=str(measurement.get("profile_id", "")),
-            run_id=str(run_id),
-            run_dir=str(run_dir),
-            test_name=str(measurement.get("test_name", "")),
-            stage=str(measurement.get("stage", "")),
-            statistic_name=str(measurement.get("statistic_name", "")),
-            statistic_value=measurement.get("statistic_value"),
-            p_value=measurement.get("p_value"),
-            n_obs=measurement.get("n_obs"),
-            sharpe=measurement.get("sharpe"),
-            cost_bps_assumed=measurement.get("cost_bps_assumed"),
-            notes=str(reason),
-            event_kind="verdict",
-            related_event_id=str(related_event_id),
-            supersedes_event_id=str(prior.get("event_id", "")) if prior is not None else "",
-            verdict=str(verdict),
-            decision_by=str(decision_by),
-            decision_reason=str(reason),
-        )
+        # PR P1.5: the ENTIRE read-check-write (measurement lookup + prior-verdict
+        # supersedes lookup + append) is ONE critical section, so a concurrent verdict
+        # cannot slip between the supersedes lookup and the append. Uses the unlocked
+        # append helper (NOT the public record_event) to avoid re-entering the
+        # non-reentrant file lock -> no self-deadlock. The read helpers
+        # (get_event / get_verdict_for_measurement -> list_events) do not re-lock.
+        with self._ledger_lock():
+            measurement = self.get_event(related_event_id)
+            if measurement is None:
+                raise KeyError(f"Measurement event not found: {related_event_id}")
+            prior = self.get_verdict_for_measurement(related_event_id)
+            row = self._build_event_row(
+                hypothesis_id=str(measurement.get("hypothesis_id", "")),
+                design_hash=str(design_hash),
+                prose_hash=str(measurement.get("prose_hash", "")),
+                structural_family=str(measurement.get("structural_family", "")),
+                economic_family=str(measurement.get("economic_family", "")),
+                profile_id=str(measurement.get("profile_id", "")),
+                run_id=str(run_id),
+                run_dir=str(run_dir),
+                test_name=str(measurement.get("test_name", "")),
+                stage=str(measurement.get("stage", "")),
+                statistic_name=str(measurement.get("statistic_name", "")),
+                statistic_value=measurement.get("statistic_value"),
+                p_value=measurement.get("p_value"),
+                n_obs=measurement.get("n_obs"),
+                sharpe=measurement.get("sharpe"),
+                cost_bps_assumed=measurement.get("cost_bps_assumed"),
+                notes=str(reason),
+                event_kind="verdict",
+                related_event_id=str(related_event_id),
+                supersedes_event_id=str(prior.get("event_id", "")) if prior is not None else "",
+                verdict=str(verdict),
+                decision_by=str(decision_by),
+                decision_reason=str(reason),
+            )
+            self._append_event_unlocked(row)
+        return row
 
     def list_events(
         self,
