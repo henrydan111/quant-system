@@ -1,0 +1,17 @@
+{
+  "generated_at": "2026-05-31T13:36:36",
+  "n_derived": 24,
+  "status_counts": {
+    "draft": 7,
+    "candidate": 16,
+    "deprecated": 1
+  },
+  "window": {
+    "start": "2014-01-01",
+    "is_end": "2020-12-31",
+    "oos_start": "2021-01-01",
+    "end": "2026-02-27"
+  },
+  "horizon": 20,
+  "long_only_metric": "top-decile minus count-weighted universe, sign-aligned, ann + sharpe + hit"
+}

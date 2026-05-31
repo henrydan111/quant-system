@@ -1,0 +1,25 @@
+factor,kind,full_rank_icir,is_rank_icir,oos_rank_icir,sign_consistency,status,reason,lo_excess_ann,lo_sharpe,lo_hit
+comp_val_qual,composite,0.1683,0.2292,0.0795,0.769,draft,"marginal (OOS ICIR=+0.080, consist=0.77)",-0.0152,-0.108,0.469
+comp_val_mom,composite,-0.0481,0.0153,-0.1459,0.538,draft,"marginal (OOS ICIR=-0.146, consist=0.54)",0.0395,0.418,0.542
+comp_qual_grow,composite,0.0569,0.1621,-0.0822,0.538,draft,"marginal (OOS ICIR=-0.082, consist=0.54)",-0.0067,-0.066,0.459
+comp_defensive,composite,0.3822,0.4388,0.3097,1.0,candidate,"walk-forward stable (OOS ICIR=+0.310, consist=1.00)",-0.0039,-0.03,0.51
+comp_small_value,composite,0.5027,0.433,0.5982,0.769,candidate,"walk-forward stable (OOS ICIR=+0.598, consist=0.77)",0.1522,1.398,0.662
+comp_garp,composite,0.1757,0.2518,0.0642,0.692,draft,"marginal (OOS ICIR=+0.064, consist=0.69)",-0.0024,-0.02,0.487
+comp_rev_low_turn,composite,0.5798,0.5806,0.5785,1.0,candidate,"walk-forward stable (OOS ICIR=+0.578, consist=1.00)",0.0398,0.4,0.56
+comp_multi_6,composite,0.3466,0.3724,0.3127,1.0,candidate,"walk-forward stable (OOS ICIR=+0.313, consist=1.00)",0.0569,0.587,0.599
+comp_magic_formula,composite,0.1881,0.2583,0.0881,0.846,draft,"marginal (OOS ICIR=+0.088, consist=0.85)",-0.0021,-0.018,0.488
+comp_quality_value,composite,0.2861,0.2932,0.2758,0.923,candidate,"walk-forward stable (OOS ICIR=+0.276, consist=0.92)",0.0123,0.081,0.479
+comp_growth_value,composite,0.266,0.3223,0.1865,0.846,candidate,"walk-forward stable (OOS ICIR=+0.187, consist=0.85)",0.0083,0.077,0.476
+comp_momentum_quality,composite,-0.2267,-0.1135,-0.4055,0.769,candidate,"walk-forward stable (OOS ICIR=-0.406, consist=0.77)",0.0613,0.59,0.566
+comp_low_vol_value,composite,0.3489,0.3551,0.3403,0.923,candidate,"walk-forward stable (OOS ICIR=+0.340, consist=0.92)",0.0016,0.01,0.494
+comp_quality_growth,composite,0.0569,0.1621,-0.0822,0.538,draft,"marginal (OOS ICIR=-0.082, consist=0.54)",-0.0067,-0.066,0.459
+comp_cash_sheep,composite,0.2728,0.2803,0.2626,0.846,candidate,"walk-forward stable (OOS ICIR=+0.263, consist=0.85)",0.0233,0.167,0.529
+comp_anti_risk,composite,-0.0106,-0.009,-0.0137,0.538,deprecated,collapsed OOS (|OOS ICIR|=0.014<0.03),-0.006,-0.07,0.491
+comp_size_quality,composite,0.4578,0.44,0.4879,0.923,candidate,"walk-forward stable (OOS ICIR=+0.488, consist=0.92)",0.1181,1.217,0.653
+comp_momentum_reversal,composite,-0.109,-0.0435,-0.2008,0.615,draft,"marginal (OOS ICIR=-0.201, consist=0.62)",-0.0219,-0.254,0.447
+comp_relative_strength,composite,0.1471,0.1343,0.1674,0.769,candidate,"walk-forward stable (OOS ICIR=+0.167, consist=0.77)",-0.0023,-0.019,0.562
+comp_52w_position,composite,-0.2581,-0.2183,-0.3242,0.769,candidate,"walk-forward stable (OOS ICIR=-0.324, consist=0.77)",-0.0147,-0.163,0.436
+mom_industry_rel_20d,industry_rel,-0.5396,-0.5284,-0.5627,1.0,candidate,"walk-forward stable (OOS ICIR=-0.563, consist=1.00)",0.0322,0.354,0.479
+mom_idio_20d,industry_rel,-0.6311,-0.6679,-0.5805,1.0,candidate,"walk-forward stable (OOS ICIR=-0.581, consist=1.00)",0.025,0.322,0.481
+val_ep_industry_rel,industry_rel,0.3482,0.385,0.293,1.0,candidate,"walk-forward stable (OOS ICIR=+0.293, consist=1.00)",0.0166,0.125,0.484
+val_bp_industry_rel,industry_rel,0.5253,0.4069,0.775,1.0,candidate,"walk-forward stable (OOS ICIR=+0.775, consist=1.00)",0.0564,0.492,0.529
