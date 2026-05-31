@@ -1,225 +1,171 @@
-# Factor Lifecycle Formalization — Implementation Plan & Codex Cross-Review Handoff
+# Factor Lifecycle Formalization — Implementation Plan (v2)
 
-**Date:** 2026-05-31. **Author:** Claude. **For:** Codex cross-review (design/architecture pass).
-**Status:** PLAN ONLY — nothing in this document is implemented yet. This is the design to
-review *before* building.
+**Date:** 2026-05-31. **Author:** Claude. **v2 changes:** integrates the **Codex round-1
+cross-review** (all claims verified against code, see §0.5) + the **catalog re-validation +
+long-only-metric empirical evidence** (§7). **Status:** PLAN ONLY — nothing implemented.
 
 **Repository:** https://github.com/henrydan111/quant-system (public).
-**Related in-repo context (read for grounding):**
-- `CLAUDE.md` §3 (hard invariants), §7 (research integrity), §9 (orchestrator + 5 registries)
-- `AGENTS.md` §2a (Codex mirror of the invariants)
-- `workspace/research/factor_expansion/` — the workstream that motivated this (proposal, audit,
-  OOS results, the predefined selection rule, the catalog re-validation)
-- `src/alpha_research/factor_library/catalog.py` — `get_factor_catalog()` (static code dict)
-- `src/alpha_research/factor_registry/store.py` — `FactorRegistryStore`, `VALID_STATUSES`
-- `src/research_orchestrator/` — DAG engine, `factor_screening` profile, `factor_screening_steps.py`
-- `config/field_registry/field_status.yaml` + `src/data_infra/field_registry.py` — the field gate
-- `src/research_orchestrator/release_gate.py` — `assert_promotion_artifact_eligible` (the §3 promotion gate)
-- `src/alpha_research/walk_forward.py` — `build_walk_forward_folds`, `TimeSplit`
+**Grounding:** `CLAUDE.md` §3/§7/§9; `AGENTS.md` §2a; `src/alpha_research/factor_library/catalog.py`
+(`get_factor_catalog`, static); `src/alpha_research/factor_registry/store.py` (`FactorRegistryStore`,
+`VALID_STATUSES`); `src/research_orchestrator/` (DAG, `factor_screening` + `hypothesis_validation`
+profiles, `resolver.py`, `validation_steps.py`, `hypothesis.py`, `holdout_seal.py`);
+`config/field_registry/field_status.yaml` + `src/data_infra/field_registry.py`;
+`src/research_orchestrator/release_gate.py`; `src/alpha_research/walk_forward.py`;
+`src/alpha_research/testing_ledger.py`.
 
 ---
 
-## 0. Why this document exists
+## 0. Why this exists
+We executed a full factor create→evaluate→select→register **workflow** end-to-end with reproducible
+evidence (expansion: 69→50→13 frozen→sealed-OOS→6 validated; + walk-forward re-validation of all
+171 catalog factors). Rigorous as a one-off, but **not a formalized, enforced pipeline** — it ran on
+ad-hoc scripts + markdown rules. This plan formalizes it. Codex round-1 reviewed v1; this v2
+incorporates that review.
 
-We just executed a full factor create→evaluate→select→register **workflow** end-to-end with
-reproducible evidence (factor-expansion: 69 candidates → 50 IS-screened → 13 frozen → sealed
-OOS → 6 validated; plus a walk-forward re-validation of the 147 base catalog factors). It was
-rigorous **as a one-off**, but it was **not a formalized, enforced, reusable process** — it
-ran on ad-hoc `workspace/scripts/` + markdown rules + manual git discipline. This plan turns
-that proven workflow into a **codified pipeline with enforced gates**. Codex's job in this
-round is to cross-review the architecture *before* implementation, with special attention to
-anything that could (re)introduce PIT leakage, OOS contamination, or silent overfit at the
-*process* level.
+## 0.5 Codex round-1 review — VERIFIED and integrated
+Codex's review identified four required changes + six holes. I verified each against the code (file:line)
+before integrating — all confirmed:
 
----
-
-## 1. Current state — what is and isn't formalized (the audit)
-
-| Lifecycle stage | Exists | Formalized? (codified + gated + contract) |
-|---|---|---|
-| **Creation** | `catalog.py::get_factor_catalog()` (static dict, 147 base + 20 composite + 4 industry-rel); `operators.py` Layer-1 expressions | Static gates (PIT parser, Count-ban lint, field-existence) are **CI-enforced**. Generation/definition is **code-only, no lifecycle hook**. |
-| **Evaluation** | `factor_eval/` (IC/RankIC/ICIR/quantile/decay/monotonicity, `batch_screening`), `walk_forward.py` | Methods **codified + reused**. But this session orchestrated them via **ad-hoc direct-call workspace scripts** (`screen_*`, `run_sealed_oos`, `revalidate_*`), NOT the orchestrator. |
-| **Selection** | `oos_topset_selection_rule.md` + `apply_oos_topset_rule.py` (predeclared, mechanical) | **One-off research artifacts.** Rule is a workspace markdown + a script, **not a governance contract**, not reusable. |
-| **Registry** | `data/factor_registry/` (`FactorRegistryStore`, statuses `draft/candidate/approved/deprecated`, `status_history`, `import_screening`); 5 typed registries via orchestrator | **Field-level governance is fully formalized + tested** (`field_status.yaml`, approvals, drift checks, dependency gate). **Factor-level registration was NOT executed** — we annotated a CSV. The registry is **disconnected from the catalog** (see §2). |
-
-**The five concrete gaps:**
-1. **Catalog ≠ registry.** `get_factor_catalog()` is static code; research never reads registry
-   status. There is no status-aware access. (Verified: `catalog.py` has zero `status`/registry refs.)
-2. **Orchestrator bypassed.** The formal `factor_screening` DAG profile exists and writes to the
-   registry, but we ran direct-call scripts (faster for research iteration, but not enforced/reusable).
-3. **Rules are artifacts, not contracts.** Selection rule, status-assignment rule, IS/OOS/walk-forward
-   protocol live in `workspace/` markdown + script headers — not CLAUDE.md, not tested.
-4. **Registry-write deferred & manual.** No automated honest-status publish; `approved` correctly
-   gated behind the promotion gate but the whole write path was skipped this session.
-5. **No registry-level multiple-testing / OOS-budget accounting.** Each one-off run reasoned about it
-   locally; nothing tracks "how many hypotheses have been tested against window W."
-
----
-
-## 2. Target architecture — the formalized lifecycle
-
-### 2.1 Registry as the single source of truth
-The factor registry (`data/factor_registry/`) holds **every factor ever constructed** (171 catalog +
-69 expansion + future), one row each, carrying: `definition_hash`, `expression`/`components`,
-`status`, `status_history`, evidence (IS + walk-forward + sealed-OOS metrics), `field_eligibility`,
-`provider_build_id` binding, and `last_revalidated_at`. Nothing is deleted; failures become
-`deprecated` with reason (permanent negative knowledge → never blindly re-screened).
-
-`catalog.py` is demoted from **source** to **seed**: a `sync_catalog_to_registry()` step writes the
-code-defined expressions into the registry at `draft`. From then on the **registry's status governs
-what research uses**, not the code dict.
-
-### 2.2 Status lifecycle (evidence-driven, gated transitions)
-```
-            static gates           walk-forward            sealed-OOS + promotion gate
- (construct) ───────────► draft ───────────────► candidate ──────────────────────────► approved
-                            │                        │                                      │
-                            └─ field-ineligible      └─ collapse / sign-flip ──► deprecated ◄┘ (revoked on
-                               (capped at draft)         (failed holdout)                       drift/expiry)
-```
-| Transition | Gate (mechanical unless noted) |
-|---|---|
-| → `draft` | passes PIT-safety + Count-ban + field-existence; computes non-degenerate |
-| `draft` → `candidate` | walk-forward sign-stable (≥N-fold consistency) AND \|ICIR\| bar AND **field-eligible** (all fields `approved`) |
-| `candidate` → `approved` | sealed-OOS pass on a *frozen predeclared set* AND **strategy-level promotion gate** (`assert_promotion_artifact_eligible`: independent PIT reproduction, clean tree, provider binding) — **human-authorized** |
-| any → `deprecated` | OOS/holdout collapse or sign-flip; or superseded; or provider-drift invalidation |
-
-**Hard rule:** `approved` is the only status requiring human authorization + the promotion gate; all
-others are mechanical from evidence. **Field-eligibility is a hard cap:** a factor whose expression
-touches a `quarantine`/`pending`/`unknown` field can never exceed `draft` for formal use, regardless
-of performance (effective usability = `min(factor_status, field_status_gate)`).
-
-### 2.3 Status-aware access API (replaces direct catalog reads)
-```python
-get_factors(status_in=("approved",), prioritize="approved", as_of=...) -> dict[name, expr]
-```
-- **Formal stages** (formal_validation / oos_test / registry_publish) default to `approved` (or
-  `approved`+`candidate` with an explicit opt-in) — **fail-closed**, mirroring the field gate.
-- **Sandbox/exploration** may request all statuses, but every returned factor carries its `status`
-  so the researcher always sees the tier. "Access to all" is allowed; "build formal artifacts on
-  unvalidated factors" is blocked at the formal gate.
-
-### 2.4 Codified evaluation protocol (promote scripts → `src/` modules)
-The ad-hoc scripts become tested reusable components under `src/alpha_research/factor_lifecycle/`:
-`static_gates.py` (wraps the validator), `is_screen.py`, `walk_forward_eval.py`, `sealed_oos.py`
-(one-shot guard), `selection_rule.py` (the predeclared rule as code), `status_assign.py`.
-
-### 2.5 Orchestrator integration
-A new profile `factor_lifecycle` (or extend `factor_screening`) compiles a DAG:
-`sync_catalog → static_gate → is_screen → walk_forward → status_assign(candidate) →
-[frozen_set freeze] → sealed_oos → promotion_gate → registry_publish`. This makes the lifecycle
-**non-bypassable** for formal runs and produces the standard run artifacts + registry publish.
-
-### 2.6 Governance & accounting
-- Promote the IS/OOS/walk-forward protocol, the selection rule, and the status lifecycle into a
-  CLAUDE.md/AGENTS.md contract section (so the next session is bound by it).
-- **OOS-budget ledger:** track hypotheses tested per sealed window; raise the promotion bar as the
-  count grows (registry-level multiple-testing control).
-- **Re-validation cadence + provider-build binding:** `approved` carries `provider_build_id`; a
-  provider rebuild flags stale approvals for re-validation (reuse the approval-evidence drift pattern).
-
----
-
-## 3. Design decisions & tradeoffs (where I want Codex's view)
-
-| # | Decision | My recommendation | Tradeoff / risk for Codex to weigh |
+| # | Codex finding | Verified at | Integrated change |
 |---|---|---|---|
-| D1 | Registry-as-source vs catalog-as-source | Registry source of truth; catalog = seed | Migration risk: 171 factors referenced by name across screening/backtest code; need a compat shim so `get_factor_catalog()` still works during migration |
-| D2 | Which status transitions are mechanical vs human | Only `→approved` is human+promotion-gate; rest mechanical | Over-automation could promote to `candidate` on noise; mitigate with walk-forward + multiple-testing bar |
-| D3 | Walk-forward vs single sealed-OOS for `candidate` | Walk-forward (reusable, no OOS spend) for `candidate`; reserve the one-shot sealed OOS for `→approved` | Walk-forward on a-priori factors ≈ per-fold IC stability (no fitting) — is that a strong enough bar? |
-| D4 | Extend `factor_screening` profile vs new `factor_lifecycle` profile | New profile (cleaner DAG), keep `factor_screening` as legacy | Duplication vs clarity; Codex: is extending the existing DAG safer? |
-| D5 | Field-eligibility × factor-status interaction | Hard cap (`min`) | Does the registry store the cap explicitly, or compute it at read time from the live field registry? (live is safer — fields can be demoted) |
-| D6 | OOS-budget accounting granularity | Per (sealed-window) hypothesis counter in the registry | How to count an ensemble vs individual factors as "hypotheses"? |
-| D7 | Status expiry | `approved` expires on provider-build change; re-validation required | Could mass-expire approvals on every rebuild → churn. Acceptable? |
+| **H1** | **Formal-resolver status bypass** — `_resolve_formal_factor` stamps every `is_current` factor `source_layer="formal"` with NO status check; `validation_steps` `formal_only` accepts it. All 171 are `draft`, so the bypass is live. | `resolver.py:_resolve_formal_factor` (source_layer="formal", no status); `validation_steps.py:~100` | **Fail-closed enforcement moves INTO the resolver** (§2.3), not a new API. The resolver must only stamp `formal` for `status==approved` (or `candidate` w/ explicit opt-in). |
+| **H2** | **Definition drift** — formal validation recomputes components from `get_factor_catalog()` by NAME, not from registry definitions. | `validation_steps.py:218-227` (`get_factor_catalog`/`get_industry_relative_defs`) | **Definition binding** (§2.7): formal compute uses the registry's stored expression OR hard-fails when `definition_hash` ≠ catalog code. |
+| **H3** | **OOS re-open via mutable `design_hash`** — `design_hash` includes `success_criteria`, `pre_registered_concerns`, `expected_effect`, `expected_sign`; `holdout_seal` blocks only same-`design_hash`. Editing thresholds/prose re-opens a failed OOS. | `hypothesis.py:design_hash` payload; `holdout_seal.py` | **`frozen_set_hash`** (§2.8): an immutable selection-set/sealed-window key that EXCLUDES pass/fail wording. The seal keys on it, so thresholds can't be edited to re-run OOS. |
+| **H4** | **Batch-level overfit** — "13 frozen → 6 validated" must be ONE governed decision set, not 13 independent events; count every factor visible to selection + direction flips + clustering + post-IS ensemble/threshold. | design (this session counted locally only) | **OOS-budget = the frozen set** (§2.6/D6); ledger records per-factor AND batch trials. |
+| **H5** | **Testing-ledger not file-locked** — `record_event`/`record_verdict` lack the `file_lock` that cache/seal stores use; concurrent runs undercount the OOS budget. | `testing_ledger.py:142,216` (no `file_lock`) | **File-lock the ledger** (§2.6) before it becomes the OOS-budget ledger, mirroring `CacheManifestStore`/`HoldoutSealStore`. |
+| **H6** | Lifecycle DAG should **reuse** existing formal-gate/OOS machinery, not invent parallel governance. | — | §2.5: new `factor_lifecycle` profile **reuses** `factor_screening` components + the `hypothesis_validation` IS-gate→OOS→publish pattern. |
+
+Codex also corrected the **taxonomy** (statuses stay simple; signal-role is metadata — §3.taxonomy)
+and the **phase ordering** (API/contract-first, schema later — §4). Both adopted.
 
 ---
 
-## 4. Phased implementation plan (file-level, incremental, each phase shippable)
+## 1. Current state — what is / isn't formalized
+| Stage | Exists | Formalized? |
+|---|---|---|
+| Creation | `get_factor_catalog()` static dict | static gates (PIT/Count/field-existence) CI-enforced; generation has no lifecycle hook |
+| Evaluation | `factor_eval/`, `walk_forward.py` | methods codified; this session orchestrated them via **ad-hoc direct-call scripts**, not the orchestrator |
+| Selection | `oos_topset_selection_rule.md` + `apply_oos_topset_rule.py` | one-off research artifacts, not contracts |
+| Registry | `FactorRegistryStore` (draft/candidate/approved/deprecated, status_history, import_screening); 5 typed registries | **field-level governance fully formalized + tested**; factor-level registration **not executed** (CSV annotation); **catalog disconnected from registry**; **formal resolver bypasses status (H1)** |
 
-**Phase 0 — Inventory & freeze the de-facto process (docs only).**
-Write the current process down (this doc + a `factor_lifecycle.md` under `src/alpha_research/`).
-No code. Output: shared vocabulary.
+Five gaps unchanged from v1 (catalog≠registry; orchestrator bypassed; rules are artifacts; registry-write deferred; no multiple-testing/OOS-budget accounting) — **plus the four enforcement holes H1-H3,H6** Codex located, which are the real fail-closed points.
 
-**Phase 1 — Registry schema + status lifecycle (extend `FactorRegistryStore`).**
-- Add evidence columns for walk-forward + sealed-OOS + `field_eligibility` + `provider_build_id` +
-  `last_revalidated_at` to the master schema.
-- Implement gated `set_status` transitions (mechanical gates inline; `→approved` calls
-  `assert_promotion_artifact_eligible`, mirroring `strategy_registry.set_status`).
-- Tests: transition gate matrix; field-cap; status_history append.
+## 2. Target architecture (revised)
 
-**Phase 2 — Status-aware access API + catalog→registry seed.**
-- `sync_catalog_to_registry()` writes the 147+20+4 at `draft`.
-- `get_factors(status_in, prioritize, as_of)` reads the registry; field-eligibility computed live.
-- Compat shim: `get_factor_catalog()` delegates to `get_factors(status_in=all)` during migration.
-- Tests: formal-stage fail-closed to approved; sandbox sees all-with-status.
+### 2.1 Registry = source of truth; catalog = seed
+All factors (171 + 69 + future) in one master, each with `definition_hash`, `expression`/`components`,
+`status`, `status_history`, evidence (IS + walk-forward + sealed-OOS + **long-only metric**),
+`field_eligibility` snapshot, `provider_build_id` binding, `last_revalidated_at`, and the new
+**signal-role metadata** (§3.taxonomy). `catalog.py` → seed via `sync_catalog_to_registry()` at `draft`.
 
-**Phase 3 — Codify evaluation protocol (`src/alpha_research/factor_lifecycle/`).**
-- Port the workspace scripts (`validate_factor_candidates`, `screen_*`, `run_sealed_oos`,
-  `revalidate_catalog_walkforward`, `apply_oos_topset_rule`) into tested modules. Keep the one-shot
-  OOS guard, the predeclared-rule-as-code, the multiple-testing-robust fold consistency.
-- Tests: selection rule determinism; OOS one-shot guard; walk-forward fold math.
+### 2.2 Status lifecycle (evidence-driven; candidate-bar depends on factor origin)
+```
+construct → draft → candidate → [HUMAN GATE] → approved        any → deprecated
+```
+| Transition | Gate |
+|---|---|
+| → `draft` | static gates pass; computes non-degenerate |
+| `draft`→`candidate` | **a-priori factor:** per-fold IC sign-consistency + min effect/coverage + field-eligible. **generated / IS-selected factor:** ALSO requires an **IS-only held-out block / walk-forward bounded to `TimeSplit.is_end`** (Codex D3) — never spends sealed OOS |
+| `candidate`→`approved` | frozen-set sealed-OOS pass **+ explicit human gate** (mirrors the `hypothesis_validation` IS gate before OOS, Codex D2) **+ promotion gate** (`assert_promotion_artifact_eligible`) |
+| any→`deprecated` | OOS/holdout collapse, sign-flip, supersession, or provider-drift → `stale` (D7) |
 
-**Phase 4 — Orchestrator `factor_lifecycle` profile/DAG.**
-- DAG per §2.5; `registry_publish` at honest statuses; `approved` guarded.
-- Tests: DAG compiles; publish writes expected statuses; bypass is impossible at formal stage.
+Field-eligibility is a hard cap; **effective status = `factor_status ∩ current field gate`** (D5).
 
-**Phase 5 — Governance contracts + accounting.**
-- CLAUDE.md/AGENTS.md: lifecycle + protocol + selection rule as contract; OOS-budget ledger;
-  re-validation cadence; provider-build binding for approvals.
-- Tests: drift/expiry; budget-counter increments.
+### 2.3 Enforcement lives in the FORMAL RESOLVER, not a new API (Codex H1 — the key change)
+The binding fail-closed gate is in `resolver._resolve_formal_factor` + `validation_steps`:
+a registry factor may be stamped `source_layer="formal"` **only if `status==approved`** (or
+`candidate` when `prescription.allow_candidate_components`). Draft/deprecated → not formal →
+rejected at the existing `formal_only` check. A new `get_factors(status_in=…, prioritize=…)` is a
+convenience for research/sandbox (returns status-tagged), but **does not** carry the formal gate —
+the resolver does. Sandbox/no-context reads unchanged.
 
-**Phase 6 — Backfill.**
-- Seed the registry from the completed catalog re-validation (147 statuses) + the expansion OOS
-  results (6 candidate / 2 defer / 5 deprecated). This is the first real population.
+### 2.7 Definition binding (Codex H2)
+Formal compute must source each factor's expression from the **registry row**, OR hard-fail when the
+registry `definition_hash` ≠ the catalog-code hash for that name. No silent recompute-from-`catalog.py`.
 
----
+### 2.8 Immutable frozen-set seal (Codex H3)
+A `frozen_set_hash` = sha256 over {sorted factor `definition_hash`es, universe, time_split window,
+rebalance, neutralization} — **excluding** `success_criteria`/`pre_registered_concerns`/
+`expected_effect`/pass-fail wording. `holdout_seal` keys the sealed-OOS claim on `frozen_set_hash`
+(not `design_hash`), so editing thresholds/prose can't re-open a consumed OOS. The predeclared
+selection rule + frozen-set JSON we already produce becomes the input to this hash.
 
-## 5. Invariants the formalization MUST preserve (non-negotiable)
-- **PIT:** every `$field` `Ref(...,1)` except approved ADJ atoms/labels; the formal access path
-  routes through `qlib_windowed_features` / `pit_research_loader` only.
-- **OOS sanctity:** sealed OOS run once per frozen set; selection rule predeclared & immutable
-  post-results; no post-OOS tuning. The lifecycle must make a second OOS read on the same window a
-  hard error (cache-manifest + the one-shot guard).
-- **Count banned;** field gate fail-closed; promotion gate guards `approved`.
-- **No silent status inflation:** every transition writes `status_history` with evidence + commit.
+### 2.4 Codified evaluation protocol
+Port the ad-hoc scripts → tested `src/alpha_research/factor_lifecycle/` modules: `static_gates`,
+`is_screen`, `walk_forward_eval` (bounded to `TimeSplit.is_end`), `sealed_oos` (one-shot guard),
+`selection_rule` (predeclared-as-code), `long_only_metric`, `status_assign`.
+
+### 2.5 Orchestrator `factor_lifecycle` profile (reuses machinery — Codex H6/D4)
+New profile (do NOT overload `factor_screening`, which is a quick-kill discovery profile). DAG:
+`sync_catalog → static_gate → is_screen → walk_forward → status_assign(candidate) → human_gate →
+frozen_set_seal → sealed_oos → promotion_gate → registry_publish`. Reuses `factor_screening`
+components + copies the `hypothesis_validation` IS-gate→OOS→publish pattern + the existing
+release/promotion gates.
+
+### 2.6 OOS-budget accounting (Codex H4/H5/D6)
+The **frozen decision set is the OOS unit**, not the factor. The (file-locked) `testing_ledger`
+records per-factor outcomes AND batch-level effective trials: every factor visible to the selection
+rule, every direction flip, family-clustering choice, and any post-IS ensemble/threshold. Raw counts
+first; correlation-adjusted family counts later. Promotion bar escalates with the count.
+
+## 3. Status taxonomy — statuses stay simple; signal-role is METADATA (Codex Q7)
+Keep `draft / candidate / approved / deprecated` as **lifecycle state only**. Do NOT add
+`risk_sleeve`/`short_side` statuses. Add **orthogonal metadata columns**:
+`expected_direction`, `signal_role` ∈ {`long_only_alpha`, `risk_sleeve`, `short_side`, `neutralizer`},
+`approved_uses`, `validation_scope`, `requires_inverse_for_long_only`, `long_only_viable` (+ the
+long-only metric value). True short-side portfolios extend `PortfolioSide` (the repo already models
+component `direction` in `hypothesis.py`/`prescription_runtime.py`), **not** factor status. **§7's
+long-only evidence is exactly what populates these fields.**
+
+## 4. Phase ordering — API/CONTRACT-FIRST, then schema (Codex)
+- **Phase 1 (safety-first, today's schema):** close the formal-resolver bypass — status-gate
+  `_resolve_formal_factor` (H1) + definition-binding hard-fail (H2) + `frozen_set_hash` seal (H3) +
+  file-lock the ledger (H5). This is the biggest safety win and needs no schema change. Tests first.
+- **Phase 2:** extend registry schema/evidence (long-only metric, signal-role metadata, provenance binding).
+- **Phase 3:** `get_factors()` status-aware API + `sync_catalog_to_registry()` (staged cutover, D1:
+  static catalog kept for seeds/tests, formal path reads registry + fail-closed).
+- **Phase 4:** port scripts → `factor_lifecycle/` modules.
+- **Phase 5:** orchestrator `factor_lifecycle` profile.
+- **Phase 6:** backfill — seed from the 171 re-validation + the 6 expansion OOS verdicts + long-only metric.
+
+## 5. Invariants preserved (non-negotiable)
+PIT (`Ref(...,1)` / `qlib_windowed_features` / `pit_research_loader` only); sealed-OOS one-shot per
+**frozen_set_hash**, predeclared rule immutable, no post-OOS tuning, second-read = hard error; Count
+banned; field gate + formal-resolver gate fail-closed; promotion gate guards `approved`; every status
+transition writes `status_history` with evidence + commit.
 
 ## 6. Risks
-- **Migration regression** (D1) — name-based catalog references break. Mitigation: compat shim + a
-  test that every legacy name resolves.
-- **"Access to all" leakage** (§2.3) — must be enforced fail-closed at formal stage, not advisory.
-- **Walk-forward over-permissiveness** (D3) — fold stability on a-priori factors may pass weak signals;
-  pair with an effect-size bar + multiple-testing control.
-- **OOS-budget erosion** — the more the registry evaluates, the more the single sealed window is
-  spent; the ledger must actually raise the bar, not just record.
-- **Scope/churn** — this is a multi-week build touching `src/`, the orchestrator, governance docs.
+Migration regression (D1 — staged cutover + name-resolution test); "access to all" leakage (enforced at
+resolver, not advisory); walk-forward over-permissiveness (effect-size + multiple-testing bar);
+OOS-budget erosion (ledger must escalate the bar); multi-week scope across `src/`/orchestrator/governance.
 
-## 7. Open questions for Codex
-1. **D1 migration:** is a compat shim + name-resolution test sufficient, or do you want a hard cutover
-   with all call sites migrated in one PR? Which is lower-risk given 171 name references?
-2. **D3:** for a-priori (non-fitted) factors, is per-fold IC sign-consistency a defensible
-   `candidate` bar, or should `candidate` also require a held-out block (mini-OOS) — and if so, how do
-   we avoid spending the sealed window?
-3. **D4:** extend `factor_screening` (which already publishes to the registry) vs a new
-   `factor_lifecycle` profile? Which fits the existing DAG engine better?
-4. **D5:** store field-eligibility in the registry row (fast, can go stale) vs compute live from the
-   field registry at read time (correct, slower)? I lean live — confirm.
-5. **OOS-budget (D6):** what's the right unit of "hypothesis" and the right bar-escalation function?
-6. Any **process-level PIT/OOS/overfit hole** in §2 the per-factor gates wouldn't catch?
-7. Is the **status taxonomy** (`draft/candidate/approved/deprecated`) sufficient, or do we need a
-   `risk_sleeve` / `short_side` status for the high-|IC|-negative-LS factors (volatility cluster,
-   accruals mismatch) that are signals but not long-only alpha?
+## 7. Empirical evidence now in hand (seeds Phase 6 + validates the taxonomy)
+The full **171 catalog re-validation** (walk-forward IS/OOS, this session):
+**93 candidate / 66 draft / 12 deprecated** (approved=0). 12 deprecated were strong-IS fundamental
+*level* factors that collapsed OOS (corroborates the expansion finding: acceleration generalizes,
+levels don't).
 
-## 8. What I want Codex to deliver
-- Concur/refute the target architecture (§2) and each decision (§3).
-- Flag migration/leakage/contamination risks I've underweighted.
-- A recommended phase ordering (is Phase 1 registry-first right, or API-first?).
-- Answers to §7, especially D1 (migration), D3 (candidate bar), D5 (eligibility freshness), and Q7
-  (status taxonomy for short-side signals).
-- Any reuse I'm missing (does the orchestrator already provide a component I'm proposing to build?).
+The **long-only top-bucket metric** (sign-aligned top-decile-minus-universe) directly demonstrates why
+**`signal_role` must be metadata, not inferred from IC**:
+- Of 16 IC-`candidate` derived factors, **only 2 have long-only Sharpe ≥ 1.0** (`comp_small_value`
+  +1.40, `comp_size_quality` +1.22 — small-cap tilts); 12 of 16 < 0.5, several negative.
+- `val_bp_industry_rel`: highest derived OOS ICIR (+0.775) but **long-only Sharpe +0.49** — strong
+  cross-sectional IC, weak long-only (the alpha is in the spread / short leg a no-shorting book can't hold).
 
----
+So the registry needs `long_only_viable` + `signal_role` populated from THIS metric: the ~55 negative-IC
+base + ~12 weak-long-only derived → `risk_sleeve`/`requires_inverse_for_long_only`; the small-cap
+composites → `long_only_alpha`. This is concrete data, not speculation, behind §3.
 
-*This plan is the design to review, not built code. The empirical inputs that will seed the registry
-(147-factor catalog walk-forward re-validation + the expansion-set OOS verdicts) are produced by the
-runs in `workspace/research/factor_expansion/`; this document is about the standing process that
-should govern all future factors so none again go through bespoke scripts.*
+## 8. Open questions for Codex round-2
+1. **Phase-1 fix shape (H1):** should `_resolve_formal_factor` return a non-formal `source_layer` for
+   `draft`/`candidate`, or `_unresolved`? Which integrates cleanest with `validation_steps` `formal_only`?
+2. **frozen_set_hash (H3):** put it on `Hypothesis`/`TimeSplit`, or a new `FrozenSelectionSet` object the
+   seal store consumes? Backward-compat with existing `design_hash`-keyed seals?
+3. **Definition binding (H2):** compute-from-registry-expression vs hard-fail-on-mismatch — which first,
+   given composites/industry-rel resolve through code (`get_composite_defs`/`get_industry_relative_defs`)?
+4. **Candidate bar (D3):** for the expansion factors (partly IS-selected), is walk-forward-to-`is_end`
+   the right pre-candidate gate, and does `walk_forward.build_walk_forward_folds` already bound correctly?
+5. **Ledger as OOS budget (H4/H5):** extend `testing_ledger` in place (add file_lock) or a new
+   `oos_budget_ledger` mirroring `CacheManifestStore`?
+6. **signal_role:** auto-derive from the long-only metric (LO Sharpe<threshold ⇒ risk_sleeve) or
+   require human assignment? What LO-Sharpe / hit-rate threshold defines `long_only_viable`?
