@@ -534,6 +534,115 @@ class TestResolverHandlerBehavior:
                 handle_validation_object_resolver(context)
 
 
+class TestPR12FormalAllowSet:
+    """PR P1.2: handle_validation_object_resolver enforces an EXPLICIT source-layer
+    allow-set — {formal} (+ factor_registry_candidate iff allow_candidate_components).
+    Every other resolved layer (factor_registry_draft / _stale / _deprecated AND the
+    candidate-registry "candidate" layer) is rejected BEFORE the IS leg. This is the
+    sole formal-permission point under the resolve-but-label design (Codex round-5)."""
+
+    def _make_context(self, tmp_path: Path, allow_candidate: bool = False):
+        from src.research_orchestrator.hypothesis import PrescribedComponent
+
+        prescription = MagicMock(
+            components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
+            allow_candidate_components=allow_candidate,
+        )
+        hypothesis = MagicMock(prescription=prescription, hypothesis_id="hyp_pr12_allowset")
+        context = MagicMock()
+        context.request.hypothesis = hypothesis
+        context.step_dir = tmp_path / "step"
+        context.step_dir.mkdir(parents=True)
+        context.registry_dirs = {
+            "factor_registry_dir": str(tmp_path / "factor_registry"),
+            "candidate_registry_dir": str(tmp_path / "candidate_registry"),
+            "signal_registry_dir": str(tmp_path / "signal_registry"),
+            "model_registry_dir": str(tmp_path / "model_registry"),
+            "strategy_registry_dir": str(tmp_path / "strategy_registry"),
+        }
+        context.profile.profile_id = "hypothesis_validation"
+        return context
+
+    @staticmethod
+    def _payload(layer: str):
+        return {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": layer,
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        "layer",
+        ["factor_registry_draft", "factor_registry_stale", "factor_registry_deprecated", "candidate"],
+    )
+    def test_non_formal_layer_rejected(self, tmp_path: Path, layer: str) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(layer),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_factor_registry_candidate_rejected_without_flag(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("factor_registry_candidate"),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_plain_candidate_rejected_even_with_flag(self, tmp_path: Path) -> None:
+        # allow_candidate_components admits ONLY factor_registry_candidate, never the
+        # separate candidate-registry "candidate" layer.
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("candidate"),
+        ):
+            with pytest.raises(ValueError, match=r"cannot resolve required"):
+                handle_validation_object_resolver(context)
+
+    def test_formal_layer_accepted(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=False)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("formal"),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        assert "field_dependency_report" in result.outputs
+
+    def test_factor_registry_candidate_accepted_with_flag(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("factor_registry_candidate"),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        assert "field_dependency_report" in result.outputs
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Formal-factor compatibility test (GPT 5.5 Pro round-2 review #2)
 # ─────────────────────────────────────────────────────────────────────────

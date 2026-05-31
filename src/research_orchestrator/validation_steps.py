@@ -97,9 +97,17 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         research_profile=context.profile.profile_id,
     )
 
-    # Tightened policy: by default require source_layer="formal" for every
-    # component. Opt in to candidate via prescription.allow_candidate_components.
-    formal_only = not prescription.allow_candidate_components
+    # Formal gate (PR P1.2, Codex round-5): the resolver now RESOLVES every
+    # factor-registry row and LABELS source_layer by status (resolve-but-label), so
+    # this explicit allow-set is the SOLE point that decides which labels may enter a
+    # formal validation. Accept only "formal" (+ "factor_registry_candidate" when the
+    # prescription opts in via allow_candidate_components); reject every other layer —
+    # factor_registry_draft / _stale / _deprecated AND plain "candidate" (the
+    # candidate-registry path). This is a net tightening of the prior binary toggle,
+    # which accepted ANY non-formal layer when allow_candidate_components=True.
+    allowed_layers = {"formal"}
+    if prescription.allow_candidate_components:
+        allowed_layers.add("factor_registry_candidate")
     rejected: list[dict[str, Any]] = []
     for entry in raw_resolution["resolved_objects"]:
         layer = str(entry.get("source_layer") or "")
@@ -109,10 +117,10 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
                 "reason": "unresolved",
                 "details": entry,
             })
-        elif formal_only and layer != "formal":
+        elif layer not in allowed_layers:
             rejected.append({
                 "factor_name": entry.get("requested", {}).get("object_name", ""),
-                "reason": f"non-formal source_layer={layer!r} but allow_candidate_components=False",
+                "reason": f"non-allowed source_layer={layer!r} (allowed={sorted(allowed_layers)})",
                 "details": entry,
             })
 

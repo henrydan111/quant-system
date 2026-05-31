@@ -1,7 +1,8 @@
 # Factor Lifecycle — Phase 1 Implementation Spec
 
-**Date:** 2026-05-31. **Status:** spec reviewed — Codex round-4 (pre-build) + round-5 (P1.2 redesign)
-integrated; GO to draft on Option A. No code written yet. Derived from
+**Date:** 2026-05-31. **Status:** Codex round-4 (pre-build) + round-5 (P1.2 redesign) integrated;
+**P1.1 + P1.2 IMPLEMENTED on branch `factor-lifecycle-p1`** (resolve-but-label reader gate + writer
+gate + tests + CLAUDE.md/AGENTS.md §3 invariant). P1.3 → P1.5 → P1.4 remain. Derived from
 `factor_lifecycle_formalization_plan.md` (v3 + Codex round-1/2/3, all GO). Phase 1 = the
 **safety-first enforcement layer**: close the reader+writer formal gates, bind definitions, seal OOS
 by frozen-set identity, and file-lock the trial ledger — all on/with the minimal schema additions
