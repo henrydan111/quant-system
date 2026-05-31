@@ -402,6 +402,71 @@ class FactorRegistryTests(unittest.TestCase):
             ].iloc[0]
             self.assertEqual(other["long_only_viable_provisional"], "non_viable")
 
+    def test_import_revalidation_definition_bound_evidence_only(self):
+        # PR P2.3: import attaches evidence ONLY to in-sync factors (registry hash ==
+        # current catalog hash), SKIPS drifted + unknown factors (fail-closed, never by
+        # name), labels rows historical_investigation / formal_evidence_eligible=False,
+        # never touches status, derives viability, and is idempotent.
+        with self.make_temp_dir("factor_registry_p2_import") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            current = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            in_sync = current.iloc[0]["factor_id"]
+            drift_fid = current.iloc[1]["factor_id"]
+            # corrupt the drift factor's registry definition_hash -> drift vs catalog
+            idx = store.factor_master.index[
+                (store.factor_master["factor_id"] == drift_fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ][0]
+            store.factor_master.at[idx, "definition_hash"] = "deadbeef" * 8
+
+            csv_path = Path(temp_dir) / "derived.csv"
+            pd.DataFrame([
+                {"factor": in_sync, "kind": "base", "is_rank_icir": 0.2, "oos_rank_icir": 0.31,
+                 "sign_consistency": 0.8, "lo_excess_ann": 0.12, "lo_sharpe": 1.4, "lo_hit": 0.66},
+                {"factor": drift_fid, "kind": "base", "is_rank_icir": 0.1, "oos_rank_icir": 0.1,
+                 "sign_consistency": 0.7, "lo_excess_ann": 0.05, "lo_sharpe": 0.6, "lo_hit": 0.55},
+                {"factor": "totally_unknown_factor", "kind": "base", "is_rank_icir": 0.1,
+                 "oos_rank_icir": 0.1, "sign_consistency": 0.7, "lo_excess_ann": 0.0,
+                 "lo_sharpe": 0.0, "lo_hit": 0.0},
+            ]).to_csv(csv_path, index=False)
+
+            report = store.import_revalidation(derived_csv=csv_path, provider_build_id="pb1", run_id="rv_test")
+            self.assertIn(in_sync, report["attached"])
+            self.assertIn(drift_fid, report["skipped_drift"])
+            self.assertIn("totally_unknown_factor", report["skipped_unknown"])
+
+            ev = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == in_sync)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev), 1)
+            erow = ev.iloc[0]
+            self.assertEqual(erow["evidence_class"], "historical_investigation")
+            self.assertEqual(bool(erow["formal_evidence_eligible"]), False)
+            self.assertAlmostEqual(float(erow["lo_sharpe_gross"]), 1.4)
+            self.assertTrue(str(erow["source_hash"]))  # bound to the definition_hash
+
+            mrow = store.factor_master[
+                (store.factor_master["factor_id"] == in_sync)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(mrow["long_only_viable_provisional"], "viable")
+            self.assertEqual(mrow["status"], "draft")  # P2.3 writes evidence, never status
+            # the drifted factor got NO evidence
+            self.assertTrue(store.factor_evidence[
+                (store.factor_evidence["factor_id"] == drift_fid)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ].empty)
+
+            # idempotent: re-import keeps exactly one evidence row for in_sync
+            store.import_revalidation(derived_csv=csv_path, provider_build_id="pb1", run_id="rv_test")
+            ev2 = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == in_sync)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev2), 1)
+
     def test_save_generates_human_readable_html_review(self):
         with self.make_temp_dir("factor_registry_html") as temp_dir:
             store = FactorRegistryStore(temp_dir)

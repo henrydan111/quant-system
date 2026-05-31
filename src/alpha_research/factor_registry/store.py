@@ -918,6 +918,133 @@ class FactorRegistryStore:
             "definition_binding": definition_binding,
         }
 
+    @staticmethod
+    def _read_revalidation_csv(path: str | Path, *, kind: str) -> dict[str, dict[str, Any]]:
+        """Read one revalidation CSV into ``{factor_id: {metric: value, ...}}``. ``kind``
+        selects which columns are pulled: ``catalog``/``derived`` (walk-forward IS/OOS
+        ICIR + sign-consistency; ``derived`` adds the GROSS long-only metrics) and
+        ``oos_report`` (maps ``ls_sharpe`` -> ``oos_ls_sharpe``). Structured CSV only —
+        no markdown (GPT cross-review)."""
+        df = pd.read_csv(path)
+        out: dict[str, dict[str, Any]] = {}
+        common = [("is_rank_icir", "is_rank_icir"), ("oos_rank_icir", "oos_rank_icir"),
+                  ("sign_consistency", "sign_consistency")]
+        derived_only = [("lo_excess_ann", "lo_excess_ann_gross"), ("lo_sharpe", "lo_sharpe_gross"),
+                        ("lo_hit", "lo_hit")]
+        for _, r in df.iterrows():
+            factor_id = _coerce_string(r.get("factor")).strip()
+            if not factor_id:
+                continue
+            metrics: dict[str, Any] = {"source_path": str(path)}
+            for col, key in common:
+                if col in df.columns:
+                    metrics[key] = _coerce_float(r[col])
+            if kind == "derived":
+                for col, key in derived_only:
+                    if col in df.columns:
+                        metrics[key] = _coerce_float(r[col])
+            if kind == "oos_report" and "ls_sharpe" in df.columns:
+                metrics["oos_ls_sharpe"] = _coerce_float(r["ls_sharpe"])
+            out[factor_id] = metrics
+        return out
+
+    def import_revalidation(
+        self,
+        *,
+        catalog_csv: str | Path | None = None,
+        derived_csv: str | Path | None = None,
+        oos_report_csv: str | Path | None = None,
+        provider_build_id: str = "",
+        calendar_policy_id: str = "",
+        evidence_class: str = "historical_investigation",
+        run_id: str = "revalidation_import",
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """PR P2.3: populate ``factor_evidence`` with walk-forward / OOS / GROSS
+        long-only metrics from the re-validation artifacts. **Definition-bound +
+        fail-closed:** a factor is attached ONLY if its current registry
+        ``definition_hash`` equals the current code-catalog hash (registry in sync);
+        a factor whose hash has DRIFTED, or that is not a current registry row, is
+        SKIPPED and logged — never attached by name alone. Imported rows are labeled
+        ``evidence_class=historical_investigation`` + ``formal_evidence_eligible=False``
+        (non-approval evidence). Writes evidence ONLY — never ``status`` /
+        ``approval_validity`` / ``definition_hash``. Idempotent per
+        ``(run_id, factor_id, version)``. Returns a report of attached/skipped factors."""
+        merged: dict[str, dict[str, Any]] = {}
+        for path, kind in ((catalog_csv, "catalog"), (derived_csv, "derived"), (oos_report_csv, "oos_report")):
+            if path is None:
+                continue
+            for factor_id, metrics in self._read_revalidation_csv(path, kind=kind).items():
+                merged.setdefault(factor_id, {}).update(metrics)
+
+        code_hashes = self.current_catalog_definition_hashes()
+        now = generated_at or _now_str()
+        current = self.factor_master[self.factor_master["is_current"].fillna(False)]
+        attached: list[str] = []
+        skipped_drift: list[str] = []
+        skipped_unknown: list[str] = []
+        evidence_rows: list[FactorEvidenceRecord] = []
+
+        for factor_id, metrics in merged.items():
+            match = current[current["factor_id"] == factor_id]
+            if match.empty:
+                skipped_unknown.append(factor_id)
+                continue
+            row = match.sort_values("version").iloc[-1]
+            registry_hash = _coerce_string(row.get("definition_hash"))
+            code_hash = code_hashes.get(factor_id)
+            if not registry_hash or code_hash is None or registry_hash != code_hash:
+                # FAIL-CLOSED: registry definition drifted from the catalog (or unknown
+                # to the catalog) — do NOT attach evidence to an ambiguous definition.
+                skipped_drift.append(factor_id)
+                continue
+            evidence_rows.append(FactorEvidenceRecord(
+                run_id=run_id, run_type="revalidation", factor_id=factor_id,
+                version=int(row["version"]), is_current_at_import=True,
+                grade="", rank_icir_5d=None, mean_rank_ic_5d=None, ic_hit_rate_5d=None,
+                monotonic=None, best_decay_horizon=None, peak_decay_icir=None,
+                ls_ann_return=None, validation_pass_count=None, selected_fold_count=None,
+                avg_validation_rank_icir=None, source_run_dir=str(metrics.get("source_path", "")),
+                evidence_time=now,
+                is_rank_icir=metrics.get("is_rank_icir"), oos_rank_icir=metrics.get("oos_rank_icir"),
+                sign_consistency=metrics.get("sign_consistency"),
+                oos_ls_sharpe=metrics.get("oos_ls_sharpe"), retain_pct=metrics.get("retain_pct"),
+                lo_excess_ann_gross=metrics.get("lo_excess_ann_gross"),
+                lo_sharpe_gross=metrics.get("lo_sharpe_gross"), lo_hit=metrics.get("lo_hit"),
+                evidence_class=evidence_class, formal_evidence_eligible=False,
+                source_path=str(metrics.get("source_path", "")), source_hash=registry_hash,
+                provider_build_id=provider_build_id, calendar_policy_id=calendar_policy_id,
+            ))
+            attached.append(factor_id)
+
+        if evidence_rows:
+            # Idempotent: drop any prior rows for the same (run_id, factor_id, version).
+            new_keys = {(run_id, r.factor_id, int(r.version)) for r in evidence_rows}
+            existing = self.factor_evidence
+            if not existing.empty:
+                keep = ~existing.apply(
+                    lambda x: (
+                        _coerce_string(x["run_id"]),
+                        _coerce_string(x["factor_id"]),
+                        _coerce_int(x["version"]),
+                    ) in new_keys,
+                    axis=1,
+                )
+                existing = existing[keep]
+            new_df = _apply_schema(
+                pd.DataFrame([asdict(r) for r in evidence_rows]),
+                FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+            )
+            self.factor_evidence = pd.concat([existing, new_df], ignore_index=True)
+
+        self.refresh_master_derived_fields()
+        return {
+            "run_id": run_id,
+            "attached": sorted(attached),
+            "skipped_drift": sorted(skipped_drift),
+            "skipped_unknown": sorted(skipped_unknown),
+        }
+
     def set_status(
         self,
         *,
