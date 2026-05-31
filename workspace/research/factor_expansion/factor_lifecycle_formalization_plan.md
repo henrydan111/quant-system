@@ -34,6 +34,26 @@ H6 reuse machinery; taxonomy → signal-role is metadata not status; phase order
 
 Round-2 also **answered v2's 6 open questions** — resolutions encoded in §2.3/§2.8/§2.4/§2.6/§3 and listed in §8.
 
+## 0.7 Codex round-3 — integrated (GO for Phase-1 spec). All API claims verified.
+- **Ordering fix:** §2.3's resolver depends on `approval_validity`, but schema was Phase 2. → **Phase 1
+  must add a minimal `approval_validity` column with a fail-closed default** (missing ⇒ not formally
+  usable). Approved rows cannot be formal while that field is absent. (§4)
+- **`frozen_set_hash` +2 fields (§2.8):** add `candidate_pool_hash` (every factor *visible to the
+  selection rule*, not just the selected — 13-of-50 ≠ 13-of-500 overfit budget) and a full
+  `eval_protocol_hash` (preprocessing, winsor/rank, return horizon, label def, quantile construction,
+  cost/slippage, missing-data + tie-break policy, universe filter — not just a version string).
+  **Provider/calendar/build IDs stay OUT of the hash** (stored beside as provenance → drift flows to
+  `approval_validity=stale`, not an OOS re-open). **Strict serialization** (schema_version, sorted
+  arrays, ISO dates, normalized enums, no NaN, no timestamps/paths, `sort_keys`+compact+`allow_nan=False`,
+  no raw floats — use ints/enums/hashes/decimal strings).
+- **Seal migration done IN `HoldoutSealStore._load()`/schema normalization** (not as a convention), old
+  `design_hash` column kept for provenance (§2.8 / Phase-1 order in §8).
+- **Writer-gate rollout:** **hard-block all ungated `approved` writes immediately**; the 6 expansion
+  factors backfill as **`candidate`+OOS-evidence first**, promote to `approved` only via the normal
+  gated path — and **only if** an independent PIT-correct reproduction existed *before unblinding*. A
+  second OOS read to manufacture that evidence would violate the seal → if absent, **do not approve the
+  6 retroactively** (§8).
+
 ---
 
 ## 1. Current state (unchanged from v2)
@@ -150,9 +170,17 @@ high cross-sectional IC ≠ long-only return, and the data that populates `signa
 `time_split.is_end`; test every fold/holdout ends ≤`is_end` and <`oos_start`) → §2.2/Phase 4. Q5 extend
 `TestingLedgerStore` + file-lock → §2.6. Q6 thresholds + auto-suggest/human-assign → §3.
 
-**Residual for round-3 (after a Phase-1 spec is drafted):**
-1. Exact `FrozenSelectionSet` field list + serialization (confirm the §2.8 payload is complete and
-   stable across runs).
-2. Migration of the 4 existing design-hash seal sites to `seal_key` without invalidating live seals.
-3. Whether the writer gate should hard-block ALL `approved` writes immediately (safest) or allow a
-   one-time governed backfill of the 6 OOS-validated expansion factors under the promotion gate.
+**Round-3 resolutions (Codex; design now converged):**
+1. **`FrozenSelectionSet`** = §2.8 payload **+ `candidate_pool_hash` + full `eval_protocol_hash`**,
+   strict serialization, provider IDs out-of-hash (stored as provenance). RESOLVED.
+2. **Seal migration order** (RESOLVED): (1) add `seal_key` to the seal-store schema, lazily fill from
+   `design_hash` inside `_load()`; (2) `claim_holdout_access()`/`list_events()` accept `seal_key`
+   (default `design_hash`); (3) add `seal_key` to `HoldoutContext` (fallback `design_hash`); (4) update
+   the 4 check sites (`steps.py`, `sealed_backtest_runner.py`, event + vectorized backstops); (5) ONLY
+   then have lifecycle code pass `FrozenSelectionSet.frozen_set_hash`. Old `design_hash` column kept.
+3. **Writer gate** (RESOLVED): hard-block all ungated `approved` writes now; 6 expansion factors enter
+   as `candidate`; `approved` only via the gated promotion path with a pre-unblinding independent PIT
+   reproduction — else not approved retroactively.
+
+**→ Next artifact: the Phase-1 implementation spec** (`factor_lifecycle_phase1_spec.md`) — file
+touch-list, test plan, the seal-migration order above, and the writer+reader gate wiring.
