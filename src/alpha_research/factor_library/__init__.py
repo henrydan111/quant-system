@@ -42,6 +42,18 @@ from .operators import (
     neutralize,
     winsorize,
 )
+from .selection import (
+    get_factors,
+    get_factor_selection,
+    sync_catalog_to_registry,
+    FactorSelection,
+    FactorRecord,
+    SANDBOX_STAGES,
+    FORMAL_STAGES,
+    FormalStageNotAllowedError,
+    RegistryNotSyncedError,
+    FactorSelectionDriftError,
+)
 
 __all__ = [
     # Catalog
@@ -54,6 +66,17 @@ __all__ = [
     'compute_spec_hash',
     'load_hypothesis_factor',
     'list_hypothesis_factors',
+    # Phase 3 — status-aware selection over the formal registry (sandbox-only)
+    'get_factors',
+    'get_factor_selection',
+    'sync_catalog_to_registry',
+    'FactorSelection',
+    'FactorRecord',
+    'SANDBOX_STAGES',
+    'FORMAL_STAGES',
+    'FormalStageNotAllowedError',
+    'RegistryNotSyncedError',
+    'FactorSelectionDriftError',
     # Computation
     'compute_factors',
     'add_composites',
