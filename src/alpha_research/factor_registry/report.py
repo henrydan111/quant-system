@@ -324,6 +324,9 @@ def build_factor_registry_review_html(
       <h3>Latest Evidence</h3>
       <div class="key-value"><span>Screening grade</span><strong>{_escape(row['latest_screening_grade'])}</strong></div>
       <div class="key-value"><span>5d Rank ICIR</span><strong>{_fmt_num(row['latest_rank_icir_5d'])}</strong></div>
+      <div class="key-value"><span>OOS Rank ICIR</span><strong>{_fmt_num(row['latest_oos_rank_icir'])}</strong></div>
+      <div class="key-value"><span>Long-only Sharpe (gross)</span><strong>{_fmt_num(row['latest_lo_sharpe_gross'])}</strong></div>
+      <div class="key-value"><span>Long-only viability</span><strong>{_escape(_fmt_text(row['long_only_viable_provisional']))} <span class="empty-inline">(provisional, gross)</span></strong></div>
       <div class="key-value"><span>Monotonic</span><strong>{_fmt_bool(row['latest_monotonic'])}</strong></div>
       <div class="key-value"><span>Best decay horizon</span><strong>{_fmt_int(row['latest_best_decay_horizon'])}</strong></div>
       <div class="key-value"><span>Validation pass count</span><strong>{_fmt_int(row['latest_validation_pass_count'])}</strong></div>
@@ -337,6 +340,8 @@ def build_factor_registry_review_html(
       <h3>Workflow Status</h3>
       <div class="key-value"><span>Recommended</span><strong>{_escape(recommended_status)}</strong></div>
       <div class="key-value"><span>Manual status</span><strong>{_escape(manual_status)}</strong></div>
+      <div class="key-value"><span>Approval validity</span><strong>{_escape(_fmt_text(row['approval_validity']))}</strong></div>
+      <div class="key-value"><span>Signal role</span><strong>{_escape(_fmt_text(row['signal_role']))} <span class="empty-inline">(suggested: {_escape(_fmt_text(row['signal_role_suggested']))})</span></strong></div>
       <div class="key-value"><span>Notes</span><div>{_escape(row['notes']) or '<span class="empty-inline">No notes</span>'}</div></div>
       <div class="key-value"><span>Deprecated reason</span><div>{_escape(row['deprecated_reason']) or '<span class="empty-inline">Not deprecated</span>'}</div></div>
       <div class="key-value"><span>Created at</span><strong>{_escape(row['created_at'])}</strong></div>

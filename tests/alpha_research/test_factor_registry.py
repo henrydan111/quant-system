@@ -467,6 +467,54 @@ class FactorRegistryTests(unittest.TestCase):
             ]
             self.assertEqual(len(ev2), 1)
 
+    def test_html_review_surfaces_phase2_columns(self):
+        # PR P2.4: the registry review HTML surfaces the LO metric / viability / signal-role.
+        with self.make_temp_dir("factor_registry_p2_html") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            html = store.render_html_review().read_text(encoding="utf-8")
+            for label in ("Long-only viability", "Long-only Sharpe (gross)", "OOS Rank ICIR",
+                          "Signal role", "Approval validity"):
+                self.assertIn(label, html)
+
+    def test_cli_import_revalidation_attaches_evidence(self):
+        # PR P2.4: the import-revalidation CLI attaches definition-bound, labeled
+        # evidence (and never changes status).
+        import subprocess
+        import sys
+
+        with self.make_temp_dir("factor_registry_p2_cli") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            store.save()
+            in_sync = store.factor_master[
+                store.factor_master["is_current"].fillna(False)
+            ].iloc[0]["factor_id"]
+            csv_path = Path(temp_dir) / "derived.csv"
+            pd.DataFrame([{
+                "factor": in_sync, "kind": "base", "is_rank_icir": 0.2, "oos_rank_icir": 0.31,
+                "sign_consistency": 0.8, "lo_excess_ann": 0.12, "lo_sharpe": 1.4, "lo_hit": 0.66,
+            }]).to_csv(csv_path, index=False)
+            cli = PROJECT_ROOT / "workspace" / "scripts" / "factor_registry_cli.py"
+            proc = subprocess.run(
+                [sys.executable, str(cli), "--registry-dir", str(temp_dir),
+                 "import-revalidation", "--derived-csv", str(csv_path), "--run-id", "rv_cli"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("attached", proc.stdout + proc.stderr)
+            reloaded = FactorRegistryStore(temp_dir)
+            ev = reloaded.factor_evidence[
+                (reloaded.factor_evidence["factor_id"] == in_sync)
+                & (reloaded.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev), 1)
+            self.assertEqual(ev.iloc[0]["evidence_class"], "historical_investigation")
+            # status untouched
+            self.assertEqual(reloaded.factor_master[
+                reloaded.factor_master["factor_id"] == in_sync
+            ].iloc[0]["status"], "draft")
+
     def test_save_generates_human_readable_html_review(self):
         with self.make_temp_dir("factor_registry_html") as temp_dir:
             store = FactorRegistryStore(temp_dir)
