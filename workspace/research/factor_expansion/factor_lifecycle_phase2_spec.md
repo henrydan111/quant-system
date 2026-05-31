@@ -100,3 +100,47 @@ imported rows carry `evidence_class=historical_investigation` + `formal_evidence
 boundary-integrity test proves the resolver/writer behavior is unchanged after an import; HTML surfaces
 the gross LO metric + signal-role; CLAUDE.md/AGENTS.md updated; full offline suite green. Then Phase 3
 (`get_factors` + staged catalog→registry cutover) begins.
+
+## Post-implementation GPT cross-review (PR #31) — integrated fixes
+GPT reviewed the IMPLEMENTED P2.1–P2.4 (ran the suite + real-data import) and returned a NO-GO with 5
+findings; all were verified against the code/real data and fixed on `factor-lifecycle-p2` (boundary
+re-confirmed: import attaches 171, all stay `draft`; status/approval_validity/definition_hash untouched;
+promotion gate never reads `factor_evidence`). The fixes harden `refresh_master_derived_fields`:
+1. **Provenance + role mirrors (finding 1).** Refresh now mirrors `latest_provider_build_id` /
+   `latest_calendar_policy_id` / `last_revalidated_at` from the latest bound `run_type=='revalidation'`
+   evidence ONLY (re-review fix: a plain `sync_catalog`, which writes a `catalog_sync` evidence row with
+   a blank `source_hash`, must NOT stamp `last_revalidated_at`), and sets
+   `signal_role_suggested='long_only_alpha'` for a `viable` factor (spec §P2.1) — NEVER touching the
+   authoritative `signal_role`.
+2. **No cross-row metric mixing (finding 2).** Viability is derived from the SINGLE latest evidence row
+   that carries an LO Sharpe, using THAT row's full `(sharpe, excess, hit)` tuple. A partial latest tuple
+   → `non_viable` (no resurrection of an older row's excess/hit). Replaces the per-metric
+   `_latest_non_null` that could combine a new Sharpe with stale excess/hit.
+3. **Definition-bound mirrors (finding 3).** Only evidence whose `source_hash` is blank
+   (legacy/non-LO) OR equals the row's CURRENT `definition_hash` drives the P2 mirrors. Stale-definition
+   evidence (nonblank `source_hash` ≠ current hash, e.g. a skip-drifted re-import) is ignored even though
+   it physically remains in `factor_evidence`.
+4. **`field_eligibility_snapshot_json` populated (finding 4).** Refresh snapshots each factor's
+   referenced `$fields` against the LIVE field-status registry at the strict `formal_validation` stage:
+   BASE factors → `{"resolved":true,"all_allowed":…,"fields":{…}}`; COMPOSITE / INDUSTRY_RELATIVE master
+   expressions are pseudo-expressions with no `$field` tokens → `{"resolved":false,
+   "reason":"transitive_deferred_…"}` (their transitive deps are resolved in Phase 3). **Fail-closed
+   contract:** `resolved=false` AND the empty string ('not computed') MUST be treated by any consumer as
+   NOT eligible — never `all_allowed`. Registry-load failure also yields `resolved=false` (never a false
+   `all_allowed=true`).
+5. **`retain_pct` deferred (finding 5).** Absent from every revalidation CSV and from
+   `screening_oos_report.csv`, and the OOS-screened factors are not yet registry rows. The column stays
+   schema-reserved/null and MUST NOT be read as populated until structured walk-forward retention inputs
+   are wired (later phase). Documented in `_read_revalidation_csv` + here.
+
+Regression tests (findings 1–4) added to `tests/alpha_research/test_factor_registry.py`; the finding-2 /
+finding-3 tests were proven to FAIL on the pre-fix logic (independent-latest / no-bind both derive
+`viable` where the fixed code derives `non_viable`). Full suite: 27 passed.
+
+**GPT re-review (commit `75c2e45`) — 1 residual must-fix, then GO.** GPT confirmed findings 1–5 closed but
+found that `last_revalidated_at` was set from ANY bound row, so a plain `sync_catalog(record_run=True)`
+(which writes a `catalog_sync` evidence row, blank `source_hash` → passes the carve-out) stamped all 171
+factors "revalidated" at the sync time. Fixed by scoping the P2 evidence-mirrors to `run_type=='revalidation'`
+rows only; added `test_sync_catalog_alone_leaves_revalidation_mirrors_blank` (proven to fail pre-fix: 171
+non-blank). Full suite after the re-review fix: **28 passed**; real-data probe: sync→0 non-blank,
+import_revalidation→171 (provider mirror = pbX).

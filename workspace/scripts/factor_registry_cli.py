@@ -47,6 +47,18 @@ def build_parser() -> argparse.ArgumentParser:
     research_parser = subparsers.add_parser("import-research", help="Import a completed research run")
     research_parser.add_argument("--run-dir", required=True, help="Research run directory")
 
+    reval_parser = subparsers.add_parser(
+        "import-revalidation",
+        help="Import walk-forward/OOS/gross-long-only metrics from revalidation CSVs "
+             "(evidence ONLY; definition-bound; never changes status)",
+    )
+    reval_parser.add_argument("--catalog-csv", default=None, help="catalog_revalidation_status.csv (base factors)")
+    reval_parser.add_argument("--derived-csv", default=None, help="derived_revalidation_status.csv (carries the GROSS long-only metric)")
+    reval_parser.add_argument("--oos-report-csv", default=None, help="screening_oos_report.csv (ls_sharpe -> oos_ls_sharpe)")
+    reval_parser.add_argument("--provider-build-id", default="", help="provider_build_id provenance")
+    reval_parser.add_argument("--calendar-policy-id", default="", help="calendar_policy_id provenance")
+    reval_parser.add_argument("--run-id", default="revalidation_import", help="evidence run_id (idempotency key)")
+
     status_parser = subparsers.add_parser("set-status", help="Manually change the status of a factor")
     status_parser.add_argument("--factor", required=True, help="Factor id")
     status_parser.add_argument(
@@ -119,6 +131,30 @@ def main(argv: list[str] | None = None) -> int:
             result["factor_count"],
             result["definition_binding"],
         )
+        return 0
+
+    if args.command == "import-revalidation":
+        result = store.import_revalidation(
+            catalog_csv=args.catalog_csv,
+            derived_csv=args.derived_csv,
+            oos_report_csv=args.oos_report_csv,
+            provider_build_id=args.provider_build_id,
+            calendar_policy_id=args.calendar_policy_id,
+            run_id=args.run_id,
+        )
+        store.save()
+        logger.info(
+            "Imported revalidation run %s: %s attached, %s skipped (drift), %s skipped (unknown). "
+            "Evidence only — no status changes.",
+            result["run_id"],
+            len(result["attached"]),
+            len(result["skipped_drift"]),
+            len(result["skipped_unknown"]),
+        )
+        if result["skipped_drift"]:
+            logger.info("  skipped (definition drift): %s", ", ".join(result["skipped_drift"]))
+        if result["skipped_unknown"]:
+            logger.info("  skipped (not in registry): %s", ", ".join(result["skipped_unknown"]))
         return 0
 
     if args.command == "set-status":

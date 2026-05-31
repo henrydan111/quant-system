@@ -314,6 +314,334 @@ class FactorRegistryTests(unittest.TestCase):
             ].iloc[0]
             self.assertEqual(row["status"], "draft")
 
+    def test_phase2_schema_columns_present_with_fail_closed_defaults(self):
+        # PR P2.1: the evidence/metadata columns exist; new rows get fail-closed
+        # defaults; status is untouched (the Phase-1 boundary).
+        with self.make_temp_dir("factor_registry_p2_schema") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            for col in ("signal_role", "signal_role_suggested", "long_only_viable_provisional",
+                        "field_eligibility_snapshot_json", "latest_provider_build_id",
+                        "expected_direction", "last_revalidated_at"):
+                self.assertIn(col, store.factor_master.columns)
+            for col in ("lo_sharpe_gross", "lo_excess_ann_gross", "oos_ls_sharpe", "retain_pct",
+                        "evidence_class", "formal_evidence_eligible", "source_hash", "provider_build_id"):
+                self.assertIn(col, store.factor_evidence.columns)
+            current = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertEqual(len(current), 171)  # P2.1 changes no row count
+            row = current.iloc[0]
+            self.assertEqual(row["signal_role"], "unassigned")
+            self.assertEqual(row["signal_role_suggested"], "unassigned")
+            self.assertEqual(row["long_only_viable_provisional"], "non_viable")
+            self.assertEqual(row["status"], "draft")  # P2.1 promotes/changes nothing
+
+    def test_phase2_metadata_backfills_fail_closed_on_load(self):
+        # A pre-P2.1 on-disk registry (no Phase-2 columns) loads back with the
+        # fail-closed defaults via _normalize_phase2_metadata.
+        with self.make_temp_dir("factor_registry_p2_backfill") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            legacy = store.factor_master.drop(columns=[
+                "signal_role", "signal_role_suggested", "long_only_viable_provisional",
+            ])
+            legacy.to_parquet(store.factor_master_path, index=False)
+
+            reloaded = FactorRegistryStore(temp_dir)
+            row = reloaded.factor_master[
+                reloaded.factor_master["is_current"].fillna(False)
+            ].iloc[0]
+            self.assertEqual(row["signal_role"], "unassigned")
+            self.assertEqual(row["signal_role_suggested"], "unassigned")
+            self.assertEqual(row["long_only_viable_provisional"], "non_viable")
+
+    def test_derive_long_only_viable_boundaries(self):
+        # PR P2.2: the fail-closed decision order at its thresholds.
+        from src.alpha_research.factor_registry.store import _derive_long_only_viable
+        self.assertEqual(_derive_long_only_viable(None, 0.1, 0.7), "non_viable")   # missing
+        self.assertEqual(_derive_long_only_viable(1.0, 0.1, 0.60), "viable")       # exactly at thresholds
+        self.assertEqual(_derive_long_only_viable(1.4, 0.12, 0.66), "viable")
+        self.assertEqual(_derive_long_only_viable(1.2, 0.1, 0.59), "review_only")  # high sharpe, low hit
+        self.assertEqual(_derive_long_only_viable(0.7, 0.1, 0.9), "review_only")   # mid sharpe
+        self.assertEqual(_derive_long_only_viable(0.49, 0.1, 0.9), "non_viable")   # sharpe < 0.5
+        self.assertEqual(_derive_long_only_viable(2.0, -0.01, 0.9), "non_viable")  # excess < 0
+        self.assertEqual(_derive_long_only_viable(2.0, 0.0, 0.9), "non_viable")    # excess == 0
+
+    def test_refresh_derives_long_only_viable_from_evidence(self):
+        # PR P2.2: refresh reads the latest GROSS LO evidence and derives
+        # long_only_viable_provisional + the latest_lo_sharpe_gross/oos mirrors;
+        # status is never touched; a factor with no LO evidence stays non_viable.
+        from src.alpha_research.factor_registry.store import (
+            _apply_schema, FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+        )
+        with self.make_temp_dir("factor_registry_p2_derive") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            target = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]
+            fid, ver = target["factor_id"], int(target["version"])
+            ev = _apply_schema(pd.DataFrame([{
+                "run_id": "rv1", "run_type": "revalidation", "factor_id": fid, "version": ver,
+                "is_current_at_import": True, "evidence_time": "2026-05-01 00:00:00",
+                "lo_sharpe_gross": 1.4, "lo_excess_ann_gross": 0.12, "lo_hit": 0.66,
+                "oos_rank_icir": 0.31, "evidence_class": "historical_investigation",
+                "formal_evidence_eligible": False,
+            }]), FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA)
+            store.factor_evidence = pd.concat([store.factor_evidence, ev], ignore_index=True)
+            store.refresh_master_derived_fields()
+
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["long_only_viable_provisional"], "viable")
+            self.assertAlmostEqual(float(row["latest_lo_sharpe_gross"]), 1.4)
+            self.assertAlmostEqual(float(row["latest_oos_rank_icir"]), 0.31)
+            self.assertEqual(row["status"], "draft")  # P2.2 derives evidence, never status
+            other = store.factor_master[
+                (store.factor_master["factor_id"] != fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(other["long_only_viable_provisional"], "non_viable")
+
+    def test_import_revalidation_definition_bound_evidence_only(self):
+        # PR P2.3: import attaches evidence ONLY to in-sync factors (registry hash ==
+        # current catalog hash), SKIPS drifted + unknown factors (fail-closed, never by
+        # name), labels rows historical_investigation / formal_evidence_eligible=False,
+        # never touches status, derives viability, and is idempotent.
+        with self.make_temp_dir("factor_registry_p2_import") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            current = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            in_sync = current.iloc[0]["factor_id"]
+            drift_fid = current.iloc[1]["factor_id"]
+            # corrupt the drift factor's registry definition_hash -> drift vs catalog
+            idx = store.factor_master.index[
+                (store.factor_master["factor_id"] == drift_fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ][0]
+            store.factor_master.at[idx, "definition_hash"] = "deadbeef" * 8
+
+            csv_path = Path(temp_dir) / "derived.csv"
+            pd.DataFrame([
+                {"factor": in_sync, "kind": "base", "is_rank_icir": 0.2, "oos_rank_icir": 0.31,
+                 "sign_consistency": 0.8, "lo_excess_ann": 0.12, "lo_sharpe": 1.4, "lo_hit": 0.66},
+                {"factor": drift_fid, "kind": "base", "is_rank_icir": 0.1, "oos_rank_icir": 0.1,
+                 "sign_consistency": 0.7, "lo_excess_ann": 0.05, "lo_sharpe": 0.6, "lo_hit": 0.55},
+                {"factor": "totally_unknown_factor", "kind": "base", "is_rank_icir": 0.1,
+                 "oos_rank_icir": 0.1, "sign_consistency": 0.7, "lo_excess_ann": 0.0,
+                 "lo_sharpe": 0.0, "lo_hit": 0.0},
+            ]).to_csv(csv_path, index=False)
+
+            report = store.import_revalidation(derived_csv=csv_path, provider_build_id="pb1", run_id="rv_test")
+            self.assertIn(in_sync, report["attached"])
+            self.assertIn(drift_fid, report["skipped_drift"])
+            self.assertIn("totally_unknown_factor", report["skipped_unknown"])
+
+            ev = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == in_sync)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev), 1)
+            erow = ev.iloc[0]
+            self.assertEqual(erow["evidence_class"], "historical_investigation")
+            self.assertEqual(bool(erow["formal_evidence_eligible"]), False)
+            self.assertAlmostEqual(float(erow["lo_sharpe_gross"]), 1.4)
+            self.assertTrue(str(erow["source_hash"]))  # bound to the definition_hash
+
+            mrow = store.factor_master[
+                (store.factor_master["factor_id"] == in_sync)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(mrow["long_only_viable_provisional"], "viable")
+            self.assertEqual(mrow["status"], "draft")  # P2.3 writes evidence, never status
+            # the drifted factor got NO evidence
+            self.assertTrue(store.factor_evidence[
+                (store.factor_evidence["factor_id"] == drift_fid)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ].empty)
+
+            # idempotent: re-import keeps exactly one evidence row for in_sync
+            store.import_revalidation(derived_csv=csv_path, provider_build_id="pb1", run_id="rv_test")
+            ev2 = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == in_sync)
+                & (store.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev2), 1)
+
+    def test_refresh_mirrors_provenance_and_suggests_role_for_viable(self):
+        # GPT PR-#31 finding 1: refresh mirrors provider/calendar/last_revalidated_at
+        # from the bound evidence, and a viable factor gets signal_role_suggested=
+        # long_only_alpha — while the authoritative signal_role stays unassigned.
+        with self.make_temp_dir("factor_registry_p2_f1") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            in_sync = store.factor_master[
+                store.factor_master["is_current"].fillna(False)
+            ].iloc[0]["factor_id"]
+            csv_path = Path(temp_dir) / "derived.csv"
+            pd.DataFrame([{
+                "factor": in_sync, "kind": "base", "is_rank_icir": 0.2, "oos_rank_icir": 0.31,
+                "sign_consistency": 0.8, "lo_excess_ann": 0.12, "lo_sharpe": 1.4, "lo_hit": 0.66,
+            }]).to_csv(csv_path, index=False)
+            store.import_revalidation(
+                derived_csv=csv_path, provider_build_id="pbZ", calendar_policy_id="calZ",
+                run_id="rv_f1",
+            )
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == in_sync)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["long_only_viable_provisional"], "viable")
+            self.assertEqual(row["latest_provider_build_id"], "pbZ")
+            self.assertEqual(row["latest_calendar_policy_id"], "calZ")
+            self.assertTrue(str(row["last_revalidated_at"]).strip())
+            self.assertEqual(row["signal_role_suggested"], "long_only_alpha")
+            self.assertEqual(row["signal_role"], "unassigned")  # authoritative role untouched
+
+    def test_sync_catalog_alone_leaves_revalidation_mirrors_blank(self):
+        # GPT PR-#31 re-review: a plain sync_catalog writes a catalog_sync evidence row
+        # (blank source_hash) — it must NOT stamp last_revalidated_at / provider /
+        # calendar mirrors, which reflect REVALIDATION evidence only (run_type ==
+        # "revalidation"). (On the pre-fix any-bound-row code this found the sync
+        # timestamp on all 171 -> this test fails there.)
+        with self.make_temp_dir("factor_registry_p2_revalonly") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=True, generated_at="2026-04-04 21:00:00")
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertEqual(len(cur), 171)
+            self.assertTrue((cur["last_revalidated_at"].astype(str).str.strip() == "").all())
+            self.assertTrue((cur["latest_provider_build_id"].astype(str).str.strip() == "").all())
+            self.assertTrue((cur["latest_calendar_policy_id"].astype(str).str.strip() == "").all())
+
+    def test_refresh_no_cross_row_metric_mixing(self):
+        # GPT PR-#31 finding 2: a newer PARTIAL LO row (Sharpe only) must NOT inherit an
+        # older row's excess/hit. Derive from the single latest LO-bearing row's tuple;
+        # a partial latest tuple -> non_viable. (On the pre-fix independent-latest code
+        # this asserted "viable" — this test fails there.)
+        from src.alpha_research.factor_registry.store import (
+            _apply_schema, FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+        )
+        with self.make_temp_dir("factor_registry_p2_f2") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            target = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]
+            fid, ver, dh = target["factor_id"], int(target["version"]), target["definition_hash"]
+            rows = _apply_schema(pd.DataFrame([
+                {"run_id": "old", "run_type": "revalidation", "factor_id": fid, "version": ver,
+                 "is_current_at_import": True, "evidence_time": "2026-05-01 00:00:00", "source_hash": dh,
+                 "lo_sharpe_gross": 1.4, "lo_excess_ann_gross": 0.12, "lo_hit": 0.66},   # complete -> viable
+                {"run_id": "new", "run_type": "revalidation", "factor_id": fid, "version": ver,
+                 "is_current_at_import": True, "evidence_time": "2026-06-01 00:00:00", "source_hash": dh,
+                 "lo_sharpe_gross": 1.9, "lo_excess_ann_gross": None, "lo_hit": None},      # partial!
+            ]), FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA)
+            store.factor_evidence = pd.concat([store.factor_evidence, rows], ignore_index=True)
+            store.refresh_master_derived_fields()
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["long_only_viable_provisional"], "non_viable")
+            self.assertAlmostEqual(float(row["latest_lo_sharpe_gross"]), 1.9)  # latest row's Sharpe
+
+    def test_refresh_ignores_stale_definition_evidence(self):
+        # GPT PR-#31 finding 3: evidence whose nonblank source_hash != the row's CURRENT
+        # definition_hash is ignored (stale-definition guard), so it cannot drive
+        # viability even though it physically remains in factor_evidence. (On the pre-fix
+        # code this asserted "viable" — this test fails there.)
+        from src.alpha_research.factor_registry.store import (
+            _apply_schema, FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+        )
+        with self.make_temp_dir("factor_registry_p2_f3") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            target = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]
+            fid, ver, dh = target["factor_id"], int(target["version"]), target["definition_hash"]
+            ev = _apply_schema(pd.DataFrame([{
+                "run_id": "rv", "run_type": "revalidation", "factor_id": fid, "version": ver,
+                "is_current_at_import": True, "evidence_time": "2026-05-01 00:00:00", "source_hash": dh,
+                "lo_sharpe_gross": 1.4, "lo_excess_ann_gross": 0.12, "lo_hit": 0.66,
+            }]), FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA)
+            store.factor_evidence = pd.concat([store.factor_evidence, ev], ignore_index=True)
+            store.refresh_master_derived_fields()
+            idx = store.factor_master.index[
+                (store.factor_master["factor_id"] == fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ][0]
+            self.assertEqual(store.factor_master.at[idx, "long_only_viable_provisional"], "viable")
+            # registry definition drifts (nonblank mismatch vs the evidence source_hash)
+            store.factor_master.at[idx, "definition_hash"] = "cafe" * 16
+            store.refresh_master_derived_fields()
+            self.assertEqual(store.factor_master.at[idx, "long_only_viable_provisional"], "non_viable")
+            self.assertTrue(pd.isna(store.factor_master.at[idx, "latest_lo_sharpe_gross"]))
+
+    def test_field_eligibility_snapshot_base_and_composite(self):
+        # GPT PR-#31 finding 4: refresh populates field_eligibility_snapshot_json from the
+        # live registry — BASE factors resolve their $fields (resolved=true); COMPOSITE /
+        # INDUSTRY_RELATIVE are fail-closed resolved=false (transitive deps deferred to P3).
+        with self.make_temp_dir("factor_registry_p2_f4") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            base_snap = json.loads(cur[cur["factor_kind"] == "base"].iloc[0]["field_eligibility_snapshot_json"])
+            self.assertTrue(base_snap["resolved"])
+            self.assertIn("all_allowed", base_snap)
+            self.assertIsInstance(base_snap["fields"], dict)
+            self.assertTrue(base_snap["fields"])  # a base factor references at least one $field
+            for kind in ("composite", "industry_relative"):
+                rows = cur[cur["factor_kind"] == kind]
+                if rows.empty:
+                    continue
+                comp_snap = json.loads(rows.iloc[0]["field_eligibility_snapshot_json"])
+                self.assertFalse(comp_snap["resolved"])  # fail-closed: never all_allowed=true
+                self.assertNotIn("all_allowed", comp_snap)
+
+    def test_html_review_surfaces_phase2_columns(self):
+        # PR P2.4: the registry review HTML surfaces the LO metric / viability / signal-role.
+        with self.make_temp_dir("factor_registry_p2_html") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            html = store.render_html_review().read_text(encoding="utf-8")
+            for label in ("Long-only viability", "Long-only Sharpe (gross)", "OOS Rank ICIR",
+                          "Signal role", "Approval validity"):
+                self.assertIn(label, html)
+
+    def test_cli_import_revalidation_attaches_evidence(self):
+        # PR P2.4: the import-revalidation CLI attaches definition-bound, labeled
+        # evidence (and never changes status).
+        import subprocess
+        import sys
+
+        with self.make_temp_dir("factor_registry_p2_cli") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            store.save()
+            in_sync = store.factor_master[
+                store.factor_master["is_current"].fillna(False)
+            ].iloc[0]["factor_id"]
+            csv_path = Path(temp_dir) / "derived.csv"
+            pd.DataFrame([{
+                "factor": in_sync, "kind": "base", "is_rank_icir": 0.2, "oos_rank_icir": 0.31,
+                "sign_consistency": 0.8, "lo_excess_ann": 0.12, "lo_sharpe": 1.4, "lo_hit": 0.66,
+            }]).to_csv(csv_path, index=False)
+            cli = PROJECT_ROOT / "workspace" / "scripts" / "factor_registry_cli.py"
+            proc = subprocess.run(
+                [sys.executable, str(cli), "--registry-dir", str(temp_dir),
+                 "import-revalidation", "--derived-csv", str(csv_path), "--run-id", "rv_cli"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("attached", proc.stdout + proc.stderr)
+            reloaded = FactorRegistryStore(temp_dir)
+            ev = reloaded.factor_evidence[
+                (reloaded.factor_evidence["factor_id"] == in_sync)
+                & (reloaded.factor_evidence["run_type"] == "revalidation")
+            ]
+            self.assertEqual(len(ev), 1)
+            self.assertEqual(ev.iloc[0]["evidence_class"], "historical_investigation")
+            # status untouched
+            self.assertEqual(reloaded.factor_master[
+                reloaded.factor_master["factor_id"] == in_sync
+            ].iloc[0]["status"], "draft")
+
     def test_save_generates_human_readable_html_review(self):
         with self.make_temp_dir("factor_registry_html") as temp_dir:
             store = FactorRegistryStore(temp_dir)
