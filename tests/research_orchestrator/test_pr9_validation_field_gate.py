@@ -728,6 +728,28 @@ class TestPR13DefinitionBindingGate:
         # the drift check must fire BEFORE the field gate / any compute
         field_gate.assert_not_called()
 
+    def test_missing_definition_hash_fails_closed(self, tmp_path: Path) -> None:
+        # GPT cross-review: a formal entry permitted into validation with NO registry
+        # definition_hash (malformed/legacy row) must be treated as drift (fail-closed)
+        # and raise BEFORE the field gate — NOT silently skipped.
+        from src.research_orchestrator.validation_steps import (
+            FactorDefinitionDriftError,
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_context(tmp_path)
+        field_gate = MagicMock()
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(""),  # malformed: empty definition_hash
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            field_gate,
+        ):
+            with pytest.raises(FactorDefinitionDriftError, match="drifted"):
+                handle_validation_object_resolver(context)
+        field_gate.assert_not_called()
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Formal-factor compatibility test (GPT 5.5 Pro round-2 review #2)
