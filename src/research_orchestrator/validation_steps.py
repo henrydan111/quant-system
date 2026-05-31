@@ -26,6 +26,14 @@ from src.research_orchestrator.dag import StepExecutionContext, StepExecutionRes
 from src.research_orchestrator.runtime import write_json
 
 
+class FactorDefinitionDriftError(RuntimeError):
+    """Raised when a resolved formal factor's STORED registry definition_hash no
+    longer matches the CURRENT code catalog's hash for that factor (PR P1.3). The
+    registry row is stale vs ``catalog.py``; formal validation refuses BEFORE any
+    IS/OOS compute so a backtest never runs against a definition the registry can
+    no longer attest."""
+
+
 def _stub_outputs(context: StepExecutionContext, **extras: Any) -> StepExecutionResult:
     """Shared stub helper: write a small status JSON in the step dir and
     emit a StepExecutionResult with status='completed'."""
@@ -138,6 +146,15 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
             "candidate-stage factors, set prescription.allow_candidate_components=True."
         )
 
+    # PR P1.3: definition-binding hard-fail. Before the field gate or ANY compute,
+    # confirm every resolved formal factor's registry definition_hash still matches
+    # the current code catalog (re-uses the registry's own hash algorithm). A drift
+    # means the registry row is stale vs catalog.py -> refuse now so a backtest never
+    # runs against a definition the registry can no longer attest.
+    definition_binding_report = _assert_no_definition_drift(
+        hub, raw_resolution, artifact_label=str(hypothesis.hypothesis_id)
+    )
+
     # PR 9 of 2026-05-26 freeze plan: field-dependency gate.
     # After the resolver confirms every prescribed component lives in the
     # formal factor layer, walk each resolved factor's Qlib expression and
@@ -180,9 +197,58 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         # PR 9b: separate report for universe raw fields so reviewers can
         # see exactly which non-factor $fields were authorized.
         "universe_field_dependency_report": universe_field_dependency_report,
+        # PR P1.3: record the definition-binding check (registry hash == current
+        # catalog hash for every resolved formal factor).
+        "definition_binding_report": definition_binding_report,
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _assert_no_definition_drift(
+    hub: Any,
+    raw_resolution: dict[str, Any],
+    *,
+    artifact_label: str,
+) -> dict[str, Any]:
+    """PR P1.3 definition-binding hard-fail. Every resolved factor-registry factor's
+    STORED ``definition_hash`` must equal the CURRENT code catalog's hash (same
+    algorithm — ``current_catalog_definition_hashes`` reuses the registry's
+    ``_build_catalog_snapshots``). A mismatch means the registry row's recorded
+    expression is stale vs ``catalog.py``; raise :class:`FactorDefinitionDriftError`
+    BEFORE any IS/OOS compute. Returns a small report for the step outputs.
+
+    Only formal-layer / ``factor_registry_*`` entries are bound to the factor
+    catalog; candidate-registry / signal / model entries are skipped.
+    """
+    current = hub.factor_store.current_catalog_definition_hashes()
+    drifted: list[dict[str, Any]] = []
+    checked = 0
+    for entry in raw_resolution.get("resolved_objects", []):
+        layer = str(entry.get("source_layer") or "")
+        if not (layer == "formal" or layer.startswith("factor_registry")):
+            continue
+        factor_id = str(entry.get("canonical_id") or "")
+        registry_hash = str(entry.get("definition_hash") or "")
+        if not factor_id or not registry_hash:
+            continue
+        checked += 1
+        code_hash = current.get(factor_id)
+        if code_hash is None:
+            drifted.append({"factor": factor_id, "registry_hash": registry_hash,
+                            "code_hash": None, "reason": "absent from current catalog"})
+        elif code_hash != registry_hash:
+            drifted.append({"factor": factor_id, "registry_hash": registry_hash,
+                            "code_hash": code_hash, "reason": "definition_hash mismatch"})
+    if drifted:
+        names = ", ".join(d["factor"] for d in drifted)
+        raise FactorDefinitionDriftError(
+            f"Definition-binding gate ({artifact_label}): {len(drifted)} factor(s) drifted "
+            f"between the registry and the current catalog: {names}. The registry's recorded "
+            f"definition_hash no longer matches catalog.py — re-sync the factor registry "
+            f"(sync_catalog) before formal validation. Details: {drifted}"
+        )
+    return {"checked": checked, "drifted": [], "stage": "formal_validation"}
 
 
 def _validate_factor_field_dependencies(

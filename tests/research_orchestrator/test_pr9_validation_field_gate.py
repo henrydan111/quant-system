@@ -643,6 +643,92 @@ class TestPR12FormalAllowSet:
         assert "field_dependency_report" in result.outputs
 
 
+class TestPR13DefinitionBindingGate:
+    """PR P1.3: handle_validation_object_resolver hard-fails with
+    FactorDefinitionDriftError BEFORE the field gate / any compute when a resolved
+    formal factor's registry definition_hash no longer matches the current code
+    catalog (registry row stale vs catalog.py)."""
+
+    def _make_context(self, tmp_path: Path):
+        from src.research_orchestrator.hypothesis import PrescribedComponent
+
+        prescription = MagicMock(
+            components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
+            allow_candidate_components=False,
+        )
+        hypothesis = MagicMock(prescription=prescription, hypothesis_id="hyp_pr13_defbind")
+        context = MagicMock()
+        context.request.hypothesis = hypothesis
+        context.step_dir = tmp_path / "step"
+        context.step_dir.mkdir(parents=True)
+        context.registry_dirs = {
+            "factor_registry_dir": str(tmp_path / "factor_registry"),
+            "candidate_registry_dir": str(tmp_path / "candidate_registry"),
+            "signal_registry_dir": str(tmp_path / "signal_registry"),
+            "model_registry_dir": str(tmp_path / "model_registry"),
+            "strategy_registry_dir": str(tmp_path / "strategy_registry"),
+        }
+        context.profile.profile_id = "hypothesis_validation"
+        return context
+
+    @staticmethod
+    def _code_hash(tmp_path: Path, factor_id: str) -> str:
+        from src.alpha_research.factor_registry import FactorRegistryStore
+
+        return FactorRegistryStore(str(tmp_path / "hashsrc")).current_catalog_definition_hashes()[factor_id]
+
+    @staticmethod
+    def _payload(definition_hash: str):
+        return {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": "formal",
+                    "canonical_id": "qual_roe",
+                    "definition_hash": definition_hash,
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+
+    def test_matching_definition_hash_passes(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        context = self._make_context(tmp_path)
+        good_hash = self._code_hash(tmp_path, "qual_roe")
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload(good_hash),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ):
+            result = handle_validation_object_resolver(context)
+        report = result.outputs["definition_binding_report"]
+        assert report["checked"] == 1
+        assert report["drifted"] == []
+
+    def test_drifted_definition_hash_raises_before_field_gate(self, tmp_path: Path) -> None:
+        from src.research_orchestrator.validation_steps import (
+            FactorDefinitionDriftError,
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_context(tmp_path)
+        field_gate = MagicMock()
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=self._payload("0" * 64),
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            field_gate,
+        ):
+            with pytest.raises(FactorDefinitionDriftError, match="drifted"):
+                handle_validation_object_resolver(context)
+        # the drift check must fire BEFORE the field gate / any compute
+        field_gate.assert_not_called()
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Formal-factor compatibility test (GPT 5.5 Pro round-2 review #2)
 # ─────────────────────────────────────────────────────────────────────────

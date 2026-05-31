@@ -265,6 +265,25 @@ class FactorRegistryTests(unittest.TestCase):
             self.assertEqual(store.export_current(out, status="approved"), 1)
             self.assertEqual(store.export_current(out, status="approved", include_invalid=True), 2)
 
+    def test_current_catalog_definition_hashes_round_trip(self):
+        # PR P1.3: the hash map from the current code catalog must equal the
+        # definition_hash sync_catalog wrote for every current row (base / composite /
+        # industry-relative) — the apples-to-apples parity the drift gate relies on.
+        with self.make_temp_dir("factor_registry_defhash") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            code = store.current_catalog_definition_hashes()
+            current = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertEqual(len(code), len(current))
+            mismatches = [
+                r["factor_id"] for _, r in current.iterrows()
+                if code.get(r["factor_id"]) != r["definition_hash"]
+            ]
+            self.assertEqual(mismatches, [])
+            self.assertTrue(
+                {"base", "composite", "industry_relative"}.issubset(set(current["factor_kind"]))
+            )
+
     def test_cli_set_status_approved_without_evidence_exits_2(self):
         # PR P1.1: the registry CLI must NOT be an unaudited approval door. Without
         # --promotion-evidence-json, set-status --status approved exits 2 and never

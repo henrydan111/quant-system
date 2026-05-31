@@ -1165,6 +1165,16 @@ class FactorRegistryStore:
 
         return snapshots
 
+    def current_catalog_definition_hashes(self) -> dict[str, str]:
+        """Return ``{factor_id: definition_hash}`` computed from the CURRENT code
+        catalog using the SAME snapshot/hash algorithm ``sync_catalog`` writes
+        (``_build_catalog_snapshots``). This is the parity primitive for the P1.3
+        definition-binding gate: comparing a registry row's stored ``definition_hash``
+        against this map detects drift between the registry and ``catalog.py`` with an
+        apples-to-apples hash (covers base / composite / industry-relative). Read-only
+        — it recomputes from code and does NOT mutate ``factor_master``."""
+        return {snap.factor_id: snap.definition_hash for snap in self._build_catalog_snapshots()}
+
     def _upsert_snapshot(self, snapshot: FactorDefinitionSnapshot, generated_at: str) -> None:
         factor_view = self.factor_master[self.factor_master["factor_id"] == snapshot.factor_id]
         current_view = factor_view[factor_view["is_current"].fillna(False)]
