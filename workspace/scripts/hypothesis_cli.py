@@ -167,8 +167,19 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_parser.add_argument("--reviewer", required=True, help="Reviewer name")
     quarantine_parser.add_argument("--reason", required=True, help="Quarantine reason")
 
-    verify_parser = subparsers.add_parser("verify-seal", help="Show holdout seal events for one design hash")
-    verify_parser.add_argument("design_hash", help="Design hash")
+    verify_parser = subparsers.add_parser("verify-seal", help="Show holdout seal events for one design hash or seal key")
+    verify_parser.add_argument(
+        "design_hash", nargs="?", default=None,
+        help="Design hash (provenance; back-compat). Provide this OR --seal-key.",
+    )
+    verify_parser.add_argument(
+        "--seal-key", default=None,
+        help=(
+            "Seal key (PR P1.4: the seal identity, e.g. a frozen_set_hash). Takes "
+            "precedence over the positional design_hash. Old design_hash-only seals "
+            "are resolvable either way (the store backfills seal_key=design_hash)."
+        ),
+    )
     verify_parser.add_argument(
         "--seal-dir",
         default=str(PROJECT_ROOT / "data" / "holdout_seals"),
@@ -355,12 +366,25 @@ def _record_gate_decision(
 
 
 def _verify_seal(args: argparse.Namespace) -> int:
+    # PR P1.4: query by --seal-key (the seal identity, e.g. a frozen_set_hash) when
+    # given, else by the positional design_hash (back-compat — the store backfills
+    # seal_key=design_hash, so old design_hash-only seals resolve either way).
+    seal_key = str(getattr(args, "seal_key", None) or "").strip().lower()
     design_hash = str(args.design_hash or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", design_hash):
-        print(f"Malformed design hash: {args.design_hash}", file=sys.stderr)
-        return 2
+    if seal_key:
+        if not re.fullmatch(r"[0-9a-f]{64}", seal_key):
+            print(f"Malformed seal key: {args.seal_key}", file=sys.stderr)
+            return 2
+        query = {"seal_key": seal_key}
+        label = f"seal_key={seal_key}"
+    else:
+        if not re.fullmatch(r"[0-9a-f]{64}", design_hash):
+            print(f"Malformed design hash: {args.design_hash}", file=sys.stderr)
+            return 2
+        query = {"design_hash": design_hash}
+        label = f"design_hash={design_hash}"
     store = HoldoutSealStore(Path(args.seal_dir).resolve())
-    events = store.list_events(design_hash=design_hash)
+    events = store.list_events(**query)
     oos_events = events[events["stage"].astype(str) == "oos_test"].copy() if not events.empty else events
     print(oos_events.to_string(index=False) if not oos_events.empty else "No OOS access recorded.")
     expect_claims = getattr(args, "expect_claims", None)
@@ -370,8 +394,7 @@ def _verify_seal(args: argparse.Namespace) -> int:
         actual = 0 if oos_events.empty else int(len(oos_events))
         if actual != int(expect_claims):
             print(
-                f"--expect-claims={expect_claims} but found {actual} OOS claim(s) "
-                f"for design_hash={design_hash}",
+                f"--expect-claims={expect_claims} but found {actual} OOS claim(s) for {label}",
                 file=sys.stderr,
             )
             return 1

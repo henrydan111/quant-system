@@ -154,7 +154,7 @@ class TestHoldoutSealConcurrency:
         assert len(failures) == 7
         # All failures must be the explicit seal-already-claimed message.
         for _, _, msg in failures:
-            assert "Holdout sealed for design_hash" in (msg or "")
+            assert "Holdout sealed for" in (msg or "")
 
         # Verify the manifest contains exactly one event for this hash.
         from src.research_orchestrator.holdout_seal import HoldoutSealStore

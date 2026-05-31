@@ -17,6 +17,7 @@ SEAL_COLUMNS = [
     "event_id",
     "recorded_at",
     "design_hash",
+    "seal_key",
     "hypothesis_id",
     "structural_family",
     "profile_id",
@@ -29,6 +30,10 @@ SEAL_SCHEMA = {
     "event_id": "string",
     "recorded_at": "string",
     "design_hash": "string",
+    # PR P1.4: the seal is keyed by seal_key (defaults to design_hash for
+    # back-compat). A FrozenSelectionSet-driven OOS run passes frozen_set_hash so the
+    # holdout budget is spent per frozen selection set, not per mutable design_hash.
+    "seal_key": "string",
     "hypothesis_id": "string",
     "structural_family": "string",
     "profile_id": "string",
@@ -78,10 +83,23 @@ class HoldoutSealStore:
         frame = frame[SEAL_COLUMNS].copy()
         for column, dtype in SEAL_SCHEMA.items():
             frame[column] = frame[column].astype(dtype)
+        # PR P1.4 back-compat: rows written before seal_key existed inherit
+        # seal_key = design_hash, so an old design_hash-keyed seal still blocks a
+        # re-claim under the default (seal_key defaults to design_hash). No mixed
+        # write-seal_key / read-design_hash window: every read goes through here.
+        if not frame.empty:
+            blank = frame["seal_key"].isna() | (
+                frame["seal_key"].astype("string").str.strip().fillna("") == ""
+            )
+            frame.loc[blank, "seal_key"] = frame.loc[blank, "design_hash"]
         return frame
 
-    def list_events(self, design_hash: str | None = None) -> pd.DataFrame:
+    def list_events(
+        self, design_hash: str | None = None, seal_key: str | None = None
+    ) -> pd.DataFrame:
         frame = self._load()
+        if seal_key is not None:
+            frame = frame[frame["seal_key"] == str(seal_key)].copy()
         if design_hash is not None:
             frame = frame[frame["design_hash"] == str(design_hash)].copy()
         return frame.reset_index(drop=True)
@@ -97,8 +115,9 @@ class HoldoutSealStore:
         step_id: str,
         stage: str = "oos_test",
         allow_same_run: bool = False,
+        seal_key: str | None = None,
     ) -> dict[str, Any]:
-        """Claim OOS access for a design_hash; raise if already sealed.
+        """Claim OOS access for a seal_key (defaults to design_hash); raise if sealed.
 
         PR 4 of the 2026-05-26 freeze plan: the entire read-check-write
         sequence runs inside ``file_lock`` so two concurrent processes that
@@ -109,9 +128,12 @@ class HoldoutSealStore:
 
         Lock file: ``<root_dir>/holdout_events.lock``.
         """
+        # PR P1.4: the seal is keyed by seal_key; empty/None falls back to design_hash
+        # so existing callers (and old rows via the _load backfill) are unchanged.
+        effective_seal_key = str(seal_key).strip() if seal_key else str(design_hash)
         normalized_run_dir = str(Path(run_dir).resolve())
         with file_lock(self.root_dir / "holdout_events.lock"):
-            frame = self.list_events(design_hash=design_hash)
+            frame = self.list_events(seal_key=effective_seal_key)
             if not frame.empty:
                 first_row = frame.iloc[0].to_dict()
                 same_run = (
@@ -121,18 +143,19 @@ class HoldoutSealStore:
                 if allow_same_run and same_run:
                     return first_row
                 raise ValueError(
-                    "Holdout sealed for design_hash "
-                    f"{design_hash}; first access was {first_row.get('recorded_at')} "
-                    f"by {first_row.get('run_dir')}"
+                    "Holdout sealed for seal_key "
+                    f"{effective_seal_key} (design_hash {design_hash}); first access was "
+                    f"{first_row.get('recorded_at')} by {first_row.get('run_dir')}"
                 )
 
             recorded_at = _now_str()
             row = {
                 "event_id": hashlib.sha256(
-                    f"{design_hash}|{normalized_run_dir}|{step_id}|{recorded_at}".encode("utf-8")
+                    f"{effective_seal_key}|{normalized_run_dir}|{step_id}|{recorded_at}".encode("utf-8")
                 ).hexdigest()[:16],
                 "recorded_at": recorded_at,
                 "design_hash": str(design_hash),
+                "seal_key": effective_seal_key,
                 "hypothesis_id": str(hypothesis_id),
                 "structural_family": str(structural_family),
                 "profile_id": str(profile_id),
