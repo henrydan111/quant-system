@@ -144,6 +144,9 @@ workspace/research/**/.ipynb_checkpoints/
 !workspace/research/factor_expansion/screening_oos/
 !workspace/research/factor_expansion/screening_oos/*.csv
 !workspace/research/factor_expansion/screening_oos/*.parquet
+!workspace/research/factor_expansion/catalog_revalidation/
+!workspace/research/factor_expansion/catalog_revalidation/*.csv
+!workspace/research/factor_expansion/catalog_revalidation/*.json
 
 # =============================================================================
 # Claude Code / Codex local tooling cache (binaries, sessions)
