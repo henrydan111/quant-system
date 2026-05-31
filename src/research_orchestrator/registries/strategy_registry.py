@@ -57,7 +57,11 @@ class StrategyRegistryStore(TypedRegistryStore):
                     f"transition (binds the approval to a committed HEAD)"
                 )
             artifact = dict(promotion_evidence or {})
-            artifact.setdefault("promotion_status", status)
+            # Force (NOT setdefault) the transition status: a caller-supplied
+            # promotion_status="draft"/"candidate" would otherwise make the gate
+            # evaluate the artifact as non-privileged and trivially pass — an
+            # approval bypass (GPT cross-review P0, mirror of the factor-registry fix).
+            artifact["promotion_status"] = status
             assert_promotion_artifact_eligible(
                 artifact,
                 current_git_sha=current_git_sha,

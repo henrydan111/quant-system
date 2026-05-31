@@ -184,6 +184,49 @@ class FactorRegistryTests(unittest.TestCase):
                     promotion_evidence=bad, current_git_sha="abc123",
                 )
 
+    def test_set_status_approved_cannot_be_bypassed_via_evidence_status(self):
+        # GPT cross-review P0: a caller-supplied promotion_status must NOT downgrade
+        # the gate. Evidence with promotion_status="draft" (which would otherwise make
+        # the artifact evaluate as non-privileged and trivially pass) must STILL raise,
+        # and the row must remain draft (no bypass write).
+        from src.research_orchestrator.release_gate import PromotionGateError
+
+        with self.make_temp_dir("factor_registry_bypass") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            with self.assertRaises(PromotionGateError):
+                store.set_status(
+                    factor_id="liq_vol_cv_20d", status="approved", reason="x",
+                    promotion_evidence={"promotion_status": "draft"}, current_git_sha="abc123",
+                )
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["status"], "draft")
+
+    def test_set_approval_validity_cannot_revalidate_approved_row(self):
+        # GPT cross-review P0: set_approval_validity is the drift/downgrade path; it
+        # must NOT flip an approved row back to "valid" (that re-opens it as a formal
+        # factor without the promotion gate). Downgrades are allowed.
+        with self.make_temp_dir("factor_registry_revalidate") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            store.set_status(
+                factor_id="liq_vol_cv_20d", status="approved", reason="promote",
+                promotion_evidence=_passing_promotion_evidence(git_sha="s1"), current_git_sha="s1",
+            )
+            # downgrade (valid -> stale) is allowed
+            store.set_approval_validity(factor_id="liq_vol_cv_20d", validity="stale", reason="provider rebuild")
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["approval_validity"], "stale")
+            # re-validation back to valid via this method is refused
+            with self.assertRaises(ValueError):
+                store.set_approval_validity(factor_id="liq_vol_cv_20d", validity="valid", reason="hand-wave")
+
     def test_approval_validity_backfill_is_fail_closed(self):
         # A row persisted as approved with a BLANK approval_validity (pre-column
         # upgrade) is normalized to requires_revalidation on load; a non-approved
@@ -454,6 +497,8 @@ class FactorRegistryIntegrationTests(unittest.TestCase):
                 factor_id="liq_vol_cv_20d",
                 status="approved",
                 reason="integration export test",
+                promotion_evidence=_passing_promotion_evidence(git_sha="integ_sha"),
+                current_git_sha="integ_sha",
             )
             export_path = Path(temp_dir) / "approved.csv"
             export_count = store.export_current(export_path, status="approved")

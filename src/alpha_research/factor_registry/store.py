@@ -812,7 +812,11 @@ class FactorRegistryStore:
                     f"(binds the approval to a committed HEAD)"
                 )
             artifact = dict(promotion_evidence or {})
-            artifact.setdefault("promotion_status", status)
+            # Force (NOT setdefault) the transition status into the artifact: a
+            # caller-supplied promotion_status="draft"/"candidate" would otherwise
+            # make the gate evaluate the artifact as non-privileged and trivially
+            # pass — an approval bypass (GPT cross-review P0).
+            artifact["promotion_status"] = status
             assert_promotion_artifact_eligible(
                 artifact,
                 current_git_sha=current_git_sha,
@@ -872,6 +876,18 @@ class FactorRegistryStore:
         changed_at = _now_str()
         current_status = _coerce_string(self.factor_master.at[index, "status"]) or "draft"
         old_validity = _coerce_string(self.factor_master.at[index, "approval_validity"]) or "valid"
+        # This method is the drift/downgrade path (valid -> requires_revalidation /
+        # stale). Re-affirming an APPROVED row back to "valid" would re-open it as a
+        # formal factor WITHOUT the promotion gate — refuse it (GPT cross-review P0).
+        # Re-validation must go through set_status(status="approved", promotion_evidence=...,
+        # current_git_sha=...). Non-approved rows' validity is cosmetic, so unrestricted.
+        if current_status == "approved" and validity == "valid":
+            raise ValueError(
+                f"cannot set approval_validity='valid' on approved factor:{factor_id} via "
+                f"set_approval_validity; re-affirm through the promotion gate "
+                f"(set_status(status='approved', promotion_evidence=..., current_git_sha=...)). "
+                f"Downgrades (valid->requires_revalidation/stale) are allowed."
+            )
         self.factor_master.at[index, "approval_validity"] = validity
         self.factor_master.at[index, "updated_at"] = changed_at
         record = StatusHistoryRecord(
