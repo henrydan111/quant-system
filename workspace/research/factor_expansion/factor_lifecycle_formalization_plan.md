@@ -82,12 +82,23 @@ gate] **+ promotion gate**, enforced on BOTH reader and writer). Effective forma
 `status==approved` **AND** `approval_validity==valid` **AND** current field gate passes (§2.3/D5).
 
 ### 2.3 Fail-closed on BOTH sides (H1 reader + R1 writer)
-- **Reader (resolver):** `resolver._resolve_formal_factor` stamps `source_layer="formal"` ONLY for
-  `status==approved` (+ `approval_validity==valid`). `draft`/`deprecated` → `_unresolved`
-  (Codex Q1). `candidate` → a **distinct** `source_layer="factor_registry_candidate"` (NOT plain
-  `"candidate"`, which already denotes the candidate-*registry* path in `resolver._resolve_candidate_factor`).
-  Tighten `validation_steps` (`allow_candidate_components=True`) to accept only `formal` + that explicit
-  candidate layer — never arbitrary non-formal layers.
+- **Reader (resolver) — "resolve-but-label" (Codex round-5; SUPERSEDES the round-2 `draft→_unresolved`
+  call below).** `resolver._resolve_formal_factor` RESOLVES every current row (top-level
+  `status="resolved"`) and labels `source_layer` by registry status + validity: `approved`+valid →
+  `formal`; `candidate`+valid → `factor_registry_candidate`; `draft` → `factor_registry_draft`;
+  `approved`+non-valid → `factor_registry_stale`; `deprecated` → `factor_registry_deprecated`. Add
+  `registry_status` + `approval_validity` to the resolver output; enforce a supplied `definition_hash`
+  as a real match filter (not a fallback). The formal gate lives ONLY in `validation_steps`' explicit
+  allow-set (`{formal}` + `factor_registry_candidate` iff `allow_candidate_components`; reject all
+  else). **Why the round-2 call was wrong:** the shared resolver feeds 3 discovery DAGs whose
+  `object_resolver` step hard-raises on unresolved (`steps.py:444`); with all 171 rows `draft`,
+  `draft→_unresolved` would hard-fail discovery + break a unit test. Resolving-but-labeling keeps
+  research access to all factors while validation stays fail-closed. Safety: discovery publish writes
+  `candidate`/`observed` (`typed_store.py:452`), never `approved`. See `factor_lifecycle_phase1_spec.md`
+  §P1.2 for the full table + tests.
+  - *(Superseded round-2 wording, kept for the audit trail: "stamps `source_layer=formal` ONLY for
+    `status==approved`; `draft`/`deprecated` → `_unresolved` (Codex Q1)." Replaced because `_unresolved`
+    breaks the discovery hard-fail path.)*
 - **Writer (store):** `FactorRegistryStore.set_status("approved")` requires `promotion_evidence`
   passing `assert_promotion_artifact_eligible` + mandatory `current_git_sha`, mirroring
   `StrategyRegistryStore.set_status`. Until that gate exists, **block creation of any `approved` row.**

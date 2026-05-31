@@ -1,11 +1,20 @@
 # Factor Lifecycle — Phase 1 Implementation Spec
 
-**Date:** 2026-05-31. **Status:** spec reviewed — Codex round-4 pre-build review integrated;
-GO to draft. No code written yet. Derived from `factor_lifecycle_formalization_plan.md`
-(v3 + Codex round-1/2/3, all GO). Phase 1 = the **safety-first enforcement layer**: close the
-reader+writer formal gates, bind definitions, seal OOS by frozen-set identity, and file-lock the
-trial ledger — all on/with the minimal schema additions Codex flagged. **No factor is
-registered/promoted by Phase 1 itself.**
+**Date:** 2026-05-31. **Status:** spec reviewed — Codex round-4 (pre-build) + round-5 (P1.2 redesign)
+integrated; GO to draft on Option A. No code written yet. Derived from
+`factor_lifecycle_formalization_plan.md` (v3 + Codex round-1/2/3, all GO). Phase 1 = the
+**safety-first enforcement layer**: close the reader+writer formal gates, bind definitions, seal OOS
+by frozen-set identity, and file-lock the trial ledger — all on/with the minimal schema additions
+Codex flagged. **No factor is registered/promoted by Phase 1 itself.**
+
+**Codex round-5 redesign of P1.2 (verified, GO):** the round-2/round-4 `draft→_unresolved` reader
+design is a PROVEN regression — the shared `_resolve_formal_factor` feeds 3 discovery DAGs whose
+`object_resolver` step hard-raises on unresolved (`steps.py:444`), and all 171 registry rows are
+`draft`, so draft→`None` would hard-fail discovery + break a unit test. P1.2 is redesigned to
+**"resolve-but-label"**: the resolver resolves every row and labels `source_layer` by status; the
+formal gate lives ONLY in the validation consumer's allow-set. Safety trace confirmed — discovery
+publish writes `candidate`/`observed` (`typed_store.py:452`), never `approved`, so labeling draft as
+resolved cannot make it formal-usable. Details in P1.2 below.
 
 **Codex round-4 corrections (all verified against code, all integrated below):**
 - P1.1: `factor_registry_cli.py set-status --status approved` is a writer-gate bypass — added to
@@ -25,7 +34,7 @@ registered/promoted by Phase 1 itself.**
 | # | Item | Files (primary) | Gate it closes |
 |---|---|---|---|
 | **P1.1** | Writer gate on `set_status("approved")` + minimal `approval_validity` column | `src/alpha_research/factor_registry/store.py`, `workspace/scripts/factor_registry_cli.py` | R1 (ungated writer + CLI bypass) + §2.3 fail-closed-on-missing-validity |
-| **P1.2** | Reader gate in formal resolver (status + validity aware) + summary accounting | `src/research_orchestrator/resolver.py`, `validation_steps.py` | H1 (formal-resolver status bypass) |
+| **P1.2** | Reader gate "resolve-but-label" (status/validity-labeled `source_layer`) + validation allow-set + accounting + `definition_hash` enforcement | `src/research_orchestrator/resolver.py`, `validation_steps.py`, `steps.py` | H1 (formal-resolver status bypass) |
 | **P1.3** | Definition-binding hard-fail | `src/research_orchestrator/validation_steps.py` | H2 (definition drift) |
 | **P1.4** | `FrozenSelectionSet` + `seal_key` migration (5-step order) | `holdout_seal.py`, `steps.py`, `sealed_backtest_runner.py`, `event_driven/__init__.py`, `vectorized/__init__.py`, `research_access_context.py`, `workspace/scripts/hypothesis_cli.py`, new `frozen_selection_set.py` | H3 (mutable design_hash re-opens OOS) |
 | **P1.5** | File-lock `TestingLedgerStore` (one lock scope + unlocked append helper) | `src/alpha_research/testing_ledger.py` | H5 (unlocked OOS-budget ledger) |
@@ -69,31 +78,61 @@ non-`design_hash` `seal_key` until every reader/backstop/CLI/context site is mer
   `include_invalid=True`; CLI `set-status --status approved` without `--promotion-evidence-json`
   exits 2 and cannot bypass the gate.
 
-## P1.2 — Reader gate (`resolver.py`, `validation_steps.py`) — lands in the SAME PR as P1.1
-- `resolver._resolve_formal_factor` (`resolver.py:124`, currently stamps `source_layer="formal"` for
-  ANY current row with NO status check): stamp `source_layer="formal"` ONLY when
-  `status=="approved" AND approval_validity=="valid"`. For `candidate` (+ `approval_validity=="valid"`)
-  return a NEW `source_layer="factor_registry_candidate"` (NOT plain `"candidate"` — that denotes the
-  candidate-*registry* path in `_resolve_candidate_factor`). `draft`/`deprecated`/`stale` →
-  return `None` so `_resolve_single` falls through to the candidate-registry path / `_unresolved`.
-- **Summary accounting (Codex round-4):** `ResolverHub.resolve_assets` (`resolver.py:76-79`) buckets
-  `candidate_hits` over `source_layer in {"candidate","signal","model","strategy"}`. The new
-  `factor_registry_candidate` layer falls into NEITHER `formal_hits` nor `candidate_hits` and would
-  silently vanish from run summaries. Add `"factor_registry_candidate"` to the `candidate_hits` set
-  (minimal, intent-preserving). Same commit as the resolver change.
-- `validation_steps` `formal_only` block (`validation_steps.py:100-117`) — TIGHTEN, don't extend.
-  Today: `formal_only = not allow_candidate_components`; when `allow_candidate_components=True` the
-  loop rejects NOTHING non-formal (it would accept plain `candidate`, `signal`, `model`, `strategy`).
-  Replace the binary toggle with an explicit allow-set: `allowed = {"formal"}`, plus
-  `"factor_registry_candidate"` IFF `prescription.allow_candidate_components`. Reject `unresolved`
-  and any `layer not in allowed` — including plain `candidate`. This is a net tightening of an
-  existing permissive path; no current prescription sets `allow_candidate_components=True`, so no
-  formal run regresses. Resolver + this change land in ONE commit.
-- **Tests:** draft factor → unresolved → formal validation rejects; approved+valid → resolves formal;
-  approved+stale → rejected; `factor_registry_candidate` resolves only under
-  `allow_candidate_components`; plain `candidate` (candidate-*registry* path) is NOT accepted as a
-  formal component even with `allow_candidate_components=True` (no source-layer-name collision);
-  resolver summary counts a `factor_registry_candidate` hit (does not drop to zero).
+## P1.2 — Reader gate, Option A "resolve-but-label" (`resolver.py`, `validation_steps.py`) — SAME PR as P1.1
+
+**Codex round-5 redesign — SUPERSEDES the round-2 `draft→_unresolved` call (proven regression).** The
+shared `_resolve_formal_factor` is consumed by 3 discovery DAGs that include the `object_resolver` step
+(`event_driven_signal_research`, `ml_signal_model_research`, `strategy_improvement`; `factor_screening`
++ `theme_strategy` set `formal_requires_resolver=True` but their DAG builders do NOT add the step today)
+via `handle_object_resolver`, which HARD-RAISES on any unresolved consume (`steps.py:438-446`). Returning
+`None` for draft would hard-fail those 3 discovery runs (all 171 registry rows are `draft`) AND break
+`tests/alpha_research/test_research_orchestrator.py:1093`. So the resolver RESOLVES every current row and
+labels privilege separately; the formal gate moves entirely to the validation consumer.
+
+- `resolver._resolve_formal_factor` (`resolver.py:124`): keep top-level `status="resolved"` for every
+  current row; stamp `source_layer` by registry status + validity:
+
+  | registry status | approval_validity | source_layer |
+  |---|---|---|
+  | approved | valid | `formal` |
+  | candidate | valid | `factor_registry_candidate` |
+  | draft | (any) | `factor_registry_draft` |
+  | approved | non-valid | `factor_registry_stale` |
+  | deprecated | (any) | `factor_registry_deprecated` |
+
+  Resolve-and-label deprecated/stale (NOT `None`) — returning `None` recreates the discovery hard-fail
+  for intentional audits of old factors; the validation allow-set rejects them anyway.
+- **Explicit metadata (round-5):** add `registry_status` + `approval_validity` to `ResolutionEntry`
+  and its `to_dict()`, so reviewers read privilege from explicit fields, not by parsing `source_layer`.
+- **Enforce requested `definition_hash` (round-5):** today `resolver.py:137` uses `definition_hash`
+  only as a fallback when name/id matching is empty, so a same-name factor-registry row can shadow a
+  different-hash request. When `asset.definition_hash` is supplied it MUST be an AND filter on the
+  match (name match + mismatched hash → no match), closing the shadowing path. Add P1.2 tests.
+- **Summary accounting (round-4 + round-5):** `formal_hits` counts ONLY `source_layer=="formal"`;
+  `candidate_hits` includes `factor_registry_candidate` + the existing `{candidate, signal, model,
+  strategy}`; ADD a `factor_registry_hits_by_layer` dict counting `{formal, factor_registry_candidate,
+  factor_registry_draft, factor_registry_stale, factor_registry_deprecated}` so no non-formal resolved
+  row vanishes from summaries. Surface the new counts in `handle_object_resolver`'s summary
+  (`steps.py:449`).
+- `validation_steps` formal-gate (`validation_steps.py:100-117`) — explicit allow-set, the SOLE formal
+  permission point (verified: discovery publish writes `candidate`/`observed` via `typed_store.py:452`,
+  NEVER `approved`; `prescription_runtime.py:103` proves permission before factor-frame compute).
+  `allowed = {"formal"}`; add `"factor_registry_candidate"` IFF `prescription.allow_candidate_components`.
+  Reject `unresolved` and EVERY other layer — `factor_registry_draft`, `factor_registry_stale`,
+  `factor_registry_deprecated`, AND plain `candidate` (candidate-registry path). Net tightening; no
+  current prescription sets `allow_candidate_components=True`. Resolver + this land in ONE commit.
+- **Candidate-registry fallback:** keep factor-registry priority (Option A preserves current ordering;
+  no new shadowing once `definition_hash` is enforced). No automatic "draft yields to candidate
+  registry" rule — if explicit registry preference is ever needed, add it to `AssetRef`, don't infer it
+  from status.
+- **Tests:** approved+valid → `formal`; approved+non-valid → `factor_registry_stale`, validation
+  rejects; candidate → `factor_registry_candidate`, accepted only under `allow_candidate_components`;
+  draft → `factor_registry_draft`, validation rejects, AND a discovery test proves draft does NOT trip
+  the `object_resolver` unresolved hard-fail; deprecated → `factor_registry_deprecated`, resolves +
+  validation rejects; a supplied mismatched `definition_hash` does NOT match a same-name row; plain
+  candidate-registry `candidate` is NOT accepted as a formal component even under
+  `allow_candidate_components`; UPDATE `test_research_orchestrator.py:1093` to expect `formal_hits==0`,
+  `source_layer=="factor_registry_draft"`, `factor_registry_hits_by_layer["factor_registry_draft"]==1`.
 
 ## P1.3 — Definition-binding hard-fail (`validation_steps.py`)
 - Where components are resolved to expressions via `get_factor_catalog()`/`get_industry_relative_defs()`
