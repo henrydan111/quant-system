@@ -671,12 +671,12 @@ class TestPR13DefinitionBindingGate:
     formal factor's registry definition_hash no longer matches the current code
     catalog (registry row stale vs catalog.py)."""
 
-    def _make_context(self, tmp_path: Path):
+    def _make_context(self, tmp_path: Path, allow_candidate: bool = False):
         from src.research_orchestrator.hypothesis import PrescribedComponent
 
         prescription = MagicMock(
             components=[PrescribedComponent(factor_name="qual_roe", weight=1.0)],
-            allow_candidate_components=False,
+            allow_candidate_components=allow_candidate,
         )
         hypothesis = MagicMock(prescription=prescription, hypothesis_id="hyp_pr13_defbind")
         context = MagicMock()
@@ -764,6 +764,41 @@ class TestPR13DefinitionBindingGate:
         with patch(
             "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
             return_value=self._payload(""),  # malformed: empty definition_hash
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            field_gate,
+        ):
+            with pytest.raises(FactorDefinitionDriftError, match="drifted"):
+                handle_validation_object_resolver(context)
+        field_gate.assert_not_called()
+
+    def test_factor_registry_candidate_layer_drift_is_caught(self, tmp_path: Path) -> None:
+        # GPT final-integration-review coverage: the drift gate covers the
+        # factor_registry_candidate layer too (layer.startswith("factor_registry")),
+        # not just "formal". Phase 2 leans on candidate backfills, so prove a
+        # candidate entry with a mismatched definition_hash raises drift BEFORE the
+        # field gate when allow_candidate_components=True admits it.
+        from src.research_orchestrator.validation_steps import (
+            FactorDefinitionDriftError,
+            handle_validation_object_resolver,
+        )
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        field_gate = MagicMock()
+        payload = {
+            "resolved_objects": [
+                {
+                    "status": "resolved",
+                    "source_layer": "factor_registry_candidate",
+                    "canonical_id": "qual_roe",
+                    "definition_hash": "0" * 64,  # mismatched vs the current catalog
+                    "requested": {"object_name": "qual_roe", "object_type": "factor"},
+                },
+            ],
+        }
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=payload,
         ), patch(
             "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
             field_gate,
