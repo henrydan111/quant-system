@@ -1,0 +1,201 @@
+# Field-registry approval evidence (2026-05-31, Wave-1 statement-field promotion)
+#
+# Promotes the income / balancesheet / cashflow STATEMENT line-item variants the
+# formal factor-expansion candidates consume from `unknown_field` → `approved`:
+#   income (24 fields):       $total_revenue_sq_q*, $ebit_sq_q*, $n_income_sq_q*,
+#                             $n_income_attr_p_sq_q*, $oper_cost_sq_q*,
+#                             $operate_profit_sq_q*, $revenue_sq_q*
+#   balancesheet (17 fields): $total_assets_q*, $total_liab_q*, $money_cap_q0,
+#                             $accounts_receiv_q*, $inventories_q*,
+#                             $total_cur_assets_q*, $total_cur_liab_q*,
+#                             $st_borr_q0, $lt_borr_q0, $goodwill_q0,
+#                             $retained_earnings_q0
+#   cashflow (12 fields):     $n_cashflow_act_sq_q*, $c_pay_acq_const_fiolta_sq_q*,
+#                             $c_fr_sale_sg_sq_q*
+#
+# WHY: the factor-expansion proposal (PR #27) produced 20+ formal-eligible
+# candidates (accruals, cash-quality, gross profitability, EV-value, Piotroski,
+# single-quarter growth) whose expressions reference these provider-derived
+# statement variants. They were materialized in the provider but never
+# registered, so they resolved as `unknown_field` and fail-closed at formal
+# stages. This promotion unlocks them (formal-eligible 21 → 47 in the merged
+# candidate set).
+#
+# These belong to the income/balancesheet/cashflow statement families, which
+# (per CLAUDE.md §3) anchor visibility on max(ann_date, f_ann_date) — distinct
+# from the indicators family's ann_date-only anchor. The on-disk pipeline did
+# NOT change; this is registry coverage only.
+
+approval_id: 2026-05-31_statements_unknown_to_approved
+date: 2026-05-31
+dataset_id: income, balancesheet, cashflow
+source_endpoint: tushare.income / tushare.balancesheet / tushare.cashflow (+ _vip quarterly)
+from_status: unknown_field
+to_status: approved
+reviewer: henrydan111
+related_pr: factor-expansion-wave1-promotion
+related_findings_id: factor_expansion_pr27
+
+# Bind to the exact provider build + calendar policy under which the coverage
+# and parity verification were performed. A future provider rebuild with a
+# different provider_build_id / calendar_policy_id requires re-verification.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Statement-family PIT contract — DIFFERENT anchor from the indicators family.
+pit_contract:
+  availability_column: "max(ann_date, f_ann_date)"
+  provider_transform: pit_aligned_by_disclosure_date_quarter_canonical_serving
+  provider_transform_owner: >-
+    src/data_infra/pit_backend.py (materialize_visibility_segments +
+    arrays_from_snapshot_segments [snapshot _q*] /
+    arrays_from_flow_segments + derive_single_quarter_value [flow _sq_q*])
+  expression_lag_required: true
+  approved_usage_pattern: "Ref($field, 1) or stricter"
+  same_day_raw_usage_allowed: false
+  late_restatement_note: >-
+    Flow _sq_q* values can retroactively change at a prior-quarter restatement's
+    effective date (current_cumulative − restated_prior_cumulative). This is the
+    intentional best-known-state contract (CLAUDE.md §3); research code caching
+    quarter values must invalidate on every ledger rebuild.
+
+# EVIDENCE 1 — live non-null coverage gate (GPT 5.5 Pro Round-5 §3.5).
+# Every registered field ≥ 50% non-null on the 2018 full-market sample.
+coverage_evidence:
+  method: "compute_factors(Ref($field,1)) over 2018 full market, non-null fraction per variant"
+  threshold: ">= 50% non-null for formal eligibility (GPT Round-5 two-tier gate)"
+  worst_variants:
+    - "$goodwill_q0: 56.6%"
+    - "$lt_borr_q0: 53.8%"
+    - "$st_borr_q0: 76.2%"
+  core_variants: ">= 95% (total_assets 99.8%, total_revenue_sq_q* 99.7-99.9%, n_cashflow_act_sq_q* 99.4-99.9%)"
+  excluded_by_gate:
+    - "$ebitda*: 3.3% non-null — NOT promoted (use $ebit_sq_q* instead)"
+    - "$fin_exp_int_exp*: 0% non-null — NOT promoted"
+    - "$rd_exp_sq_q1..q3: ~0% — NOT promoted (rd_exp left unregistered/sparse)"
+
+# STRUCTURAL-ZERO CAVEAT (GPT 5.5 Pro Round-6 condition #1; resolved by audit).
+# goodwill / lt_borr / st_borr pass the >=50% coverage gate but their "missing"
+# fraction is NOT data failure — it is overwhelmingly TRUE-ZERO recorded as NaN.
+# Audit workspace/scripts/audit_structural_zero.py (pooled 2018-2023 annual,
+# 58,986 raw / 269,958 ledger / 70,080 provider cells, consistent across all 3
+# layers): zero% < 1.3% while nan% is 24-55% (goodwill 54%nan/0.85%zero;
+# lt_borr 48%/1.1%; st_borr 24%/0.7%; total_assets control 0%nan). CONCLUSION:
+# true-zero is INDISTINGUISHABLE from not-reported for these fields, so factors
+# dividing by / scaling on them (acc_goodwill_ratio, acc_noa_scaled) are biased
+# toward reporting firms.
+structural_zero_pending:
+  fields: ["$goodwill_q0", "$lt_borr_q0", "$st_borr_q0"]
+  status: "registry-approved (coverage+parity verified) BUT zero-semantics flagged"
+  finding: "true-zero encoded as NaN, not 0.0 — indistinguishable from not-reported"
+  audit: workspace/scripts/audit_structural_zero.py
+  consequence: >-
+    Factors that ratio/scale on these fields (acc_goodwill_ratio, acc_noa_scaled)
+    are biased toward firms that report the line item. Both are D-grade in the IS
+    screen (ICIR -0.18 / -0.05) so the bias has no current alpha cost, but they
+    are EXCLUDED from the sealed-OOS top set until a zero-vs-NaN coalescing policy
+    (e.g. If($f==$f,$f,0) only where business-logic confirms true-zero) is decided.
+  resolution_options:
+    - "Coalesce NaN->0 ONLY if domain logic confirms absence == true zero (risky; some NaN are genuine non-disclosure)."
+    - "Restrict dependent factors to a sub-universe where the line item is universally reported."
+    - "Keep as-is for non-ratio uses (the level fields themselves are fine for firms that report)."
+
+# EVIDENCE 2 — INDEPENDENT-RECOMPUTE provider parity. The provider DERIVES these
+# variants (quarter-canonical serving); they are NOT stored ledger columns, so
+# the loader↔provider harness used for the indicators approval cannot validate
+# them. Instead a from-scratch pandas reimplementation of the derivation
+# (snapshot visible-state + single-quarter cumulative-diff) is compared
+# cell-by-cell to the provider's D.features output.
+parity_evidence:
+  method: >-
+    workspace/scripts/verify_statement_provider_parity.py — independent pandas
+    recompute (imports NONE of the provider's derivation functions) of _q{slot}
+    snapshot and _sq_q{slot} single-quarter values directly from the PIT ledger,
+    vs provider D.features. rtol=1e-3, atol=1.0, both-NaN==equal.
+  grid: "6 representative fields × 3 securities (600519.SH, 000001.SZ, 000002.SZ) × 2017-2019"
+  result: "PASS — 15,351 cells compared, 0 mismatches across all 3 families and both serving paths (snapshot _q0 + flow _sq_q0/_sq_q1)."
+  note: >-
+    000001.SZ (bank) ebit_sq_q0 has sparse non-null (124/731) — banks report
+    EBIT sparsely; the non-null cells that exist match the provider exactly.
+
+fields_added:
+  income:
+    - $ebit_sq_q0
+    - $ebit_sq_q1
+    - $ebit_sq_q2
+    - $ebit_sq_q3
+    - $n_income_attr_p_sq_q0
+    - $n_income_attr_p_sq_q4
+    - $n_income_sq_q0
+    - $n_income_sq_q1
+    - $n_income_sq_q2
+    - $n_income_sq_q3
+    - $oper_cost_sq_q0
+    - $oper_cost_sq_q1
+    - $oper_cost_sq_q2
+    - $oper_cost_sq_q3
+    - $oper_cost_sq_q4
+    - $operate_profit_sq_q0
+    - $operate_profit_sq_q4
+    - $revenue_sq_q0
+    - $revenue_sq_q4
+    - $total_revenue_sq_q0
+    - $total_revenue_sq_q1
+    - $total_revenue_sq_q2
+    - $total_revenue_sq_q3
+    - $total_revenue_sq_q4
+  balancesheet:
+    - $accounts_receiv_q0
+    - $accounts_receiv_q4
+    - $goodwill_q0
+    - $inventories_q0
+    - $inventories_q4
+    - $lt_borr_q0
+    - $money_cap_q0
+    - $retained_earnings_q0
+    - $st_borr_q0
+    - $total_assets_q0
+    - $total_assets_q4
+    - $total_cur_assets_q0
+    - $total_cur_assets_q4
+    - $total_cur_liab_q0
+    - $total_cur_liab_q4
+    - $total_liab_q0
+    - $total_liab_q4
+  cashflow:
+    - $c_fr_sale_sg_sq_q0
+    - $c_fr_sale_sg_sq_q1
+    - $c_fr_sale_sg_sq_q2
+    - $c_fr_sale_sg_sq_q3
+    - $c_pay_acq_const_fiolta_sq_q0
+    - $c_pay_acq_const_fiolta_sq_q1
+    - $c_pay_acq_const_fiolta_sq_q2
+    - $c_pay_acq_const_fiolta_sq_q3
+    - $n_cashflow_act_sq_q0
+    - $n_cashflow_act_sq_q1
+    - $n_cashflow_act_sq_q2
+    - $n_cashflow_act_sq_q3
+
+tests:
+  - test_id: workspace/scripts/verify_statement_provider_parity.py
+    asserts: "Independent recompute reproduces provider _q*/_sq_q* exactly (15,351 cells, 0 mismatch)."
+  - test_id: tests/data_infra/test_field_registry.py::TestLiveRegistry::test_statement_fields_approved_for_formal
+    asserts: "income/balancesheet/cashflow statement variants resolve to status=approved at formal_validation."
+
+notes: |
+  No on-disk or pipeline change — registry coverage only. These variants flow
+  through the identical max(ann_date, f_ann_date)-anchored quarter-canonical
+  serving as the existing materialized provider bins. Registering them lets the
+  formal factor-expansion candidates (accruals / cash-quality / gross-prof /
+  EV-value / Piotroski / single-quarter growth) pass the field-dependency gate.
+  EBITDA and fin_exp_int_exp were deliberately EXCLUDED by the coverage gate
+  (3.3% and 0% non-null respectively) — see coverage_evidence.excluded_by_gate.

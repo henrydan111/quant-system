@@ -431,16 +431,19 @@ class EventDrivenBacktester:
                 from src.research_orchestrator.holdout_seal import HoldoutSealStore
 
                 store = HoldoutSealStore(holdout_context.seal_store_dir)
-                events = store.list_events(design_hash=holdout_context.design_hash)
+                # PR P1.4: check by the seal_key the claim was made under
+                # (effective_seal_key falls back to design_hash for back-compat).
+                events = store.list_events(seal_key=holdout_context.effective_seal_key)
                 matching = events[
                     (events["run_dir"] == holdout_context.run_dir)
                     & (events["step_id"] == holdout_context.step_id)
                 ]
                 if matching.empty:
                     raise ValueError(
-                        f"Engine backstop: OOS run on design_hash={holdout_context.design_hash} "
-                        f"but no seal claim found for run_dir={holdout_context.run_dir}, "
-                        f"step_id={holdout_context.step_id}. Did you call SealedBacktestRunner?"
+                        f"Engine backstop: OOS run on seal_key={holdout_context.effective_seal_key} "
+                        f"(design_hash={holdout_context.design_hash}) but no seal claim found for "
+                        f"run_dir={holdout_context.run_dir}, step_id={holdout_context.step_id}. "
+                        f"Did you call SealedBacktestRunner?"
                     )
 
         # PR 2 corrected preload condition + PR 8 fix #1: is_formal already

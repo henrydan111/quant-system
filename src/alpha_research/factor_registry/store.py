@@ -10,7 +10,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -22,15 +22,27 @@ from src.alpha_research.factor_library.catalog import (
 
 LOGGER = logging.getLogger(__name__)
 
+# store.py lives at src/alpha_research/factor_registry/store.py — parents[3] is the
+# project root. Used to resolve the committed field-status registry cwd-independently
+# for the P2 field-eligibility snapshot (GPT PR #31 review, finding 4).
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_FIELD_STATUS_YAML = _PROJECT_ROOT / "config" / "field_registry" / "field_status.yaml"
+
 SCHEMA_VERSION = 1
 CANDIDATE_SCREENING_GRADES = {"A (Graduated)", "B (Strong IC)"}
 VALID_STATUSES = ("draft", "candidate", "approved", "deprecated")
+# approval_validity qualifies an `approved` row: is the approval still trustworthy
+# against the CURRENT provider/calendar, or has a rebuild invalidated it? Non-approved
+# rows are vacuously "valid". Fail-closed: a missing value on an `approved` row is
+# treated as requiring revalidation (see FactorRegistryStore._normalize_approval_validity).
+VALID_APPROVAL_VALIDITIES = ("valid", "requires_revalidation", "stale")
 
 FACTOR_MASTER_COLUMNS = [
     "factor_id",
     "version",
     "is_current",
     "status",
+    "approval_validity",
     "recommended_status",
     "object_type",
     "factor_kind",
@@ -55,6 +67,23 @@ FACTOR_MASTER_COLUMNS = [
     "deprecated_reason",
     "created_at",
     "updated_at",
+    # PR P2.1 (Phase-2 schema foundation): latest-mirrors + signal-role metadata +
+    # provenance. Evidence/metadata ONLY — none of these affect resolution or
+    # promotion (the Phase-1 reader/writer gates key on status/approval_validity/
+    # definition_hash, untouched here).
+    "latest_oos_rank_icir",
+    "latest_lo_sharpe_gross",
+    "long_only_viable_provisional",
+    "expected_direction",
+    "signal_role",
+    "signal_role_suggested",
+    "requires_inverse_for_long_only",
+    "approved_uses",
+    "validation_scope",
+    "field_eligibility_snapshot_json",
+    "last_revalidated_at",
+    "latest_provider_build_id",
+    "latest_calendar_policy_id",
 ]
 
 FACTOR_EVIDENCE_COLUMNS = [
@@ -76,6 +105,22 @@ FACTOR_EVIDENCE_COLUMNS = [
     "avg_validation_rank_icir",
     "source_run_dir",
     "evidence_time",
+    # PR P2.1: walk-forward / sealed-OOS metrics + GROSS long-only top-bucket metric
+    # + evidence-provenance + trust labeling (evidence_class / formal_evidence_eligible).
+    "is_rank_icir",
+    "oos_rank_icir",
+    "sign_consistency",
+    "oos_ls_sharpe",
+    "retain_pct",
+    "lo_excess_ann_gross",
+    "lo_sharpe_gross",
+    "lo_hit",
+    "evidence_class",
+    "formal_evidence_eligible",
+    "source_path",
+    "source_hash",
+    "provider_build_id",
+    "calendar_policy_id",
 ]
 
 RUN_INDEX_COLUMNS = [
@@ -107,6 +152,7 @@ FACTOR_MASTER_SCHEMA = {
     "version": "Int64",
     "is_current": "boolean",
     "status": "string",
+    "approval_validity": "string",
     "recommended_status": "string",
     "object_type": "string",
     "factor_kind": "string",
@@ -131,6 +177,20 @@ FACTOR_MASTER_SCHEMA = {
     "deprecated_reason": "string",
     "created_at": "string",
     "updated_at": "string",
+    # PR P2.1
+    "latest_oos_rank_icir": "Float64",
+    "latest_lo_sharpe_gross": "Float64",
+    "long_only_viable_provisional": "string",
+    "expected_direction": "string",
+    "signal_role": "string",
+    "signal_role_suggested": "string",
+    "requires_inverse_for_long_only": "boolean",
+    "approved_uses": "string",
+    "validation_scope": "string",
+    "field_eligibility_snapshot_json": "string",
+    "last_revalidated_at": "string",
+    "latest_provider_build_id": "string",
+    "latest_calendar_policy_id": "string",
 }
 
 FACTOR_EVIDENCE_SCHEMA = {
@@ -152,6 +212,21 @@ FACTOR_EVIDENCE_SCHEMA = {
     "avg_validation_rank_icir": "Float64",
     "source_run_dir": "string",
     "evidence_time": "string",
+    # PR P2.1
+    "is_rank_icir": "Float64",
+    "oos_rank_icir": "Float64",
+    "sign_consistency": "Float64",
+    "oos_ls_sharpe": "Float64",
+    "retain_pct": "Float64",
+    "lo_excess_ann_gross": "Float64",
+    "lo_sharpe_gross": "Float64",
+    "lo_hit": "Float64",
+    "evidence_class": "string",
+    "formal_evidence_eligible": "boolean",
+    "source_path": "string",
+    "source_hash": "string",
+    "provider_build_id": "string",
+    "calendar_policy_id": "string",
 }
 
 RUN_INDEX_SCHEMA = {
@@ -331,6 +406,36 @@ def _resolved_bool(value: Any) -> bool:
     return bool(coerced) if coerced is not None else False
 
 
+# PR P2.2: deterministic, fail-closed PROVISIONAL long-only viability from the GROSS
+# top-bucket metric (plan §3 thresholds; GPT cross-review decision order). This is a
+# gross proxy — the FORMAL cost-adjusted long_only_viable is a later-phase recompute.
+LONG_ONLY_VIABILITIES = ("viable", "review_only", "non_viable")
+
+
+def _derive_long_only_viable(
+    lo_sharpe_gross: Any, lo_excess_gross: Any, lo_hit: Any
+) -> str:
+    """Map the gross LO metric to ``viable`` / ``review_only`` / ``non_viable``.
+
+    Decision order (fail-closed): missing -> non_viable; sharpe>=1.0 & excess>0 &
+    hit>=0.60 -> viable; sharpe<0.5 OR excess<=0 -> non_viable; sharpe>=0.5 & excess>0
+    -> review_only; else non_viable. ``review_only`` is fail-closed for automated/formal
+    long-only use (treat as non-viable) but advisory for human / risk-sleeve review.
+    """
+    s = _coerce_float(lo_sharpe_gross)
+    e = _coerce_float(lo_excess_gross)
+    h = _coerce_float(lo_hit)
+    if s is None or e is None or h is None:
+        return "non_viable"
+    if s >= 1.0 and e > 0 and h >= 0.60:
+        return "viable"
+    if s < 0.5 or e <= 0:
+        return "non_viable"
+    if s >= 0.5 and e > 0:
+        return "review_only"
+    return "non_viable"
+
+
 def _coerce_string_list(series: pd.Series) -> list[str]:
     values = []
     for value in series.tolist():
@@ -360,6 +465,7 @@ class FactorMasterRecord:
     version: int
     is_current: bool
     status: str
+    approval_validity: str
     recommended_status: str
     object_type: str
     factor_kind: str
@@ -384,6 +490,21 @@ class FactorMasterRecord:
     deprecated_reason: str
     created_at: str
     updated_at: str
+    # PR P2.1 (defaults so existing constructors are unchanged; populated later by
+    # the P2.2 derivation + P2.3 importer). Evidence/metadata only.
+    latest_oos_rank_icir: float | None = None
+    latest_lo_sharpe_gross: float | None = None
+    long_only_viable_provisional: str = "non_viable"
+    expected_direction: str = ""
+    signal_role: str = "unassigned"
+    signal_role_suggested: str = "unassigned"
+    requires_inverse_for_long_only: bool | None = None
+    approved_uses: str = ""
+    validation_scope: str = ""
+    field_eligibility_snapshot_json: str = ""
+    last_revalidated_at: str = ""
+    latest_provider_build_id: str = ""
+    latest_calendar_policy_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -406,6 +527,22 @@ class FactorEvidenceRecord:
     avg_validation_rank_icir: float | None
     source_run_dir: str
     evidence_time: str
+    # PR P2.1 (defaults so existing import constructors are unchanged). GROSS LO metric
+    # + walk-forward/OOS metrics + provenance + trust labeling.
+    is_rank_icir: float | None = None
+    oos_rank_icir: float | None = None
+    sign_consistency: float | None = None
+    oos_ls_sharpe: float | None = None
+    retain_pct: float | None = None
+    lo_excess_ann_gross: float | None = None
+    lo_sharpe_gross: float | None = None
+    lo_hit: float | None = None
+    evidence_class: str = ""
+    formal_evidence_eligible: bool | None = False
+    source_path: str = ""
+    source_hash: str = ""
+    provider_build_id: str = ""
+    calendar_policy_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -480,6 +617,8 @@ class FactorRegistryStore:
             FACTOR_MASTER_COLUMNS,
             FACTOR_MASTER_SCHEMA,
         )
+        self._normalize_approval_validity()
+        self._normalize_phase2_metadata()
         self.factor_evidence = self._load_table(
             self.factor_evidence_path,
             self.factor_evidence_csv_path,
@@ -498,6 +637,40 @@ class FactorRegistryStore:
             STATUS_HISTORY_COLUMNS,
             STATUS_HISTORY_SCHEMA,
         )
+
+    def _normalize_approval_validity(self) -> None:
+        """Fail-closed backfill of ``approval_validity`` for rows persisted before
+        the column existed (PR P1.1). A non-approved row is vacuously ``"valid"``;
+        a pre-existing ``approved`` row with no recorded validity is set to
+        ``"requires_revalidation"`` — a formal artifact must POSITIVELY attest a
+        valid approval, never silently inherit one across a schema upgrade."""
+        if self.factor_master.empty:
+            return
+        validity = self.factor_master["approval_validity"]
+        blank = validity.isna() | (validity.astype("string").str.strip().fillna("") == "")
+        if not bool(blank.any()):
+            return
+        status = self.factor_master["status"].astype("string").str.lower().str.strip().fillna("")
+        self.factor_master.loc[blank & (status == "approved"), "approval_validity"] = "requires_revalidation"
+        self.factor_master.loc[blank & (status != "approved"), "approval_validity"] = "valid"
+
+    def _normalize_phase2_metadata(self) -> None:
+        """Fail-closed load defaults for the Phase-2 metadata columns (PR P2.1) on
+        rows persisted before they existed — mirrors ``_normalize_approval_validity``.
+        Only the behaviorally-meaningful string columns are defaulted; numeric/evidence
+        columns stay null until the P2.3 importer populates them."""
+        if self.factor_master.empty:
+            return
+        fail_closed_defaults = {
+            "signal_role": "unassigned",
+            "signal_role_suggested": "unassigned",
+            "long_only_viable_provisional": "non_viable",
+        }
+        for column, default in fail_closed_defaults.items():
+            col = self.factor_master[column]
+            blank = col.isna() | (col.astype("string").str.strip().fillna("") == "")
+            if bool(blank.any()):
+                self.factor_master.loc[blank, column] = default
 
     def save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -751,6 +924,139 @@ class FactorRegistryStore:
             "definition_binding": definition_binding,
         }
 
+    @staticmethod
+    def _read_revalidation_csv(path: str | Path, *, kind: str) -> dict[str, dict[str, Any]]:
+        """Read one revalidation CSV into ``{factor_id: {metric: value, ...}}``. ``kind``
+        selects which columns are pulled: ``catalog``/``derived`` (walk-forward IS/OOS
+        ICIR + sign-consistency; ``derived`` adds the GROSS long-only metrics) and
+        ``oos_report`` (maps ``ls_sharpe`` -> ``oos_ls_sharpe``). Structured CSV only —
+        no markdown (GPT cross-review).
+
+        ``retain_pct`` (GPT PR-#31 finding 5) is schema-reserved but DEFERRED: it is
+        absent from every current revalidation CSV and from ``screening_oos_report.csv``,
+        and the OOS-screened factors are not yet registry rows. It is populated in a
+        later phase when structured walk-forward retention inputs are wired; until then
+        the column stays null and MUST NOT be read as if populated."""
+        df = pd.read_csv(path)
+        out: dict[str, dict[str, Any]] = {}
+        common = [("is_rank_icir", "is_rank_icir"), ("oos_rank_icir", "oos_rank_icir"),
+                  ("sign_consistency", "sign_consistency")]
+        derived_only = [("lo_excess_ann", "lo_excess_ann_gross"), ("lo_sharpe", "lo_sharpe_gross"),
+                        ("lo_hit", "lo_hit")]
+        for _, r in df.iterrows():
+            factor_id = _coerce_string(r.get("factor")).strip()
+            if not factor_id:
+                continue
+            metrics: dict[str, Any] = {"source_path": str(path)}
+            for col, key in common:
+                if col in df.columns:
+                    metrics[key] = _coerce_float(r[col])
+            if kind == "derived":
+                for col, key in derived_only:
+                    if col in df.columns:
+                        metrics[key] = _coerce_float(r[col])
+            if kind == "oos_report" and "ls_sharpe" in df.columns:
+                metrics["oos_ls_sharpe"] = _coerce_float(r["ls_sharpe"])
+            out[factor_id] = metrics
+        return out
+
+    def import_revalidation(
+        self,
+        *,
+        catalog_csv: str | Path | None = None,
+        derived_csv: str | Path | None = None,
+        oos_report_csv: str | Path | None = None,
+        provider_build_id: str = "",
+        calendar_policy_id: str = "",
+        evidence_class: str = "historical_investigation",
+        run_id: str = "revalidation_import",
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """PR P2.3: populate ``factor_evidence`` with walk-forward / OOS / GROSS
+        long-only metrics from the re-validation artifacts. **Definition-bound +
+        fail-closed:** a factor is attached ONLY if its current registry
+        ``definition_hash`` equals the current code-catalog hash (registry in sync);
+        a factor whose hash has DRIFTED, or that is not a current registry row, is
+        SKIPPED and logged — never attached by name alone. Imported rows are labeled
+        ``evidence_class=historical_investigation`` + ``formal_evidence_eligible=False``
+        (non-approval evidence). Writes evidence ONLY — never ``status`` /
+        ``approval_validity`` / ``definition_hash``. Idempotent per
+        ``(run_id, factor_id, version)``. Returns a report of attached/skipped factors."""
+        merged: dict[str, dict[str, Any]] = {}
+        for path, kind in ((catalog_csv, "catalog"), (derived_csv, "derived"), (oos_report_csv, "oos_report")):
+            if path is None:
+                continue
+            for factor_id, metrics in self._read_revalidation_csv(path, kind=kind).items():
+                merged.setdefault(factor_id, {}).update(metrics)
+
+        code_hashes = self.current_catalog_definition_hashes()
+        now = generated_at or _now_str()
+        current = self.factor_master[self.factor_master["is_current"].fillna(False)]
+        attached: list[str] = []
+        skipped_drift: list[str] = []
+        skipped_unknown: list[str] = []
+        evidence_rows: list[FactorEvidenceRecord] = []
+
+        for factor_id, metrics in merged.items():
+            match = current[current["factor_id"] == factor_id]
+            if match.empty:
+                skipped_unknown.append(factor_id)
+                continue
+            row = match.sort_values("version").iloc[-1]
+            registry_hash = _coerce_string(row.get("definition_hash"))
+            code_hash = code_hashes.get(factor_id)
+            if not registry_hash or code_hash is None or registry_hash != code_hash:
+                # FAIL-CLOSED: registry definition drifted from the catalog (or unknown
+                # to the catalog) — do NOT attach evidence to an ambiguous definition.
+                skipped_drift.append(factor_id)
+                continue
+            evidence_rows.append(FactorEvidenceRecord(
+                run_id=run_id, run_type="revalidation", factor_id=factor_id,
+                version=int(row["version"]), is_current_at_import=True,
+                grade="", rank_icir_5d=None, mean_rank_ic_5d=None, ic_hit_rate_5d=None,
+                monotonic=None, best_decay_horizon=None, peak_decay_icir=None,
+                ls_ann_return=None, validation_pass_count=None, selected_fold_count=None,
+                avg_validation_rank_icir=None, source_run_dir=str(metrics.get("source_path", "")),
+                evidence_time=now,
+                is_rank_icir=metrics.get("is_rank_icir"), oos_rank_icir=metrics.get("oos_rank_icir"),
+                sign_consistency=metrics.get("sign_consistency"),
+                oos_ls_sharpe=metrics.get("oos_ls_sharpe"), retain_pct=metrics.get("retain_pct"),
+                lo_excess_ann_gross=metrics.get("lo_excess_ann_gross"),
+                lo_sharpe_gross=metrics.get("lo_sharpe_gross"), lo_hit=metrics.get("lo_hit"),
+                evidence_class=evidence_class, formal_evidence_eligible=False,
+                source_path=str(metrics.get("source_path", "")), source_hash=registry_hash,
+                provider_build_id=provider_build_id, calendar_policy_id=calendar_policy_id,
+            ))
+            attached.append(factor_id)
+
+        if evidence_rows:
+            # Idempotent: drop any prior rows for the same (run_id, factor_id, version).
+            new_keys = {(run_id, r.factor_id, int(r.version)) for r in evidence_rows}
+            existing = self.factor_evidence
+            if not existing.empty:
+                keep = ~existing.apply(
+                    lambda x: (
+                        _coerce_string(x["run_id"]),
+                        _coerce_string(x["factor_id"]),
+                        _coerce_int(x["version"]),
+                    ) in new_keys,
+                    axis=1,
+                )
+                existing = existing[keep]
+            new_df = _apply_schema(
+                pd.DataFrame([asdict(r) for r in evidence_rows]),
+                FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+            )
+            self.factor_evidence = pd.concat([existing, new_df], ignore_index=True)
+
+        self.refresh_master_derived_fields()
+        return {
+            "run_id": run_id,
+            "attached": sorted(attached),
+            "skipped_drift": sorted(skipped_drift),
+            "skipped_unknown": sorted(skipped_unknown),
+        }
+
     def set_status(
         self,
         *,
@@ -759,10 +1065,44 @@ class FactorRegistryStore:
         reason: str,
         version: int | None = None,
         source_run_id: str | None = None,
+        promotion_evidence: Mapping[str, Any] | None = None,
+        current_git_sha: str | None = None,
     ) -> dict[str, Any]:
         status = status.strip().lower()
         if status not in VALID_STATUSES:
             raise ValueError(f"Unsupported status: {status}")
+
+        # Writer gate (PR P1.1): a transition to a PRIVILEGED status ("approved")
+        # is refused unless promotion_evidence proves an INDEPENDENT PIT-correct
+        # reproduction AND passes the lint/parity/clean-tree/git-sha checks, with a
+        # MANDATORY current_git_sha binding the approval to a committed HEAD. Mirrors
+        # StrategyRegistryStore.set_status. Non-privileged transitions are unchanged.
+        # Lazy import: store.py lives in alpha_research, release_gate in
+        # research_orchestrator — importing at call time avoids a module-load cycle.
+        from src.research_orchestrator.release_gate import (
+            PRIVILEGED_REGISTRY_STATUSES,
+            PromotionGateError,
+            assert_promotion_artifact_eligible,
+        )
+
+        if status in PRIVILEGED_REGISTRY_STATUSES:
+            if not current_git_sha:
+                raise PromotionGateError(
+                    f"Promotion gate blocked factor:{factor_id}: current_git_sha is "
+                    f"required for a privileged factor-registry status transition "
+                    f"(binds the approval to a committed HEAD)"
+                )
+            artifact = dict(promotion_evidence or {})
+            # Force (NOT setdefault) the transition status into the artifact: a
+            # caller-supplied promotion_status="draft"/"candidate" would otherwise
+            # make the gate evaluate the artifact as non-privileged and trivially
+            # pass — an approval bypass (GPT cross-review P0).
+            artifact["promotion_status"] = status
+            assert_promotion_artifact_eligible(
+                artifact,
+                current_git_sha=current_git_sha,
+                artifact_label=f"factor:{factor_id}",
+            )
 
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         changed_at = _now_str()
@@ -770,6 +1110,9 @@ class FactorRegistryStore:
 
         self.factor_master.at[index, "status"] = status
         self.factor_master.at[index, "updated_at"] = changed_at
+        if status in PRIVILEGED_REGISTRY_STATUSES:
+            # The gate above passed, so this is a fresh, valid approval.
+            self.factor_master.at[index, "approval_validity"] = "valid"
         if status == "deprecated":
             self.factor_master.at[index, "deprecated_reason"] = reason
         elif old_status == "deprecated":
@@ -795,13 +1138,77 @@ class FactorRegistryStore:
             "new_status": status,
         }
 
-    def export_current(self, output_path: str | Path, *, status: str | None = None) -> int:
+    def set_approval_validity(
+        self,
+        *,
+        factor_id: str,
+        validity: str,
+        reason: str,
+        version: int | None = None,
+    ) -> dict[str, Any]:
+        """Update ``approval_validity`` on a row (e.g. provider-rebuild drift ->
+        "stale"). Records a status_history entry (lifecycle status unchanged; the
+        reason documents the validity transition). The drift->stale path is not
+        wired into provider-rebuild detection in Phase 1."""
+        validity = validity.strip().lower()
+        if validity not in VALID_APPROVAL_VALIDITIES:
+            raise ValueError(f"Unsupported approval_validity: {validity}")
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        changed_at = _now_str()
+        current_status = _coerce_string(self.factor_master.at[index, "status"]) or "draft"
+        old_validity = _coerce_string(self.factor_master.at[index, "approval_validity"]) or "valid"
+        # This method is the drift/downgrade path (valid -> requires_revalidation /
+        # stale). Re-affirming an APPROVED row back to "valid" would re-open it as a
+        # formal factor WITHOUT the promotion gate — refuse it (GPT cross-review P0).
+        # Re-validation must go through set_status(status="approved", promotion_evidence=...,
+        # current_git_sha=...). Non-approved rows' validity is cosmetic, so unrestricted.
+        if current_status == "approved" and validity == "valid":
+            raise ValueError(
+                f"cannot set approval_validity='valid' on approved factor:{factor_id} via "
+                f"set_approval_validity; re-affirm through the promotion gate "
+                f"(set_status(status='approved', promotion_evidence=..., current_git_sha=...)). "
+                f"Downgrades (valid->requires_revalidation/stale) are allowed."
+            )
+        self.factor_master.at[index, "approval_validity"] = validity
+        self.factor_master.at[index, "updated_at"] = changed_at
+        record = StatusHistoryRecord(
+            factor_id=factor_id,
+            version=int(self.factor_master.at[index, "version"]),
+            old_status=current_status,
+            new_status=current_status,
+            reason=f"approval_validity {old_validity}->{validity}: {reason}",
+            source_run_id="",
+            changed_at=changed_at,
+        )
+        self.status_history = pd.concat(
+            [self.status_history, _apply_schema(pd.DataFrame([asdict(record)]), STATUS_HISTORY_COLUMNS, STATUS_HISTORY_SCHEMA)],
+            ignore_index=True,
+        )
+        return {
+            "factor_id": factor_id,
+            "version": int(self.factor_master.at[index, "version"]),
+            "old_approval_validity": old_validity,
+            "new_approval_validity": validity,
+        }
+
+    def export_current(
+        self,
+        output_path: str | Path,
+        *,
+        status: str | None = None,
+        include_invalid: bool = False,
+    ) -> int:
         current_df = self.factor_master[self.factor_master["is_current"].fillna(False)].copy()
         if status:
             normalized = status.strip().lower()
             if normalized not in VALID_STATUSES:
                 raise ValueError(f"Unsupported status: {status}")
             current_df = current_df[current_df["status"] == normalized].copy()
+            # Fail-closed (PR P1.1): an "approved" export is the deployable set, so it
+            # must exclude approvals invalidated by a provider rebuild unless the
+            # caller explicitly asks for stale rows (audit/review export).
+            if normalized == "approved" and not include_invalid:
+                current_df = current_df[current_df["approval_validity"] == "valid"].copy()
 
         current_df = _sort_with_version(current_df, ["factor_kind", "category", "factor_id", "version"])
         output_path = Path(output_path).resolve()
@@ -851,6 +1258,58 @@ class FactorRegistryStore:
         for category, count in category_counts.items():
             lines.append(f"  {category}: {int(count)}")
         return "\n".join(lines)
+
+    def _field_registry_cached(self):
+        """Lazily load + cache the committed field-status registry (cwd-independent
+        via ``_FIELD_STATUS_YAML``). Cached on the instance — one store run sees one
+        registry snapshot."""
+        reg = getattr(self, "_field_registry_obj", None)
+        if reg is None:
+            from src.data_infra.field_registry import load_field_registry
+            reg = load_field_registry(_FIELD_STATUS_YAML)
+            self._field_registry_obj = reg
+        return reg
+
+    def _field_eligibility_snapshot(self, *, factor_kind: str, expression: str) -> str:
+        """GPT PR-#31 cross-review finding 4: snapshot the live field-registry
+        eligibility of a factor's referenced ``$fields`` at the strict
+        ``formal_validation`` stage, as compact JSON.
+
+        BASE factors carry a real Qlib expression and resolve directly. COMPOSITE /
+        INDUSTRY_RELATIVE master expressions are PSEUDO-expressions (``COMPOSITE(...)``,
+        ``INDUSTRY_REL[...](...)``) with NO ``$field`` tokens, so their true (transitive)
+        field dependencies are DEFERRED to Phase 3 (``get_factors`` resolves composite
+        deps) — they are marked ``resolved=false`` here. **Fail-closed contract:**
+        ``resolved=false`` (composite / registry-load error) AND an empty string ('not
+        computed') MUST be treated by any consumer as NOT eligible — never as
+        ``all_allowed``. Returns the JSON string (never raises)."""
+        if factor_kind != "base":
+            return json.dumps(
+                {"resolved": False, "reason": f"transitive_deferred_{factor_kind or 'unknown'}"},
+                sort_keys=True,
+            )
+        try:
+            from src.data_infra.field_registry import extract_qlib_fields
+            registry = self._field_registry_cached()
+            tokens = extract_qlib_fields(expression)
+            fields: dict[str, str] = {}
+            all_allowed = True
+            for token in tokens:
+                resolution = registry.resolve_field(token, "formal_validation")
+                fields[token] = resolution.status_id or ("unknown" if resolution.is_unknown else "")
+                if not resolution.allowed:
+                    all_allowed = False
+            return json.dumps(
+                {"resolved": True, "stage": "formal_validation",
+                 "all_allowed": all_allowed, "fields": fields},
+                sort_keys=True,
+            )
+        except Exception as exc:  # fail-closed: never emit a misleading all_allowed=true
+            LOGGER.warning(
+                "field_eligibility snapshot failed (expression=%r): %s — emitting "
+                "resolved=false (fail-closed)", expression, exc,
+            )
+            return json.dumps({"resolved": False, "reason": "registry_error"}, sort_keys=True)
 
     def refresh_master_derived_fields(self) -> None:
         if self.factor_master.empty:
@@ -916,6 +1375,74 @@ class FactorRegistryStore:
                 latest_screening_grade=latest_screening_grade,
                 latest_validation_pass_count=latest_validation_pass_count,
                 latest_selected_fold_count=latest_selected_fold_count,
+            )
+
+            # PR P2.2 + GPT PR-#31 cross-review (findings 1-4): GROSS long-only + OOS
+            # mirrors, provenance mirrors, the deterministic fail-closed provisional
+            # viability, and the live field-eligibility snapshot. NONE of this changes
+            # status/approval_validity/definition_hash (the Phase-1 gates).
+            current_def_hash = _coerce_string(row["definition_hash"])
+            latest_lo_sharpe_gross = None
+            latest_lo_excess_gross = None
+            latest_lo_hit = None
+            latest_oos_rank_icir = None
+            latest_provider_build_id = ""
+            latest_calendar_policy_id = ""
+            last_revalidated_at = ""
+            if not subset.empty and current_def_hash:
+                # The P2 mirrors (provenance, last_revalidated_at, OOS/LO, viability)
+                # reflect the latest REVALIDATION evidence ONLY (GPT PR-#31 re-review):
+                #  - run_type == "revalidation": a `catalog_sync` / screening / research
+                #    row must NOT set last_revalidated_at (else a plain sync_catalog would
+                #    stamp every factor "revalidated" at the sync timestamp).
+                #  - Finding 3 (fail-closed binding): within revalidation rows, only those
+                #    whose source_hash is blank (manually-injected; never carries LO) OR
+                #    matches the CURRENT definition_hash drive the mirrors. Stale-definition
+                #    evidence (nonblank source_hash != current hash, e.g. a skip-drifted
+                #    re-import) is ignored even though it remains in factor_evidence.
+                source_hashes = subset["source_hash"].map(_coerce_string)
+                bound = subset[
+                    (subset["run_type"] == "revalidation")
+                    & ((source_hashes == "") | (source_hashes == current_def_hash))
+                ]
+                if not bound.empty:
+                    latest_oos_rank_icir = _latest_non_null(bound["oos_rank_icir"], _coerce_float)
+                    latest_provider_build_id = _coerce_string(_latest_non_null(bound["provider_build_id"]))
+                    latest_calendar_policy_id = _coerce_string(_latest_non_null(bound["calendar_policy_id"]))
+                    last_revalidated_at = _coerce_string(_latest_non_null(bound["evidence_time"]))
+                    # Finding 2 (no cross-row metric mixing): derive viability from the
+                    # SINGLE latest row that actually carries an LO Sharpe, using THAT
+                    # row's full tuple. A partial tuple on that row -> non_viable (the
+                    # _derive_long_only_viable fail-closed rule), never a resurrected
+                    # excess/hit from an older row.
+                    lo_bearing = bound[bound["lo_sharpe_gross"].notna()]
+                    if not lo_bearing.empty:
+                        lo_row = lo_bearing.iloc[-1]
+                        latest_lo_sharpe_gross = _coerce_float(lo_row["lo_sharpe_gross"])
+                        latest_lo_excess_gross = _coerce_float(lo_row["lo_excess_ann_gross"])
+                        latest_lo_hit = _coerce_float(lo_row["lo_hit"])
+            viability = _derive_long_only_viable(
+                latest_lo_sharpe_gross, latest_lo_excess_gross, latest_lo_hit
+            )
+            master.at[index, "latest_lo_sharpe_gross"] = latest_lo_sharpe_gross
+            master.at[index, "latest_oos_rank_icir"] = latest_oos_rank_icir
+            master.at[index, "latest_provider_build_id"] = latest_provider_build_id
+            master.at[index, "latest_calendar_policy_id"] = latest_calendar_policy_id
+            master.at[index, "last_revalidated_at"] = last_revalidated_at
+            master.at[index, "long_only_viable_provisional"] = viability
+            # Finding 1: auto-SUGGEST long_only_alpha for a viable factor (spec §P2.1).
+            # NEVER touch the authoritative human-assigned `signal_role` (a separate
+            # column set only via the gated CLI).
+            master.at[index, "signal_role_suggested"] = (
+                "long_only_alpha" if viability == "viable" else "unassigned"
+            )
+            # Finding 4: live field-registry eligibility snapshot of the factor's
+            # referenced $fields. Definition-derived (not evidence-derived), so it is
+            # set for every factor. Fail-closed: composites / registry errors yield
+            # resolved=false, never a false all_allowed=true.
+            master.at[index, "field_eligibility_snapshot_json"] = self._field_eligibility_snapshot(
+                factor_kind=_coerce_string(row["factor_kind"]),
+                expression=_coerce_string(row["expression"]),
             )
 
         self.factor_master = _apply_schema(master, FACTOR_MASTER_COLUMNS, FACTOR_MASTER_SCHEMA)
@@ -1039,6 +1566,16 @@ class FactorRegistryStore:
 
         return snapshots
 
+    def current_catalog_definition_hashes(self) -> dict[str, str]:
+        """Return ``{factor_id: definition_hash}`` computed from the CURRENT code
+        catalog using the SAME snapshot/hash algorithm ``sync_catalog`` writes
+        (``_build_catalog_snapshots``). This is the parity primitive for the P1.3
+        definition-binding gate: comparing a registry row's stored ``definition_hash``
+        against this map detects drift between the registry and ``catalog.py`` with an
+        apples-to-apples hash (covers base / composite / industry-relative). Read-only
+        — it recomputes from code and does NOT mutate ``factor_master``."""
+        return {snap.factor_id: snap.definition_hash for snap in self._build_catalog_snapshots()}
+
     def _upsert_snapshot(self, snapshot: FactorDefinitionSnapshot, generated_at: str) -> None:
         factor_view = self.factor_master[self.factor_master["factor_id"] == snapshot.factor_id]
         current_view = factor_view[factor_view["is_current"].fillna(False)]
@@ -1064,6 +1601,7 @@ class FactorRegistryStore:
             version=version,
             is_current=True,
             status="draft",
+            approval_validity="valid",
             recommended_status="draft",
             object_type="factor",
             factor_kind=snapshot.factor_kind,

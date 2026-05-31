@@ -107,7 +107,16 @@ class ResearchAccessContext:
     calendar_policy_id: str
     holdout_context_id: Optional[str] = None
     holdout_seal_claimed: bool = False
+    # PR P1.4: the seal identity this context reports. Empty falls back to
+    # design_hash, so a context built without a seal_key reports design_hash exactly
+    # as before. A FrozenSelectionSet-driven OOS run carries frozen_set_hash here so
+    # the reported seal identity matches the seal_key the claim was made under.
+    seal_key: str = ""
     allowed_fields: Optional[frozenset[str]] = None
+
+    @property
+    def effective_seal_key(self) -> str:
+        return self.seal_key or self.design_hash
 
     @classmethod
     def from_split(
@@ -122,6 +131,7 @@ class ResearchAccessContext:
         calendar_policy_id: str,
         holdout_context_id: Optional[str] = None,
         holdout_seal_claimed: bool = False,
+        seal_key: str = "",
         allowed_fields: Optional[Iterable[str]] = None,
     ) -> "ResearchAccessContext":
         """Build a context from a ``time_split`` dict (the orchestrator-native form)."""
@@ -148,6 +158,7 @@ class ResearchAccessContext:
             calendar_policy_id=str(calendar_policy_id),
             holdout_context_id=str(holdout_context_id) if holdout_context_id else None,
             holdout_seal_claimed=bool(holdout_seal_claimed),
+            seal_key=str(seal_key),
             allowed_fields=frozenset(allowed_fields) if allowed_fields is not None else None,
         )
 
@@ -182,9 +193,9 @@ class ResearchAccessContext:
 
         if self.stage == "oos_test" and not self.holdout_seal_claimed:
             raise HoldoutSealViolation(
-                f"OOS read on design_hash={self.design_hash} "
-                f"(run={self.run_id}, step={self.step_id}) without "
-                "holdout_seal_claimed=True. Acquire a seal claim via "
+                f"OOS read on seal_key={self.effective_seal_key} "
+                f"(design_hash={self.design_hash}, run={self.run_id}, step={self.step_id}) "
+                "without holdout_seal_claimed=True. Acquire a seal claim via "
                 "SealedBacktestRunner before reading any data."
             )
 
