@@ -443,6 +443,18 @@ class TestResolverHandlerBehavior:
     ResolverHub so we observe the actual call path.
     """
 
+    @pytest.fixture(autouse=True)
+    def _isolate_drift_gate(self):
+        # These tests drive the handler with SYNTHETIC resolver fixtures that omit a
+        # definition_hash; the P1.3 drift gate (fail-closed, covered by TestPR13)
+        # would reject them. Isolate it so these tests exercise the allow-set / field
+        # gate as intended.
+        with patch(
+            "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+            return_value={"checked": 0, "drifted": [], "stage": "formal_validation"},
+        ):
+            yield
+
     def _make_context(self, tmp_path: Path):
         from src.research_orchestrator.hypothesis import PrescribedComponent
         # Minimal hypothesis + prescription with one component.
@@ -618,12 +630,19 @@ class TestPR12FormalAllowSet:
         from src.research_orchestrator.validation_steps import handle_validation_object_resolver
 
         context = self._make_context(tmp_path, allow_candidate=False)
+        # This test isolates the ALLOW-SET; the drift gate (P1.3) and the field gate
+        # (PR9) are patched out (their behavior is covered by TestPR13 / the field-gate
+        # tests). The mock payload has no definition_hash, which the real fail-closed
+        # drift gate would now reject — not what this test is asserting.
         with patch(
             "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
             return_value=self._payload("formal"),
         ), patch(
             "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
             return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ), patch(
+            "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+            return_value={"checked": 1, "drifted": [], "stage": "formal_validation"},
         ):
             result = handle_validation_object_resolver(context)
         assert "field_dependency_report" in result.outputs
@@ -638,6 +657,9 @@ class TestPR12FormalAllowSet:
         ), patch(
             "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
             return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ), patch(
+            "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+            return_value={"checked": 1, "drifted": [], "stage": "formal_validation"},
         ):
             result = handle_validation_object_resolver(context)
         assert "field_dependency_report" in result.outputs
@@ -1340,6 +1362,18 @@ class TestPR9bUniverseFieldGate:
        addition to that dict cannot bypass the gate even if someone
        forgets to mirror it into the resolver-side helper.
     """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_drift_gate(self):
+        # Synthetic resolver fixtures here omit a definition_hash; isolate the P1.3
+        # drift gate (fail-closed, covered by TestPR13) so the universe-field gate is
+        # what these tests exercise. Harmless for the dataset_build tests that never
+        # reach the resolver handler.
+        with patch(
+            "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+            return_value={"checked": 0, "drifted": [], "stage": "formal_validation"},
+        ):
+            yield
 
     def _helper(self):
         from src.research_orchestrator.validation_steps import (
