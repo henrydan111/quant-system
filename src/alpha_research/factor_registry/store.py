@@ -61,6 +61,23 @@ FACTOR_MASTER_COLUMNS = [
     "deprecated_reason",
     "created_at",
     "updated_at",
+    # PR P2.1 (Phase-2 schema foundation): latest-mirrors + signal-role metadata +
+    # provenance. Evidence/metadata ONLY — none of these affect resolution or
+    # promotion (the Phase-1 reader/writer gates key on status/approval_validity/
+    # definition_hash, untouched here).
+    "latest_oos_rank_icir",
+    "latest_lo_sharpe_gross",
+    "long_only_viable_provisional",
+    "expected_direction",
+    "signal_role",
+    "signal_role_suggested",
+    "requires_inverse_for_long_only",
+    "approved_uses",
+    "validation_scope",
+    "field_eligibility_snapshot_json",
+    "last_revalidated_at",
+    "latest_provider_build_id",
+    "latest_calendar_policy_id",
 ]
 
 FACTOR_EVIDENCE_COLUMNS = [
@@ -82,6 +99,22 @@ FACTOR_EVIDENCE_COLUMNS = [
     "avg_validation_rank_icir",
     "source_run_dir",
     "evidence_time",
+    # PR P2.1: walk-forward / sealed-OOS metrics + GROSS long-only top-bucket metric
+    # + evidence-provenance + trust labeling (evidence_class / formal_evidence_eligible).
+    "is_rank_icir",
+    "oos_rank_icir",
+    "sign_consistency",
+    "oos_ls_sharpe",
+    "retain_pct",
+    "lo_excess_ann_gross",
+    "lo_sharpe_gross",
+    "lo_hit",
+    "evidence_class",
+    "formal_evidence_eligible",
+    "source_path",
+    "source_hash",
+    "provider_build_id",
+    "calendar_policy_id",
 ]
 
 RUN_INDEX_COLUMNS = [
@@ -138,6 +171,20 @@ FACTOR_MASTER_SCHEMA = {
     "deprecated_reason": "string",
     "created_at": "string",
     "updated_at": "string",
+    # PR P2.1
+    "latest_oos_rank_icir": "Float64",
+    "latest_lo_sharpe_gross": "Float64",
+    "long_only_viable_provisional": "string",
+    "expected_direction": "string",
+    "signal_role": "string",
+    "signal_role_suggested": "string",
+    "requires_inverse_for_long_only": "boolean",
+    "approved_uses": "string",
+    "validation_scope": "string",
+    "field_eligibility_snapshot_json": "string",
+    "last_revalidated_at": "string",
+    "latest_provider_build_id": "string",
+    "latest_calendar_policy_id": "string",
 }
 
 FACTOR_EVIDENCE_SCHEMA = {
@@ -159,6 +206,21 @@ FACTOR_EVIDENCE_SCHEMA = {
     "avg_validation_rank_icir": "Float64",
     "source_run_dir": "string",
     "evidence_time": "string",
+    # PR P2.1
+    "is_rank_icir": "Float64",
+    "oos_rank_icir": "Float64",
+    "sign_consistency": "Float64",
+    "oos_ls_sharpe": "Float64",
+    "retain_pct": "Float64",
+    "lo_excess_ann_gross": "Float64",
+    "lo_sharpe_gross": "Float64",
+    "lo_hit": "Float64",
+    "evidence_class": "string",
+    "formal_evidence_eligible": "boolean",
+    "source_path": "string",
+    "source_hash": "string",
+    "provider_build_id": "string",
+    "calendar_policy_id": "string",
 }
 
 RUN_INDEX_SCHEMA = {
@@ -392,6 +454,21 @@ class FactorMasterRecord:
     deprecated_reason: str
     created_at: str
     updated_at: str
+    # PR P2.1 (defaults so existing constructors are unchanged; populated later by
+    # the P2.2 derivation + P2.3 importer). Evidence/metadata only.
+    latest_oos_rank_icir: float | None = None
+    latest_lo_sharpe_gross: float | None = None
+    long_only_viable_provisional: str = "non_viable"
+    expected_direction: str = ""
+    signal_role: str = "unassigned"
+    signal_role_suggested: str = "unassigned"
+    requires_inverse_for_long_only: bool | None = None
+    approved_uses: str = ""
+    validation_scope: str = ""
+    field_eligibility_snapshot_json: str = ""
+    last_revalidated_at: str = ""
+    latest_provider_build_id: str = ""
+    latest_calendar_policy_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -414,6 +491,22 @@ class FactorEvidenceRecord:
     avg_validation_rank_icir: float | None
     source_run_dir: str
     evidence_time: str
+    # PR P2.1 (defaults so existing import constructors are unchanged). GROSS LO metric
+    # + walk-forward/OOS metrics + provenance + trust labeling.
+    is_rank_icir: float | None = None
+    oos_rank_icir: float | None = None
+    sign_consistency: float | None = None
+    oos_ls_sharpe: float | None = None
+    retain_pct: float | None = None
+    lo_excess_ann_gross: float | None = None
+    lo_sharpe_gross: float | None = None
+    lo_hit: float | None = None
+    evidence_class: str = ""
+    formal_evidence_eligible: bool | None = False
+    source_path: str = ""
+    source_hash: str = ""
+    provider_build_id: str = ""
+    calendar_policy_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -489,6 +582,7 @@ class FactorRegistryStore:
             FACTOR_MASTER_SCHEMA,
         )
         self._normalize_approval_validity()
+        self._normalize_phase2_metadata()
         self.factor_evidence = self._load_table(
             self.factor_evidence_path,
             self.factor_evidence_csv_path,
@@ -523,6 +617,24 @@ class FactorRegistryStore:
         status = self.factor_master["status"].astype("string").str.lower().str.strip().fillna("")
         self.factor_master.loc[blank & (status == "approved"), "approval_validity"] = "requires_revalidation"
         self.factor_master.loc[blank & (status != "approved"), "approval_validity"] = "valid"
+
+    def _normalize_phase2_metadata(self) -> None:
+        """Fail-closed load defaults for the Phase-2 metadata columns (PR P2.1) on
+        rows persisted before they existed — mirrors ``_normalize_approval_validity``.
+        Only the behaviorally-meaningful string columns are defaulted; numeric/evidence
+        columns stay null until the P2.3 importer populates them."""
+        if self.factor_master.empty:
+            return
+        fail_closed_defaults = {
+            "signal_role": "unassigned",
+            "signal_role_suggested": "unassigned",
+            "long_only_viable_provisional": "non_viable",
+        }
+        for column, default in fail_closed_defaults.items():
+            col = self.factor_master[column]
+            blank = col.isna() | (col.astype("string").str.strip().fillna("") == "")
+            if bool(blank.any()):
+                self.factor_master.loc[blank, column] = default
 
     def save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

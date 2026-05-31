@@ -314,6 +314,46 @@ class FactorRegistryTests(unittest.TestCase):
             ].iloc[0]
             self.assertEqual(row["status"], "draft")
 
+    def test_phase2_schema_columns_present_with_fail_closed_defaults(self):
+        # PR P2.1: the evidence/metadata columns exist; new rows get fail-closed
+        # defaults; status is untouched (the Phase-1 boundary).
+        with self.make_temp_dir("factor_registry_p2_schema") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            for col in ("signal_role", "signal_role_suggested", "long_only_viable_provisional",
+                        "field_eligibility_snapshot_json", "latest_provider_build_id",
+                        "expected_direction", "last_revalidated_at"):
+                self.assertIn(col, store.factor_master.columns)
+            for col in ("lo_sharpe_gross", "lo_excess_ann_gross", "oos_ls_sharpe", "retain_pct",
+                        "evidence_class", "formal_evidence_eligible", "source_hash", "provider_build_id"):
+                self.assertIn(col, store.factor_evidence.columns)
+            current = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertEqual(len(current), 171)  # P2.1 changes no row count
+            row = current.iloc[0]
+            self.assertEqual(row["signal_role"], "unassigned")
+            self.assertEqual(row["signal_role_suggested"], "unassigned")
+            self.assertEqual(row["long_only_viable_provisional"], "non_viable")
+            self.assertEqual(row["status"], "draft")  # P2.1 promotes/changes nothing
+
+    def test_phase2_metadata_backfills_fail_closed_on_load(self):
+        # A pre-P2.1 on-disk registry (no Phase-2 columns) loads back with the
+        # fail-closed defaults via _normalize_phase2_metadata.
+        with self.make_temp_dir("factor_registry_p2_backfill") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            legacy = store.factor_master.drop(columns=[
+                "signal_role", "signal_role_suggested", "long_only_viable_provisional",
+            ])
+            legacy.to_parquet(store.factor_master_path, index=False)
+
+            reloaded = FactorRegistryStore(temp_dir)
+            row = reloaded.factor_master[
+                reloaded.factor_master["is_current"].fillna(False)
+            ].iloc[0]
+            self.assertEqual(row["signal_role"], "unassigned")
+            self.assertEqual(row["signal_role_suggested"], "unassigned")
+            self.assertEqual(row["long_only_viable_provisional"], "non_viable")
+
     def test_save_generates_human_readable_html_review(self):
         with self.make_temp_dir("factor_registry_html") as temp_dir:
             store = FactorRegistryStore(temp_dir)
