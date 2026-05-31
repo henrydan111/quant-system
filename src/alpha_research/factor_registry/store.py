@@ -400,6 +400,36 @@ def _resolved_bool(value: Any) -> bool:
     return bool(coerced) if coerced is not None else False
 
 
+# PR P2.2: deterministic, fail-closed PROVISIONAL long-only viability from the GROSS
+# top-bucket metric (plan §3 thresholds; GPT cross-review decision order). This is a
+# gross proxy — the FORMAL cost-adjusted long_only_viable is a later-phase recompute.
+LONG_ONLY_VIABILITIES = ("viable", "review_only", "non_viable")
+
+
+def _derive_long_only_viable(
+    lo_sharpe_gross: Any, lo_excess_gross: Any, lo_hit: Any
+) -> str:
+    """Map the gross LO metric to ``viable`` / ``review_only`` / ``non_viable``.
+
+    Decision order (fail-closed): missing -> non_viable; sharpe>=1.0 & excess>0 &
+    hit>=0.60 -> viable; sharpe<0.5 OR excess<=0 -> non_viable; sharpe>=0.5 & excess>0
+    -> review_only; else non_viable. ``review_only`` is fail-closed for automated/formal
+    long-only use (treat as non-viable) but advisory for human / risk-sleeve review.
+    """
+    s = _coerce_float(lo_sharpe_gross)
+    e = _coerce_float(lo_excess_gross)
+    h = _coerce_float(lo_hit)
+    if s is None or e is None or h is None:
+        return "non_viable"
+    if s >= 1.0 and e > 0 and h >= 0.60:
+        return "viable"
+    if s < 0.5 or e <= 0:
+        return "non_viable"
+    if s >= 0.5 and e > 0:
+        return "review_only"
+    return "non_viable"
+
+
 def _coerce_string_list(series: pd.Series) -> list[str]:
     values = []
     for value in series.tolist():
@@ -1154,6 +1184,24 @@ class FactorRegistryStore:
                 latest_screening_grade=latest_screening_grade,
                 latest_validation_pass_count=latest_validation_pass_count,
                 latest_selected_fold_count=latest_selected_fold_count,
+            )
+
+            # PR P2.2: latest GROSS long-only + OOS mirrors, and the deterministic,
+            # fail-closed provisional viability derived from them (no evidence yet ->
+            # non_viable). This does NOT change status/approval_validity (Phase-1 gates).
+            latest_lo_sharpe_gross = None
+            latest_lo_excess_gross = None
+            latest_lo_hit = None
+            latest_oos_rank_icir = None
+            if not subset.empty:
+                latest_lo_sharpe_gross = _latest_non_null(subset["lo_sharpe_gross"], _coerce_float)
+                latest_lo_excess_gross = _latest_non_null(subset["lo_excess_ann_gross"], _coerce_float)
+                latest_lo_hit = _latest_non_null(subset["lo_hit"], _coerce_float)
+                latest_oos_rank_icir = _latest_non_null(subset["oos_rank_icir"], _coerce_float)
+            master.at[index, "latest_lo_sharpe_gross"] = latest_lo_sharpe_gross
+            master.at[index, "latest_oos_rank_icir"] = latest_oos_rank_icir
+            master.at[index, "long_only_viable_provisional"] = _derive_long_only_viable(
+                latest_lo_sharpe_gross, latest_lo_excess_gross, latest_lo_hit
             )
 
         self.factor_master = _apply_schema(master, FACTOR_MASTER_COLUMNS, FACTOR_MASTER_SCHEMA)

@@ -354,6 +354,54 @@ class FactorRegistryTests(unittest.TestCase):
             self.assertEqual(row["signal_role_suggested"], "unassigned")
             self.assertEqual(row["long_only_viable_provisional"], "non_viable")
 
+    def test_derive_long_only_viable_boundaries(self):
+        # PR P2.2: the fail-closed decision order at its thresholds.
+        from src.alpha_research.factor_registry.store import _derive_long_only_viable
+        self.assertEqual(_derive_long_only_viable(None, 0.1, 0.7), "non_viable")   # missing
+        self.assertEqual(_derive_long_only_viable(1.0, 0.1, 0.60), "viable")       # exactly at thresholds
+        self.assertEqual(_derive_long_only_viable(1.4, 0.12, 0.66), "viable")
+        self.assertEqual(_derive_long_only_viable(1.2, 0.1, 0.59), "review_only")  # high sharpe, low hit
+        self.assertEqual(_derive_long_only_viable(0.7, 0.1, 0.9), "review_only")   # mid sharpe
+        self.assertEqual(_derive_long_only_viable(0.49, 0.1, 0.9), "non_viable")   # sharpe < 0.5
+        self.assertEqual(_derive_long_only_viable(2.0, -0.01, 0.9), "non_viable")  # excess < 0
+        self.assertEqual(_derive_long_only_viable(2.0, 0.0, 0.9), "non_viable")    # excess == 0
+
+    def test_refresh_derives_long_only_viable_from_evidence(self):
+        # PR P2.2: refresh reads the latest GROSS LO evidence and derives
+        # long_only_viable_provisional + the latest_lo_sharpe_gross/oos mirrors;
+        # status is never touched; a factor with no LO evidence stays non_viable.
+        from src.alpha_research.factor_registry.store import (
+            _apply_schema, FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+        )
+        with self.make_temp_dir("factor_registry_p2_derive") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            target = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]
+            fid, ver = target["factor_id"], int(target["version"])
+            ev = _apply_schema(pd.DataFrame([{
+                "run_id": "rv1", "run_type": "revalidation", "factor_id": fid, "version": ver,
+                "is_current_at_import": True, "evidence_time": "2026-05-01 00:00:00",
+                "lo_sharpe_gross": 1.4, "lo_excess_ann_gross": 0.12, "lo_hit": 0.66,
+                "oos_rank_icir": 0.31, "evidence_class": "historical_investigation",
+                "formal_evidence_eligible": False,
+            }]), FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA)
+            store.factor_evidence = pd.concat([store.factor_evidence, ev], ignore_index=True)
+            store.refresh_master_derived_fields()
+
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["long_only_viable_provisional"], "viable")
+            self.assertAlmostEqual(float(row["latest_lo_sharpe_gross"]), 1.4)
+            self.assertAlmostEqual(float(row["latest_oos_rank_icir"]), 0.31)
+            self.assertEqual(row["status"], "draft")  # P2.2 derives evidence, never status
+            other = store.factor_master[
+                (store.factor_master["factor_id"] != fid)
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(other["long_only_viable_provisional"], "non_viable")
+
     def test_save_generates_human_readable_html_review(self):
         with self.make_temp_dir("factor_registry_html") as temp_dir:
             store = FactorRegistryStore(temp_dir)
