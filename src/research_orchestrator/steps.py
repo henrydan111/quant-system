@@ -58,6 +58,7 @@ from src.research_orchestrator.validation_steps import (
 from src.research_orchestrator.factor_lifecycle_steps import (
     handle_factor_lifecycle_object_resolver as _factor_lifecycle_handle_object_resolver,
     handle_factor_lifecycle_dataset_build as _factor_lifecycle_handle_dataset_build,
+    handle_factor_lifecycle_walk_forward as _factor_lifecycle_handle_walk_forward,
 )
 from src.research_orchestrator.dag import PauseForInputPayload, StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.ml_signal_steps import (
@@ -1779,7 +1780,8 @@ HANDLER_REGISTRY = {
     "validation_gate_concerns_oos": _validation_handle_gate_concerns_oos,
     "validation_gate_review_oos": _validation_handle_gate_review_oos,
     "validation_registry_publish": _validation_handle_registry_publish,
-    # factor_lifecycle plan Phase 5 (slices 2-3; remaining handlers land in later slices).
+    # factor_lifecycle plan Phase 5 (slices 2-4; publish handler lands in slice 6).
     "factor_lifecycle_object_resolver": _factor_lifecycle_handle_object_resolver,
     "factor_lifecycle_dataset_build": _factor_lifecycle_handle_dataset_build,
+    "factor_lifecycle_walk_forward": _factor_lifecycle_handle_walk_forward,
 }

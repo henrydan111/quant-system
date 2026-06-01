@@ -9,6 +9,7 @@ from src.research_orchestrator.dag import StepExecutionContext
 from src.research_orchestrator.schema import AssetRef
 from src.research_orchestrator.factor_lifecycle_steps import (
     handle_factor_lifecycle_object_resolver,
+    handle_factor_lifecycle_walk_forward,
     per_factor_field_eligible,
 )
 from src.alpha_research.factor_registry import FactorRegistryStore
@@ -152,6 +153,75 @@ class FactorLifecycleDatasetBuildTests(unittest.TestCase):
             }
             with self.assertRaises(ValueError):
                 fls.handle_factor_lifecycle_dataset_build(ctx)
+
+
+class FactorLifecycleWalkForwardTests(unittest.TestCase):
+    def _temp(self):
+        WORKSPACE_OUTPUTS.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix="p5_wf_", dir=WORKSPACE_OUTPUTS)
+
+    def _panel(self):
+        import numpy as np
+        import pandas as pd
+        from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
+        cal = pd.DatetimeIndex(pd.date_range("2014-01-03", "2020-12-25", freq="W-FRI"))
+        insts = [f"{i:06d}_SZ" for i in range(60)]
+        idx = pd.MultiIndex.from_product([insts, cal], names=["instrument", "datetime"])
+        rng = np.random.default_rng(5)
+        adj = pd.Series(10 * np.exp((rng.standard_normal(len(idx)) * 0.02).cumsum() % 3), index=idx).sort_index()
+        panel = pd.DataFrame(
+            {"mom_return_5d": rng.standard_normal(len(idx)), "val_bp": rng.standard_normal(len(idx))},
+            index=idx,
+        ).sort_index()
+        return build_is_windowed_panel(panel, adj, is_end="2020-12-31", horizon=4, trade_cal=cal)
+
+    def _context(self, root: Path):
+        ts = {"is_start": "2014-01-01", "is_end": "2020-12-31", "oos_start": "2021-01-01", "oos_end": "2022-01-01"}
+        request = ResearchRequest(
+            profile_id="factor_lifecycle", mode="formal",
+            inputs={"output_dir": str(root), "time_split": ts, "horizon": 4, "factor_origin": "a_priori"},
+        )
+        profile = profile_registry().get("factor_lifecycle")
+        dag = profile.dag_builder(request, list(profile.default_capabilities))
+        step = next(s for s in dag.steps if s.handler == "factor_lifecycle_walk_forward")
+        step_dir = root / "step"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        (root / "testing_ledger").mkdir(parents=True, exist_ok=True)
+        ctx = StepExecutionContext(
+            request=request, profile=profile, dag=dag, step=step, run_dir=root, step_dir=step_dir,
+            registry_dirs={"testing_ledger_dir": root / "testing_ledger"},
+            effective_capabilities=[], effective_capability_metadata=[], state={},
+        )
+        ctx.state["factor_lifecycle"] = {"panel": self._panel(), "excluded_factors": ["some_excluded"]}
+        return ctx
+
+    def test_walk_forward_emits_verdicts_no_oos_and_records_ledger(self):
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            result = handle_factor_lifecycle_walk_forward(ctx)
+            self.assertEqual(result.status, "completed")
+            verdicts = result.outputs["factor_verdicts"]
+            self.assertEqual({v["factor"] for v in verdicts}, {"mom_return_5d", "val_bp"})
+            self.assertTrue(all(v["status"] in ("candidate", "draft") for v in verdicts))
+            # IS-only: no oos_* field anywhere in the verdict rows
+            self.assertFalse(any(k.startswith("oos") for v in verdicts for k in v))
+            self.assertEqual(result.outputs["evidence_kind"], "a_priori")
+            # ledger: 2 per-factor measurements + 1 batch effective-trials = 3
+            self.assertEqual(result.outputs["ledger"]["recorded"], 3)
+
+    def test_unknown_factor_origin_raises_fail_closed(self):
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            ctx.request.inputs["factor_origin"] = "generted"  # typo
+            with self.assertRaises(ValueError):
+                handle_factor_lifecycle_walk_forward(ctx)
+
+    def test_missing_panel_raises(self):
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            ctx.state["factor_lifecycle"]["panel"] = None
+            with self.assertRaises(ValueError):
+                handle_factor_lifecycle_walk_forward(ctx)
 
 
 if __name__ == "__main__":

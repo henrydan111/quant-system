@@ -18,13 +18,17 @@ registry, the gate triplet); only the lifecycle-status allow-set widens to inclu
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from src.research_orchestrator.dag import StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.runtime import write_json
 # Top-level so tests can monkeypatch `factor_lifecycle_steps.load_is_windowed_panel`
 # (no import cycle: walk_forward_validation does not import research_orchestrator).
-from src.alpha_research.factor_lifecycle.walk_forward_validation import load_is_windowed_panel
+from src.alpha_research.factor_lifecycle.walk_forward_validation import (
+    load_is_windowed_panel,
+    run_is_walk_forward,
+)
 
 # The lifecycle resolver allow-set: the gate INPUT is draft factors, so `draft` is
 # ACCEPTED (unlike validation_object_resolver's {formal} set). stale / deprecated / plain
@@ -222,6 +226,97 @@ def handle_factor_lifecycle_dataset_build(context: StepExecutionContext) -> Step
         "is_window": {"is_start": time_split.is_start, "is_end": time_split.is_end},
         "horizon": horizon,
         "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
+    }
+    write_json(context.step_dir / "step_outputs.json", outputs)
+    return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _record_lifecycle_ledger(context: StepExecutionContext, result: Any, *, excluded: list[str]) -> dict:
+    """Record per-factor IS-heldout measurements + ONE batch-effective-trials event to the
+    file-locked TestingLedgerStore (the whole pool the selection rule saw = tested +
+    field-excluded). Defensive: no testing_ledger_dir -> skip."""
+    rd = context.registry_dirs or {}
+    ledger_dir = rd.get("testing_ledger_dir")
+    if not ledger_dir:
+        return {"recorded": 0, "skipped": "no testing_ledger_dir"}
+    from src.alpha_research.testing_ledger import TestingLedgerStore
+
+    hyp = getattr(context.request, "hypothesis", None)
+    hyp_id = str(getattr(hyp, "hypothesis_id", "") or "factor_lifecycle")
+    try:
+        design_hash = str(hyp.design_hash()) if hyp is not None else ""
+    except Exception:
+        design_hash = ""
+    run_dir = str(context.run_dir)
+    run_id = Path(run_dir).name or "factor_lifecycle_run"
+    store = TestingLedgerStore(ledger_dir)
+    profile_id = context.profile.profile_id
+
+    recorded = 0
+    for row in result.rows:
+        store.record_event(
+            hypothesis_id=hyp_id, design_hash=design_hash, prose_hash="", structural_family="",
+            profile_id=profile_id, run_id=run_id, run_dir=run_dir,
+            test_name=f"factor_lifecycle:{row['factor']}", stage="is_only",
+            statistic_name="heldout_rank_icir", statistic_value=row.get("heldout_rank_icir"),
+            n_obs=row.get("n_heldout_blocks"), notes=str(row.get("reason", "")),
+            event_kind="measurement", verdict=str(row.get("status", "")),
+        )
+        recorded += 1
+    # batch effective trials = the whole pool the selection rule saw (tested + field-excluded)
+    store.record_event(
+        hypothesis_id=hyp_id, design_hash=design_hash, prose_hash="", structural_family="",
+        profile_id=profile_id, run_id=run_id, run_dir=run_dir,
+        test_name="factor_lifecycle:batch_effective_trials", stage="is_only",
+        statistic_name="effective_trials", statistic_value=float(len(result.rows) + len(excluded)),
+        n_obs=len(result.rows) + len(excluded), event_kind="measurement",
+        notes=f"tested={len(result.rows)} field_excluded={len(excluded)}",
+    )
+    return {"recorded": recorded + 1}
+
+
+def handle_factor_lifecycle_walk_forward(context: StepExecutionContext) -> StepExecutionResult:
+    """Phase 5 slice 4: run the IS-only walk-forward validator on the dataset_build panel,
+    assign per-factor `candidate`/`draft` verdicts, and record per-factor + batch-effective-
+    trials events to the file-locked testing ledger. The result carries NO `oos_*` field
+    (structurally). `factor_origin` is enum-validated `{generated, a_priori}` and
+    fail-closed (a typo / missing value raises, never silently takes a_priori)."""
+    lifecycle_state = context.state.setdefault("factor_lifecycle", {})
+    panel = lifecycle_state.get("panel")
+    if panel is None:
+        raise ValueError(
+            "factor_lifecycle_walk_forward: no panel from dataset_build "
+            "(state['factor_lifecycle']['panel'])"
+        )
+    time_split = _lifecycle_time_split(context.request)
+    inputs = getattr(context.request, "inputs", {}) or {}
+    horizon = int(inputs.get("horizon", 20))
+    factor_origin = str(inputs.get("factor_origin", "")).strip()
+    if factor_origin not in ("generated", "a_priori"):
+        raise ValueError(
+            "factor_lifecycle_walk_forward requires factor_origin in {generated, a_priori} "
+            f"(fail-closed; no silent default), got {factor_origin!r}"
+        )
+
+    result = run_is_walk_forward(
+        panel=panel, time_split=time_split, horizon=horizon, factor_origin=factor_origin,
+    )
+    ledger_report = _record_lifecycle_ledger(
+        context, result, excluded=list(lifecycle_state.get("excluded_factors", []))
+    )
+    lifecycle_state["walk_forward_rows"] = [dict(r) for r in result.rows]
+    lifecycle_state["evidence_kind"] = result.evidence_kind
+
+    candidate_count = sum(1 for r in result.rows if r.get("status") == "candidate")
+    outputs = {
+        "evidence_kind": result.evidence_kind,
+        "n_heldout_blocks": result.n_heldout_blocks,
+        "tested_count": len(result.rows),
+        "candidate_count": candidate_count,
+        "field_ineligible_count": len(lifecycle_state.get("excluded_factors", [])),
+        "factor_verdicts": [dict(r) for r in result.rows],
+        "effective_eval_end": str(result.effective_eval_end),
+        "ledger": ledger_report,
     }
     write_json(context.step_dir / "step_outputs.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
