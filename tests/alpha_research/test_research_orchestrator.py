@@ -626,6 +626,8 @@ class ResearchOrchestratorTests(unittest.TestCase):
                 # jolly-seeking-lollipop Gate B: validation profile for
                 # prescription-style hypotheses.
                 "hypothesis_validation",
+                # factor_lifecycle plan Phase 5: the IS-only draft->candidate factor gate.
+                "factor_lifecycle",
             },
         )
         self.assertTrue(all(profile.execution_model == "dag" for profile in profiles.values()))
