@@ -8,12 +8,14 @@ on the **label-realization date**. Three belts (design-review must-fix #1):
   1. **No `compute_factors` forward return** — factors computed with ``horizons=None`` over
      ``[is_start, is_end]`` (END = is_end).
   2. **Label capped at is_end** — built from adjusted close loaded ONLY over
-     ``[is_start, is_end]``; ``groupby(instrument).shift(-h)`` yields NaN for the last ``h``
-     rows of each instrument, so factor dates whose label would realize past ``is_end`` are
-     dropped automatically.
+     ``[is_start, is_end]``, at the EXACT trading-calendar target ``r(t)=open_days[pos(t)+h]``
+     (NOT ``shift(-h)``-over-rows — a sparse/suspended or uncapped adj-close would otherwise
+     reach a LATER row, possibly past ``is_end``). A missing ``r(t)`` row drops (never
+     substituted by a later row); both inputs are asserted ``<= is_end`` (belt 0, GPT P0 review).
   3. **Runtime assertions** — :class:`IsWindowedPanel` raises unless ``max_factor_date`` AND
      ``max_label_realization_date`` are both ``<= is_end`` (the realization date is the
-     factor date shifted ``+h`` TRADING days via ``trade_cal.parquet``).
+     factor date shifted ``+h`` TRADING days via ``trade_cal.parquet``), AND the factor/label
+     indices are aligned.
 
 The result (:class:`WalkForwardResult`) carries NO ``oos_*`` field (structurally cannot)
 and labels ``evidence_kind`` on BOTH the result and every per-factor row so a
