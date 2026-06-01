@@ -323,6 +323,37 @@ def _collect_measured_values(context: StepExecutionContext) -> dict[str, Any]:
             return _json.loads(metrics_path.read_text(encoding="utf-8"))
         return {}
 
+    # factor_lifecycle plan Phase 5 (slice 5): surface the IS-only walk-forward metrics so
+    # the shared gate has a non-empty rule table for a factor BATCH. The lifecycle heldout
+    # ICIR is MAPPED into the standard `rank_icir` metric (GPT slice-1 risk, option a) so a
+    # SuccessCriteria with metric=rank_icir auto-evaluates -> non-empty criteria_results.
+    if context.profile.profile_id == "factor_lifecycle":
+        wf = context.state.get("step_outputs", {}).get("factor_lifecycle_walk_forward", {})
+        verdicts = wf.get("factor_verdicts", [])
+        icirs: list[float] = []
+        for v in verdicts:
+            val = v.get("heldout_rank_icir")
+            if val is None:
+                continue
+            try:
+                f = abs(float(val))
+            except (TypeError, ValueError):
+                continue
+            if f == f:  # exclude NaN
+                icirs.append(f)
+        icirs.sort()
+        median_icir = icirs[len(icirs) // 2] if icirs else None
+        tested = int(wf.get("tested_count", 0))
+        ineligible = int(wf.get("field_ineligible_count", 0))
+        return {
+            "rank_icir": (icirs[-1] if icirs else None),  # max |heldout ICIR| -> standard rule
+            "median_heldout_rank_icir": median_icir,
+            "candidate_count": int(wf.get("candidate_count", 0)),
+            "tested_count": tested,
+            "field_ineligible_count": ineligible,
+            "effective_trials": tested + ineligible,
+        }
+
     return {}
 
 

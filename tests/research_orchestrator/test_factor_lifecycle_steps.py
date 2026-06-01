@@ -224,5 +224,36 @@ class FactorLifecycleWalkForwardTests(unittest.TestCase):
                 handle_factor_lifecycle_walk_forward(ctx)
 
 
+class FactorLifecycleGateMetricsTests(unittest.TestCase):
+    def test_collect_measured_values_branch_is_nonempty_and_maps_rank_icir(self):
+        # GPT slice-1 risk: an unknown profile returns {} so the gate has no rule table.
+        # The factor_lifecycle branch must return non-empty metrics with rank_icir mapped
+        # from the max |heldout ICIR| so the standard rank_icir criterion auto-fires.
+        from src.research_orchestrator.steps import _collect_measured_values
+        from src.research_orchestrator import ResearchRequest, profile_registry
+
+        profile = profile_registry().get("factor_lifecycle")
+        request = ResearchRequest(profile_id="factor_lifecycle", mode="formal", inputs={"output_dir": "x"})
+        ctx = StepExecutionContext(
+            request=request, profile=profile, dag=None, step=None, run_dir=Path("."),
+            step_dir=Path("."), registry_dirs={}, effective_capabilities=[],
+            effective_capability_metadata=[],
+            state={"step_outputs": {"factor_lifecycle_walk_forward": {
+                "candidate_count": 2, "tested_count": 5, "field_ineligible_count": 1,
+                "factor_verdicts": [
+                    {"factor": "a", "heldout_rank_icir": 0.15, "status": "candidate"},
+                    {"factor": "b", "heldout_rank_icir": -0.05, "status": "draft"},
+                    {"factor": "c", "heldout_rank_icir": None, "status": "draft"},
+                ],
+            }}},
+        )
+        mv = _collect_measured_values(ctx)
+        self.assertTrue(mv)  # NOT {} (the empty-gate hole)
+        self.assertAlmostEqual(mv["rank_icir"], 0.15)         # max |heldout ICIR| -> rank_icir
+        self.assertEqual(mv["candidate_count"], 2)
+        self.assertEqual(mv["tested_count"], 5)
+        self.assertEqual(mv["effective_trials"], 6)           # tested 5 + field-ineligible 1
+
+
 if __name__ == "__main__":
     unittest.main()
