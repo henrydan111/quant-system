@@ -107,6 +107,12 @@ class IsWindowedPanel:
         is_end = pd.Timestamp(self.is_end)
         if self.factor_panel.empty or self.label.empty:
             raise IsEndLeakageError("IsWindowedPanel: empty factor panel / label")
+        # factor panel and label MUST be row-aligned (a directly-constructed panel with a
+        # label indexed elsewhere — e.g. after is_end — must be rejected, GPT P0 review).
+        if not self.factor_panel.index.equals(self.label.index):
+            raise IsEndLeakageError(
+                "IsWindowedPanel: factor_panel and label indices are not aligned"
+            )
         max_factor = self.factor_panel.index.get_level_values("datetime").max()
         object.__setattr__(self, "max_factor_date", pd.Timestamp(max_factor))
         if self.max_factor_date > is_end:
@@ -162,18 +168,46 @@ def build_is_windowed_panel(
     trade_cal=None,
 ) -> IsWindowedPanel:
     """Build a validated :class:`IsWindowedPanel` from an IS-only factor panel + an IS-only
-    adjusted-close series (both already capped at ``is_end``). The label is the
-    trading-row forward return ``adj.shift(-h)/adj - 1`` — the last ``h`` rows per
-    instrument become NaN and drop, so only label-safe dates survive (belt 2)."""
+    adjusted-close series. The label uses the EXACT trading-calendar target — for factor
+    date ``t`` the future price is taken at ``r(t) = open_days[pos(t)+h]``, NOT the "next
+    ``h`` available rows" (GPT P0 review: a sparse/suspended adj-close would otherwise reach
+    a LATER row, possibly past ``is_end``, while the calendar assertion reported a safe
+    date). A missing ``r(t)`` row -> NaN -> dropped (never substituted by a later row).
+
+    Belt 0 (GPT P0): both inputs MUST already be capped at ``is_end`` — verified here, never
+    assumed."""
     open_days = load_open_trading_days(trade_cal)
+    is_end_ts = pd.Timestamp(is_end)
+    if factor_panel.empty or adj_close.empty:
+        raise IsEndLeakageError("build_is_windowed_panel: empty factor panel / adj_close")
+    f_max = pd.Timestamp(factor_panel.index.get_level_values("datetime").max())
+    a_max = pd.Timestamp(adj_close.index.get_level_values("datetime").max())
+    if f_max > is_end_ts:
+        raise IsEndLeakageError(f"factor_panel max date {f_max.date()} > is_end {is_end_ts.date()}")
+    if a_max > is_end_ts:
+        raise IsEndLeakageError(f"adj_close max date {a_max.date()} > is_end {is_end_ts.date()}")
+
     adj = adj_close.sort_index()
-    future = adj.groupby(level="instrument").shift(-horizon)
-    label = (future / adj - 1.0).dropna()
-    label.name = "label"
-    aligned = factor_panel.loc[factor_panel.index.intersection(label.index)]
-    label = label.loc[aligned.index]
+    # exact-calendar realization date r(t) per unique factor date
+    factor_dates = pd.DatetimeIndex(sorted(factor_panel.index.get_level_values("datetime").unique()))
+    pos = open_days.searchsorted(factor_dates, side="left")
+    target = pos + horizon
+    real_map: dict = {}
+    for fdate, tgt in zip(factor_dates, target):
+        real_map[fdate] = open_days[tgt] if tgt < len(open_days) else pd.NaT
+
+    insts = factor_panel.index.get_level_values("instrument")
+    dts = factor_panel.index.get_level_values("datetime")
+    r_for_rows = pd.DatetimeIndex([real_map.get(d, pd.NaT) for d in dts])
+    future_index = pd.MultiIndex.from_arrays([insts, r_for_rows], names=["instrument", "datetime"])
+
+    cur = adj.reindex(factor_panel.index).to_numpy()
+    fut = adj.reindex(future_index).to_numpy()  # adj at the EXACT calendar r(t); missing -> NaN
+    label_vals = fut / cur - 1.0
+    label = pd.Series(label_vals, index=factor_panel.index, name="label").dropna()
+    aligned = factor_panel.loc[label.index]
     return IsWindowedPanel(
-        factor_panel=aligned, label=label, is_end=pd.Timestamp(is_end),
+        factor_panel=aligned, label=label, is_end=is_end_ts,
         horizon=horizon, open_days=open_days,
     )
 
@@ -252,6 +286,12 @@ def run_is_walk_forward(
     ``factor_origin='generated'`` uses an explicit IS-internal heldout (fail-closed if none
     can be built); for ``'a_priori'`` uses yearly blocked sign-consistency within IS,
     labeled distinctly. Returns a :class:`WalkForwardResult` with NO ``oos_*`` field."""
+    # GPT P1 review: an unknown factor_origin must NOT silently take the a_priori path —
+    # a typo in a generated-factor run would bypass the heldout fail-closed requirement.
+    if factor_origin not in ("generated", "a_priori"):
+        raise ValueError(
+            f"factor_origin must be 'generated' or 'a_priori', got {factor_origin!r}"
+        )
     if panel is None:
         if catalog is None:
             raise ValueError("run_is_walk_forward requires either `panel` or `catalog`")

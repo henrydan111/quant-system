@@ -179,5 +179,15 @@ AGENTS.md §2a Phase-4 entry added (same pass, §11.2); full offline suite green
 IMPLEMENTED per the build order: `metrics.py` + `status_rules.py` + `revalidation.py`
 (`revalidate_panel` + `run_historical_*`) + `report.py` + `walk_forward_validation.py`
 (`IsWindowedPanel` 3-belt boundary + `run_is_walk_forward`); `revalidate_*.py` reduced to
-thin wrappers. 30 package tests + 49-test regression sweep (architecture + factor_lifecycle)
+thin wrappers. 34 package tests + 49-test regression sweep (architecture + factor_lifecycle)
 green; PIT002 lint clean for the new code; no new revalidation run (existing CSVs stand).
+
+**GPT PR-#33 post-impl review (NO-GO → 2 fixes → GO):** (P0) `build_is_windowed_panel`'s
+`shift(-h)`-over-rows could use a LATER adj-close row past `is_end` (sparse/uncapped series)
+while the calendar assertion reported a safe date — REPRODUCED (label used the OOS price), then
+fixed by building the label at the EXACT trading-calendar target `r(t)=open_days[pos(t)+h]`
+(missing row drops, never substituted) + belt-0 input caps (factor & adj max `≤ is_end`) + an
+`IsWindowedPanel` factor/label index-alignment assertion. (P1) an unknown `factor_origin`
+silently took the `a_priori` path — now raises (`{generated, a_priori}` only). 4 regression
+tests added (uncapped-adj raises, sparse-drops-not-substitutes, misaligned-label raises,
+unknown-origin raises).

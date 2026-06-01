@@ -101,6 +101,56 @@ class IsWindowedPanelLeakageTests(unittest.TestCase):
         self.assertLessEqual(wp.max_factor_date, cal[-5])
         self.assertLessEqual(wp.max_label_realization_date, pd.Timestamp(is_end))
 
+    def test_uncapped_adj_close_raises(self):
+        # GPT P0: an adj-close extending past is_end must be rejected (belt 0) — the
+        # reviewer's reproduction (a later OOS price would otherwise leak into the label).
+        cal = pd.DatetimeIndex(["2020-01-03", "2020-01-10", "2020-01-17"])
+        adj = pd.Series(
+            [10.0, 99.0],
+            index=pd.MultiIndex.from_tuples(
+                [("000001_SZ", pd.Timestamp("2020-01-03")), ("000001_SZ", pd.Timestamp("2020-01-17"))],
+                names=["instrument", "datetime"],
+            ),
+        )
+        fac = pd.DataFrame({"f1": [0.5]}, index=pd.MultiIndex.from_tuples(
+            [("000001_SZ", pd.Timestamp("2020-01-03"))], names=["instrument", "datetime"]))
+        with self.assertRaises(IsEndLeakageError):
+            build_is_windowed_panel(fac, adj, is_end="2020-01-10", horizon=1, trade_cal=cal)
+
+    def test_sparse_adj_drops_not_substitutes_later_row(self):
+        # GPT P0: a capped-but-sparse adj-close (missing the EXACT r(t) row) must DROP that
+        # factor date, never substitute a later available row (the shift(-h)-over-rows bug).
+        cal = pd.DatetimeIndex(["2020-01-03", "2020-01-10", "2020-01-17", "2020-01-24"])
+        insts = ["000001_SZ"]
+        # adj has d0, d2, d3 (MISSING d1=Jan10); is_end=Jan24 so all rows are capped
+        adj = pd.Series(
+            [10.0, 12.0, 13.0],
+            index=pd.MultiIndex.from_tuples(
+                [("000001_SZ", pd.Timestamp(d)) for d in ["2020-01-03", "2020-01-17", "2020-01-24"]],
+                names=["instrument", "datetime"]),
+        )
+        # factor at d0 (r(d0)=d1=Jan10, which is MISSING in adj) + d2 (r(d2)=d3=Jan24, present)
+        fac = pd.DataFrame({"f1": [0.5, 0.6]}, index=pd.MultiIndex.from_tuples(
+            [("000001_SZ", pd.Timestamp("2020-01-03")), ("000001_SZ", pd.Timestamp("2020-01-17"))],
+            names=["instrument", "datetime"]))
+        wp = build_is_windowed_panel(fac, adj, is_end="2020-01-24", horizon=1, trade_cal=cal)
+        kept = wp.factor_panel.index.get_level_values("datetime")
+        self.assertNotIn(pd.Timestamp("2020-01-03"), kept)  # r(d0)=Jan10 missing -> dropped
+        self.assertIn(pd.Timestamp("2020-01-17"), kept)     # r(d2)=Jan24 present -> kept
+        # the kept label used the EXACT Jan24 price (13/12-1), not a substitution
+        self.assertAlmostEqual(float(wp.label.loc[("000001_SZ", pd.Timestamp("2020-01-17"))]), 13.0 / 12.0 - 1)
+
+    def test_direct_constructor_rejects_misaligned_label(self):
+        # GPT P0: a directly-constructed panel whose label index != factor index is rejected.
+        cal = _weekly_calendar()
+        idx = pd.MultiIndex.from_tuples(
+            [("000001_SZ", cal[5]), ("000001_SZ", cal[6])], names=["instrument", "datetime"])
+        panel = pd.DataFrame({"f1": [0.1, 0.2]}, index=idx)
+        label = pd.Series([0.0], index=pd.MultiIndex.from_tuples(
+            [("000001_SZ", cal[5])], names=["instrument", "datetime"]))  # shorter -> misaligned
+        with self.assertRaises(IsEndLeakageError):
+            IsWindowedPanel(factor_panel=panel, label=label, is_end=cal[10], horizon=4, open_days=cal)
+
 
 class LoadIsPanelSpyTests(unittest.TestCase):
     def test_load_uses_horizons_none_and_end_at_is_end(self):
@@ -163,6 +213,13 @@ class RunIsWalkForwardTests(unittest.TestCase):
         ts = TimeSplit("2019-01-01", "2020-12-31", "2021-01-01", "2022-01-01")
         with self.assertRaises(NoHeldoutBlockError):
             run_is_walk_forward(panel=wp, time_split=ts, horizon=4, factor_origin="generated")
+
+    def test_unknown_factor_origin_raises(self):
+        # GPT P1: a typo'd factor_origin must NOT silently take the a_priori path.
+        ts = TimeSplit("2014-01-01", "2020-12-31", "2021-01-01", "2022-01-01")
+        with self.assertRaises(ValueError):
+            run_is_walk_forward(panel=self._panel_for_folds(), time_split=ts, horizon=4,
+                                factor_origin="generted")  # typo
 
 
 if __name__ == "__main__":
