@@ -151,6 +151,50 @@ class IsWindowedPanelLeakageTests(unittest.TestCase):
         with self.assertRaises(IsEndLeakageError):
             IsWindowedPanel(factor_panel=panel, label=label, is_end=cal[10], horizon=4, open_days=cal)
 
+    def test_build_is_multiindex_level_order_invariant(self):
+        # REGRESSION (real-data dry-run 2026-06-01): compute_factors returns a
+        # (datetime, instrument) panel, but build_is_windowed_panel hardcoded an
+        # (instrument, datetime) future index, so the POSITIONAL reindex matched NOTHING ->
+        # all-NaN label -> "empty factor panel / label" IsEndLeakageError. Every prior
+        # fixture used (instrument, datetime), so the integration point was untested. The
+        # builder must produce identical, correct labels for EITHER input level order.
+        insts = ["000001_SZ", "000002_SZ"]
+        cal = pd.bdate_range("2020-01-01", periods=10)
+        open_days = list(cal)
+        h = 2
+        is_end = cal[-1]
+        recs = []
+        for d in cal:
+            for inst in insts:
+                base = 100.0 if inst == insts[0] else 200.0
+                recs.append({"instrument": inst, "datetime": d,
+                             "f1": float(open_days.index(d)), "adj": base + open_days.index(d)})
+        long = pd.DataFrame(recs)
+
+        def _build(order):
+            idx = pd.MultiIndex.from_frame(long[list(order)])
+            fp = long.set_index(idx)[["f1"]]
+            ac = long.set_index(idx)["adj"]
+            return build_is_windowed_panel(fp, ac, is_end=is_end, horizon=h, trade_cal=open_days)
+
+        di = _build(("datetime", "instrument"))   # the REAL compute_factors order
+        idd = _build(("instrument", "datetime"))   # the legacy fixture order
+
+        # non-empty + correct boundary: last usable factor date is open_days[-1-h]
+        self.assertFalse(di.factor_panel.empty)
+        self.assertEqual(di.max_factor_date, cal[-1 - h])
+        self.assertLessEqual(di.max_label_realization_date, pd.Timestamp(is_end))
+        # concrete forward return: 000001_SZ at cal[0] (price 100) -> r=cal[2] (price 102)
+        v = di.label.reset_index()
+        v = v[(v["instrument"] == "000001_SZ") & (v["datetime"] == cal[0])]["label"].iloc[0]
+        self.assertAlmostEqual(float(v), 102.0 / 100.0 - 1.0)
+        # order invariance: identical label sets regardless of input level order
+        la = di.label.reset_index()[["instrument", "datetime", "label"]] \
+            .sort_values(["instrument", "datetime"]).reset_index(drop=True)
+        lb = idd.label.reset_index()[["instrument", "datetime", "label"]] \
+            .sort_values(["instrument", "datetime"]).reset_index(drop=True)
+        pd.testing.assert_frame_equal(la, lb)
+
 
 class LoadIsPanelSpyTests(unittest.TestCase):
     def test_load_uses_horizons_none_and_end_at_is_end(self):
