@@ -1072,12 +1072,21 @@ class FactorRegistryStore:
         ``run_type='factor_lifecycle'``, ``formal_evidence_eligible=True``, IS-only metrics
         (``is_rank_icir`` = heldout ICIR, ``sign_consistency``), NO ``oos_*``. Idempotent
         per ``(run_id, factor_id, version)`` so a retry after a status-write failure does
-        not duplicate rows (GPT slice-1 risk). Writes EVIDENCE only — never ``status``."""
+        not duplicate rows. Writes EVIDENCE only — never ``status``.
+
+        FAIL-CLOSED (GPT PR-#34 review): because this is itself a FORMAL-evidence writer,
+        it INDEPENDENTLY re-checks definition drift (mirrors ``import_revalidation``) — a
+        factor whose registry ``definition_hash`` != the current code-catalog hash, or that
+        is unknown to the registry, is SKIPPED (never attached to an ambiguous definition)
+        and reported in ``skipped_drift`` / ``skipped_unknown``. ``selected_fold_count``
+        carries ``n_heldout_blocks``."""
         now = generated_at or _now_str()
+        code_hashes = self.current_catalog_definition_hashes()
         current = self.factor_master[self.factor_master["is_current"].fillna(False)]
         evidence_rows: list[FactorEvidenceRecord] = []
         attached: list[str] = []
         skipped_unknown: list[str] = []
+        skipped_drift: list[str] = []
         for v in verdicts:
             fid = _coerce_string(v.get("factor"))
             match = current[current["factor_id"] == fid] if fid else current.iloc[0:0]
@@ -1085,19 +1094,26 @@ class FactorRegistryStore:
                 skipped_unknown.append(fid)
                 continue
             row = match.sort_values("version").iloc[-1]
+            registry_hash = _coerce_string(row.get("definition_hash"))
+            code_hash = code_hashes.get(fid)
+            if not registry_hash or code_hash is None or registry_hash != code_hash:
+                # FAIL-CLOSED: drifted (or unknown to catalog) -> no FORMAL evidence.
+                skipped_drift.append(fid)
+                continue
             evidence_rows.append(FactorEvidenceRecord(
                 run_id=run_id, run_type="factor_lifecycle", factor_id=fid,
                 version=int(row["version"]), is_current_at_import=True,
                 grade="", rank_icir_5d=None, mean_rank_ic_5d=None, ic_hit_rate_5d=None,
                 monotonic=None, best_decay_horizon=None, peak_decay_icir=None,
-                ls_ann_return=None, validation_pass_count=None, selected_fold_count=None,
+                ls_ann_return=None, validation_pass_count=None,
+                selected_fold_count=_coerce_int(v.get("n_heldout_blocks")),
                 avg_validation_rank_icir=None, source_run_dir=str(source_run_dir), evidence_time=now,
                 is_rank_icir=_coerce_float(v.get("heldout_rank_icir")), oos_rank_icir=None,
                 sign_consistency=_coerce_float(v.get("sign_consistency")),
                 oos_ls_sharpe=None, retain_pct=None, lo_excess_ann_gross=None,
                 lo_sharpe_gross=None, lo_hit=None,
                 evidence_class=str(evidence_class), formal_evidence_eligible=True,
-                source_path="", source_hash=_coerce_string(row.get("definition_hash")),
+                source_path="", source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
             ))
             attached.append(fid)
@@ -1120,7 +1136,12 @@ class FactorRegistryStore:
             )
             self.factor_evidence = pd.concat([existing, new_df], ignore_index=True)
             self.refresh_master_derived_fields()
-        return {"run_id": run_id, "attached": sorted(attached), "skipped_unknown": sorted(skipped_unknown)}
+        return {
+            "run_id": run_id,
+            "attached": sorted(attached),
+            "skipped_drift": sorted(skipped_drift),
+            "skipped_unknown": sorted(skipped_unknown),
+        }
 
     def set_status(
         self,

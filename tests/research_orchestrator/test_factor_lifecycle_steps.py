@@ -279,8 +279,10 @@ class FactorLifecyclePublishTests(unittest.TestCase):
         step = next(s for s in dag.steps if s.handler == "factor_lifecycle_registry_publish")
         step_dir = root / "step"
         step_dir.mkdir(parents=True, exist_ok=True)
-        rows = [{"factor": f, "status": "candidate", "heldout_rank_icir": 0.15, "sign_consistency": 0.8} for f in candidates]
-        rows += [{"factor": f, "status": "draft", "heldout_rank_icir": 0.04, "sign_consistency": 0.5} for f in drafts]
+        rows = [{"factor": f, "status": "candidate", "heldout_rank_icir": 0.15,
+                 "sign_consistency": 0.8, "n_heldout_blocks": 3} for f in candidates]
+        rows += [{"factor": f, "status": "draft", "heldout_rank_icir": 0.04,
+                  "sign_consistency": 0.5, "n_heldout_blocks": 3} for f in drafts]
         state = {
             "factor_lifecycle": {"walk_forward_rows": rows, "evidence_kind": "a_priori"},
             "step_outputs": {"gate_review": {"decision": decision}},
@@ -313,6 +315,28 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertTrue(bool(ev.iloc[0]["formal_evidence_eligible"]))  # FORMAL evidence
             self.assertTrue(pd.isna(ev.iloc[0]["oos_rank_icir"]))          # IS-only, no oos
             self.assertTrue(str(ev.iloc[0]["source_hash"]))                # definition-bound
+            self.assertEqual(int(ev.iloc[0]["selected_fold_count"]), 3)    # n_heldout_blocks mapped
+            # produced_objects for lineage (GPT PR-#34), recorded at status candidate
+            po = result.outputs["produced_objects"]
+            self.assertEqual({o["object_id"] for o in po}, {"mom_return_5d", "val_bp"})
+            self.assertTrue(all(o["status"] == "candidate" and o["registry"] == "factor_registry" for o in po))
+
+    def test_evidence_skips_drifted_factor_fail_closed(self):
+        # GPT PR-#34: record_lifecycle_evidence is itself a formal-evidence writer and must
+        # independently fail-closed on definition drift (not rely on the resolver's P1.3).
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d"])
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            idx = store.factor_master.index[
+                (store.factor_master["factor_id"] == "mom_return_5d")
+                & (store.factor_master["is_current"].fillna(False))
+            ][0]
+            store.factor_master.at[idx, "definition_hash"] = "dead" * 16  # drift vs catalog
+            store.save()
+            result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertEqual(result.outputs["promoted_to_candidate"], [])   # drift -> not promoted
+            self.assertIn("mom_return_5d", result.outputs["skipped_drift"])
+            self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")  # status unchanged
 
     def test_non_approved_decisions_write_nothing(self):
         for decision in ("rejected", "quarantined", ""):

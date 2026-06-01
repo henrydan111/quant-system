@@ -378,12 +378,29 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             promoted.append(fid)
     store.save()
 
+    # produced_objects for orchestrator lineage (GPT PR-#34 review): the promoted factors,
+    # recorded at lifecycle status `candidate` (never typed-registry `approved` artifacts).
+    produced_objects = [
+        {"registry": "factor_registry", "object_type": "factor", "object_id": fid, "status": "candidate"}
+        for fid in sorted(promoted)
+    ]
     outputs = {
         "decision": "approved",
         "evidence_attached": ev_report["attached"],
         "promoted_to_candidate": sorted(promoted),
         "published": len(promoted),
-        "skipped_unknown": ev_report["skipped_unknown"],
+        "skipped_drift": ev_report.get("skipped_drift", []),
+        "skipped_unknown": ev_report.get("skipped_unknown", []),
+        "produced_objects": produced_objects,
+        "registry_payloads": {"factor_registry_publish": {
+            "promoted_to_candidate": sorted(promoted),
+            "evidence_attached": ev_report["attached"],
+            "skipped_drift": ev_report.get("skipped_drift", []),
+            "skipped_unknown": ev_report.get("skipped_unknown", []),
+        }},
     }
     write_json(context.step_dir / "step_outputs.json", outputs)
-    return StepExecutionResult(status="completed", outputs=outputs)
+    return StepExecutionResult(
+        status="completed", outputs=outputs,
+        summary={"produced_object_count": len(produced_objects)},
+    )

@@ -1055,7 +1055,11 @@ def _register_builtin_profiles() -> None:
         ResearchProfile(
             profile_id="factor_lifecycle",
             supported_modes=("formal",),  # the draft->candidate gate is a formal decision
-            consumes_types=("factor", "composite_factor"),
+            # BASE factors only (GPT PR-#34 review): the dataset_build computes via
+            # load_is_windowed_panel (base Qlib expressions). Composite / industry-relative
+            # gating (Layer-2 add_composites) is a documented follow-up; advertising only
+            # `factor` keeps the profile faithful to what it actually gates.
+            consumes_types=("factor",),
             produces_types=("factor",),  # same factors, now at status candidate (or left draft)
             default_capabilities=(
                 "object_resolver",

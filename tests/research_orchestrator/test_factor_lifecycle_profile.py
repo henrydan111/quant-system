@@ -30,7 +30,8 @@ class FactorLifecycleProfileTests(unittest.TestCase):
     def test_profile_registered_formal_only(self):
         profile = profile_registry().get("factor_lifecycle")
         self.assertEqual(profile.supported_modes, ("formal",))
-        self.assertIn("factor", profile.consumes_types)
+        # BASE factors only (GPT PR-#34): composite_factor is NOT advertised (deferred).
+        self.assertEqual(profile.consumes_types, ("factor",))
         self.assertEqual(profile.produces_types, ("factor",))
         self.assertEqual(profile.execution_model, "dag")
 
