@@ -22,6 +22,9 @@ from typing import Any
 
 from src.research_orchestrator.dag import StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.runtime import write_json
+# Top-level so tests can monkeypatch `factor_lifecycle_steps.load_is_windowed_panel`
+# (no import cycle: walk_forward_validation does not import research_orchestrator).
+from src.alpha_research.factor_lifecycle.walk_forward_validation import load_is_windowed_panel
 
 # The lifecycle resolver allow-set: the gate INPUT is draft factors, so `draft` is
 # ACCEPTED (unlike validation_object_resolver's {formal} set). stale / deprecated / plain
@@ -144,4 +147,81 @@ def handle_factor_lifecycle_object_resolver(context: StepExecutionContext) -> St
         "field_ineligible_factors": sorted(n for n, ok in field_eligible.items() if not ok),
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
+    return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _lifecycle_time_split(request: Any):
+    """The IS/OOS window for a lifecycle run — from ``request.inputs['time_split']`` (a
+    TimeSplit dict) or ``hypothesis.time_split``. Required (no default)."""
+    from src.alpha_research.walk_forward import TimeSplit
+
+    inputs = getattr(request, "inputs", {}) or {}
+    ts = inputs.get("time_split")
+    if isinstance(ts, dict):
+        return TimeSplit.from_dict(ts)
+    hyp = getattr(request, "hypothesis", None)
+    if hyp is not None and getattr(hyp, "time_split", None) is not None:
+        return hyp.time_split
+    raise ValueError(
+        "factor_lifecycle requires a time_split (request.inputs['time_split'] or hypothesis.time_split)"
+    )
+
+
+def handle_factor_lifecycle_dataset_build(context: StepExecutionContext) -> StepExecutionResult:
+    """Phase 5 slice 3: build the IS-only windowed panel for the GATE input. Field-
+    ineligible factors (from the resolver's per-factor `field_eligible`) are EXCLUDED from
+    compute (marked `draft`, recorded) — a disallowed `$field` never reaches
+    ``load_is_windowed_panel``. The panel is IS-only (structurally `is_end`-bounded by the
+    Phase-4 builder); the profile has no OOS stage. The IsWindowedPanel (non-serializable)
+    is passed to the walk-forward step via ``context.state``; only a summary is written.
+
+    Scope note: base factors are gated directly; composite / industry-relative factors in
+    the batch are recorded as `non_base_deferred` (their Layer-2 compute via
+    ``add_composites`` is a documented follow-up — the base-factor gate is the
+    leakage-critical core)."""
+    resolver_out = context.state.get("step_outputs", {}).get("factor_lifecycle_object_resolver", {})
+    field_eligible = dict(resolver_out.get("field_eligible", {}))
+    if not field_eligible:
+        raise ValueError(
+            "factor_lifecycle_dataset_build: missing field_eligible from the resolver step"
+        )
+    eligible = sorted(n for n, ok in field_eligible.items() if ok)
+    excluded = sorted(n for n, ok in field_eligible.items() if not ok)
+
+    time_split = _lifecycle_time_split(context.request)
+    inputs = getattr(context.request, "inputs", {}) or {}
+    horizon = int(inputs.get("horizon", 20))
+    qlib_dir = inputs.get("qlib_dir")
+
+    from src.alpha_research.factor_library.catalog import get_factor_catalog
+
+    full = get_factor_catalog(include_new_data=True)
+    eligible_base = {n: full[n] for n in eligible if n in full}
+    non_base_deferred = sorted(n for n in eligible if n not in full)
+    if not eligible_base:
+        raise ValueError(
+            "factor_lifecycle_dataset_build: no eligible BASE factors to gate "
+            f"(excluded {len(excluded)} field-ineligible; {len(non_base_deferred)} non-base deferred)"
+        )
+
+    panel = load_is_windowed_panel(eligible_base, time_split, horizon=horizon, qlib_dir=qlib_dir)
+
+    # Pass the (non-serializable) panel + the excluded/draft sets to the walk-forward step.
+    lifecycle_state = context.state.setdefault("factor_lifecycle", {})
+    lifecycle_state["panel"] = panel
+    lifecycle_state["excluded_factors"] = excluded
+    lifecycle_state["non_base_deferred"] = non_base_deferred
+    lifecycle_state["horizon"] = horizon
+
+    outputs = {
+        "eligible_count": len(eligible),
+        "field_ineligible_count": len(excluded),
+        "field_ineligible_factors": excluded,
+        "gated_base_factors": sorted(eligible_base),
+        "non_base_deferred": non_base_deferred,
+        "is_window": {"is_start": time_split.is_start, "is_end": time_split.is_end},
+        "horizon": horizon,
+        "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
+    }
+    write_json(context.step_dir / "step_outputs.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)

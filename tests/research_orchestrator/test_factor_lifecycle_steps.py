@@ -83,5 +83,76 @@ class FactorLifecycleResolverTests(unittest.TestCase):
                 handle_factor_lifecycle_object_resolver(ctx)
 
 
+class FactorLifecycleDatasetBuildTests(unittest.TestCase):
+    def _temp(self):
+        WORKSPACE_OUTPUTS.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix="p5_dataset_", dir=WORKSPACE_OUTPUTS)
+
+    def _context(self, root: Path):
+        request = ResearchRequest(
+            profile_id="factor_lifecycle", mode="formal",
+            inputs={
+                "output_dir": str(root),
+                "time_split": {"is_start": "2014-01-01", "is_end": "2020-12-31",
+                               "oos_start": "2021-01-01", "oos_end": "2022-01-01"},
+                "horizon": 20,
+            },
+        )
+        profile = profile_registry().get("factor_lifecycle")
+        dag = profile.dag_builder(request, list(profile.default_capabilities))
+        step = next(s for s in dag.steps if s.handler == "factor_lifecycle_dataset_build")
+        step_dir = root / "step"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        return StepExecutionContext(
+            request=request, profile=profile, dag=dag, step=step, run_dir=root,
+            step_dir=step_dir, registry_dirs={}, effective_capabilities=[],
+            effective_capability_metadata=[], state={},
+        )
+
+    def test_dataset_build_excludes_field_ineligible_from_compute(self):
+        import types
+        from unittest.mock import patch
+        import pandas as pd
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            # resolver output: 2 eligible base factors + 1 field-INELIGIBLE base factor
+            ctx.state["step_outputs"] = {
+                "factor_lifecycle_object_resolver": {
+                    "field_eligible": {"mom_return_5d": True, "val_bp": True, "qual_roe": False},
+                }
+            }
+            captured = {}
+
+            def spy(catalog, time_split, *, horizon=20, qlib_dir=None, **kw):
+                captured["catalog"] = dict(catalog)
+                captured["horizon"] = horizon
+                return types.SimpleNamespace(max_label_realization_date=pd.Timestamp("2020-12-01"))
+
+            with patch.object(fls, "load_is_windowed_panel", spy):
+                result = fls.handle_factor_lifecycle_dataset_build(ctx)
+
+            # the field-ineligible factor NEVER reaches the compute catalog
+            self.assertIn("mom_return_5d", captured["catalog"])
+            self.assertIn("val_bp", captured["catalog"])
+            self.assertNotIn("qual_roe", captured["catalog"])
+            self.assertEqual(captured["horizon"], 20)
+            self.assertEqual(result.outputs["field_ineligible_factors"], ["qual_roe"])
+            self.assertEqual(set(result.outputs["gated_base_factors"]), {"mom_return_5d", "val_bp"})
+            # the panel is passed to the walk-forward step via state
+            self.assertIn("panel", ctx.state["factor_lifecycle"])
+
+    def test_dataset_build_raises_if_no_eligible_base(self):
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            ctx.state["step_outputs"] = {
+                "factor_lifecycle_object_resolver": {"field_eligible": {"mom_return_5d": False}}
+            }
+            with self.assertRaises(ValueError):
+                fls.handle_factor_lifecycle_dataset_build(ctx)
+
+
 if __name__ == "__main__":
     unittest.main()
