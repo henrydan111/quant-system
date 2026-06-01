@@ -201,11 +201,39 @@ def build_is_windowed_panel(
     insts = factor_panel.index.get_level_values("instrument")
     dts = factor_panel.index.get_level_values("datetime")
     r_for_rows = pd.DatetimeIndex([real_map.get(d, pd.NaT) for d in dts])
-    future_index = pd.MultiIndex.from_arrays([insts, r_for_rows], names=["instrument", "datetime"])
 
-    cur = adj.reindex(factor_panel.index).to_numpy()
-    fut = adj.reindex(future_index).to_numpy()  # adj at the EXACT calendar r(t); missing -> NaN
-    label_vals = fut / cur - 1.0
+    # The future-price lookup reindexes ``adj`` POSITIONALLY by MultiIndex level, so
+    # ``future_index`` MUST carry the SAME level order as the factor panel, and ``adj`` MUST
+    # share it too. ``compute_factors`` returns (datetime, instrument); a hardcoded
+    # (instrument, datetime) future index silently matches NOTHING and yields an all-NaN
+    # label (real-data dry-run finding, 2026-06-01 — the synthetic fixtures only ever used
+    # (instrument, datetime) order so the integration point was untested). Be robust to
+    # EITHER input order, mirroring the factor_eval helpers' MultiIndex normalization.
+    names = list(factor_panel.index.names)
+    if set(names) != {"instrument", "datetime"}:
+        raise IsEndLeakageError(
+            f"build_is_windowed_panel expects an (instrument, datetime) MultiIndex; got names={names}"
+        )
+    if list(adj.index.names) != names:
+        adj = adj.reorder_levels(names).sort_index()
+    _future_levels = {"datetime": r_for_rows, "instrument": insts}
+    future_index = pd.MultiIndex.from_arrays(
+        [_future_levels[name] for name in names], names=names,
+    )
+
+    cur = adj.reindex(factor_panel.index)
+    fut = adj.reindex(future_index)  # adj at the EXACT calendar r(t); missing -> NaN
+    # Defensive guard: if current prices matched but EVERY future price is NaN, the reindex
+    # aligned on the wrong levels (a MultiIndex-order regression) rather than hitting a
+    # legitimately empty window — fail loud with a diagnosable message instead of the
+    # generic "empty factor panel / label" from IsWindowedPanel.__post_init__.
+    if bool(cur.notna().any()) and not bool(fut.notna().any()):
+        raise IsEndLeakageError(
+            "build_is_windowed_panel: future-price reindex matched zero rows while current "
+            f"prices matched (factor names={names}, adj names={list(adj.index.names)}) — "
+            "MultiIndex level-order mismatch, not an empty window."
+        )
+    label_vals = fut.to_numpy() / cur.to_numpy() - 1.0
     label = pd.Series(label_vals, index=factor_panel.index, name="label").dropna()
     aligned = factor_panel.loc[label.index]
     return IsWindowedPanel(

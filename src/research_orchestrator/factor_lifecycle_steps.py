@@ -341,9 +341,21 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     / missing / unknown -> NO status writes. NEVER writes ``approved`` (that stays behind
     the P1.1 promotion gate, unreachable from here)."""
     decision = _read_gate_decision(context)
+    # RESUME-SAFETY (real-data finding 2026-06-01): the gate pauses
+    # (gate_concern_scoring/gate_review) split the run across processes, and
+    # reconstruct_state_from_completed_steps restores ONLY step_outputs on resume — the
+    # in-memory context.state["factor_lifecycle"] dict (panel + walk_forward_rows) does NOT
+    # survive. Read the verdicts from the PERSISTED walk_forward step_outputs
+    # (factor_verdicts + evidence_kind), which ARE restored, falling back to the in-memory
+    # state only for the single-process / no-pause path (tests + back-compat).
+    wf_out = dict(context.state.get("step_outputs", {}).get("factor_lifecycle_walk_forward", {}))
     lifecycle_state = context.state.get("factor_lifecycle", {})
-    verdicts = list(lifecycle_state.get("walk_forward_rows", []))
-    evidence_kind = str(lifecycle_state.get("evidence_kind", ""))
+    if "factor_verdicts" in wf_out:
+        verdicts = list(wf_out.get("factor_verdicts", []))
+        evidence_kind = str(wf_out.get("evidence_kind", ""))
+    else:
+        verdicts = list(lifecycle_state.get("walk_forward_rows", []))
+        evidence_kind = str(lifecycle_state.get("evidence_kind", ""))
     candidate_verdicts = [v for v in verdicts if v.get("status") == "candidate"]
 
     if decision != "approved":

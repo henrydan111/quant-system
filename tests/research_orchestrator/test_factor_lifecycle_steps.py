@@ -321,6 +321,28 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertEqual({o["object_id"] for o in po}, {"mom_return_5d", "val_bp"})
             self.assertTrue(all(o["status"] == "candidate" and o["registry"] == "factor_registry" for o in po))
 
+    def test_publish_reads_verdicts_from_persisted_step_outputs_on_resume(self):
+        # RESUME-SAFETY regression (real orchestrator run, 2026-06-01): the gate pauses
+        # (gate_concern_scoring/gate_review) split the run across processes, and
+        # reconstruct_state_from_completed_steps restores ONLY step_outputs on resume — the
+        # in-memory context.state["factor_lifecycle"] dict (walk_forward_rows) does NOT
+        # survive. Publish must read the verdicts from the PERSISTED walk_forward
+        # step_outputs. Pre-fix (in-memory only) -> promotes NOTHING on a resumed run.
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d", "val_bp"], drafts=["qual_roe"])
+            # simulate resume: the in-memory factor_lifecycle dict is GONE; verdicts live
+            # only in the restored walk_forward step_outputs.
+            verdicts = list(ctx.state["factor_lifecycle"]["walk_forward_rows"])
+            ev_kind = ctx.state["factor_lifecycle"]["evidence_kind"]
+            ctx.state.pop("factor_lifecycle")
+            ctx.state["step_outputs"]["factor_lifecycle_walk_forward"] = {
+                "factor_verdicts": verdicts, "evidence_kind": ev_kind,
+            }
+            result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertEqual(set(result.outputs["promoted_to_candidate"]), {"mom_return_5d", "val_bp"})
+            self.assertEqual(self._status_of(rd, "mom_return_5d"), "candidate")
+            self.assertEqual(self._status_of(rd, "qual_roe"), "draft")  # draft verdict NOT promoted
+
     def test_evidence_skips_drifted_factor_fail_closed(self):
         # GPT PR-#34: record_lifecycle_evidence is itself a formal-evidence writer and must
         # independently fail-closed on definition drift (not rely on the resolver's P1.3).
