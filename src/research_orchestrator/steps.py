@@ -54,6 +54,10 @@ from src.research_orchestrator.validation_steps import (
     handle_validation_gate_review_oos as _validation_handle_gate_review_oos,
     handle_validation_registry_publish as _validation_handle_registry_publish,
 )
+# factor_lifecycle plan Phase 5: the IS-only draft->candidate factor-gate handlers.
+from src.research_orchestrator.factor_lifecycle_steps import (
+    handle_factor_lifecycle_object_resolver as _factor_lifecycle_handle_object_resolver,
+)
 from src.research_orchestrator.dag import PauseForInputPayload, StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.ml_signal_steps import (
     run_ml_dataset_build_step,
@@ -1774,4 +1778,6 @@ HANDLER_REGISTRY = {
     "validation_gate_concerns_oos": _validation_handle_gate_concerns_oos,
     "validation_gate_review_oos": _validation_handle_gate_review_oos,
     "validation_registry_publish": _validation_handle_registry_publish,
+    # factor_lifecycle plan Phase 5 (slice 2; remaining handlers land in later slices).
+    "factor_lifecycle_object_resolver": _factor_lifecycle_handle_object_resolver,
 }
