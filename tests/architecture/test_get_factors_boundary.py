@@ -33,6 +33,9 @@ FORMAL_PATHS: tuple[Path, ...] = (
     PROJECT_ROOT / "src" / "research_orchestrator" / "resolver.py",
     PROJECT_ROOT / "src" / "research_orchestrator" / "steps.py",
     PROJECT_ROOT / "src" / "research_orchestrator" / "sealed_backtest_runner.py",
+    # Gate C of hypothesis_validation: universe materialization on the formal compute
+    # path (imported by validation_steps.py). Reviewer-flagged (PR #32).
+    PROJECT_ROOT / "src" / "research_orchestrator" / "prescription_runtime.py",
     PROJECT_ROOT / "src" / "backtest_engine" / "event_driven",
     PROJECT_ROOT / "src" / "backtest_engine" / "vectorized",
 )

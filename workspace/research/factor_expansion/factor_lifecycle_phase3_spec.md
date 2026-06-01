@@ -213,3 +213,14 @@ green (name-parity, compute-readiness, formal-stage refusal, AST-usage boundary,
 registry-raises, status-filter, sync parity); `get_factor_catalog` + all 42 consumers unchanged; CLAUDE.md §3
 + AGENTS.md §2a Phase-3 entry added (same pass, §11.2); full offline suite green. Then Phase 4
 (`factor_lifecycle/` modules) begins.
+
+## Post-implementation review (PR #32) — 2 fixes, then GO
+GPT reviewed the implemented P3.1-P3.2 (ran the 19-test suite) and returned NO-GO with 2 small fixes, both
+on the safety surface; both integrated → GO:
+1. **`parity_ok` ignored `registry_only`.** `sync_catalog_to_registry`'s `parity_ok` was
+   `not catalog_only and not drifted` — so an ORPHAN current registry row (a factor removed from code but
+   still `is_current`) falsely reported parity. Now also requires `not registry_only`. Regression test
+   `test_sync_parity_ok_false_when_registry_only_orphan_present` (fails on the pre-fix formula).
+2. **AST boundary list missed `prescription_runtime`.** That module is the hypothesis_validation Gate-C
+   universe-materialization step on the formal compute path (imported by `validation_steps`), so it was
+   added to `FORMAL_PATHS` in the AST-usage boundary test. Suite: 21 passed.

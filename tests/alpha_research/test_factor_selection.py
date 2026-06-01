@@ -223,6 +223,28 @@ class FactorSelectionTests(unittest.TestCase):
             self.assertTrue(dry2["parity_ok"])
             self.assertEqual(dry2["new_drafts"], [])
 
+    def test_sync_parity_ok_false_when_registry_only_orphan_present(self):
+        # GPT PR-#32 finding 1: an orphan current registry row (a factor removed from
+        # code but still is_current) is a parity violation — parity_ok must be False even
+        # when catalog_only and drifted are empty. (Pre-fix parity_ok ignored
+        # registry_only, so this asserted False where the buggy code returned True.)
+        import pandas as pd
+        from src.alpha_research.factor_library import sync_catalog_to_registry
+        with self._temp_dir("sel_sync_orphan") as d:
+            store = self._synced_store(d)
+            ghost = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0].copy()
+            ghost["factor_id"] = "ghost_removed_from_code"
+            ghost["version"] = 1
+            store.factor_master = pd.concat(
+                [store.factor_master, pd.DataFrame([ghost])], ignore_index=True
+            )
+            store.save()
+            rep = sync_catalog_to_registry(registry_dir=d, dry_run=True)
+            self.assertIn("ghost_removed_from_code", rep["registry_only"])
+            self.assertEqual(rep["catalog_only"], [])   # the code catalog is fully present
+            self.assertEqual(rep["new_versions"], [])    # nothing drifted
+            self.assertFalse(rep["parity_ok"])           # but NOT parity: orphan present
+
     # ── P3.1: prioritize ordering ──────────────────────────────────────────
     def test_prioritize_orders_without_filtering(self):
         with self._temp_dir("sel_prio") as d:

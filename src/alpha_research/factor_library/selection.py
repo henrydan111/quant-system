@@ -441,7 +441,10 @@ def sync_catalog_to_registry(
             "new_versions": pre_drifted,
             "catalog_only": pre_catalog_only,
             "registry_only": pre_registry_only,
-            "parity_ok": not pre_catalog_only and not pre_drifted,
+            # parity requires the registry to MATCH the code catalog exactly: no missing
+            # factors (catalog_only), no drifted defs, AND no orphan current rows for
+            # factors removed from code (registry_only).
+            "parity_ok": not pre_catalog_only and not pre_drifted and not pre_registry_only,
         }
 
     result = store.sync_catalog(record_run=record_run)
@@ -454,5 +457,5 @@ def sync_catalog_to_registry(
         "new_versions": pre_drifted,
         "catalog_only": post_catalog_only,
         "registry_only": post_registry_only,
-        "parity_ok": not post_catalog_only and not post_drifted,
+        "parity_ok": not post_catalog_only and not post_drifted and not post_registry_only,
     }
