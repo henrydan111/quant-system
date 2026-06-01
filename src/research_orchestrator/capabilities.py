@@ -36,6 +36,11 @@ CAPABILITY_SPECS: dict[str, dict[str, str]] = {
         "category": "core_research",
         "description": "Screen, evaluate, deduplicate, and rank factor candidates.",
     },
+    "walk_forward_validation": {
+        "category": "core_research",
+        "description": "Run the IS-only walk-forward factor validator (the factor-lifecycle "
+                       "draft->candidate gate; structurally bounded to TimeSplit.is_end).",
+    },
     "signal_search": {
         "category": "core_research",
         "description": "Combine factors into signals and search signal recipes or parameters.",
