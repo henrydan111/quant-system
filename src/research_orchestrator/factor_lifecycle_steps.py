@@ -320,3 +320,70 @@ def handle_factor_lifecycle_walk_forward(context: StepExecutionContext) -> StepE
     }
     write_json(context.step_dir / "step_outputs.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)
+
+
+def _read_gate_decision(context: StepExecutionContext) -> str:
+    """The injected gate_review step's decision ("approved"/"rejected"/"quarantined"/"")."""
+    gate_outputs = dict(context.state.get("step_outputs", {}).get("gate_review", {}))
+    decision = str(gate_outputs.get("decision", "") or "")
+    if not decision:
+        decision = str(dict(gate_outputs.get("verdict", {})).get("decision", "") or "")
+    return decision
+
+
+def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> StepExecutionResult:
+    """Phase 5 slice 6: DIRECT decision matrix (must-fix #2 — NOT
+    ``_assert_gate_allows_publication``, whose ``quarantined`` -> ``under_review`` has no
+    factor-registry status). ONLY a human ``approved`` decision promotes passing factors:
+    for each ``candidate``-verdict factor, write a FORMAL lifecycle evidence row FIRST
+    (idempotent, definition-bound, ``formal_evidence_eligible=True``) THEN
+    ``set_status(candidate)`` (non-privileged; NO git-sha). ``rejected`` / ``quarantined``
+    / missing / unknown -> NO status writes. NEVER writes ``approved`` (that stays behind
+    the P1.1 promotion gate, unreachable from here)."""
+    decision = _read_gate_decision(context)
+    lifecycle_state = context.state.get("factor_lifecycle", {})
+    verdicts = list(lifecycle_state.get("walk_forward_rows", []))
+    evidence_kind = str(lifecycle_state.get("evidence_kind", ""))
+    candidate_verdicts = [v for v in verdicts if v.get("status") == "candidate"]
+
+    if decision != "approved":
+        outputs = {
+            "decision": decision or "(missing)",
+            "promoted_to_candidate": [],
+            "published": 0,
+            "reason": f"gate decision={decision or '(missing)'!r} != approved -> NO candidate promotions",
+        }
+        write_json(context.step_dir / "step_outputs.json", outputs)
+        return StepExecutionResult(status="completed", outputs=outputs)
+
+    from src.alpha_research.factor_registry import FactorRegistryStore
+
+    rd = context.registry_dirs
+    store = FactorRegistryStore(rd["factor_registry_dir"])
+    run_id = Path(str(context.run_dir)).name or "factor_lifecycle_run"
+
+    # Evidence FIRST (idempotent), then the non-privileged candidate status change.
+    ev_report = store.record_lifecycle_evidence(
+        run_id=run_id, verdicts=candidate_verdicts, evidence_class=evidence_kind,
+        source_run_dir=str(context.run_dir),
+    )
+    promoted: list[str] = []
+    for v in candidate_verdicts:
+        fid = str(v.get("factor", ""))
+        if fid and fid in ev_report["attached"]:
+            store.set_status(
+                factor_id=fid, status="candidate",
+                reason=f"factor_lifecycle IS-heldout gate ({evidence_kind})", source_run_id=run_id,
+            )
+            promoted.append(fid)
+    store.save()
+
+    outputs = {
+        "decision": "approved",
+        "evidence_attached": ev_report["attached"],
+        "promoted_to_candidate": sorted(promoted),
+        "published": len(promoted),
+        "skipped_unknown": ev_report["skipped_unknown"],
+    }
+    write_json(context.step_dir / "step_outputs.json", outputs)
+    return StepExecutionResult(status="completed", outputs=outputs)

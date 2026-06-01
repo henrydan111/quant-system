@@ -64,6 +64,17 @@ class FactorLifecycleProfileTests(unittest.TestCase):
         self.assertLess(ids.index("factor_lifecycle_walk_forward"), ids.index("gate_review"))
         self.assertLess(ids.index("gate_review"), ids.index("registry_publish"))
 
+    def test_lifecycle_handlers_never_reference_holdout_seal(self):
+        # GPT slice-1 risk 2 (handler-level guard the DAG-only test cannot see): the seal
+        # claim only fires on `oos_test` (steps.py: _claim_holdout_access_if_needed), and
+        # the IS-only lifecycle handlers must never reach for it. Source-scan the lifecycle
+        # steps module so a future handler can't quietly open an OOS-seal path.
+        import src.research_orchestrator.factor_lifecycle_steps as fls
+        source = Path(fls.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("claim_holdout_access", source)
+        self.assertNotIn("HoldoutSealStore", source)
+        self.assertNotIn("oos_test", source)
+
 
 if __name__ == "__main__":
     unittest.main()

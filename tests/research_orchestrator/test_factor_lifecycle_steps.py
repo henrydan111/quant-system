@@ -4,12 +4,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from src.research_orchestrator import ResearchRequest, profile_registry
 from src.research_orchestrator.dag import StepExecutionContext
 from src.research_orchestrator.schema import AssetRef
 from src.research_orchestrator.factor_lifecycle_steps import (
     handle_factor_lifecycle_object_resolver,
     handle_factor_lifecycle_walk_forward,
+    handle_factor_lifecycle_registry_publish,
     per_factor_field_eligible,
 )
 from src.alpha_research.factor_registry import FactorRegistryStore
@@ -253,6 +256,85 @@ class FactorLifecycleGateMetricsTests(unittest.TestCase):
         self.assertEqual(mv["candidate_count"], 2)
         self.assertEqual(mv["tested_count"], 5)
         self.assertEqual(mv["effective_trials"], 6)           # tested 5 + field-ineligible 1
+
+
+class FactorLifecyclePublishTests(unittest.TestCase):
+    def _temp(self):
+        WORKSPACE_OUTPUTS.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix="p5_publish_", dir=WORKSPACE_OUTPUTS)
+
+    def _ctx(self, root: Path, decision: str, candidates, drafts=()):
+        registry_dirs = {
+            "factor_registry_dir": root / "factor_registry",
+            "candidate_registry_dir": root / "candidate_registry",
+        }
+        registry_dirs["factor_registry_dir"].mkdir(parents=True, exist_ok=True)
+        if not (registry_dirs["factor_registry_dir"] / "factor_master.parquet").exists():
+            store = FactorRegistryStore(registry_dirs["factor_registry_dir"])
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            store.save()
+        request = ResearchRequest(profile_id="factor_lifecycle", mode="formal", inputs={"output_dir": str(root)})
+        profile = profile_registry().get("factor_lifecycle")
+        dag = profile.dag_builder(request, list(profile.default_capabilities))
+        step = next(s for s in dag.steps if s.handler == "factor_lifecycle_registry_publish")
+        step_dir = root / "step"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        rows = [{"factor": f, "status": "candidate", "heldout_rank_icir": 0.15, "sign_consistency": 0.8} for f in candidates]
+        rows += [{"factor": f, "status": "draft", "heldout_rank_icir": 0.04, "sign_consistency": 0.5} for f in drafts]
+        state = {
+            "factor_lifecycle": {"walk_forward_rows": rows, "evidence_kind": "a_priori"},
+            "step_outputs": {"gate_review": {"decision": decision}},
+        }
+        return StepExecutionContext(
+            request=request, profile=profile, dag=dag, step=step, run_dir=root, step_dir=step_dir,
+            registry_dirs=registry_dirs, effective_capabilities=[], effective_capability_metadata=[], state=state,
+        ), registry_dirs
+
+    def _status_of(self, registry_dirs, factor_id):
+        store = FactorRegistryStore(registry_dirs["factor_registry_dir"])
+        cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+        return str(cur[cur["factor_id"] == factor_id].iloc[0]["status"])
+
+    def test_approved_promotes_candidates_writes_formal_evidence_never_approved(self):
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d", "val_bp"], drafts=["qual_roe"])
+            result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertEqual(set(result.outputs["promoted_to_candidate"]), {"mom_return_5d", "val_bp"})
+            self.assertEqual(self._status_of(rd, "mom_return_5d"), "candidate")
+            self.assertEqual(self._status_of(rd, "qual_roe"), "draft")  # draft verdict NOT promoted
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            self.assertNotIn("approved", set(cur["status"]))  # NEVER approved from this handler
+            ev = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == "mom_return_5d")
+                & (store.factor_evidence["run_type"] == "factor_lifecycle")
+            ]
+            self.assertEqual(len(ev), 1)
+            self.assertTrue(bool(ev.iloc[0]["formal_evidence_eligible"]))  # FORMAL evidence
+            self.assertTrue(pd.isna(ev.iloc[0]["oos_rank_icir"]))          # IS-only, no oos
+            self.assertTrue(str(ev.iloc[0]["source_hash"]))                # definition-bound
+
+    def test_non_approved_decisions_write_nothing(self):
+        for decision in ("rejected", "quarantined", ""):
+            with self._temp() as d:
+                ctx, rd = self._ctx(Path(d), decision, ["mom_return_5d"])
+                result = handle_factor_lifecycle_registry_publish(ctx)
+                self.assertEqual(result.outputs["published"], 0)
+                self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")  # unchanged
+
+    def test_evidence_idempotent_on_reapprove(self):
+        with self._temp() as d:
+            root = Path(d)
+            ctx1, rd = self._ctx(root, "approved", ["mom_return_5d"])
+            handle_factor_lifecycle_registry_publish(ctx1)
+            ctx2, _ = self._ctx(root, "approved", ["mom_return_5d"])  # same root -> same run_id
+            handle_factor_lifecycle_registry_publish(ctx2)
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            ev = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == "mom_return_5d")
+                & (store.factor_evidence["run_type"] == "factor_lifecycle")
+            ]
+            self.assertEqual(len(ev), 1)  # idempotent by (run_id, factor_id, version)
 
 
 if __name__ == "__main__":
