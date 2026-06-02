@@ -1051,6 +1051,32 @@ def forward_return(horizon):
 #  Used for cross-sectional operations.
 # ═══════════════════════════════════════════════════════════════════════
 
+def _date_level_key(series):
+    """The groupby key for a per-DATE cross-section.
+
+    PIT-safety hardening (Phase 7, GPT review): cross-sectional helpers MUST group by the
+    DATE level, not positional level 0. A positional ``groupby(level=0)`` on an
+    ``(instrument, datetime)`` panel silently ranks each stock ACROSS TIME — so the value at
+    factor date ``t`` would absorb that stock's values at ``t+1 … end``, INCLUDING dates after
+    that row's label-realization ``r(t)`` → a lookahead leak inside the IS window (same
+    MultiIndex-order class as the Phase-6 ``build_is_windowed_panel`` bug).
+
+    Prefer the level NAMED ``datetime`` (robust to either index order); else the
+    datetime-TYPED level by dtype; else FAIL CLOSED. A positional level-0 fallback is the leak
+    path and is intentionally NOT provided (GPT review: do not re-introduce it).
+    """
+    names = list(series.index.names)
+    if "datetime" in names:
+        return "datetime"
+    for i in range(series.index.nlevels):
+        if pd.api.types.is_datetime64_any_dtype(series.index.get_level_values(i)):
+            return i
+    raise ValueError(
+        "cross-sectional op requires a 'datetime' MultiIndex level; none found "
+        f"(index names={names})"
+    )
+
+
 def cs_rank(series):
     """Cross-sectional percentile rank per date.
 
@@ -1058,12 +1084,12 @@ def cs_rank(series):
     a value in [0, 1].
 
     Args:
-        series: pd.Series with MultiIndex(datetime, instrument).
+        series: pd.Series with MultiIndex(datetime, instrument) or (instrument, datetime).
 
     Returns:
         pd.Series with percentile ranks.
     """
-    return series.groupby(level=0).rank(pct=True)
+    return series.groupby(level=_date_level_key(series)).rank(pct=True)
 
 
 def cs_zscore(series):
@@ -1078,8 +1104,9 @@ def cs_zscore(series):
     Returns:
         pd.Series with z-scores.
     """
-    mean = series.groupby(level=0).transform('mean')
-    std = series.groupby(level=0).transform('std')
+    key = _date_level_key(series)
+    mean = series.groupby(level=key).transform('mean')
+    std = series.groupby(level=key).transform('std')
     return (series - mean) / std.replace(0, np.nan)
 
 
@@ -1092,7 +1119,7 @@ def cs_demean(series):
     Returns:
         pd.Series, demeaned.
     """
-    return series - series.groupby(level=0).transform('mean')
+    return series - series.groupby(level=_date_level_key(series)).transform('mean')
 
 
 def composite(df, factor_names, weights=None):
@@ -1200,7 +1227,7 @@ def winsorize(series, lower=0.01, upper=0.99):
         lo = group.quantile(lower)
         hi = group.quantile(upper)
         return group.clip(lo, hi)
-    return series.groupby(level=0).transform(_clip_group)
+    return series.groupby(level=_date_level_key(series)).transform(_clip_group)
 
 
 # ═══════════════════════════════════════════════════════════════════════

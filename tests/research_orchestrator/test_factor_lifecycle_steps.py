@@ -113,7 +113,9 @@ class FactorLifecycleDatasetBuildTests(unittest.TestCase):
             effective_capability_metadata=[], state={},
         )
 
-    def test_dataset_build_excludes_field_ineligible_from_compute(self):
+    def test_dataset_build_gates_base_composite_industry_excludes_ineligible(self):
+        # Phase 7: dataset_build splits eligible into base / composite / industry-relative and
+        # feeds the unified Layer-2 builder; field-ineligible factors never reach compute.
         import types
         from unittest.mock import patch
         import pandas as pd
@@ -121,31 +123,57 @@ class FactorLifecycleDatasetBuildTests(unittest.TestCase):
 
         with self._temp() as d:
             ctx = self._context(Path(d))
-            # resolver output: 2 eligible base factors + 1 field-INELIGIBLE base factor
             ctx.state["step_outputs"] = {
                 "factor_lifecycle_object_resolver": {
-                    "field_eligible": {"mom_return_5d": True, "val_bp": True, "qual_roe": False},
+                    "field_eligible": {
+                        "mom_return_5d": True, "val_bp": True,      # base
+                        "comp_small_value": True,                   # composite
+                        "val_bp_industry_rel": True,                # industry-relative
+                        "qual_roe": False,                          # field-INELIGIBLE
+                    },
                 }
             }
             captured = {}
 
-            def spy(catalog, time_split, *, horizon=20, qlib_dir=None, **kw):
-                captured["catalog"] = dict(catalog)
+            def spy(*, gated_base, gated_composite_defs, gated_industry_defs, time_split,
+                    horizon=20, qlib_dir=None, **kw):
+                captured["base"] = list(gated_base)
+                captured["composite"] = [x["name"] for x in gated_composite_defs]
+                captured["industry"] = [x["name"] for x in gated_industry_defs]
                 captured["horizon"] = horizon
                 return types.SimpleNamespace(max_label_realization_date=pd.Timestamp("2020-12-01"))
 
-            with patch.object(fls, "load_is_windowed_panel", spy):
+            with patch.object(fls, "load_is_windowed_panel_with_layer2", spy):
                 result = fls.handle_factor_lifecycle_dataset_build(ctx)
 
-            # the field-ineligible factor NEVER reaches the compute catalog
-            self.assertIn("mom_return_5d", captured["catalog"])
-            self.assertIn("val_bp", captured["catalog"])
-            self.assertNotIn("qual_roe", captured["catalog"])
+            self.assertEqual(set(captured["base"]), {"mom_return_5d", "val_bp"})
+            self.assertEqual(captured["composite"], ["comp_small_value"])
+            self.assertEqual(captured["industry"], ["val_bp_industry_rel"])
+            self.assertNotIn("qual_roe", captured["base"])     # field-ineligible never computed
             self.assertEqual(captured["horizon"], 20)
             self.assertEqual(result.outputs["field_ineligible_factors"], ["qual_roe"])
             self.assertEqual(set(result.outputs["gated_base_factors"]), {"mom_return_5d", "val_bp"})
-            # the panel is passed to the walk-forward step via state
+            self.assertEqual(result.outputs["gated_composite_factors"], ["comp_small_value"])
+            self.assertEqual(result.outputs["gated_industry_relative_factors"], ["val_bp_industry_rel"])
             self.assertIn("panel", ctx.state["factor_lifecycle"])
+
+    def test_dataset_build_raises_on_unknown_factor(self):
+        import types
+        from unittest.mock import patch
+        import pandas as pd
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            ctx.state["step_outputs"] = {
+                "factor_lifecycle_object_resolver": {
+                    "field_eligible": {"mom_return_5d": True, "not_a_real_factor": True},
+                }
+            }
+            def spy(**kw):
+                return types.SimpleNamespace(max_label_realization_date=pd.Timestamp("2020-12-01"))
+            with patch.object(fls, "load_is_windowed_panel_with_layer2", spy):
+                with self.assertRaises(ValueError):
+                    fls.handle_factor_lifecycle_dataset_build(ctx)
 
     def test_dataset_build_raises_if_no_eligible_base(self):
         from src.research_orchestrator import factor_lifecycle_steps as fls
@@ -280,9 +308,11 @@ class FactorLifecyclePublishTests(unittest.TestCase):
         step_dir = root / "step"
         step_dir.mkdir(parents=True, exist_ok=True)
         rows = [{"factor": f, "status": "candidate", "heldout_rank_icir": 0.15,
-                 "sign_consistency": 0.8, "n_heldout_blocks": 3} for f in candidates]
+                 "sign_consistency": 0.8, "n_heldout_blocks": 3,
+                 "expected_direction": "positive"} for f in candidates]
         rows += [{"factor": f, "status": "draft", "heldout_rank_icir": 0.04,
-                  "sign_consistency": 0.5, "n_heldout_blocks": 3} for f in drafts]
+                  "sign_consistency": 0.5, "n_heldout_blocks": 3,
+                  "expected_direction": "positive"} for f in drafts]
         state = {
             "factor_lifecycle": {"walk_forward_rows": rows, "evidence_kind": "a_priori"},
             "step_outputs": {"gate_review": {"decision": decision}},
@@ -342,6 +372,33 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertEqual(set(result.outputs["promoted_to_candidate"]), {"mom_return_5d", "val_bp"})
             self.assertEqual(self._status_of(rd, "mom_return_5d"), "candidate")
             self.assertEqual(self._status_of(rd, "qual_roe"), "draft")  # draft verdict NOT promoted
+
+    def test_publish_persists_expected_direction_metadata(self):
+        # GPT Phase-7 impl-review must-fix: on promotion, factor_master.expected_direction MUST
+        # be populated (the future FrozenSelectionSet hash consumes it). Metadata-only: status
+        # stays candidate; an INVERSE-ICIR factor records "inverse" (not implied long-only-positive).
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d"])
+            ctx.state["factor_lifecycle"]["walk_forward_rows"][0]["heldout_rank_icir"] = -0.25
+            ctx.state["factor_lifecycle"]["walk_forward_rows"][0]["expected_direction"] = "inverse"
+            handle_factor_lifecycle_registry_publish(ctx)
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            row = cur[cur["factor_id"] == "mom_return_5d"].iloc[0]
+            self.assertEqual(str(row["expected_direction"]), "inverse")  # durable direction persisted
+            self.assertEqual(str(row["status"]), "candidate")            # metadata-only: status unchanged
+
+    def test_set_expected_direction_enum_validated_fail_closed(self):
+        # GPT Phase-7 re-confirm note: the setter enum-validates (only positive/inverse/
+        # undetermined); a stray value fails closed, blank is a no-op.
+        with self._temp() as d:
+            _, rd = self._ctx(Path(d), "approved", ["mom_return_5d"])
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            with self.assertRaises(ValueError):
+                store.set_expected_direction(factor_id="mom_return_5d", expected_direction="bogus")
+            store.set_expected_direction(factor_id="mom_return_5d", expected_direction="")  # no-op, no raise
+            for ed in ("positive", "inverse", "undetermined"):
+                store.set_expected_direction(factor_id="mom_return_5d", expected_direction=ed)
 
     def test_evidence_skips_drifted_factor_fail_closed(self):
         # GPT PR-#34: record_lifecycle_evidence is itself a formal-evidence writer and must

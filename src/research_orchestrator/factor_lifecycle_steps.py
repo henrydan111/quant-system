@@ -27,6 +27,7 @@ from src.research_orchestrator.runtime import write_json
 # (no import cycle: walk_forward_validation does not import research_orchestrator).
 from src.alpha_research.factor_lifecycle.walk_forward_validation import (
     load_is_windowed_panel,
+    load_is_windowed_panel_with_layer2,
     run_is_walk_forward,
 )
 
@@ -52,8 +53,16 @@ def _field_check_expressions(name: str) -> list[str] | None:
     industry = {str(d["name"]): d for d in get_industry_relative_defs()}
     composites = {str(d["name"]): d for d in get_composite_defs()}
     if name in industry:
-        base = str(industry[name].get("base", ""))
-        return [catalog[base]] if base in catalog else None
+        d = industry[name]
+        base = str(d.get("base", ""))
+        if base not in catalog:
+            return None
+        exprs = [catalog[base]]
+        # GPT Phase-7: a size_industry_neutralize def really consumes market cap
+        # (Ref($total_mv, 1)) — the field gate must SEE that dependency, not only the base.
+        if d.get("requires_market_cap"):
+            exprs.append("Ref($total_mv, 1)")
+        return exprs
     if name in catalog:
         return [catalog[name]]
     if name in composites:
@@ -172,17 +181,20 @@ def _lifecycle_time_split(request: Any):
 
 
 def handle_factor_lifecycle_dataset_build(context: StepExecutionContext) -> StepExecutionResult:
-    """Phase 5 slice 3: build the IS-only windowed panel for the GATE input. Field-
-    ineligible factors (from the resolver's per-factor `field_eligible`) are EXCLUDED from
-    compute (marked `draft`, recorded) — a disallowed `$field` never reaches
-    ``load_is_windowed_panel``. The panel is IS-only (structurally `is_end`-bounded by the
-    Phase-4 builder); the profile has no OOS stage. The IsWindowedPanel (non-serializable)
-    is passed to the walk-forward step via ``context.state``; only a summary is written.
+    """Phase 5 slice 3 (+ Phase 7 Layer-2): build the IS-only windowed panel for the GATE
+    input. Field-ineligible factors (from the resolver's per-factor `field_eligible`) are
+    EXCLUDED from compute — a disallowed `$field` never reaches the builder. The panel is
+    IS-only (structurally `is_end`-bounded by the Phase-4 builder); the profile has no OOS
+    stage. The IsWindowedPanel (non-serializable) is passed to the walk-forward step via
+    ``context.state``; only a summary is written.
 
-    Scope note: base factors are gated directly; composite / industry-relative factors in
-    the batch are recorded as `non_base_deferred` (their Layer-2 compute via
-    ``add_composites`` is a documented follow-up — the base-factor gate is the
-    leakage-critical core)."""
+    Phase 7: eligible factors are split into base / composite / industry-relative and all
+    flow through ``load_is_windowed_panel_with_layer2`` (composites + industry-relative are
+    SAME-DATE cross-sectional transforms of PIT-safe base factors, so they inherit the
+    `is_end` boundary). Dependency-only bases (composite components / industry-rel bases not
+    themselves gated) are computed as inputs but EXCLUDED from the verdict columns. There is
+    no `non_base_deferred` bucket; an eligible name that is neither base, composite, nor
+    industry-relative hard-fails."""
     resolver_out = context.state.get("step_outputs", {}).get("factor_lifecycle_object_resolver", {})
     field_eligible = dict(resolver_out.get("field_eligible", {}))
     if not field_eligible:
@@ -197,32 +209,58 @@ def handle_factor_lifecycle_dataset_build(context: StepExecutionContext) -> Step
     horizon = int(inputs.get("horizon", 20))
     qlib_dir = inputs.get("qlib_dir")
 
-    from src.alpha_research.factor_library.catalog import get_factor_catalog
+    from src.alpha_research.factor_library.catalog import (
+        get_composite_defs,
+        get_factor_catalog,
+        get_industry_relative_defs,
+    )
 
     full = get_factor_catalog(include_new_data=True)
-    eligible_base = {n: full[n] for n in eligible if n in full}
-    non_base_deferred = sorted(n for n in eligible if n not in full)
-    if not eligible_base:
+    composite_defs_all = {str(d["name"]): d for d in get_composite_defs()}
+    industry_defs_all = {str(d["name"]): d for d in get_industry_relative_defs()}
+
+    # Phase 7: gate BASE + composite + industry-relative (no `non_base_deferred` bucket).
+    gated_base = sorted(n for n in eligible if n in full)
+    gated_composite = sorted(n for n in eligible if n in composite_defs_all)
+    gated_industry = sorted(n for n in eligible if n in industry_defs_all)
+    unknown = sorted(
+        n for n in eligible
+        if n not in full and n not in composite_defs_all and n not in industry_defs_all
+    )
+    if unknown:
         raise ValueError(
-            "factor_lifecycle_dataset_build: no eligible BASE factors to gate "
-            f"(excluded {len(excluded)} field-ineligible; {len(non_base_deferred)} non-base deferred)"
+            "factor_lifecycle_dataset_build: eligible factors not in catalog / composite / "
+            f"industry-relative defs: {unknown}"
+        )
+    if not (gated_base or gated_composite or gated_industry):
+        raise ValueError(
+            "factor_lifecycle_dataset_build: no eligible factors to gate "
+            f"(excluded {len(excluded)} field-ineligible)"
         )
 
-    panel = load_is_windowed_panel(eligible_base, time_split, horizon=horizon, qlib_dir=qlib_dir)
+    # Unified IS-only panel: base + Layer-2 composite/industry-relative columns, one label,
+    # one set of is_end belts. Dependency-only bases (composite components / industry-rel bases
+    # not themselves gated) are computed as inputs but EXCLUDED from the verdict columns.
+    panel = load_is_windowed_panel_with_layer2(
+        gated_base=gated_base,
+        gated_composite_defs=[composite_defs_all[n] for n in gated_composite],
+        gated_industry_defs=[industry_defs_all[n] for n in gated_industry],
+        time_split=time_split, horizon=horizon, qlib_dir=qlib_dir,
+    )
 
-    # Pass the (non-serializable) panel + the excluded/draft sets to the walk-forward step.
+    # Pass the (non-serializable) panel + the excluded set to the walk-forward step.
     lifecycle_state = context.state.setdefault("factor_lifecycle", {})
     lifecycle_state["panel"] = panel
     lifecycle_state["excluded_factors"] = excluded
-    lifecycle_state["non_base_deferred"] = non_base_deferred
     lifecycle_state["horizon"] = horizon
 
     outputs = {
         "eligible_count": len(eligible),
         "field_ineligible_count": len(excluded),
         "field_ineligible_factors": excluded,
-        "gated_base_factors": sorted(eligible_base),
-        "non_base_deferred": non_base_deferred,
+        "gated_base_factors": gated_base,
+        "gated_composite_factors": gated_composite,
+        "gated_industry_relative_factors": gated_industry,
         "is_window": {"is_start": time_split.is_start, "is_end": time_split.is_end},
         "horizon": horizon,
         "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
@@ -386,6 +424,12 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             store.set_status(
                 factor_id=fid, status="candidate",
                 reason=f"factor_lifecycle IS-heldout gate ({evidence_kind})", source_run_id=run_id,
+            )
+            # GPT Phase-7 impl-review must-fix: persist the durable direction metadata
+            # (the future FrozenSelectionSet hash consumes factor_master.expected_direction).
+            # Metadata-only — does NOT touch status / approval_validity / definition_hash.
+            store.set_expected_direction(
+                factor_id=fid, expected_direction=str(v.get("expected_direction", "")),
             )
             promoted.append(fid)
     store.save()

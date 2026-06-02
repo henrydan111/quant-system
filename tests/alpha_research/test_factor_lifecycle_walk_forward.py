@@ -18,9 +18,11 @@ from src.alpha_research.factor_lifecycle.walk_forward_validation import (
     NoHeldoutBlockError,
     build_is_windowed_panel,
     load_is_windowed_panel,
+    load_is_windowed_panel_with_layer2,
     realization_date,
     last_usable_factor_date,
     run_is_walk_forward,
+    _expected_direction,
 )
 
 
@@ -264,6 +266,110 @@ class RunIsWalkForwardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_is_walk_forward(panel=self._panel_for_folds(), time_split=ts, horizon=4,
                                 factor_origin="generted")  # typo
+
+
+class ExpectedDirectionTests(unittest.TestCase):
+    def test_signed_icir_direction_label(self):
+        self.assertEqual(_expected_direction(0.3), "positive")
+        self.assertEqual(_expected_direction(-0.3), "inverse")   # admit inverse predictors
+        self.assertEqual(_expected_direction(0.0), "undetermined")
+        self.assertEqual(_expected_direction(float("nan")), "undetermined")
+
+
+class Layer2PanelTests(unittest.TestCase):
+    """Phase 7: the Layer-2 IS-only builder gates composites + industry-relative while
+    inheriting the is_end belts and EXCLUDING dependency-only bases from verdict columns."""
+
+    def _setup(self):
+        cal = _weekly_calendar()  # 2014..2020 weekly
+        insts = [f"{i:06d}_SZ" for i in range(6)]
+        idx = pd.MultiIndex.from_product([cal, insts], names=["datetime", "instrument"])  # (dt, inst)
+        rng = np.random.default_rng(11)
+        base = pd.DataFrame({
+            "mom_return_20d": rng.standard_normal(len(idx)),
+            "size_ln_mcap": rng.standard_normal(len(idx)),
+            "val_bp": rng.standard_normal(len(idx)),
+        }, index=idx)
+        adj = pd.DataFrame({"adj_close": 10 * np.exp((rng.standard_normal(len(idx)) * 0.02).cumsum() % 3)},
+                           index=idx)
+        # industry: 3 stocks "A", 3 stocks "B"
+        industry = pd.Series(["A" if int(s[:6]) < 3 else "B" for s in idx.get_level_values("instrument")],
+                             index=idx)
+
+        def fake_cf(catalog, start_date, end_date, horizons, **kw):
+            keys = set(catalog)
+            if "adj_close" in keys:
+                return adj, None
+            if "market_cap" in keys:
+                return pd.DataFrame({"market_cap": np.abs(rng.standard_normal(len(idx))) + 1}, index=idx), None
+            return base[[c for c in catalog if c in base.columns]], None
+
+        ts = TimeSplit("2014-01-01", "2020-12-31", "2021-01-01", "2022-01-01")
+        return cal, base, industry, fake_cf, ts
+
+    def test_gates_composite_and_industry_excludes_dependency_only_bases(self):
+        cal, base, industry, fake_cf, ts = self._setup()
+        comp = {"name": "comp_small_value", "components": ["size_ln_mcap", "val_bp"], "negate": [True, False]}
+        ind = {"name": "val_bp_industry_rel", "base": "val_bp", "kind": "industry_mean_subtract",
+               "requires_market_cap": False}
+        wp = load_is_windowed_panel_with_layer2(
+            gated_base=["mom_return_20d"], gated_composite_defs=[comp], gated_industry_defs=[ind],
+            time_split=ts, horizon=4, trade_cal=cal,
+            compute_factors_fn=fake_cf, industry_series_fn=lambda ix: industry.reindex(ix),
+        )
+        cols = set(wp.factor_panel.columns)
+        # gated columns present; dependency-only bases (size_ln_mcap, val_bp) EXCLUDED
+        self.assertEqual(cols, {"mom_return_20d", "comp_small_value", "val_bp_industry_rel"})
+        self.assertNotIn("size_ln_mcap", cols)
+        self.assertNotIn("val_bp", cols)
+        # is_end belt holds (label realizes <= is_end)
+        self.assertLessEqual(wp.max_label_realization_date, pd.Timestamp("2020-12-31"))
+        # composite is a rank-average -> within [0, 1]; computed (not all-NaN)
+        cv = wp.factor_panel["comp_small_value"].dropna()
+        self.assertTrue(len(cv) > 0)
+        self.assertTrue(((cv >= 0) & (cv <= 1)).all())
+        # industry-relative column computed (not all-NaN)
+        self.assertTrue(wp.factor_panel["val_bp_industry_rel"].notna().any())
+
+    def test_base_only_equivalent_to_load_is_windowed_panel(self):
+        cal, base, industry, fake_cf, ts = self._setup()
+        layer2 = load_is_windowed_panel_with_layer2(
+            gated_base=["mom_return_20d", "val_bp"], gated_composite_defs=[], gated_industry_defs=[],
+            time_split=ts, horizon=4, trade_cal=cal, compute_factors_fn=fake_cf,
+        )
+
+        def cf_base(catalog, start_date, end_date, horizons, **kw):
+            keys = set(catalog)
+            if "adj_close" in keys:
+                return fake_cf(catalog, start_date, end_date, horizons, **kw)
+            return base[[c for c in catalog if c in base.columns]], None
+
+        direct = load_is_windowed_panel(
+            {"mom_return_20d": "x", "val_bp": "x"}, ts, horizon=4, trade_cal=cal, compute_factors_fn=cf_base,
+        )
+        self.assertEqual(set(layer2.factor_panel.columns), set(direct.factor_panel.columns))
+        self.assertEqual(len(layer2.label), len(direct.label))
+        self.assertEqual(layer2.max_label_realization_date, direct.max_label_realization_date)
+
+    def test_wrong_order_base_panel_fails_closed_before_layer2(self):
+        # belt-and-suspenders: an (instrument, datetime) base panel must fail loudly before
+        # the formal Layer-2 compute (even though cs_rank is now name-based).
+        cal, base, industry, fake_cf, ts = self._setup()
+        base_swapped = base.swaplevel(0, 1).sort_index()  # (instrument, datetime)
+
+        def cf_swapped(catalog, start_date, end_date, horizons, **kw):
+            keys = set(catalog)
+            if "adj_close" in keys:
+                a = fake_cf(catalog, start_date, end_date, horizons, **kw)[0]
+                return a, None
+            return base_swapped[[c for c in catalog if c in base_swapped.columns]], None
+
+        comp = {"name": "comp_small_value", "components": ["size_ln_mcap", "val_bp"], "negate": [True, False]}
+        with self.assertRaises(IsEndLeakageError):
+            load_is_windowed_panel_with_layer2(
+                gated_base=["mom_return_20d"], gated_composite_defs=[comp], gated_industry_defs=[],
+                time_split=ts, horizon=4, trade_cal=cal, compute_factors_fn=cf_swapped,
+            )
 
 
 if __name__ == "__main__":
