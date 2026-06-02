@@ -733,6 +733,8 @@ Storage: `data/market/stk_limit/YYYY/stk_limit_YYYYMMDD.parquet`
 
 > [!NOTE]
 > Observed raw schema on 2026-03-30 contains `trade_date`, `ts_code`, `up_limit`, `down_limit`. The staged PIT backend does not assume a `pre_close` column unless it is actually present in the raw Parquet.
+>
+> **Consumer (2026-06-02)**: materialized as the bare-name Qlib day bins `$up_limit` / `$down_limit`; the `EventDrivenBacktester` uses them as the **primary** limit-up/limit-down source via `Exchange.resolve_limit_prices()` (computed-band fallback for coverage holes). Promoted in the field registry `quarantine → approved` — see `config/field_registry/approvals/2026-06-02_stk_limit_quarantine_to_approved.yaml`.
 
 | Column | English | Chinese |
 |--------|---------|---------|

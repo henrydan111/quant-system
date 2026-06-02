@@ -426,25 +426,68 @@ class Exchange:
         limit_down = max(limit_down, 0.01)  # Minimum price is 1分
         return limit_up, limit_down
 
+    def resolve_limit_prices(self, row: pd.Series, code: str,
+                             date: pd.Timestamp) -> tuple[float, float]:
+        """Resolve ``(limit_up, limit_down)`` for a stock-day.
+
+        **Primary source — Tushare ``stk_limit``**: when the row carries
+        ``up_limit`` / ``down_limit`` (the exchange's own published daily
+        limit prices, materialized as the ``$up_limit`` / ``$down_limit``
+        Qlib bins), those values are used verbatim. They already encode the
+        exact fen-rounding and the ex-rights adjustment the exchange applied,
+        and they carry special regimes the band formula does not (e.g. the
+        main-board IPO-first-day ±44% rule).
+
+        **No-limit stock-days use a wide sentinel, NOT NaN**: on genuinely
+        no-limit days (ChiNext / STAR / post-2023 main-board first 5 trading
+        days; BSE listing day) Tushare publishes ``up_limit ≈ 1e5/1e6`` and
+        ``down_limit ≈ 0.01/0.00`` — an unreachable band. The primary path
+        uses these verbatim, so ``is_limit_up`` / ``is_limit_down`` both return
+        False and the stock is correctly treated as freely tradable. (True
+        non-stock instruments like indices are the only NaN rows; they never
+        reach an order path.) Verified on real 2024 IPOs in
+        ``workspace/scripts/diag_stk_limit_nolimit_days.py``.
+
+        **Fallback — computed band**: when the Tushare fields are absent or
+        NaN, fall back to ``compute_limit_prices(pre_close, band)``. Verified
+        coverage holes that require this fallback (see
+        ``workspace/scripts/diag_stk_limit_coverage.py``): Beijing Stock
+        Exchange names during the 2021 launch window, sparse IPO no-limit days
+        in older data, and a few legacy main-board stocks. Recent years (2024+)
+        have zero holes.
+
+        Both prices are raw (unadjusted), matching the raw ``close`` the
+        limit checks compare against.
+        """
+        up = row.get('up_limit')
+        down = row.get('down_limit')
+        if up is not None and down is not None and pd.notna(up) and pd.notna(down):
+            return float(up), float(down)
+        # Fallback: compute from previous close × regulatory band.
+        is_st = self.is_st(code, date)
+        limit_pct = self.get_limit_pct(code, is_st, date)
+        pre_close = row.get('raw_pre_close', row['pre_close'])
+        return self.compute_limit_prices(pre_close, limit_pct)
+
     def is_limit_up(self, row: pd.Series, code: str,
                     date: pd.Timestamp) -> bool:
         """Check if a stock closed at limit-up.
 
         Cannot buy at limit-up (no sellers). Can still sell.
 
+        Uses Tushare's published ``up_limit`` when available, else the
+        computed band (see :meth:`resolve_limit_prices`).
+
         Args:
-            row: Daily data row with 'close' and 'pre_close'.
+            row: Daily data row with 'close' (+ optional 'up_limit').
             code: Stock ts_code.
             date: Trading date.
 
         Returns:
             True if close is at limit-up price.
         """
-        is_st = self.is_st(code, date)
-        limit_pct = self.get_limit_pct(code, is_st, date)
-        pre_close = row.get('raw_pre_close', row['pre_close'])
         close = row.get('raw_close', row['close'])
-        limit_up, _ = self.compute_limit_prices(pre_close, limit_pct)
+        limit_up, _ = self.resolve_limit_prices(row, code, date)
         return abs(close - limit_up) < 0.005  # within half a fen
 
     def is_limit_down(self, row: pd.Series, code: str,
@@ -453,19 +496,19 @@ class Exchange:
 
         Cannot sell at limit-down (no buyers). Can still buy.
 
+        Uses Tushare's published ``down_limit`` when available, else the
+        computed band (see :meth:`resolve_limit_prices`).
+
         Args:
-            row: Daily data row with 'close' and 'pre_close'.
+            row: Daily data row with 'close' (+ optional 'down_limit').
             code: Stock ts_code.
             date: Trading date.
 
         Returns:
             True if close is at limit-down price.
         """
-        is_st = self.is_st(code, date)
-        limit_pct = self.get_limit_pct(code, is_st, date)
-        pre_close = row.get('raw_pre_close', row['pre_close'])
         close = row.get('raw_close', row['close'])
-        _, limit_down = self.compute_limit_prices(pre_close, limit_pct)
+        _, limit_down = self.resolve_limit_prices(row, code, date)
         return abs(close - limit_down) < 0.005
 
     def is_suspended(

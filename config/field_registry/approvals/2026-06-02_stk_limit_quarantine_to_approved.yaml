@@ -1,0 +1,145 @@
+# Field-registry approval evidence (2026-06-02)
+#
+# Promotes the Tushare stk_limit daily price-limit fields ($up_limit /
+# $down_limit) from "quarantine" to "approved" in
+# config/field_registry/field_status.yaml.
+#
+# Motivation: the EventDrivenBacktester now uses the exchange's OWN published
+# daily limit prices as the primary limit-up/limit-down source (via
+# Exchange.resolve_limit_prices), instead of always recomputing them from
+# pre_close × regulatory band. Tushare's published values carry the exact
+# fen-rounding, the ex-rights adjustment, and special regimes the band formula
+# does not — the pre-2023 main-board IPO-first-day +44%/-36% (asymmetric) rule,
+# and the post-2023 registration-system no-limit window (first 5 days) encoded
+# as a wide sentinel (up_limit~1e6, down_limit~0.01). A computed-band fallback
+# is retained for the verified coverage holes (see evidence below).
+
+approval_id: 2026-06-02_stk_limit_quarantine_to_approved
+date: 2026-06-02
+dataset_id: stk_limit
+source_endpoint: tushare.stk_limit
+from_status: quarantine
+to_status: approved
+reviewer: henrydan111
+related_pr: stk-limit-tushare-field-promotion
+related_findings_id: null
+
+# Bind this approval to the exact provider build + calendar policy under which
+# the on-disk coverage + value verification was performed (PR 10 contract). A
+# future provider rebuild whose provider_build_id or calendar_policy_id differs
+# from these values fails the daily-QA approval_evidence_binding check until the
+# evidence is re-verified.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+# Per-stage scope — mirrors the `approved` status row in field_status.yaml.
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Availability / PIT contract for this dataset.
+#
+# Unlike the PIT-fundamentals families, $up_limit / $down_limit are EXECUTION
+# fields, not predictive signals. The exchange publishes the day-T limit prices
+# pre-market, derived deterministically from the day-(T-1) close. They are
+# therefore knowable at the day-T session open and are used same-day for
+# tradability gating inside the engine — this is not lookahead. No Ref(...) lag
+# is required for execution use. (Should a factor ever reference $up_limit as a
+# signal, a Ref(..., 1) frame is still the recommended hygiene, but the value is
+# pre-determined and carries no same-day price leakage.)
+pit_contract:
+  availability_column: trade_date
+  knowable_at: session_open_day_T
+  usage: execution_only_tradability_gate
+  expression_lag_required: false
+  same_day_raw_usage_allowed: true
+  provider_transform: raw_daily_fact_per_stock_day_bin
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_daily_dataset
+  consumer: src/backtest_engine/event_driven/exchange.py::resolve_limit_prices
+
+# Structured evidence supporting the promotion. Reproduce with
+# workspace/scripts/diag_stk_limit_coverage.py.
+evidence:
+  coverage:
+    method: "QlibDataFeeder preload of $up_limit/$down_limit/$vol over the 'all' universe; count traded stock-days (vol>0, restricted to stock_basic codes) where up_limit or down_limit is NaN."
+    note: "Index/benchmark instruments (e.g. 000001.SH) legitimately carry no limit and are excluded."
+    sampled_windows:
+      - window: "2014"
+        traded_stock_days: 570306
+        gap_pct: 0.1057
+        ipo_window_gaps: 358
+        genuine_holes: 245
+      - window: "2018"
+        traded_stock_days: 823940
+        gap_pct: 0.8732
+        ipo_window_gaps: 6952
+        genuine_holes: 243
+      - window: "2021"
+        traded_stock_days: 1085202
+        gap_pct: 2.1694
+        ipo_window_gaps: 12203
+        genuine_holes: 11339
+        note: "Dominated by .BJ (Beijing Stock Exchange) names during the 2021 launch — Tushare had no stk_limit row yet. Handled by the computed-band fallback (BSE = ±30%)."
+      - window: "2024"
+        traded_stock_days: 1293651
+        gap_pct: 0.0
+      - window: "2026-01..02"
+        traded_stock_days: 185791
+        gap_pct: 0.0
+    conclusion: "Coverage is complete for 2024+ and has small explained holes earlier. The exchange retains a computed-band fallback (Exchange.resolve_limit_prices) so the holes never silently mistreat a limit-locked stock as unconstrained."
+  value_sanity:
+    method: "Where present, implied band = up_limit/pre_close-1 (and the down side) must land on a known regulatory tier ±{5,10,20,30}% within 0.005 (float32 storage)."
+    # NOTE: off_tier here is the VALUE-tier check (implied band off the known
+    # tiers), NOT the coverage-gap rate above. Sentinel no-limit rows count as
+    # off-tier (their implied band is ~thousands of %), which is why 2024/2026
+    # are non-zero even though their coverage-gap rate is 0.
+    off_tier_pct_by_window:
+      "2014": 0.0153
+      "2018": 0.0164
+      "2021": 0.2043
+      "2024": 0.0587
+      "2026": 0.0393
+    min_on_tier_pct: 99.7957   # worst window (2021); i.e. >=99.79% on-tier
+    off_tier_explanations:
+      - "no-limit SENTINEL rows: registration-system IPO no-limit days carry up_limit~1e5/1e6 and down_limit~0.01/0.00 (implied band ~thousands of %). CORRECT — these are unreachable bands meaning 'no limit'; they dominate the 2024/2026 off-tier count. See diag_stk_limit_nolimit_days.py."
+      - "up_band≈0.44 / dn_band≈0.36: PRE-2023 main-board IPO-first-day +44%/-36% (ASYMMETRIC) rule (limit referenced to issue price, not pre_close). CORRECT. Only in older data (2014/2018; a few in 2021)."
+      - "±0.09/0.11 implied band on sub-¥1 penny stocks: exact fen (0.01) rounding distorts the implied ratio; the stored value is the exchange's correct rounded price. This is precisely where the published field beats naive computation."
+    worked_example: "000001.SZ 2014-01-02: pre_close 12.25 × 1.10 = 13.475 → round-half-up → 13.48 = stored up_limit. Exact match to the engine's compute_limit_prices round-half-up convention."
+  field_inventory:
+    instruments_checked:
+      - "000001_sz"
+      - "000002_sz"
+      - "000004_sz"
+    fields_present:
+      - $up_limit
+      - $down_limit
+    verification_method: "on-disk listing of data/qlib_data/features/<instr>/{up_limit,down_limit}.day.bin"
+  tests:
+    - test_id: tests/backtest_engine/test_exchange_limits.py
+      asserts: "Exchange.resolve_limit_prices prefers row up_limit/down_limit when present and falls back to the computed round-half-up band when absent/NaN; is_limit_up/is_limit_down detect against the resolved prices."
+    - test_id: tests/data_infra/test_field_registry.py::TestLiveRegistry::test_stk_limit_bare_fields_approved_for_formal
+      asserts: "$up_limit / $down_limit resolve to dataset_id=stk_limit, status=approved, allowed at formal_validation."
+
+fields_added:
+  - field: $up_limit
+    referenced_by:
+      - "src/backtest_engine/event_driven/exchange.py::resolve_limit_prices (primary limit-up source)"
+  - field: $down_limit
+    referenced_by:
+      - "src/backtest_engine/event_driven/exchange.py::resolve_limit_prices (primary limit-down source)"
+
+notes: |
+  The stk_limit endpoint was bootstrapped in Phase 3 and held at quarantine
+  ("downloaded but pending anomaly review") since PR 5 of the 2026-05-26 freeze
+  plan. The pending review is discharged here: a full coverage + value-tier
+  audit (workspace/scripts/diag_stk_limit_coverage.py) confirms the data is
+  correct where present and that the residual holes (BSE 2021 launch, IPO
+  no-limit days, a few legacy names) are explained and safely covered by the
+  engine's computed-band fallback. No on-disk / pipeline change — only the
+  registry status changes, plus the engine now consuming the fields it already
+  materialized.
