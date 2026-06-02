@@ -107,5 +107,70 @@ class GitStateTests(unittest.TestCase):
         self.assertIsInstance(st["dirty_tree"], bool)
 
 
+class ReproduceSealedOosTests(unittest.TestCase):
+    def _frozen_set(self):
+        from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
+        return FrozenSelectionSet(
+            selected=(SelectedFactor("f_pos", 1, "h1", "long"), SelectedFactor("f_neg", 1, "h2", "short")),
+            candidate_pool_hash="pool", selection_rule_hash="rule", eval_protocol_hash="proto",
+            metric="rank_icir", portfolio_side="long_short", universe="csi_all",
+            time_split_window="2021..2026", rebalance="20d", neutralization="industry",
+        )
+
+    def _fake_cf(self):
+        import numpy as np
+        import pandas as pd
+        cal = pd.DatetimeIndex(pd.date_range("2021-01-08", "2025-12-26", freq="W-FRI"))
+        insts = [f"{i:06d}_SZ" for i in range(60)]
+        idx = pd.MultiIndex.from_product([cal, insts], names=["datetime", "instrument"])
+        rng = np.random.default_rng(7)
+        fdf = pd.DataFrame({"f_pos": rng.standard_normal(len(idx)), "f_neg": rng.standard_normal(len(idx))}, index=idx)
+        adf = pd.DataFrame({"adj_close": 10 * np.exp((rng.standard_normal(len(idx)) * 0.02).cumsum() % 3)}, index=idx)
+
+        def cf(catalog, start_date, end_date, horizons, **kw):
+            if "adj_close" in set(catalog):
+                return adf, None
+            return fdf[[c for c in catalog if c in fdf.columns]], None
+        return cal, cf
+
+    def test_calendar_mismatch_refused(self):
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+        with self.assertRaises(PromotionEvidenceError):
+            reproduce_sealed_oos(
+                frozen_set=self._frozen_set(), factor_exprs={"f_pos": "x"}, oos_start="2021-01-01",
+                qlib_dir=".", seal_root=".", run_dir=".", design_hash="d", claim_seal=False,
+                provider_provenance={"provider_build_id": "b", "calendar_policy_id": "c",
+                                     "calendar_end": "2025-01-01"},  # != OOS_END 2026-02-27
+            )
+
+    def test_full_reproduction_claims_seal_and_computes_leakfree_metrics(self):
+        import tempfile
+        from pathlib import Path as _P
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+        fs = self._frozen_set()
+        cal, cf = self._fake_cf()
+        _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
+            store = HoldoutSealStore(d)
+            rep = reproduce_sealed_oos(
+                frozen_set=fs, factor_exprs={"f_pos": "x", "f_neg": "y"}, oos_start="2021-01-01",
+                qlib_dir=".", seal_root=d, run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
+                provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
+                                     "calendar_end": OOS_END},
+                compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+            )
+            ir = rep["independent_reproduction"]
+            self.assertEqual(ir["source"], "qlib_windowed_features")
+            self.assertEqual(ir["provider_build_id"], "pb1")
+            self.assertEqual(ir["frozen_set_hash"], fs.frozen_set_hash)
+            self.assertEqual(set(ir["per_factor"]), {"f_pos", "f_neg"})
+            for m in ir["per_factor"].values():
+                self.assertIn("oos_rank_icir", m)
+                self.assertIn("oos_ls_sharpe", m)
+            self.assertLessEqual(str(ir["max_label_realization_date"])[:10], OOS_END)  # leak-free belt
+            self.assertEqual(len(store.list_events(seal_key=fs.frozen_set_hash)), 1)  # seal claimed
+
+
 if __name__ == "__main__":
     unittest.main()

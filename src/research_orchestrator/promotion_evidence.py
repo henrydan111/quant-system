@@ -117,6 +117,134 @@ def assert_definition_binding(catalog_hashes: Mapping[str, str], frozen_hashes: 
 
 # ── the assembler + self-verify (the orchestration heart) ─────────────────────────────────────
 
+def _load_provider_provenance(qlib_dir: str | Path) -> dict:
+    """Live provider provenance: ``{provider_build_id, calendar_policy_id, calendar_end}``.
+    `calendar_end` is read from ``calendars/day.txt`` (the daily-QA pattern), not assumed."""
+    from src.data_infra.provider_manifest import load_provider_manifest
+
+    qdir = Path(qlib_dir)
+    manifest = load_provider_manifest(qdir)
+    day_txt = qdir / "calendars" / "day.txt"
+    lines = [ln.strip() for ln in day_txt.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not lines:
+        raise PromotionEvidenceError(f"empty calendar at {day_txt}")
+    return {
+        "provider_build_id": manifest.provider_build_id,
+        "calendar_policy_id": manifest.calendar_policy_id,
+        "calendar_end": lines[-1],
+    }
+
+
+def _oos_ls_sharpe(factor, label, *, horizon: int, n_quantiles: int = 5) -> float:
+    """Sign-aligned annualized long-short Sharpe over the OOS panel (NaN if undefined)."""
+    import numpy as np
+    from src.alpha_research.factor_eval.quantile_analysis import (
+        compute_long_short_returns, compute_quantile_returns,
+    )
+
+    qdf = compute_quantile_returns(factor, label, n_quantiles=n_quantiles)
+    if qdf.empty:
+        return float("nan")
+    # sign-align: long the IC-direction tail (a negative-IC factor longs the LOW quantile).
+    # ``factor_ic`` returns a DataFrame with [IC, RankIC] columns; align on mean RankIC.
+    from src.alpha_research.factor_lifecycle import metrics
+    ic_df = metrics.factor_ic(factor, label)
+    ric = ic_df["RankIC"].dropna() if "RankIC" in getattr(ic_df, "columns", []) else ic_df.dropna()
+    ic_mean = float(ric.mean()) if len(ric) else 0.0
+    hi, lo = int(qdf["quantile"].max()), int(qdf["quantile"].min())
+    long_q, short_q = (hi, lo) if ic_mean >= 0 else (lo, hi)
+    ls = compute_long_short_returns(qdf, long_q=long_q, short_q=short_q)
+    if ls.empty or ls.std() == 0 or np.isnan(ls.std()):
+        return float("nan")
+    return float(ls.mean() / ls.std() * np.sqrt(252.0 / horizon))
+
+
+def reproduce_sealed_oos(
+    *,
+    frozen_set,
+    factor_exprs: Mapping[str, str],
+    oos_start: str,
+    oos_end: str = OOS_END,
+    qlib_dir: str | Path,
+    seal_root: str | Path,
+    run_dir: str,
+    design_hash: str,
+    hypothesis_id: str = "sealed_oos_winners",
+    structural_family: str = "",
+    profile_id: str = "promotion_evidence",
+    step_id: str = "reproduce_sealed_oos",
+    horizon: int = 20,
+    n_quantiles: int = 5,
+    claim_seal: bool = True,
+    allow_same_run: bool = False,
+    provider_provenance: Mapping | None = None,
+    compute_factors_fn=None,
+    seal_store=None,
+    trade_cal=None,
+) -> dict:
+    """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
+    calendar end == OOS_END, then reproduce the OOS through the LEAK-FREE Phase-4 belt
+    (``build_is_windowed_panel(is_end=OOS_END)``) — `Ref(-h)` forward returns cannot pull future
+    data even if the calendar later advances. Returns the ``independent_reproduction`` block with
+    `source='qlib_windowed_features'`, provenance, and per-factor leak-free OOS metrics
+    (`oos_rank_icir`, `oos_ls_sharpe`). The metrics GOVERN approval (a factor below the bar here
+    is a correct rejection). Injectable deps for tests; live by default."""
+    from src.alpha_research.factor_lifecycle import metrics
+    from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
+
+    prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
+    if str(prov.get("calendar_end")) != str(oos_end):
+        raise PromotionEvidenceError(
+            f"provider calendar end {prov.get('calendar_end')!r} != OOS_END {oos_end!r}; "
+            "refusing the reproduction (a calendar advance would change the OOS labels)"
+        )
+
+    seal_hash = frozen_set.frozen_set_hash
+    if claim_seal:
+        if seal_store is None:
+            from src.research_orchestrator.holdout_seal import HoldoutSealStore
+            seal_store = HoldoutSealStore(seal_root)
+        seal_store.claim_holdout_access(
+            design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
+            profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
+            allow_same_run=allow_same_run, seal_key=seal_hash,
+        )
+
+    if compute_factors_fn is None:
+        from src.alpha_research.factor_library import operators
+        compute_factors_fn = operators.compute_factors
+        adj_expr = getattr(operators, "ADJ_CLOSE", "$close * $adj_factor")
+    else:
+        adj_expr = "$close * $adj_factor"
+
+    qdir = str(qlib_dir)
+    fpanel, _ = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
+                                   horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
+    apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
+                                   horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
+    panel = build_is_windowed_panel(fpanel, apanel["adj_close"], is_end=oos_end, horizon=horizon, trade_cal=trade_cal)
+
+    per_factor: dict[str, dict] = {}
+    for name in panel.factor_panel.columns:
+        ic = metrics.factor_ic(panel.factor_panel[name], panel.label)
+        per_factor[str(name)] = {
+            "oos_rank_icir": metrics.rank_icir(ic),
+            "oos_ls_sharpe": _oos_ls_sharpe(panel.factor_panel[name], panel.label, horizon=horizon, n_quantiles=n_quantiles),
+        }
+    return {
+        "independent_reproduction": {
+            "source": "qlib_windowed_features",
+            "provider_build_id": prov.get("provider_build_id", ""),
+            "calendar_policy_id": prov.get("calendar_policy_id", ""),
+            "frozen_set_hash": seal_hash,
+            "oos_window": f"{oos_start}..{oos_end}",
+            "horizon": horizon,
+            "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
+            "per_factor": per_factor,
+        }
+    }
+
+
 def build_promotion_evidence(
     *,
     canaries: Mapping[str, str],
