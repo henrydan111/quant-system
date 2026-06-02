@@ -1,0 +1,55 @@
+{
+  "promoted_at_oos_end": "2026-02-27",
+  "frozen_set_hash": "5a8d601a6a06bbc9e536562bd3d728237910683e9346409476ea9ccafff078c3",
+  "git_sha": "150c1ff18be652b2cbea5579b1683abbb1f3b4cc",
+  "provider_build_id": "prod_full_20260421_namespace_v1",
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "evidence_class": "single_shot_sealed_oos_leak_free_reproduction",
+  "note": "These 6 are NOT oos_informed_backfill: the 13-factor top set was frozen PRE-OOS (oos_frozen_topset.json) and the OOS window was run once. This is the leak-free Phase-4-belt reproduction of that already-spent window; its numbers GOVERN approval. 2021-2026 remains spent for this frozen set.",
+  "promoted": [
+    {
+      "factor_id": "liq_zero_ret_days_10d",
+      "oos_rank_icir": 0.41086330127062803,
+      "oos_ls_sharpe": 2.1431121334513468
+    },
+    {
+      "factor_id": "rev_turnover_spike_5d",
+      "oos_rank_icir": 0.27585909981966567,
+      "oos_ls_sharpe": 2.6817727487602516
+    },
+    {
+      "factor_id": "grow_total_revenue_yoy_accel_q",
+      "oos_rank_icir": 0.2565027227006839,
+      "oos_ls_sharpe": 3.444084254398133
+    },
+    {
+      "factor_id": "grow_n_income_attr_p_yoy_accel_q",
+      "oos_rank_icir": 0.24985640733436865,
+      "oos_ls_sharpe": 1.9560115570102816
+    },
+    {
+      "factor_id": "grow_operate_profit_yoy_accel_q",
+      "oos_rank_icir": 0.19658662575033042,
+      "oos_ls_sharpe": 1.4924218626315495
+    },
+    {
+      "factor_id": "qual_piotroski_fscore_9pt",
+      "oos_rank_icir": 0.20894171439099019,
+      "oos_ls_sharpe": 1.2029280792030757
+    }
+  ],
+  "skipped": [],
+  "promotion_evidence": {
+    "unsafe_pit_dates_lint": "passed",
+    "live_provider_parity": "passed",
+    "dirty_tree": false,
+    "promotion_status": "approved",
+    "synthetic_lookahead_canary": "passed",
+    "restatement_canary": "passed",
+    "q0_canary_multiperiod": "passed",
+    "q0_canary_stateful_restatement": "passed",
+    "q0_canary_missing_field": "passed",
+    "availability_assertion": "passed",
+    "git_sha": "150c1ff18be652b2cbea5579b1683abbb1f3b4cc"
+  }
+}
