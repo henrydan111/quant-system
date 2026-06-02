@@ -128,6 +128,16 @@ workspace/research/**/*.png
 workspace/research/**/*.jpg
 workspace/research/**/*.pdf
 workspace/research/**/.ipynb_checkpoints/
+# Local research/sandbox scratch (workspace is scratch space per CLAUDE.md §5) —
+# kept untracked. alpha_mining request/hypothesis/concern-score JSONs + per-run
+# factor_screening_run_metadata; the long_only_50cagr /goal scratch tree;
+# review_tmp; and sandbox_*.py experiment scripts. (Added 2026-06-02 to clear the
+# tree for the sealed-OOS-winners approved-promotion run, which requires a clean tree.)
+workspace/review_tmp/
+workspace/research/long_only_50cagr/
+workspace/research/alpha_mining/*.json
+workspace/research/alpha_mining/**/factor_screening_run_metadata.json
+workspace/scripts/sandbox_*.py
 # Factor-expansion handoff: track the machine-readable candidate lists next to the
 # proposal markdown so the GPT review has the full artifact set in-repo.
 !workspace/research/factor_expansion/*.csv
