@@ -8,8 +8,10 @@
 # daily limit prices as the primary limit-up/limit-down source (via
 # Exchange.resolve_limit_prices), instead of always recomputing them from
 # pre_close × regulatory band. Tushare's published values carry the exact
-# fen-rounding, the ex-rights adjustment, and special regimes (main-board
-# IPO-first-day ±44%) that the band formula does not. A computed-band fallback
+# fen-rounding, the ex-rights adjustment, and special regimes the band formula
+# does not — the pre-2023 main-board IPO-first-day +44%/-36% (asymmetric) rule,
+# and the post-2023 registration-system no-limit window (first 5 days) encoded
+# as a wide sentinel (up_limit~1e6, down_limit~0.01). A computed-band fallback
 # is retained for the verified coverage holes (see evidence below).
 
 approval_id: 2026-06-02_stk_limit_quarantine_to_approved
@@ -92,14 +94,20 @@ evidence:
     conclusion: "Coverage is complete for 2024+ and has small explained holes earlier. The exchange retains a computed-band fallback (Exchange.resolve_limit_prices) so the holes never silently mistreat a limit-locked stock as unconstrained."
   value_sanity:
     method: "Where present, implied band = up_limit/pre_close-1 (and the down side) must land on a known regulatory tier ±{5,10,20,30}% within 0.005 (float32 storage)."
+    # NOTE: off_tier here is the VALUE-tier check (implied band off the known
+    # tiers), NOT the coverage-gap rate above. Sentinel no-limit rows count as
+    # off-tier (their implied band is ~thousands of %), which is why 2024/2026
+    # are non-zero even though their coverage-gap rate is 0.
     off_tier_pct_by_window:
       "2014": 0.0153
       "2018": 0.0164
       "2021": 0.2043
-      "2024": 0.0
-      "2026": 0.0
+      "2024": 0.0587
+      "2026": 0.0393
+    min_on_tier_pct: 99.7957   # worst window (2021); i.e. >=99.79% on-tier
     off_tier_explanations:
-      - "up_band≈0.44: main-board IPO-first-day ±44% rule (limit referenced to issue price, not pre_close). CORRECT."
+      - "no-limit SENTINEL rows: registration-system IPO no-limit days carry up_limit~1e5/1e6 and down_limit~0.01/0.00 (implied band ~thousands of %). CORRECT — these are unreachable bands meaning 'no limit'; they dominate the 2024/2026 off-tier count. See diag_stk_limit_nolimit_days.py."
+      - "up_band≈0.44 / dn_band≈0.36: PRE-2023 main-board IPO-first-day +44%/-36% (ASYMMETRIC) rule (limit referenced to issue price, not pre_close). CORRECT. Only in older data (2014/2018; a few in 2021)."
       - "±0.09/0.11 implied band on sub-¥1 penny stocks: exact fen (0.01) rounding distorts the implied ratio; the stored value is the exchange's correct rounded price. This is precisely where the published field beats naive computation."
     worked_example: "000001.SZ 2014-01-02: pre_close 12.25 × 1.10 = 13.475 → round-half-up → 13.48 = stored up_limit. Exact match to the engine's compute_limit_prices round-half-up convention."
   field_inventory:

@@ -7,7 +7,9 @@
 """What does Tushare's stk_limit field look like on legitimately-no-limit days?
 
 Regimes inspected on the FIRST trading days after listing:
-  - Main board (60xxxx/00xxxx): listing day has a ±44% / -36% special limit
+  - Main board (60xxxx/00xxxx): TWO regimes —
+      * post-2023 全面注册制 (registration system): first 5 days NO limit (sentinel)
+      * pre-2023: listing day had a +44% / -36% (ASYMMETRIC) special limit
   - ChiNext (300/301) post-2020-08-24: first 5 days genuinely NO limit
   - STAR (688/689): first 5 days genuinely NO limit
   - BSE (8xxxxx): listing day no limit
@@ -98,7 +100,7 @@ def main() -> None:
     bse = find_ipos(feeder, ["83", "92", "87"], "2024", k=2)
 
     for c in main_board:
-        show(feeder, "MAIN BOARD (listing day ±44%/-36%)", c)
+        show(feeder, "MAIN BOARD (post-2023: first 5 days NO limit; pre-2023 was +44%/-36%)", c)
     for c in chinext:
         show(feeder, "CHINEXT (first 5 days NO limit)", c)
     for c in star:
