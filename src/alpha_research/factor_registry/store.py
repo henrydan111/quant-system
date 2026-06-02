@@ -1277,6 +1277,27 @@ class FactorRegistryStore:
             "new_approval_validity": validity,
         }
 
+    def set_expected_direction(
+        self,
+        *,
+        factor_id: str,
+        expected_direction: str,
+        version: int | None = None,
+    ) -> None:
+        """Metadata-only: set ``factor_master.expected_direction`` on the current row (Phase 7,
+        GPT impl-review must-fix). Derived from the lifecycle verdict's SIGNED ICIR
+        (``positive`` / ``inverse`` / ``undetermined``) so the durable direction metadata that
+        the future ``FrozenSelectionSet`` hash consumes is populated on promotion. Does NOT
+        touch ``status`` / ``approval_validity`` / ``definition_hash`` and writes NO
+        status-history row — direction is signal metadata, not a lifecycle transition. A blank
+        value is a no-op."""
+        ed = str(expected_direction or "").strip()
+        if not ed:
+            return
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        self.factor_master.at[index, "expected_direction"] = ed
+        self.factor_master.at[index, "updated_at"] = _now_str()
+
     def export_current(
         self,
         output_path: str | Path,

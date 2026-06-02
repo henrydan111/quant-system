@@ -308,9 +308,11 @@ class FactorLifecyclePublishTests(unittest.TestCase):
         step_dir = root / "step"
         step_dir.mkdir(parents=True, exist_ok=True)
         rows = [{"factor": f, "status": "candidate", "heldout_rank_icir": 0.15,
-                 "sign_consistency": 0.8, "n_heldout_blocks": 3} for f in candidates]
+                 "sign_consistency": 0.8, "n_heldout_blocks": 3,
+                 "expected_direction": "positive"} for f in candidates]
         rows += [{"factor": f, "status": "draft", "heldout_rank_icir": 0.04,
-                  "sign_consistency": 0.5, "n_heldout_blocks": 3} for f in drafts]
+                  "sign_consistency": 0.5, "n_heldout_blocks": 3,
+                  "expected_direction": "positive"} for f in drafts]
         state = {
             "factor_lifecycle": {"walk_forward_rows": rows, "evidence_kind": "a_priori"},
             "step_outputs": {"gate_review": {"decision": decision}},
@@ -370,6 +372,21 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertEqual(set(result.outputs["promoted_to_candidate"]), {"mom_return_5d", "val_bp"})
             self.assertEqual(self._status_of(rd, "mom_return_5d"), "candidate")
             self.assertEqual(self._status_of(rd, "qual_roe"), "draft")  # draft verdict NOT promoted
+
+    def test_publish_persists_expected_direction_metadata(self):
+        # GPT Phase-7 impl-review must-fix: on promotion, factor_master.expected_direction MUST
+        # be populated (the future FrozenSelectionSet hash consumes it). Metadata-only: status
+        # stays candidate; an INVERSE-ICIR factor records "inverse" (not implied long-only-positive).
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d"])
+            ctx.state["factor_lifecycle"]["walk_forward_rows"][0]["heldout_rank_icir"] = -0.25
+            ctx.state["factor_lifecycle"]["walk_forward_rows"][0]["expected_direction"] = "inverse"
+            handle_factor_lifecycle_registry_publish(ctx)
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            row = cur[cur["factor_id"] == "mom_return_5d"].iloc[0]
+            self.assertEqual(str(row["expected_direction"]), "inverse")  # durable direction persisted
+            self.assertEqual(str(row["status"]), "candidate")            # metadata-only: status unchanged
 
     def test_evidence_skips_drifted_factor_fail_closed(self):
         # GPT PR-#34: record_lifecycle_evidence is itself a formal-evidence writer and must

@@ -181,17 +181,20 @@ def _lifecycle_time_split(request: Any):
 
 
 def handle_factor_lifecycle_dataset_build(context: StepExecutionContext) -> StepExecutionResult:
-    """Phase 5 slice 3: build the IS-only windowed panel for the GATE input. Field-
-    ineligible factors (from the resolver's per-factor `field_eligible`) are EXCLUDED from
-    compute (marked `draft`, recorded) — a disallowed `$field` never reaches
-    ``load_is_windowed_panel``. The panel is IS-only (structurally `is_end`-bounded by the
-    Phase-4 builder); the profile has no OOS stage. The IsWindowedPanel (non-serializable)
-    is passed to the walk-forward step via ``context.state``; only a summary is written.
+    """Phase 5 slice 3 (+ Phase 7 Layer-2): build the IS-only windowed panel for the GATE
+    input. Field-ineligible factors (from the resolver's per-factor `field_eligible`) are
+    EXCLUDED from compute — a disallowed `$field` never reaches the builder. The panel is
+    IS-only (structurally `is_end`-bounded by the Phase-4 builder); the profile has no OOS
+    stage. The IsWindowedPanel (non-serializable) is passed to the walk-forward step via
+    ``context.state``; only a summary is written.
 
-    Scope note: base factors are gated directly; composite / industry-relative factors in
-    the batch are recorded as `non_base_deferred` (their Layer-2 compute via
-    ``add_composites`` is a documented follow-up — the base-factor gate is the
-    leakage-critical core)."""
+    Phase 7: eligible factors are split into base / composite / industry-relative and all
+    flow through ``load_is_windowed_panel_with_layer2`` (composites + industry-relative are
+    SAME-DATE cross-sectional transforms of PIT-safe base factors, so they inherit the
+    `is_end` boundary). Dependency-only bases (composite components / industry-rel bases not
+    themselves gated) are computed as inputs but EXCLUDED from the verdict columns. There is
+    no `non_base_deferred` bucket; an eligible name that is neither base, composite, nor
+    industry-relative hard-fails."""
     resolver_out = context.state.get("step_outputs", {}).get("factor_lifecycle_object_resolver", {})
     field_eligible = dict(resolver_out.get("field_eligible", {}))
     if not field_eligible:
@@ -421,6 +424,12 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             store.set_status(
                 factor_id=fid, status="candidate",
                 reason=f"factor_lifecycle IS-heldout gate ({evidence_kind})", source_run_id=run_id,
+            )
+            # GPT Phase-7 impl-review must-fix: persist the durable direction metadata
+            # (the future FrozenSelectionSet hash consumes factor_master.expected_direction).
+            # Metadata-only — does NOT touch status / approval_validity / definition_hash.
+            store.set_expected_direction(
+                factor_id=fid, expected_direction=str(v.get("expected_direction", "")),
             )
             promoted.append(fid)
     store.save()
