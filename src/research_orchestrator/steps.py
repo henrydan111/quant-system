@@ -54,6 +54,13 @@ from src.research_orchestrator.validation_steps import (
     handle_validation_gate_review_oos as _validation_handle_gate_review_oos,
     handle_validation_registry_publish as _validation_handle_registry_publish,
 )
+# factor_lifecycle plan Phase 5: the IS-only draft->candidate factor-gate handlers.
+from src.research_orchestrator.factor_lifecycle_steps import (
+    handle_factor_lifecycle_object_resolver as _factor_lifecycle_handle_object_resolver,
+    handle_factor_lifecycle_dataset_build as _factor_lifecycle_handle_dataset_build,
+    handle_factor_lifecycle_walk_forward as _factor_lifecycle_handle_walk_forward,
+    handle_factor_lifecycle_registry_publish as _factor_lifecycle_handle_registry_publish,
+)
 from src.research_orchestrator.dag import PauseForInputPayload, StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.ml_signal_steps import (
     run_ml_dataset_build_step,
@@ -317,6 +324,37 @@ def _collect_measured_values(context: StepExecutionContext) -> dict[str, Any]:
             return _json.loads(metrics_path.read_text(encoding="utf-8"))
         return {}
 
+    # factor_lifecycle plan Phase 5 (slice 5): surface the IS-only walk-forward metrics so
+    # the shared gate has a non-empty rule table for a factor BATCH. The lifecycle heldout
+    # ICIR is MAPPED into the standard `rank_icir` metric (GPT slice-1 risk, option a) so a
+    # SuccessCriteria with metric=rank_icir auto-evaluates -> non-empty criteria_results.
+    if context.profile.profile_id == "factor_lifecycle":
+        wf = context.state.get("step_outputs", {}).get("factor_lifecycle_walk_forward", {})
+        verdicts = wf.get("factor_verdicts", [])
+        icirs: list[float] = []
+        for v in verdicts:
+            val = v.get("heldout_rank_icir")
+            if val is None:
+                continue
+            try:
+                f = abs(float(val))
+            except (TypeError, ValueError):
+                continue
+            if f == f:  # exclude NaN
+                icirs.append(f)
+        icirs.sort()
+        median_icir = icirs[len(icirs) // 2] if icirs else None
+        tested = int(wf.get("tested_count", 0))
+        ineligible = int(wf.get("field_ineligible_count", 0))
+        return {
+            "rank_icir": (icirs[-1] if icirs else None),  # max |heldout ICIR| -> standard rule
+            "median_heldout_rank_icir": median_icir,
+            "candidate_count": int(wf.get("candidate_count", 0)),
+            "tested_count": tested,
+            "field_ineligible_count": ineligible,
+            "effective_trials": tested + ineligible,
+        }
+
     return {}
 
 
@@ -449,6 +487,9 @@ def handle_object_resolver(context: StepExecutionContext) -> StepExecutionResult
         summary={
             "formal_hits": int(resolution.get("formal_hits", 0)),
             "candidate_hits": int(resolution.get("candidate_hits", 0)),
+            # PR P1.2: surface the per-layer registry hits so a discovery run's
+            # draft/stale/deprecated factor consumes stay visible in the summary.
+            "factor_registry_hits_by_layer": dict(resolution.get("factor_registry_hits_by_layer", {})),
         },
     )
 
@@ -1771,4 +1812,9 @@ HANDLER_REGISTRY = {
     "validation_gate_concerns_oos": _validation_handle_gate_concerns_oos,
     "validation_gate_review_oos": _validation_handle_gate_review_oos,
     "validation_registry_publish": _validation_handle_registry_publish,
+    # factor_lifecycle plan Phase 5 (slices 2-6: resolver/dataset/walk-forward/publish).
+    "factor_lifecycle_object_resolver": _factor_lifecycle_handle_object_resolver,
+    "factor_lifecycle_dataset_build": _factor_lifecycle_handle_dataset_build,
+    "factor_lifecycle_walk_forward": _factor_lifecycle_handle_walk_forward,
+    "factor_lifecycle_registry_publish": _factor_lifecycle_handle_registry_publish,
 }

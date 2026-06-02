@@ -1,0 +1,40 @@
+{
+  "generated_at": "2026-05-31T01:04:44",
+  "window": {
+    "oos_start": "2021-01-01",
+    "oos_end": "2026-02-27",
+    "stage": "oos_test"
+  },
+  "horizons": [
+    5,
+    10,
+    20
+  ],
+  "frozen_topset_count": 13,
+  "frozen_topset": [
+    "grow_n_income_attr_p_yoy_accel_q",
+    "grow_operate_profit_yoy_accel_q",
+    "grow_total_revenue_yoy_accel_q",
+    "grow_operate_profit_yoy_q",
+    "grow_n_income_attr_p_yoy_q",
+    "rev_turnover_spike_5d",
+    "qual_piotroski_fscore_9pt",
+    "acc_cash_roa_ttm",
+    "acc_cfo_to_ni_ttm",
+    "val_retearn_yield",
+    "liq_zero_ret_days_10d",
+    "val_fcf_ev_ttm",
+    "val_ebit_ev_ttm"
+  ],
+  "grade_counts": {
+    "C": 9,
+    "D": 3,
+    "B": 1
+  },
+  "timing_seconds": {
+    "compute_factors": 206.46,
+    "run_batch_screening": 39.63
+  },
+  "one_shot": true,
+  "note": "Sealed OOS run once on the predeclared frozen top set. No tuning, no re-selection."
+}

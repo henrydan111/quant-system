@@ -626,6 +626,8 @@ class ResearchOrchestratorTests(unittest.TestCase):
                 # jolly-seeking-lollipop Gate B: validation profile for
                 # prescription-style hypotheses.
                 "hypothesis_validation",
+                # factor_lifecycle plan Phase 5: the IS-only draft->candidate factor gate.
+                "factor_lifecycle",
             },
         )
         self.assertTrue(all(profile.execution_model == "dag" for profile in profiles.values()))
@@ -1070,7 +1072,10 @@ class ResearchOrchestratorTests(unittest.TestCase):
             self.assertEqual([item.object_type for item in request.consumes], ["factor", "composite_factor"])
             self.assertTrue(str(request.inputs["output_dir"]).strip())
 
-    def test_resolver_hits_formal_factor_registry(self):
+    def test_resolver_labels_draft_factor_registry_row(self):
+        # PR P1.2 "resolve-but-label": a synced catalog factor is `draft`, so it
+        # RESOLVES (status=="resolved" -> the discovery object_resolver does NOT trip
+        # its unresolved hard-fail) but is labeled factor_registry_draft, NOT formal.
         with self.make_temp_dir("orch_resolver_formal") as temp_dir:
             root = Path(temp_dir)
             factor_store = FactorRegistryStore(root / "factor_registry")
@@ -1090,9 +1095,97 @@ class ResearchOrchestratorTests(unittest.TestCase):
                 allowed_new_object_types=set(),
                 research_profile="event_driven_signal_research",
             )
-            self.assertEqual(result["formal_hits"], 1)
+            self.assertEqual(result["formal_hits"], 0)
             self.assertEqual(result["candidate_hits"], 0)
-            self.assertEqual(result["resolved_objects"][0]["source_layer"], "formal")
+            self.assertEqual(len(result["unresolved_objects"]), 0)
+            entry = result["resolved_objects"][0]
+            self.assertEqual(entry["status"], "resolved")
+            self.assertEqual(entry["source_layer"], "factor_registry_draft")
+            self.assertEqual(entry["registry_status"], "draft")
+            self.assertEqual(entry["approval_validity"], "valid")
+            self.assertEqual(result["factor_registry_hits_by_layer"]["factor_registry_draft"], 1)
+
+    def test_resolver_labels_by_registry_status(self):
+        # PR P1.2: approved+valid->formal, candidate->factor_registry_candidate,
+        # approved+stale->factor_registry_stale, deprecated->factor_registry_deprecated.
+        with self.make_temp_dir("orch_resolver_labels") as temp_dir:
+            root = Path(temp_dir)
+            store = FactorRegistryStore(root / "factor_registry")
+            store.sync_catalog(record_run=False, generated_at="2026-04-06 21:00:00")
+            ids = store.factor_master["factor_id"].tolist()
+            approved_id, candidate_id, stale_id, deprecated_id = ids[0], ids[1], ids[2], ids[3]
+
+            def _set(fid, status, validity):
+                i = store.factor_master.index[store.factor_master["factor_id"] == fid][0]
+                store.factor_master.at[i, "status"] = status
+                store.factor_master.at[i, "approval_validity"] = validity
+
+            _set(approved_id, "approved", "valid")
+            _set(candidate_id, "candidate", "valid")
+            _set(stale_id, "approved", "requires_revalidation")
+            _set(deprecated_id, "deprecated", "valid")
+            store.save()
+
+            resolver = ResolverHub(
+                factor_registry_dir=root / "factor_registry",
+                candidate_registry_dir=root / "candidate_registry",
+                signal_registry_dir=root / "signal_registry",
+                model_registry_dir=root / "model_registry",
+                strategy_registry_dir=root / "strategy_registry",
+            )
+            result = resolver.resolve_assets(
+                consumes=[
+                    AssetRef(object_type="factor", object_name=f)
+                    for f in (approved_id, candidate_id, stale_id, deprecated_id)
+                ],
+                mode="formal",
+                allowed_new_object_types=set(),
+                research_profile="event_driven_signal_research",
+            )
+            layers = {e["canonical_id"]: e["source_layer"] for e in result["resolved_objects"]}
+            self.assertEqual(layers[approved_id], "formal")
+            self.assertEqual(layers[candidate_id], "factor_registry_candidate")
+            self.assertEqual(layers[stale_id], "factor_registry_stale")
+            self.assertEqual(layers[deprecated_id], "factor_registry_deprecated")
+            self.assertEqual(result["formal_hits"], 1)
+            self.assertEqual(result["candidate_hits"], 1)
+            self.assertEqual(result["factor_registry_hits_by_layer"]["factor_registry_stale"], 1)
+            self.assertEqual(result["factor_registry_hits_by_layer"]["factor_registry_deprecated"], 1)
+
+    def test_resolver_enforces_requested_definition_hash(self):
+        # PR P1.2 (Codex round-5): a requested definition_hash that mismatches the
+        # named factor-registry row must NOT resolve formally (closes the
+        # same-name-shadows-different-hash path); the correct hash resolves.
+        with self.make_temp_dir("orch_resolver_hash") as temp_dir:
+            root = Path(temp_dir)
+            store = FactorRegistryStore(root / "factor_registry")
+            store.sync_catalog(record_run=False, generated_at="2026-04-06 21:00:00")
+            store.save()
+            real_hash = store.factor_master[
+                store.factor_master["factor_id"] == "liq_vol_cv_20d"
+            ].iloc[0]["definition_hash"]
+
+            resolver = ResolverHub(
+                factor_registry_dir=root / "factor_registry",
+                candidate_registry_dir=root / "candidate_registry",
+                signal_registry_dir=root / "signal_registry",
+                model_registry_dir=root / "model_registry",
+                strategy_registry_dir=root / "strategy_registry",
+            )
+            wrong = resolver.resolve_assets(
+                consumes=[AssetRef(object_type="factor", object_name="liq_vol_cv_20d", definition_hash="0" * 64)],
+                mode="formal", allowed_new_object_types=set(),
+                research_profile="event_driven_signal_research",
+            )
+            self.assertEqual(wrong["resolved_objects"][0]["status"], "unresolved")
+
+            right = resolver.resolve_assets(
+                consumes=[AssetRef(object_type="factor", object_name="liq_vol_cv_20d", definition_hash=real_hash)],
+                mode="formal", allowed_new_object_types=set(),
+                research_profile="event_driven_signal_research",
+            )
+            self.assertEqual(right["resolved_objects"][0]["status"], "resolved")
+            self.assertEqual(right["resolved_objects"][0]["source_layer"], "factor_registry_draft")
 
     def test_resolver_falls_back_to_candidate_registry_for_theme_component(self):
         with self.make_temp_dir("orch_resolver_candidate") as temp_dir:

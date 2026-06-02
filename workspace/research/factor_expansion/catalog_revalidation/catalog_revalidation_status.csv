@@ -1,0 +1,148 @@
+factor,field_eligible,full_rank_icir,is_rank_icir,oos_rank_icir,sign_consistency,n_years,status,reason
+liq_log_dollar_vol,True,-0.6934,-0.6206,-0.8065,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.806, sign-consistency=1.00)"
+mom_intraday_20d,True,-0.6148,-0.569,-0.6817,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.682, sign-consistency=1.00)"
+rev_max_return_20d,True,-0.6907,-0.709,-0.6712,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.671, sign-consistency=1.00)"
+mom_ewm_60d,True,-0.5584,-0.4917,-0.6583,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.658, sign-consistency=1.00)"
+mom_high_moment_20d,True,-0.6043,-0.5897,-0.6261,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.626, sign-consistency=1.00)"
+liq_turnover_f_5d,True,-0.6273,-0.6387,-0.6113,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.611, sign-consistency=1.00)"
+liq_vol_surge,True,-0.453,-0.3587,-0.5973,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.597, sign-consistency=1.00)"
+mom_weighted_120d,True,-0.5156,-0.4579,-0.5972,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.597, sign-consistency=1.00)"
+liq_turnover_ratio_5_60,True,-0.4426,-0.3432,-0.5966,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.597, sign-consistency=1.00)"
+tech_price_to_ma60,True,-0.4965,-0.4339,-0.5942,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.594, sign-consistency=1.00)"
+risk_vol_5d,True,-0.538,-0.5106,-0.5757,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.576, sign-consistency=1.00)"
+risk_vol_10d,True,-0.5461,-0.5308,-0.5672,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.567, sign-consistency=1.00)"
+liq_turnover_f_20d,True,-0.5838,-0.5963,-0.5661,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.566, sign-consistency=1.00)"
+liq_amihud_20d,True,0.4407,0.3629,0.5648,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.565, sign-consistency=0.92)"
+risk_skew_60d,True,-0.5155,-0.487,-0.5591,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.559, sign-consistency=1.00)"
+tech_close_to_low_20d,True,-0.4824,-0.4348,-0.5499,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.550, sign-consistency=1.00)"
+mom_ewm_20d,True,-0.4683,-0.4182,-0.5459,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.546, sign-consistency=1.00)"
+liq_vol_cv_20d,True,-0.64,-0.7092,-0.545,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.545, sign-consistency=1.00)"
+liq_turnover_5d,True,-0.5441,-0.5445,-0.5434,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.543, sign-consistency=1.00)"
+tech_skew_20d,True,-0.4876,-0.4658,-0.5414,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.541, sign-consistency=1.00)"
+risk_vol_20d,True,-0.5174,-0.5001,-0.5413,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.541, sign-consistency=1.00)"
+liq_turnover_10d,True,-0.5293,-0.5288,-0.5298,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.530, sign-consistency=1.00)"
+mom_return_20d,True,-0.4734,-0.4385,-0.5294,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.529, sign-consistency=1.00)"
+liq_spread_proxy_20d,True,-0.5075,-0.5034,-0.5146,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.515, sign-consistency=1.00)"
+risk_range_ratio_20d,True,-0.5007,-0.4943,-0.5108,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.511, sign-consistency=1.00)"
+tech_rsi_28,True,-0.4169,-0.3584,-0.5014,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.501, sign-consistency=1.00)"
+mom_return_60d,True,-0.466,-0.4425,-0.5006,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.501, sign-consistency=1.00)"
+liq_turnover_20d,True,-0.4973,-0.496,-0.4989,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.499, sign-consistency=1.00)"
+tech_ma20_ma60_ratio,True,-0.3973,-0.33,-0.4933,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.493, sign-consistency=1.00)"
+mom_return_120d,True,-0.3726,-0.2906,-0.4923,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.492, sign-consistency=0.92)"
+val_pb_change_60d,True,-0.5003,-0.5115,-0.4846,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.485, sign-consistency=1.00)"
+val_bp,True,0.3472,0.267,0.4758,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.476, sign-consistency=0.92)"
+val_bps_to_price,True,0.3426,0.2588,0.4752,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.475, sign-consistency=0.92)"
+tech_price_to_ma20,True,-0.4125,-0.3751,-0.4738,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.474, sign-consistency=1.00)"
+tech_ma5_ma20_ratio,True,-0.4009,-0.3618,-0.4651,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.465, sign-consistency=1.00)"
+risk_vol_60d,True,-0.454,-0.4513,-0.4577,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.458, sign-consistency=1.00)"
+mom_return_250d,True,-0.2981,-0.2237,-0.4321,0.846,13,candidate,"walk-forward stable (OOS ICIR=-0.432, sign-consistency=0.85)"
+mom_overnight_20d,True,0.3166,0.2623,0.4186,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.419, sign-consistency=0.92)"
+mom_return_10d,True,-0.3704,-0.348,-0.4066,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.407, sign-consistency=1.00)"
+rev_return_10d,True,0.3704,0.348,0.4066,1.0,13,candidate,"walk-forward stable (OOS ICIR=+0.407, sign-consistency=1.00)"
+liq_turnover_60d,True,-0.4118,-0.4192,-0.4013,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.401, sign-consistency=1.00)"
+risk_vol_120d,True,-0.3974,-0.395,-0.4005,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.401, sign-consistency=0.92)"
+size_ln_mcap,True,-0.2633,-0.181,-0.3926,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.393, sign-consistency=0.77)"
+size_ln_mcap_sq,True,-0.2633,-0.181,-0.3926,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.393, sign-consistency=0.77)"
+val_relative_pe,True,-0.377,-0.3702,-0.388,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.388, sign-consistency=0.92)"
+rev_min_return_20d,True,0.3006,0.2417,0.3818,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.382, sign-consistency=0.92)"
+tech_rsi_14,True,-0.3253,-0.2905,-0.3797,0.846,13,candidate,"walk-forward stable (OOS ICIR=-0.380, sign-consistency=0.85)"
+risk_downvol_20d,True,-0.2955,-0.2385,-0.3787,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.379, sign-consistency=0.92)"
+val_sp_ttm,True,0.2965,0.2477,0.3738,0.846,13,candidate,"walk-forward stable (OOS ICIR=+0.374, sign-consistency=0.85)"
+risk_tail_60d,True,0.3401,0.3173,0.3717,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.372, sign-consistency=0.92)"
+risk_var_95_20d,True,0.3242,0.2903,0.3715,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.372, sign-consistency=0.92)"
+val_sp,True,0.283,0.2275,0.3709,0.846,13,candidate,"walk-forward stable (OOS ICIR=+0.371, sign-consistency=0.85)"
+mom_low_moment_20d,True,0.3575,0.3503,0.3676,1.0,13,candidate,"walk-forward stable (OOS ICIR=+0.368, sign-consistency=1.00)"
+risk_vol_of_vol,True,-0.4641,-0.5679,-0.3593,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.359, sign-consistency=0.92)"
+risk_downvol_60d,True,-0.3059,-0.2814,-0.342,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.342, sign-consistency=0.92)"
+rev_up_down_ratio_20d,True,-0.2492,-0.1862,-0.3356,0.846,13,candidate,"walk-forward stable (OOS ICIR=-0.336, sign-consistency=0.85)"
+tech_bb_pct,True,-0.2218,-0.1747,-0.2968,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.297, sign-consistency=0.77)"
+size_ln_circmv,True,-0.1667,-0.0928,-0.296,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.296, sign-consistency=0.77)"
+qual_accruals,True,0.242,0.2193,0.2877,0.8,5,candidate,"walk-forward stable (OOS ICIR=+0.288, sign-consistency=0.80)"
+val_div_yield,True,0.2784,0.2759,0.2818,0.846,13,candidate,"walk-forward stable (OOS ICIR=+0.282, sign-consistency=0.85)"
+mom_return_5d,True,-0.2654,-0.2541,-0.2812,1.0,13,candidate,"walk-forward stable (OOS ICIR=-0.281, sign-consistency=1.00)"
+rev_return_5d,True,0.2654,0.2541,0.2812,1.0,13,candidate,"walk-forward stable (OOS ICIR=+0.281, sign-consistency=1.00)"
+liq_vol_ratio_ma5,True,-0.2368,-0.2275,-0.2502,0.923,13,candidate,"walk-forward stable (OOS ICIR=-0.250, sign-consistency=0.92)"
+tech_williams_r_14,True,-0.1761,-0.1313,-0.2454,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.245, sign-consistency=0.77)"
+mom_acceleration_20d,True,-0.3134,-0.3667,-0.2435,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.244, sign-consistency=0.77)"
+val_ep,True,0.2366,0.2406,0.2313,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.231, sign-consistency=0.92)"
+mom_skip1m_252d,True,-0.1169,-0.0513,-0.2276,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.228, sign-consistency=0.77)"
+tech_rsi_6,True,-0.1771,-0.1472,-0.2192,0.846,13,candidate,"walk-forward stable (OOS ICIR=-0.219, sign-consistency=0.85)"
+val_ep_ttm,True,0.246,0.2664,0.2175,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.217, sign-consistency=0.92)"
+tech_macd_signal,True,-0.237,-0.2539,-0.2125,0.846,13,candidate,"walk-forward stable (OOS ICIR=-0.212, sign-consistency=0.85)"
+rev_return_3d,True,0.2041,0.2017,0.2073,1.0,13,candidate,"walk-forward stable (OOS ICIR=+0.207, sign-consistency=1.00)"
+qual_margin_stability,True,0.2752,0.3387,0.2055,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.205, sign-consistency=0.92)"
+val_div_ratio,True,0.2861,0.3481,0.2045,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.204, sign-consistency=0.92)"
+val_cftp,True,0.1985,0.2285,0.1608,0.846,13,candidate,"walk-forward stable (OOS ICIR=+0.161, sign-consistency=0.85)"
+qual_roe_change,True,-0.0923,-0.0656,-0.1376,0.769,13,candidate,"walk-forward stable (OOS ICIR=-0.138, sign-consistency=0.77)"
+grow_rev_trend,True,0.1843,0.2238,0.1245,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.124, sign-consistency=0.92)"
+grow_rev_acceleration,True,0.1431,0.1651,0.1057,0.923,13,candidate,"walk-forward stable (OOS ICIR=+0.106, sign-consistency=0.92)"
+grow_profit_trend,True,0.2356,0.3908,0.0162,0.769,13,deprecated,collapsed OOS (|OOS ICIR|=0.016 < 0.03)
+earn_earnings_momentum,True,0.1508,0.2708,-0.0132,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.013 < 0.03)
+grow_eps_yoy,True,0.1742,0.3059,0.0128,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.013 < 0.03)
+grow_netprofit_yoy,True,0.1356,0.2545,-0.0102,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.010 < 0.03)
+size_ln_free_float,True,-0.0082,-0.0087,-0.0074,0.462,13,deprecated,collapsed OOS (|OOS ICIR|=0.007 < 0.03)
+qual_asset_turnover,True,0.142,0.2492,0.0066,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.007 < 0.03)
+grow_opprofit_yoy,True,0.1525,0.2832,-0.0061,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.006 < 0.03)
+qual_leverage,True,0.0059,0.0118,-0.0046,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.005 < 0.03)
+lev_debt_to_assets,True,0.0059,0.0118,-0.0046,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.005 < 0.03)
+lev_debt_capacity,True,-0.0059,-0.0118,0.0046,0.615,13,deprecated,collapsed OOS (|OOS ICIR|=0.005 < 0.03)
+lev_deleverage,True,0.0524,0.0795,0.0021,0.538,13,deprecated,collapsed OOS (|OOS ICIR|=0.002 < 0.03)
+alpha_topinst_hit_density_60d,False,-0.7961,-0.7944,-0.8021,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_toplist_hit_density_60d,False,-0.7793,-0.7869,-0.7713,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+flow_large_buy_ratio_5d,False,-0.2607,-0.0065,-0.6659,0.769,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_block_volume_share_20d,False,0.3864,0.2439,0.6315,0.769,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_inst_net_buy_20d,False,0.4747,0.3844,0.6016,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+flow_net_inflow_20d,False,0.5928,0.6344,0.5356,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_toplist_amount_over_mv_20d,False,-0.4406,-0.4219,-0.4664,0.923,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+flow_net_inflow_5d,False,0.4751,0.485,0.4619,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+margin_net_buy_20d,False,-0.3043,-0.2396,-0.4557,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_toplist_net_rate_20d,False,-0.2215,-0.1166,-0.3835,0.846,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_chip_cost_spread_pct,False,0.406,0.4672,0.3686,0.778,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_holder_event_density_60d,False,-0.2247,-0.1485,-0.3683,0.923,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+flow_inflow_surge,False,-0.3508,-0.3434,-0.3611,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_chip_winner_rate_ema_10d,False,-0.2639,-0.101,-0.3574,0.889,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_topinst_net_buy_ema_20d,False,0.2256,0.1228,0.3452,0.615,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_block_event_density_20d,False,-0.136,-0.0056,-0.3433,0.692,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+qual_roe_stability,True,0.0362,-0.1391,0.3243,0.692,13,draft,"marginal (OOS ICIR=+0.324, sign-consistency=0.69)"
+flow_large_small_ratio,False,0.3717,0.4208,0.301,1.0,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_chip_weight_avg_dev,False,-0.0237,0.3188,-0.2763,0.556,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_insider_net_buy_60d,False,0.1884,0.1291,0.2725,0.846,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+liq_turnover_skew_20d,True,0.0463,-0.094,0.2703,0.538,13,draft,"marginal (OOS ICIR=+0.270, sign-consistency=0.54)"
+alpha_holder_gross_vol_60d,False,-0.2146,-0.1918,-0.2557,0.769,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+margin_balance_pct,False,-0.0951,-0.0184,-0.2454,0.538,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+margin_sl_balance_change,False,-0.1735,-0.1614,-0.1953,0.923,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_roe_improvement,True,-0.1226,-0.0825,-0.1773,0.692,13,draft,"marginal (OOS ICIR=-0.177, sign-consistency=0.69)"
+north_hold_pct,False,0.1085,0.4288,-0.1741,0.6,10,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+alpha_chip_price_vs_cost50,False,0.0625,0.3875,-0.1653,0.667,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+qual_gross_margin,True,-0.0338,0.0461,-0.1618,0.615,13,draft,"marginal (OOS ICIR=-0.162, sign-consistency=0.62)"
+alpha_holder_net_ratio_ema_20d,False,0.1398,0.1295,0.155,0.769,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+qual_roic,True,0.0326,0.1457,-0.1148,0.462,13,draft,"marginal (OOS ICIR=-0.115, sign-consistency=0.46)"
+qual_roa,True,0.0277,0.1339,-0.1122,0.462,13,draft,"marginal (OOS ICIR=-0.112, sign-consistency=0.46)"
+tech_kurt_20d,True,0.0381,0.1026,-0.11,0.538,13,draft,"marginal (OOS ICIR=-0.110, sign-consistency=0.54)"
+risk_mdd_proxy_60d,True,-0.061,-0.0308,-0.109,0.615,13,draft,"marginal (OOS ICIR=-0.109, sign-consistency=0.62)"
+qual_roe,True,0.0327,0.1381,-0.1089,0.462,13,draft,"marginal (OOS ICIR=-0.109, sign-consistency=0.46)"
+qual_net_margin,True,0.0136,0.1044,-0.1022,0.462,13,draft,"marginal (OOS ICIR=-0.102, sign-consistency=0.46)"
+north_accumulation_20d,False,0.2584,0.6355,-0.1018,0.667,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_roe_yoy,True,0.2182,0.3293,0.0943,0.769,13,draft,"marginal (OOS ICIR=+0.094, sign-consistency=0.77)"
+qual_margin_trend,True,0.1224,0.1445,0.0907,0.692,13,draft,"marginal (OOS ICIR=+0.091, sign-consistency=0.69)"
+rev_return_1d,True,0.0763,0.0689,0.0856,0.846,13,draft,"marginal (OOS ICIR=+0.086, sign-consistency=0.85)"
+tech_close_to_high_20d,True,0.0612,0.0472,0.0832,0.615,13,draft,"marginal (OOS ICIR=+0.083, sign-consistency=0.62)"
+north_hold_change_20d,False,0.2717,0.6262,-0.0792,0.667,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_gross_margin_chg,True,0.07,0.0666,0.0763,0.692,13,draft,"marginal (OOS ICIR=+0.076, sign-consistency=0.69)"
+north_hold_change_5d,False,0.3017,0.5529,0.0741,0.875,8,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_opprofit_qoq,True,0.2026,0.2945,0.0718,0.615,13,draft,"marginal (OOS ICIR=+0.072, sign-consistency=0.62)"
+earn_surprise_eps,True,-0.005,0.0303,-0.0626,0.538,13,draft,"marginal (OOS ICIR=-0.063, sign-consistency=0.54)"
+alpha_block_discount_20d,False,-0.1077,-0.1428,-0.0615,0.692,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_profit_acceleration,True,0.1819,0.2549,0.0553,0.846,13,draft,"marginal (OOS ICIR=+0.055, sign-consistency=0.85)"
+alpha_chip_winner_rate_chg_20d,False,-0.102,-0.2017,-0.0533,0.667,9,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+grow_peg,True,-0.0494,-0.1321,0.0524,0.615,13,draft,"marginal (OOS ICIR=+0.052, sign-consistency=0.62)"
+grow_consistency,True,0.0747,0.1588,-0.041,0.692,13,draft,"marginal (OOS ICIR=-0.041, sign-consistency=0.69)"
+grow_revenue_yoy,True,0.0806,0.1731,-0.0405,0.462,13,draft,"marginal (OOS ICIR=-0.041, sign-consistency=0.46)"
+earn_surprise_revenue,True,0.0806,0.1731,-0.0405,0.462,13,draft,"marginal (OOS ICIR=-0.041, sign-consistency=0.46)"
+qual_quick_ratio,True,-0.0316,-0.0282,-0.0381,0.538,13,draft,"marginal (OOS ICIR=-0.038, sign-consistency=0.54)"
+lev_quick_ratio,True,-0.0316,-0.0282,-0.0381,0.538,13,draft,"marginal (OOS ICIR=-0.038, sign-consistency=0.54)"
+flow_small_net_pct_20d,False,-0.073,-0.1248,0.0377,0.538,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+qual_current_ratio,True,-0.0229,-0.0153,-0.0357,0.615,13,draft,"marginal (OOS ICIR=-0.036, sign-consistency=0.62)"
+lev_current_ratio,True,-0.0229,-0.0153,-0.0357,0.615,13,draft,"marginal (OOS ICIR=-0.036, sign-consistency=0.62)"
+north_flow_momentum,False,0.2463,0.5617,-0.0201,0.8,10,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft
+flow_large_net_pct_20d,False,0.1766,0.2757,-0.002,0.692,13,draft,field-ineligible (quarantine/pending/unknown field) — capped at draft

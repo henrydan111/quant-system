@@ -43,8 +43,13 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.alpha_research.factor_eval.batch_screening import run_batch_screening
 from src.alpha_research.factor_library import operators
 
+import os
 MERGED_CSV = PROJECT_ROOT / "workspace/research/factor_expansion/factor_candidates_merged.csv"
-OUTDIR = PROJECT_ROOT / "workspace/research/factor_expansion/screening_is"
+# OUTDIR overridable via env so successive runs (21-factor pre-Wave1, 47-factor
+# post-Wave1) can be preserved side by side for comparison.
+OUTDIR = PROJECT_ROOT / "workspace/research/factor_expansion" / os.environ.get(
+    "SCREEN_OUTDIR", "screening_is"
+)
 IS_START = "2014-01-01"
 IS_END = "2020-12-31"
 HORIZONS = [5, 10, 20]

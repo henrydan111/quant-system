@@ -109,7 +109,8 @@ Scope boundary: **from "data is ready, research can start" to "research result i
 - `window_enforcement.py`: first-layer hypothesis time-window clamp before orchestrator-owned data loading
 - `holdout_seal.py`: mechanical OOS seal log
 - `sealed_backtest_runner.py`: seal-aware backtest choke point for orchestrator-owned execution
-- `profiles.py`: `ResearchProfile` registration and the 7 built-in profiles
+- `profiles.py`: `ResearchProfile` registration and the 8 built-in profiles (the 8th, `factor_lifecycle`, is the IS-only `draft→candidate` factor gate — start-to-finish guide: [alpha_research/factor_lifecycle/README.md](alpha_research/factor_lifecycle/README.md))
+- `factor_lifecycle_steps.py`: the 4 `factor_lifecycle` handlers (resolver / dataset_build / walk_forward / registry_publish)
 - `capabilities.py`: layered 21-capability vocabulary (`core_research` / `diagnostic` / `support`)
 - `dag.py` + `steps.py`: profile-to-DAG compilation, typed pause payloads, and step handler registry
 - `runtime.py`: serial topological execution, per-step state, `pause_for_input` / `pause_for_gate`, strict resume gating on `request_hash + plan_hash`

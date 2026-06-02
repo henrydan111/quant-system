@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-05-31T13:05:49",
+  "window": {
+    "start": "2014-01-01",
+    "is_end": "2020-12-31",
+    "oos_start": "2021-01-01",
+    "end": "2026-02-27"
+  },
+  "horizon": 20,
+  "n_factors": 147,
+  "status_counts": {
+    "candidate": 77,
+    "draft": 59,
+    "deprecated": 11
+  },
+  "field_ineligible_count": 33,
+  "method": "walk-forward per-year fold-stability + IS/OOS split; a-priori factors, unpromoted; 2021-2026 = first clean split (not pristine OOS).",
+  "approved_note": "approved NOT assigned here \u2014 requires strategy-level promotion gate."
+}

@@ -619,6 +619,35 @@ def _factor_screening_dag_builder(
     )
 
 
+def _factor_lifecycle_dag_builder(
+    request: ResearchRequest,
+    effective_capabilities: list[str],
+) -> CompiledResearchDag:
+    """Phase 5: the factor-lifecycle draft->candidate gate. IS-ONLY — note the ABSENCE of
+    any oos_test stage, OOS backtest, or holdout-seal claim (the candidate->approved OOS
+    spend is a SEPARATE frozen-set / promotion-gate path, never this profile). The
+    object_resolver step is EXPLICIT (formal_requires_resolver does NOT auto-inject it)."""
+    del effective_capabilities
+    steps = _inject_gate_sequence(
+        [
+            ("data_scope", "data_scope", "noop"),
+            ("data_readiness", "data_readiness", "noop"),
+            ("factor_lifecycle_object_resolver", "object_resolver", "factor_lifecycle_object_resolver"),
+            ("factor_lifecycle_dataset_build", "dataset_build", "factor_lifecycle_dataset_build"),
+            ("factor_lifecycle_walk_forward", "walk_forward_validation", "factor_lifecycle_walk_forward"),
+            ("registry_publish", "registry_publish", "factor_lifecycle_registry_publish"),
+            ("report_render", "report_render", "report_render"),
+        ],
+        stage="is_only",
+    )
+    return _build_linear_dag(
+        profile_id="factor_lifecycle",
+        run_dir=_request_run_dir(request),
+        steps=steps,
+        metadata={"requested_stage": "factor_lifecycle", "is_only": True},
+    )
+
+
 def _theme_strategy_dag_builder(
     request: ResearchRequest,
     effective_capabilities: list[str],
@@ -1018,6 +1047,31 @@ def _register_builtin_profiles() -> None:
             # empty until that step runs.
             formal_requires_resolver=True,
             dag_builder=_hypothesis_validation_dag_builder,
+        ),
+        # factor_lifecycle plan Phase 5: the IS-ONLY draft->candidate factor gate.
+        # Runs run_is_walk_forward as the gate; publishes passing factors at status
+        # `candidate` only (never `approved`). NO OOS leg (candidate->approved OOS spend
+        # is the separate frozen-set / promotion-gate path).
+        ResearchProfile(
+            profile_id="factor_lifecycle",
+            supported_modes=("formal",),  # the draft->candidate gate is a formal decision
+            # BASE factors only (GPT PR-#34 review): the dataset_build computes via
+            # load_is_windowed_panel (base Qlib expressions). Composite / industry-relative
+            # gating (Layer-2 add_composites) is a documented follow-up; advertising only
+            # `factor` keeps the profile faithful to what it actually gates.
+            consumes_types=("factor",),
+            produces_types=("factor",),  # same factors, now at status candidate (or left draft)
+            default_capabilities=(
+                "object_resolver",
+                "dataset_build",
+                "walk_forward_validation",
+                "gate_evaluation",
+                "gate_concern_scoring",
+                "gate_review",
+                "registry_publish",
+            ),
+            formal_requires_resolver=True,
+            dag_builder=_factor_lifecycle_dag_builder,
         ),
     ]
     for profile in builtins:

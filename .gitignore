@@ -135,6 +135,18 @@ workspace/research/**/.ipynb_checkpoints/
 !workspace/research/factor_expansion/screening_is/
 !workspace/research/factor_expansion/screening_is/*.csv
 !workspace/research/factor_expansion/screening_is/*.parquet
+!workspace/research/factor_expansion/screening_is_47/
+!workspace/research/factor_expansion/screening_is_47/*.csv
+!workspace/research/factor_expansion/screening_is_47/*.parquet
+!workspace/research/factor_expansion/screening_is_50/
+!workspace/research/factor_expansion/screening_is_50/*.csv
+!workspace/research/factor_expansion/screening_is_50/*.parquet
+!workspace/research/factor_expansion/screening_oos/
+!workspace/research/factor_expansion/screening_oos/*.csv
+!workspace/research/factor_expansion/screening_oos/*.parquet
+!workspace/research/factor_expansion/catalog_revalidation/
+!workspace/research/factor_expansion/catalog_revalidation/*.csv
+!workspace/research/factor_expansion/catalog_revalidation/*.json
 
 # =============================================================================
 # Claude Code / Codex local tooling cache (binaries, sessions)

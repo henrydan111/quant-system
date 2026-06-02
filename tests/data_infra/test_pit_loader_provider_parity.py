@@ -48,8 +48,16 @@ _needs_provider = pytest.mark.skipif(
 PARITY_FIELDS = [
     "roa", "roe", "netprofit_margin",
     "roe_waa", "roe_dt", "q_roe", "q_dt_roe", "dt_netprofit_yoy",
+    # Wave-2 (2026-05-31): indicators-family margin ratios. Loader-servable
+    # (in the indicators ledger), so the standard loader↔provider parity is the
+    # right evidence here (unlike the provider-DERIVED statement _sq/_q variants,
+    # which use workspace/scripts/verify_statement_provider_parity.py).
+    "op_of_gr", "ebit_of_gr", "profit_to_gr",
 ]
-NEW_FIELDS = {"roe_waa", "roe_dt", "q_roe", "q_dt_roe", "dt_netprofit_yoy"}
+NEW_FIELDS = {
+    "roe_waa", "roe_dt", "q_roe", "q_dt_roe", "dt_netprofit_yoy",
+    "op_of_gr", "ebit_of_gr", "profit_to_gr",
+}
 PARITY_TS = ["600519.SH", "000001.SZ", "603080.SH"]  # 2 stable + 1 IPO-edge (listed 2018-01-03)
 START, END = "20170101", "20191231"
 

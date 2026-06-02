@@ -1,0 +1,34 @@
+{
+  "frozen_at": "2026-05-31T00:59:22",
+  "rule": "workspace/research/factor_expansion/oos_topset_selection_rule.md",
+  "is_screen": "screening_is_50",
+  "frozen_topset": [
+    "grow_n_income_attr_p_yoy_accel_q",
+    "grow_operate_profit_yoy_accel_q",
+    "grow_total_revenue_yoy_accel_q",
+    "grow_operate_profit_yoy_q",
+    "grow_n_income_attr_p_yoy_q",
+    "rev_turnover_spike_5d",
+    "qual_piotroski_fscore_9pt",
+    "acc_cash_roa_ttm",
+    "acc_cfo_to_ni_ttm",
+    "val_retearn_yield",
+    "liq_zero_ret_days_10d",
+    "val_fcf_ev_ttm",
+    "val_ebit_ev_ttm"
+  ],
+  "count": 13,
+  "redundancy_pruned": [
+    {
+      "dropped": "grow_revenue_yoy_accel_q",
+      "kept": "grow_total_revenue_yoy_accel_q"
+    }
+  ],
+  "oos_run": "COMPLETE (2026-05-31, one-shot, screening_oos/)",
+  "oos_outcome": {
+    "registered": 6,
+    "deferred": 2,
+    "rejected": 5
+  },
+  "registration_boundary": "register_validated = recorded in candidate artifacts + oos_results_and_registration.md. NOT written to data/factor_registry/ master tables (privileged production path per CLAUDE.md \u00a79; requires orchestrator publish + strategy-level promotion gate). Conservative per /goal irreversible-change caution."
+}

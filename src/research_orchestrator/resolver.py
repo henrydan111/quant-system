@@ -22,6 +22,11 @@ class ResolutionEntry:
     version: int | None
     definition_hash: str
     can_publish: bool
+    # PR P1.2 (Codex round-5): explicit registry privilege metadata, so reviewers
+    # read status/validity directly instead of parsing the source_layer string.
+    # Empty for non-factor-registry layers (candidate/signal/model/strategy/new).
+    registry_status: str = ""
+    approval_validity: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +38,8 @@ class ResolutionEntry:
             "version": self.version,
             "definition_hash": self.definition_hash,
             "can_publish": self.can_publish,
+            "registry_status": self.registry_status,
+            "approval_validity": self.approval_validity,
         }
 
 
@@ -72,12 +79,27 @@ class ResolverHub:
                     research_profile=research_profile,
                 )
             )
+        # PR P1.2 (Codex round-4/5): with draft factors now RESOLVED-but-labeled
+        # (not unresolved), keep every non-formal registry layer visible in the
+        # summary so nothing silently vanishes. formal_hits stays formal-only.
+        factor_registry_layers = (
+            "formal",
+            "factor_registry_candidate",
+            "factor_registry_draft",
+            "factor_registry_stale",
+            "factor_registry_deprecated",
+        )
         return {
             "formal_hits": sum(1 for item in entries if item.source_layer == "formal"),
             "candidate_hits": sum(
-                1 for item in entries if item.source_layer in {"candidate", "signal", "model", "strategy"}
+                1 for item in entries
+                if item.source_layer in {"candidate", "factor_registry_candidate", "signal", "model", "strategy"}
             ),
             "new_objects_created": sum(1 for item in entries if item.source_layer == "new_candidate"),
+            "factor_registry_hits_by_layer": {
+                layer: sum(1 for item in entries if item.source_layer == layer)
+                for layer in factor_registry_layers
+            },
             "unresolved_objects": [item.to_dict() for item in entries if item.status == "unresolved"],
             "resolved_objects": [item.to_dict() for item in entries],
         }
@@ -121,6 +143,26 @@ class ResolverHub:
 
         return self._unresolved(asset, mode, asset.object_type in allowed_new_object_types)
 
+    @staticmethod
+    def _formal_source_layer(registry_status: str, approval_validity: str) -> str:
+        """Map a factor-registry row's (status, approval_validity) to a source_layer.
+
+        PR P1.2 "resolve-but-label" (Codex round-5): the row is ALWAYS resolved
+        (so discovery's object_resolver never trips its unresolved hard-fail); only
+        the privilege LABEL changes. The formal gate lives in the validation
+        consumer's allow-set, which accepts ``formal`` (+ ``factor_registry_candidate``
+        under ``allow_candidate_components``) and rejects the rest. Fail-closed: a
+        candidate without a valid approval, or any unknown status, is labeled draft.
+        """
+        valid = approval_validity == "valid"
+        if registry_status == "approved":
+            return "formal" if valid else "factor_registry_stale"
+        if registry_status == "candidate" and valid:
+            return "factor_registry_candidate"
+        if registry_status == "deprecated":
+            return "factor_registry_deprecated"
+        return "factor_registry_draft"
+
     def _resolve_formal_factor(self, asset: AssetRef) -> ResolutionEntry | None:
         current = self.factor_store.factor_master[
             self.factor_store.factor_master["is_current"].fillna(False)
@@ -134,20 +176,31 @@ class ResolverHub:
             matches = matches[matches["factor_id"] == asset.object_name].copy()
         if asset.version is not None:
             matches = matches[matches["version"] == int(asset.version)].copy()
-        if matches.empty and asset.definition_hash:
-            matches = current[current["definition_hash"] == asset.definition_hash].copy()
+        if asset.definition_hash:
+            # PR P1.2 (Codex round-5): enforce a requested definition_hash as a REAL
+            # filter, not a fallback — a name match with a mismatched hash must NOT
+            # resolve here (it returns None and falls through to the candidate
+            # registry), closing the same-name-shadows-different-hash path. A pure
+            # hash request (no id/name) still resolves registry-wide by hash.
+            matches = matches[matches["definition_hash"] == asset.definition_hash].copy()
+            if matches.empty and not asset.object_id and not asset.object_name:
+                matches = current[current["definition_hash"] == asset.definition_hash].copy()
         if matches.empty:
             return None
         row = matches.sort_values("version").iloc[-1]
+        registry_status = (_coerce_string(row.get("status")) or "draft").strip().lower()
+        approval_validity = (_coerce_string(row.get("approval_validity")) or "valid").strip().lower()
         return ResolutionEntry(
             requested=asset.to_dict(),
             status="resolved",
-            source_layer="formal",
+            source_layer=self._formal_source_layer(registry_status, approval_validity),
             object_type="composite_factor" if _coerce_string(row.get("factor_kind")) == "composite" else "factor",
             canonical_id=_coerce_string(row.get("factor_id")),
             version=_coerce_int(row.get("version")),
             definition_hash=_coerce_string(row.get("definition_hash")),
             can_publish=False,
+            registry_status=registry_status,
+            approval_validity=approval_validity,
         )
 
     def _resolve_candidate_factor(self, asset: AssetRef) -> ResolutionEntry | None:

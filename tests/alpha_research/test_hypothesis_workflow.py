@@ -1883,7 +1883,19 @@ class ValidationObjectResolverTests(unittest.TestCase):
                      "object_type": "factor", "canonical_id": "alpha_b"},
                 ],
             }
-            with self._patch_resolver(mock_resolution):
+            # alpha_a/alpha_b are synthetic resolver fixtures (not catalog factors),
+            # so patch the PR9 field-dependency gate here to isolate the resolver
+            # handler's emission logic. The field gate itself is covered in
+            # tests/research_orchestrator/test_pr9_validation_field_gate.py.
+            # The P1.3 drift gate is likewise isolated (synthetic alpha_a/alpha_b have
+            # no definition_hash); it is covered by TestPR13DefinitionBindingGate.
+            with self._patch_resolver(mock_resolution), patch(
+                "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+                return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+            ), patch(
+                "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+                return_value={"checked": 0, "drifted": [], "stage": "formal_validation"},
+            ):
                 result = handle_validation_object_resolver(ctx)
             self.assertEqual(result.status, "completed")
             # The registry_resolution key must be emitted (runtime.py:407 reads it).
@@ -1949,6 +1961,9 @@ class ValidationObjectResolverTests(unittest.TestCase):
             shutil.rmtree(run_dir, ignore_errors=True)
 
     def test_accepts_candidate_when_opt_in_set(self):
+        # PR P1.2 (Codex round-5): allow_candidate_components admits the
+        # factor_registry_candidate layer (candidate-STATUS factors in the formal
+        # factor registry), NOT the separate candidate-registry "candidate" layer.
         from src.research_orchestrator.validation_steps import handle_validation_object_resolver
         ctx, run_dir = self._build_context(allow_candidate=True)
         try:
@@ -1957,14 +1972,22 @@ class ValidationObjectResolverTests(unittest.TestCase):
                 "unresolved_objects": [],
                 "resolved_objects": [
                     {"requested": {"object_type": "factor", "object_name": "alpha_a"},
-                     "status": "resolved", "source_layer": "candidate",
-                     "object_type": "factor", "canonical_id": "alpha_a_cand"},
+                     "status": "resolved", "source_layer": "factor_registry_candidate",
+                     "object_type": "factor", "canonical_id": "alpha_a"},
                     {"requested": {"object_type": "factor", "object_name": "alpha_b"},
-                     "status": "resolved", "source_layer": "candidate",
-                     "object_type": "factor", "canonical_id": "alpha_b_cand"},
+                     "status": "resolved", "source_layer": "factor_registry_candidate",
+                     "object_type": "factor", "canonical_id": "alpha_b"},
                 ],
             }
-            with self._patch_resolver(mock_resolution):
+            # Field gate patched (alpha_a/alpha_b are synthetic fixtures) — see
+            # test_resolves_formal_factors_and_emits_registry_resolution.
+            with self._patch_resolver(mock_resolution), patch(
+                "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+                return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+            ), patch(
+                "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+                return_value={"checked": 0, "drifted": [], "stage": "formal_validation"},
+            ):
                 result = handle_validation_object_resolver(ctx)
             self.assertEqual(result.status, "completed")
             self.assertEqual(result.outputs["registry_resolution"]["candidate_hits"], 2)
