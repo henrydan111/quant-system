@@ -161,6 +161,15 @@ def _slice_dates(obj, start, end):
     return obj[(dt >= pd.Timestamp(start)) & (dt <= pd.Timestamp(end))]
 
 
+def _expected_direction(icir) -> str:
+    """Signed-ICIR direction label (GPT Phase-7): admit inverse predictors without implying
+    long-only-positive alpha. ``positive`` = higher factor predicts higher return;
+    ``inverse`` = higher factor predicts LOWER return; ``undetermined`` = NaN/zero ICIR."""
+    if icir is None or pd.isna(icir) or icir == 0:
+        return "undetermined"
+    return "positive" if icir > 0 else "inverse"
+
+
 def build_is_windowed_panel(
     factor_panel: pd.DataFrame,
     adj_close: pd.Series,
@@ -275,6 +284,112 @@ def load_is_windowed_panel(
     )
 
 
+def _default_industry_series(index):
+    """Production industry labels (PIT-safe SW2021 L1 membership as-of the row date)."""
+    from src.data_infra.provider_metadata import build_industry_series_asof
+
+    return build_industry_series_asof(index, "L1")
+
+
+def load_is_windowed_panel_with_layer2(
+    *,
+    gated_base: list,
+    gated_composite_defs: list,
+    gated_industry_defs: list,
+    time_split,
+    horizon: int = DEFAULT_HORIZON,
+    qlib_dir=None,
+    trade_cal=None,
+    compute_factors_fn=None,
+    industry_series_fn=None,
+    adj_close_expr: str | None = None,
+) -> IsWindowedPanel:
+    """IS-only panel for BASE + Layer-2 (composite / industry-relative) factors (Phase 7).
+
+    Composites and industry-relative factors are SAME-DATE cross-sectional transforms of
+    already-PIT-safe base factors (composite = weighted ``Σ cs_rank(±base)``; industry-relative
+    = within-``(date, industry)`` demean / size-industry-neutralize), so they inherit the
+    ``is_end`` boundary UNCHANGED: the base dependency closure is computed over
+    ``[is_start, is_end]`` with ``horizons=None`` (belt 1), the SAME exact-calendar ``r(t)``
+    label is used, and the SAME :class:`IsWindowedPanel` belts assert ``is_end``. Only the GATED
+    columns (``gated_base`` + the named composites/industry-rel) become verdict columns;
+    dependency-only bases (composite components / industry-rel bases not themselves gated) are
+    computed as INPUTS and EXCLUDED from the panel (mirrors the Phase-3 selection contract).
+
+    With empty composite/industry defs this is equivalent to :func:`load_is_windowed_panel` over
+    ``gated_base``. ``industry_series_fn`` / ``compute_factors_fn`` are injectable for tests.
+    """
+    from src.alpha_research.factor_library import operators
+    from src.alpha_research.factor_library.catalog import get_factor_catalog
+
+    cf = compute_factors_fn or operators.compute_factors
+    adj_expr = adj_close_expr or getattr(operators, "ADJ_CLOSE", "$close * $adj_factor")
+    qdir = str(qlib_dir or _DEFAULT_QLIB_DIR)
+    is_start, is_end = time_split.is_start, time_split.is_end
+
+    base_catalog = get_factor_catalog(include_new_data=True)
+    # dependency closure: gated bases + every composite component + every industry-rel base.
+    dep = set(gated_base)
+    for d in gated_composite_defs:
+        dep.update(d.get("components", []))
+    for d in gated_industry_defs:
+        if d.get("base"):
+            dep.add(d["base"])
+    dep = sorted(x for x in dep if x)
+    missing = [x for x in dep if x not in base_catalog]
+    if missing:
+        raise ValueError(
+            f"load_is_windowed_panel_with_layer2: dependency base factors absent from the "
+            f"catalog: {missing}"
+        )
+
+    base_panel, _ = cf(
+        catalog={n: base_catalog[n] for n in dep}, start_date=is_start, end_date=is_end,
+        horizons=None, qlib_dir=qdir, kernels=1, stage="is_only",
+    )
+    adj_panel, _ = cf(
+        catalog={"adj_close": adj_expr}, start_date=is_start, end_date=is_end,
+        horizons=None, qlib_dir=qdir, kernels=1, stage="is_only",
+    )
+
+    panel = base_panel
+    if gated_composite_defs or gated_industry_defs:
+        # belt-and-suspenders (GPT Phase-7 review): the cross-sectional Layer-2 ops require a
+        # (datetime, instrument) panel. cs_rank is now name-based, but assert the exact order
+        # here so a wrong-order panel fails LOUDLY before the formal Layer-2 compute.
+        if list(base_panel.index.names) != ["datetime", "instrument"]:
+            raise IsEndLeakageError(
+                "layer2 base panel must be a ['datetime', 'instrument'] MultiIndex; got "
+                f"{list(base_panel.index.names)}"
+            )
+    if gated_composite_defs:
+        panel = operators.add_composites(panel, gated_composite_defs, progress_every=0)
+    if gated_industry_defs:
+        industry = (industry_series_fn or _default_industry_series)(panel.index)
+        mcap = None
+        if any(bool(d.get("requires_market_cap")) for d in gated_industry_defs):
+            mcap_panel, _ = cf(
+                catalog={"market_cap": "Ref($total_mv, 1)"}, start_date=is_start, end_date=is_end,
+                horizons=None, qlib_dir=qdir, kernels=1, stage="is_only",
+            )
+            mcap = mcap_panel["market_cap"]
+        panel = operators.add_industry_relative_composites(
+            panel, industry, market_cap=mcap, defs=gated_industry_defs, progress_every=0,
+        )
+
+    gated_cols = (
+        list(gated_base)
+        + [d["name"] for d in gated_composite_defs]
+        + [d["name"] for d in gated_industry_defs]
+    )
+    missing_cols = [c for c in gated_cols if c not in panel.columns]
+    if missing_cols:
+        raise ValueError(f"load_is_windowed_panel_with_layer2: gated columns not produced: {missing_cols}")
+    return build_is_windowed_panel(
+        panel[gated_cols], adj_panel["adj_close"], is_end=is_end, horizon=horizon, trade_cal=trade_cal,
+    )
+
+
 def _heldout_metrics_generated(factor: pd.Series, label: pd.Series, folds) -> tuple[float, float, int]:
     """Per-fold IS-internal heldout rank ICIR over each fold's TEST window, aggregated.
     heldout ICIR = nanmean of fold test ICIRs; sign_consistency = fraction of valid fold
@@ -359,6 +474,7 @@ def run_is_walk_forward(
                 "factor": name, "evidence_kind": evidence_kind, "heldout_rank_icir": heldout,
                 "sign_consistency": sign_consistency, "n_heldout_blocks": n_valid,
                 "status": status, "reason": reason,
+                "expected_direction": _expected_direction(heldout),
             })
     else:  # a_priori
         evidence_kind = "a_priori"
@@ -377,6 +493,7 @@ def run_is_walk_forward(
                 "factor": name, "evidence_kind": evidence_kind, "heldout_rank_icir": heldout,
                 "sign_consistency": sign_consistency, "n_heldout_blocks": n_valid,
                 "status": status, "reason": reason,
+                "expected_direction": _expected_direction(heldout),
             })
 
     return WalkForwardResult(

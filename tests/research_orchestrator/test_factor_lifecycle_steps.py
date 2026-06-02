@@ -113,7 +113,9 @@ class FactorLifecycleDatasetBuildTests(unittest.TestCase):
             effective_capability_metadata=[], state={},
         )
 
-    def test_dataset_build_excludes_field_ineligible_from_compute(self):
+    def test_dataset_build_gates_base_composite_industry_excludes_ineligible(self):
+        # Phase 7: dataset_build splits eligible into base / composite / industry-relative and
+        # feeds the unified Layer-2 builder; field-ineligible factors never reach compute.
         import types
         from unittest.mock import patch
         import pandas as pd
@@ -121,31 +123,57 @@ class FactorLifecycleDatasetBuildTests(unittest.TestCase):
 
         with self._temp() as d:
             ctx = self._context(Path(d))
-            # resolver output: 2 eligible base factors + 1 field-INELIGIBLE base factor
             ctx.state["step_outputs"] = {
                 "factor_lifecycle_object_resolver": {
-                    "field_eligible": {"mom_return_5d": True, "val_bp": True, "qual_roe": False},
+                    "field_eligible": {
+                        "mom_return_5d": True, "val_bp": True,      # base
+                        "comp_small_value": True,                   # composite
+                        "val_bp_industry_rel": True,                # industry-relative
+                        "qual_roe": False,                          # field-INELIGIBLE
+                    },
                 }
             }
             captured = {}
 
-            def spy(catalog, time_split, *, horizon=20, qlib_dir=None, **kw):
-                captured["catalog"] = dict(catalog)
+            def spy(*, gated_base, gated_composite_defs, gated_industry_defs, time_split,
+                    horizon=20, qlib_dir=None, **kw):
+                captured["base"] = list(gated_base)
+                captured["composite"] = [x["name"] for x in gated_composite_defs]
+                captured["industry"] = [x["name"] for x in gated_industry_defs]
                 captured["horizon"] = horizon
                 return types.SimpleNamespace(max_label_realization_date=pd.Timestamp("2020-12-01"))
 
-            with patch.object(fls, "load_is_windowed_panel", spy):
+            with patch.object(fls, "load_is_windowed_panel_with_layer2", spy):
                 result = fls.handle_factor_lifecycle_dataset_build(ctx)
 
-            # the field-ineligible factor NEVER reaches the compute catalog
-            self.assertIn("mom_return_5d", captured["catalog"])
-            self.assertIn("val_bp", captured["catalog"])
-            self.assertNotIn("qual_roe", captured["catalog"])
+            self.assertEqual(set(captured["base"]), {"mom_return_5d", "val_bp"})
+            self.assertEqual(captured["composite"], ["comp_small_value"])
+            self.assertEqual(captured["industry"], ["val_bp_industry_rel"])
+            self.assertNotIn("qual_roe", captured["base"])     # field-ineligible never computed
             self.assertEqual(captured["horizon"], 20)
             self.assertEqual(result.outputs["field_ineligible_factors"], ["qual_roe"])
             self.assertEqual(set(result.outputs["gated_base_factors"]), {"mom_return_5d", "val_bp"})
-            # the panel is passed to the walk-forward step via state
+            self.assertEqual(result.outputs["gated_composite_factors"], ["comp_small_value"])
+            self.assertEqual(result.outputs["gated_industry_relative_factors"], ["val_bp_industry_rel"])
             self.assertIn("panel", ctx.state["factor_lifecycle"])
+
+    def test_dataset_build_raises_on_unknown_factor(self):
+        import types
+        from unittest.mock import patch
+        import pandas as pd
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        with self._temp() as d:
+            ctx = self._context(Path(d))
+            ctx.state["step_outputs"] = {
+                "factor_lifecycle_object_resolver": {
+                    "field_eligible": {"mom_return_5d": True, "not_a_real_factor": True},
+                }
+            }
+            def spy(**kw):
+                return types.SimpleNamespace(max_label_realization_date=pd.Timestamp("2020-12-01"))
+            with patch.object(fls, "load_is_windowed_panel_with_layer2", spy):
+                with self.assertRaises(ValueError):
+                    fls.handle_factor_lifecycle_dataset_build(ctx)
 
     def test_dataset_build_raises_if_no_eligible_base(self):
         from src.research_orchestrator import factor_lifecycle_steps as fls
