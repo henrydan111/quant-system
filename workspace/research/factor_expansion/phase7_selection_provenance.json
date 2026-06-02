@@ -1,0 +1,169 @@
+{
+  "label": "oos_informed_backfill",
+  "run_dir": "E:\\量化系统\\workspace\\outputs\\phase6_factor_lifecycle_live_p7prod16",
+  "run_id": "phase6_factor_lifecycle_live_p7prod16",
+  "hypothesis_id": "factor_lifecycle_phase6",
+  "branch": "factor-lifecycle-p7",
+  "pr": 36,
+  "is_window": {
+    "is_start": "2014-01-01",
+    "is_end": "2020-12-31"
+  },
+  "horizon": 20,
+  "selection_funnel": {
+    "composite_industry_rel_total": 24,
+    "oos_stable_consumed": 16,
+    "field_eligible": 16,
+    "is_candidate_promoted": 15,
+    "is_draft_not_promoted": 1,
+    "oos_marginal_or_collapsed_excluded": 8
+  },
+  "promoted_15": [
+    {
+      "factor": "comp_52w_position",
+      "expected_direction": "inverse",
+      "is_heldout_rank_icir": -0.23167007435111622
+    },
+    {
+      "factor": "comp_cash_sheep",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.2783193829235127
+    },
+    {
+      "factor": "comp_defensive",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.4292237281817963
+    },
+    {
+      "factor": "comp_growth_value",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.3096549521291717
+    },
+    {
+      "factor": "comp_low_vol_value",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.35289106973082585
+    },
+    {
+      "factor": "comp_multi_6",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.3663767173295404
+    },
+    {
+      "factor": "comp_quality_value",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.2842681995599053
+    },
+    {
+      "factor": "comp_relative_strength",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.12705116302031635
+    },
+    {
+      "factor": "comp_rev_low_turn",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.58049010776317
+    },
+    {
+      "factor": "comp_size_quality",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.46264848188508667
+    },
+    {
+      "factor": "comp_small_value",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.46859639002890363
+    },
+    {
+      "factor": "mom_idio_20d",
+      "expected_direction": "inverse",
+      "is_heldout_rank_icir": -0.6750782563733178
+    },
+    {
+      "factor": "mom_industry_rel_20d",
+      "expected_direction": "inverse",
+      "is_heldout_rank_icir": -0.5471323266197804
+    },
+    {
+      "factor": "val_bp_industry_rel",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.414689175405415
+    },
+    {
+      "factor": "val_ep_industry_rel",
+      "expected_direction": "positive",
+      "is_heldout_rank_icir": 0.37786803133715174
+    }
+  ],
+  "is_draft_not_promoted": [
+    {
+      "factor": "comp_momentum_quality",
+      "is_heldout_rank_icir": -0.13672089970597157,
+      "sign_consistency": 0.5714285714285714,
+      "reason": "IS sign-consistency < 0.70 on 2014-2020 (full-window OOS-stable but IS-marginal)"
+    }
+  ],
+  "oos_marginal_or_collapsed_excluded_8": [
+    {
+      "factor": "comp_anti_risk",
+      "full_window_status": "deprecated",
+      "is_rank_icir": -0.009,
+      "oos_rank_icir": -0.0137
+    },
+    {
+      "factor": "comp_garp",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.2518,
+      "oos_rank_icir": 0.0642
+    },
+    {
+      "factor": "comp_magic_formula",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.2583,
+      "oos_rank_icir": 0.0881
+    },
+    {
+      "factor": "comp_momentum_reversal",
+      "full_window_status": "draft",
+      "is_rank_icir": -0.0435,
+      "oos_rank_icir": -0.2008
+    },
+    {
+      "factor": "comp_qual_grow",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.1621,
+      "oos_rank_icir": -0.0822
+    },
+    {
+      "factor": "comp_quality_growth",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.1621,
+      "oos_rank_icir": -0.0822
+    },
+    {
+      "factor": "comp_val_mom",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.0153,
+      "oos_rank_icir": -0.1459
+    },
+    {
+      "factor": "comp_val_qual",
+      "full_window_status": "draft",
+      "is_rank_icir": 0.2292,
+      "oos_rank_icir": 0.0795
+    }
+  ],
+  "caveats": [
+    "These 15 are an OOS-INFORMED conservative backfill, NOT a fresh OOS-free selection. The selection of the 16 consumed used the PRE-EXISTING full-window (2014-2026) derived_revalidation_status.csv.",
+    "The IS-only validator was NOT contaminated: OOS data did not enter labels / folds / metrics / set_status; the 15 lifecycle evidence rows are IS-only (oos_rank_icir=NA).",
+    "candidate != approved. candidate is an ADDITIVE tier; it can never auto-become approved (separate P1.1 OOS/promotion gate).",
+    "2021-2026 is ALREADY BURNED for these 15 (observed in the pre-existing revalidation). A future candidate->approved promotion MUST use a genuinely-sealed window.",
+    "comp_momentum_quality was consumed (OOS-stable) but the IS-only gate left it DRAFT (sign-consistency 0.571 < 0.70 on 2014-2020) — the gate filtering, not OOS data.",
+    "expected_direction persisted to factor_master (3 inverse predictors: mom_idio_20d, mom_industry_rel_20d, comp_52w_position) — not implied long-only-positive."
+  ],
+  "live_registry_after": {
+    "candidate": 87,
+    "draft": 84,
+    "note": "72 base (Phase 6) + 15 Layer-2 (Phase 7)"
+  }
+}
