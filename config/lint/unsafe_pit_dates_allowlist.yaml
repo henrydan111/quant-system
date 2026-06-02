@@ -35,3 +35,37 @@
     itself.
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
+
+- path: workspace/scripts/verify_statement_provider_parity.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Independent-recompute parity ORACLE for the Wave-1 statement-field promotion
+    (income/balancesheet/cashflow _q*/_sq_q* derived variants). It reimplements
+    the provider's quarter-canonical derivation FROM SCRATCH in pandas directly
+    off data/pit_ledger/<family>/<family>.parquet WITHOUT importing the
+    provider's derivation code, then compares cell-by-cell to D.features. Reading
+    the raw ledger is the POINT — routing it through pit_research_loader would be
+    circular and destroy its value as an independent oracle (the loader-parity
+    harness used for the indicators approval cannot validate provider-DERIVED
+    variants). Read-only, no mutation; script_status: historical_investigation;
+    formal_research_allowed: false. This is the fail-closed evidence behind PR
+    #28's income/balancesheet/cashflow approval.
+  permanent: true
+  link: config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
+
+- path: workspace/scripts/audit_structural_zero.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Zero-vs-NaN structural-zero audit (GPT Round-6 condition #1). Read-only
+    diagnostic that quantifies how Tushare encodes a true-zero balance-sheet
+    line vs a not-reported one for goodwill/lt_borr/st_borr by comparing the
+    SAME field across three layers: raw Tushare parquet, the PIT ledger
+    (data/pit_ledger/balancesheet/balancesheet.parquet), and provider
+    D.features _q0. Auditing the ledger's own encoding REQUIRES reading it
+    directly — the sanctioned loader normalizes the very values under audit, so
+    routing through it would defeat the diagnostic. No mutation;
+    script_status: historical_investigation; formal_research_allowed: false.
+  permanent: true
+  link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
