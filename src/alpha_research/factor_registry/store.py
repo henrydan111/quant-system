@@ -1294,6 +1294,13 @@ class FactorRegistryStore:
         ed = str(expected_direction or "").strip()
         if not ed:
             return
+        # GPT Phase-7 re-confirm note: the lifecycle producer emits only these three; enum-
+        # validate fail-closed so a stray value cannot quietly enter the FrozenSelectionSet field.
+        valid = {"positive", "inverse", "undetermined"}
+        if ed not in valid:
+            raise ValueError(
+                f"expected_direction must be one of {sorted(valid)} (or blank); got {ed!r}"
+            )
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         self.factor_master.at[index, "expected_direction"] = ed
         self.factor_master.at[index, "updated_at"] = _now_str()

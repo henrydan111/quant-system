@@ -388,6 +388,18 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertEqual(str(row["expected_direction"]), "inverse")  # durable direction persisted
             self.assertEqual(str(row["status"]), "candidate")            # metadata-only: status unchanged
 
+    def test_set_expected_direction_enum_validated_fail_closed(self):
+        # GPT Phase-7 re-confirm note: the setter enum-validates (only positive/inverse/
+        # undetermined); a stray value fails closed, blank is a no-op.
+        with self._temp() as d:
+            _, rd = self._ctx(Path(d), "approved", ["mom_return_5d"])
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            with self.assertRaises(ValueError):
+                store.set_expected_direction(factor_id="mom_return_5d", expected_direction="bogus")
+            store.set_expected_direction(factor_id="mom_return_5d", expected_direction="")  # no-op, no raise
+            for ed in ("positive", "inverse", "undetermined"):
+                store.set_expected_direction(factor_id="mom_return_5d", expected_direction=ed)
+
     def test_evidence_skips_drifted_factor_fail_closed(self):
         # GPT PR-#34: record_lifecycle_evidence is itself a formal-evidence writer and must
         # independently fail-closed on definition drift (not rely on the resolver's P1.3).
