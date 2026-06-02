@@ -26,7 +26,7 @@ backtest_engine/
 | **Backend** | Qlib `backtest()` | Custom Python engine |
 | **Strategy Input** | Score-ranked signal → TopkDropout/Weight | Custom `Strategy` class (JQ-style) |
 | **Execution Model** | Qlib SimulatorExecutor | Sells-before-buys, 2-phase per day |
-| **Price Limits** | Expression-based (`$pct_chg ≥ 9.5`) | Computed from `pre_close × (1 ± limit%)` |
+| **Price Limits** | Expression-based (`$pct_chg ≥ 9.5`) | Tushare `$up_limit`/`$down_limit` (primary), computed `pre_close × (1 ± limit%)` fallback |
 | **Limit Tiers** | Single ±9.5% threshold | Multi-tier: Main 10%, ST 5%, ChiNext/STAR 20%, BSE 30% |
 | **T+1 Settlement** | Qlib handles internally | Explicit share-level `closeable_amount` tracking |
 | **Corporate Actions** | Not supported | Cash dividends (post-tax) + bonus shares |
@@ -380,7 +380,7 @@ The `Exchange` class simulates real A-share market microstructure.
 | STAR (科创板) | 688/689 | ±20% | Since 2019-07-22 launch |
 | BSE (北交所) | 83/87/43/92 | ±30% | Always |
 
-Limits are computed from `pre_close`: `limit_up = round(pre_close × (1 + limit_pct), 2)`. Comparison uses a ±0.005 tolerance (half a 分).
+Limit prices are resolved by `Exchange.resolve_limit_prices()`: **primary** source is Tushare's published `$up_limit` / `$down_limit` (the exchange's own daily limit prices, carrying the exact fen-rounding, ex-rights adjustment, and special regimes such as the main-board IPO-first-day ±44% rule); **fallback** (when those fields are absent/NaN — e.g. BSE 2021-launch names, IPO no-limit days, a few legacy stocks) is the computed band `limit_up = round_half_up(pre_close × (1 + limit_pct), 2)`. Comparison uses a ±0.005 tolerance (half a 分). The fields are in `ENGINE_REQUIRED_FIELDS` so formal runs preload them; `stk_limit` is `approved` in the field registry (promoted 2026-06-02). Coverage/value audit: `workspace/scripts/diag_stk_limit_coverage.py`.
 
 #### Tradability Rules
 

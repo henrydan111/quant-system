@@ -374,13 +374,17 @@ class TestLiveRegistry:
             assert r.dataset_id == "margin_detail"
             assert r.status_id == "quarantine"
 
-    def test_stk_limit_bare_fields_quarantined_for_formal(self, reg) -> None:
-        # stk_limit endpoint: $up_limit / $down_limit.
+    def test_stk_limit_bare_fields_approved_for_formal(self, reg) -> None:
+        # stk_limit endpoint: $up_limit / $down_limit. Promoted
+        # quarantine->approved 2026-06-02 (the EventDrivenBacktester now uses
+        # Tushare's published limit prices as the primary limit source via
+        # Exchange.resolve_limit_prices). Evidence:
+        # config/field_registry/approvals/2026-06-02_stk_limit_quarantine_to_approved.yaml
         for field in ("$up_limit", "$down_limit"):
             r = reg.resolve_field(field, "formal_validation")
-            assert r.allowed is False
+            assert r.allowed is True
             assert r.dataset_id == "stk_limit"
-            assert r.status_id == "quarantine"
+            assert r.status_id == "approved"
 
     def test_stk_holdertrade_bare_fields_pending_review_for_formal(self, reg) -> None:
         # stk_holdertrade aggregator emits bare-named summary columns; PR 9a

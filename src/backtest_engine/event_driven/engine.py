@@ -494,9 +494,11 @@ class BacktestEngine:
         if not universe:
             return pd.DataFrame()
 
-        # Get required fields for engine execution (including adj_factor)
-        fields = ['$open', '$close', '$high', '$low', '$vol', '$amount',
-                  '$pre_close', '$adj_factor']
+        # Get required fields for engine execution (including adj_factor).
+        # ENGINE_REQUIRED_FIELDS is the single source of truth (PR 2 contract);
+        # it now includes $up_limit / $down_limit so the exchange can read
+        # Tushare's published daily price limits (with a computed fallback).
+        fields = list(ENGINE_REQUIRED_FIELDS)
         df_multi = self.feeder.get_features(universe, fields, date, date)
 
         if df_multi.empty:
@@ -518,6 +520,8 @@ class BacktestEngine:
             '$amount': 'amount',
             '$pre_close': 'pre_close',
             '$adj_factor': 'adj_factor',
+            '$up_limit': 'up_limit',
+            '$down_limit': 'down_limit',
         })
 
         # ── Raw (unadjusted) price columns ─────────────────────────
