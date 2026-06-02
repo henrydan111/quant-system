@@ -121,16 +121,22 @@ class ReproduceSealedOosTests(unittest.TestCase):
         import numpy as np
         import pandas as pd
         cal = pd.DatetimeIndex(pd.date_range("2021-01-08", "2025-12-26", freq="W-FRI"))
-        insts = [f"{i:06d}_SZ" for i in range(60)]
+        insts = [f"{i:06d}_SZ" for i in range(120)]  # > fast-path min_obs(50)
         idx = pd.MultiIndex.from_product([cal, insts], names=["datetime", "instrument"])
         rng = np.random.default_rng(7)
         fdf = pd.DataFrame({"f_pos": rng.standard_normal(len(idx)), "f_neg": rng.standard_normal(len(idx))}, index=idx)
         adf = pd.DataFrame({"adj_close": 10 * np.exp((rng.standard_normal(len(idx)) * 0.02).cumsum() % 3)}, index=idx)
 
         def cf(catalog, start_date, end_date, horizons, **kw):
+            # mirror operators.compute_factors: (factors_df, fwd_df). fwd_df is None when
+            # horizons is falsy; otherwise it carries one fwd_{h}d column per horizon.
             if "adj_close" in set(catalog):
                 return adf, None
-            return fdf[[c for c in catalog if c in fdf.columns]], None
+            facs = fdf[[c for c in catalog if c in fdf.columns]]
+            if horizons:
+                fwd = pd.DataFrame({f"fwd_{h}d": rng.standard_normal(len(idx)) for h in horizons}, index=idx)
+                return facs, fwd
+            return facs, None
         return cal, cf
 
     def test_calendar_mismatch_refused(self):

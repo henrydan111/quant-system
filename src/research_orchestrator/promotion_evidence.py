@@ -39,6 +39,13 @@ if _SRC not in sys.path:
 OOS_END = "2026-02-27"
 PASSED = "passed"
 FAILED = "failed"
+# The screening's horizon set, mirroring workspace/scripts/run_sealed_oos.py::HORIZONS.
+# run_batch_screening produces ls_sharpe at the PRIMARY (first) horizon (5d) — that is
+# the exact metric the Round-6 registration bar (LS Sharpe > 1.0) was defined against —
+# while rank_icir is read per-horizon (rank_icir_20d). Reproducing with this set + the
+# engine="batch" path matches the screening report bit-for-bit (verified: grow_total_
+# revenue 3.4441 vs 3.444, rev_turnover 2.6818 vs 2.682).
+SCREENING_HORIZONS = (5, 10, 20)
 
 # The 6 PIT canary keys (mirrors pit_canaries.CANARY_KEYS; duplicated here to avoid importing the
 # heavy pit chain at module load — validated equal by test).
@@ -135,30 +142,6 @@ def _load_provider_provenance(qlib_dir: str | Path) -> dict:
     }
 
 
-def _oos_ls_sharpe(factor, label, *, horizon: int, n_quantiles: int = 5) -> float:
-    """Sign-aligned annualized long-short Sharpe over the OOS panel (NaN if undefined)."""
-    import numpy as np
-    from src.alpha_research.factor_eval.quantile_analysis import (
-        compute_long_short_returns, compute_quantile_returns,
-    )
-
-    qdf = compute_quantile_returns(factor, label, n_quantiles=n_quantiles)
-    if qdf.empty:
-        return float("nan")
-    # sign-align: long the IC-direction tail (a negative-IC factor longs the LOW quantile).
-    # ``factor_ic`` returns a DataFrame with [IC, RankIC] columns; align on mean RankIC.
-    from src.alpha_research.factor_lifecycle import metrics
-    ic_df = metrics.factor_ic(factor, label)
-    ric = ic_df["RankIC"].dropna() if "RankIC" in getattr(ic_df, "columns", []) else ic_df.dropna()
-    ic_mean = float(ric.mean()) if len(ric) else 0.0
-    hi, lo = int(qdf["quantile"].max()), int(qdf["quantile"].min())
-    long_q, short_q = (hi, lo) if ic_mean >= 0 else (lo, hi)
-    ls = compute_long_short_returns(qdf, long_q=long_q, short_q=short_q)
-    if ls.empty or ls.std() == 0 or np.isnan(ls.std()):
-        return float("nan")
-    return float(ls.mean() / ls.std() * np.sqrt(252.0 / horizon))
-
-
 def reproduce_sealed_oos(
     *,
     frozen_set,
@@ -183,13 +166,17 @@ def reproduce_sealed_oos(
     trade_cal=None,
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
-    calendar end == OOS_END, then reproduce the OOS through the LEAK-FREE Phase-4 belt
-    (``build_is_windowed_panel(is_end=OOS_END)``) — `Ref(-h)` forward returns cannot pull future
-    data even if the calendar later advances. Returns the ``independent_reproduction`` block with
-    `source='qlib_windowed_features'`, provenance, and per-factor leak-free OOS metrics
-    (`oos_rank_icir`, `oos_ls_sharpe`). The metrics GOVERN approval (a factor below the bar here
-    is a correct rejection). Injectable deps for tests; live by default."""
-    from src.alpha_research.factor_lifecycle import metrics
+    calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
+    ``run_batch_screening(engine="batch", horizons=SCREENING_HORIZONS)`` over factors recomputed
+    through ``compute_factors(stage="oos_test")`` (→ source ``qlib_windowed_features``). This
+    matches the Round-6 registration bit-for-bit (it is the same code + same horizons), so the
+    bar (LS Sharpe > 1.0, defined against ``ls_sharpe`` = the primary-horizon long-short Sharpe)
+    is applied on the exact scale. Leak-freedom is guaranteed by the calendar_end == OOS_END
+    assertion (Ref(-h) is NaN past the data boundary for every horizon); the Phase-4 belt
+    (``build_is_windowed_panel``) is retained as a redundant explicit leak-guard. Returns the
+    ``independent_reproduction`` block with `source='qlib_windowed_features'`, provenance, and
+    per-factor `oos_rank_icir` (read at `horizon`) + `oos_ls_sharpe` (primary horizon). The
+    metrics GOVERN approval. Injectable deps for tests; live by default."""
     from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
 
     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
@@ -217,19 +204,40 @@ def reproduce_sealed_oos(
     else:
         adj_expr = "$close * $adj_factor"
 
+    import pandas as pd
+    from src.alpha_research.factor_eval.batch_screening import run_batch_screening
+
     qdir = str(qlib_dir)
-    fpanel, _ = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
-                                   horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
+    # Reproduce the screening's EXACT inputs AND metric path: compute the factors plus
+    # the multi-horizon forward returns over SCREENING_HORIZONS (the run_sealed_oos set),
+    # then score with the SAME engine="batch" path. ls_sharpe is run_batch_screening's
+    # primary-horizon (5d) long-short Sharpe — the metric the registration bar was
+    # defined against; rank_icir is read at `horizon` (20d). A hand-rolled metric on a
+    # different horizon (the pre-fix bug) does NOT reproduce the bar's scale.
+    factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
+                                            horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1, stage="oos_test")
+    factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
     apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
                                    horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
-    panel = build_is_windowed_panel(fpanel, apanel["adj_close"], is_end=oos_end, horizon=horizon, trade_cal=trade_cal)
+    # Guard #3 belt: the LONGEST-horizon label must realize on or before OOS_END
+    # (raises IsEndLeakageError otherwise). Redundant with the calendar_end == OOS_END
+    # assertion above (at the data boundary Ref(-h) is NaN past OOS_END for every
+    # horizon), but kept as the explicit leak-guard; its panel is NOT the scoring metric.
+    panel = build_is_windowed_panel(factors_df, apanel["adj_close"], is_end=oos_end,
+                                    horizon=max(SCREENING_HORIZONS), trade_cal=trade_cal)
 
+    screen = run_batch_screening(factors_df, fwd_df, horizons=tuple(SCREENING_HORIZONS),
+                                 engine="batch", progress_every=0)
     per_factor: dict[str, dict] = {}
-    for name in panel.factor_panel.columns:
-        ic = metrics.factor_ic(panel.factor_panel[name], panel.label)
+    for name in factor_exprs:
+        if name not in screen.index:
+            continue
+        row = screen.loc[name]
+        ricir, ls = row.get(f"rank_icir_{horizon}d"), row.get("ls_sharpe")
         per_factor[str(name)] = {
-            "oos_rank_icir": metrics.rank_icir(ic),
-            "oos_ls_sharpe": _oos_ls_sharpe(panel.factor_panel[name], panel.label, horizon=horizon, n_quantiles=n_quantiles),
+            "oos_rank_icir": float(ricir) if ricir is not None and not pd.isna(ricir) else float("nan"),
+            "oos_ls_sharpe": float(ls) if ls is not None and not pd.isna(ls) else float("nan"),
+            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
         }
     return {
         "independent_reproduction": {
