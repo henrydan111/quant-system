@@ -821,16 +821,17 @@ class TestFormalFactorCompatibility:
     Compatibility universe scope (GPT 5.5 Pro round-3 review #3):
 
       * `get_factor_catalog(include_new_data=False)` →  111 base factors
-      * `get_factor_catalog(include_new_data=True)`  →  147 base factors
+      * `get_factor_catalog(include_new_data=True)`  →  153 base factors
         (+36 new alpha endpoint factors: flow_*, north_*, margin_*,
-        earn_*, alpha_*)
+        earn_*, alpha_*; +6 Round-6 sealed-OOS winners onboarded
+        2026-06-02 via _add_sealed_oos_winners)
       * `get_industry_relative_defs()`              →    4 industry-relative
         composites (PIT inherited from `base` factor)
       * `get_composite_defs()`                       →   20 Layer-2 composites
         (PIT inherited from `components` list)
-      * Total factor surface area                    →  171 named factors
+      * Total factor surface area                    →  177 named factors
 
-    This test iterates the 147 base factors from
+    This test iterates the 153 base factors from
     `get_factor_catalog(include_new_data=True)`. The 4 industry-relative
     composites and 20 Layer-2 composites inherit their field dependencies
     from their base factors and are covered transitively (their fields are
@@ -838,8 +839,8 @@ class TestFormalFactorCompatibility:
     composites also have direct coverage in `TestHelperBehavior`.
 
     The historical PR description on PR #14 mentions "191 factors" — that
-    docstring count in catalog.py:1 is stale; the actual live count is 171
-    (147 + 4 + 20). The "191" never reflected the runtime universe.
+    docstring count in catalog.py:1 is stale; the actual live count is 177
+    (153 + 4 + 20). The "191" never reflected the runtime universe.
 
     Pre-PR-9a a silent registry/catalog mismatch could block
     historically-formal factors at the resolver gate without anyone

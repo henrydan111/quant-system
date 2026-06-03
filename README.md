@@ -12,8 +12,9 @@ intentionally excluded; see [What this repo does NOT contain](#what-this-repo-do
 
 > **Status snapshot (2026-05-26):** Live Qlib provider rebuilt 2026-04-21.
 > Trading calendar frozen at 2026-02-27 (intentional, while the system
-> is under active development). Factor registry has 171 graded factors
-> (post-PIT-safety fix: 1A / 37B / 75C / 36D base + composites). Engine
+> is under active development). Factor registry has 177 graded factors
+> (post-PIT-safety fix: 1A / 37B / 75C / 36D base + composites; +6 Round-6
+> sealed-OOS winners onboarded 2026-06-02). Engine
 > verified against JoinQuant to within an irreducible cross-stack noise
 > floor (see [project_state.md](project_state.md) latest entries).
 
@@ -40,7 +41,7 @@ and a pre-registered hypothesis lifecycle (IS → seal → OOS).
 | Module | Responsibility |
 |---|---|
 | [src/data_infra/](src/data_infra/) | Tushare ingestion, Parquet storage, normalization, PIT ledger, Qlib backend builder, verification |
-| [src/alpha_research/](src/alpha_research/) | Factor library (171 named factors: 147 base + 4 industry-relative + 20 Layer-2 composites), factor evaluation toolkit, theme strategy framework, model zoo, MLflow tracker, registries |
+| [src/alpha_research/](src/alpha_research/) | Factor library (177 named factors: 153 base + 4 industry-relative + 20 Layer-2 composites), factor evaluation toolkit, theme strategy framework, model zoo, MLflow tracker, registries |
 | [src/backtest_engine/](src/backtest_engine/) | `VectorizedBacktester` (Qlib wrapper for fast screening) and `EventDrivenBacktester` (realistic A-share simulator with T+1, multi-tier limits, corporate actions, JoinQuant-parity defaults) |
 | [src/portfolio_risk/](src/portfolio_risk/) | `PortfolioOptimizer` (cvxpy), cost models, risk models |
 | [src/result_analysis/](src/result_analysis/) | Canonical metrics, `BacktestReport`, plotters |

@@ -8,7 +8,7 @@ The Alpha Research module is the library layer for factor engineering, evaluatio
 alpha_research/
 |-- factor_library/
 |   |-- __init__.py          # Public API: catalog + compute helpers
-|   |-- catalog.py           # 171-factor catalog (147 base + 4 industry-rel + 20 Layer-2) and composite definitions
+|   |-- catalog.py           # 177-factor catalog (153 base + 4 industry-rel + 20 Layer-2) and composite definitions
 |   |-- operators.py         # Qlib expression operators + pandas transforms
 |   `-- qlib_expr_guide.md   # Expression syntax rules and known pitfalls
 |-- factor_eval/             # IC, quantile, neutralization, decay, correlation

@@ -12,7 +12,7 @@ doc explains *how the whole thing works and why it is safe*.
 
 ## 1. The problem this solves
 
-The system has a library of **171 factors** ([catalog.py](../factor_library/catalog.py) — 147
+The system has a library of **177 factors** ([catalog.py](../factor_library/catalog.py) — 153
 base + 20 composite + 4 industry-relative). They all started at status **`draft`**: defined in
 code, with no proof they work. A past lookahead-leakage bug had once let factors "peek at the
 future" and produced fake winners that nearly got deployed. So this arc built a **governed,

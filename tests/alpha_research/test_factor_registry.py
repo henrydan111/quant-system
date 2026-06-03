@@ -39,24 +39,26 @@ class FactorRegistryTests(unittest.TestCase):
 
     def test_sync_catalog_creates_expected_current_counts(self):
         # Updated 2026-04-27: catalog now includes 4 industry-relative factors
-        # via get_industry_relative_defs() (plan vast-exploring-rabbit v8 phase B3),
-        # bringing the total to 147 base + 20 composite + 4 industry_relative = 171.
+        # via get_industry_relative_defs() (plan vast-exploring-rabbit v8 phase B3).
+        # Updated 2026-06-02: +6 Round-6 sealed-OOS winners onboarded into
+        # get_factor_catalog(include_new_data=True) via _add_sealed_oos_winners,
+        # bringing the total to 153 base + 20 composite + 4 industry_relative = 177.
         with self.make_temp_dir("factor_registry_sync") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             result = store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
 
             current_df = store.factor_master[store.factor_master["is_current"].fillna(False)].copy()
 
-            self.assertEqual(result["current_factor_count"], 171)
-            self.assertEqual(len(current_df), 171)
-            self.assertEqual(int((current_df["factor_kind"] == "base").sum()), 147)
+            self.assertEqual(result["current_factor_count"], 177)
+            self.assertEqual(len(current_df), 177)
+            self.assertEqual(int((current_df["factor_kind"] == "base").sum()), 153)
             self.assertEqual(int((current_df["factor_kind"] == "composite").sum()), 20)
             self.assertEqual(int((current_df["factor_kind"] == "industry_relative").sum()), 4)
 
             store.sync_catalog(record_run=False, generated_at="2026-04-04 21:05:00")
             current_df = store.factor_master[store.factor_master["is_current"].fillna(False)].copy()
-            self.assertEqual(len(current_df), 171)
-            self.assertEqual(current_df["factor_id"].nunique(), 171)
+            self.assertEqual(len(current_df), 177)
+            self.assertEqual(current_df["factor_id"].nunique(), 177)
 
     def test_base_factor_definition_change_creates_new_version(self):
         with self.make_temp_dir("factor_registry_base_version") as temp_dir:
@@ -328,7 +330,7 @@ class FactorRegistryTests(unittest.TestCase):
                         "evidence_class", "formal_evidence_eligible", "source_hash", "provider_build_id"):
                 self.assertIn(col, store.factor_evidence.columns)
             current = store.factor_master[store.factor_master["is_current"].fillna(False)]
-            self.assertEqual(len(current), 171)  # P2.1 changes no row count
+            self.assertEqual(len(current), 177)  # P2.1 changes no row count
             row = current.iloc[0]
             self.assertEqual(row["signal_role"], "unassigned")
             self.assertEqual(row["signal_role_suggested"], "unassigned")
@@ -502,12 +504,12 @@ class FactorRegistryTests(unittest.TestCase):
         # (blank source_hash) — it must NOT stamp last_revalidated_at / provider /
         # calendar mirrors, which reflect REVALIDATION evidence only (run_type ==
         # "revalidation"). (On the pre-fix any-bound-row code this found the sync
-        # timestamp on all 171 -> this test fails there.)
+        # timestamp on all 177 -> this test fails there.)
         with self.make_temp_dir("factor_registry_p2_revalonly") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             store.sync_catalog(record_run=True, generated_at="2026-04-04 21:00:00")
             cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
-            self.assertEqual(len(cur), 171)
+            self.assertEqual(len(cur), 177)
             self.assertTrue((cur["last_revalidated_at"].astype(str).str.strip() == "").all())
             self.assertTrue((cur["latest_provider_build_id"].astype(str).str.strip() == "").all())
             self.assertTrue((cur["latest_calendar_policy_id"].astype(str).str.strip() == "").all())
