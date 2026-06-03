@@ -243,7 +243,7 @@ datasets:
 
   stk_limit:
     status: approved
-    reason: "Tushare stk_limit daily limit-up/limit-down prices. Promoted quarantine->approved 2026-06-02 (config/field_registry/approvals/2026-06-02_stk_limit_quarantine_to_approved.yaml): coverage verified full 2008-2026 (2024+ zero holes; pre-2022 holes are BSE-launch/IPO-window/legacy names handled by the engine's computed-band fallback) and values verified on regulatory tiers (>=99.8% on +/-5/10/20/30%; residual = IPO-first-day +/-44% rule + penny-stock fen-rounding, both correct). EventDrivenBacktester uses $up_limit/$down_limit as the primary limit source via Exchange.resolve_limit_prices. These are execution fields knowable at session open (pre-determined from prior close), so no Ref lag is required."
+    reason: "Tushare stk_limit daily limit-up/limit-down prices. Promoted quarantine->approved 2026-06-02 (config/field_registry/approvals/2026-06-02_stk_limit_quarantine_to_approved.yaml): coverage verified full 2008-2026 (2024+ zero holes; pre-2022 holes are BSE-launch/IPO-window/legacy names handled by the engine's computed-band fallback) and values verified on regulatory tiers (>=99.79% on +/-5/10/20/30%; residual = no-limit sentinel rows [registration-system IPO no-limit days, up_limit~1e6/down_limit~0.01], the pre-2023 main-board IPO first-day +44%/-36% rule, and penny-stock fen-rounding -- all correct). EventDrivenBacktester uses $up_limit/$down_limit as the primary limit source via Exchange.resolve_limit_prices. These are execution fields knowable at session open (pre-determined from prior close), so no Ref lag is required."
     fields:
       - $up_limit
       - $down_limit

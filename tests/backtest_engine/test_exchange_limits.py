@@ -116,15 +116,23 @@ class ResolveLimitPricesTests(unittest.TestCase):
         self.assertAlmostEqual(down, 11.03, places=2)
 
     def test_primary_beats_computed_band(self):
-        # IPO-first-day ±44% rule: Tushare carries up_limit=20.16 off a
-        # pre_close of 14.0, which the ±10% band formula (→15.40) would miss.
-        row = self._row(raw_close=20.16, close=20.16,
-                        raw_pre_close=14.0, pre_close=14.0,
-                        up_limit=20.16, down_limit=7.84)
-        self.assertTrue(self.ex.is_limit_up(row, "002728.SZ", self.date))
-        # Sanity: the computed band alone would NOT flag this as limit-up.
-        band_up, _ = self.ex.compute_limit_prices(14.0, 0.10)
+        # Pre-registration main-board IPO-first-day rule: +44% / -36%
+        # (ASYMMETRIC, referenced to the issue price). Tushare carries
+        # up_limit=20.16 AND down_limit=8.96 off a pre_close of 14.0
+        # (real: 002728.SZ 2014-07-31); the ±10% band (15.40 / 12.60) would
+        # miss BOTH sides. up_band=20.16/14.0-1=+44%; dn_band=1-8.96/14.0=-36%.
+        up_row = self._row(raw_close=20.16, close=20.16,
+                           raw_pre_close=14.0, pre_close=14.0,
+                           up_limit=20.16, down_limit=8.96)
+        self.assertTrue(self.ex.is_limit_up(up_row, "002728.SZ", self.date))
+        down_row = self._row(raw_close=8.96, close=8.96,
+                             raw_pre_close=14.0, pre_close=14.0,
+                             up_limit=20.16, down_limit=8.96)
+        self.assertTrue(self.ex.is_limit_down(down_row, "002728.SZ", self.date))
+        # Sanity: the computed ±10% band alone would flag NEITHER side.
+        band_up, band_down = self.ex.compute_limit_prices(14.0, 0.10)
         self.assertAlmostEqual(band_up, 15.40, places=2)
+        self.assertAlmostEqual(band_down, 12.60, places=2)
 
     def test_is_limit_up_via_tushare(self):
         row = self._row(raw_close=13.48, close=13.48, up_limit=13.48, down_limit=11.03)
