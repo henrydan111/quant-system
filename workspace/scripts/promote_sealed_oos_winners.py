@@ -145,9 +145,43 @@ def winner_frozen_hashes() -> dict[str, str]:
     return {name: _base_def_hash(name, exprs[name]) for name in WINNERS}
 
 
+def _write_provenance_json(*, artifact, ir, fs, promoted, skipped, approval_git_sha=None):
+    """Persist the provenance JSON with the FULL gate artifact (GPT post-impl review Fix 1):
+    `promotion_evidence` carries `independent_reproduction` so the saved JSON is itself
+    gate-eligible (re-checkable via evaluate_promotion_artifact at its own git_sha). When the
+    provenance is regenerated at a later commit, `approval_git_sha` records the commit the
+    registry approval was originally bound to."""
+    prov_path = FE / "sealed_oos_winners_promotion.json"
+    note = ("These 6 are NOT oos_informed_backfill: the 13-factor top set was frozen "
+            "PRE-OOS (oos_frozen_topset.json) and the OOS window was run once. This is the "
+            "leak-free Phase-4-belt reproduction of that already-spent window; its numbers "
+            "GOVERN approval. 2021-2026 remains spent for this frozen set.")
+    payload = {
+        "promoted_at_oos_end": OOS_END,
+        "frozen_set_hash": fs.frozen_set_hash,
+        "git_sha": artifact["git_sha"],
+        "provider_build_id": ir["provider_build_id"],
+        "calendar_policy_id": ir["calendar_policy_id"],
+        "evidence_class": "single_shot_sealed_oos_leak_free_reproduction",
+        "note": note,
+        "promoted": promoted,
+        "skipped": skipped,
+        # FULL artifact (NOT stripped) — the saved promotion_evidence re-passes the gate.
+        "promotion_evidence": artifact,
+    }
+    if approval_git_sha and approval_git_sha != artifact["git_sha"]:
+        payload["approval_git_sha"] = approval_git_sha
+        payload["note"] = (
+            note + f" (Provenance regenerated at git_sha {artifact['git_sha'][:12]}; the live "
+            f"registry approval is bound to approval_git_sha {approval_git_sha[:12]}.)"
+        )
+    prov_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return prov_path
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["dryrun", "live"], default="dryrun")
+    ap.add_argument("--mode", choices=["dryrun", "live", "regen-provenance"], default="dryrun")
     args = ap.parse_args()
 
     from src.alpha_research.factor_registry.store import FactorRegistryStore
@@ -166,13 +200,12 @@ def main() -> int:
 
     # ── reproduce sealed OOS (leak-free Phase-4 belt) ──
     winner_exprs = {n: _load_csv_exprs()[n] for n in WINNERS}
-    if args.mode == "dryrun":
-        tmp = tempfile.mkdtemp(prefix="sealed_oos_dryrun_", dir=str(ROOT / "workspace" / "outputs"))
-        seal_root = Path(tmp) / "seals"
-        seal_root.mkdir(parents=True, exist_ok=True)
-        run_dir = tmp
-        print(f"[dryrun] temp seal_root={seal_root}")
-    else:
+    # All modes claim a seal (required so the OOS ResearchAccessContext's seal guard permits the
+    # compute reads), but only --mode live claims into the REAL seal store (the one sanctioned
+    # spend). dryrun + regen-provenance claim into a TEMP seal store that is discarded with the
+    # tempdir — no real seal is consumed and no registry write happens.
+    claim_seal = True
+    if args.mode == "live":
         seal_root = SEAL_ROOT
         run_dir = str(ROOT / "workspace" / "outputs" / "sealed_oos_winners_live")
         Path(run_dir).mkdir(parents=True, exist_ok=True)
@@ -186,6 +219,23 @@ def main() -> int:
                   "the OOS seal. Commit / stash / gitignore the untracked or modified files first.")
             return 2
         print(f"[live] clean tree at {gs['git_sha']}; proceeding to claim the OOS seal.")
+    else:
+        tmp = tempfile.mkdtemp(prefix=f"sealed_oos_{args.mode}_", dir=str(ROOT / "workspace" / "outputs"))
+        seal_root = Path(tmp) / "seals"
+        seal_root.mkdir(parents=True, exist_ok=True)
+        run_dir = tmp
+        print(f"[{args.mode}] temp seal_root={seal_root}")
+        if args.mode == "regen-provenance":
+            # The regenerated promotion_evidence must self-verify through the gate, which
+            # requires dirty_tree=False + a real git_sha — so a clean committed tree is needed.
+            gs = pe.capture_git_state()
+            if gs["dirty_tree"] or not gs["git_sha"]:
+                print("[regen-provenance] ABORT: working tree not clean. The regenerated "
+                      "promotion_evidence must carry dirty_tree=False + a real git_sha; commit first.")
+                return 2
+            print(f"[regen-provenance] clean tree at {gs['git_sha']}; recomputing the deterministic "
+                  "reproduction (TEMP seal claim only, NO real seal spend, NO registry writes — "
+                  "provenance JSON only).")
 
     reproduction = pe.reproduce_sealed_oos(
         frozen_set=fs,
@@ -199,7 +249,7 @@ def main() -> int:
         hypothesis_id="sealed_oos_winners",
         horizon=HORIZON,
         n_quantiles=N_QUANTILES,
-        claim_seal=True,
+        claim_seal=claim_seal,
     )
     ir = reproduction["independent_reproduction"]
     print(f"\nreproduction source={ir['source']} provider_build={ir['provider_build_id']} "
@@ -242,6 +292,25 @@ def main() -> int:
         print("\n[dryrun] NO registry writes. Live promotion is --mode live behind explicit approval.")
         return 0
 
+    if args.mode == "regen-provenance":
+        # Re-emit the provenance JSON with the FULL gate artifact (Fix 1), NO registry/seal writes.
+        promoted = [{"factor_id": n, "oos_rank_icir": r, "oos_ls_sharpe": l}
+                    for n, ok, r, l in bar_pass if ok]
+        skipped = [{"factor_id": n, "oos_rank_icir": r, "oos_ls_sharpe": l}
+                   for n, ok, r, l in bar_pass if not ok]
+        existing = FE / "sealed_oos_winners_promotion.json"
+        approval_sha = None
+        if existing.exists():
+            try:
+                approval_sha = json.loads(existing.read_text(encoding="utf-8")).get("git_sha")
+            except Exception:
+                approval_sha = None
+        prov_path = _write_provenance_json(artifact=artifact, ir=ir, fs=fs, promoted=promoted,
+                                           skipped=skipped, approval_git_sha=approval_sha)
+        print(f"\n[regen-provenance] rewrote {prov_path} with the FULL gate artifact "
+              f"(promotion_evidence now gate-eligible). approval_git_sha={approval_sha}")
+        return 0
+
     # ── LIVE promotion (3e): Step B sync->draft, then Step C2 approve the passers ──
     from src.alpha_research.factor_library import sync_catalog_to_registry
 
@@ -271,22 +340,8 @@ def main() -> int:
         print(f"[live] APPROVED {name}")
     live_store.save()
 
-    prov_path = FE / "sealed_oos_winners_promotion.json"
-    prov_path.write_text(json.dumps({
-        "promoted_at_oos_end": OOS_END,
-        "frozen_set_hash": fs.frozen_set_hash,
-        "git_sha": git_sha,
-        "provider_build_id": ir["provider_build_id"],
-        "calendar_policy_id": ir["calendar_policy_id"],
-        "evidence_class": "single_shot_sealed_oos_leak_free_reproduction",
-        "note": ("These 6 are NOT oos_informed_backfill: the 13-factor top set was frozen "
-                 "PRE-OOS (oos_frozen_topset.json) and the OOS window was run once. This is the "
-                 "leak-free Phase-4-belt reproduction of that already-spent window; its numbers "
-                 "GOVERN approval. 2021-2026 remains spent for this frozen set."),
-        "promoted": promoted,
-        "skipped": skipped,
-        "promotion_evidence": {k: artifact[k] for k in artifact if k != "independent_reproduction"},
-    }, indent=2), encoding="utf-8")
+    prov_path = _write_provenance_json(artifact=artifact, ir=ir, fs=fs,
+                                       promoted=promoted, skipped=skipped)
     print(f"[live] provenance -> {prov_path}")
 
     try:

@@ -208,17 +208,36 @@ def reproduce_sealed_oos(
     from src.alpha_research.factor_eval.batch_screening import run_batch_screening
 
     qdir = str(qlib_dir)
+    # Guard #3 hardening (GPT post-impl review #3): install the OOS ResearchAccessContext so the
+    # qlib_windowed_features reads INSIDE compute_factors are validated against [oos_start, oos_end]
+    # + the claimed seal at the data layer (the formal chokepoint), instead of relying solely on
+    # the calendar_end == OOS_END boundary above. compute_factors requests exactly [oos_start,
+    # oos_end] (lookback is internal to the Qlib expr engine -> NaN warmup, no sub-oos_start read),
+    # so the read sits within the window. holdout_seal_claimed mirrors claim_seal: a real OOS read
+    # without a seal claim is correctly refused (HoldoutSealViolation) rather than silently allowed.
+    from src.research_orchestrator.research_access_context import (
+        ResearchAccessContext,
+        research_access_context,
+    )
+    oos_ctx = ResearchAccessContext(
+        run_id=str(run_dir), step_id=step_id, stage="oos_test", design_hash=design_hash,
+        allowed_start=pd.Timestamp(oos_start), allowed_end=pd.Timestamp(oos_end),
+        provider_build_id=prov.get("provider_build_id", ""),
+        calendar_policy_id=prov.get("calendar_policy_id", ""),
+        holdout_seal_claimed=bool(claim_seal), seal_key=seal_hash,
+    )
     # Reproduce the screening's EXACT inputs AND metric path: compute the factors plus
     # the multi-horizon forward returns over SCREENING_HORIZONS (the run_sealed_oos set),
     # then score with the SAME engine="batch" path. ls_sharpe is run_batch_screening's
     # primary-horizon (5d) long-short Sharpe — the metric the registration bar was
     # defined against; rank_icir is read at `horizon` (20d). A hand-rolled metric on a
     # different horizon (the pre-fix bug) does NOT reproduce the bar's scale.
-    factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
-                                            horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1, stage="oos_test")
-    factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
-    apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
-                                   horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
+    with research_access_context(oos_ctx):
+        factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
+                                                horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1, stage="oos_test")
+        factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
+        apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
+                                       horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
     # Guard #3 belt: the LONGEST-horizon label must realize on or before OOS_END
     # (raises IsEndLeakageError otherwise). Redundant with the calendar_end == OOS_END
     # assertion above (at the data boundary Ref(-h) is NaN past OOS_END for every
@@ -247,6 +266,15 @@ def reproduce_sealed_oos(
             "frozen_set_hash": seal_hash,
             "oos_window": f"{oos_start}..{oos_end}",
             "horizon": horizon,
+            "rank_icir_horizon": horizon,
+            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
+            "metric_note": (
+                f"Approval bar reproduced exactly as the Round-6 screening defined it: "
+                f"rank_icir at {horizon}d + run_batch_screening's primary-horizon ls_sharpe "
+                f"from horizons={tuple(SCREENING_HORIZONS)} (i.e. {SCREENING_HORIZONS[0]}d "
+                f"long-short Sharpe). This is the registration metric, not a horizon-consistent "
+                f"tradability metric; strategy-level deployment validation is a separate gate."
+            ),
             "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
             "per_factor": per_factor,
         }

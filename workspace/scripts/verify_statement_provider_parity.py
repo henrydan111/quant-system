@@ -211,8 +211,12 @@ def independent_series(family: str, base: str, kind: str, slot: int,
 
 def main() -> int:
     if not (QLIB / "calendars" / "day.txt").exists():
-        print("PROVIDER ABSENT — live-local only. Skipping.")
-        return 0
+        # Skip-as-fail (promotion-evidence guard #5): a parity check that did NOT run against a
+        # present provider must NOT be reported as "passed". The harness reads exit 0 as passed,
+        # so an absent provider must return nonzero. (Run this on a host that has the Qlib provider.)
+        print("PROVIDER ABSENT — cannot verify statement parity (no calendars/day.txt). "
+              "Skip-as-fail: returning nonzero so the harness does not treat this as passed.")
+        return 1
     import qlib
     from qlib.config import REG_CN
     from qlib.data import D
@@ -269,6 +273,13 @@ def main() -> int:
             print(f"{colname:30s} {ts_code:10s} {len(common):6d} {nmis:9d} {nonnull:8d}  {verdict} {first_bad}")
 
     print(f"\nTOTAL: {total_cmp} cells compared, {total_mismatch} mismatches")
+    if total_cmp == 0:
+        # Skip-as-fail: zero comparisons means no real provider coverage for the target fields
+        # (e.g. every instrument missing, or no overlapping dates). A parity check with no
+        # actual comparison must NOT pass.
+        print("RESULT: FAIL (zero comparisons — no provider coverage for the target fields; "
+              "skip-as-fail: a parity check that compared nothing must not be treated as passed)")
+        return 1
     print("RESULT:", "FAIL" if any_fail else "PASS (provider derivation reproduced independently)")
     return 1 if any_fail else 0
 

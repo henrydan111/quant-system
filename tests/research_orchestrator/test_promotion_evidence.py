@@ -177,6 +177,66 @@ class ReproduceSealedOosTests(unittest.TestCase):
             self.assertLessEqual(str(ir["max_label_realization_date"])[:10], OOS_END)  # leak-free belt
             self.assertEqual(len(store.list_events(seal_key=fs.frozen_set_hash)), 1)  # seal claimed
 
+    def test_oos_reads_run_under_research_access_context(self):
+        # GPT post-impl review Fix 3: the compute_factors reads must run under an OOS
+        # ResearchAccessContext (stage=oos_test, seal_key=frozen_set_hash, window=[oos_start,
+        # oos_end], holdout_seal_claimed) so the qlib_windowed_features data layer validates them,
+        # instead of relying solely on the calendar_end == OOS_END boundary.
+        import tempfile
+        from pathlib import Path as _P
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+        from src.research_orchestrator.research_access_context import get_research_access_context
+        fs = self._frozen_set()
+        cal, base_cf = self._fake_cf()
+        seen = {}
+
+        def cf(catalog, start_date, end_date, horizons, **kw):
+            seen["ctx"] = get_research_access_context()  # capture the active context during compute
+            return base_cf(catalog, start_date, end_date, horizons, **kw)
+
+        _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
+            store = HoldoutSealStore(d)
+            reproduce_sealed_oos(
+                frozen_set=fs, factor_exprs={"f_pos": "x", "f_neg": "y"}, oos_start="2021-01-01",
+                qlib_dir=".", seal_root=d, run_dir=d, design_hash="dh", horizon=4,
+                provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
+                                     "calendar_end": OOS_END},
+                compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+            )
+        ctx = seen.get("ctx")
+        self.assertIsNotNone(ctx, "compute ran with NO ResearchAccessContext installed")
+        self.assertEqual(ctx.stage, "oos_test")
+        self.assertEqual(ctx.effective_seal_key, fs.frozen_set_hash)
+        self.assertTrue(ctx.holdout_seal_claimed)
+        self.assertEqual(str(ctx.allowed_start)[:10], "2021-01-01")
+        self.assertEqual(str(ctx.allowed_end)[:10], OOS_END)
+        self.assertIsNone(get_research_access_context(), "context leaked after reproduce_sealed_oos")
+
+
+class SavedProvenanceGateEligibilityTests(unittest.TestCase):
+    """GPT post-impl review Fix 1: the persisted sealed_oos_winners_promotion.json must carry the
+    FULL gate artifact (including independent_reproduction) so its promotion_evidence re-passes
+    evaluate_promotion_artifact. The pre-fix producer stripped independent_reproduction, leaving a
+    saved artifact that failed the gate with 'independent reproduction source; none supplied'."""
+
+    def test_saved_promotion_json_is_gate_eligible(self):
+        import json as _json
+        from pathlib import Path as _P
+        from src.research_orchestrator.release_gate import evaluate_promotion_artifact
+        root = _P(__file__).resolve().parents[2]
+        prov = root / "workspace" / "research" / "factor_expansion" / "sealed_oos_winners_promotion.json"
+        self.assertTrue(prov.exists(), f"committed provenance artifact missing: {prov}")
+        data = _json.loads(prov.read_text(encoding="utf-8"))
+        pe_block = data.get("promotion_evidence")
+        self.assertIsInstance(pe_block, dict, "promotion_evidence missing from provenance JSON")
+        self.assertIn("independent_reproduction", pe_block,
+                      "FULL artifact required: independent_reproduction was stripped (Fix 1 regression)")
+        res = evaluate_promotion_artifact(pe_block, current_git_sha=pe_block.get("git_sha"))
+        self.assertTrue(res.eligible,
+                        f"saved promotion_evidence is NOT gate-eligible: {list(res.reasons)}")
+
 
 if __name__ == "__main__":
     unittest.main()
