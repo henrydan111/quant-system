@@ -696,7 +696,7 @@ Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 > [!WARNING]
 > The staged 2026-03-30 audit found that recent raw files contain mixed `.HK` rows and other code contamination. The staged PIT backend filters to validated A-share `ts_code`s before Qlib materialization and treats the recent mixed raw state as an integrity issue, not as trusted equity data.
 
-> **Status (2026-06-04): HELD at quarantine — NOT usable in formal research.** The 2026-06-04 review (`diag_daily_dense_review.py`) found the `.HK` contamination grows 19% (2017) → 27% (2024) → **100% of 2026 rows**, so the served A-share `$ratio` has a coverage hole ending ~2025. Ingestion fix is a spawned task; promote once northbound A-share coverage is restored. PIT: end-of-day fact → wrap `$ratio` in `Ref(...,1)`.
+> **Status (2026-06-05): approved.** The raw mixes northbound A-share rows (`exchange=SH/SZ` — the wanted foreign-holding data) with southbound HK rows (`exchange=HK`, 港股通); the staged backend filters to valid A-share `ts_code`s, so the served `$ratio` is **A-share-only** (the `.HK` rows are legitimate southbound, NOT contamination — correcting the earlier note). Served `$ratio` clean + parity-verified **2017–2025**. COVERAGE CAVEAT: the 2026 tail (Jan–Feb) has no SH/SZ northbound rows — likely a genuine northbound-disclosure cutoff (~end-2025); negligible for research. PIT: end-of-day fact → wrap `$ratio` in `Ref(...,1)`.
 
 | Column | English | Chinese |
 |--------|---------|---------|

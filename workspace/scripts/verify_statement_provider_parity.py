@@ -64,16 +64,21 @@ TARGETS = [
     ("balancesheet", "total_cur_liab", "snapshot", [0, 4]),
     ("cashflow", "n_cashflow_act", "flow", [0]),
 ]
-# NOTE on `ebit` (the prior Wave-1 row, removed 2026-06-02): NONE of the 6
-# sealed-OOS winners use ebit, so it is out of scope for this promotion's guard
-# #4. It is also the one field where this script's raw-ledger canonical recompute
-# does NOT match the provider for banks (000001.SZ): the provider runs
-# `canonicalize_report_variants` over the quarterly group, which drops/normalizes
-# bank `ebit` single-quarter rows that income_quarterly DOES carry, so the
-# provider serves ebit_sq from the cumulative diff while a naive direct-quarter
-# read picks up the (provider-discarded) quarterly value. Faithfully reproducing
-# `canonicalize_report_variants` for ebit is a separate Wave-1 parity follow-up,
-# tracked apart from the sealed-OOS-winner onboarding.
+# NOTE on `ebit` — VERIFIED root cause (2026-06-04 review; corrects the earlier
+# backwards note). ebit is INTENTIONALLY excluded from TARGETS. No factor uses it.
+# Finding (diag in workspace/outputs/gated_review): banks/financials (comp_type
+# 2/3/4) report `ebit` in the CUMULATIVE income statement only ANNUALLY +
+# SEMI-ANNUALLY — Q1 and Q3 cumulative ebit are None (e.g. 000001.SZ 2017: Q1=None,
+# Q2=401.84e8, Q3=None, Q4=731.48e8). So EVERY single-quarter diff for a bank hits a
+# None (current or prior quarter) -> there is NO clean single-quarter ebit for
+# financials, and the provider CORRECTLY serves $ebit_sq_q* = NaN for them
+# (confirmed: 600519.SH comp_type=1 general -> provider serves a value via
+# cumulative-diff; 000001.SZ comp_type=2 bank -> provider serves NaN; 607/731 days
+# mismatch was provider=NaN vs this script's recompute=value). This script's
+# generic cumulative-diff over-produces for financials. Re-adding ebit with 0
+# mismatches would require replicating the provider's exact single-quarter
+# None-handling per firm type — disproportionate for a field no factor uses, so
+# ebit stays excluded. (The provider's NaN is the correct value; nothing is lost.)
 
 
 def _prev_quarter_end(ts: pd.Timestamp):
@@ -150,8 +155,11 @@ def independent_series(family: str, base: str, kind: str, slot: int,
       * operate_profit: income_quarterly carries it WITH late restatements — e.g.
         000001.SZ restated 2017-Q1 to 8.242e9 in the 2018-Q1 filing (eff 2018-04-23)
         while the cumulative `income` 2017-Q1 row stayed 8.228e9. Direct-quarter wins.
-      * ebit: income_quarterly does NOT populate it -> the value falls back to the
-        cumulative diff (which is exactly what the provider does).
+      * ebit: income_quarterly does NOT populate it. For GENERAL firms (comp_type 1)
+        the provider derives it from the cumulative diff (matches this script). For
+        FINANCIALS (comp_type 2/3/4) the cumulative ebit is reported only annually +
+        semi-annually (Q1/Q3 = None) so there is NO clean single-quarter value and the
+        provider serves NaN -> ebit is EXCLUDED from TARGETS (see the NOTE above).
     Snapshot ``_q*`` (balance sheet) is point-in-time, read from its own family."""
     if kind != "flow":
         events = _load_family_events(family, base, ts_code)

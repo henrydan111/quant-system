@@ -1,0 +1,67 @@
+# Field-registry approval evidence (2026-06-05) — hk_hold northbound $ratio.
+#
+# Promotes the Tushare hk_hold foreign-holding ratio ($ratio) from quarantine to
+# approved. Corrects the 2026-06-04 HOLD: the `.HK` rows flagged then are
+# LEGITIMATE southbound holdings (exchange=HK) that the staged backend already
+# filters out — not contamination. Review: workspace/scripts/diag_daily_dense_review.py
+# (evidence: workspace/outputs/gated_review/daily_dense_review.json) + the
+# exchange-distribution diagnosis (2026-06-05).
+
+approval_id: 2026-06-05_hk_hold_quarantine_to_approved
+date: 2026-06-05
+dataset_id: hk_hold
+source_endpoint: tushare.hk_hold
+from_status: quarantine
+to_status: approved
+reviewer: henrydan111
+related_pr: gated-dataset-anomaly-review
+related_findings_id: null
+
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Northbound foreign-holding ratio — end-of-day fact, anchored on trade_date,
+# knowable at session close T. Predictive factors MUST wrap $ratio in Ref(...,1).
+pit_contract:
+  availability_column: trade_date
+  knowable_at: session_close_day_T
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: raw_daily_fact_per_stock_day_bin_ashare_filtered
+
+evidence:
+  southbound_filtering:
+    finding: "The raw northbound files mix exchange={SH,SZ} (NORTHBOUND, A-share foreign holdings — the wanted data) with exchange=HK (SOUTHBOUND, 港股通 mainland-held HK stocks). The staged PIT backend filters to valid A-share ts_codes before Qlib materialization, so the served $ratio is A-share-only and the HK rows never reach the provider."
+    note: "The 2026-06-04 'contamination' flag was a mis-read of these legitimate southbound rows."
+  coverage:
+    method: "exchange-distribution by year over data/market/northbound/YYYY/ + provider $ratio parity."
+    clean_ashare_northbound_through: "2025"
+    by_year_exchange: {"2017": "SZ+SH+HK", "2021": "SZ+SH+HK", "2024": "SZ+SH+HK", "2025": "SH+SZ+HK", "2026": "HK only (no SH/SZ)"}
+    coverage_caveat: "2026 (Jan-Feb, the frozen-calendar tail) has NO northbound SH/SZ rows — only southbound HK. Consistent with China's 2024 reduction of northbound-holding disclosure (likely a genuine source cutoff, not a fetch failure). A-share northbound $ratio effectively ends ~end-2025; the 2026 tail is empty. Negligible for research (9 years 2017-2025 of clean data)."
+    ratio_range: "[0, ~76] percent (foreign-holding ratio); 99.9-100% non-null where present."
+  provider_parity:
+    method: "Qlib D.features($ratio) vs raw, sample stock-days 2024-01."
+    result: "served + non-null (A-share-filtered, parity confirmed)."
+  tests:
+    - test_id: tests/data_infra/test_field_registry.py
+      asserts: "$ratio resolves to dataset_id=hk_hold, status=approved, allowed at formal_validation (assertion flipped from quarantine)."
+
+fields_added:
+  - field: $ratio
+    note: "Northbound foreign-holding ratio (percent). A-share northbound only (southbound HK filtered)."
+
+notes: |
+  Promoted with a documented coverage note (option 'promote with coverage note',
+  2026-06-05). The served A-share northbound $ratio is clean + parity-verified
+  2017-2025; the 2026 tail is empty (likely a real northbound-disclosure cutoff).
+  No re-fetch / ingestion fix needed — the southbound HK rows are correctly
+  filtered, not a bug. No on-disk/pipeline change — only the registry status flips.

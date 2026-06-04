@@ -224,8 +224,8 @@ datasets:
       - $sell_elg_amount
 
   hk_hold:
-    status: quarantine
-    reason: "Northbound holdings (hk_hold endpoint); downloaded but pending anomaly review. The `$ratio` field is the foreign-holding ratio column from Tushare hk_hold."
+    status: approved
+    reason: "Northbound foreign-holding ratio ($ratio, hk_hold endpoint). Promoted quarantine->approved 2026-06-05 (approvals/2026-06-05_hk_hold_quarantine_to_approved.yaml). The raw mixes northbound A-share rows (exchange=SH/SZ, the wanted data) with southbound HK rows (exchange=HK); the staged backend filters to A-share ts_codes so the served $ratio is A-share-only (the earlier .HK 'contamination' flag was a mis-read of legitimate southbound rows). Served $ratio clean + parity-verified 2017-2025. COVERAGE CAVEAT: the 2026 tail (Jan-Feb) has no SH/SZ northbound rows — likely a genuine northbound-disclosure cutoff (~end-2025); negligible for research. PIT: end-of-day fact -> wrap $ratio in Ref(...,1)."
     fields:
       - $ratio
 

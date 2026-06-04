@@ -359,11 +359,13 @@ class TestLiveRegistry:
     # ever silently regresses to the unmatched `$moneyflow_` style, these
     # tests fail loudly with a precise dataset-id check rather than a vague
     # `unknown_field` outcome.
-    def test_hk_hold_bare_field_quarantined_for_formal(self, reg) -> None:
+    def test_hk_hold_bare_field_approved_for_formal(self, reg) -> None:
         # Northbound foreign-holding ratio (hk_hold endpoint, bare $ratio).
+        # Promoted quarantine->approved 2026-06-05 (approvals/
+        # 2026-06-05_hk_hold_quarantine_to_approved.yaml). Assertion FLIPPED.
         r = reg.resolve_field("$ratio", "formal_validation")
-        assert r.allowed is False
-        assert r.status_id == "quarantine"
+        assert r.allowed is True
+        assert r.status_id == "approved"
         assert r.dataset_id == "hk_hold"
 
     def test_margin_detail_partial_promotion_for_formal(self, reg) -> None:
