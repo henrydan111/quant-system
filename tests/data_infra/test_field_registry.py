@@ -338,18 +338,21 @@ class TestLiveRegistry:
         assert r.allowed is True
         assert r.dataset_id == "market_daily"
 
-    def test_moneyflow_is_quarantined_for_formal(self, reg) -> None:
-        # PR 9a (2026-05-27): moneyflow fields are written into Qlib with
-        # BARE column names (no `$moneyflow_` namespace prefix) because the
-        # endpoint is not in EVENT_LIKE_DAILY_DATASETS. Field names match the
-        # raw Tushare moneyflow schema — see field_status.yaml::moneyflow.fields.
+    def test_moneyflow_fields_approved_for_formal(self, reg) -> None:
+        # Promoted quarantine->approved 2026-06-04 (gated-dataset anomaly review;
+        # approvals/2026-06-04_moneyflow_quarantine_to_approved.yaml). Fields are
+        # written with BARE column names (no `$moneyflow_` prefix) because the
+        # endpoint is not in EVENT_LIKE_DAILY_DATASETS. This assertion was FLIPPED
+        # from the old quarantine assertion at promotion (mirror of the stk_limit
+        # flip). net_mf_amount/net_mf_vol are approved-with-caveat (opaque vendor
+        # nets); status is still `approved` for all 18 fields.
         r = reg.resolve_field("$net_mf_amount", "formal_validation")
-        assert r.allowed is False
-        assert r.status_id == "quarantine"
+        assert r.allowed is True
+        assert r.status_id == "approved"
         assert r.dataset_id == "moneyflow"
         r2 = reg.resolve_field("$buy_sm_vol", "formal_validation")
-        assert r2.allowed is False
-        assert r2.status_id == "quarantine"
+        assert r2.allowed is True
+        assert r2.status_id == "approved"
 
     # PR 9a round-3 (GPT 5.5 Pro): one explicit per-family regression so the
     # prefix→bare-name fix becomes a permanent guardrail. If the registry

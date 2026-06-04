@@ -1,0 +1,137 @@
+# Field-registry approval evidence (2026-06-04)
+#
+# Promotes the Tushare moneyflow endpoint (18 individual-stock capital-flow
+# fields) from "quarantine" to "approved" in
+# config/field_registry/field_status.yaml.
+#
+# Discharges the "pending anomaly review" gate (PR 5 of the 2026-05-26 freeze
+# plan) via the read-only review in workspace/scripts/diag_moneyflow_review.py
+# (evidence dump: workspace/outputs/gated_review/moneyflow_review.json).
+
+approval_id: 2026-06-04_moneyflow_quarantine_to_approved
+date: 2026-06-04
+dataset_id: moneyflow
+source_endpoint: tushare.moneyflow
+from_status: quarantine
+to_status: approved
+reviewer: henrydan111
+related_pr: gated-dataset-anomaly-review
+related_findings_id: null
+
+# Bind to the exact provider build + calendar policy the on-disk review ran
+# against (PR 10 contract). A future rebuild with different ids fails the
+# daily-QA approval_evidence_binding check until the evidence is re-verified.
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# PIT / availability contract.
+#
+# Unlike stk_limit (an execution field knowable pre-market), moneyflow is a
+# SAME-DAY-REALIZED daily OUTCOME: the day-T classified order flow is only
+# complete at the day-T session CLOSE. A predictive factor must therefore use
+# day-(T-1) flow to predict day-T return — i.e. every moneyflow $field MUST sit
+# inside a Ref(..., 1) frame (same discipline as $turnover_rate and any daily
+# outcome). The factor-library PIT-safety lint (test_factor_library_pit_safety)
+# already enforces this for any factor that references these fields.
+pit_contract:
+  availability_column: trade_date
+  knowable_at: session_close_day_T
+  usage: predictive_signal
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: raw_daily_fact_per_stock_day_bin
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_daily_dataset
+  consumer: src/alpha_research/factor_library (via compute_factors, Ref(...,1)-framed)
+
+# Structured evidence. Reproduce with workspace/scripts/diag_moneyflow_review.py.
+evidence:
+  coverage:
+    method: "Per-field non-null % over the full raw moneyflow market (data/market/moneyflow/YYYY/), sampled years."
+    bar: "every field >= 50% non-null on the 2018 full market (Wave-1 statement-promotion bar)."
+    min_nonnull_pct_by_year:
+      "2008": 31.487    # PARTIAL — moneyflow did not cover the full market this early
+      "2014": 100.0
+      "2018": 100.0     # bar year: 816,683 stock-days, all 18 fields 100% non-null
+      "2021": 100.0
+      "2024": 100.0
+      "2026": 100.0
+    conclusion: "Complete coverage from 2014 onward. 2008 is partial (31.5%) — an early-history limitation; factors should start ~2014 or tolerate pre-2014 nulls. Passes the >=50%-on-2018 bar (100%)."
+  value_sanity:
+    method: "Sign + range + turnover-balance checks on the 2018 deep year (816,683 rows)."
+    negative_component_rows: 0   # all buy/sell vol+amount components >= 0 (correct)
+    turnover_balance:
+      check: "Sum(buy_*_amount) ~= Sum(sell_*_amount) (every trade classified to one side -> totals balance to the day's turnover)."
+      corr: 0.999983
+      mean_abs_err_wan_yuan: 36.30   # small fen/rounding residual
+    amount_units: "万元 (10k CNY)"
+    vol_units: "手 (lots)"
+  net_field_reconciliation:
+    finding: "net_mf_amount / net_mf_vol DO NOT reconcile from the component columns. They are Tushare-computed proprietary nets (separate tick-classification), NOT a simple sum of the sm/md/lg/elg buy/sell columns."
+    net_mf_amount_best_corr_to_component_formula: 0.5146   # (buy_lg+elg) - (sell_lg+elg); exact-match 0.21%
+    net_mf_amount_all_sizes_corr: -0.2804                  # negatively correlated (Sbuy~Ssell -> all-sizes net ~ 0)
+    net_mf_vol_best_corr_to_component_formula: 0.5459      # (buy_lg+elg) - (sell_lg+elg); exact-match 0.07%
+    caveat: >
+      The 16 component fields (sm/md/lg/elg × buy/sell × vol/amount) are reliable, internally
+      consistent (balanced turnover, no negatives, 100% coverage 2014+) and are the RECOMMENDED
+      basis for capital-flow factors (e.g. main-force imbalance = (buy_lg+elg − sell_lg+elg)/turnover).
+      net_mf_amount / net_mf_vol are APPROVED but flagged as OPAQUE VENDOR NETS: they correlate only
+      ~0.51 / ~0.55 with the main-force net and reconcile to NO component formula, so a factor MUST
+      NOT assume net_mf_* equals any column combination — treat them as Tushare's proprietary
+      net-inflow signal or prefer the component-derived alternative.
+  provider_parity:
+    method: "Qlib D.features($net_mf_amount, $net_mf_vol) vs raw parquet on sample stock-days (000001.SZ, 600519.SH, 2018-01-02..10)."
+    mismatches: 0
+    conclusion: "Provider serves moneyflow correctly (bare-name day bins)."
+  field_inventory:
+    instruments_checked: ["000001_sz", "600519_sh"]
+    fields_present_bin: ["net_mf_amount", "net_mf_vol", "buy_lg_amount", "sell_lg_amount", "...(18 total)"]
+    verification_method: "Qlib provider preload + raw parquet column inventory."
+  tests:
+    - test_id: tests/data_infra/test_field_registry.py
+      asserts: "moneyflow fields resolve to dataset_id=moneyflow, status=approved, allowed at formal_validation."
+    - test_id: tests/data_infra/test_approval_evidence.py
+      asserts: "this approval YAML is binding-valid against the live provider_build.json."
+
+fields_added:
+  - field: $net_mf_amount
+    note: "OPAQUE vendor net — see net_field_reconciliation caveat."
+  - field: $net_mf_vol
+    note: "OPAQUE vendor net — see net_field_reconciliation caveat."
+  - field: $buy_sm_vol
+  - field: $buy_sm_amount
+  - field: $sell_sm_vol
+  - field: $sell_sm_amount
+  - field: $buy_md_vol
+  - field: $buy_md_amount
+  - field: $sell_md_vol
+  - field: $sell_md_amount
+  - field: $buy_lg_vol
+  - field: $buy_lg_amount
+  - field: $sell_lg_vol
+  - field: $sell_lg_amount
+  - field: $buy_elg_vol
+  - field: $buy_elg_amount
+  - field: $sell_elg_vol
+  - field: $sell_elg_amount
+
+notes: |
+  moneyflow was bootstrapped in Phase 3 (init_factor_data) and held at quarantine
+  since PR 5. The review (diag_moneyflow_review.py) confirms: full coverage from
+  2014 (2008 partial), clean value sanity (no negatives, balanced turnover
+  decomposition corr 0.99998), and correct provider serving (0 parity mismatches).
+  The one material finding is that net_mf_amount / net_mf_vol are opaque
+  Tushare-computed nets that do not reconcile from the component columns — they
+  are approved with an explicit "prefer component-derived signals" caveat (option
+  A of the 2026-06-04 review). PIT: same-day daily outcome -> Ref(...,1) required
+  (enforced by the factor-library PIT-safety lint). No on-disk / pipeline change —
+  only the registry status flips; the bins already exist and the provider already
+  serves them.

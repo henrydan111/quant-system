@@ -684,6 +684,12 @@ Storage: `data/market/moneyflow/YYYY/moneyflow_YYYYMMDD.parquet`
 | `net_mf_vol` | Net Capital Flow Volume | 净流入量(手) |
 | `net_mf_amount` | Net Capital Flow Amount | 净流入额(万元) |
 
+> **Status (2026-06-04): `approved` for formal research** (`config/field_registry/approvals/2026-06-04_moneyflow_quarantine_to_approved.yaml`). Review notes:
+> - **Coverage** is 100% from 2014; **2008 is partial (31.5%)** — factors should start ~2014 or tolerate pre-2014 nulls.
+> - The 16 buy/sell component columns (`{buy,sell}_{sm,md,lg,elg}_{vol,amount}`) are a **balanced turnover decomposition** (Σbuy ≈ Σsell), all ≥0 — the reliable basis for factors (e.g. main-force imbalance = `(buy_lg+buy_elg − sell_lg−sell_elg)/turnover`).
+> - **⚠ `net_mf_amount` / `net_mf_vol` are OPAQUE vendor nets** — they do NOT reconcile from the component columns (best corr ~0.51/0.55 to the main-force net, 0% exact match). Treat them as Tushare's proprietary net-inflow signal; do not assume they equal any component formula.
+> - **PIT:** same-day-realized daily OUTCOME (known only at session close T) → every field MUST be wrapped in `Ref(...,1)` in a factor expression (enforced by the factor-library PIT-safety lint). NOT an execution field.
+
 ### hk_hold (沪深港通持股明细)
 Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 

@@ -201,8 +201,8 @@ datasets:
   # via an explicit quarantine. PR 9a switches each to an explicit `fields:`
   # list so the diagnostic at formal stages names the dataset cleanly.
   moneyflow:
-    status: quarantine
-    reason: "Tushare moneyflow endpoint (institutional / retail capital flow); downloaded but pending anomaly review before production publish (project_state 2026-05-26)."
+    status: approved
+    reason: "Tushare moneyflow endpoint (18 individual-stock capital-flow fields). Promoted quarantine->approved 2026-06-04 (config/field_registry/approvals/2026-06-04_moneyflow_quarantine_to_approved.yaml): full coverage from 2014 (2008 partial 31.5%), clean value sanity (0 negative components, balanced turnover Sum(buy)~Sum(sell) corr 0.99998), provider parity 0 mismatches. CAVEAT: $net_mf_amount/$net_mf_vol are OPAQUE vendor nets (do NOT reconcile from the component columns; best corr ~0.51/0.55 to the main-force net) -> factors should prefer component-derived signals (e.g. (buy_lg+elg - sell_lg+elg)/turnover). PIT: same-day daily OUTCOME (trade_date anchor, knowable at session close T) -> predictive factors MUST wrap every field in Ref(...,1), enforced by the factor-library PIT-safety lint."
     fields:
       - $net_mf_amount
       - $net_mf_vol
