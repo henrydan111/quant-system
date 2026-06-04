@@ -696,6 +696,8 @@ Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 > [!WARNING]
 > The staged 2026-03-30 audit found that recent raw files contain mixed `.HK` rows and other code contamination. The staged PIT backend filters to validated A-share `ts_code`s before Qlib materialization and treats the recent mixed raw state as an integrity issue, not as trusted equity data.
 
+> **Status (2026-06-04): HELD at quarantine — NOT usable in formal research.** The 2026-06-04 review (`diag_daily_dense_review.py`) found the `.HK` contamination grows 19% (2017) → 27% (2024) → **100% of 2026 rows**, so the served A-share `$ratio` has a coverage hole ending ~2025. Ingestion fix is a spawned task; promote once northbound A-share coverage is restored. PIT: end-of-day fact → wrap `$ratio` in `Ref(...,1)`.
+
 | Column | English | Chinese |
 |--------|---------|---------|
 | `code` | Stock Code | 原始代码 |
@@ -708,6 +710,8 @@ Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 
 ### margin_detail (融资融券交易明细)
 Storage: `data/market/margin/YYYY/margin_YYYYMMDD.parquet`
+
+> **Status (2026-06-04): PARTIAL approved.** The 5 balance/buy fields (`$rzye` 融资余额, `$rqye` 融券余额, `$rzmre`, `$rzrqye`, `$rqmcl`) are approved (coverage 99.8-100% from 2010, 0 negatives). The 2 repayment fields (`$rzche`, `$rqchl`) are **HELD at quarantine** (`margin_detail_repayment` entry) — 28,127/799 negative rows in 2024, all `.BJ` (BSE) names. `rqyl` (融券余量) is in the raw but unregistered. PIT: exchange publishes day-T balances after close → predictive factors need `Ref(...,1)`.
 
 | Column | English | Chinese |
 |--------|---------|---------|
@@ -752,6 +756,8 @@ Storage: `data/market/stk_limit/YYYY/stk_limit_YYYYMMDD.parquet`
 ### top_list (龙虎榜每日明细)
 Storage: `data/market/top_list/YYYY/top_list_YYYYMMDD.parquet`
 
+> **Status (2026-06-04): approved** (sparse event, 龙虎榜). Materialized as `$top_list__<col>` day bins. PIT: published after close T → wrap in `Ref(...,1)` + apply explicit staleness/decay handling (the signal exists only on event days). Text columns (`name`, `reason`) are NOT materialized.
+
 Qlib provider names: event-like payload columns are exposed as
 `$top_list__{column}` to avoid collisions with canonical market fields such as
 `$close` and `$amount`.
@@ -776,6 +782,8 @@ Qlib provider names: event-like payload columns are exposed as
 ### top_inst (龙虎榜机构明细)
 Storage: `data/market/top_inst/YYYY/top_inst_YYYYMMDD.parquet`
 
+> **Status (2026-06-04): approved** (sparse event, 机构席位). `$top_inst__<col>`. CAVEAT: values are large-scale (institutional seat amounts) → normalize (e.g. `net_buy/turnover`), don't use raw levels. PIT: `Ref(...,1)` + staleness handling. Text columns (`exalter`, `side`, `reason`) not materialized.
+
 Qlib provider names: `$top_inst__buy`, `$top_inst__sell`,
 `$top_inst__net_buy`, `$top_inst__buy_rate`, `$top_inst__sell_rate`.
 
@@ -792,6 +800,8 @@ Qlib provider names: `$top_inst__buy`, `$top_inst__sell`,
 ### block_trade (大宗交易)
 Storage: `data/market/block_trade/YYYY/block_trade_YYYYMMDD.parquet`
 
+> **Status (2026-06-04): approved** (sparse event, 大宗交易, 2008+). `$block_trade__<col>`. Value sanity clean (0 negative amounts). PIT: reported day T → `Ref(...,1)` + staleness handling. Text columns (`buyer`, `seller`) not materialized.
+
 Qlib provider names: `$block_trade__price`, `$block_trade__vol`,
 `$block_trade__amount`. This endpoint is sparse by design.
 
@@ -807,6 +817,8 @@ Qlib provider names: `$block_trade__price`, `$block_trade__vol`,
 
 ### cyq_perf (筹码分布)
 Storage: `data/market/cyq_perf/YYYY/cyq_perf_YYYYMMDD.parquet`
+
+> **Status (2026-06-04): approved** (daily-dense, 筹码分布, 2018+). `$cyq_perf__<col>`. Cost percentiles are monotonic-ordered (cost_5≤15≤50≤85≤95); `winner_rate` in [0,100] (max 100.41 = negligible rounding). PIT: computed for day T → `Ref(...,1)`.
 
 Qlib provider names: dense daily payloads are exposed as
 `$cyq_perf__{column}`.
@@ -827,6 +839,8 @@ Qlib provider names: dense daily payloads are exposed as
 
 ### stk_holdertrade (股东增减持)
 Storage: `data/corporate/stk_holdertrade/stk_holdertrade_{year}.parquet`
+
+> **Status (2026-06-04): approved** (股东增减持). Aggregated to `$holdertrade_net_vol`/`_gross_vol`/`_net_ratio`/`_events`. **PROPERLY PIT-anchored** — the ledger carries `ann_date` + `disclosure_date` + `effective_date` (effective_date is the visibility anchor), unlike the daily endpoints. Sparse holder events → apply staleness/decay handling.
 
 Per-holder raw rows remain in the PIT ledger. The Qlib provider exposes
 per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
