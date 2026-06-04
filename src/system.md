@@ -2,6 +2,67 @@
 
 This document is the top-level architecture guide for the source tree. It describes the live module boundaries for the local Parquet + Qlib research stack and the current Phase 3 factor-research workflow.
 
+## 0. Canonical Function Map — check before writing new code
+
+This is the antidote to reinventing the wheel. §3 of `CLAUDE.md` says what NOT to break; the sections
+below say what each module *is*; **this map says: for this task, call THIS — and never hand-roll THAT.**
+Before adding any helper, pipeline, metric, or data read, find your task here first. If it is genuinely
+not here, say so explicitly and propose adding a row. (This is a curated list of canonical entry points,
+not an exhaustive index — keep it short. The orchestrator-internal `capabilities.py` vocabulary is a
+different, unrelated concept.)
+
+### Data access
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Load PIT fundamentals in research/sandbox | `pit_research_loader.load_pit_signal_panel` (lag-1, default) / `load_pit_asof_panel` (lag-0) — `src/data_infra/pit_research_loader.py` | Read `data/pit_ledger/*` directly; hand-roll PIT alignment; string-compare date columns (PIT002 lint = hard error) |
+| Read Qlib features in formal research | `qlib_windowed_features(...)` — `src/research_orchestrator/qlib_windowed_features.py` | Call `D.features` directly (AST lint bans it; the wrapper is the only door) |
+| Check if a `$field` is allowed at a stage | `FieldStatusRegistry.resolve_field` / `validate_expression`; `extract_qlib_fields` — `src/data_infra/field_registry.py` | Assume a field is usable; reference a quarantined/pending field in a formal expression |
+| Trading-day / ST ground truth | `data/reference/trade_cal.parquet` / `data/qlib_data/instruments/st_stocks.txt` | Assume business days == trading days; use `stock_st_daily.parquet` alone |
+
+### Factors
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Get factor definitions (authoritative, ALL discovery) | `get_factor_catalog()` (+ `get_composite_defs()`, `get_industry_relative_defs()`) — `src/alpha_research/factor_library/` | Re-define a factor expression inline |
+| Compute factor values | `compute_factors()`, then `add_composites()` / `add_industry_relative_composites()` | Slow bespoke `groupby().apply()` when a Qlib operator exists |
+| Status-filtered factor selection (sandbox only) | `selection.get_factors` / `get_factor_selection` — `src/alpha_research/factor_library/selection.py` (raises at formal stages) | Use these as a formal gate — formal resolves through the orchestrator allow-set |
+| Standard factor evaluation / batch screening | `src/alpha_research/factor_eval/` ; `run_batch_screening(engine="batch", horizons=...)` — `factor_eval/batch_screening.py` | Reimplement IC/quantile math; hand-roll a screening loop or a wrong-horizon LS-Sharpe |
+
+### Backtesting & execution
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Fast signal screening | `VectorizedBacktester` — `src/backtest_engine/vectorized/` | Use it where execution realism matters |
+| Realistic / formal backtest | `EventDrivenBacktester.run(execution_profile=…, calendar_policy_id=…, run_mode=…)` — `src/backtest_engine/event_driven/` | Run formal without preload (100× slower) or without `execution_profile` + `calendar_policy_id` |
+| Buy/sell cost breakdown | `Exchange.compute_buy_cost_breakdown` / `compute_sell_cost_breakdown` — `src/backtest_engine/event_driven/exchange.py` | Duplicate tax/commission/过户费 logic in the engine or portfolio |
+| Cost / slippage presets | `CostConfig()` (JoinQuant) / `CostConfig.realistic_china()` ; `JOINQUANT_DEFAULT_SLIPPAGE` / `CONSERVATIVE_SLIPPAGE_10BPS` | Inline cost or slippage literals |
+
+### Metrics, reporting, tracking
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Sharpe / MDD / turnover / win-rate | `src/result_analysis/metrics.py` | Reimplement any metric in a notebook (add it to metrics.py) |
+| Backtest report | `BacktestReport` — `src/result_analysis/report.py` | Build ad-hoc report objects |
+| Log a substantive run | `ExperimentTracker` — `src/alpha_research/mlflow_tracker.py` | Skip MLflow logging on model-training / backtest runs |
+
+### Orchestration, hypotheses, promotion
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Run formal research | orchestrator profiles via `workspace/scripts/research_orchestrator_cli.py` (`plan`/`run`/`resume`); 8 built-in profiles | Write a new top-level research script outside the orchestrator |
+| Register / validate a hypothesis | `workspace/scripts/hypothesis_cli.py` | Bypass the gated lifecycle |
+| Produce promotion evidence | `produce_promotion_evidence` (self-verifies through the gate) — `src/research_orchestrator/promotion_evidence.py`; canaries `src/data_infra/pit_canaries.py` | Hand-assemble a promotion_evidence dict |
+| Promote a factor's status | `FactorRegistryStore.set_status` (writer gate: git_sha + promotion_evidence) | Edit registry master tables outside the publish path |
+
+### Portfolio (⚠ dormant)
+
+`PortfolioOptimizer` (cvxpy) lives at `src/portfolio_risk/optimizer.py`, but the module is **dormant** per
+the 2026-05-26 audit: `predict_portfolio_risk()` returns a hardcoded `0.05` and `MultiFactorRiskModel.fit()`
+is a no-op. Formal-path modules must NOT import the dormant symbols.
+
+---
+
 ## Directory Overview
 
 ```text
