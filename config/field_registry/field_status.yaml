@@ -230,15 +230,20 @@ datasets:
       - $ratio
 
   margin_detail:
-    status: quarantine
-    reason: "Margin trading detail (margin_detail endpoint); downloaded but pending anomaly review. Field names are bare (no `$margin_` prefix) because margin_detail is not in EVENT_LIKE_DAILY_DATASETS."
+    status: approved
+    reason: "Margin trading detail (margin_detail endpoint), bare names (not EVENT_LIKE). PARTIAL promotion quarantine->approved 2026-06-04 (approvals/2026-06-04_margin_detail_partial_to_approved.yaml; review: diag_daily_dense_review.py): the 5 BALANCE/BUY fields ($rzye 融资余额, $rqye 融券余额, $rzmre 融资买入额, $rzrqye 融资融券余额, $rqmcl 融券卖出量) are clean — coverage 99.8-100% from 2010, 0 negative rows. The 2 REPAYMENT fields ($rzche, $rqchl) are HELD at quarantine (margin_detail_repayment entry) due to BSE-localized negatives (see below). PIT: exchange publishes day-T balances AFTER close (often next AM) -> predictive factors MUST use Ref(...,1) at minimum (treat as a T-disclosed-after-close outcome)."
     fields:
       - $rzye
       - $rqye
       - $rzmre
-      - $rzche
       - $rzrqye
       - $rqmcl
+
+  margin_detail_repayment:
+    status: quarantine
+    reason: "Held repayment fields of the margin_detail endpoint ($rzche 融资偿还额, $rqchl 融券偿还量). HELD at quarantine 2026-06-04: the 2024 review (diag_daily_dense_review.py) found 28,127 ($rzche) + 799 ($rqchl) NEGATIVE rows, all localized to .BJ (Beijing Stock Exchange) names — a vendor data quirk (min rzche -2.0e8). Blocked from formal use until the BSE-negatives anomaly is explained/cleaned. The 5 clean margin balance/buy fields are approved (margin_detail entry)."
+    fields:
+      - $rzche
       - $rqchl
 
   stk_limit:
@@ -254,8 +259,8 @@ datasets:
   # that emits BARE column names rather than the `{dataset}__{col}` prefix.
   # Same `pending_review` status as its sibling alpha endpoints.
   stk_holdertrade:
-    status: pending_review
-    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Anomaly review WIP — same gating as the other alpha endpoints."
+    status: approved
+    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): 168,024 holder-event rows 2008-2026, in_de split DE 124,982 / IN 43,042 (sensible). PROPERLY PIT-anchored — the ledger carries ann_date + disclosure_date + effective_date (effective_date is the visibility anchor), unlike the daily endpoints. Still wrap in Ref(...,1) as hygiene + apply staleness/decay (sparse holder events)."
     fields:
       - $holdertrade_net_vol
       - $holdertrade_gross_vol
@@ -264,26 +269,26 @@ datasets:
 
   # ─── Pending review: event-like daily endpoints (post-2026-04-20 namespacing) ──
   top_list:
-    status: pending_review
-    reason: "Tushare top_list endpoint (龙虎榜). Namespace-protected via $top_list__* prefix per PR 4 (2026-04-20). Anomaly review WIP."
+    status: approved
+    reason: "Tushare top_list endpoint (龙虎榜). Namespace-protected via $top_list__* prefix per PR 4 (2026-04-20). Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): sparse-event coverage ~245 event-days/yr 2014+, ~2000-3500 distinct stocks/yr, value sanity clean (net_amount ±2.3B, l_buy/l_sell ≥0). PIT: 龙虎榜 published after close T -> Ref(...,1) + explicit staleness/decay handling required (signal exists only on event days)."
     field_prefixes:
       - $top_list__
 
   top_inst:
-    status: pending_review
-    reason: "Tushare top_inst endpoint (机构席位). Namespace-protected via $top_inst__* prefix. Anomaly review WIP."
+    status: approved
+    reason: "Tushare top_inst endpoint (机构席位). Namespace-protected via $top_inst__* prefix. Promoted pending_review->approved 2026-06-04 (same batch): sparse-event coverage ~245 days/yr 2012+, clean. CAVEAT: net_buy values are large-scale (institutional seat amounts) -> normalize (e.g. net_buy/turnover). PIT: Ref(...,1) + staleness handling."
     field_prefixes:
       - $top_inst__
 
   block_trade:
-    status: pending_review
-    reason: "Tushare block_trade endpoint (大宗交易). Namespace-protected via $block_trade__* prefix. Anomaly review WIP."
+    status: approved
+    reason: "Tushare block_trade endpoint (大宗交易). Namespace-protected via $block_trade__* prefix. Promoted pending_review->approved 2026-06-04 (same batch): sparse-event coverage ~245 days/yr 2008+, value sanity clean (0 negative amounts, price/vol/amount ≥0). PIT: 大宗交易 reported day T -> Ref(...,1) + staleness handling."
     field_prefixes:
       - $block_trade__
 
   cyq_perf:
-    status: pending_review
-    reason: "Tushare cyq_perf endpoint (筹码分布). Namespace-protected via $cyq_perf__* prefix. Anomaly review WIP."
+    status: approved
+    reason: "Tushare cyq_perf endpoint (筹码分布). Namespace-protected via $cyq_perf__* prefix. Promoted pending_review->approved 2026-06-04 (same batch): DAILY-DENSE (per-stock chip distribution) coverage 2018+ (~3400-5500 stocks/day), value sanity clean (cost percentiles 100% monotonic-ordered; winner_rate in [0,100], max 100.41 = negligible rounding). PIT: computed for day T -> Ref(...,1)."
     field_prefixes:
       - $cyq_perf__
 

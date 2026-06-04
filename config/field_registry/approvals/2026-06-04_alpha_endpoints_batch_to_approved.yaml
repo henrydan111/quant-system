@@ -1,0 +1,93 @@
+# Field-registry approval evidence (2026-06-04) — alpha-endpoints batch.
+#
+# Promotes 5 pending_review alpha endpoints to approved in field_status.yaml:
+#   top_list (龙虎榜), top_inst (机构席位), block_trade (大宗交易),
+#   cyq_perf (筹码分布), stk_holdertrade (股东增减持).
+# Discharges the "anomaly review WIP" gate via the read-only review in
+# workspace/scripts/diag_sparse_event_review.py (evidence dump:
+# workspace/outputs/gated_review/sparse_event_review.json).
+
+approval_id: 2026-06-04_alpha_endpoints_batch_to_approved
+date: 2026-06-04
+dataset_id: alpha_endpoints_batch_2026_06_04   # batch label; per-dataset detail under `datasets:`
+source_endpoint: tushare.{top_list,top_inst,block_trade,cyq_perf,stk_holdertrade}
+from_status: pending_review
+to_status: approved
+reviewer: henrydan111
+related_pr: gated-dataset-anomaly-review
+related_findings_id: null
+
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# General PIT contract for these endpoints. top_list/top_inst/block_trade are
+# events PUBLISHED AFTER the close of trade_date T; cyq_perf is computed for
+# day T; all are knowable only at session close T -> predictive factors MUST
+# wrap every field in Ref(...,1) (factor-library PIT-safety lint enforces).
+# The 3 SPARSE event endpoints additionally need explicit staleness/decay
+# handling (a signal exists only on event days; a factor must define how long
+# it persists). stk_holdertrade is the exception — it carries proper
+# disclosure_date/effective_date anchors.
+pit_contract:
+  knowable_at: session_close_day_T
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  sparse_event_staleness_handling_required: true   # top_list/top_inst/block_trade
+  provider_transform: event_like_daily_dataset_namespaced_bins   # $<ds>__<col>.day.bin (PR 4)
+
+datasets:
+  top_list:
+    type: sparse_event
+    materialized_prefix: $top_list__
+    coverage: "~245 event-days/yr 2014-2026; ~2005-3534 distinct stocks/yr."
+    value_sanity_2024: "net_amount range ±2.3e9 (sensible); l_buy/l_sell ≥ 13.8 (positive amounts)."
+    non_materialized_cols: [name, reason]
+  top_inst:
+    type: sparse_event
+    materialized_prefix: $top_inst__
+    coverage: "~245 days/yr 2012-2026; ~2005-3472 distinct stocks/yr."
+    value_sanity_2024: "net_buy range ±1e11 (institutional seat amounts; LARGE SCALE -> normalize, e.g. net_buy/turnover); buy/sell ≥ 0."
+    caveat: "values are large-scale; use ratio/normalized forms, not raw levels."
+    non_materialized_cols: [exalter, side, reason]
+  block_trade:
+    type: sparse_event
+    materialized_prefix: $block_trade__
+    coverage: "~245 days/yr 2008-2026; ~1342-2948 distinct stocks/yr."
+    value_sanity_2024: "price ≥ 0.32, vol ≥ 0.1, amount ≥ 11.1, 0 negative-amount rows."
+    non_materialized_cols: [buyer, seller]
+  cyq_perf:
+    type: daily_dense
+    materialized_prefix: $cyq_perf__
+    coverage: "DAILY-DENSE 2018-2026; ~3422-5486 stocks/day."
+    value_sanity_2024: "cost percentiles 100% monotonic-ordered (cost_5≤15≤50≤85≤95); winner_rate in [0,100] (max 100.41 = negligible rounding)."
+  stk_holdertrade:
+    type: pit_ledger_event
+    materialized_fields: [$holdertrade_net_vol, $holdertrade_gross_vol, $holdertrade_net_ratio, $holdertrade_events]
+    coverage: "168,024 holder-event rows, effective_date 2008-01-03..2026-02-27."
+    value_sanity: "in_de split DE 124,982 / IN 43,042 (sensible — reductions > additions)."
+    pit: "PROPERLY anchored — carries ann_date + disclosure_date + effective_date (effective_date = visibility anchor)."
+
+tests:
+  - test_id: tests/data_infra/test_field_registry.py
+    asserts: "the 5 endpoints' fields resolve to status=approved, allowed at formal_validation (test_stk_holdertrade flipped; per-endpoint approved assertions added)."
+  - test_id: tests/data_infra/test_approval_evidence.py
+    asserts: "this batch YAML is binding-valid against the live provider_build.json."
+
+notes: |
+  Batch promotion (review option A, 2026-06-04). All 5 endpoints passed the
+  read-only review (diag_sparse_event_review.py): good event/daily coverage,
+  clean value sanity, no data-quality blockers. They differ from the daily
+  market fields in PIT (post-close events -> Ref(...,1)) and the 3 sparse ones
+  need staleness handling. No on-disk/pipeline change — the namespaced bins
+  ($<ds>__<col>, PR 4) already exist and the provider already serves them; only
+  the registry status flips. (hk_hold was HELD this round — .HK contamination;
+  margin_detail was PARTIAL — see its own approval YAML.)

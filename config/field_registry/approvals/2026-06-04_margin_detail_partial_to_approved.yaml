@@ -1,0 +1,75 @@
+# Field-registry approval evidence (2026-06-04) — margin_detail PARTIAL promotion.
+#
+# Promotes the 5 CLEAN balance/buy fields of the Tushare margin_detail endpoint
+# (quarantine -> approved); HOLDS the 2 repayment fields ($rzche, $rqchl) at
+# quarantine (margin_detail_repayment entry) pending a BSE-negatives fix.
+# Review: workspace/scripts/diag_daily_dense_review.py
+# (evidence: workspace/outputs/gated_review/daily_dense_review.json).
+
+approval_id: 2026-06-04_margin_detail_partial_to_approved
+date: 2026-06-04
+dataset_id: margin_detail
+source_endpoint: tushare.margin_detail
+from_status: quarantine
+to_status: approved   # for the 5 clean fields only; rzche/rqchl stay quarantine
+reviewer: henrydan111
+related_pr: gated-dataset-anomaly-review
+related_findings_id: null
+
+provider_build_id: prod_full_20260421_namespace_v1
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Margin balances are anchored on trade_date, but the exchange PUBLISHES day-T
+# balances AFTER the close (often next morning). So day-T margin is NOT safely
+# knowable intraday-T; predictive factors MUST use Ref(...,1) at minimum.
+pit_contract:
+  availability_column: trade_date
+  knowable_at: session_close_day_T_or_next_am
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: raw_daily_fact_per_stock_day_bin
+
+approved_fields:
+  - $rzye     # 融资余额 financing balance
+  - $rqye     # 融券余额 short balance
+  - $rzmre    # 融资买入额 financing buy amount
+  - $rzrqye   # 融资融券余额 total margin balance
+  - $rqmcl    # 融券卖出量 short sell volume
+
+held_fields:   # remain quarantine under the margin_detail_repayment entry
+  - $rzche    # 融资偿还额 — 28,127 NEGATIVE rows in 2024, all .BJ (BSE) names (min -2.0e8)
+  - $rqchl    # 融券偿还量 — 799 negative rows in 2024, all .BJ names
+
+evidence:
+  coverage:
+    method: "Per-field non-null % over raw margin_detail (data/market/margin/YYYY/), sampled years."
+    min_nonnull_pct_by_year: {"2010": 99.8, "2014": 100.0, "2018": 99.99, "2024": 99.96, "2026": 99.94}
+    note: "true coverage starts 2010-03-31."
+  value_sanity:
+    approved_fields_negative_rows: 0          # the 5 promoted fields: 0 negatives across all sampled years
+    held_fields_negative_rows_2024: {"rzche": 28127, "rqchl": 799}
+    held_fields_negatives_localization: "ALL negative rows are .BJ (Beijing Stock Exchange) names — a vendor data quirk in the repayment fields."
+  raw_columns_not_registered: [rqyl]   # 融券余量 present in raw, intentionally unregistered (not reviewed)
+  provider_parity:
+    method: "Qlib D.features($rzye,$rqye) vs raw, sample stock-days 2024-01."
+    result: "served + non-null (parity confirmed)."
+  tests:
+    - test_id: tests/data_infra/test_field_registry.py
+      asserts: "$rzye/$rqye/$rzmre/$rzrqye/$rqmcl approved at formal_validation; $rzche/$rqchl remain quarantine (margin_detail_repayment)."
+
+notes: |
+  PARTIAL promotion (review option A, 2026-06-04). The 5 balance/buy fields are
+  the high-value ones (margin balance = leverage/sentiment) and are clean. The 2
+  repayment fields are held at quarantine because of BSE-localized negative
+  values (vendor quirk) — unblock them once the BSE-negatives anomaly is
+  explained/cleaned. PIT: T-disclosed-after-close outcome -> Ref(...,1) required.
+  No on-disk/pipeline change — only the registry status changes.

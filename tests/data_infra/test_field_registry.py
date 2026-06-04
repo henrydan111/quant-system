@@ -366,16 +366,24 @@ class TestLiveRegistry:
         assert r.status_id == "quarantine"
         assert r.dataset_id == "hk_hold"
 
-    def test_margin_detail_bare_fields_quarantined_for_formal(self, reg) -> None:
-        # margin_detail uses bare column names: $rzye / $rqye / $rzmre / $rzche.
-        for field in ("$rzye", "$rqye", "$rzmre", "$rzche"):
+    def test_margin_detail_partial_promotion_for_formal(self, reg) -> None:
+        # PARTIAL promotion 2026-06-04 (gated-dataset review; approvals/
+        # 2026-06-04_margin_detail_partial_to_approved.yaml): the 5 CLEAN
+        # balance/buy fields are approved; the 2 REPAYMENT fields ($rzche/$rqchl)
+        # stay quarantine under the margin_detail_repayment entry (.BJ negatives).
+        for field in ("$rzye", "$rqye", "$rzmre", "$rzrqye", "$rqmcl"):
             r = reg.resolve_field(field, "formal_validation")
-            assert r.allowed is False, (
-                f"{field} should be quarantined under margin_detail; got "
+            assert r.allowed is True, (
+                f"{field} should be approved under margin_detail; got "
                 f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
             )
             assert r.dataset_id == "margin_detail"
+            assert r.status_id == "approved"
+        for field in ("$rzche", "$rqchl"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is False, f"{field} should be HELD; got allowed={r.allowed}"
             assert r.status_id == "quarantine"
+            assert r.dataset_id == "margin_detail_repayment"
 
     def test_stk_limit_bare_fields_approved_for_formal(self, reg) -> None:
         # stk_limit endpoint: $up_limit / $down_limit. Promoted
@@ -389,9 +397,10 @@ class TestLiveRegistry:
             assert r.dataset_id == "stk_limit"
             assert r.status_id == "approved"
 
-    def test_stk_holdertrade_bare_fields_pending_review_for_formal(self, reg) -> None:
-        # stk_holdertrade aggregator emits bare-named summary columns; PR 9a
-        # registered it as pending_review alongside the other alpha endpoints.
+    def test_stk_holdertrade_bare_fields_approved_for_formal(self, reg) -> None:
+        # Promoted pending_review->approved 2026-06-04 (alpha-endpoints batch;
+        # approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml). Properly
+        # PIT-anchored (disclosure_date/effective_date). Assertion FLIPPED.
         for field in (
             "$holdertrade_net_vol",
             "$holdertrade_gross_vol",
@@ -399,12 +408,24 @@ class TestLiveRegistry:
             "$holdertrade_events",
         ):
             r = reg.resolve_field(field, "formal_validation")
-            assert r.allowed is False, (
-                f"{field} should be blocked at formal_validation; got "
+            assert r.allowed is True, (
+                f"{field} should be approved at formal_validation; got "
                 f"allowed={r.allowed} dataset={r.dataset_id} status={r.status_id}"
             )
             assert r.dataset_id == "stk_holdertrade"
-            assert r.status_id == "pending_review"
+            assert r.status_id == "approved"
+
+    def test_alpha_event_endpoints_approved_for_formal(self, reg) -> None:
+        # top_list/top_inst/block_trade/cyq_perf promoted pending_review->approved
+        # 2026-06-04 (alpha-endpoints batch). Namespaced $<ds>__<col> fields.
+        for field in ("$top_list__net_amount", "$top_inst__net_buy",
+                      "$block_trade__amount", "$cyq_perf__winner_rate"):
+            r = reg.resolve_field(field, "formal_validation")
+            assert r.allowed is True, (
+                f"{field} should be approved; got allowed={r.allowed} "
+                f"dataset={r.dataset_id} status={r.status_id}"
+            )
+            assert r.status_id == "approved"
 
     def test_indicators_bare_fields_approved_for_formal(self, reg) -> None:
         # PR 9a indicators dataset (Tushare fina_indicator_vip) — every
@@ -496,10 +517,11 @@ class TestLiveRegistry:
             assert r.dataset_id == "indicators"
             assert r.status_id == "approved"
 
-    def test_top_list_is_pending_for_formal(self, reg) -> None:
+    def test_top_list_approved_for_formal(self, reg) -> None:
+        # Promoted pending_review->approved 2026-06-04 (alpha-endpoints batch).
         r = reg.resolve_field("$top_list__close", "formal_validation")
-        assert r.allowed is False
-        assert r.status_id == "pending_review"
+        assert r.allowed is True
+        assert r.status_id == "approved"
 
     def test_top_list_allowed_for_sandbox(self, reg) -> None:
         r = reg.resolve_field("$top_list__close", "sandbox_screening")
