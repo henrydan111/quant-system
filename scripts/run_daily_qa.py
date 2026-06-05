@@ -307,6 +307,16 @@ def main() -> int:
     # re-verification.
     checks.append(_approval_evidence_binding_check())
 
+    # 0c. Canonical Function Map honesty (2026-06-04) — fails if the §0 reuse
+    # map in src/system.md cites a renamed/moved function or a non-existent
+    # committed path. Keeps the anti-reinvention index from silently rotting.
+    checks.append(
+        _run(
+            [python, "-m", "pytest", "tests/architecture/test_canonical_function_map.py", "-q"],
+            "canonical_function_map",
+        )
+    )
+
     # 1. DataAuditor
     checks.append(_audit_daily_files_inprocess())
 

@@ -27,7 +27,7 @@ different, unrelated concept.)
 | Get factor definitions (authoritative, ALL discovery) | `get_factor_catalog()` (+ `get_composite_defs()`, `get_industry_relative_defs()`) — `src/alpha_research/factor_library/` | Re-define a factor expression inline |
 | Compute factor values | `compute_factors()`, then `add_composites()` / `add_industry_relative_composites()` | Slow bespoke `groupby().apply()` when a Qlib operator exists |
 | Status-filtered factor selection (sandbox only) | `selection.get_factors` / `get_factor_selection` — `src/alpha_research/factor_library/selection.py` (raises at formal stages) | Use these as a formal gate — formal resolves through the orchestrator allow-set |
-| Standard factor evaluation / batch screening | `src/alpha_research/factor_eval/` ; `run_batch_screening(engine="batch", horizons=...)` — `factor_eval/batch_screening.py` | Reimplement IC/quantile math; hand-roll a screening loop or a wrong-horizon LS-Sharpe |
+| Standard factor evaluation / batch screening | `src/alpha_research/factor_eval/` ; `run_batch_screening(engine="batch", horizons=...)` — `src/alpha_research/factor_eval/batch_screening.py` | Reimplement IC/quantile math; hand-roll a screening loop or a wrong-horizon LS-Sharpe |
 
 ### Backtesting & execution
 
