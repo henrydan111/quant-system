@@ -9,7 +9,9 @@ below say what each module *is*; **this map says: for this task, call THIS — a
 Before adding any helper, pipeline, metric, or data read, find your task here first. If it is genuinely
 not here, say so explicitly and propose adding a row. (This is a curated list of canonical entry points,
 not an exhaustive index — keep it short. The orchestrator-internal `capabilities.py` vocabulary is a
-different, unrelated concept.)
+different, unrelated concept.) The guard test `tests/architecture/test_canonical_function_map.py` checks
+path/symbol existence + doc↔registry sync only — NOT semantic completeness, so a canonical workflow that
+is simply absent won't be flagged; add a row whenever you add one.
 
 ### Data access
 
@@ -19,6 +21,12 @@ different, unrelated concept.)
 | Read Qlib features in formal research | `qlib_windowed_features(...)` — `src/research_orchestrator/qlib_windowed_features.py` | Call `D.features` directly (AST lint bans it; the wrapper is the only door) |
 | Check if a `$field` is allowed at a stage | `FieldStatusRegistry.resolve_field` / `validate_expression`; `extract_qlib_fields` — `src/data_infra/field_registry.py` | Assume a field is usable; reference a quarantined/pending field in a formal expression |
 | Trading-day / ST ground truth | `data/reference/trade_cal.parquet` / `data/qlib_data/instruments/st_stocks.txt` | Assume business days == trading days; use `stock_st_daily.parquet` alone |
+
+### Provider / backend ops
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Build / refresh / publish / verify the local Qlib provider | `src/data_infra/pipeline/build_qlib_backend.py` (`--stage full\|upstream-only\|provider-only`), `update_daily_data.py`, `verify_database.py`; publish via `StagedQlibBackendBuilder.publish()` — `src/data_infra/pit_backend.py` | Copy/rename `data/qlib_data/` by hand; bypass staged publish or its `BuildGateError` same-volume guard; run a `mode=all` full rebuild without cause |
 
 ### Factors
 
