@@ -202,6 +202,86 @@ def test_report_rc_bins_roundtrip_and_deterministic(tmp_path):
         assert (feat / f"{fn}.day.bin").read_bytes() == (feat2 / f"{fn}.day.bin").read_bytes()
 
 
+def _write_reference_data_long(base: Path) -> None:
+    """6 open days so a 2-open-day lag + next-open stays on-calendar."""
+    ref = base / "reference"
+    ref.mkdir(parents=True, exist_ok=True)
+    days = ["20200101", "20200102", "20200103", "20200106", "20200107", "20200108"]
+    pd.DataFrame([
+        {"exchange": "SSE", "cal_date": d, "is_open": 1, "pretrade_date": days[max(i - 1, 0)]}
+        for i, d in enumerate(days)
+    ]).to_parquet(ref / "trade_cal.parquet", index=False)
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "symbol": "000001", "exchange": "SZSE", "list_date": "19910101"},
+    ]).to_parquet(ref / "stock_basic.parquet", index=False)
+
+
+def test_report_rc_missing_create_time_uses_fixed_open_day_lag(tmp_path):
+    # The decisive PIT canary: a row WITHOUT create_time must NOT be exposed at
+    # next_open(report_date); it gets report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS.
+    data_root = tmp_path / "data"
+    _write_reference_data_long(data_root)
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": None,
+         "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.0},
+    ]).to_parquet(d / "report_rc_2020.parquet", index=False)
+    b = StagedQlibBackendBuilder(
+        data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
+        build_id="lag", allow_exceptions=True,
+    )
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    led["effective_date"] = pd.to_datetime(led["effective_date"])
+    with_ct = led.loc[led["normalized_analyst_id"] == "AAA证券::甲", "effective_date"].iloc[0]
+    without_ct = led.loc[led["normalized_analyst_id"] == "BBB证券::乙", "effective_date"].iloc[0]
+    assert with_ct == pd.Timestamp("2020-01-02")            # next open after report/create
+    assert without_ct != pd.Timestamp("2020-01-02")          # NOT exposed at next_open(report_date)
+    assert without_ct == pd.Timestamp("2020-01-06")          # 0101 +2 open = 0103 -> next open = 0106
+
+
+def test_report_rc_same_effective_date_chronological_order(tmp_path):
+    # Two forecasts by one analyst/quarter both visible 2020-01-02, written in REVERSE
+    # chronological raw order. Must classify by availability (UP), not raw order (DOWN).
+    early = {"ts_code": "000001.SZ", "report_date": "20191231", "create_time": "2020-01-01 09:00:00",
+             "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0}
+    late = {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": "2020-01-01 21:00:00",
+            "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.5}
+    b = _make_builder(tmp_path, [late, early])  # reverse-chronological raw order
+    cal = b.open_calendar()
+    captured: dict = {}
+    b._write_feature_series = lambda fd, fn, arr: captured.setdefault(fd, {}).__setitem__(
+        fn, np.asarray(arr, dtype=float))
+    b._materialize_report_rc_consensus(cal, {"000001_sz": "x"})
+    a = captured["x"]
+    # day index 1 = 2020-01-02: the later forecast (1.0 -> 1.5) is an UP revision
+    assert a["report_rc__eps_up"][1] == 1.0
+    assert a["report_rc__eps_dn"][1] == 0.0
+
+
+def test_report_rc_missing_quarter_excluded(tmp_path):
+    # A non-null-EPS forecast with no target quarter must not feed revision OR n_active.
+    rows = [
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
+         "org_name": "BBB证券", "author_name": "乙", "quarter": None, "eps": 9.0},
+    ]
+    b = _make_builder(tmp_path, rows)
+    cal = b.open_calendar()
+    captured: dict = {}
+    b._write_feature_series = lambda fd, fn, arr: captured.setdefault(fd, {}).__setitem__(
+        fn, np.asarray(arr, dtype=float))
+    b._materialize_report_rc_consensus(cal, {"000001_sz": "x"})
+    nact = captured["x"]["report_rc__n_active_analysts"]
+    # only the valid-quarter analyst counts (== 1 from 2020-01-02 on), not 2
+    assert nact[1] == 1.0
+
+
 def test_normalized_analyst_id_handles_messy_strings():
     org = pd.Series(["AAA证券", "BBB证券", "CCC证券", None])
     author = pd.Series(["甲", "丙,乙", "", "甲"])

@@ -147,6 +147,11 @@ PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
 # report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
 REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
 EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
+# Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
+# rows that LACK create_time, so a vendor-backfilled row dated T is not exposed at
+# next_open(T). Fixed + non-tunable (data-infra constant, no per-window override);
+# reducible later only via a documented vendor-lag audit, never via IC.
+REPORT_RC_VENDOR_LAG_OPEN_DAYS = 2
 
 
 @dataclass(frozen=True)
@@ -699,6 +704,27 @@ def normalized_analyst_id(org: pd.Series, author: pd.Series) -> pd.Series:
         return f"{o_norm}::" + "+".join(tokens)
 
     return pd.Series([_one(o, a) for o, a in zip(org, author)], index=org.index, dtype="object")
+
+
+def add_open_day_lag(dates: pd.Series, open_calendar: pd.DatetimeIndex, n_open_days: int) -> pd.Series:
+    """Shift each date forward by ``n_open_days`` OPEN trading days.
+
+    For date ``x``, returns ``open_calendar[pos + n]`` where ``pos`` is the index of
+    the first open day >= ``x`` (so a non-trading-day input rolls to the next open day
+    first). NaT if the shift runs past the calendar end. Used as the conservative
+    report_rc vendor-availability fallback when ``create_time`` is missing — counted in
+    trading days, NOT ``Timedelta(days=...)``.
+    """
+    clean = pd.to_datetime(dates, errors="coerce")
+    values = open_calendar.values
+    out = []
+    for x in clean.values:
+        if pd.isna(x):
+            out.append(pd.NaT)
+            continue
+        pos = int(np.searchsorted(values, np.datetime64(x, "ns"), side="left")) + int(n_open_days)
+        out.append(open_calendar[pos] if pos < len(open_calendar) else pd.NaT)
+    return pd.Series(out, index=clean.index)
 
 
 def disclosure_dates(df: pd.DataFrame, ann_col: str | None, f_ann_col: str | None) -> pd.Series:
@@ -2148,6 +2174,27 @@ class StagedQlibBackendBuilder:
                 work.get("org_name", pd.Series("", index=work.index)),
                 work.get("author_name", pd.Series("", index=work.index)),
             )
+            # PIT anchor with a vendor-lag fallback (override the generic
+            # disclosure_dates()/effective_date computed above). When create_time is
+            # present: disclosure = max(report_date, create_time). When it is
+            # absent/null: disclosure = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS
+            # open days — the generic report_date-only fallback would expose a
+            # vendor-backfilled row at next_open(report_date), too early.
+            report_dt = normalize_date_series(work["report_date"])
+            create_dt = (
+                normalize_date_series(work["create_time"])
+                if "create_time" in work.columns
+                else pd.Series(pd.NaT, index=work.index)
+            )
+            observed = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
+            missing_create = create_dt.isna()
+            if missing_create.any():
+                observed.loc[missing_create] = add_open_day_lag(
+                    report_dt.loc[missing_create], self.open_calendar(),
+                    REPORT_RC_VENDOR_LAG_OPEN_DAYS,
+                )
+            work["disclosure_date"] = observed
+            work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
             key_columns = [
                 column
                 for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
@@ -2542,10 +2589,29 @@ class StagedQlibBackendBuilder:
         if not fields:
             return []
 
+        # Drop rows without a usable forecast-target quarter from BOTH revision and
+        # active-coverage (a forecast with no target is not a safe same-target input;
+        # otherwise revision's groupby(quarter) would drop them while n_active still
+        # counted them — an inconsistency).
+        if "quarter" in ledger.columns:
+            bad_q = ledger["quarter"].isna() | (ledger["quarter"].astype(str).str.strip() == "")
+            if bad_q.any():
+                logger.warning("report_rc: dropping %d rows with missing/blank quarter", int(bad_q.sum()))
+                ledger = ledger.loc[~bad_q].copy()
+
         # --- revision-direction events: per (code, analyst, quarter) compare each
-        #     forecast to that analyst's PREVIOUS one for the same quarter ---
-        rev = ledger.dropna(subset=["eps"]).sort_values(
-            ["qlib_code", "normalized_analyst_id", "quarter", "effective_date"], kind="stable")
+        #     forecast to that analyst's PREVIOUS one for the same quarter. Sort
+        #     chronologically (effective_date, then disclosure/report/create_time) so
+        #     two forecasts mapping to the SAME effective day are ordered by true
+        #     availability, not raw/ledger order (a stable-sort tie would flip up/dn). ---
+        rev = ledger.dropna(subset=["eps"]).copy()
+        for _c in ("disclosure_date", "report_date", "create_time"):
+            if _c in rev.columns:
+                rev[_c] = normalize_date_series(rev[_c])
+        _sort_cols = [c for c in ("qlib_code", "normalized_analyst_id", "quarter",
+                                  "effective_date", "disclosure_date", "report_date", "create_time")
+                      if c in rev.columns]
+        rev = rev.sort_values(_sort_cols, kind="mergesort")
         prev_eps = rev.groupby(["qlib_code", "normalized_analyst_id", "quarter"], sort=False)["eps"].shift(1)
         delta = rev["eps"] - prev_eps
         rev = rev.assign(
