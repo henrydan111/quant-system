@@ -14,6 +14,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from data_infra.pit_backend import StagedQlibBackendBuilder, normalized_analyst_id  # noqa: E402
+from data_infra.storage.qlib_bin_utils import (  # noqa: E402
+    read_qlib_bin, write_qlib_bin, validate_stock_bins,
+)
+
+RRC_FIELDS = [
+    "report_rc__eps_up", "report_rc__eps_dn",
+    "report_rc__eps_revision_count", "report_rc__n_active_analysts",
+]
 
 
 def _write_reference_data(base: Path) -> None:
@@ -31,6 +39,21 @@ def _write_reference_data(base: Path) -> None:
 
 def _ct(day_evening: str) -> str:
     return f"{day_evening} 21:00:00"
+
+
+def _revision_fixture() -> list:
+    base = dict(ts_code="000001.SZ")
+    return [
+        # analyst A 2024Q4: 1.00 (eff 0102, coverage_init) -> 1.20 (eff 0103, UP)
+        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.00},
+        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.20},
+        # analyst B 2024Q4: 1.00 (init) -> 0.90 (eff 0103, DOWN)
+        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.00},
+        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 0.90},
+        # FUTURE row: report_date 0103 -> effective beyond the 3-day calendar -> NaT
+        # -> must be dropped (no-lookahead canary; the 5.00 revision must not leak).
+        {**base, "report_date": "20200103", "create_time": _ct("2020-01-03"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 5.00},
+    ]
 
 
 def _write_fixture(data_root: Path) -> None:
@@ -106,20 +129,7 @@ def _make_builder(tmp: Path, rows: list) -> StagedQlibBackendBuilder:
 
 
 def test_report_rc_materializer_event_flow_primitives(tmp_path):
-    base = dict(ts_code="000001.SZ")
-    rows = [
-        # analyst A 2024Q4: 1.00 (eff 0102, coverage_init) -> 1.20 (eff 0103, UP)
-        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.00},
-        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.20},
-        # analyst B 2024Q4: 1.00 (init) -> 0.90 (eff 0103, DOWN)
-        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.00},
-        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 0.90},
-        # FUTURE row: report_date 0103 -> effective beyond the 3-day calendar ->
-        # NaT -> must be dropped (no-lookahead canary; a huge 5.00 revision must
-        # NOT leak into earlier days).
-        {**base, "report_date": "20200103", "create_time": _ct("2020-01-03"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 5.00},
-    ]
-    b = _make_builder(tmp_path, rows)
+    b = _make_builder(tmp_path, _revision_fixture())
     calendar = b.open_calendar()  # [2020-01-01, 02, 03]
 
     captured: dict = {}
@@ -131,10 +141,7 @@ def test_report_rc_materializer_event_flow_primitives(tmp_path):
     feat_dir = str(tmp_path / "feat")
     written = b._materialize_report_rc_consensus(calendar, {"000001_sz": feat_dir})
 
-    assert set(written) >= {
-        "report_rc__eps_up", "report_rc__eps_dn",
-        "report_rc__eps_revision_count", "report_rc__n_active_analysts",
-    }
+    assert set(written) >= set(RRC_FIELDS)
     arr = captured[feat_dir]
     nan = -1.0  # sentinel for NaN comparison
 
@@ -144,6 +151,55 @@ def test_report_rc_materializer_event_flow_primitives(tmp_path):
     np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__eps_revision_count"], nan=nan), [nan, 0, 2])
     # n_active: NaN before first coverage (0101), then 2 live analysts on 0102/0103
     np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__n_active_analysts"], nan=nan), [nan, 2, 2])
+
+
+def test_report_rc_in_build_selection(tmp_path):
+    # report_rc must be in the build's selected datasets so materialize_provider's
+    # hook fires (and build_ledger runs); excluded when phase-3 is off.
+    b = StagedQlibBackendBuilder(
+        data_root=str(tmp_path / "d"), qlib_dir=str(tmp_path / "q"),
+        build_id="sel", allow_exceptions=True,
+    )
+    assert "report_rc" in b.selected_datasets()
+    b_no3 = StagedQlibBackendBuilder(
+        data_root=str(tmp_path / "d"), qlib_dir=str(tmp_path / "q"),
+        build_id="sel2", allow_exceptions=True, include_phase3=False,
+    )
+    assert "report_rc" not in b_no3.selected_datasets()
+
+
+def _materialize_to_bins(tmp: Path, feat_dir: Path) -> None:
+    b = _make_builder(tmp, _revision_fixture())
+    calendar = b.open_calendar()
+    feat_dir.mkdir(parents=True, exist_ok=True)
+    # fabricate the reference close.day.bin the materializer aligns to (real builds
+    # write price bins first via _run_dump_bin; here we stand one in).
+    write_qlib_bin(str(feat_dir / "close.day.bin"),
+                   np.arange(len(calendar), dtype=np.float32), start_index=0)
+    b._materialize_report_rc_consensus(calendar, {"000001_sz": str(feat_dir)})
+
+
+def test_report_rc_bins_roundtrip_and_deterministic(tmp_path):
+    feat = tmp_path / "a" / "000001_sz"
+    _materialize_to_bins(tmp_path / "a", feat)
+
+    # bins round-trip through the real Qlib writer/reader
+    si, up = read_qlib_bin(str(feat / "report_rc__eps_up.day.bin"))
+    assert si == 0
+    np.testing.assert_array_equal(np.nan_to_num(up, nan=-1.0), [-1, 0, 1])
+    _, dn = read_qlib_bin(str(feat / "report_rc__eps_dn.day.bin"))
+    np.testing.assert_array_equal(np.nan_to_num(dn, nan=-1.0), [-1, 0, 1])
+    _, nact = read_qlib_bin(str(feat / "report_rc__n_active_analysts.day.bin"))
+    np.testing.assert_array_equal(np.nan_to_num(nact, nan=-1.0), [-1, 2, 2])
+
+    # every report_rc bin aligns to the reference close bin (Qlib-queryable)
+    assert validate_stock_bins(str(feat), RRC_FIELDS) == []
+
+    # deterministic: an independent rebuild produces byte-identical bins
+    feat2 = tmp_path / "b" / "000001_sz"
+    _materialize_to_bins(tmp_path / "b", feat2)
+    for fn in RRC_FIELDS:
+        assert (feat / f"{fn}.day.bin").read_bytes() == (feat2 / f"{fn}.day.bin").read_bytes()
 
 
 def test_normalized_analyst_id_handles_messy_strings():
