@@ -292,6 +292,13 @@ datasets:
     field_prefixes:
       - $cyq_perf__
 
+  # ─── Quarantine: report_rc analyst-forecast event-flow primitives (P1, 2026-06-08) ──
+  report_rc:
+    status: quarantine
+    reason: "Analyst-forecast (report_rc) event-flow primitives, P1 plumbing slice. Materialized by pit_backend._materialize_report_rc_consensus from the report_rc PIT ledger; effective_date = strictly_next_open_trade_day(max(report_date, create_time)) so the vendor update timestamp (create_time, after-hours) captures the real availability lag — EXCEPT when create_time is null/absent, where disclosure_date = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS (=2) OPEN trading days then strictly_next_open, so a vendor-backfilled row dated T is NOT exposed at next_open(T). HELD at quarantine pending: (1) the report_date/create_time backfill canary (PIT-safety), (2) the full provider rebuild + coverage/parity audit, (3) the compliant factor_lifecycle IS screen. Fields: $report_rc__eps_up / $report_rc__eps_dn / $report_rc__eps_revision_count / $report_rc__n_active_analysts. PIT: post-close analyst publication -> predictive factors MUST wrap every field in Ref(...,1)."
+    field_prefixes:
+      - $report_rc__
+
   # ─── Approved: statement line-items (Wave-1 promotion 2026-05-31) ────────────
   # The income / balancesheet / cashflow STATEMENT FAMILIES anchor visibility on
   # max(ann_date, f_ann_date) (CLAUDE.md §3) — distinct from the indicators

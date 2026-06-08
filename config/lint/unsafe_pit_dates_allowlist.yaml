@@ -69,3 +69,19 @@
     script_status: historical_investigation; formal_research_allowed: false.
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
+
+- path: workspace/scripts/diag_sparse_event_review.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Pending-review alpha-endpoint anomaly review (gated-review group 2). Read-only
+    diagnostic that inspects the stk_holdertrade PIT ledger's OWN schema
+    (data/pit_ledger/stk_holdertrade/stk_holdertrade.parquet) — confirming it
+    carries the ann_date/disclosure_date/effective_date anchor trio, its row count,
+    distinct-stock count, effective_date range, and in_de distribution. Auditing the
+    ledger's anchor structure REQUIRES reading it directly — the sanctioned loader
+    returns a PIT-aligned panel, not the raw anchor columns under review, so routing
+    through it would defeat the diagnostic. No mutation; script_status:
+    historical_investigation; formal_research_allowed: false.
+  permanent: true
+  link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md

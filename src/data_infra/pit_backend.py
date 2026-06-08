@@ -84,6 +84,8 @@ PHASE3_DATASETS = {
     "moneyflow", "northbound", "margin", "stk_limit",
     # New alpha endpoints (added 2026-04-14)
     "top_list", "top_inst", "block_trade", "stk_holdertrade", "cyq_perf",
+    # 15000积分 expansion (P1, 2026-06-08): analyst forecasts (report_rc).
+    "report_rc",
 }
 PERIODIC_LEDGER_DATASETS = {
     "income",
@@ -99,6 +101,10 @@ PERIODIC_LEDGER_DATASETS = {
     # rows. Ledger key includes holder_name to avoid collapsing distinct
     # transactions on the same ann_date.
     "stk_holdertrade",
+    # 15000积分 expansion (P1, 2026-06-08): analyst forecasts. event_periodic
+    # with per-(analyst × forecast-quarter) rows; custom build_ledger key branch
+    # (ts_code, report_date, normalized_analyst_id, quarter) avoids collapse.
+    "report_rc",
 }
 EXPECTED_EMPTY_DATE_FILES = {
     "moneyflow": "moneyflow_known_empty_dates.txt",
@@ -138,6 +144,25 @@ CANONICAL_KLINE_FIELDS: frozenset[str] = frozenset({
 })
 HOLDER_NUMBER_UNUSABLE_SUFFIX = "unusable_pit"
 PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
+# report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
+REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
+EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
+# Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
+# rows whose create_time is absent OR a bulk-backfill stamp (see below), so a row
+# dated T is not exposed at next_open(T). Fixed + non-tunable (data-infra constant,
+# no per-window override); reducible later only via a documented vendor-lag audit,
+# never via IC.
+REPORT_RC_VENDOR_LAG_OPEN_DAYS = 2
+# create_time gap (CALENDAR days after report_date) above which a create_time is a
+# vendor BULK-BACKFILL stamp, not a contemporaneous ingestion timestamp, and must be
+# IGNORED for the PIT anchor. Validated 2026-06-08 (REPORT_RC_PIT_ANCHOR_VALIDATION.md):
+# report_date+1 reproduces JoinQuant's genuine-PIT 朝阳永续 consensus market-wide
+# (per-date Spearman mean +0.94, holds for small caps 0.90 + later-delisted 0.93), so
+# report_date IS the faithful publication date and the 2022-05 bulk stamp (gap = years)
+# must not collapse the deep history to 2022-05. Genuine contemporaneous lags are <= a
+# few days (2023+ median 1d); the smallest backfill gap (late-2021 reports stamped
+# 2022-05) is ~120d — 45 cleanly separates the two regimes.
+REPORT_RC_BACKFILL_GAP_DAYS = 45
 
 
 @dataclass(frozen=True)
@@ -500,6 +525,28 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         date_column="trade_date",
         phase=3,
     ),
+    # 15000积分 expansion (P1, 2026-06-08): sell-side analyst forecasts.
+    # event_periodic, multi-row per (ts_code, report_date): one per analyst ×
+    # forecast-quarter. Anchor (custom build_ledger branch, NOT the generic
+    # disclosure_dates() max): for a CONTEMPORANEOUS create_time (gap <=
+    # REPORT_RC_BACKFILL_GAP_DAYS) -> next_open(max(report_date, create_time)); for a
+    # BULK-BACKFILL create_time (gap > threshold, e.g. the 2022-05 stamp on 2010-2021
+    # reports) or a missing create_time -> next_open(report_date +
+    # REPORT_RC_VENDOR_LAG_OPEN_DAYS). report_date+1 was validated PIT market-wide
+    # 2026-06-08 (REPORT_RC_PIT_ANCHOR_VALIDATION.md), so the backfill stamp must not
+    # gate the deep history. duplicate_key_columns is LEFT UNSET so normalize does NOT
+    # collapse rows; the custom build_ledger key branch keys on (ts_code, report_date,
+    # normalized_analyst_id, quarter) to preserve each distinct forecast.
+    "report_rc": DatasetSpec(
+        name="report_rc",
+        raw_pattern="analyst/report_rc/*.parquet",
+        kind="event_periodic",
+        natural_keys=("ts_code", "report_date", "org_name", "author_name", "quarter"),
+        required_columns=("ts_code", "report_date"),
+        ann_date_column="report_date",
+        f_ann_date_column="create_time",
+        phase=3,
+    ),
 }
 
 
@@ -643,6 +690,56 @@ def normalize_date_series(series: pd.Series) -> pd.Series:
     if fallback_mask.any():
         parsed.loc[fallback_mask] = pd.to_datetime(as_text.loc[fallback_mask], errors="coerce")
     return parsed
+
+
+def normalized_analyst_id(org: pd.Series, author: pd.Series) -> pd.Series:
+    """Stable analyst-team identity from messy org/author strings (report_rc P1).
+
+    ``org_norm`` (NFKC, trim, collapse whitespace) + ``"::"`` + sorted author
+    tokens (split on ``/ & , ， 、 ; ；``). Missing author -> ``<org>::UNKNOWN_AUTHOR``.
+    Multi-author rows are one TEAM identity in P1 (per-member mapping is an
+    active-latest refinement, not needed for the event-flow primitives). Used as a
+    ledger-key component so each analyst's forecasts stay distinct rather than
+    collapsing on ``(ts_code, report_date)``.
+    """
+    import re
+    import unicodedata
+
+    def _clean(x: object) -> str:
+        if x is None or (isinstance(x, float) and pd.isna(x)):
+            return ""
+        return unicodedata.normalize("NFKC", str(x)).strip()
+
+    def _one(o: object, a: object) -> str:
+        o_norm = re.sub(r"\s+", " ", _clean(o))
+        a_norm = _clean(a)
+        if not a_norm or a_norm.lower() in {"nan", "none", "<na>"}:
+            return f"{o_norm}::UNKNOWN_AUTHOR"
+        tokens = sorted(t.strip() for t in re.split(r"[/&,，、;；]", a_norm) if t.strip())
+        return f"{o_norm}::" + "+".join(tokens)
+
+    return pd.Series([_one(o, a) for o, a in zip(org, author)], index=org.index, dtype="object")
+
+
+def add_open_day_lag(dates: pd.Series, open_calendar: pd.DatetimeIndex, n_open_days: int) -> pd.Series:
+    """Shift each date forward by ``n_open_days`` OPEN trading days.
+
+    For date ``x``, returns ``open_calendar[pos + n]`` where ``pos`` is the index of
+    the first open day >= ``x`` (so a non-trading-day input rolls to the next open day
+    first). NaT if the shift runs past the calendar end. Used as the conservative
+    report_rc vendor-availability fallback when ``create_time`` is missing — counted in
+    trading days, NOT ``Timedelta(days=...)``.
+    """
+    clean = pd.to_datetime(dates, errors="coerce")
+    values = open_calendar.values
+    out = []
+    for x in clean.values:
+        if pd.isna(x):
+            out.append(pd.NaT)
+            continue
+        pos = int(np.searchsorted(values, np.datetime64(x, "ns"), side="left")) + int(n_open_days)
+        out.append(open_calendar[pos] if pos < len(open_calendar) else pd.NaT)
+    return pd.Series(out, index=clean.index)
 
 
 def disclosure_dates(df: pd.DataFrame, ann_col: str | None, f_ann_col: str | None) -> pd.Series:
@@ -2077,6 +2174,79 @@ class StagedQlibBackendBuilder:
                 for column in ("ts_code", "ann_date", "disclosure_date", "holder_name", "in_de", "change_vol")
                 if column in work.columns
             ]
+        elif dataset_name == "report_rc":
+            # Analyst forecasts: multi-row per (ts_code, report_date) — one per
+            # analyst-team × forecast quarter. Keying on (ts_code, end_date,
+            # disclosure_date) like the generic branch would collapse all analysts
+            # and quarters for a stock-date into ONE row (report_rc has no
+            # end_date) — the same ~99% loss the stk_holdertrade branch prevents.
+            # Key on a stable analyst-team identity + the forecast quarter; exact
+            # duplicate payload rows still merge via collapse_duplicate_versions'
+            # content-hash tie-break (the _src_* tail columns are stripped at
+            # normalize). The effective_date anchor is (re)computed by the custom
+            # resolver below — NOT the generic f_ann_date max() — see the PIT anchor note.
+            work["normalized_analyst_id"] = normalized_analyst_id(
+                work.get("org_name", pd.Series("", index=work.index)),
+                work.get("author_name", pd.Series("", index=work.index)),
+            )
+            # PIT anchor (override the generic disclosure_dates()/effective_date above).
+            # A create_time is trusted ONLY when CONTEMPORANEOUS (within
+            # REPORT_RC_BACKFILL_GAP_DAYS of report_date): disclosure =
+            # max(report_date, create_time). When create_time is a BULK-BACKFILL stamp
+            # (gap > threshold — the 2022-05 stamp on 2010-2021 reports) OR absent:
+            # disclosure = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS open days.
+            # report_date+1 was validated PIT market-wide 2026-06-08
+            # (REPORT_RC_PIT_ANCHOR_VALIDATION.md: per-date Spearman +0.94 vs JoinQuant
+            # genuine-PIT consensus, holding for small caps + later-delisted), so the
+            # backfill stamp must NOT collapse the deep history to 2022-05; a
+            # report_date-only fallback would expose a genuine late-ingested row too
+            # early, which the open-day lag guards against.
+            report_dt = normalize_date_series(work["report_date"])
+            create_dt = (
+                normalize_date_series(work["create_time"])
+                if "create_time" in work.columns
+                else pd.Series(pd.NaT, index=work.index)
+            )
+            # gap in CALENDAR days: normalize both sides so an intraday create_time
+            # (e.g. an after-hours "...21:00:00" stamp) cannot skew the day count — the
+            # threshold is defined in calendar days, not 24h-elapsed days. (No-op while
+            # report_date is midnight-parsed, but makes the "calendar days" intent exact.)
+            gap_days = (create_dt.dt.normalize() - report_dt.dt.normalize()).dt.days
+            contemporaneous = create_dt.notna() & (gap_days >= 0) & (gap_days <= REPORT_RC_BACKFILL_GAP_DAYS)
+            # default (backfill stamp / missing / pre-dated create_time): report_date + lag
+            observed = add_open_day_lag(report_dt, self.open_calendar(), REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+            if contemporaneous.any():
+                # trust the genuine ingestion timestamp: max(report_date, create_time)
+                trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
+                observed.loc[contemporaneous] = trusted.loc[contemporaneous]
+            # Continuous-checkability audit (GPT post-impl review Q1/Q2): the threshold
+            # assumes the 2023+ contemporaneous era has create_time gaps of only a few
+            # days. A clean-era (report_date >= 2023) row with gap > threshold would be
+            # classified backfill and anchored at report_date+lag — EARLIER than its
+            # create_time (a potential early-exposure). Log the split every build and WARN
+            # if the canary count is non-zero, so the empirical assumption is monitored.
+            clean_era_large_gap = int((create_dt.notna() & (report_dt.dt.year >= 2023)
+                                       & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
+            logger.info(
+                "report_rc anchor: %d rows | contemporaneous=%d backfill/missing=%d | "
+                "clean-era(report_date>=2023) gap>%dd=%d",
+                len(work), int(contemporaneous.sum()), int((~contemporaneous).sum()),
+                REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
+            )
+            if clean_era_large_gap:
+                logger.warning(
+                    "report_rc anchor: %d clean-era (report_date>=2023) rows have a create_time gap "
+                    ">%dd and were anchored at report_date+lag (earlier than create_time) — the "
+                    "contemporaneous-era assumption may be violated; review REPORT_RC_BACKFILL_GAP_DAYS",
+                    clean_era_large_gap, REPORT_RC_BACKFILL_GAP_DAYS,
+                )
+            work["disclosure_date"] = observed
+            work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
+            key_columns = [
+                column
+                for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
+                if column in work.columns
+            ]
         else:
             key_columns = [column for column in ("ts_code", "end_date", "disclosure_date") if column in work.columns]
             if "report_type" in work.columns and spec.kind in {"periodic_snapshot", "periodic_cumulative", "periodic_direct_sq"}:
@@ -2413,6 +2583,154 @@ class StagedQlibBackendBuilder:
             frame = symbol_df.set_index("effective_date")[fields].reindex(calendar).astype(np.float32, copy=False)
             for field_name in fields:
                 self._write_feature_series(feature_dir, field_name, frame[field_name].to_numpy(dtype=np.float32))
+                written.append(field_name)
+        return sorted(set(written))
+
+    def _materialize_report_rc_consensus(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """Custom materializer for report_rc analyst forecasts (P1 event-flow subset).
+
+        Reads the PIT ledger and emits per (qlib_code, effective_date):
+          - ``report_rc__eps_up`` / ``__eps_dn``: # analysts who raised / lowered
+            their EPS forecast vs THAT analyst's previous visible forecast for the
+            SAME ``quarter`` (ε-tolerant; the first forecast per analyst×quarter is
+            coverage-init, NOT a revision).
+          - ``report_rc__eps_revision_count``: up + dn (the evidence count).
+          - ``report_rc__n_active_analysts``: # distinct analysts whose latest
+            forecast is "live" (effective within the trailing
+            ``REPORT_RC_ACTIVE_TTL_OPEN_DAYS`` trading days). Carried daily.
+
+        Event bins are NaN on no-event days (sparse, like stk_holdertrade);
+        ``n_active`` is the daily count (0 once all stale, NaN before first
+        coverage). Windowing into a tradable breadth factor happens in the Qlib
+        expression layer, not here. Fields are written DIRECTLY with the
+        ``report_rc__`` namespace (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX).
+        """
+        ledger_path = self.ledger_path("report_rc")
+        if not os.path.exists(ledger_path):
+            return []
+        ledger = pd.read_parquet(ledger_path)
+        if ledger.empty:
+            return []
+        target_codes = set(target_dirs)
+        if target_codes:
+            ledger = ledger[ledger["qlib_code"].isin(target_codes)].copy()
+        if ledger.empty:
+            return []
+        ledger["effective_date"] = normalize_date_series(ledger["effective_date"])
+        ledger = ledger.dropna(subset=["effective_date"]).copy()
+        ledger["eps"] = pd.to_numeric(ledger.get("eps"), errors="coerce")
+        if "normalized_analyst_id" not in ledger.columns:
+            ledger["normalized_analyst_id"] = normalized_analyst_id(
+                ledger.get("org_name", pd.Series("", index=ledger.index)),
+                ledger.get("author_name", pd.Series("", index=ledger.index)),
+            )
+
+        fields = self._apply_field_filter([
+            "report_rc__eps_up", "report_rc__eps_dn",
+            "report_rc__eps_revision_count", "report_rc__n_active_analysts",
+        ])
+        if not fields:
+            return []
+
+        # Fail closed if the target-quarter column is entirely absent (corrupted
+        # feed): the revision groupby depends on it, so emit nothing rather than
+        # KeyError or silently miscount coverage.
+        if "quarter" not in ledger.columns:
+            logger.warning("report_rc: 'quarter' column absent — failing closed (no fields materialized)")
+            return []
+
+        # Drop rows without a usable forecast-target quarter from BOTH revision and
+        # active-coverage (a forecast with no target is not a safe same-target input;
+        # otherwise revision's groupby(quarter) would drop them while n_active still
+        # counted them — an inconsistency).
+        bad_q = ledger["quarter"].isna() | (ledger["quarter"].astype(str).str.strip() == "")
+        if bad_q.any():
+            logger.warning("report_rc: dropping %d rows with missing/blank quarter", int(bad_q.sum()))
+            ledger = ledger.loc[~bad_q].copy()
+
+        # --- revision-direction events: per (code, analyst, quarter) compare each
+        #     forecast to that analyst's PREVIOUS one for the same quarter. Sort
+        #     chronologically (effective_date, then disclosure/report/create_time) so
+        #     two forecasts mapping to the SAME effective day are ordered by true
+        #     availability, not raw/ledger order (a stable-sort tie would flip up/dn). ---
+        rev = ledger.dropna(subset=["eps"]).copy()
+        for _c in ("disclosure_date", "report_date", "create_time"):
+            if _c in rev.columns:
+                rev[_c] = normalize_date_series(rev[_c])
+        _sort_cols = [c for c in ("qlib_code", "normalized_analyst_id", "quarter",
+                                  "effective_date", "disclosure_date", "report_date", "create_time")
+                      if c in rev.columns]
+        rev = rev.sort_values(_sort_cols, kind="mergesort")
+        prev_eps = rev.groupby(["qlib_code", "normalized_analyst_id", "quarter"], sort=False)["eps"].shift(1)
+        delta = rev["eps"] - prev_eps
+        rev = rev.assign(
+            _eps_up=((delta > EPS_REVISION_EPSILON) & prev_eps.notna()).astype(float),
+            _eps_dn=((delta < -EPS_REVISION_EPSILON) & prev_eps.notna()).astype(float),
+        )
+        events = (
+            rev.groupby(["qlib_code", "effective_date"], sort=False)
+            .agg(report_rc__eps_up=("_eps_up", "sum"), report_rc__eps_dn=("_eps_dn", "sum"))
+            .reset_index()
+        )
+        events["report_rc__eps_revision_count"] = events["report_rc__eps_up"] + events["report_rc__eps_dn"]
+        events_by_code = {code: g.set_index("effective_date") for code, g in events.groupby("qlib_code")}
+
+        # --- active-analyst state: per (code, analyst), each forecast keeps the
+        #     analyst "live" for TTL trading days; union intervals, count per day ---
+        cal_pos = {ts: i for i, ts in enumerate(calendar)}
+        n_cal = len(calendar)
+        ttl = REPORT_RC_ACTIVE_TTL_OPEN_DAYS
+        active_by_code: dict[str, list[list[int]]] = {}
+        for (code, _aid), eff in (
+            ledger.dropna(subset=["eps"]).groupby(["qlib_code", "normalized_analyst_id"], sort=False)["effective_date"]
+        ):
+            positions = sorted({cal_pos[t] for t in eff if t in cal_pos})
+            if positions:
+                active_by_code.setdefault(code, []).append(positions)
+
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs), desc="Materialize report_rc",
+            unit="symbol", leave=False,
+        ):
+            ev = events_by_code.get(qlib_code)
+            analyst_pos = active_by_code.get(qlib_code)
+            if ev is None and not analyst_pos:
+                continue
+            arrays: dict[str, np.ndarray] = {
+                "report_rc__eps_up": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__eps_dn": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__eps_revision_count": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__n_active_analysts": np.full(n_cal, np.nan, dtype=np.float32),
+            }
+            if ev is not None:
+                frame = ev.reindex(calendar)
+                for col in ("report_rc__eps_up", "report_rc__eps_dn", "report_rc__eps_revision_count"):
+                    arrays[col] = frame[col].to_numpy(dtype=np.float32)
+            if analyst_pos:
+                diff = np.zeros(n_cal + 1, dtype=np.float64)
+                first_pos = n_cal
+                for positions in analyst_pos:
+                    first_pos = min(first_pos, positions[0])
+                    merged: list[list[int]] = []
+                    for p in positions:
+                        a, b = p, min(p + ttl, n_cal - 1)
+                        if merged and a <= merged[-1][1] + 1:
+                            merged[-1][1] = max(merged[-1][1], b)
+                        else:
+                            merged.append([a, b])
+                    for a, b in merged:
+                        diff[a] += 1.0
+                        diff[b + 1] -= 1.0
+                n_active = np.cumsum(diff[:n_cal]).astype(np.float32)
+                n_active[:first_pos] = np.nan  # NaN before this stock's first coverage
+                arrays["report_rc__n_active_analysts"] = n_active
+            for field_name in fields:
+                self._write_feature_series(feature_dir, field_name, arrays[field_name])
                 written.append(field_name)
         return sorted(set(written))
 
@@ -2827,6 +3145,11 @@ class StagedQlibBackendBuilder:
             # Custom materializer: event stream (no end_date, multi-row per
             # ann_date). Aggregates to per-day net / gross / ratio / count.
             written["stk_holdertrade"] = self._materialize_stk_holdertrade(calendar, target_dirs)
+        if "report_rc" in active_datasets and os.path.exists(self.ledger_path("report_rc")):
+            # Custom materializer: analyst-forecast event stream -> event-flow EPS
+            # revision-direction primitives + active-analyst state (P1 subset).
+            # Writes report_rc__* fields directly (NOT via the event-like prefix map).
+            written["report_rc"] = self._materialize_report_rc_consensus(calendar, target_dirs)
         if "dividends" in active_datasets and os.path.exists(self.ledger_path("dividends")):
             written["dividends"] = self._materialize_dividend_compat(calendar, target_dirs)
         for dataset_name in (

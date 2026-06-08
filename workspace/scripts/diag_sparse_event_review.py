@@ -107,7 +107,7 @@ def review_stk_holdertrade() -> dict:
     out["has_disclosure_anchor"] = bool({"ann_date", "disclosure_date", "effective_date"} <= set(df.columns))
     out["distinct_stocks"] = int(df["ts_code"].nunique()) if "ts_code" in df.columns else None
     if "effective_date" in df.columns:
-        ed = pd.to_datetime(df["effective_date"].astype(str), errors="coerce")
+        ed = pd.to_datetime(df["effective_date"], errors="coerce")
         out["effective_date_range"] = [str(ed.min().date()), str(ed.max().date())]
     if "in_de" in df.columns:
         out["in_de_values"] = df["in_de"].astype(str).value_counts().to_dict()

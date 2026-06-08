@@ -68,10 +68,12 @@ def test_provider_bounds_mask_unlisted_stock():
 def test_field_governance_blocks_quarantined_field_at_formal_stage():
     cal = L._trading_calendar()
     sim = [d.strftime("%Y%m%d") for d in cal if 20180101 <= int(d.strftime("%Y%m%d")) <= 20180201]
-    # $net_mf_amount (moneyflow) is quarantined → blocked at a formal stage,
-    # and the bare 'net_mf_amount' cannot bypass governance by dropping '$'.
+    # $rzche (margin_detail_repayment) is quarantined → blocked at a formal stage,
+    # and the bare 'rzche' cannot bypass governance by dropping '$'. (moneyflow's
+    # net_mf_amount was promoted to approved 2026-06-05, so it is no longer a valid
+    # quarantine probe — use the still-quarantine repayment field.)
     with pytest.raises(FieldApprovalError):
-        load_pit_asof_panel(["net_mf_amount"], sim, instruments=["600519.SH"], stage="formal_validation")
+        load_pit_asof_panel(["rzche"], sim, instruments=["600519.SH"], stage="formal_validation")
 
 
 @_needs_ref
@@ -89,8 +91,10 @@ def test_loader_rejects_unknown_field_even_at_sandbox():
 def test_loader_rejects_quarantine_field_at_sandbox():
     cal = L._trading_calendar()
     sim = [d.strftime("%Y%m%d") for d in cal if 20180101 <= int(d.strftime("%Y%m%d")) <= 20180201]
+    # $rzche (margin_detail_repayment) is still quarantined (net_mf_amount was
+    # promoted to approved 2026-06-05) → fail closed even at the sandbox stage.
     with pytest.raises(FieldApprovalError):
-        load_pit_asof_panel(["net_mf_amount"], sim, instruments=["600519.SH"])
+        load_pit_asof_panel(["rzche"], sim, instruments=["600519.SH"])
 
 
 @_needs_ledger
