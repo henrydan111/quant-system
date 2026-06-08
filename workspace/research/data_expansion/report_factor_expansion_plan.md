@@ -1,113 +1,134 @@
-# Report-Factor Expansion Plan (`report_rc` → factors, the COMPLIANT way)
+# Report-Factor Expansion Plan v2 (`report_rc` → factors, the COMPLIANT way)
 
-*2026-06-08. This plan REDOES the report_rc factor work through the sanctioned backend, replacing the
-quarantined hand-rolled sandbox pilot. Per CLAUDE.md §3.2 / src/system.md §0: a new dataset becomes a
-factor ONLY after `pit_backend` materializes it into the PIT ledger + Qlib provider and `field_status.yaml`
-registers it; factors are then Qlib expressions computed via `compute_factors` — never hand-rolled from
-raw `data/` parquet.*
+*2026-06-08. v2 = v1 + the GPT 5.5 Pro design cross-review, **every repo-specific trap verified against
+the live code** (line cites below). Verdict adopted: **GO-with-conditions for a no-alpha plumbing slice;
+NO-GO for full rebuild / screen / promotion** until the semantics + wiring + canaries below are resolved.
+This plan REDOES the quarantined hand-rolled pilot through the sanctioned backend (CLAUDE.md §3.2 /
+src/system.md §0): a new dataset becomes a factor ONLY after `pit_backend` materializes it into the PIT
+ledger + Qlib provider and `field_status.yaml` registers it; factors are `Ref(...)`-guarded Qlib
+expressions via `compute_factors` — never hand-rolled from raw parquet.*
 
-## 0. Status of the prior (tainted) work
-The sandbox pilot found `eps_diffusion` (analyst EPS-revision breadth) looked strong + tradeable. That
-result is **a HYPOTHESIS, not a finding** — it was produced by a non-compliant path (raw reads +
-hand-rolled PIT + no provider-bounds masking). This plan re-derives it through the backend, where it
-becomes trustworthy. Do not cite the sandbox numbers as evidence.
+## 0. The prior (tainted) pilot does NOT inform go/no-go
+`eps_diffusion` "strong + tradeable" was produced by a non-compliant raw-read + hand-rolled-PIT path with
+no provider-bounds masking → **untrusted hypothesis, schema/method reference only.** It must be
+re-derived through the compliant pipeline (Phase 5) before any claim stands.
 
-## 1. Goal & scope
-Turn `report_rc` (sell-side analyst forecasts, RAW at `data/analyst/report_rc/`, 2.87M rows 2010-2026)
-into a small set of PIT-correct, registry-governed **Qlib factor fields** (`$report_rc__*`) and screen
-them through the factor lifecycle. Scope is `report_rc` only; the same six-step pattern extends to the
-other Bucket A fundamentals/events (express, fina_mainbz, repurchase, pledge_stat, top10_floatholders,
-fina_audit, disclosure_date) as follow-on expansions, NOT covered here.
-
-## 2. Architecture mapping (where each piece slots in — verified anchors)
-| Step | Mechanism (existing precedent) | File |
+## 1. GPT review — verified repo traps (these break a naive build)
+| # | Trap (GPT) | Verified in code |
 |---|---|---|
-| Dataset contract | `DatasetSpec(kind="event_ledger", ann_date_column="report_date")` | `pit_backend.py` `DATASET_SPECS` (≈L240/L485 `stk_holdertrade`) |
-| PIT ledger | normalize → `data/pit_ledger/report_rc/` with `effective_date = strictly_next_open_trade_day(report_date)` | `pit_backend.py` ledger builder + `strictly_next_open_trade_day` (L659) |
-| Daily materialization | custom `_materialize_report_rc_consensus` → `$report_rc__*` bins (windowed rolling consensus) | precedent `_materialize_stk_holdertrade` (L2340) |
-| Namespace protection | add `report_rc` to `EVENT_LIKE_DAILY_FIELD_PREFIX` (→ `report_rc__`) | `pit_backend.py` L122 |
-| Field governance | register `$report_rc__*` in `field_status.yaml` (quarantine→approve) | `config/field_registry/` |
-| Factor definitions | Qlib exprs `Ref($report_rc__eps_diffusion, 1)` in the catalog | `factor_library/catalog.py` + `operators.py` |
-| IS screen | `factor_lifecycle` profile (draft→candidate) | `research_orchestrator` |
-| OOS / ML | sealed-OOS (candidate→approved) OR ML features via `compute_factors`/`pit_research_loader` | — |
+| T1 | A `DatasetSpec` is NOT enough — ledgers build only for configured sets | `build_ledgers` gates on `PERIODIC_LEDGER_DATASETS` (pit_backend.py L2105); `stk_holdertrade` ∈ `PHASE3_DATASETS` L86 + `PERIODIC_LEDGER_DATASETS` L101 → **report_rc must be added to BOTH** |
+| T2 | Do NOT reuse `EVENT_LIKE_DAILY_FIELD_PREFIX` | `test_prefix_keys_match_event_like_dataset_set` + `test_every_event_like_dataset_has_a_prefix_entry` force prefix-map keys == `EVENT_LIKE_DAILY_DATASETS` → adding report_rc there would route it through the generic daily-fact path. **Custom materializer writes `report_rc__*` names directly** (как `_materialize_stk_holdertrade`); register the `$report_rc__` prefix in `field_status.yaml`. |
+| T3 | Mirror the explicit hook, not just the style | `materialize_provider` hard-codes `self._materialize_stk_holdertrade(...)` (L2829) → add an explicit `written["report_rc"] = self._materialize_report_rc_consensus(...)` hook |
+| T4 | `Count(cond,N)` is broken in this repo | use `Sum(If(cond,1,0),N)`, never `Count(...)` (matches the prior production `operators.py` fix) |
 
-## 3. The hard part — the consensus materializer (key design)
-Unlike `stk_holdertrade` (aggregate events to their own `effective_date`, NaN between), a report_rc
-consensus is a **windowed, forward-evolving cross-analyst aggregate**: on each trading day T, the
-consensus is computed from all forecasts visible (`effective_date ≤ T`) within a trailing window, one
-vote per analyst (latest), with age-expiry. Design decisions to freeze BEFORE coding:
+## 2. Architecture mapping (corrected)
+| Step | Mechanism | File / anchor |
+|---|---|---|
+| Dataset contract | `DatasetSpec(kind="event_periodic", ann_date_column="report_date")` **+ add `report_rc` to `PHASE3_DATASETS` and `PERIODIC_LEDGER_DATASETS`** | `pit_backend.py` L82/L88/L240 |
+| PIT ledger | `data/pit_ledger/report_rc/` keyed `(ts_code, normalized_analyst_id, target_fy, report_date)`, with `effective_date` (§4) | ledger builder + `strictly_next_open_trade_day` L659 |
+| Daily materialization | custom `_materialize_report_rc_consensus` writing `report_rc__*` PRIMITIVE bins directly; **explicit hook in `materialize_provider`** | precedent `_materialize_stk_holdertrade` L2340 / hook L2829 |
+| Namespace | written directly by the materializer; register `$report_rc__` prefix in registry (NOT via `EVENT_LIKE_DAILY_FIELD_PREFIX`) | `config/field_registry/field_status.yaml` |
+| Factor defs | Qlib exprs over primitives, `Ref(...,1)`-guarded, `Sum(If(...))` not `Count` | `factor_library/catalog.py`+`operators.py` |
+| IS screen / OOS | `factor_lifecycle` (draft→candidate) → single sealed-OOS | `research_orchestrator` |
 
-1. **Efficient rolling computation (NOT per-day recompute).** Event-driven per-stock state: on each
-   forecast's `effective_date` insert/replace that analyst's vote; expire votes older than `AGE_DAYS`;
-   emit the consensus on every calendar day the state is non-empty. O(events + days·stocks_active), not
-   O(days × forecasts). Must be deterministic (P0-4 `_src_file`/`_src_ordinal` tie-break discipline).
-2. **FY1 target rule** for the EPS-level/revision features: the consensus EPS refers to the nearest
-   not-yet-reported annual period (`quarter == "{YYYY}Q4"` for the current fiscal year as-of T). Freeze
-   the exact rule (handle the Q4-already-reported roll-forward) — it must be PIT-correct.
-3. **Revision/diffusion semantics**: per-analyst direction = latest vs prior forecast within the window
-   (the breadth/diffusion form, which the pilot suggested >> magnitude). Diffusion is discrete with a
-   large zero-mass → factors built on it must be `cs_rank`/sign-based downstream, not quantile-sorted.
-4. **PIT anchor**: `effective_date = strictly_next_open_trade_day(report_date)` (strictly later). Every
-   factor wraps the field in `Ref(...,1)` (factor-library PIT-safety lint). Provider bounds (delist/
-   IPO-lag) inherited because the materializer writes per `target_dirs` (the instruments-sidecar guard).
-5. **report_date PIT-safety**: the backfill canary (2026-06-15) verifies `report_date` isn't backfilled;
-   approval to `field_status` waits on its verdict (parallel track — does not block design/Phases 1-2).
+## 3. The materializer — A2′ (atomic primitives; Qlib does the windowing)
+**Decision (GPT-adjudicated): A2′, not A1, and the field is EVENT-FLOW revision breadth, not
+"active-latest consensus".** A windowed cross-analyst aggregate needs per-analyst stateful logic Qlib
+can't express; but we minimize that to per-event primitives and push windowing to Qlib operators. The
+honest claim — per GPT — is **event-flow EPS-revision breadth**, NOT one-vote-per-analyst consensus
+(which would require backend state/cancellation primitives; deferred, or A1-only, as a later refinement).
 
-## 4. Candidate field set (materialize as `$report_rc__*`; the SCREEN picks winners)
-Materialize a small, economically-motivated set; let the compliant factor_lifecycle decide — do NOT
-pre-select from the tainted pilot:
-- `eps_diffusion` — net % of analysts raising FY1 EPS (revision breadth) ← lead hypothesis
-- `eps_revision` — consensus FY1 EPS Δ over the window (magnitude)
-- `rating_revision` — consensus rating-score Δ
-- `eps_dispersion` — cross-analyst FY1 EPS std / |mean| (disagreement)
-- `n_analysts` — coverage count (KNOWN size-proxy → expect it to fail the marginal-IC gate; keep as a control)
-- `eps_fy1` — consensus FY1 EPS level (likely a price-level artifact; keep for the screen to reject)
+**Why the v1 A2 formula was wrong (GPT, accepted):** `Sum($active,W)` is analyst-days not coverage
+(invalid denominator); `Sum($up,W)` counts events and does NOT dedupe "latest per analyst within W".
 
-Defer `tp`-based target-implied return — the raw `tp` field is unit-corrupted (e.g. 9600 targets) and
-needs a cleaning pass first. Drop `rating_diffusion` / rec-change (2% coverage — A-share analysts don't
-change ratings; dead in the data).
+**Materializer emits per `(qlib_code, effective_date)` (NaN on no-event days, never zero-filled):**
+```
+report_rc__eps_up, report_rc__eps_dn, report_rc__eps_same   # per-analyst revision direction events
+report_rc__eps_revision_count                               # # of directional revisions that day
+report_rc__eps_revision_sum, report_rc__eps_revision_mean   # magnitude (Δ vs that analyst's prior)
+report_rc__eps_fy1_mean, report_rc__eps_fy1_dispersion      # level + cross-analyst std/|mean|
+report_rc__n_active_analysts                                # state: # analysts with a live FY1 view
+report_rc__coverage_init, report_rc__coverage_change        # first-coverage / Δcoverage events
+report_rc__days_since_last_forecast, report_rc__mean_forecast_age_days
+```
+**Per-analyst revision state machine (the stateful part the materializer owns):** for each
+`(qlib_code, normalized_analyst_id, target_fy)`, compare a forecast ONLY to that analyst's previous
+forecast already visible by `effective_date`. Deterministic ordering key:
+`qlib_code, normalized_analyst_id, target_fy, effective_date, report_date, _src_file, _src_ordinal`
+(reuse the P0-4 tie-break). **The first forecast for a new analyst / new `target_fy` is `coverage_init`,
+NOT an up/down revision.** Same-day duplicates resolved deterministically before classification.
 
-## 5. Phases, deliverables, gates
-- **Phase 0 — Pre-register + design cross-review.** Write the hypothesis (`hypothesis_cli.py register`)
-  + freeze the §3 design decisions + the §4 field definitions. GPT cross-review the materializer design
-  (esp. the rolling-state correctness + FY1 rule + diffusion semantics) BEFORE coding. *Gate: design GO.*
-- **Phase 1 — Dataset spec + PIT ledger.** Add the `report_rc` `DatasetSpec`; build
-  `data/pit_ledger/report_rc/`. *Tests:* PIT invariant (`effective_date > report_date` for all rows),
-  coverage vs raw, deterministic rebuild (SHA-256 stable). *Gate:* ledger parity.
-- **Phase 2 — Consensus materializer.** Implement `_materialize_report_rc_consensus` + add to
-  `EVENT_LIKE_DAILY_FIELD_PREFIX`. *Tests:* (a) PIT-safety — `factor[T] ⊥ report[T+1]` (behavioral, like
-  `test_operator_behavioral_pit`); (b) **independent-recompute parity** — a from-scratch pandas
-  reimplementation off the ledger matches `D.features` cell-by-cell (the method GPT validated for the
-  Wave-1 statement promotion); (c) namespace protection (`test_event_like_daily_namespace`); (d) a
-  synthetic-lookahead canary. *Gate:* all PIT + parity tests green.
-- **Phase 3 — Provider build + registry.** Staged provider rebuild (`build_qlib_backend.py
-  --stage provider-only` on a basket first, then full) → `$report_rc__*` bins exist; register in
-  `field_status.yaml` as **quarantine**; run coverage + live-provider parity audit; write approval
-  evidence (provider-build + calendar-policy bound); promote quarantine→approved **only after** the
-  06-15 canary + user approval (§13). *Gate:* field-registry tests + approval-evidence binding green.
-- **Phase 4 — Catalog factors.** Add `Ref($report_rc__<field>, 1)` (+ any smoothed/Δ variants) to
-  `catalog.py`; update the catalog count docs. *Tests:* `test_factor_library_pit_safety`,
-  `test_operator_expressions`. *Gate:* lints green.
-- **Phase 5 — Compliant IS screen (REPLACES the tainted pilot).** Run the new factors through the
-  `factor_lifecycle` IS gate (IS 2014-2020, the sanctioned `compute_factors`→`qlib_windowed_features`
-  door) → IC / ICIR / LS-Sharpe / quantile / decay / turnover the proper way; promote draft→candidate
-  for those that clear the bar (marginal/orthogonalized IC, per [[reference_factor_selection_marginal_not_icir]]).
-  *This is where `eps_diffusion` is either confirmed or falsified — trustworthy this time.*
-- **Phase 6 — OOS or ML.** Candidate→approved via a single sealed-OOS shot vs CSI500; OR, for the ML
-  direction, the now-compliant `$report_rc__*` provider fields are read as ML features via
-  `compute_factors` (qlib) into a feature store built the sanctioned way (no raw reads).
+**The factor (Qlib expression, event-flow breadth, `Ref`-guarded, `Sum(If(...))` not `Count`):**
+```
+eps_rev_breadth_W = Ref(
+  (Sum($report_rc__eps_up, W) - Sum($report_rc__eps_dn, W))
+  / Max(Sum($report_rc__eps_revision_count, W), MIN_N),
+  1)
+```
+`W ∈ {20,60,120}` becomes a factor hyperparameter (no re-materialize). `n_active_analysts` is carried as
+STATE by the materializer (not inferred from sparse event sums). Discrete-ratio factors require a
+minimum-evidence gate (`Sum(revision_count,W) >= 3` and/or `n_active_analysts >= 2`).
 
-## 6. Risks / open questions
-1. **The rolling-consensus materializer is novel + the main risk** (correctness, determinism,
-   performance over daily × full history). Mitigation: independent-recompute parity test + a small-basket
-   build first. *Hardest item — design-review it heavily in Phase 0.*
-2. **`report_date` PIT-safety** unproven until the canary (06-15). Design/build proceed; formal approval waits.
-3. **FY1 target-selection rule** has reporting-calendar edge cases (Q4 roll-forward) — freeze precisely.
-4. **Provider rebuild cost** (Phase 3) — a §13 risky action; basket-first, confirm before full.
-5. **Expectation**: the pilot hint is provisional; the compliant screen may yield a WEAKER (or null)
-   result once provider-bounds masking removes survivorship inflation. Treat a null as a valid outcome.
+## 4. FY1 target = first-visible annual ACTUAL (no future leakage)
+For stock S, day T: `target_fy` = the nearest annual fiscal year whose **annual actual has not yet
+become visible by T**, where visibility = the first `effective_date` the annual-actual row appears in
+the **sanctioned PIT statement ledgers** (income/indicators), NOT eventual data availability. Roll FY1
+forward on that first-visible date. **Never classify a `YYYYQ4`→`(YYYY+1)Q4` change as an EPS revision —
+that is a target change** (emit `coverage_change`/target-init, not up/down).
 
-## 7. Smallest first slice (if approved to start)
-Phase 0 (pre-register + design) → Phase 1 (ledger) → Phase 2 (materializer + parity tests) on a small
-symbol basket, WITHOUT a full provider rebuild — enough to prove the field materializes PIT-correctly and
-matches an independent recompute. Then decide on the full rebuild + screen.
+## 5. PIT anchor = max(next-open, vendor-lag) — quarantine until canary
+`effective_date = max( strictly_next_open_trade_day(report_date), vendor_observed_effective_date )`.
+`Ref(...,1)` does NOT fix vendor backfill lag (if a row dated T was only obtainable at T+K, the provider
+is already too early). If row-level ingestion time is unavailable, use a **predeclared conservative lag**
+and keep the field **quarantined** until the backfill canary (the standing 2026-06-15 reading) proves no
+material lag. Registry fails closed on quarantine — exactly the desired gate.
+
+## 6. Test/parity strategy — 3 layers + negative canaries (NOT just parity)
+Parity alone proves implementation math, not PIT correctness. Required:
+1. **Primitive-bin parity** — ledger rows → independent pandas primitives vs provider `$report_rc__*`.
+2. **Expression parity** — provider primitives → pandas rolling expr vs the Qlib factor (via
+   `qlib_windowed_features`, never raw files).
+3. **Negative PIT canaries** (the decisive layer) — inject a future report with a huge EPS revision, a
+   same-day-anchor row, duplicate same-day reports, a fiscal-year roll, and a vendor-backfill row; assert
+   **none change any feature dated before its `effective_date`.** Adversarial fixture: 3-analyst case
+   (one revises twice in W, one once, one stale) forcing the event-flow-vs-active-latest declaration.
+
+## 7. Pre-registered kill rule (Risk-1) — before any compliant screen
+Write a `report_rc` research manifest (hypotheses, windows {20,60,120}, denominators, neutralizations,
+thresholds, allowed negative controls) BEFORE screening; reject any result using fields/windows not in
+it. Pass bar (lifecycle floor + anti-mining): `|rank_icir| ≥ 0.10` IS, yearly sign-consistency ≥ 0.70,
+**survives industry/size/coverage neutralization**, not concentrated in one year/sector, min
+coverage/revision-count gate met, **no post-hoc targetprice/rating substitution if EPS fails.** Kill
+rule: if the lead EPS-revision-breadth family fails, promote NOTHING beyond quarantine/candidate unless a
+NEW hypothesis is registered before testing. A null is a valid result (the primitives may still serve as
+ML inputs / negative controls).
+
+## 8. Candidate fields — small pre-registered family; defer the rest
+Materialize the §3 primitive family. **Defer/quarantine:** `targetprice_*` (unit/scale contamination —
+the `tp` field has 9600-type garbage); `rating_diffusion` (2% coverage, dead — negative control only);
+analyst/org quality scores (circularity unless frozen ex-ante). Sparse fields stay NaN on no-event days;
+factors decide no-event→0 via `Sum(If(IsNull,0,...))`.
+
+## 9. Phases & gates (tightened)
+- **P0 — pre-register + (this) design review DONE.** Freeze: event-flow semantics, the §3 primitives,
+  FY1 first-visible rule, the anchor, the kill manifest. *Gate: design GO ✓ (with conditions).*
+- **P1 — no-alpha PLUMBING slice (first PR).** 1-2 tickers, 1-2 years, quarantined `report_rc__eps_up/
+  dn/revision_count/n_active_analysts` only, NO screen. Wire: `DatasetSpec` + add to `PHASE3_DATASETS`
+  + `PERIODIC_LEDGER_DATASETS`; build `pit_ledger/report_rc/`; `_materialize_report_rc_consensus` + the
+  explicit `materialize_provider` hook; register `$report_rc__` quarantine. **Acceptance = deterministic
+  rebuild + the §6 PIT canaries + provider parity — NOT IC.**
+- **P2 — full primitive family + parity/canary suite green on a small basket.** *Gate: all §6 tests.*
+- **P3 — full provider rebuild (§13 risky — basket-first, confirm)** + coverage/parity audit + (canary
+  permitting) quarantine→approved.
+- **P4 — catalog factors** (`eps_rev_breadth_{20,60,120}`, `Ref`-guarded, `Sum(If)`); PIT-safety lint.
+- **P5 — compliant `factor_lifecycle` IS screen** against the §7 manifest (REPLACES the tainted pilot —
+  confirms or kills `eps_rev_breadth`). → draft→candidate by marginal/orthogonal IC.
+- **P6 — sealed OOS (candidate→approved) OR ML features** read compliantly via `compute_factors`.
+
+## 10. Open items still needing a call
+1. **Event-flow vs active-latest** — v2 commits to event-flow (honest, valid Qlib math). Active-latest
+   (true one-vote consensus) is a later refinement needing backend state/cancellation primitives or A1.
+2. **Vendor ingestion-time** — does the raw `report_rc` carry an obtainable-at timestamp? If not, the
+   conservative-lag + canary path is mandatory before promotion.
+3. **`normalized_analyst_id`** — author/org strings are messy (multi-author rows, name variants); the
+   per-analyst state machine needs a stable identity normalization — a sub-task to scope in P1.
