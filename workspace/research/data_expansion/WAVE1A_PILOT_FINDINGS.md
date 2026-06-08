@@ -9,6 +9,30 @@
 > aggregator → register → `compute_factors` Qlib expr → factor_lifecycle → sealed OOS) before any are
 > accepted. Same failure mode as the val_heavy lookahead. Retained for method reference only.
 
+> # ✅ UPDATE (2026-06-08): the VENDOR-BACKFILL ground below is REFUTED — `report_date+1` is VALIDATED PIT
+> The "vendor-backfill lookahead" invalidation below was based on `create_time`=2022-05. That is an
+> *ingestion* stamp, not proof `report_date` is unreliable. Anchoring at `report_date+1`
+> (=`strictly_next_open_trade_day`) reconstructs the genuine PIT consensus the independent JoinQuant 朝阳永续
+> oracle saw: forecast-LEVEL corr **+0.997** (Test A′), forecast-ERROR parity reproduces the cyclical regime
+> sign-flips at full magnitude with Tushare *less* accurate than the oracle (no lookahead; Test B′). So the
+> pre-2022-05 deep history IS PIT-usable at report_date+1. **BUT these specific WAVE1A numbers stay INVALID on
+> the OTHER ground — they used a non-compliant hand-rolled PIT path** (top banner) and must be reproduced
+> through the sanctioned backend before they are trusted. Verdict: data-is-non-PIT ground REFUTED;
+> method-non-compliant ground STANDS. See `REPORT_RC_PIT_ANCHOR_VALIDATION.md`.
+
+> # ⚠⚠ (data-non-PIT ground now REFUTED — see green note above) INVALIDATED BY VENDOR-BACKFILL LOOKAHEAD (2026-06-08, P3 finding) ⚠⚠
+> The P3 compliant build (with the `create_time` PIT anchor) proved that **Tushare bulk-backfilled ALL
+> historical `report_rc` on ~2022-05-03**: 100% of forecasts dated 2010-2021 carry
+> `create_time = 2022-05-02/03` (**0% contemporaneous**); only 2023+ is genuinely point-in-time (2022 =
+> 72% transition). Therefore `report_rc` is **PIT-usable only from ~2022-05 onward** — the "2010+ deep
+> history" was never available via Tushare before May 2022. **Consequences:** (1) the IS-2014-2020 screen
+> below is IMPOSSIBLE PIT-correctly; (2) **every numeric result in this document is a vendor-backfill
+> LOOKAHEAD artifact** (the v1/v2/tradability runs all anchored on `report_date` over backfilled
+> 2014-2020 data) — do NOT cite `eps_diffusion` +0.64 / +5.5%/yr etc. The compliant `create_time` anchor
+> (CLAUDE.md §3.2 backend path) is what caught this; the hand-rolled raw-read pilot hid it. report_rc now
+> belongs with the recent-only feeds (limit_list_d / moneyflow_dc / hm_detail) — usable for a 2023+
+> forward study only, NOT a 2014-2020 IS screen. Kept for method reference only.
+
 # Wave-1A pilot — `report_rc` analyst-consensus incremental-IC result
 
 *2026-06-08. Sandbox, IS 2014-2020 ONLY (OOS 2021-2026 untouched). The audit-first gate (GPT

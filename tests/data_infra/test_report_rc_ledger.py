@@ -3,8 +3,9 @@
 The decisive guardrail: build_ledger must NOT collapse the many analyst×quarter
 rows that share a (ts_code, report_date) into one row (the generic
 `(ts_code, end_date, disclosure_date)` key would — report_rc has no end_date).
-Also pins: exact-duplicate merge, the create_time vendor-lag anchor, and the
-analyst-id normalization. No alpha / no screen — plumbing acceptance only.
+Also pins: exact-duplicate merge, the create_time anchor (contemporaneous honored /
+bulk-backfill stamp ignored -> report_date+lag), and the analyst-id normalization.
+No alpha / no screen — plumbing acceptance only.
 """
 from pathlib import Path
 import sys
@@ -242,6 +243,39 @@ def test_report_rc_missing_create_time_uses_fixed_open_day_lag(tmp_path):
     assert with_ct == pd.Timestamp("2020-01-02")            # next open after report/create
     assert without_ct != pd.Timestamp("2020-01-02")          # NOT exposed at next_open(report_date)
     assert without_ct == pd.Timestamp("2020-01-06")          # 0101 +2 open = 0103 -> next open = 0106
+
+
+def test_report_rc_backfill_create_time_ignored_anchors_on_report_date(tmp_path):
+    # The deep-history reclamation canary (validated 2026-06-08): a create_time that is
+    # a vendor BULK-BACKFILL stamp (gap > REPORT_RC_BACKFILL_GAP_DAYS, e.g. the 2022-05
+    # stamp on a 2020 report) must be IGNORED — the row anchors at report_date + lag,
+    # NOT collapsed to next_open(2022-05-xx). Two analysts, same report_date: one with a
+    # contemporaneous create_time, one with a backfill stamp -> identical effective date.
+    data_root = tmp_path / "data"
+    _write_reference_data_long(data_root)
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": "2022-05-03 08:00:00",
+         "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.0},
+    ]).to_parquet(d / "report_rc_2020.parquet", index=False)
+    b = StagedQlibBackendBuilder(
+        data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
+        build_id="backfill", allow_exceptions=True,
+    )
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    led["effective_date"] = pd.to_datetime(led["effective_date"])
+    contemporaneous = led.loc[led["normalized_analyst_id"] == "AAA证券::甲", "effective_date"].iloc[0]
+    backfilled = led.loc[led["normalized_analyst_id"] == "BBB证券::乙", "effective_date"].iloc[0]
+    assert contemporaneous == pd.Timestamp("2020-01-02")     # contemporaneous create_time honored
+    # backfill stamp ignored -> report_date + 2 open days (0103) -> next open = 0106,
+    # NOT 2022-05 (which would be off this 6-day test calendar and drop the row entirely)
+    assert backfilled == pd.Timestamp("2020-01-06")
+    assert pd.notna(backfilled), "backfilled row must survive (deep history reclaimed), not drop to NaT"
 
 
 def test_report_rc_same_effective_date_chronological_order(tmp_path):

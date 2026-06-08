@@ -148,10 +148,21 @@ PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
 REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
 EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
 # Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
-# rows that LACK create_time, so a vendor-backfilled row dated T is not exposed at
-# next_open(T). Fixed + non-tunable (data-infra constant, no per-window override);
-# reducible later only via a documented vendor-lag audit, never via IC.
+# rows whose create_time is absent OR a bulk-backfill stamp (see below), so a row
+# dated T is not exposed at next_open(T). Fixed + non-tunable (data-infra constant,
+# no per-window override); reducible later only via a documented vendor-lag audit,
+# never via IC.
 REPORT_RC_VENDOR_LAG_OPEN_DAYS = 2
+# create_time gap (CALENDAR days after report_date) above which a create_time is a
+# vendor BULK-BACKFILL stamp, not a contemporaneous ingestion timestamp, and must be
+# IGNORED for the PIT anchor. Validated 2026-06-08 (REPORT_RC_PIT_ANCHOR_VALIDATION.md):
+# report_date+1 reproduces JoinQuant's genuine-PIT 朝阳永续 consensus market-wide
+# (per-date Spearman mean +0.94, holds for small caps 0.90 + later-delisted 0.93), so
+# report_date IS the faithful publication date and the 2022-05 bulk stamp (gap = years)
+# must not collapse the deep history to 2022-05. Genuine contemporaneous lags are <= a
+# few days (2023+ median 1d); the smallest backfill gap (late-2021 reports stamped
+# 2022-05) is ~120d — 45 cleanly separates the two regimes.
+REPORT_RC_BACKFILL_GAP_DAYS = 45
 
 
 @dataclass(frozen=True)
@@ -516,11 +527,15 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
     ),
     # 15000积分 expansion (P1, 2026-06-08): sell-side analyst forecasts.
     # event_periodic, multi-row per (ts_code, report_date): one per analyst ×
-    # forecast-quarter. Anchor = next_open(max(report_date, create_time)) — the
-    # create_time (vendor update timestamp, after-hours) is the f_ann_date so the
-    # generic disclosure_dates() max() captures the real availability lag.
-    # duplicate_key_columns is LEFT UNSET so normalize does NOT collapse rows; the
-    # custom build_ledger key branch keys on (ts_code, report_date,
+    # forecast-quarter. Anchor (custom build_ledger branch, NOT the generic
+    # disclosure_dates() max): for a CONTEMPORANEOUS create_time (gap <=
+    # REPORT_RC_BACKFILL_GAP_DAYS) -> next_open(max(report_date, create_time)); for a
+    # BULK-BACKFILL create_time (gap > threshold, e.g. the 2022-05 stamp on 2010-2021
+    # reports) or a missing create_time -> next_open(report_date +
+    # REPORT_RC_VENDOR_LAG_OPEN_DAYS). report_date+1 was validated PIT market-wide
+    # 2026-06-08 (REPORT_RC_PIT_ANCHOR_VALIDATION.md), so the backfill stamp must not
+    # gate the deep history. duplicate_key_columns is LEFT UNSET so normalize does NOT
+    # collapse rows; the custom build_ledger key branch keys on (ts_code, report_date,
     # normalized_analyst_id, quarter) to preserve each distinct forecast.
     "report_rc": DatasetSpec(
         name="report_rc",
@@ -2174,25 +2189,32 @@ class StagedQlibBackendBuilder:
                 work.get("org_name", pd.Series("", index=work.index)),
                 work.get("author_name", pd.Series("", index=work.index)),
             )
-            # PIT anchor with a vendor-lag fallback (override the generic
-            # disclosure_dates()/effective_date computed above). When create_time is
-            # present: disclosure = max(report_date, create_time). When it is
-            # absent/null: disclosure = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS
-            # open days — the generic report_date-only fallback would expose a
-            # vendor-backfilled row at next_open(report_date), too early.
+            # PIT anchor (override the generic disclosure_dates()/effective_date above).
+            # A create_time is trusted ONLY when CONTEMPORANEOUS (within
+            # REPORT_RC_BACKFILL_GAP_DAYS of report_date): disclosure =
+            # max(report_date, create_time). When create_time is a BULK-BACKFILL stamp
+            # (gap > threshold — the 2022-05 stamp on 2010-2021 reports) OR absent:
+            # disclosure = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS open days.
+            # report_date+1 was validated PIT market-wide 2026-06-08
+            # (REPORT_RC_PIT_ANCHOR_VALIDATION.md: per-date Spearman +0.94 vs JoinQuant
+            # genuine-PIT consensus, holding for small caps + later-delisted), so the
+            # backfill stamp must NOT collapse the deep history to 2022-05; a
+            # report_date-only fallback would expose a genuine late-ingested row too
+            # early, which the open-day lag guards against.
             report_dt = normalize_date_series(work["report_date"])
             create_dt = (
                 normalize_date_series(work["create_time"])
                 if "create_time" in work.columns
                 else pd.Series(pd.NaT, index=work.index)
             )
-            observed = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
-            missing_create = create_dt.isna()
-            if missing_create.any():
-                observed.loc[missing_create] = add_open_day_lag(
-                    report_dt.loc[missing_create], self.open_calendar(),
-                    REPORT_RC_VENDOR_LAG_OPEN_DAYS,
-                )
+            gap_days = (create_dt - report_dt).dt.days
+            contemporaneous = create_dt.notna() & (gap_days >= 0) & (gap_days <= REPORT_RC_BACKFILL_GAP_DAYS)
+            # default (backfill stamp / missing / pre-dated create_time): report_date + lag
+            observed = add_open_day_lag(report_dt, self.open_calendar(), REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+            if contemporaneous.any():
+                # trust the genuine ingestion timestamp: max(report_date, create_time)
+                trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
+                observed.loc[contemporaneous] = trusted.loc[contemporaneous]
             work["disclosure_date"] = observed
             work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
             key_columns = [
