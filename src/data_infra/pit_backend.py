@@ -2589,15 +2589,21 @@ class StagedQlibBackendBuilder:
         if not fields:
             return []
 
+        # Fail closed if the target-quarter column is entirely absent (corrupted
+        # feed): the revision groupby depends on it, so emit nothing rather than
+        # KeyError or silently miscount coverage.
+        if "quarter" not in ledger.columns:
+            logger.warning("report_rc: 'quarter' column absent — failing closed (no fields materialized)")
+            return []
+
         # Drop rows without a usable forecast-target quarter from BOTH revision and
         # active-coverage (a forecast with no target is not a safe same-target input;
         # otherwise revision's groupby(quarter) would drop them while n_active still
         # counted them — an inconsistency).
-        if "quarter" in ledger.columns:
-            bad_q = ledger["quarter"].isna() | (ledger["quarter"].astype(str).str.strip() == "")
-            if bad_q.any():
-                logger.warning("report_rc: dropping %d rows with missing/blank quarter", int(bad_q.sum()))
-                ledger = ledger.loc[~bad_q].copy()
+        bad_q = ledger["quarter"].isna() | (ledger["quarter"].astype(str).str.strip() == "")
+        if bad_q.any():
+            logger.warning("report_rc: dropping %d rows with missing/blank quarter", int(bad_q.sum()))
+            ledger = ledger.loc[~bad_q].copy()
 
         # --- revision-direction events: per (code, analyst, quarter) compare each
         #     forecast to that analyst's PREVIOUS one for the same quarter. Sort

@@ -17,7 +17,7 @@ index 733c01f..d6a38d1 100644
    # The income / balancesheet / cashflow STATEMENT FAMILIES anchor visibility on
    # max(ann_date, f_ann_date) (CLAUDE.md §3) — distinct from the indicators
 diff --git a/src/data_infra/pit_backend.py b/src/data_infra/pit_backend.py
-index e52300f..1a5646c 100644
+index e52300f..f789795 100644
 --- a/src/data_infra/pit_backend.py
 +++ b/src/data_infra/pit_backend.py
 @@ -84,6 +84,8 @@ PHASE3_DATASETS = {
@@ -40,17 +40,22 @@ index e52300f..1a5646c 100644
  }
  EXPECTED_EMPTY_DATE_FILES = {
      "moneyflow": "moneyflow_known_empty_dates.txt",
-@@ -138,6 +144,9 @@ CANONICAL_KLINE_FIELDS: frozenset[str] = frozenset({
+@@ -138,6 +144,14 @@ CANONICAL_KLINE_FIELDS: frozenset[str] = frozenset({
  })
  HOLDER_NUMBER_UNUSABLE_SUFFIX = "unusable_pit"
  PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
 +# report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
 +REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
 +EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
++# Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
++# rows that LACK create_time, so a vendor-backfilled row dated T is not exposed at
++# next_open(T). Fixed + non-tunable (data-infra constant, no per-window override);
++# reducible later only via a documented vendor-lag audit, never via IC.
++REPORT_RC_VENDOR_LAG_OPEN_DAYS = 2
  
  
  @dataclass(frozen=True)
-@@ -500,6 +509,24 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
+@@ -500,6 +514,24 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
          date_column="trade_date",
          phase=3,
      ),
@@ -75,7 +80,7 @@ index e52300f..1a5646c 100644
  }
  
  
-@@ -645,6 +672,35 @@ def normalize_date_series(series: pd.Series) -> pd.Series:
+@@ -645,6 +677,56 @@ def normalize_date_series(series: pd.Series) -> pd.Series:
      return parsed
  
  
@@ -108,10 +113,31 @@ index e52300f..1a5646c 100644
 +    return pd.Series([_one(o, a) for o, a in zip(org, author)], index=org.index, dtype="object")
 +
 +
++def add_open_day_lag(dates: pd.Series, open_calendar: pd.DatetimeIndex, n_open_days: int) -> pd.Series:
++    """Shift each date forward by ``n_open_days`` OPEN trading days.
++
++    For date ``x``, returns ``open_calendar[pos + n]`` where ``pos`` is the index of
++    the first open day >= ``x`` (so a non-trading-day input rolls to the next open day
++    first). NaT if the shift runs past the calendar end. Used as the conservative
++    report_rc vendor-availability fallback when ``create_time`` is missing — counted in
++    trading days, NOT ``Timedelta(days=...)``.
++    """
++    clean = pd.to_datetime(dates, errors="coerce")
++    values = open_calendar.values
++    out = []
++    for x in clean.values:
++        if pd.isna(x):
++            out.append(pd.NaT)
++            continue
++        pos = int(np.searchsorted(values, np.datetime64(x, "ns"), side="left")) + int(n_open_days)
++        out.append(open_calendar[pos] if pos < len(open_calendar) else pd.NaT)
++    return pd.Series(out, index=clean.index)
++
++
  def disclosure_dates(df: pd.DataFrame, ann_col: str | None, f_ann_col: str | None) -> pd.Series:
      """Compute conservative disclosure dates."""
      ann = normalize_date_series(df[ann_col]) if ann_col and ann_col in df.columns else pd.Series(pd.NaT, index=df.index)
-@@ -2077,6 +2133,26 @@ class StagedQlibBackendBuilder:
+@@ -2077,6 +2159,47 @@ class StagedQlibBackendBuilder:
                  for column in ("ts_code", "ann_date", "disclosure_date", "holder_name", "in_de", "change_vol")
                  if column in work.columns
              ]
@@ -130,6 +156,27 @@ index e52300f..1a5646c 100644
 +                work.get("org_name", pd.Series("", index=work.index)),
 +                work.get("author_name", pd.Series("", index=work.index)),
 +            )
++            # PIT anchor with a vendor-lag fallback (override the generic
++            # disclosure_dates()/effective_date computed above). When create_time is
++            # present: disclosure = max(report_date, create_time). When it is
++            # absent/null: disclosure = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS
++            # open days — the generic report_date-only fallback would expose a
++            # vendor-backfilled row at next_open(report_date), too early.
++            report_dt = normalize_date_series(work["report_date"])
++            create_dt = (
++                normalize_date_series(work["create_time"])
++                if "create_time" in work.columns
++                else pd.Series(pd.NaT, index=work.index)
++            )
++            observed = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
++            missing_create = create_dt.isna()
++            if missing_create.any():
++                observed.loc[missing_create] = add_open_day_lag(
++                    report_dt.loc[missing_create], self.open_calendar(),
++                    REPORT_RC_VENDOR_LAG_OPEN_DAYS,
++                )
++            work["disclosure_date"] = observed
++            work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
 +            key_columns = [
 +                column
 +                for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
@@ -138,7 +185,7 @@ index e52300f..1a5646c 100644
          else:
              key_columns = [column for column in ("ts_code", "end_date", "disclosure_date") if column in work.columns]
              if "report_type" in work.columns and spec.kind in {"periodic_snapshot", "periodic_cumulative", "periodic_direct_sq"}:
-@@ -2416,6 +2492,129 @@ class StagedQlibBackendBuilder:
+@@ -2416,6 +2539,148 @@ class StagedQlibBackendBuilder:
                  written.append(field_name)
          return sorted(set(written))
  
@@ -192,10 +239,29 @@ index e52300f..1a5646c 100644
 +        if not fields:
 +            return []
 +
++        # Drop rows without a usable forecast-target quarter from BOTH revision and
++        # active-coverage (a forecast with no target is not a safe same-target input;
++        # otherwise revision's groupby(quarter) would drop them while n_active still
++        # counted them — an inconsistency).
++        if "quarter" in ledger.columns:
++            bad_q = ledger["quarter"].isna() | (ledger["quarter"].astype(str).str.strip() == "")
++            if bad_q.any():
++                logger.warning("report_rc: dropping %d rows with missing/blank quarter", int(bad_q.sum()))
++                ledger = ledger.loc[~bad_q].copy()
++
 +        # --- revision-direction events: per (code, analyst, quarter) compare each
-+        #     forecast to that analyst's PREVIOUS one for the same quarter ---
-+        rev = ledger.dropna(subset=["eps"]).sort_values(
-+            ["qlib_code", "normalized_analyst_id", "quarter", "effective_date"], kind="stable")
++        #     forecast to that analyst's PREVIOUS one for the same quarter. Sort
++        #     chronologically (effective_date, then disclosure/report/create_time) so
++        #     two forecasts mapping to the SAME effective day are ordered by true
++        #     availability, not raw/ledger order (a stable-sort tie would flip up/dn). ---
++        rev = ledger.dropna(subset=["eps"]).copy()
++        for _c in ("disclosure_date", "report_date", "create_time"):
++            if _c in rev.columns:
++                rev[_c] = normalize_date_series(rev[_c])
++        _sort_cols = [c for c in ("qlib_code", "normalized_analyst_id", "quarter",
++                                  "effective_date", "disclosure_date", "report_date", "create_time")
++                      if c in rev.columns]
++        rev = rev.sort_values(_sort_cols, kind="mergesort")
 +        prev_eps = rev.groupby(["qlib_code", "normalized_analyst_id", "quarter"], sort=False)["eps"].shift(1)
 +        delta = rev["eps"] - prev_eps
 +        rev = rev.assign(
@@ -268,7 +334,7 @@ index e52300f..1a5646c 100644
      def _materialize_snapshot_dataset(
          self,
          dataset_name: str,
-@@ -2827,6 +3026,11 @@ class StagedQlibBackendBuilder:
+@@ -2827,6 +3092,11 @@ class StagedQlibBackendBuilder:
              # Custom materializer: event stream (no end_date, multi-row per
              # ann_date). Aggregates to per-day net / gross / ratio / count.
              written["stk_holdertrade"] = self._materialize_stk_holdertrade(calendar, target_dirs)
@@ -282,10 +348,10 @@ index e52300f..1a5646c 100644
          for dataset_name in (
 diff --git a/tests/data_infra/test_report_rc_ledger.py b/tests/data_infra/test_report_rc_ledger.py
 new file mode 100644
-index 0000000..544e303
+index 0000000..4d23daf
 --- /dev/null
 +++ b/tests/data_infra/test_report_rc_ledger.py
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,293 @@
 +"""P1 plumbing tests for the report_rc PIT ledger (15000积分 expansion).
 +
 +The decisive guardrail: build_ledger must NOT collapse the many analyst×quarter
@@ -488,6 +554,86 @@ index 0000000..544e303
 +    _materialize_to_bins(tmp_path / "b", feat2)
 +    for fn in RRC_FIELDS:
 +        assert (feat / f"{fn}.day.bin").read_bytes() == (feat2 / f"{fn}.day.bin").read_bytes()
++
++
++def _write_reference_data_long(base: Path) -> None:
++    """6 open days so a 2-open-day lag + next-open stays on-calendar."""
++    ref = base / "reference"
++    ref.mkdir(parents=True, exist_ok=True)
++    days = ["20200101", "20200102", "20200103", "20200106", "20200107", "20200108"]
++    pd.DataFrame([
++        {"exchange": "SSE", "cal_date": d, "is_open": 1, "pretrade_date": days[max(i - 1, 0)]}
++        for i, d in enumerate(days)
++    ]).to_parquet(ref / "trade_cal.parquet", index=False)
++    pd.DataFrame([
++        {"ts_code": "000001.SZ", "symbol": "000001", "exchange": "SZSE", "list_date": "19910101"},
++    ]).to_parquet(ref / "stock_basic.parquet", index=False)
++
++
++def test_report_rc_missing_create_time_uses_fixed_open_day_lag(tmp_path):
++    # The decisive PIT canary: a row WITHOUT create_time must NOT be exposed at
++    # next_open(report_date); it gets report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS.
++    data_root = tmp_path / "data"
++    _write_reference_data_long(data_root)
++    d = data_root / "analyst" / "report_rc"
++    d.mkdir(parents=True, exist_ok=True)
++    pd.DataFrame([
++        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
++         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},
++        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": None,
++         "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.0},
++    ]).to_parquet(d / "report_rc_2020.parquet", index=False)
++    b = StagedQlibBackendBuilder(
++        data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
++        build_id="lag", allow_exceptions=True,
++    )
++    b.normalize_dataset("report_rc")
++    b.build_ledger("report_rc")
++    led = pd.read_parquet(b.ledger_path("report_rc"))
++    led["effective_date"] = pd.to_datetime(led["effective_date"])
++    with_ct = led.loc[led["normalized_analyst_id"] == "AAA证券::甲", "effective_date"].iloc[0]
++    without_ct = led.loc[led["normalized_analyst_id"] == "BBB证券::乙", "effective_date"].iloc[0]
++    assert with_ct == pd.Timestamp("2020-01-02")            # next open after report/create
++    assert without_ct != pd.Timestamp("2020-01-02")          # NOT exposed at next_open(report_date)
++    assert without_ct == pd.Timestamp("2020-01-06")          # 0101 +2 open = 0103 -> next open = 0106
++
++
++def test_report_rc_same_effective_date_chronological_order(tmp_path):
++    # Two forecasts by one analyst/quarter both visible 2020-01-02, written in REVERSE
++    # chronological raw order. Must classify by availability (UP), not raw order (DOWN).
++    early = {"ts_code": "000001.SZ", "report_date": "20191231", "create_time": "2020-01-01 09:00:00",
++             "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0}
++    late = {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": "2020-01-01 21:00:00",
++            "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.5}
++    b = _make_builder(tmp_path, [late, early])  # reverse-chronological raw order
++    cal = b.open_calendar()
++    captured: dict = {}
++    b._write_feature_series = lambda fd, fn, arr: captured.setdefault(fd, {}).__setitem__(
++        fn, np.asarray(arr, dtype=float))
++    b._materialize_report_rc_consensus(cal, {"000001_sz": "x"})
++    a = captured["x"]
++    # day index 1 = 2020-01-02: the later forecast (1.0 -> 1.5) is an UP revision
++    assert a["report_rc__eps_up"][1] == 1.0
++    assert a["report_rc__eps_dn"][1] == 0.0
++
++
++def test_report_rc_missing_quarter_excluded(tmp_path):
++    # A non-null-EPS forecast with no target quarter must not feed revision OR n_active.
++    rows = [
++        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
++         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},
++        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
++         "org_name": "BBB证券", "author_name": "乙", "quarter": None, "eps": 9.0},
++    ]
++    b = _make_builder(tmp_path, rows)
++    cal = b.open_calendar()
++    captured: dict = {}
++    b._write_feature_series = lambda fd, fn, arr: captured.setdefault(fd, {}).__setitem__(
++        fn, np.asarray(arr, dtype=float))
++    b._materialize_report_rc_consensus(cal, {"000001_sz": "x"})
++    nact = captured["x"]["report_rc__n_active_analysts"]
++    # only the valid-quarter analyst counts (== 1 from 2020-01-02 on), not 2
++    assert nact[1] == 1.0
 +
 +
 +def test_normalized_analyst_id_handles_messy_strings():

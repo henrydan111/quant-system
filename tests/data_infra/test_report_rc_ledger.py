@@ -282,6 +282,27 @@ def test_report_rc_missing_quarter_excluded(tmp_path):
     assert nact[1] == 1.0
 
 
+def test_report_rc_absent_quarter_column_fails_closed(tmp_path):
+    # A corrupted feed with NO quarter column must fail closed (emit nothing),
+    # not KeyError the revision groupby.
+    data_root = tmp_path / "data"
+    _write_reference_data(data_root)
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "report_date": "20200101", "create_time": _ct("2020-01-01"),
+         "org_name": "AAA证券", "author_name": "甲", "eps": 1.0},  # no 'quarter' column
+    ]).to_parquet(d / "report_rc_2020.parquet", index=False)
+    b = StagedQlibBackendBuilder(
+        data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
+        build_id="noq", allow_exceptions=True,
+    )
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    written = b._materialize_report_rc_consensus(b.open_calendar(), {"000001_sz": str(tmp_path / "f")})
+    assert written == []
+
+
 def test_normalized_analyst_id_handles_messy_strings():
     org = pd.Series(["AAA证券", "BBB证券", "CCC证券", None])
     author = pd.Series(["甲", "丙,乙", "", "甲"])
