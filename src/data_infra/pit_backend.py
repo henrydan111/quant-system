@@ -2183,8 +2183,8 @@ class StagedQlibBackendBuilder:
             # Key on a stable analyst-team identity + the forecast quarter; exact
             # duplicate payload rows still merge via collapse_duplicate_versions'
             # content-hash tie-break (the _src_* tail columns are stripped at
-            # normalize). effective_date is already next_open(max(report_date,
-            # create_time)) from the f_ann_date_column="create_time" spec.
+            # normalize). The effective_date anchor is (re)computed by the custom
+            # resolver below — NOT the generic f_ann_date max() — see the PIT anchor note.
             work["normalized_analyst_id"] = normalized_analyst_id(
                 work.get("org_name", pd.Series("", index=work.index)),
                 work.get("author_name", pd.Series("", index=work.index)),
@@ -2207,7 +2207,11 @@ class StagedQlibBackendBuilder:
                 if "create_time" in work.columns
                 else pd.Series(pd.NaT, index=work.index)
             )
-            gap_days = (create_dt - report_dt).dt.days
+            # gap in CALENDAR days: normalize both sides so an intraday create_time
+            # (e.g. an after-hours "...21:00:00" stamp) cannot skew the day count — the
+            # threshold is defined in calendar days, not 24h-elapsed days. (No-op while
+            # report_date is midnight-parsed, but makes the "calendar days" intent exact.)
+            gap_days = (create_dt.dt.normalize() - report_dt.dt.normalize()).dt.days
             contemporaneous = create_dt.notna() & (gap_days >= 0) & (gap_days <= REPORT_RC_BACKFILL_GAP_DAYS)
             # default (backfill stamp / missing / pre-dated create_time): report_date + lag
             observed = add_open_day_lag(report_dt, self.open_calendar(), REPORT_RC_VENDOR_LAG_OPEN_DAYS)
@@ -2215,6 +2219,27 @@ class StagedQlibBackendBuilder:
                 # trust the genuine ingestion timestamp: max(report_date, create_time)
                 trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
                 observed.loc[contemporaneous] = trusted.loc[contemporaneous]
+            # Continuous-checkability audit (GPT post-impl review Q1/Q2): the threshold
+            # assumes the 2023+ contemporaneous era has create_time gaps of only a few
+            # days. A clean-era (report_date >= 2023) row with gap > threshold would be
+            # classified backfill and anchored at report_date+lag — EARLIER than its
+            # create_time (a potential early-exposure). Log the split every build and WARN
+            # if the canary count is non-zero, so the empirical assumption is monitored.
+            clean_era_large_gap = int((create_dt.notna() & (report_dt.dt.year >= 2023)
+                                       & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
+            logger.info(
+                "report_rc anchor: %d rows | contemporaneous=%d backfill/missing=%d | "
+                "clean-era(report_date>=2023) gap>%dd=%d",
+                len(work), int(contemporaneous.sum()), int((~contemporaneous).sum()),
+                REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
+            )
+            if clean_era_large_gap:
+                logger.warning(
+                    "report_rc anchor: %d clean-era (report_date>=2023) rows have a create_time gap "
+                    ">%dd and were anchored at report_date+lag (earlier than create_time) — the "
+                    "contemporaneous-era assumption may be violated; review REPORT_RC_BACKFILL_GAP_DAYS",
+                    clean_era_large_gap, REPORT_RC_BACKFILL_GAP_DAYS,
+                )
             work["disclosure_date"] = observed
             work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
             key_columns = [

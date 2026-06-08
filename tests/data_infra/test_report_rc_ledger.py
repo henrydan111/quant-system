@@ -14,7 +14,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from data_infra.pit_backend import StagedQlibBackendBuilder, normalized_analyst_id  # noqa: E402
+from data_infra.pit_backend import (  # noqa: E402
+    StagedQlibBackendBuilder, normalized_analyst_id,
+    add_open_day_lag, strictly_next_open_trade_day, REPORT_RC_VENDOR_LAG_OPEN_DAYS,
+)
 from data_infra.storage.qlib_bin_utils import (  # noqa: E402
     read_qlib_bin, write_qlib_bin, validate_stock_bins,
 )
@@ -276,6 +279,98 @@ def test_report_rc_backfill_create_time_ignored_anchors_on_report_date(tmp_path)
     # NOT 2022-05 (which would be off this 6-day test calendar and drop the row entirely)
     assert backfilled == pd.Timestamp("2020-01-06")
     assert pd.notna(backfilled), "backfilled row must survive (deep history reclaimed), not drop to NaT"
+
+
+def _write_business_calendar(base: Path, start: str, end: str) -> pd.DatetimeIndex:
+    """trade_cal.parquet with every weekday in [start, end] open. Returns the open index
+    (so a test can compute expected anchors via the same helpers the builder uses)."""
+    ref = base / "reference"
+    ref.mkdir(parents=True, exist_ok=True)
+    days = pd.bdate_range(start, end)
+    prev = days[0]
+    rows = []
+    for d in days:
+        rows.append({"exchange": "SSE", "cal_date": d.strftime("%Y%m%d"), "is_open": 1,
+                     "pretrade_date": prev.strftime("%Y%m%d")})
+        prev = d
+    pd.DataFrame(rows).to_parquet(ref / "trade_cal.parquet", index=False)
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "symbol": "000001", "exchange": "SZSE", "list_date": "19910101"},
+    ]).to_parquet(ref / "stock_basic.parquet", index=False)
+    return days
+
+
+def test_report_rc_backfill_gap_boundary_45_trusted_46_ignored(tmp_path):
+    # The load-bearing rule now (GPT post-impl review Q6): create_time is trusted iff the
+    # calendar-day gap from report_date is <= REPORT_RC_BACKFILL_GAP_DAYS (=45). Pin the
+    # boundary with three analysts sharing report_date 2020-01-01 (intraday create_time, to
+    # exercise the calendar-day normalize): gap 45 trusts create_time; gap 46 ignores it;
+    # gap -1 (pre-dated) falls back. Expectations computed via the real helpers on the same
+    # calendar, so the test is robust to the exact holiday layout.
+    data_root = tmp_path / "data"
+    open_days = _write_business_calendar(data_root, "2019-12-20", "2020-03-02")
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    report = "20200101"
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "report_date": report, "create_time": "2020-02-15 21:00:00",
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},   # gap 45 -> trust
+        {"ts_code": "000001.SZ", "report_date": report, "create_time": "2020-02-16 21:00:00",
+         "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.0},   # gap 46 -> ignore
+        {"ts_code": "000001.SZ", "report_date": report, "create_time": "2019-12-31 21:00:00",
+         "org_name": "CCC证券", "author_name": "丙", "quarter": "2024Q4", "eps": 1.0},   # gap -1 -> fallback
+    ]).to_parquet(d / "report_rc_2020.parquet", index=False)
+    b = StagedQlibBackendBuilder(data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
+                                 build_id="boundary", allow_exceptions=True)
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    led["effective_date"] = pd.to_datetime(led["effective_date"])
+    eff = {a: led.loc[led["normalized_analyst_id"] == a, "effective_date"].iloc[0]
+           for a in led["normalized_analyst_id"].unique()}
+
+    exp_trust = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2020-02-15 21:00:00")]), open_days).iloc[0]
+    fallback_obs = add_open_day_lag(pd.Series([pd.Timestamp(report)]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+    exp_fallback = strictly_next_open_trade_day(fallback_obs, open_days).iloc[0]
+
+    assert exp_trust != exp_fallback                  # the boundary genuinely bifurcates
+    assert eff["AAA证券::甲"] == exp_trust            # gap 45 -> create_time honored
+    assert eff["BBB证券::乙"] == exp_fallback         # gap 46 -> create_time ignored (backfill)
+    assert eff["CCC证券::丙"] == exp_fallback         # gap -1 -> fallback
+
+
+def test_report_rc_transition_mixed_rows_split_effective_dates(tmp_path):
+    # 2022 transition (GPT post-impl review Q3): same ts_code + report_date, one
+    # contemporaneous create_time and one 2022-05 bulk-backfill stamp -> two DIFFERENT
+    # effective dates, BOTH rows survive (no collapse). Locks the intended asymmetry.
+    data_root = tmp_path / "data"
+    open_days = _write_business_calendar(data_root, "2022-02-20", "2022-06-01")
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    report = "20220301"
+    pd.DataFrame([
+        {"ts_code": "000001.SZ", "report_date": report, "create_time": "2022-03-02 08:00:00",
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.0},   # contemporaneous (gap 1)
+        {"ts_code": "000001.SZ", "report_date": report, "create_time": "2022-05-03 08:00:00",
+         "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.0},   # backfill stamp (gap 63)
+    ]).to_parquet(d / "report_rc_2022.parquet", index=False)
+    b = StagedQlibBackendBuilder(data_root=str(data_root), qlib_dir=str(tmp_path / "q"),
+                                 build_id="transition", allow_exceptions=True)
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    led["effective_date"] = pd.to_datetime(led["effective_date"])
+    assert len(led) == 2, f"both rows must survive (no collapse), got {len(led)}"
+    eff = {a: led.loc[led["normalized_analyst_id"] == a, "effective_date"].iloc[0]
+           for a in led["normalized_analyst_id"].unique()}
+
+    exp_contemp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2022-03-02 08:00:00")]), open_days).iloc[0]
+    backfill_obs = add_open_day_lag(pd.Series([pd.Timestamp(report)]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+    exp_backfill = strictly_next_open_trade_day(backfill_obs, open_days).iloc[0]
+
+    assert exp_contemp != exp_backfill                # the asymmetry GPT analyzed
+    assert eff["AAA证券::甲"] == exp_contemp          # contemporaneous create_time honored
+    assert eff["BBB证券::乙"] == exp_backfill         # 2022-05 stamp ignored -> report_date+lag
 
 
 def test_report_rc_same_effective_date_chronological_order(tmp_path):

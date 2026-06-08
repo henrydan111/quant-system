@@ -163,10 +163,25 @@ byte-identical; only the backfilled deep history is reclaimed.
   2,005 up / 2,297 down, 3,917 active days) and validate OK. Live `data/qlib_data`
   untouched (sandbox stage).
 
+**GPT 5.5 Pro post-impl review = MERGE-WITH-NITS** (no blocking PIT leak / determinism /
+materializer defect). All nits applied + verified (commit pending):
+- *(Q4 code)* gap computed on `.dt.normalize()` both sides so the threshold is exact
+  calendar days (a no-op while report_date is midnight-parsed, but explicit/future-proof).
+- *(Q1/Q2 audit)* build-time log of the anchor split + a clean-era canary: counts
+  `report_date>=2023` rows with `gap>45d` (would be wrongly treated as backfill →
+  anchored early) and WARNs if non-zero. Real-basket run: `contemporaneous=9874
+  backfill/missing=23570 | clean-era gap>45d=0` → the threshold assumption holds.
+- *(Q6 test)* `test_report_rc_backfill_gap_boundary_45_trusted_46_ignored` (45 trusts
+  create_time, 46 ignores, −1 falls back).
+- *(Q3 test)* `test_report_rc_transition_mixed_rows_split_effective_dates` (same
+  report_date, one contemporaneous + one 2022-05 stamp → two effective dates, no row loss).
+Tests now 14/14 report_rc + 84 regression + 206 curated CI green; GPT kept 45 (did not
+force 90). Prompt + diff: `reanchor_postimpl_review_for_gpt.md`,
+`reanchor_report_rc_code.diff`.
+
 Still gated (unchanged): a full provider rebuild on the re-anchored history, the
 remaining primitives (eps_same / dispersion / FY1-level / coverage), the catalog factor
-(P4), and the compliant screen (P5). `$report_rc__*` stays QUARANTINE. Recommended before
-merge: a GPT post-impl review of the re-anchor (matches the P1 review cadence).
+(P4), and the compliant screen (P5). `$report_rc__*` stays QUARANTINE.
 
 ## Artifacts
 - `report_rc_pit_anchor_validation.py` → `workspace/outputs/report_rc_pit_anchor_validation.{csv,json}`
