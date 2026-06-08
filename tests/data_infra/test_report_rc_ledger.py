@@ -9,6 +9,7 @@ analyst-id normalization. No alpha / no screen — plumbing acceptance only.
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -87,6 +88,62 @@ def test_report_rc_ledger_deterministic(tmp_path):
     sig_a = sorted(a[key].astype(str).agg("|".join, axis=1))
     sig_b = sorted(b[key].astype(str).agg("|".join, axis=1))
     assert sig_a == sig_b
+
+
+def _make_builder(tmp: Path, rows: list) -> StagedQlibBackendBuilder:
+    data_root = tmp / "data"
+    _write_reference_data(data_root)
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_parquet(d / "report_rc_2020.parquet", index=False)
+    b = StagedQlibBackendBuilder(
+        data_root=str(data_root), qlib_dir=str(tmp / "qlib"),
+        build_id="unit_rrc_mat", allow_exceptions=True,
+    )
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    return b
+
+
+def test_report_rc_materializer_event_flow_primitives(tmp_path):
+    base = dict(ts_code="000001.SZ")
+    rows = [
+        # analyst A 2024Q4: 1.00 (eff 0102, coverage_init) -> 1.20 (eff 0103, UP)
+        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.00},
+        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 1.20},
+        # analyst B 2024Q4: 1.00 (init) -> 0.90 (eff 0103, DOWN)
+        {**base, "report_date": "20200101", "create_time": _ct("2020-01-01"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 1.00},
+        {**base, "report_date": "20200102", "create_time": _ct("2020-01-02"), "org_name": "BBB证券", "author_name": "乙", "quarter": "2024Q4", "eps": 0.90},
+        # FUTURE row: report_date 0103 -> effective beyond the 3-day calendar ->
+        # NaT -> must be dropped (no-lookahead canary; a huge 5.00 revision must
+        # NOT leak into earlier days).
+        {**base, "report_date": "20200103", "create_time": _ct("2020-01-03"), "org_name": "AAA证券", "author_name": "甲", "quarter": "2024Q4", "eps": 5.00},
+    ]
+    b = _make_builder(tmp_path, rows)
+    calendar = b.open_calendar()  # [2020-01-01, 02, 03]
+
+    captured: dict = {}
+
+    def _capture(feature_dir, field_name, array):
+        captured.setdefault(feature_dir, {})[field_name] = np.asarray(array, dtype=float)
+
+    b._write_feature_series = _capture
+    feat_dir = str(tmp_path / "feat")
+    written = b._materialize_report_rc_consensus(calendar, {"000001_sz": feat_dir})
+
+    assert set(written) >= {
+        "report_rc__eps_up", "report_rc__eps_dn",
+        "report_rc__eps_revision_count", "report_rc__n_active_analysts",
+    }
+    arr = captured[feat_dir]
+    nan = -1.0  # sentinel for NaN comparison
+
+    # calendar positions: [0101 (no activity), 0102 (both first->0 revisions), 0103 (A up, B dn)]
+    np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__eps_up"], nan=nan), [nan, 0, 1])
+    np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__eps_dn"], nan=nan), [nan, 0, 1])
+    np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__eps_revision_count"], nan=nan), [nan, 0, 2])
+    # n_active: NaN before first coverage (0101), then 2 live analysts on 0102/0103
+    np.testing.assert_array_equal(np.nan_to_num(arr["report_rc__n_active_analysts"], nan=nan), [nan, 2, 2])
 
 
 def test_normalized_analyst_id_handles_messy_strings():

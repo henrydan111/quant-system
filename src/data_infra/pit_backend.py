@@ -144,6 +144,9 @@ CANONICAL_KLINE_FIELDS: frozenset[str] = frozenset({
 })
 HOLDER_NUMBER_UNUSABLE_SUFFIX = "unusable_pit"
 PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
+# report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
+REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
+EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
 
 
 @dataclass(frozen=True)
@@ -2489,6 +2492,129 @@ class StagedQlibBackendBuilder:
                 written.append(field_name)
         return sorted(set(written))
 
+    def _materialize_report_rc_consensus(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """Custom materializer for report_rc analyst forecasts (P1 event-flow subset).
+
+        Reads the PIT ledger and emits per (qlib_code, effective_date):
+          - ``report_rc__eps_up`` / ``__eps_dn``: # analysts who raised / lowered
+            their EPS forecast vs THAT analyst's previous visible forecast for the
+            SAME ``quarter`` (ε-tolerant; the first forecast per analyst×quarter is
+            coverage-init, NOT a revision).
+          - ``report_rc__eps_revision_count``: up + dn (the evidence count).
+          - ``report_rc__n_active_analysts``: # distinct analysts whose latest
+            forecast is "live" (effective within the trailing
+            ``REPORT_RC_ACTIVE_TTL_OPEN_DAYS`` trading days). Carried daily.
+
+        Event bins are NaN on no-event days (sparse, like stk_holdertrade);
+        ``n_active`` is the daily count (0 once all stale, NaN before first
+        coverage). Windowing into a tradable breadth factor happens in the Qlib
+        expression layer, not here. Fields are written DIRECTLY with the
+        ``report_rc__`` namespace (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX).
+        """
+        ledger_path = self.ledger_path("report_rc")
+        if not os.path.exists(ledger_path):
+            return []
+        ledger = pd.read_parquet(ledger_path)
+        if ledger.empty:
+            return []
+        target_codes = set(target_dirs)
+        if target_codes:
+            ledger = ledger[ledger["qlib_code"].isin(target_codes)].copy()
+        if ledger.empty:
+            return []
+        ledger["effective_date"] = normalize_date_series(ledger["effective_date"])
+        ledger = ledger.dropna(subset=["effective_date"]).copy()
+        ledger["eps"] = pd.to_numeric(ledger.get("eps"), errors="coerce")
+        if "normalized_analyst_id" not in ledger.columns:
+            ledger["normalized_analyst_id"] = normalized_analyst_id(
+                ledger.get("org_name", pd.Series("", index=ledger.index)),
+                ledger.get("author_name", pd.Series("", index=ledger.index)),
+            )
+
+        fields = self._apply_field_filter([
+            "report_rc__eps_up", "report_rc__eps_dn",
+            "report_rc__eps_revision_count", "report_rc__n_active_analysts",
+        ])
+        if not fields:
+            return []
+
+        # --- revision-direction events: per (code, analyst, quarter) compare each
+        #     forecast to that analyst's PREVIOUS one for the same quarter ---
+        rev = ledger.dropna(subset=["eps"]).sort_values(
+            ["qlib_code", "normalized_analyst_id", "quarter", "effective_date"], kind="stable")
+        prev_eps = rev.groupby(["qlib_code", "normalized_analyst_id", "quarter"], sort=False)["eps"].shift(1)
+        delta = rev["eps"] - prev_eps
+        rev = rev.assign(
+            _eps_up=((delta > EPS_REVISION_EPSILON) & prev_eps.notna()).astype(float),
+            _eps_dn=((delta < -EPS_REVISION_EPSILON) & prev_eps.notna()).astype(float),
+        )
+        events = (
+            rev.groupby(["qlib_code", "effective_date"], sort=False)
+            .agg(report_rc__eps_up=("_eps_up", "sum"), report_rc__eps_dn=("_eps_dn", "sum"))
+            .reset_index()
+        )
+        events["report_rc__eps_revision_count"] = events["report_rc__eps_up"] + events["report_rc__eps_dn"]
+        events_by_code = {code: g.set_index("effective_date") for code, g in events.groupby("qlib_code")}
+
+        # --- active-analyst state: per (code, analyst), each forecast keeps the
+        #     analyst "live" for TTL trading days; union intervals, count per day ---
+        cal_pos = {ts: i for i, ts in enumerate(calendar)}
+        n_cal = len(calendar)
+        ttl = REPORT_RC_ACTIVE_TTL_OPEN_DAYS
+        active_by_code: dict[str, list[list[int]]] = {}
+        for (code, _aid), eff in (
+            ledger.dropna(subset=["eps"]).groupby(["qlib_code", "normalized_analyst_id"], sort=False)["effective_date"]
+        ):
+            positions = sorted({cal_pos[t] for t in eff if t in cal_pos})
+            if positions:
+                active_by_code.setdefault(code, []).append(positions)
+
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs), desc="Materialize report_rc",
+            unit="symbol", leave=False,
+        ):
+            ev = events_by_code.get(qlib_code)
+            analyst_pos = active_by_code.get(qlib_code)
+            if ev is None and not analyst_pos:
+                continue
+            arrays: dict[str, np.ndarray] = {
+                "report_rc__eps_up": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__eps_dn": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__eps_revision_count": np.full(n_cal, np.nan, dtype=np.float32),
+                "report_rc__n_active_analysts": np.full(n_cal, np.nan, dtype=np.float32),
+            }
+            if ev is not None:
+                frame = ev.reindex(calendar)
+                for col in ("report_rc__eps_up", "report_rc__eps_dn", "report_rc__eps_revision_count"):
+                    arrays[col] = frame[col].to_numpy(dtype=np.float32)
+            if analyst_pos:
+                diff = np.zeros(n_cal + 1, dtype=np.float64)
+                first_pos = n_cal
+                for positions in analyst_pos:
+                    first_pos = min(first_pos, positions[0])
+                    merged: list[list[int]] = []
+                    for p in positions:
+                        a, b = p, min(p + ttl, n_cal - 1)
+                        if merged and a <= merged[-1][1] + 1:
+                            merged[-1][1] = max(merged[-1][1], b)
+                        else:
+                            merged.append([a, b])
+                    for a, b in merged:
+                        diff[a] += 1.0
+                        diff[b + 1] -= 1.0
+                n_active = np.cumsum(diff[:n_cal]).astype(np.float32)
+                n_active[:first_pos] = np.nan  # NaN before this stock's first coverage
+                arrays["report_rc__n_active_analysts"] = n_active
+            for field_name in fields:
+                self._write_feature_series(feature_dir, field_name, arrays[field_name])
+                written.append(field_name)
+        return sorted(set(written))
+
     def _materialize_snapshot_dataset(
         self,
         dataset_name: str,
@@ -2900,6 +3026,11 @@ class StagedQlibBackendBuilder:
             # Custom materializer: event stream (no end_date, multi-row per
             # ann_date). Aggregates to per-day net / gross / ratio / count.
             written["stk_holdertrade"] = self._materialize_stk_holdertrade(calendar, target_dirs)
+        if "report_rc" in active_datasets and os.path.exists(self.ledger_path("report_rc")):
+            # Custom materializer: analyst-forecast event stream -> event-flow EPS
+            # revision-direction primitives + active-analyst state (P1 subset).
+            # Writes report_rc__* fields directly (NOT via the event-like prefix map).
+            written["report_rc"] = self._materialize_report_rc_consensus(calendar, target_dirs)
         if "dividends" in active_datasets and os.path.exists(self.ledger_path("dividends")):
             written["dividends"] = self._materialize_dividend_compat(calendar, target_dirs)
         for dataset_name in (
