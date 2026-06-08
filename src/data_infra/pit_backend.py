@@ -84,6 +84,8 @@ PHASE3_DATASETS = {
     "moneyflow", "northbound", "margin", "stk_limit",
     # New alpha endpoints (added 2026-04-14)
     "top_list", "top_inst", "block_trade", "stk_holdertrade", "cyq_perf",
+    # 15000积分 expansion (P1, 2026-06-08): analyst forecasts (report_rc).
+    "report_rc",
 }
 PERIODIC_LEDGER_DATASETS = {
     "income",
@@ -99,6 +101,10 @@ PERIODIC_LEDGER_DATASETS = {
     # rows. Ledger key includes holder_name to avoid collapsing distinct
     # transactions on the same ann_date.
     "stk_holdertrade",
+    # 15000积分 expansion (P1, 2026-06-08): analyst forecasts. event_periodic
+    # with per-(analyst × forecast-quarter) rows; custom build_ledger key branch
+    # (ts_code, report_date, normalized_analyst_id, quarter) avoids collapse.
+    "report_rc",
 }
 EXPECTED_EMPTY_DATE_FILES = {
     "moneyflow": "moneyflow_known_empty_dates.txt",
@@ -500,6 +506,24 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         date_column="trade_date",
         phase=3,
     ),
+    # 15000积分 expansion (P1, 2026-06-08): sell-side analyst forecasts.
+    # event_periodic, multi-row per (ts_code, report_date): one per analyst ×
+    # forecast-quarter. Anchor = next_open(max(report_date, create_time)) — the
+    # create_time (vendor update timestamp, after-hours) is the f_ann_date so the
+    # generic disclosure_dates() max() captures the real availability lag.
+    # duplicate_key_columns is LEFT UNSET so normalize does NOT collapse rows; the
+    # custom build_ledger key branch keys on (ts_code, report_date,
+    # normalized_analyst_id, quarter) to preserve each distinct forecast.
+    "report_rc": DatasetSpec(
+        name="report_rc",
+        raw_pattern="analyst/report_rc/*.parquet",
+        kind="event_periodic",
+        natural_keys=("ts_code", "report_date", "org_name", "author_name", "quarter"),
+        required_columns=("ts_code", "report_date"),
+        ann_date_column="report_date",
+        f_ann_date_column="create_time",
+        phase=3,
+    ),
 }
 
 
@@ -643,6 +667,35 @@ def normalize_date_series(series: pd.Series) -> pd.Series:
     if fallback_mask.any():
         parsed.loc[fallback_mask] = pd.to_datetime(as_text.loc[fallback_mask], errors="coerce")
     return parsed
+
+
+def normalized_analyst_id(org: pd.Series, author: pd.Series) -> pd.Series:
+    """Stable analyst-team identity from messy org/author strings (report_rc P1).
+
+    ``org_norm`` (NFKC, trim, collapse whitespace) + ``"::"`` + sorted author
+    tokens (split on ``/ & , ， 、 ; ；``). Missing author -> ``<org>::UNKNOWN_AUTHOR``.
+    Multi-author rows are one TEAM identity in P1 (per-member mapping is an
+    active-latest refinement, not needed for the event-flow primitives). Used as a
+    ledger-key component so each analyst's forecasts stay distinct rather than
+    collapsing on ``(ts_code, report_date)``.
+    """
+    import re
+    import unicodedata
+
+    def _clean(x: object) -> str:
+        if x is None or (isinstance(x, float) and pd.isna(x)):
+            return ""
+        return unicodedata.normalize("NFKC", str(x)).strip()
+
+    def _one(o: object, a: object) -> str:
+        o_norm = re.sub(r"\s+", " ", _clean(o))
+        a_norm = _clean(a)
+        if not a_norm or a_norm.lower() in {"nan", "none", "<na>"}:
+            return f"{o_norm}::UNKNOWN_AUTHOR"
+        tokens = sorted(t.strip() for t in re.split(r"[/&,，、;；]", a_norm) if t.strip())
+        return f"{o_norm}::" + "+".join(tokens)
+
+    return pd.Series([_one(o, a) for o, a in zip(org, author)], index=org.index, dtype="object")
 
 
 def disclosure_dates(df: pd.DataFrame, ann_col: str | None, f_ann_col: str | None) -> pd.Series:
@@ -2075,6 +2128,26 @@ class StagedQlibBackendBuilder:
             key_columns = [
                 column
                 for column in ("ts_code", "ann_date", "disclosure_date", "holder_name", "in_de", "change_vol")
+                if column in work.columns
+            ]
+        elif dataset_name == "report_rc":
+            # Analyst forecasts: multi-row per (ts_code, report_date) — one per
+            # analyst-team × forecast quarter. Keying on (ts_code, end_date,
+            # disclosure_date) like the generic branch would collapse all analysts
+            # and quarters for a stock-date into ONE row (report_rc has no
+            # end_date) — the same ~99% loss the stk_holdertrade branch prevents.
+            # Key on a stable analyst-team identity + the forecast quarter; exact
+            # duplicate payload rows still merge via collapse_duplicate_versions'
+            # content-hash tie-break (the _src_* tail columns are stripped at
+            # normalize). effective_date is already next_open(max(report_date,
+            # create_time)) from the f_ann_date_column="create_time" spec.
+            work["normalized_analyst_id"] = normalized_analyst_id(
+                work.get("org_name", pd.Series("", index=work.index)),
+                work.get("author_name", pd.Series("", index=work.index)),
+            )
+            key_columns = [
+                column
+                for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
                 if column in work.columns
             ]
         else:
