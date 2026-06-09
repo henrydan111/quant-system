@@ -856,3 +856,147 @@ per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 | `change_ratio` | Changed Share Ratio | 变动比例 |
 | `after_share` | Shares After Change | 变动后持股 |
 | `after_ratio` | Holding Ratio After Change | 变动后持股比例 |
+
+## 8. Bucket A — 15000积分 Expansion (downloaded 2026-06-08, RAW)
+
+Eight deep-history endpoints from the Tushare 5000→15000积分 upgrade, fetched by
+[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py). RAW only — not yet normalized / PIT-aligned /
+in the Qlib provider. Coverage table + PIT notes: [data_tracker.md](data_tracker.md) §11.
+
+### report_rc (卖方盈利预测明细 — analyst forecasts)
+Total Columns: 21. `data/analyst/report_rc/report_rc_{YYYY}.parquet`. Each row = one analyst's forecast
+for one stock × one forecast `quarter`. Visibility anchor = `report_date` (PIT canary under test).
+Sparse fields (expected NaN): `tp`, `op_pr`, `rd`, `max_price`, `min_price`.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `name` | Stock Name | 股票名称 |
+| `report_date` | Report Publish Date (visibility anchor) | 研报发布日期 |
+| `report_title` | Report Title | 报告标题 |
+| `report_type` | Report Type | 报告类型 |
+| `classify` | Report Classification | 报告分类 |
+| `org_name` | Institution (broker) Name | 机构名称 |
+| `author_name` | Analyst Author(s) | 研究员 |
+| `quarter` | Forecast Period (e.g. 2026Q4) | 预测年度/季度 |
+| `op_rt` | Forecast Operating Revenue | 预测营业收入(万元) |
+| `op_pr` | Forecast Operating Profit | 预测营业利润(万元) |
+| `tp` | Target Price | 目标价 |
+| `np` | Forecast Net Profit | 预测净利润(万元) |
+| `eps` | Forecast EPS | 预测每股收益 |
+| `pe` | Forecast P/E | 预测市盈率 |
+| `rd` | Forecast R&D Expense | 预测研发支出 |
+| `roe` | Forecast ROE | 预测净资产收益率 |
+| `ev_ebitda` | Forecast EV/EBITDA | 预测EV/EBITDA |
+| `rating` | Analyst Rating (买入/增持/Buy/Overweight…) | 卖方评级 |
+| `max_price` | Target Price High | 目标价上限 |
+| `min_price` | Target Price Low | 目标价下限 |
+
+### express (业绩快报 — preliminary earnings, via express_vip)
+Total Columns: 17. `data/fundamentals/express/express_{period}.parquet`. Anchor: `ann_date`.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `ann_date` | Announcement Date | 公告日期 |
+| `end_date` | Report Period End | 报告期 |
+| `revenue` | Operating Revenue | 营业收入 |
+| `operate_profit` | Operating Profit | 营业利润 |
+| `total_profit` | Total Profit | 利润总额 |
+| `n_income` | Net Income | 净利润 |
+| `total_assets` | Total Assets | 总资产 |
+| `total_hldr_eqy_exc_min_int` | Shareholders' Equity (excl. minority) | 股东权益(不含少数股东) |
+| `diluted_eps` | Diluted EPS | 摊薄每股收益 |
+| `diluted_roe` | Diluted ROE | 摊薄净资产收益率 |
+| `yoy_net_profit` | YoY Net Profit | 去年同期净利润 / 同比 |
+| `bps` | Book Value per Share | 每股净资产 |
+| `open_net_assets` | Opening Net Assets | 期初净资产 |
+| `open_bps` | Opening BPS | 期初每股净资产 |
+| `perf_summary` | Performance Summary (text) | 业绩简要说明 |
+| `update_flag` | Update Flag | 更新标识 |
+
+### disclosure_date (财报披露计划日期)
+Total Columns: 5. `data/fundamentals/disclosure_date/disclosure_date_{period}.parquet`.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `ann_date` | Latest Announcement Date | 最新公告日期 |
+| `end_date` | Report Period End | 报告期 |
+| `pre_date` | Planned Disclosure Date | 预计披露日期 |
+| `actual_date` | Actual Disclosure Date | 实际披露日期 |
+
+### fina_mainbz (主营业务构成 — segment revenue, via fina_mainbz_vip)
+Total Columns: 8. `data/fundamentals/fina_mainbz/fina_mainbz_{period}.parquet`. Multiple segment rows
+per stock×period. Anchor: owning report's disclosure (`ann_date` joined from the statement).
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `end_date` | Report Period End | 报告期 |
+| `bz_item` | Business Segment Item | 主营业务来源(项目) |
+| `bz_code` | Segment Code | 项目代码 |
+| `bz_sales` | Segment Revenue | 主营业务收入 |
+| `bz_profit` | Segment Profit | 主营业务利润 |
+| `bz_cost` | Segment Cost | 主营业务成本 |
+| `curr_type` | Currency | 货币代码 |
+
+### repurchase (股票回购)
+Total Columns: 9. `data/corporate/repurchase/repurchase_{YYYY}.parquet`. Anchor: `ann_date`. `exp_date`
+sparse (~97% NaN).
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `ann_date` | Announcement Date | 公告日期 |
+| `end_date` | Period End | 截止日期 |
+| `proc` | Process Status | 进度(预案/实施/完成…) |
+| `exp_date` | Expiry Date | 过期日期 |
+| `vol` | Repurchase Volume | 回购数量 |
+| `amount` | Repurchase Amount | 回购金额 |
+| `high_limit` | Price Cap | 回购最高价 |
+| `low_limit` | Price Floor | 回购最低价 |
+
+### pledge_stat (股权质押统计)
+Total Columns: 7. `data/corporate/pledge_stat/pledge_stat_{YYYY}.parquet`. ⚠ Only `end_date` (weekly
+exchange statistic date, NOT a disclosure date) → visibility semantics need a check before formal use.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `end_date` | Statistic Date (weekly) | 截止日期(周) |
+| `pledge_count` | Number of Pledges | 质押次数 |
+| `unrest_pledge` | Unrestricted Pledged Shares | 无限售股质押数量 |
+| `rest_pledge` | Restricted Pledged Shares | 限售股质押数量 |
+| `total_share` | Total Shares | 总股本 |
+| `pledge_ratio` | Pledge Ratio | 质押比例 |
+
+### top10_floatholders (前十大流通股东)
+Total Columns: 9. `data/corporate/top10_floatholders/top10_floatholders_{period}.parquet`. Anchor:
+`ann_date`. Up to 10 holder rows per stock×period.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `ann_date` | Announcement Date | 公告日期 |
+| `end_date` | Report Period End | 报告期 |
+| `holder_name` | Holder Name | 股东名称 |
+| `hold_amount` | Shares Held | 持股数量 |
+| `hold_ratio` | Holding Ratio (total) | 占总股本比例 |
+| `hold_float_ratio` | Holding Ratio (float) | 占流通股本比例 |
+| `hold_change` | Change in Holding | 持股变动 |
+| `holder_type` | Holder Type | 股东类型 |
+
+### fina_audit (财务审计意见)
+Total Columns: 7. `data/fundamentals/fina_audit/fina_audit.parquet` (single consolidated file).
+Anchor: `ann_date`. Annual only.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `ts_code` | TS Stock Code | TS代码 |
+| `ann_date` | Announcement Date | 公告日期 |
+| `end_date` | Report Period End | 报告期 |
+| `audit_result` | Audit Opinion (标准无保留意见…) | 审计结果 |
+| `audit_fees` | Audit Fees | 审计总费用(元) |
+| `audit_agency` | Audit Firm | 会计事务所 |
+| `audit_sign` | Signing Auditors | 签字会计师 |

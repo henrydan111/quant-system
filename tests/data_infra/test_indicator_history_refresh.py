@@ -17,8 +17,9 @@ class _StubIndicatorFetcher:
     def __init__(self):
         self.calls = []
 
-    def fetch_fina_indicator_vip(self, period: str):
+    def fetch_fina_indicator_vip(self, period: str, fields: str | None = None):
         self.calls.append(period)
+        self.last_fields = fields
         return pd.DataFrame(
             [
                 {

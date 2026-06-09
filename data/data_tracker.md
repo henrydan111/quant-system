@@ -1,6 +1,6 @@
 # Quantitative Data Infrastructure Tracker
 
-*Last Updated: 2026-05-22 (added §10 JoinQuant PIT Cache infrastructure for bidirectional local↔JoinQuant strategy verification: storage layout, loader API, refresh template, 597-snapshot 中小综 migration)*
+*Last Updated: 2026-06-08 (added §11 Bucket A 15000积分 expansion: 8 new raw endpoints downloaded — report_rc analyst forecasts + express/disclosure_date/fina_mainbz/fina_audit fundamentals + repurchase/pledge_stat/top10_floatholders governance; ~10M rows, RAW-only pending normalize→PIT→provider→registry. ALSO: field-parity audit vs official Tushare specs (`workspace/research/data_audit/`) + 3 fixes — stock_basic now 5,852 rows / 17 cols (+act_name/act_ent_type), income_quarterly dropped 100%-null ebit/ebitda → 21 cols, fina_indicator re-fetched with ALL 167 fields (raw 109→167 cols, 58 indicators backfilled; RAW-ONLY, pending ledger/provider/field-registry))*
 
 This document tracks all the data currently downloaded from Tushare into the local Parquet cache (`e:\量化系统\data\`). It should be regularly updated after mass data acquisitions.
 
@@ -13,7 +13,7 @@ Contains basic metadata and trading calendars for the market.
 
 | File | Rows | Description | Required Columns Available |
 |------|------|-------------|----------------------------|
-| `stock_basic.parquet` | 5,805 | Contains all historical listed A-shares, including delisted and ST stocks. | `ts_code`, `list_date`, `delist_date`, `industry`, `exchange` |
+| `stock_basic.parquet` | 5,852 | Contains all historical listed A-shares, including delisted and ST stocks. (2026-06-08: re-fetched with `act_name`/`act_ent_type` → 17 cols.) | `ts_code`, `list_date`, `delist_date`, `industry`, `exchange`, `act_name`, `act_ent_type` |
 | `trade_cal.parquet` | 4,410 | Core trading calendar representing every day the market was explicitly open or closed. | `cal_date`, `is_open`, `pretrade_date` |
 | `namechange.parquet` | 18,237 | All historical stock name changes, including ST designation/removal events. | `ts_code`, `name`, `start_date`, `end_date`, `ann_date`, `change_reason` |
 | `stock_st_daily.parquet` | 307,696 | Daily ST stock list (2016-08-09 to 2026-03-23). Each row = one stock being ST on that trading day. **⚠ Known gap: 2020-01-02 missing (Tushare server-side issue, confirmed on re-download).** | `ts_code`, `name`, `trade_date`, `type`, `type_name` |
@@ -64,9 +64,9 @@ Quarterly financial reports explicitly tracked by announcement dates to prevent 
 | Sub-Folder | Files | Partition Strategy | Type | Description | Key Columns Available |
 |------------|-------|--------------------|------|-------------|-----------------------|
 | `income/` | 82 | By `end_date` | Financials | Income Statements. | `ts_code`, `ann_date`, `end_date`, `total_revenue`, `n_income`, etc. (88 cols total) |
-| `income_quarterly/` | 72 | By `end_date` | Financials | Single-quarter income statements (`income_vip` / direct-quarter semantics). | `ts_code`, `ann_date`, `end_date`, `revenue`, `operate_profit`, `n_income_attr_p`, `basic_eps`, etc. (25 cols total) |
+| `income_quarterly/` | 72 | By `end_date` | Financials | Single-quarter income statements (`income_vip` / direct-quarter semantics). | `ts_code`, `ann_date`, `end_date`, `revenue`, `operate_profit`, `n_income_attr_p`, `basic_eps`, etc. (21 cols; `ebit`/`ebitda` were 100% null — single-quarter endpoint doesn't populate them — dropped 2026-06-08) |
 | `balancesheet/` | 72 | By `end_date` | Financials | Balance Sheets. | `ts_code`, `ann_date`, `end_date`, `total_assets`, `total_liab`, etc. (152 cols total) |
-| `indicators/` | 97 | By reported `end_date` period | Vendor-reported metrics; VIP-refreshed raw + PIT serving | Historical raw store was clean-replaced from `fina_indicator_vip` on 2026-04-01. Current status: `544,986` rows, `109` columns in every partition including `update_flag`, and the staged PIT backend now resolves `239,008` same-key duplicate `(ts_code, ann_date, end_date)` groups via `update_flag` and deterministic tie-breaks. The historical period set still includes a small number of non-quarter-end periods already present in legacy Tushare history, so this feed should still be treated as vendor-reported rather than a paired quarterly statement family. | `ts_code`, `ann_date`, `end_date`, `update_flag`, `eps`, `roe`, `roa`, `q_op_qoq`, etc. (109 cols total) |
+| `indicators/` | 97 | By reported `end_date` period | Vendor-reported metrics; VIP-refreshed raw + PIT serving | Historical raw store was clean-replaced from `fina_indicator_vip` on 2026-04-01. Current status: **raw re-fetched 2026-06-08 with ALL 167 fields (per the field-parity audit) → `550,537` rows, `167` columns** (was 109; 58 non-default indicators backfilled — `rd_exp`/`roe_avg`/`q_*`/turnover-days/coverage ratios; old archived to `_archive/indicators_pre_20260608_230015`). **RAW-ONLY: the PIT ledger + Qlib provider were NOT rebuilt, so the 58 new fields are NOT yet served — pending ledger/provider rebuild + `field_status.yaml` governance per field.** The prior 109-col staged PIT backend resolved `239,008` same-key duplicate `(ts_code, ann_date, end_date)` groups via `update_flag` and deterministic tie-breaks (unchanged until rebuild). The historical period set still includes a small number of non-quarter-end periods already present in legacy Tushare history, so this feed should still be treated as vendor-reported rather than a paired quarterly statement family. | `ts_code`, `ann_date`, `end_date`, `update_flag`, `eps`, `roe`, `roa`, `q_op_qoq`, etc. (167 cols raw as of 2026-06-08; 109 served by current ledger until rebuild) |
 
 > Quarterly VIP backfill support is now available for `income`, `cashflow`, and `balancesheet` via `scripts/fetch_quarterly_statements.py`. `cashflow_quarterly/` has now been historically backfilled through `2025-12-31`; direct-quarter cashflow files are written only for non-empty periods so future empty fiscal periods do not create schema-less raw partitions. A live 2026-03-31 audit found `balancesheet(report_type=2/3)` and `balancesheet_vip(report_type=2/3)` returning zero rows on sampled periods and names, so `balancesheet_quarterly/` is intentionally not backfilled yet. Historical indicator refreshes now use `src/data_infra/pipeline/refresh_indicator_history.py`, which stages refreshed VIP period files and swaps them into `data/fundamentals/indicators/` only after validation.
 
@@ -206,6 +206,34 @@ Local mirror of JoinQuant's point-in-time views for fields Tushare doesn't expos
 - Backtest-engine deployment-parity defaults consume the cache transparently when a strategy uses the `JoinQuantParityStrategy` template.
 
 **Enforcement**: `tests/data_infra/test_jq_pit_cache.py` locks the loader API and shim contract (18 tests).
+
+---
+
+## 11. Bucket A — 15000积分 Expansion (raw bootstrap, downloaded 2026-06-08)
+
+Eight new deep-history endpoints unlocked by the Tushare 5000→15000积分 upgrade, downloaded via
+[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py) (sequential, `_safe_api_call`, cap-aware
+pagination, idempotent). **Status: RAW only** — NOT yet normalized, NOT in the PIT ledger, NOT in the
+Qlib provider, NOT in `field_status.yaml`. These are not research-usable until they go through
+normalize → PIT ledger → Qlib materialization → field-registry promotion. Provenance + design:
+[workspace/research/data_expansion/](../workspace/research/data_expansion/) (plan + GPT cross-review).
+
+| Dataset | Path | API / bulk mode | Files | Rows | Stocks | Span | Size |
+|---|---|---|---|---|---|---|---|
+| `report_rc` ⭐ | `data/analyst/report_rc/report_rc_{YYYY}.parquet` | `report_rc`, report_date month-chunked + paginated (cap 5000) | 17 | 2,869,998 | 5,648 | 2010-01..2026-06 | 123 MB |
+| `express` | `data/fundamentals/express/express_{period}.parquet` | `express_vip` by quarterly period | 73 | 28,646 | 4,543 | 2008..2026 | 2.9 MB |
+| `disclosure_date` | `data/fundamentals/disclosure_date/disclosure_date_{period}.parquet` | `disclosure_date` by quarterly end_date (all-market) | 73 | 266,225 | 6,044 | 2008..2026 | 2.2 MB |
+| `fina_mainbz` | `data/fundamentals/fina_mainbz/fina_mainbz_{period}.parquet` | `fina_mainbz_vip` by period, paginated (cap 10000) | 65 | 1,901,403 | 6,942 | 2010..2026 | 53 MB |
+| `repurchase` | `data/corporate/repurchase/repurchase_{YYYY}.parquet` | `repurchase` by ann_date year range, paginated | 17 | 101,874 | 3,781 | 2010..2026 | 1.7 MB |
+| `pledge_stat` | `data/corporate/pledge_stat/pledge_stat_{YYYY}.parquet` | `pledge_stat` by weekly Friday end_date, paginated (HARD cap 3000) | 13 | 2,073,664 | 4,444 | 2014-03..2026-06 | 18.6 MB |
+| `top10_floatholders` | `data/corporate/top10_floatholders/top10_floatholders_{period}.parquet` | `top10_floatholders` by period, paginated (cap 6000) | 77 | 2,635,091 | 6,021 | 2007..2026 | 89 MB |
+| `fina_audit` | `data/fundamentals/fina_audit/fina_audit.parquet` | `fina_audit` PER-STOCK (ts_code required), checkpointed | 1 | 95,825 | 5,803 | 1997..2025 | 1.0 MB |
+
+**PIT notes (must be honored before any formal use):**
+- `report_rc` is analyst forecast data anchored on `report_date`. PIT-safety (no backfill/restate) is under test via the standing canary `scripts/report_rc_backfill_canary.py` (baseline 2026-06-08; 2nd reading scheduled 2026-06-15). Intended anchor: `strictly_next_open_trade_day(report_date)`. **Coverage is strongly size-tilted** (large-cap ~95% vs small-cap ~22–53%) — see cross-review §2.4.
+- `pledge_stat` carries ONLY `end_date` (a weekly exchange statistic date, NOT a disclosure date) → visibility-date semantics + publication-lag need a check before formal use.
+- `express` / `disclosure_date` / `fina_audit` / `repurchase` / `top10_floatholders` carry `ann_date` → disclosure-anchored (standard `max(ann_date, f_ann_date)` / `ann_date` handling).
+- `fina_mainbz` segment rows anchor on the owning report's disclosure (join `ann_date` from the statement).
 
 ---
 

@@ -176,7 +176,7 @@ class TushareFetcher:
     def fetch_stock_basic(self) -> pd.DataFrame:
         """Fetch list of all stocks, including delisted and ST (L, D, P)."""
         logging.info("Fetching stock basics (L, D, P)...")
-        return self._safe_api_call(self.pro.stock_basic, exchange='', list_status='L,D,P', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
+        return self._safe_api_call(self.pro.stock_basic, exchange='', list_status='L,D,P', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type')
 
     def fetch_trade_cal(self, start_date=None, end_date=None) -> pd.DataFrame:
         """Fetch trading calendar."""
@@ -285,8 +285,13 @@ class TushareFetcher:
         fields: str = None,
         report_types=("2", "3"),
     ) -> pd.DataFrame:
-        """Fetch direct single-quarter income rows, preserving both report_type=2 and 3."""
-        return self._fetch_statement_report_types(
+        """Fetch direct single-quarter income rows, preserving both report_type=2 and 3.
+
+        Single-quarter (report_type 2/3) rows structurally lack cumulative-only fields
+        (e.g. ``ebit``/``ebitda`` are never populated by Tushare for single quarters);
+        we drop all-null columns so they are not stored as misleading empty columns.
+        """
+        df = self._fetch_statement_report_types(
             self.pro.income_vip,
             report_types=report_types,
             limit=VIP_ALL_STOCK_LIMIT,
@@ -298,6 +303,7 @@ class TushareFetcher:
             comp_type=comp_type,
             fields=fields,
         )
+        return df.dropna(how="all", axis=1) if df is not None and not df.empty else df
 
     def fetch_balancesheet(
         self,
@@ -584,8 +590,12 @@ class TushareFetcher:
         fields: str = None,
         report_types=("2", "3"),
     ) -> pd.DataFrame:
-        """Fetch direct single-quarter cashflow rows, preserving report_type variants."""
-        return self._fetch_statement_report_types(
+        """Fetch direct single-quarter cashflow rows, preserving report_type variants.
+
+        Drops all-null columns: single-quarter (report_type 2/3) rows structurally lack
+        cumulative-only fields, which would otherwise be stored as empty columns.
+        """
+        df = self._fetch_statement_report_types(
             self.pro.cashflow_vip,
             report_types=report_types,
             limit=VIP_ALL_STOCK_LIMIT,
@@ -597,6 +607,7 @@ class TushareFetcher:
             comp_type=comp_type,
             fields=fields,
         )
+        return df.dropna(how="all", axis=1) if df is not None and not df.empty else df
 
     def fetch_forecast(self, ts_code: str = None, period: str = None,
                        ann_date: str = None) -> pd.DataFrame:
