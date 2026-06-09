@@ -23,6 +23,7 @@ from .catalog import (
     get_composite_defs,
     get_category_map,
     get_industry_relative_defs,
+    catalog_composition,
 )
 from .hypothesis_factors import (
     HYPOTHESIS_FACTOR_SCHEMA,
@@ -61,6 +62,7 @@ __all__ = [
     'get_composite_defs',
     'get_category_map',
     'get_industry_relative_defs',
+    'catalog_composition',
     'HypothesisFactorSpec',
     'HYPOTHESIS_FACTOR_SCHEMA',
     'compute_spec_hash',

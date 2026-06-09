@@ -1,0 +1,90 @@
+{
+  "hypothesis": {
+    "hypothesis_id": "hyp_osap_probinformedtrading_20260608_001",
+    "thesis_statement": "In A-shares, higher Probability of Informed Trading predicts higher cross-sectional forward returns (US predictor 'ProbInformedTrading', Easley, Hvidkjaer and O'Hara 2002, JF). Test whether this published US anomaly ports to A-shares.",
+    "mechanism": "OSAP economic category: liquidity. Proposed A-share build: price+vol+amount -> 'osap_probinformedtrading_ashare'. Definition (US): Download parameter estimates from the archived version of Hvidkjaers website (https://web.archive.org/web/20110219024112/http://sites.google.com/site/hvidkjaer/data/data-files/pin1983-2001.zip?attredirects=0), and the page for Duarte, Hu, Young, JFE 2020 https://edwinhu.github.io",
+    "source": {
+      "source_type": "academic_paper",
+      "identifier": "OSAP:ProbInformedTrading",
+      "title": "Probability of Informed Trading",
+      "authors": [
+        "Easley",
+        "Hvidkjaer",
+        "O'Hara"
+      ],
+      "url": "",
+      "publication_date": "2002",
+      "publisher": "JF"
+    },
+    "factor_refs": [
+      {
+        "object_type": "composite_factor",
+        "object_name": "osap_probinformedtrading_ashare"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2015-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2024-12-31",
+      "walk_forward_config": {
+        "train_years": 3,
+        "validation_years": 1,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "20d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 1,
+    "expected_effect": null,
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.025,
+      "min_deflated_sharpe": 0.6,
+      "min_cost_adjusted_sharpe": 0.4,
+      "max_drawdown": 0.35,
+      "max_annual_turnover": 4.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "[DRAFT] The US 'ProbInformedTrading' effect may not survive A-share microstructure (T+1, limit boards, retail-dominated flow) or may be subsumed by existing liq factors after neutralization.",
+      "weakest_assumption": "[DRAFT] That the US accounting/price construction maps faithfully to Tushare A-share fields without definitional drift.",
+      "what_would_falsify_this": "[DRAFT] Sealed-OOS rank-ICIR below the committed band, or hard rules failing after realistic costs.",
+      "priors_on_cost_sensitivity": "[DRAFT] Review turnover at the chosen rebalance before committing."
+    },
+    "pre_registered_at": "",
+    "registered_by": ""
+  },
+  "_draft_review": {
+    "GENERATED_BY": "triage_osap_to_ashare.py — DRAFT, not registerable as-is",
+    "feasibility": "BUILDABLE_NOW",
+    "data_need": "price+vol+amount",
+    "novelty_heuristic": "REVIEW",
+    "dup_match_or_category": "liq_* (15 factors) — verify variant",
+    "us_evidence_context_only": {
+      "monthly_ls_return_pct": null,
+      "t_stat": 2.496,
+      "gscholar_cites": 2835,
+      "reproduction_quality": "1_good",
+      "us_sample": "1984-1998"
+    },
+    "proposed_factor_name": "osap_probinformedtrading_ashare",
+    "todo_before_registering": [
+      "Implement factor 'osap_probinformedtrading_ashare' in factor_library (map US definition -> A-share Tushare/Qlib fields; PIT-safe Ref(...,1)).",
+      "CONFIRM not a duplicate of existing catalog factors in category 'liq' (heuristic flag = REVIEW).",
+      "SET expected_effect = YOUR A-share prediction (point + CI + horizon). Do NOT copy us_evidence_context_only above.",
+      "CONFIRM the OOS window is unburned for this design before registering.",
+      "Then: hypothesis_cli.py register --file <this> --profile-id factor_screening"
+    ]
+  }
+}

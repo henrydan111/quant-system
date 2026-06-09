@@ -8,6 +8,12 @@ update notes in [project_state.md](../../../project_state.md) (Phases 1–7, 202
 *enforced invariants* (the load-bearing rules), read [CLAUDE.md](../../../CLAUDE.md) §3. This
 doc explains *how the whole thing works and why it is safe*.
 
+> **Confused about what `draft`/`candidate`/`approved` mean, or when a factor should be registered
+> as a draft at all?** Start with the one-page quick-reference
+> [factor_status_ladder.md](factor_status_ladder.md) (因子等级与收录标准) — it explains that `draft`
+> is the *floor* (free on definition, not earned), why sandbox-testing ≠ registration, and the
+> practical bar for adding a factor to the catalog. Then come back here for the mechanics.
+
 ---
 
 ## 1. The problem this solves

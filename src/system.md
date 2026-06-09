@@ -115,9 +115,9 @@ Notes:
 - `factor_library/`: Phase 3 two-layer factor framework
   - `hypothesis_factors.py`: immutable hypothesis YAML factor specs
   - `operators.py`: Layer 1 Qlib expression operators plus Layer 2 pandas transforms
-  - `catalog.py`: central registry of the 177-factor catalog (153 base + 4 industry-relative + 20 Layer-2 composites; see catalog.py module docstring for the per-API breakdown)
+  - `catalog.py`: central registry of the factor catalog (base + industry-relative + Layer-2 composites). The count is DERIVED — call `catalog_composition()` (the single source of truth); never hard-code it. Adding a factor needs no test/doc count edits (parity is structural in test_factor_registry.py).
   - `qlib_expr_guide.md`: expression syntax rules and edge cases
-  - `__init__.py`: public entry points: `get_factor_catalog()`, `get_composite_defs()`, `get_industry_relative_defs()`, `compute_factors()`, `add_composites()`, `add_industry_relative_composites()`. The two industry-relative APIs added 2026-04-27 expose Layer 2 industry-mean-subtract / size+industry-neutralize composites that consume time-varying SW2021 industry labels from `provider_metadata.build_industry_series_asof`.
+  - `__init__.py`: public entry points: `get_factor_catalog()`, `catalog_composition()` (live count, single source of truth), `get_composite_defs()`, `get_industry_relative_defs()`, `compute_factors()`, `add_composites()`, `add_industry_relative_composites()`. The two industry-relative APIs added 2026-04-27 expose Layer 2 industry-mean-subtract / size+industry-neutralize composites that consume time-varying SW2021 industry labels from `provider_metadata.build_industry_series_asof`.
 - `factor_eval/`: IC, quantile, neutralization, decay, correlation, plotting, statistical tests, cost-aware evaluation, and regime diagnostics
 - `model_zoo/`: ML model wrappers such as LightGBM, XGBoost, and ElasticNet
 - `mlflow_tracker.py`: experiment logging through MLflow

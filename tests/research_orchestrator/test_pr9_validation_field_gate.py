@@ -820,27 +820,18 @@ class TestFormalFactorCompatibility:
 
     Compatibility universe scope (GPT 5.5 Pro round-3 review #3):
 
-      * `get_factor_catalog(include_new_data=False)` →  111 base factors
-      * `get_factor_catalog(include_new_data=True)`  →  153 base factors
-        (+36 new alpha endpoint factors: flow_*, north_*, margin_*,
-        earn_*, alpha_*; +6 Round-6 sealed-OOS winners onboarded
-        2026-06-02 via _add_sealed_oos_winners)
-      * `get_industry_relative_defs()`              →    4 industry-relative
-        composites (PIT inherited from `base` factor)
-      * `get_composite_defs()`                       →   20 Layer-2 composites
-        (PIT inherited from `components` list)
-      * Total factor surface area                    →  177 named factors
+      * `get_factor_catalog(include_new_data=False)` → base factors (existing Qlib data)
+      * `get_factor_catalog(include_new_data=True)`  → base + new-alpha-endpoint families
+        (flow_*, north_*, margin_*, earn_*, alpha_*) + the Round-6 sealed-OOS winners
+      * `get_industry_relative_defs()`               → industry-relative composites
+      * `get_composite_defs()`                       → Layer-2 composites
+      * `catalog_composition()`                      → the live counts (single source of truth)
 
-    This test iterates the 153 base factors from
-    `get_factor_catalog(include_new_data=True)`. The 4 industry-relative
-    composites and 20 Layer-2 composites inherit their field dependencies
-    from their base factors and are covered transitively (their fields are
-    a subset of what this test already checks). Industry-relative
-    composites also have direct coverage in `TestHelperBehavior`.
-
-    The historical PR description on PR #14 mentions "191 factors" — that
-    docstring count in catalog.py:1 is stale; the actual live count is 177
-    (153 + 4 + 20). The "191" never reflected the runtime universe.
+    Counts are DERIVED, never pinned here — the catalog grows as factors are added.
+    This test iterates `get_factor_catalog(include_new_data=True)`; the industry-relative
+    and Layer-2 composites inherit field dependencies from their base factors and are
+    covered transitively (their fields are a subset of what this test already checks).
+    Industry-relative composites also have direct coverage in `TestHelperBehavior`.
 
     Pre-PR-9a a silent registry/catalog mismatch could block
     historically-formal factors at the resolver gate without anyone
@@ -875,6 +866,11 @@ class TestFormalFactorCompatibility:
             expected_dataset="margin_detail_repayment",
             expected_fields=["$rzche"],
         ),
+        # NOTE: qual_cash_to_assets / qual_rd_to_assets were briefly here (their bare
+        # $money_cap/$total_assets/$rd_exp aliases were unregistered). 2026-06-08 they were
+        # repointed to the registered PIT fields ($money_cap_q0/$total_assets_q0 already
+        # approved; $rd_exp_sq_q0 promoted into the income family, parity 0-mismatch) → both
+        # now PASS the formal gate, so they are NO LONGER non-formal and were removed here.
     }
 
     def test_every_formal_factor_resolves_at_formal_validation(self) -> None:

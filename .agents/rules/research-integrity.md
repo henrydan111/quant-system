@@ -68,6 +68,17 @@ This is non-negotiable. When analyzing a strategy result, a discrepancy between 
 
 This rule applies to ALL responses about quantitative results, including trade comparisons, performance attribution, regime analysis, and gap decompositions. The CLAUDE.md mirror lives in §7 item 10.
 
+## 8b. No leverage in strategy research (added 2026-06-08)
+
+Leverage is NOT a viable option in strategy research. This is non-negotiable.
+
+- Research, evaluate, and report every strategy **unlevered**: gross exposure ≤ 1× capital, no margin financing / borrowing to exceed 100% invested.
+- Never propose leverage as a path to a return (CAGR) target, and never quote a **levered** figure as the headline / deployable result — the deployable number is the **1× number**.
+- A long-only book is fully-invested-or-cash. A market-neutral book is sized at its natural 1× (funded long vs short, gross ≈ 1×); do not scale it up to chase a return target.
+- Rationale: leverage adds no edge — it only multiplies volatility and drawdown proportionally — and the deployment context does not assume access to it. Return must be earned via Sharpe at native volatility, not borrowed. (Empirically, leverage on a high-vol long-only book is self-defeating: vol-drag + borrow cap the geometric CAGR while drawdown explodes.)
+- `config.yaml risk.max_leverage` is a legacy field; it is NOT license to lever in research.
+- The CLAUDE.md mirror lives in §7 item 11; the AGENTS.md mirror lives in §2a.3.
+
 ## 9. Phase 3 Factor Implementation Rules
 
 - Use the two-layer factor framework in `src/alpha_research/factor_library/`:
