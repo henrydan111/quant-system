@@ -58,6 +58,7 @@ TARGETS = [
     ("income", "operate_profit", "flow", [0, 4]),
     ("income", "n_income_attr_p", "flow", [0, 4]),
     ("income", "oper_cost", "flow", [0, 4]),
+    ("income", "rd_exp", "flow", [0]),   # added 2026-06-08 — consumed by qual_rd_to_assets
     ("balancesheet", "total_assets", "snapshot", [0, 4]),
     ("balancesheet", "total_liab", "snapshot", [0, 4]),
     ("balancesheet", "total_cur_assets", "snapshot", [0, 4]),

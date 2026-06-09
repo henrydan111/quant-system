@@ -1,6 +1,6 @@
 """
 Factor Research Data Initializer (Phase 3)
-Downloads additional data sources required for the 177-factor research catalog:
+Downloads additional data sources required for the factor research catalog:
   1. cashflow      - Cash flow statements (per stock, quarterly)
   2. forecast      - Earnings pre-announcements (per stock)
   3. moneyflow     - Daily capital flow (per trading day)
@@ -64,7 +64,7 @@ ALL_CATEGORIES = [
 class FactorDataInitializer:
     """Downloads factor research data from Tushare Pro API.
 
-    Handles 7 new data endpoints needed for the 177-factor catalog.
+    Handles 7 new data endpoints needed for the factor catalog.
     Supports per-category download, resume-safe operation, and dry-run mode.
 
     Args:

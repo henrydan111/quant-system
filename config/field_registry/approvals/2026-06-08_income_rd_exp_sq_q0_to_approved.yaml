@@ -1,0 +1,69 @@
+# Field-registry approval evidence (2026-06-08) — income $rd_exp_sq_q0 (R&D expense).
+#
+# Adds the single-quarter R&D-expense line item $rd_exp_sq_q0 to the already-approved
+# `income` statement family (Wave-1 promotion 2026-05-31). It was materialized by the
+# SAME pit_backend single-quarter (_sq_q*) derivation as the other approved income
+# fields but was not registered then (no factor used it). Unlocks qual_rd_to_assets
+# (OSAP idea-sourced R&D-intensity draft) for formal eligibility.
+
+approval_id: 2026-06-08_income_rd_exp_sq_q0_to_approved
+date: 2026-06-08
+dataset_id: income
+source_endpoint: tushare.income
+from_status: unregistered          # materialized in the provider but absent from field_status.yaml
+to_status: approved
+reviewer: henrydan111
+related_pr: osap-tier1-factor-expansion
+related_findings_id: null
+
+provider_build_id: report_rc_incr_20260608
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Single-quarter R&D expense (研发费用), income statement. PIT-anchored on
+# max(ann_date, f_ann_date) — IDENTICAL derivation + anchoring as the other approved
+# income _sq_q* fields. Predictive factors MUST wrap $rd_exp_sq_q0 in Ref(...,1).
+pit_contract:
+  availability_column: ann_date            # max(ann_date, f_ann_date) for statement families
+  knowable_at: disclosure_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: single_quarter_sq_q0_derived_from_income_statement   # same as approved income family
+
+evidence:
+  family_inheritance:
+    finding: "$rd_exp_sq_q0 is produced by the EXACT same single-quarter (_sq_q*) derivation pipeline and the same max(ann_date, f_ann_date) PIT anchor as the income family fields approved 2026-05-31 (revenue_sq_q*, n_income_sq_q*, oper_cost_sq_q*, operate_profit_sq_q*, ebit_sq_q*). It inherits that family's verified derivation + leak-free anchoring; it was simply omitted from the 2026-05-31 list (no factor referenced it then)."
+  coverage:
+    method: "compute_factors(Ref($rd_exp_sq_q0,1)) over 2019-01..2019-02, full A-share universe."
+    non_null_fraction: 0.834
+    coverage_caveat: "R&D is reported by ~83% of firm-quarters (non-R&D firms are NaN, correctly excluded from the cross-section) → qual_rd_to_assets is a sub-universe factor. This is an economic property of R&D disclosure, not a data defect."
+  bare_alias_identity:
+    finding: "The unregistered bare aliases $money_cap / $total_assets used by the sibling qual_cash_to_assets were verified BIT-IDENTICAL to their registered _q0 names (fraction_equal=1.000, corr=1.0000 over 300,045 stock-days), confirming the bare/registered name pairs are the same served values; qual_cash_to_assets was repointed to the already-approved $money_cap_q0/$total_assets_q0 (no field change needed for it)."
+  provider_parity:
+    method: "Independent-recompute cell-by-cell vs provider D.features via workspace/scripts/verify_statement_provider_parity.py (rd_exp added to TARGETS, now permanent since a formal factor consumes it) — the SAME harness as the 2026-05-31 family promotion. 3 stocks (600519.SH / 000001.SZ / 000002.SZ) over 2017-2019."
+    result: "0 mismatch on all stock-days. 600519.SH 288/731 non-null (Moutai reports R&D); 000001.SZ bank 0 non-null (no R&D → provider correctly serves NaN, recompute agrees); 000002.SZ PASS. Clean single-quarter cumulative-diff derivation — NO ebit-type financials over-production."
+  prior_exclusion:
+    note: "rd_exp was DELIBERATELY EXCLUDED from the 2026-05-31 income promotion 'for sparse coverage' (with ebitda/fin_exp_int_exp). Re-introduced here because (a) cov 0.834 clears that promotion's own >=50% non-null gate, and (b) a formal factor (qual_rd_to_assets) now consumes it. The sparse-coverage caveat is preserved as the sub-universe property above."
+  tests:
+    - test_id: tests/research_orchestrator/test_pr9_validation_field_gate.py
+      asserts: "qual_rd_to_assets now RESOLVES at formal_validation ($rd_exp_sq_q0 + $total_assets_q0 approved) → removed from KNOWN_NON_FORMAL_FACTORS."
+
+fields_added:
+  - field: $rd_exp_sq_q0
+    note: "Single-quarter R&D expense (income statement, _sq_q0 derived). PIT-anchored on max(ann_date, f_ann_date)."
+
+notes: |
+  Same-family extension, not a new dataset. cash_to_assets needed NO field change
+  (its $money_cap_q0/$total_assets_q0 were already approved); only $rd_exp_sq_q0 is
+  promoted here, to unlock qual_rd_to_assets. No on-disk / pipeline change — the field
+  was already materialized; only the registry status is recorded. Evidence basis is
+  family-inheritance + a coverage probe (parity not independently re-run); run_daily_qa
+  is the standard confirming gate.

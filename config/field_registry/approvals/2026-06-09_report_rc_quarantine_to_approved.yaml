@@ -1,0 +1,140 @@
+# Field-registry approval evidence (2026-06-09)
+#
+# Promotes report_rc (analyst-forecast event-flow primitives) from "quarantine"
+# to "approved" in config/field_registry/field_status.yaml. Read-only review:
+# workspace/scripts/diag_report_rc_review.py -> workspace/outputs/gated_review/report_rc_review.json.
+
+approval_id: 2026-06-09_report_rc_quarantine_to_approved
+date: 2026-06-09
+dataset_id: report_rc
+source_endpoint: tushare.report_rc
+from_status: quarantine
+to_status: approved
+reviewer: henrydan111
+related_pr: report-rc-p1-plumbing (merged) + incremental publish report_rc_incr_20260608
+related_findings_id: null
+
+# Bind to the provider build that materialized + serves report_rc (the incremental
+# add published 2026-06-09). Daily-QA approval_evidence_binding enforces this.
+provider_build_id: report_rc_incr_20260608
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# PIT / availability contract.
+#
+# The PRIMARY guarantee is the LEDGER anchor, NOT a same-day raw read: every
+# report_rc event is anchored at effective_date = strictly_next_open_trade_day of
+# (contemporaneous create_time when gap <= REPORT_RC_BACKFILL_GAP_DAYS=45, else
+# report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS=2 open days). report_date+1 was
+# VALIDATED market-wide (2026-06-09, REPORT_RC_PIT_ANCHOR_VALIDATION.md: vs the
+# independent genuine-PIT JoinQuant 朝阳永续 consensus — level Pearson/Spearman
+# +0.997, per-date broad Spearman +0.94, holds for small caps + later-delisted;
+# forecast-error parity reproduces the 2015/2017 regime sign-flips with Tushare
+# LESS accurate than the oracle = no lookahead). Predictive factors MUST
+# additionally wrap every field in Ref(...,1) (the daily/event-endpoint
+# convention; the factor-library PIT-safety lint enforces it).
+pit_contract:
+  availability_column: effective_date  # = report_date+1 (validated), NOT create_time backfill stamp
+  knowable_at: next_open_after_disclosure
+  usage: predictive_signal
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: event_flow_primitives_per_stock_day_bin
+  provider_transform_owner: src/data_infra/pit_backend.py::_materialize_report_rc_consensus
+  consumer: src/alpha_research/factor_library (via compute_factors, Ref(...,1)-framed)
+
+# Structured evidence. Reproduce with workspace/scripts/diag_report_rc_review.py.
+evidence:
+  coverage:
+    method: "Distinct covered stocks per effective_date year, from the live PIT ledger (2.85M rows)."
+    covered_stocks_by_year:
+      "2011": 2155
+      "2014": 2124
+      "2018": 2417
+      "2021": 2624
+      "2024": 3342
+    total_distinct_covered_stocks: 5648
+    conclusion: >
+      Broad, dense coverage 2010-2026 (~2,100-3,500 covered stocks/yr; delisted names
+      retained -> no survivorship-by-omission). Known limitation (cross-review 2026-06-08):
+      coverage is STRONGLY CAP-TILTED (large-cap ~95% vs small-cap lower) -> any report_rc
+      factor MUST rank within-coverage and size-neutralize hard. report_rc is sparse by
+      nature (event-only days populated); the moneyflow ">=50% non-null per field" bar does
+      not apply to an event feed.
+  value_sanity:
+    method: "D.features on 120 sampled stocks, 2014-2024 (291,749 rows, 13,802 event rows)."
+    eps_up_min: 0.0
+    eps_dn_min: 0.0
+    negativity_any: false
+    revision_count_eq_up_plus_dn: true   # holds on EVERY event row (internal consistency)
+    n_active_range: [0.0, 72.0]
+    conclusion: "eps_up/eps_dn non-negative; revision_count == up+dn on every event row; n_active bounded; zero negatives."
+  provider_serving:
+    method: "D.features('600519_SH', $report_rc__*, 2015) — deep (pre-2022) history readable."
+    rows_2015: 244
+    up_event_days_2015: 9
+    readable: true
+    note: "Deep history (2010+) reclaimed by the report_date+1 re-anchor; serves correctly from the live provider."
+  determinism_parity:
+    note: >
+      report_rc fields are DERIVED (event-flow), not raw columns, so 'parity' = internal
+      consistency (rev == up+dn, non-negativity, n_active sanity — all pass above) PLUS the
+      test-covered byte-determinism of the materializer (an independent rebuild produces
+      byte-identical bins — test_report_rc_bins_roundtrip_and_deterministic).
+  tests:
+    - test_id: tests/data_infra/test_report_rc_ledger.py
+      asserts: "14 tests: row-preservation/anti-collapse, report_date+1 anchor, backfill-stamp-ignored, gap-boundary 45/46, transition asymmetry, event-flow primitives + no-lookahead canary, bin round-trip + byte-determinism, analyst-id normalization."
+    - test_id: tests/data_infra/test_provider_boundary.py + test_pit_live_provider.py + test_event_like_daily_namespace.py
+      asserts: "37 passed against report_rc_incr_20260608 (provider boundary / PIT live / namespacing)."
+    - test_id: tests/data_infra/test_field_registry.py
+      asserts: "report_rc fields resolve to dataset_id=report_rc, status=approved, allowed at formal_validation."
+
+fields_added:
+  - field: $report_rc__eps_up
+    note: "# analysts who RAISED their FY1 EPS forecast on the event day (per (stock,analyst,quarter) eps.shift(1))."
+  - field: $report_rc__eps_dn
+    note: "# analysts who LOWERED their FY1 EPS forecast on the event day."
+  - field: $report_rc__eps_revision_count
+    note: "= eps_up + eps_dn (the revision evidence count)."
+  - field: $report_rc__n_active_analysts
+    note: "# distinct analysts with a live forecast (each forecast keeps an analyst live REPORT_RC_ACTIVE_TTL_OPEN_DAYS=120 trading days). Coverage proxy — size-adjacent, do NOT use as standalone alpha."
+
+# ----------------------------------------------------------------------------
+# OUTSTANDING GATE (recorded, NOT discharged): breadth restatement canary.
+# ----------------------------------------------------------------------------
+outstanding_gate:
+  name: report_rc_breadth_restatement_canary
+  why: >
+    The report_date+1 anchor is validated for the consensus LEVEL/error market-wide. The
+    eps_up/eps_dn BREADTH primitives are a SECOND-DIFFERENCE (per-analyst revision direction),
+    more sensitive to the exact per-revision SET than the level — a backfill could in principle
+    preserve the mean yet alter individual revisions. Level-parity is necessary + strong but
+    not fully sufficient for breadth.
+  test: "scripts/report_rc_backfill_canary.py recheck — 2nd snapshot vs SNAP1; PASS = 0 backfilled + 0 drift."
+  schedule: "2026-06-15 09:30 +08:00 (one-time scheduled task already set)."
+  binding_consequence: >
+    This approval ENABLES report_rc for formal RESEARCH (field is approved; eps_diffusion can
+    run the factor_lifecycle IS gate). It is a HARD GATE before the eps_diffusion sealed-OOS
+    (Phase E): the single-shot OOS must NOT be spent until the canary PASSES, because a
+    breadth-set contamination would make the one-shot verdict meaningless. If the canary FAILS,
+    report_rc is RE-QUARANTINED (or restricted to the 2023+ contemporaneous window) and this
+    approval is revoked. Per user decision 2026-06-09: approve now, canary as the pre-OOS check.
+
+notes: |
+  report_rc was downloaded raw 2026-06-08 (Bucket A, 15000积分 expansion), plumbed through the
+  PIT ledger + a custom event-flow materializer (P1, merged via report-rc-p1-plumbing), then
+  re-anchored to report_date+1 (the create_time vendor-backfill stamp was proven a non-issue;
+  REPORT_RC_PIT_ANCHOR_VALIDATION.md) and published into the live provider 2026-06-09
+  (report_rc_incr_20260608). This promotion makes the $report_rc__* event-flow primitives
+  usable at formal_validation. The factor itself (eps_diffusion = net % analysts raising FY1
+  EPS) is NOT yet built/validated — it must still pass the factor_lifecycle IS gate and a
+  single sealed-OOS shot (the WAVE1A +0.64 ICIR is INVALID — non-compliant hand-rolled path).
+  Approving the FIELD ≠ a deployable factor.

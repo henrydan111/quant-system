@@ -38,27 +38,29 @@ class FactorRegistryTests(unittest.TestCase):
         return tempfile.TemporaryDirectory(prefix=f"{name}_", dir=WORKSPACE_OUTPUTS)
 
     def test_sync_catalog_creates_expected_current_counts(self):
-        # Updated 2026-04-27: catalog now includes 4 industry-relative factors
-        # via get_industry_relative_defs() (plan vast-exploring-rabbit v8 phase B3).
-        # Updated 2026-06-02: +6 Round-6 sealed-OOS winners onboarded into
-        # get_factor_catalog(include_new_data=True) via _add_sealed_oos_winners,
-        # bringing the total to 153 base + 20 composite + 4 industry_relative = 177.
+        # Counts are DERIVED from catalog_composition() (the single source of truth),
+        # never hard-coded — the catalog grows as factors are added. This still
+        # enforces the real invariant: sync output == catalog composition, the
+        # base/composite/industry_relative partition is correct, no duplicate ids,
+        # and re-sync is idempotent (no row growth).
+        from src.alpha_research.factor_library.catalog import catalog_composition
+        comp = catalog_composition()
         with self.make_temp_dir("factor_registry_sync") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             result = store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
 
             current_df = store.factor_master[store.factor_master["is_current"].fillna(False)].copy()
 
-            self.assertEqual(result["current_factor_count"], 177)
-            self.assertEqual(len(current_df), 177)
-            self.assertEqual(int((current_df["factor_kind"] == "base").sum()), 153)
-            self.assertEqual(int((current_df["factor_kind"] == "composite").sum()), 20)
-            self.assertEqual(int((current_df["factor_kind"] == "industry_relative").sum()), 4)
+            self.assertEqual(result["current_factor_count"], comp["total"])
+            self.assertEqual(len(current_df), comp["total"])
+            self.assertEqual(int((current_df["factor_kind"] == "base").sum()), comp["base"])
+            self.assertEqual(int((current_df["factor_kind"] == "composite").sum()), comp["composite"])
+            self.assertEqual(int((current_df["factor_kind"] == "industry_relative").sum()), comp["industry_relative"])
 
             store.sync_catalog(record_run=False, generated_at="2026-04-04 21:05:00")
             current_df = store.factor_master[store.factor_master["is_current"].fillna(False)].copy()
-            self.assertEqual(len(current_df), 177)
-            self.assertEqual(current_df["factor_id"].nunique(), 177)
+            self.assertEqual(len(current_df), comp["total"])
+            self.assertEqual(current_df["factor_id"].nunique(), comp["total"])
 
     def test_base_factor_definition_change_creates_new_version(self):
         with self.make_temp_dir("factor_registry_base_version") as temp_dir:
@@ -329,8 +331,9 @@ class FactorRegistryTests(unittest.TestCase):
             for col in ("lo_sharpe_gross", "lo_excess_ann_gross", "oos_ls_sharpe", "retain_pct",
                         "evidence_class", "formal_evidence_eligible", "source_hash", "provider_build_id"):
                 self.assertIn(col, store.factor_evidence.columns)
+            from src.alpha_research.factor_library.catalog import catalog_composition
             current = store.factor_master[store.factor_master["is_current"].fillna(False)]
-            self.assertEqual(len(current), 177)  # P2.1 changes no row count
+            self.assertEqual(len(current), catalog_composition()["total"])  # P2.1 changes no row count
             row = current.iloc[0]
             self.assertEqual(row["signal_role"], "unassigned")
             self.assertEqual(row["signal_role_suggested"], "unassigned")
@@ -508,8 +511,9 @@ class FactorRegistryTests(unittest.TestCase):
         with self.make_temp_dir("factor_registry_p2_revalonly") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             store.sync_catalog(record_run=True, generated_at="2026-04-04 21:00:00")
+            from src.alpha_research.factor_library.catalog import catalog_composition
             cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
-            self.assertEqual(len(cur), 177)
+            self.assertEqual(len(cur), catalog_composition()["total"])
             self.assertTrue((cur["last_revalidated_at"].astype(str).str.strip() == "").all())
             self.assertTrue((cur["latest_provider_build_id"].astype(str).str.strip() == "").all())
             self.assertTrue((cur["latest_calendar_policy_id"].astype(str).str.strip() == "").all())

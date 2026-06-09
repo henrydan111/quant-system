@@ -197,18 +197,20 @@ class FactorSelectionTests(unittest.TestCase):
         with self._temp_dir("sel_sync") as d:
             # dry_run on an empty registry: reports the full catalog as would-be drafts,
             # writes NOTHING (a read still raises not-synced afterwards).
+            from src.alpha_research.factor_library.catalog import catalog_composition
+            total = catalog_composition()["total"]  # derived, not hard-coded
             dry = sync_catalog_to_registry(registry_dir=d, dry_run=True)
             self.assertTrue(dry["dry_run"])
-            self.assertEqual(len(dry["new_drafts"]), 177)
+            self.assertEqual(len(dry["new_drafts"]), total)
             self.assertFalse(dry["parity_ok"])
             with self.assertRaises(RegistryNotSyncedError):
                 get_factors(stage="sandbox_screening", status_in={"draft"}, registry_dir=d)
 
-            # real sync: 177 draft rows, reaches parity
+            # real sync: full-catalog draft rows, reaches parity
             res = sync_catalog_to_registry(registry_dir=d, record_run=False)
             self.assertFalse(res["dry_run"])
-            self.assertEqual(res["synced"], 177)
-            self.assertEqual(len(res["new_drafts"]), 177)
+            self.assertEqual(res["synced"], total)
+            self.assertEqual(len(res["new_drafts"]), total)
             self.assertEqual(res["catalog_only"], [])
             self.assertEqual(res["registry_only"], [])
             self.assertTrue(res["parity_ok"])

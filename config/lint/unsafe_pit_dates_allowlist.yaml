@@ -85,3 +85,18 @@
     historical_investigation; formal_research_allowed: false.
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
+
+- path: workspace/scripts/diag_report_rc_review.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    report_rc approval evidence review (quarantine->approved, 2026-06-09). Read-only
+    diagnostic that reads the report_rc PIT ledger
+    (data/pit_ledger/report_rc/report_rc.parquet) to compute coverage-by-year
+    (distinct covered stocks per effective_date year) for the approval YAML. Counting
+    the ledger's own coverage REQUIRES reading it directly — the sanctioned loader
+    returns a PIT-aligned panel, not the raw (ts_code, effective_date) rows under
+    audit, so routing through it would defeat the diagnostic. No mutation;
+    script_status: historical_investigation; formal_research_allowed: false.
+  permanent: true
+  link: config/field_registry/approvals/2026-06-09_report_rc_quarantine_to_approved.yaml

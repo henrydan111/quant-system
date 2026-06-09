@@ -119,7 +119,7 @@ def run_historical_catalog_revalidation(
     compute_factors_fn=None,
 ) -> pd.DataFrame:
     """Mode-2 port of ``revalidate_catalog_walkforward.main`` — the current base catalog
-    (153 factors as of 2026-06-02), field-eligibility-capped, full-window IS+OOS. Loads via the sanctioned
+    (the current base catalog — live count via ``catalog_composition()``), field-eligibility-capped, full-window IS+OOS. Loads via the sanctioned
     ``operators.compute_factors`` path (injectable as ``compute_factors_fn`` for tests).
     Returns the UNROUNDED panel DataFrame (the thin script wrapper renders the CSV via
     ``report.write_catalog_csv``)."""
