@@ -99,6 +99,90 @@ the IS-only / zero-OOS / resolve-but-label guarantees.
 
 ---
 
+## Revision 3 — GPT 5.5 Pro code-grounded review (2026-06-10)
+
+A second review (GPT 5.5 Pro, browsed the repo + read the implementing modules) found the v2 plan's
+**capability matrix overstated readiness**: several rows were labeled ✅ where the cited function does
+LESS than claimed (the primitive exists, but the *composed metric helper* is not yet written/tested).
+**All 4 falsifiable code claims were independently verified TRUE** (`venv` spot-checks, 2026-06-10):
+
+1. **`statistical_tests.bootstrap_sharpe_ci` is IID `rng.choice(replace=True)` Sharpe resampling** — NOT
+   a block bootstrap, NOT an IC/RankIC t-stat. → overlap-adjusted significance is **❌ NOT implemented**
+   (v2's ⚠️ was too generous). `deflated_sharpe_ratio` is a simplified `√(2·lnN)/√T` uplift (not
+   dependence/effective-trials aware).
+2. **`decay_analysis.compute_ic_decay` computes `price(t+h)/price(t)−1` internally with NO `is_end`
+   guard** → feeding it a price series leaks for h>20 (a 40d label realizes ~Feb-2021, past `is_end`).
+   **HIGHEST-priority leak fix.**
+3. **Registry `expected_direction` is OBSERVED, not predeclared** — `walk_forward_validation._expected_direction(heldout)`
+   derives it from the heldout ICIR sign, persisted via `factor_lifecycle_steps.set_expected_direction`.
+   → Rev-2 §A.3's "orient monotonicity by registry `expected_direction`" is **CIRCULAR** for those 30
+   factors (direction observed on the same IS window the shape is judged on).
+4. **`regime.py` summarizes a return series by calendar year** (mean/vol/positive/count) — NOT per-year
+   ICIR from an IC series, NOT bull/bear regimes.
+
+### Corrected capability labels (supersede §1 of [unified_eval_plan_v2.md](unified_eval_plan_v2.md))
+
+| Metric | v2 | Corrected | Why |
+|---|---|---|---|
+| Heldout ICIR / sign-cons, mean-IC point est., neutralized IC, correlation/redundancy | ✅ | ✅ | engine + `neutralize_size_industry` + `correlation` genuinely do this |
+| Overlap-adjusted significance (t/CI) | ⚠️ | **❌** | bootstrap is IID Sharpe; no HAC; no statsmodels |
+| `mono_shape` / oriented step-signs / `insufficient_quantiles` | ✅ | **⚠️** | exists only in my **probe** script, not a tested module fn |
+| Decay full vector + per-horizon clip | ✅ | **⚠️** | needs per-horizon `load_is_windowed_panel`; raw `compute_ic_decay` leaks |
+| Turnover one-way `/(2K)` + tie/top/bottom | ✅ | **⚠️** | `annualized_turnover` only annualizes; churn formula is custom-unwritten |
+| Long-leg excess net vs benchmark; LS decomposition | ✅ | **⚠️** | benchmark-excess + China long-side cost + orientation-aware long leg = custom-unwritten |
+| DSR/PSR, regime-ICIR, capacity, persistence, data-quality | ✅ | **⚠️** | primitives only; composed/tested helpers not written |
+| Monotonicity orientation by predeclared direction | ⚠️ | **🔴 circular** | registry field is observed; must NOT be used |
+
+### Two must-fix-FIRST (highest priority, before any helper work)
+
+- **Decay leak:** production decay MUST call `load_is_windowed_panel(..., horizon=h)` separately per
+  horizon (each independently `is_end`-clips realization) and compute IC vs `panel.label`. NEVER feed a
+  single price series to `compute_ic_decay`.
+- **Direction non-circularity:** do NOT use the registry `expected_direction` for monotonicity. Either
+  (a) **predeclare economic directions** by hand from factor definitions, or (b) **fold-pure train-fold
+  orientation** (estimate sign on train fold ONLY, freeze, judge shape on that fold's heldout block).
+  Add `direction_source ∈ {economic_prior, train_fold, undetermined}`.
+
+### Accepted refinements
+
+- **Significance:** **HAC/Newey-West is PRIMARY** (Bartlett kernel, lag ≥ horizon; default `lag=40`,
+  report sensitivity 20/40/60), **block bootstrap = robustness** (moving/circular blocks on the
+  date-level IC series, block_len≈40, NOT IID). Implement HAC internally (no new dep) OR pin
+  `statsmodels` in [requirements.txt](../../../requirements.txt) (it is currently absent).
+- **`style_controls_v1` (FROZEN + hashed; all 14 verified present in catalog):** `size_ln_mcap`,
+  `size_ln_mcap_sq`, `val_ep_ttm`, `val_bp`, `val_sp_ttm`, `mom_return_20d`, `mom_return_120d`,
+  `rev_return_5d`, `qual_gross_profitability`, `qual_accruals`, `liq_log_dollar_vol`, `liq_turnover_20d`,
+  `liq_amihud_20d`, `risk_vol_20d`. One frozen pipeline: winsorize → cs-z/rank → regress (controls
+  [+ industry dummies if the column says so]); **do NOT** pre-neutralize controls AND add size/industry
+  dummies (double-counts). Report **residual coverage** (listwise deletion changes the universe).
+- **Two marginal columns, two reference variants:** `resid_ic_vs_approved_stable` (EXCLUDES the 2
+  provisional report_rc approvals; **default sortable**) + `resid_ic_vs_approved_current` (includes,
+  `provisional_ref=true`) + `resid_ic_vs_style_controls_v1`. The 2 provisionals are 25% of an 8-factor
+  base and correlated with the endpoint family under review → never the canonical novelty measure.
+- **Add (capable, elevate):** conditional IC by size bucket (`compute_ic_by_group`), top-bucket style
+  exposures, coverage-drift-over-time (esp. `report_rc`), execution-friction flags (suspended/limit-
+  block/ST/new-listing/missing-price rate in the active bucket), **benchmark-assignment discipline**
+  (pre-assign CSI300/500 by universe/size profile or show both — never pick after seeing excess).
+- **Cut from headline:** naive ICIR significance, peak/best decay horizon, combined LS, DSR-as-is,
+  bull/bear-regime ICIR (until implemented), factor-return skew/kurt/tail.
+- **Tight dashboard core:** `coverage_tier`, `coverage`, `heldout_rank_icir`, `sign_consistency`,
+  HAC-t/q for mean RankIC, `mean_rank_ic`, `neutralized_rank_icir`, `long_leg_excess_net_ir`,
+  `turnover_ann`, `mono_shape/reason`, compact decay vector, `resid_ic_vs_approved_stable`,
+  `resid_ic_vs_style_controls_v1`, `reference_set_version`/`provisional_flag`.
+- **Freeze + hash BEFORE the full run** (methodology hash): `style_controls_v1`, benchmark assignment,
+  HAC/bootstrap settings, cost assumptions, `reference_set_version`. The 185-factor dashboard is
+  discovery → multiplicity is NOT just 185 (× horizons × directions × shapes × controls × peer-groups
+  × benchmarks × cost assumptions × human column-sorting); DSR with `N=185` is under-deflated.
+
+### Net effect
+
+The plan is directionally right but **NOT yet implementation-ready**: the full run is blocked on writing
++ testing real helpers (HAC t-stat, mono_shape module fn, per-horizon decay, one-way turnover,
+long-leg-excess), fixing the decay leak + the direction circularity, and freezing/hashing the
+methodology. v2 §1 ✅/⚠️ labels are corrected above.
+
+---
+
 ## Design principles
 
 1. **One口径 for all 185 factors.** Every factor gets the same intrinsic metric set, same
@@ -293,6 +377,19 @@ Dashboard column mapping:
   (oriented step-signs + `mono_shape` + `mono_frac_dominant`) verified on real data — correctly
   labels `top_reversal` / `inverted_U` / `irregular` / `insufficient_quantiles` where a single
   Spearman could not. Equal-weight `marginal_icir_delta` TESTED → REJECTED (confounded; see Tier 2).
-- **NEXT:** run the full-catalog recompute (~40 min, IS-only, cached) — adds decay horizon
-  (multi-horizon labels) + the monotonicity shape columns to all field-eligible factors — write the
-  new evidence columns, then repoint the dashboard 评级 column.
+- **2026-06-10 (P0a/P0b/P0c implemented + tested):** the correctness/statistics core now lives in the
+  tested module [src/alpha_research/factor_eval/unified_eval.py](../../../src/alpha_research/factor_eval/unified_eval.py)
+  ([tests/alpha_research/test_unified_eval.py](../../../tests/alpha_research/test_unified_eval.py),
+  **19 passed**):
+  - **P0a** — `leak_safe_decay_ic_vector` (per-horizon `is_end`-clipped; closes the `compute_ic_decay`
+    leak), `resolve_orientation` (economic-prior / train-fold; NEVER the observed registry direction),
+    `classify_quantile_shape` (promoted to a module fn).
+  - **P0b** — `hac_mean_tstat` (internal Bartlett Newey-West HAC; no statsmodels; test proves
+    HAC-SE > IID-SE for positive autocorrelation = the overlap fix) + `moving_block_bootstrap_mean_ci`
+    (date-level moving blocks, deterministic).
+  - **P0c** — `one_way_turnover` (true `|Δ|/(|A|+|prev|)×252/rebal` + tie-rate + top/bottom) +
+    `long_leg_excess_ir` (A-share deployable long-leg-excess-vs-benchmark IR, net long-side cost).
+- **NEXT (P1 → P2):** wire these helpers into a production driver, run the 7-factor verify with the
+  full corrected pipeline, **freeze + hash the methodology** (`style_controls_v1`, benchmark
+  assignment, HAC/bootstrap settings, cost, `reference_set_version`), then the full-catalog recompute
+  (IS-only, cached) → write evidence columns → repoint the dashboard 评级 (coverage-tier-peer-grouped).
