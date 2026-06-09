@@ -46,25 +46,32 @@ def hac_mean_tstat(series, *, lags: int = 40) -> dict:
     ``lags ≥ horizon`` (default 40; the driver should report sensitivity at 20/40/60). This is the
     PRIMARY significance statistic — NOT ``statistical_tests.bootstrap_sharpe_ci`` (IID Sharpe).
     """
+    if int(lags) < 0:
+        raise ValueError(f"lags must be non-negative, got {lags}")
     x = pd.Series(series, dtype=float).dropna().to_numpy()
     T = int(len(x))
     if T < 3:
-        return {"mean": None, "hac_se": None, "hac_t": None, "hac_p": None, "lags": 0, "n": T}
+        return {"mean": None, "hac_se": None, "hac_t": None, "hac_p": None, "lags": 0, "n": T,
+                "small_sample_warning": True}
     mean = float(x.mean())
     e = x - mean
     L = min(int(lags), T - 1)
+    # The HAC t-stat / normal p are ASYMPTOTIC — flag thin samples (sub-coverage factors drop dates).
+    small_sample = bool(T < max(100, 4 * L))
     omega = float(e @ e) / T  # γ₀
     for l in range(1, L + 1):
         w = 1.0 - l / (L + 1)
         omega += 2.0 * w * float(e[l:] @ e[:-l]) / T
     var_mean = omega / T
     if var_mean <= 0:
-        return {"mean": mean, "hac_se": None, "hac_t": None, "hac_p": None, "lags": L, "n": T}
+        return {"mean": mean, "hac_se": None, "hac_t": None, "hac_p": None, "lags": L, "n": T,
+                "small_sample_warning": small_sample}
     se = float(np.sqrt(var_mean))
     t = mean / se
     from math import erfc, sqrt
-    p = float(erfc(abs(t) / sqrt(2.0)))  # two-sided normal
-    return {"mean": mean, "hac_se": se, "hac_t": float(t), "hac_p": p, "lags": L, "n": T}
+    p = float(erfc(abs(t) / sqrt(2.0)))  # two-sided normal (asymptotic)
+    return {"mean": mean, "hac_se": se, "hac_t": float(t), "hac_p": p, "lags": L, "n": T,
+            "small_sample_warning": small_sample}
 
 
 def moving_block_bootstrap_mean_ci(series, *, block_len: int = 20, n_boot: int = 2000,
@@ -93,13 +100,30 @@ def moving_block_bootstrap_mean_ci(series, *, block_len: int = 20, n_boot: int =
 
 
 # ------------------------------------------------------- P0c: turnover + long-leg excess
+def _one_way_weight_turnover(cur: set, prev: set) -> float:
+    """TRUE equal-weight one-way portfolio turnover `0.5·Σ_{i∈union}|w_cur_i − w_prev_i|` with equal
+    weights `1/|bucket|`. Differs from membership churn `|Δ|/(|A|+|prev|)` when bucket sizes drift
+    (e.g. prev 100 ⊂ cur 200 → weight turnover 0.5, churn 0.333). This is the cost-relevant number.
+    """
+    if not cur and not prev:
+        return float("nan")
+    wc = 1.0 / len(cur) if cur else 0.0
+    wp = 1.0 / len(prev) if prev else 0.0
+    s = 0.0
+    for i in cur | prev:
+        s += abs((wc if i in cur else 0.0) - (wp if i in prev else 0.0))
+    return 0.5 * s
+
+
 def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, top_q: float = 0.2,
                      trading_days: int = 252, min_names: int = 5) -> dict:
-    """True one-way membership turnover `|A_t Δ A_{t-rebal}|/(|A_t|+|A_prev|) × (252/rebal)`.
+    """Annualized TRUE equal-weight one-way portfolio turnover of the top bucket (the long book).
 
-    Top-bucket (the long book) is the headline; bottom-bucket reported separately; plus the
-    boundary `tie_rate` (fraction of the cross-section sitting exactly on the top threshold —
-    inflated for discrete/tie-heavy factors, which makes membership churn unstable).
+    Per rebalance, `turnover = 0.5·Σ|Δw|` (equal weights) — the cost-relevant metric, NOT membership
+    churn (they differ when bucket sizes drift via ties/coverage). Bottom bucket reported separately.
+    Plus instability diagnostics: top/bottom boundary `tie_rate` (fraction exactly on the threshold)
+    and bucket size fractions. Returns both the candidate and the used (post-`min_names`) rebalance
+    counts.
     """
     f = _to_dt_inst(factor).dropna()
     df = f.reset_index()
@@ -107,46 +131,68 @@ def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, top_q: floa
     dates = sorted(df["datetime"].unique())
     rebal = dates[::rebalance_days]
     top_prev = bot_prev = None
-    top_churn, bot_churn, tie_rates = [], [], []
+    top_t, bot_t, top_tie, bot_tie, top_frac, bot_frac = [], [], [], [], [], []
+    used = 0
     for d in rebal:
         g = df[df["datetime"] == d]
         n = len(g)
         if n < min_names:
             continue
+        used += 1
         hi, lo = g["val"].quantile(1 - top_q), g["val"].quantile(top_q)
         top = set(g.loc[g["val"] >= hi, "instrument"])
         bot = set(g.loc[g["val"] <= lo, "instrument"])
-        tie_rates.append(float((g["val"] == hi).sum()) / n)
-        if top_prev is not None and (top or top_prev):
-            top_churn.append(len(top ^ top_prev) / (len(top) + len(top_prev)))
-        if bot_prev is not None and (bot or bot_prev):
-            bot_churn.append(len(bot ^ bot_prev) / (len(bot) + len(bot_prev)))
+        top_tie.append(float((g["val"] == hi).sum()) / n)
+        bot_tie.append(float((g["val"] == lo).sum()) / n)
+        top_frac.append(len(top) / n)
+        bot_frac.append(len(bot) / n)
+        if top_prev is not None:
+            top_t.append(_one_way_weight_turnover(top, top_prev))
+        if bot_prev is not None:
+            bot_t.append(_one_way_weight_turnover(bot, bot_prev))
         top_prev, bot_prev = top, bot
     ann = trading_days / rebalance_days
+
+    def _m(a):
+        a = [v for v in a if v == v]
+        return float(np.mean(a)) if a else float("nan")
+
     return {
-        "turnover_ann": float(np.mean(top_churn)) * ann if top_churn else float("nan"),
-        "bottom_turnover_ann": float(np.mean(bot_churn)) * ann if bot_churn else float("nan"),
-        "tie_rate": float(np.mean(tie_rates)) if tie_rates else float("nan"),
-        "n_rebalances": len(rebal),
+        "turnover_ann": _m(top_t) * ann if top_t else float("nan"),
+        "bottom_turnover_ann": _m(bot_t) * ann if bot_t else float("nan"),
+        "tie_rate": _m(top_tie), "bottom_tie_rate": _m(bot_tie),
+        "top_bucket_frac": _m(top_frac), "bottom_bucket_frac": _m(bot_frac),
+        "n_rebalance_candidates": len(rebal), "n_rebalances_used": used,
     }
 
 
 def long_leg_excess_ir(factor: pd.Series, label: pd.Series, benchmark_fwd_return: pd.Series, *,
                        top_q: float = 0.2, cost_bps_per_turnover: float = 25.0,
-                       rebalance_days: int = 20, trading_days: int = 252, min_names: int = 5) -> dict:
-    """Deployable A-share headline: equal-weight top-quantile LONG-ONLY excess vs benchmark, net cost.
+                       rebalance_days: int = 20, horizon: int | None = None, trading_days: int = 252,
+                       min_names: int = 5, include_initial_cost: bool = True) -> dict:
+    """A-share deployable-PROXY (IS): equal-weight top-quantile LONG-ONLY excess vs benchmark, net cost.
 
-    ``factor`` MUST already be oriented (top bucket = intended-best; see :func:`resolve_orientation`).
-    ``label`` = per-name forward return at the rebalance horizon; ``benchmark_fwd_return`` = the index
-    forward return over the SAME horizon, indexed by date. Long-side cost only (no borrow fee) applied
-    as ``one_way_turnover × cost_bps_per_turnover`` (default 25bps ≈ realistic_china long-side
-    round-trip: sell stamp 5 + 2×commission 2.5 + slippage 10 + transfer 1). Returns annualized excess
-    + its IR. This is the deployable number — a combined long-short spread is NOT (A-shares can't short).
+    This is a SCREENING PROXY, NOT a backtest IR — it ignores limit-up/down, suspensions, T+1, ST/new-
+    listing filters, liquidity/participation caps, partial fills, real order price, nonlinear slippage,
+    and top-K (vs top-quantile) construction; names with a missing forward label are dropped (which can
+    hide suspension/delist friction). Use the event-driven engine for a deployable figure.
+
+    ``factor`` MUST already be oriented (top bucket = intended-best; see :func:`resolve_orientation` —
+    refuse to call this when ``orientation_valid`` is False). ``label`` = per-name forward return at the
+    rebalance ``horizon``; ``benchmark_fwd_return`` = the index forward return over the SAME ``horizon``,
+    indexed by date (FAIL-CLOSED: a missing benchmark date raises, never silently advances the book).
+    ``horizon`` defaults to ``rebalance_days`` (non-overlapping); the IR annualizes by √(252/rebal).
+    Long-side cost only (no borrow fee): ``one_way_turnover × cost_bps_per_turnover`` (default 25bps ≈
+    realistic_china long-side round-trip = sell stamp 5 + 2×commission 2.5 + slippage 10 + transfer 1).
     """
+    if horizon is not None and int(horizon) != int(rebalance_days):
+        raise ValueError(f"horizon ({horizon}) must equal rebalance_days ({rebalance_days}) for "
+                         "non-overlapping IR annualization; pass aligned values or omit horizon")
+    bench_idx = set(pd.Timestamp(d) for d in benchmark_fwd_return.index)
     f, lab = _to_dt_inst(factor), _to_dt_inst(label)
     joined = pd.DataFrame({"f": f, "r": lab}).dropna()
     if joined.empty:
-        return {"long_leg_excess_ann": None, "long_leg_excess_ir": None, "n_rebalances": 0}
+        return {"long_leg_excess_ann": None, "long_leg_excess_ir_proxy_is": None, "n_rebalances": 0}
     dates = sorted(joined.index.get_level_values("datetime").unique())
     rebal = dates[::rebalance_days]
     excess, prev_top = [], None
@@ -154,19 +200,25 @@ def long_leg_excess_ir(factor: pd.Series, label: pd.Series, benchmark_fwd_return
         g = joined.xs(d, level="datetime")
         if len(g) < min_names:
             continue
+        dt = pd.Timestamp(d)
+        if dt not in bench_idx or pd.isna(benchmark_fwd_return.loc[dt]):
+            raise ValueError(f"missing benchmark forward return at {dt.date()} (fail-closed; a "
+                             "silently-dropped benchmark would corrupt the next row's turnover)")
         top = g[g["f"] >= g["f"].quantile(1 - top_q)]
         cur = set(top.index)
-        turn = len(cur ^ prev_top) / (len(cur) + len(prev_top)) if prev_top else 1.0
-        bench = benchmark_fwd_return.get(d, np.nan)
-        excess.append(float(top["r"].mean()) - float(bench) - turn * cost_bps_per_turnover / 1e4)
+        turn = _one_way_weight_turnover(cur, prev_top) if prev_top is not None else (
+            1.0 if include_initial_cost else 0.0)
+        excess.append(float(top["r"].mean()) - float(benchmark_fwd_return.loc[dt])
+                      - turn * cost_bps_per_turnover / 1e4)
         prev_top = cur
     ex = pd.Series(excess).dropna()
     if len(ex) < 2:
-        return {"long_leg_excess_ann": None, "long_leg_excess_ir": None, "n_rebalances": int(len(ex))}
+        return {"long_leg_excess_ann": None, "long_leg_excess_ir_proxy_is": None,
+                "n_rebalances": int(len(ex))}
     ann = trading_days / rebalance_days
     std = float(ex.std())
     ir = float(ex.mean() / std * np.sqrt(ann)) if std > 0 else float("nan")
-    return {"long_leg_excess_ann": float(ex.mean() * ann), "long_leg_excess_ir": ir,
+    return {"long_leg_excess_ann": float(ex.mean() * ann), "long_leg_excess_ir_proxy_is": ir,
             "n_rebalances": int(len(ex))}
 
 
@@ -210,30 +262,39 @@ def classify_quantile_shape(quantile_returns) -> dict:
 
 
 # --------------------------------------------------------------------------- non-circular direction
-def resolve_orientation(ic_by_date: pd.Series, *, train_dates=None, economic_prior=None) -> dict:
+def resolve_orientation(ic_by_date: pd.Series, *, train_dates=None, economic_prior=None,
+                        min_train_t: float = 1.0) -> dict:
     """Resolve a NON-CIRCULAR orientation sign for the monotonicity shape.
 
     NEVER uses the registry ``expected_direction`` (observed from heldout ICIR → circular).
-    Priority: (1) ``economic_prior`` (predeclared ±1) → ``direction_source='economic_prior'``;
-    (2) sign of mean IC over ``train_dates`` ONLY → ``'train_fold'``; (3) zero/empty →
-    ``'undetermined'`` (sign defaults to +1, shape reported without a pass/fail polarity claim).
+    Priority: (1) ``economic_prior`` (predeclared ±1) → ``'economic_prior'`` (always valid);
+    (2) sign of mean IC over ``train_dates`` ONLY, but ONLY if the train-window signal is strong
+    enough (HAC |t| ≥ ``min_train_t``) → ``'train_fold'``; (3) weak/zero/empty → ``'undetermined'``.
 
-    ``ic_by_date`` is a per-date IC (or RankIC) Series. ``train_dates`` is the set/Index of dates in
-    the walk-forward TRAIN windows only (NOT the full IS span, NOT the heldout blocks).
+    Returns ``orientation_valid`` — downstream consumers (e.g. :func:`long_leg_excess_ir`, the shape
+    pass/fail label) MUST refuse a "top bucket is intended-best" claim when it is ``False`` (the sign
+    defaults to +1 only so the raw bucket vector can still be displayed). Train-date matching is
+    type-normalized to ``Timestamp`` so a string/Timestamp mismatch can't silently yield no match.
     """
     if economic_prior in (1, -1, 1.0, -1.0):
-        return {"sign": float(economic_prior), "direction_source": "economic_prior"}
+        return {"sign": float(economic_prior), "direction_source": "economic_prior",
+                "orientation_valid": True}
     if train_dates is not None and ic_by_date is not None and len(ic_by_date):
-        idx = ic_by_date.index
-        sel = idx.isin(list(train_dates))
-        train_ic = ic_by_date[sel].dropna()
-        if len(train_ic):
+        ic = ic_by_date.copy()
+        ic.index = pd.DatetimeIndex([pd.Timestamp(d) for d in ic.index])
+        train_set = {pd.Timestamp(d) for d in train_dates}
+        train_ic = ic[ic.index.isin(train_set)].dropna()
+        if len(train_ic) >= 3:
             m = float(train_ic.mean())
-            if m > 0:
-                return {"sign": 1.0, "direction_source": "train_fold"}
-            if m < 0:
-                return {"sign": -1.0, "direction_source": "train_fold"}
-    return {"sign": 1.0, "direction_source": "undetermined"}
+            t = hac_mean_tstat(train_ic, lags=min(40, len(train_ic) - 1)).get("hac_t")
+            # weak-signal guard: a tiny noisy train mean must NOT manufacture false orientation
+            # precision. When HAC t is undefined (zero-variance / constant series) the signal is
+            # strong iff the constant mean is non-trivially non-zero.
+            strong = (abs(m) > 1e-9) if t is None else (abs(t) >= min_train_t)
+            if m != 0 and strong:
+                return {"sign": 1.0 if m > 0 else -1.0, "direction_source": "train_fold",
+                        "orientation_valid": True, "train_hac_t": None if t is None else float(t)}
+    return {"sign": 1.0, "direction_source": "undetermined", "orientation_valid": False}
 
 
 # --------------------------------------------------------------------------- leak-safe decay
@@ -280,15 +341,18 @@ def leak_safe_decay_ic_vector(
             "n_dates": int(rank_ic.dropna().shape[0]),
             "max_realization": str(pd.Timestamp(panel.max_label_realization_date).date()),
         }
-    # half-life vs the peak |rank_icir|
+    # half-life vs the SHORTEST horizon's |rank_icir| (NOT peak-relative — peak selection is hidden
+    # horizon mining; the shortest horizon is the freshest signal, a fixed non-selected reference).
     icirs = {h: abs(v["rank_icir"]) for h, v in vec.items() if v["rank_icir"] == v["rank_icir"]}
     half_life = None
     if icirs:
-        peak_h = max(icirs, key=icirs.get)
-        peak = icirs[peak_h]
-        for h in sorted(h for h in icirs if h >= peak_h):
-            if icirs[h] <= 0.5 * peak:
-                half_life = h
-                break
-    return {"horizons": list(horizons), "vector": vec, "half_life": half_life,
-            "note": "leak-safe: each horizon independently is_end-clipped via build_is_windowed_panel"}
+        h0 = min(icirs)
+        base = icirs[h0]
+        if base > 0:
+            for h in sorted(h for h in icirs if h > h0):
+                if icirs[h] <= 0.5 * base:
+                    half_life = h
+                    break
+    return {"horizons": list(horizons), "vector": vec, "half_life_vs_shortest": half_life,
+            "note": "leak-safe: each horizon independently is_end-clipped via build_is_windowed_panel; "
+                    "half_life is vs the shortest horizon (not peak-relative)"}

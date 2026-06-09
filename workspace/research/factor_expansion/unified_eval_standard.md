@@ -34,10 +34,12 @@ flagged real correctness/safety gaps, not just additions. All accepted. The amen
    HLZ t≥3.0 bar, any IC t-stat) uses **Newey-West (≥20 lags)** or **block bootstrap**. The naive
    `mean/std` ICIR is kept as a point estimate but its CI/t-stat MUST be overlap-corrected.
 3. **Monotonicity orientation circularity (leak fix).** Orienting by the *same-sample* mean RankIC
-   then judging monotonicity on that sample is mild in-sample circularity. FIX: orient by the
-   **registry `expected_direction`** (predeclared) where it exists; for drafts without one, orient on
-   **train folds** and judge shape on **heldout folds**. Add an explicit `direction_source` column
-   (`registry` / `train_fold`) per factor.
+   then judging monotonicity on that sample is mild in-sample circularity. FIX: orient by a
+   **predeclared ECONOMIC prior** where one exists; otherwise orient on **train folds** and judge shape
+   on **heldout folds**. Add an explicit `direction_source` column (`economic_prior` / `train_fold` /
+   `undetermined`). ⚠ **Rev3 correction:** the registry `expected_direction` is NOT a predeclared prior —
+   it is OBSERVED from the heldout ICIR (`_expected_direction(heldout)`), so using it is itself circular
+   (see Rev3 §A.3). Never use the registry field for orientation.
 
 ### B. Design-correctness — relabel / regroup / version (no leak, but mislabeled)
 
@@ -242,9 +244,10 @@ system must backfill.
    (synthetic, 2026-06-10): full-spearman collapses **U-shape (0.0)**, **inverted-U (0.0)**, and
    **genuine flat (≈0)** to the same value, and a `body_spearman` patch only rescues the *top-tail*
    case. The COMPLETE non-parametric characterization (Patton–Timmermann 2010, *Monotonicity in
-   Asset Returns*) is the **adjacent-bucket difference SIGN VECTOR**, oriented by the factor's
-   `expected_direction` first (so the intended-best quantile is Q_top; a descending factor is sign-
-   flipped before classification, else `---+` mis-reads as U-shape):
+   Asset Returns*) is the **adjacent-bucket difference SIGN VECTOR**, oriented by the **non-circular
+   direction** (`resolve_orientation`: economic prior, else train-fold sign — NEVER the observed
+   registry `expected_direction`; Rev3 §A.3) so the intended-best quantile is Q_top (a descending
+   factor is sign-flipped before classification, else `---+` mis-reads as U-shape):
 
    | Shape | step_signs (5q→4 steps) | full spearman | `mono_frac_dominant` |
    |---|---|---|---|
@@ -256,12 +259,13 @@ system must backfill.
    | irregular / noise | `+-+-` | ≈0 | 0.50 |
 
    **Full-run monotonicity columns (replaces the `monotonic_spearman_body` patch):**
-   - `monotonic_spearman` — full-5q Spearman (familiar scalar, kept).
-   - `mono_step_signs` — the expected-direction-oriented adjacent-diff sign string.
-   - `mono_shape` — classified label from the sign string (the 6 cases above).
-   - `mono_frac_dominant` = `max(#up, #down) / n_steps` — a monotonicity-strength scalar that, unlike
-     Spearman, a single tail reversal only drops to 0.75 (not 0.0). **This is the better headline
-     than Spearman.**
+   - **Headline = `mono_shape` + the bucket-return vector + adjacent-step magnitudes + a CI/`mono_reason`**
+     (per Rev2 §B.8 — NOT a single scalar).
+   - `mono_step_signs` — the non-circularly-oriented adjacent-diff sign string.
+   - `monotonic_spearman` — full-5q Spearman (familiar scalar, supporting).
+   - `mono_frac_dominant` = `max(#up, #down) / n_steps` — a **supporting DIAGNOSTIC** (a single tail
+     reversal only drops it to 0.75 vs Spearman's 0.0). It ignores magnitude/confidence/ties, so it is
+     NOT the headline (Rev2 §B.8 supersedes any earlier "better headline" wording).
    - `monotonic_reason=insufficient_quantiles(n<3)` for the discrete/tie-heavy case (a) below.
 
    **Three sources of "not cleanly monotonic" the full run disambiguates:**

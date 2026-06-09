@@ -192,4 +192,50 @@ def test_long_leg_excess_positive_when_top_beats_benchmark():
     out = long_leg_excess_ir(factor, label, zero_bench, top_q=0.2, cost_bps_per_turnover=0.0,
                              rebalance_days=20)
     assert out["long_leg_excess_ann"] > 0
-    assert out["long_leg_excess_ir"] > 0
+    assert out["long_leg_excess_ir_proxy_is"] > 0
+
+
+# ----------------------------------------------------------------- round-2 GPT 5.5 Pro fixes
+def test_hac_formula_exact_small_vector():
+    # independently recompute the Newey-West Bartlett estimator and match the function exactly
+    x = np.array([1.0, 2.0, 4.0, 8.0])
+    T, L = len(x), 2
+    e = x - x.mean()
+    g0 = (e @ e) / T
+    omega = g0 + 2.0 * sum((1 - l / (L + 1)) * (e[l:] @ e[:-l]) / T for l in range(1, L + 1))
+    se_exp = float(np.sqrt(omega / T))
+    out = hac_mean_tstat(pd.Series(x), lags=2)
+    assert out["hac_se"] == pytest.approx(se_exp, rel=1e-9)
+    assert out["hac_t"] == pytest.approx(x.mean() / se_exp, rel=1e-9)
+
+
+def test_hac_rejects_negative_lags():
+    with pytest.raises(ValueError):
+        hac_mean_tstat(pd.Series([1.0, 2.0, 3.0]), lags=-1)
+
+
+def test_orientation_weak_signal_is_undetermined():
+    # tiny noisy train mean → HAC |t| < 1 → must NOT manufacture a sign
+    rng = np.random.default_rng(3)
+    dates = pd.date_range("2020-01-01", periods=60, freq="D")
+    ic = pd.Series(rng.normal(0.02, 1.0, 60), index=dates)  # |t| ≈ 0.15
+    out = resolve_orientation(ic, train_dates=dates, min_train_t=1.0)
+    assert out["direction_source"] == "undetermined"
+    assert out["orientation_valid"] is False
+
+
+def test_true_weight_turnover_differs_from_membership_churn():
+    from src.alpha_research.factor_eval.unified_eval import _one_way_weight_turnover
+    prev, cur = set(range(100)), set(range(200))  # cur ⊇ prev, sizes drift 100→200
+    # true equal-weight one-way turnover = 0.5 (NOT the membership churn 100/300 = 0.333)
+    assert _one_way_weight_turnover(cur, prev) == pytest.approx(0.5)
+
+
+def test_long_leg_excess_fails_closed_on_missing_benchmark():
+    idx, dates, insts = _cs_panel()
+    rng = np.random.default_rng(2)
+    factor = pd.Series(rng.normal(size=len(idx)), index=idx)
+    label = pd.Series(rng.normal(size=len(idx)), index=idx)
+    partial_bench = pd.Series(0.0, index=pd.DatetimeIndex(dates[:50]))  # misses rebal date day 60
+    with pytest.raises(ValueError):
+        long_leg_excess_ir(factor, label, partial_bench, rebalance_days=20)
