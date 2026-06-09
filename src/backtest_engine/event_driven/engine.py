@@ -17,7 +17,7 @@ from typing import Optional
 import pandas as pd
 
 from .data_feeder import QlibDataFeeder, strict_cache_mode
-from .portfolio import Portfolio
+from .portfolio import Portfolio, Position
 from .exchange import Exchange
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
@@ -288,6 +288,12 @@ class BacktestEngine:
         self._daily_records: list[dict] = []
         self._daily_holdings: list[dict] = []
         self._benchmark_returns: pd.Series = pd.Series(dtype=float)
+        # Carry-forward cache of each held name's last KNOWN real (non-NaN,
+        # positive) close. Used by ``_handle_delistings`` to price a delisting
+        # force-close at the true last traded value even across a suspension
+        # gap (where the final in-universe bars are NaN), instead of the
+        # optimistic ``avg_cost`` fallback. Populated in ``_record_day``.
+        self._last_valid_price: dict[str, float] = {}
 
         # Instrumentation (plan ``snappy-buzzing-meerkat`` v5 verification gate).
         # Per-day wall-clock timing for the full day loop iteration, used by
@@ -626,16 +632,43 @@ class BacktestEngine:
         for code in list(self.portfolio.positions.keys()):
             if code not in today_codes:
                 pos = self.portfolio.positions[code]
-                if code in prev_indexed.index:
-                    last_price = prev_indexed.loc[code, 'close']
-                else:
-                    last_price = pos.avg_cost
+                last_price = self._resolve_delist_price(code, pos, prev_indexed)
                 logger.warning(
                     'Delisting detected: %s on %s, force-closing %d '
-                    'shares at %.2f',
+                    'shares at %.4f',
                     code, date, pos.shares, last_price
                 )
                 self.portfolio.force_close(code, price=last_price)
+
+    def _resolve_delist_price(self, code: str, pos: Position,
+                              prev_indexed: pd.DataFrame) -> float:
+        """Best-known exit price for a position leaving the universe (delisting).
+
+        Carries forward the last KNOWN real (non-NaN, positive) traded close so
+        the force-close prices at the true last traded value even when the final
+        in-universe bars were NaN suspension rows. Preference order:
+
+          1. ``self._last_valid_price[code]`` — last real close seen while held
+             (survives a suspension gap; populated in ``_record_day``)
+          2. yesterday's close, if real — covers a position not yet recorded
+          3. ``pos.avg_cost`` — cost-basis last resort
+          4. ``0.0`` — total loss; never NaN, never negative
+
+        No discount is applied: the pre-delisting collapse (退市整理期 /
+        consecutive limit-downs) is ALREADY captured day-by-day in the price
+        path and marked through daily P&L, so this returns the real last traded
+        price. A haircut here would double-count a loss already booked.
+        """
+        cached = self._last_valid_price.get(code)
+        if cached is not None and not pd.isna(cached) and cached > 0:
+            return float(cached)
+        if not prev_indexed.empty and code in prev_indexed.index:
+            prev_close = prev_indexed.loc[code, 'close']
+            if not pd.isna(prev_close) and prev_close > 0:
+                return float(prev_close)
+        if pos.avg_cost > 0:
+            return float(pos.avg_cost)
+        return 0.0
 
     # ─── Fill-price column synthesis ──────────────────────────────
 
@@ -860,6 +893,13 @@ class BacktestEngine:
 
         # Per-stock holdings snapshot
         for code, pos in self.portfolio.positions.items():
+            # Carry-forward last KNOWN real close for robust delisting pricing
+            # (see _resolve_delist_price). Skip NaN/absent (suspension) and
+            # non-positive values so the cache retains the last genuine traded
+            # price across a halt rather than overwriting it with a NaN.
+            _raw_px = prices.get(code)
+            if _raw_px is not None and not pd.isna(_raw_px) and _raw_px > 0:
+                self._last_valid_price[code] = float(_raw_px)
             mkt_price = prices.get(code, pos.avg_cost)
             self._daily_holdings.append({
                 'date': date,

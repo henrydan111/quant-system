@@ -24,7 +24,11 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from src.backtest_engine.event_driven.strategies import RankedFallbackStrategy
+from src.backtest_engine.event_driven.portfolio import Portfolio, Position
+from src.backtest_engine.event_driven.strategies import (
+    RankedFallbackStrategy,
+    _emit_rebalance_orders,
+)
 from src.backtest_engine.event_driven.strategy import BacktestContext
 
 
@@ -356,3 +360,113 @@ class TestRankedFallbackSuspensionRegression:
         buy_codes = sorted(o.code for o in strat.before_market_open(ctx)
                           if o.direction == "buy")
         assert buy_codes == ["B.SZ", "C.SZ"]
+
+
+def _mk_real_portfolio(
+    holdings: dict[str, tuple[int, float]] | None = None,
+    cash: float = 0.0,
+) -> Portfolio:
+    """A real Portfolio (not a mock) seeded with `holdings = {code: (shares, avg_cost)}`.
+
+    Used by the NaN-price regression below: the real Portfolio's
+    ``market_value`` / ``total_value`` already fall back to ``avg_cost`` for a
+    NaN price (portfolio.py), so ``portfolio_value`` stays finite — exactly as
+    in production. This isolates the crash to the trim loop's ``int()`` call,
+    rather than masking it behind a NaN portfolio value from a naive mock.
+    """
+    holdings = holdings or {}
+    pf = Portfolio(initial_cash=max(cash, 1.0))
+    pf._cash = float(cash)  # test-only: set exact cash after construction
+    for code, (shares, avg_cost) in holdings.items():
+        pf._positions[code] = Position(
+            code=code,
+            shares=shares,
+            closeable_amount=shares,
+            avg_cost=avg_cost,
+        )
+    return pf
+
+
+class TestRankedFallbackNaNPriceCarry:
+    """Regression: a currently-HELD name that is suspended / has no price on the
+    rebalance day surfaces a NaN ``ref_price`` (prev-day close is NaN). Before the
+    fix, the trim loop computed ``int(max(diff, 0) / NaN / lot) * lot`` →
+    ``ValueError: cannot convert float NaN to integer``, crashing the entire
+    EventDrivenBacktester run (engine.py → strategies.py:245 → :76).
+
+    The fix skips the trim for any held name with a NaN / non-positive ref_price
+    and carries the position to the next rebalance. These tests pin: (1) no
+    crash, (2) the suspended held name emits NO sell order (carried), and
+    (3) the rest of the rebalance — a normally-priced, over-allocated held name —
+    is still trimmed, so the guard is surgical.
+    """
+
+    def test_held_suspended_nan_price_does_not_crash_and_is_carried(self):
+        # SUSP.SZ: held + target, suspended (prev close NaN) → must be carried.
+        # NORM.SZ: held + target, normally priced + over-allocated → still trimmed.
+        candidates = ["NORM.SZ", "SUSP.SZ"]
+        strat = RankedFallbackStrategy(
+            ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
+            topk=2,
+        )
+        ctx = BacktestContext(
+            date=pd.Timestamp("2021-01-05"),
+            day_data=pd.DataFrame(),
+            day_data_indexed=pd.DataFrame(),
+            prev_day_data=_mk_prev_data([
+                _ohlcv("NORM.SZ", close=20.0),
+                _ohlcv("SUSP.SZ", close=float("nan"), vol=0),  # suspended → NaN price
+            ]),
+            # NORM over-allocated at target 0.5: 10k sh * 20 = 200k vs target 150k.
+            portfolio=_mk_real_portfolio(
+                holdings={"NORM.SZ": (10_000, 10.0), "SUSP.SZ": (10_000, 10.0)},
+                cash=0.0,
+            ),
+            exchange=_mk_exchange(),
+            feeder=MagicMock(),
+        )
+
+        # The crux: this used to raise ValueError on the NaN ref_price.
+        orders = strat.before_market_open(ctx)
+
+        susp_orders = [o for o in orders if o.code == "SUSP.SZ"]
+        assert susp_orders == [], (
+            "Suspended held name (NaN price) must emit NO order — carried to next "
+            f"rebalance. Got: {susp_orders}"
+        )
+        # The position itself is untouched by order emission (engine applies fills,
+        # not the strategy) — it remains held for the next rebalance.
+        assert ctx.portfolio.positions["SUSP.SZ"].shares == 10_000
+
+        # Surgical: the normally-priced, over-allocated held name is still trimmed.
+        norm_trims = [
+            o for o in orders
+            if o.code == "NORM.SZ" and o.direction == "sell" and o.reason == "rebalance_trim"
+        ]
+        assert len(norm_trims) == 1, (
+            f"Over-allocated NORM.SZ should still be trimmed; got {orders}"
+        )
+        # 200k current vs 150k target → trim ~50k / 20 = 2500 shares (lot 100).
+        assert norm_trims[0].target_shares == 2500
+
+    def test_emit_rebalance_orders_skips_nan_ref_price_directly(self):
+        # Unit-level pin on the helper that owns the bug.
+        ctx = BacktestContext(
+            date=pd.Timestamp("2021-01-05"),
+            day_data=pd.DataFrame(),
+            day_data_indexed=pd.DataFrame(),
+            prev_day_data=_mk_prev_data([
+                _ohlcv("SUSP.SZ", close=float("nan"), vol=0),
+            ]),
+            portfolio=_mk_real_portfolio(
+                holdings={"SUSP.SZ": (10_000, 10.0)},
+                cash=100_000.0,
+            ),
+            exchange=_mk_exchange(),
+            feeder=MagicMock(),
+        )
+        # SUSP held AND a target → hits the trim loop (the crash site).
+        orders = _emit_rebalance_orders({"SUSP.SZ": 0.5}, ctx)
+        assert all(o.code != "SUSP.SZ" or o.direction != "sell" for o in orders), (
+            f"NaN-priced held name must not be sold/trimmed; got {orders}"
+        )

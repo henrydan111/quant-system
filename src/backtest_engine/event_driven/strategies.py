@@ -67,7 +67,14 @@ def _emit_rebalance_orders(
     for code in sorted(current_codes & target_codes):
         pos = current_positions[code]
         ref_price = float(prev_prices.get(code, pos.avg_cost if pos.avg_cost > 0 else 0))
-        if ref_price <= 0:
+        # A held name that is suspended / has no price on the rebalance day yields a
+        # NaN ref_price. ``NaN <= 0`` is False, so a bare ``<= 0`` guard would let NaN
+        # fall through to the ``int(... / ref_price ...)`` conversion below and raise
+        # ``ValueError: cannot convert float NaN to integer``, crashing the whole run.
+        # A position we can't price/trade today cannot be rebalanced today — skip the
+        # trim and carry it to the next rebalance (the engine already models the
+        # suspension itself via the vol==0 proxy at fill time).
+        if pd.isna(ref_price) or ref_price <= 0:
             continue
         current_value = pos.shares * ref_price
         target_value = portfolio_value * float(target_weights[code])
