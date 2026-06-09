@@ -294,8 +294,8 @@ datasets:
 
   # ─── Quarantine: report_rc analyst-forecast event-flow primitives (P1, 2026-06-08) ──
   report_rc:
-    status: quarantine
-    reason: "Analyst-forecast (report_rc) event-flow primitives, P1 plumbing slice. Materialized by pit_backend._materialize_report_rc_consensus from the report_rc PIT ledger; effective_date = strictly_next_open_trade_day(max(report_date, create_time)) so the vendor update timestamp (create_time, after-hours) captures the real availability lag — EXCEPT when create_time is null/absent, where disclosure_date = report_date + REPORT_RC_VENDOR_LAG_OPEN_DAYS (=2) OPEN trading days then strictly_next_open, so a vendor-backfilled row dated T is NOT exposed at next_open(T). HELD at quarantine pending: (1) the report_date/create_time backfill canary (PIT-safety), (2) the full provider rebuild + coverage/parity audit, (3) the compliant factor_lifecycle IS screen. Fields: $report_rc__eps_up / $report_rc__eps_dn / $report_rc__eps_revision_count / $report_rc__n_active_analysts. PIT: post-close analyst publication -> predictive factors MUST wrap every field in Ref(...,1)."
+    status: approved
+    reason: "Analyst-forecast (report_rc) event-flow primitives. Promoted quarantine->approved 2026-06-09 (config/field_registry/approvals/2026-06-09_report_rc_quarantine_to_approved.yaml); served by provider report_rc_incr_20260608. Materialized by pit_backend._materialize_report_rc_consensus from the report_rc PIT ledger; effective_date anchors on report_date+1 (strictly_next_open): a CONTEMPORANEOUS create_time (gap<=REPORT_RC_BACKFILL_GAP_DAYS=45 cal days) -> max(report_date,create_time); a bulk-backfill stamp (gap>45 — the 2022-05 stamp on 2010-2021 reports) OR missing create_time -> report_date+REPORT_RC_VENDOR_LAG_OPEN_DAYS(=2) open days. report_date+1 VALIDATED market-wide vs JoinQuant genuine-PIT 朝阳永续 consensus (REPORT_RC_PIT_ANCHOR_VALIDATION.md: level corr +0.997, broad per-date Spearman +0.94, holds small-cap+delisted; forecast-error parity reproduces 2015/2017 regime sign-flips with Tushare LESS accurate than the oracle = no lookahead). Evidence: ~2.1k-3.5k covered stocks/yr 2010-2026 (CAP-TILTED -> rank within-coverage + size-neutralize hard), value-sanity clean (eps_up/dn>=0, revision_count==up+dn on every event row, n_active 0-72, 0 negatives), test-covered byte-determinism. Fields: $report_rc__eps_up / $report_rc__eps_dn / $report_rc__eps_revision_count / $report_rc__n_active_analysts. PIT: events anchored at report_date+1 (effective_date); predictive factors MUST additionally wrap every field in Ref(...,1). OUTSTANDING (recorded in the approval YAML, NOT discharged): the breadth restatement canary (2026-06-15) is a HARD gate before the eps_diffusion sealed-OOS — a FAIL re-quarantines."
     field_prefixes:
       - $report_rc__
 
@@ -316,7 +316,7 @@ datasets:
   #   config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
   income:
     status: approved
-    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
+    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml."
     fields:
       - $ebit_sq_q0
       - $ebit_sq_q1
@@ -335,6 +335,7 @@ datasets:
       - $oper_cost_sq_q4
       - $operate_profit_sq_q0
       - $operate_profit_sq_q4
+      - $rd_exp_sq_q0
       - $revenue_sq_q0
       - $revenue_sq_q4
       - $total_revenue_sq_q0
