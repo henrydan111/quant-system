@@ -228,6 +228,14 @@ price/accounting.
    tripwire was replaced by a derived catalog↔registry parity check), so GP flowed in 177→178 with
    no test edits. Remaining: register the draft row (`sync_catalog`) + run `factor_lifecycle`
    (draft→candidate IS gate) → sealed-OOS for `approved`.
-2. **`report_rc` integration** (Wave-1) — the analyst/earnings-forecast family, where the
-   saturated-book finding says new orthogonal alpha actually lives. (Scope below / in progress.)
+2. ✅ **`report_rc` integrated + eps_diffusion promoted** (2026-06-09): the analyst dimension the
+   saturated-book finding pointed to — **and it paid off.** report_rc approved (4 `$report_rc__*`
+   event-flow primitives); built the EPS-revision-breadth family ([build/eval_report_rc_diffusion.py](build/eval_report_rc_diffusion.py)),
+   size-neutralized IS ICIR **+0.55** (60d) and it **SURVIVES orthogonalization to ROE/growth**
+   (residual retains ~100%) → the **first genuinely-new-dimension** factor (analyst info beyond
+   fundamentals); reproduces the prior untrusted hand-rolled pilot through the compliant path.
+   Promoted `earn_eps_diffusion_60` / `earn_eps_diffusion_120` to formal-eligible catalog **draft**.
+   ⚠ marginal increment is only +0.011 (PARTIAL in EW-composite — correlated 0.67 to `qual_roe`);
+   ⚠ candidate→approved **sealed-OOS is HARD-GATED behind the 2026-06-15 breadth canary**.
+   Remaining: `factor_lifecycle` IS gate now → sealed-OOS after the canary.
 3. **OpenAlex enrichment**; **Chinese 研报 slice** via AKShare.
