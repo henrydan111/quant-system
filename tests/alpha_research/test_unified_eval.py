@@ -15,9 +15,11 @@ from src.alpha_research.factor_eval.unified_eval import (
     EvalMethodology,
     classify_quantile_shape,
     hac_mean_tstat,
+    index_forward_returns,
     leak_safe_decay_ic_vector,
     long_leg_excess_ir,
     moving_block_bootstrap_mean_ci,
+    neutralized_rank_icir,
     one_way_turnover,
     residual_ic_vs_controls,
     resolve_orientation,
@@ -276,3 +278,27 @@ def test_residual_ic_orthogonal_retains_redundant_collapses():
     assert abs(orth["residual_mean_rank_ic"]) > abs(redun["residual_mean_rank_ic"])
     assert orth["residual_coverage"] == pytest.approx(1.0, abs=0.02)  # synthetic = full coverage
     assert orth["n_controls"] == 2
+
+
+# ----------------------------------------------------------------- P1b-data: neutralized IC + index fwd
+def test_neutralized_ic_pure_size_collapses_orthogonal_retains():
+    idx, dates, insts = _cs_panel(n_inst=60, n_days=70)
+    rng = np.random.default_rng(11)
+    mcap = pd.Series(np.exp(rng.normal(10, 1, size=len(idx))), index=idx)        # positive market cap
+    industry = pd.Series(rng.integers(0, 4, size=len(idx)).astype(str), index=idx)
+    size_factor = np.log(mcap).rename(None)                                       # PURE size
+    orth = pd.Series(rng.normal(size=len(idx)), index=idx)                        # ⊥ size/industry
+    label = pd.Series(0.5 * orth.to_numpy() + rng.normal(size=len(idx)) * 0.05, index=idx)
+    neut_size = neutralized_rank_icir(size_factor, label, mcap, industry, min_obs=20)
+    neut_orth = neutralized_rank_icir(orth, label, mcap, industry, min_obs=20)
+    # pure-size factor loses its IC after size neutralization; the orthogonal signal keeps it
+    assert abs(neut_orth["neutralized_mean_rank_ic"]) > abs(neut_size["neutralized_mean_rank_ic"])
+
+
+def test_index_forward_returns_exact_calendar_and_tail_drop():
+    cal = pd.bdate_range("2020-01-01", periods=50)
+    close = pd.Series(100.0 + np.arange(50), index=cal)  # 100,101,...,149
+    fwd = index_forward_returns(close, horizon=5, trade_cal=list(cal))
+    assert fwd.iloc[0] == pytest.approx(105.0 / 100.0 - 1.0)   # close[5]/close[0]-1
+    assert len(fwd) == 45                                      # trailing 5 have no realization → dropped
+    assert fwd.index.max() == cal[44]

@@ -30,8 +30,12 @@ import json
 from dataclasses import asdict, dataclass, field
 
 from src.alpha_research.factor_eval.ic_analysis import compute_ic_series, compute_marginal_ic
+from src.alpha_research.factor_eval.neutralization import neutralize_size_industry
 from src.alpha_research.factor_library.operators import cs_zscore, winsorize
-from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
+from src.alpha_research.factor_lifecycle.walk_forward_validation import (
+    build_is_windowed_panel,
+    load_open_trading_days,
+)
 
 DEFAULT_DECAY_HORIZONS = (5, 10, 20, 40)
 
@@ -128,6 +132,46 @@ def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_ret
         "n_dates": int(len(rank_ic)),
         "n_controls": len(control_names),
     }
+
+
+# ------------------------------------------------------- P1b-data: neutralized IC + index fwd returns
+def neutralized_rank_icir(factor: pd.Series, label: pd.Series, market_cap: pd.Series,
+                          industry: pd.Series, *, min_obs: int = 30, hac_lags: int = 40) -> dict:
+    """Size+industry-neutralized RankIC / ICIR — separates genuine alpha from style beta.
+
+    Per-date OLS-residualize the factor on log market cap + industry dummies
+    (``neutralize_size_industry``), then RankIC vs the forward return + an overlap-aware HAC t.
+    """
+    neut = neutralize_size_industry(_to_dt_inst(factor), _to_dt_inst(market_cap),
+                                    _to_dt_inst(industry))
+    ic = compute_ic_series(_to_dt_inst(neut), _to_dt_inst(label), min_obs=min_obs)
+    rank_ic = (ic["RankIC"] if "RankIC" in ic.columns else ic.iloc[:, -1]).dropna()
+    hac = hac_mean_tstat(rank_ic, lags=hac_lags)
+    return {"neutralized_mean_rank_ic": _f(rank_ic.mean()), "neutralized_rank_icir": _rank_icir(rank_ic),
+            "neutralized_hac_t": hac.get("hac_t"), "n_dates": int(len(rank_ic))}
+
+
+def index_forward_returns(index_close: pd.Series, *, horizon: int, trade_cal=None) -> pd.Series:
+    """Forward return of a benchmark index over ``horizon`` trading days, by the EXACT calendar.
+
+    ``index_close`` is a datetime-indexed close series (one index). For date ``t`` the return uses
+    ``close[open_days[pos(t)+horizon]] / close[t] − 1`` (same row-based realization as the factor
+    label); the trailing ``horizon`` dates with no realized close are dropped (leak-safe — cap
+    ``index_close`` at ``is_end`` and the last rebalance dates the factor can use are already ≤
+    is_end−horizon, so every used rebalance date has a realized benchmark return).
+    """
+    s = index_close.dropna().sort_index()
+    open_days = load_open_trading_days(trade_cal)
+    dates = pd.DatetimeIndex(sorted(s.index))
+    pos = open_days.searchsorted(dates, side="left")
+    out = {}
+    for d, p in zip(dates, pos):
+        tgt = p + int(horizon)
+        if tgt < len(open_days):
+            rd = open_days[tgt]
+            if rd in s.index:
+                out[pd.Timestamp(d)] = float(s.loc[rd] / s.loc[d] - 1.0)
+    return pd.Series(out, name="index_fwd_return")
 
 
 # ------------------------------------------------------- P0b: overlap-adjusted significance
