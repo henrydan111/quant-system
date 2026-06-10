@@ -237,6 +237,42 @@ verified true against the committed code and implemented. **Must-fix-before-185 
 size² but monitor VIF); neutralized-signal long-leg IR for neutralized-only winners; size-bucket
 conditional IC + top-bucket style exposures.
 
+### Revision 5 — two-class evidence taxonomy: lifecycle + unified_eval MERGED (2026-06-10, user directive)
+
+The user directed: factors have exactly TWO evaluation types. The unified evaluation IS the lifecycle
+methodology run at full-catalog scale, so they merge into one "formal" class:
+
+| eval type | what it is | evidence rows |
+|---|---|---|
+| **discovery** | the legacy batch screening (5d letter grades, triage) | `run_type='screening'/'research'` |
+| **formal** | THE formal methodology (this spec): walk-forward heldout ICIR + sign-consistency + HAC + neutralized + shapes + residuals + decay + turnover + coverage + long-leg | `run_type='factor_lifecycle'` (gated) + `run_type='factor_lifecycle_refresh'` (ungated sweep) |
+
+The taxonomy is DERIVED at read time from `run_type` (no schema repurposing — `evidence_class` keeps
+its honesty-label role, e.g. `oos_informed_backfill`). **Within formal, the gated/ungated split is
+load-bearing and carried by the existing `formal_evidence_eligible` column:**
+
+- **gated run** (orchestrator `factor_lifecycle` + human gate) → `formal_evidence_eligible=True` —
+  the ONLY rows that can support a status change (resolve-but-label unchanged).
+- **refresh run** (the automated full-catalog sweep) → `formal_evidence_eligible=False`,
+  `evidence_class='unified_refresh'` — same engine, same口径, refreshes the dashboard for all 185;
+  can NEVER support a status change. An ungated sweep must never masquerade as a gate verdict.
+
+Implementation (2026-06-10): evidence schema widened with the unified metric columns
+(`methodology_hash`, `mean_rank_ic_hac_t`, `neutralized_*`, `mono_shape`, `direction_source`,
+`coverage[_tier]`, `turnover_ann`, oriented residuals, long-leg IRs, + `unified_metrics_json` carrying
+the full record); new fail-closed definition-bound writer
+`FactorRegistryStore.record_formal_refresh_evidence` (mirrors `record_lifecycle_evidence`; idempotent
+per run_id); importer [import_unified_refresh_evidence.py](../../../workspace/scripts/import_unified_refresh_evidence.py)
+(dry-run default). Old evidence parquets widen transparently on load (new columns = NA). Tests:
+`FormalRefreshEvidenceTests` in [test_factor_registry.py](../../../tests/alpha_research/test_factor_registry.py)
+(never-gate-eligible, drift fail-closed, idempotency, schema widening) — full file 32 passed +
+lifecycle-steps 17 + promotion gates 47.
+
+**Staged follow-up (gated-run enrichment):** extend the `factor_lifecycle` walk_forward/publish
+handlers so a GATED run also persists the full unified metric set (today its rows carry the headline
+subset — same engine, same numbers). Until then, gated rows = headline metrics, refresh rows = full
+set; the dashboard prefers gated rows where both exist (`formal_evidence_eligible` first).
+
 ### Rev4 addendum — fourth-pass self-audit (2026-06-10, pre-185 gate)
 
 A line-by-line re-read of the whole module + drivers + a live lint run found and fixed:

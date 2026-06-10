@@ -121,6 +121,24 @@ FACTOR_EVIDENCE_COLUMNS = [
     "source_hash",
     "provider_build_id",
     "calendar_policy_id",
+    # 2026-06-10 unified formal-eval merge: lifecycle + unified_eval are ONE formal methodology
+    # (two run modes — gated orchestrator run vs ungated refresh sweep, split by
+    # formal_evidence_eligible). These columns carry the unified metric set; the full record
+    # (decay vector, CIs, signed residuals, …) is packed in unified_metrics_json.
+    "methodology_hash",
+    "mean_rank_ic_hac_t",
+    "neutralized_rank_icir",
+    "neutralized_hac_t",
+    "mono_shape",
+    "direction_source",
+    "coverage",
+    "coverage_tier",
+    "turnover_ann",
+    "resid_ic_vs_approved_stable_oriented",
+    "resid_ic_vs_style_controls_v1_oriented",
+    "long_leg_ir_proxy_is_csi300",
+    "long_leg_ir_proxy_is_csi500",
+    "unified_metrics_json",
 ]
 
 RUN_INDEX_COLUMNS = [
@@ -227,6 +245,21 @@ FACTOR_EVIDENCE_SCHEMA = {
     "source_hash": "string",
     "provider_build_id": "string",
     "calendar_policy_id": "string",
+    # 2026-06-10 unified formal-eval merge (see FACTOR_EVIDENCE_COLUMNS note)
+    "methodology_hash": "string",
+    "mean_rank_ic_hac_t": "Float64",
+    "neutralized_rank_icir": "Float64",
+    "neutralized_hac_t": "Float64",
+    "mono_shape": "string",
+    "direction_source": "string",
+    "coverage": "Float64",
+    "coverage_tier": "string",
+    "turnover_ann": "Float64",
+    "resid_ic_vs_approved_stable_oriented": "Float64",
+    "resid_ic_vs_style_controls_v1_oriented": "Float64",
+    "long_leg_ir_proxy_is_csi300": "Float64",
+    "long_leg_ir_proxy_is_csi500": "Float64",
+    "unified_metrics_json": "string",
 }
 
 RUN_INDEX_SCHEMA = {
@@ -543,6 +576,21 @@ class FactorEvidenceRecord:
     source_hash: str = ""
     provider_build_id: str = ""
     calendar_policy_id: str = ""
+    # 2026-06-10 unified formal-eval merge (defaults keep existing constructors unchanged)
+    methodology_hash: str = ""
+    mean_rank_ic_hac_t: float | None = None
+    neutralized_rank_icir: float | None = None
+    neutralized_hac_t: float | None = None
+    mono_shape: str = ""
+    direction_source: str = ""
+    coverage: float | None = None
+    coverage_tier: str = ""
+    turnover_ann: float | None = None
+    resid_ic_vs_approved_stable_oriented: float | None = None
+    resid_ic_vs_style_controls_v1_oriented: float | None = None
+    long_leg_ir_proxy_is_csi300: float | None = None
+    long_leg_ir_proxy_is_csi500: float | None = None
+    unified_metrics_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -1115,6 +1163,112 @@ class FactorRegistryStore:
                 evidence_class=str(evidence_class), formal_evidence_eligible=True,
                 source_path="", source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
+            ))
+            attached.append(fid)
+        if evidence_rows:
+            new_keys = {(run_id, r.factor_id, int(r.version)) for r in evidence_rows}
+            existing = self.factor_evidence
+            if not existing.empty:
+                keep = ~existing.apply(
+                    lambda x: (
+                        _coerce_string(x["run_id"]),
+                        _coerce_string(x["factor_id"]),
+                        _coerce_int(x["version"]),
+                    ) in new_keys,
+                    axis=1,
+                )
+                existing = existing[keep]
+            new_df = _apply_schema(
+                pd.DataFrame([asdict(r) for r in evidence_rows]),
+                FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+            )
+            self.factor_evidence = pd.concat([existing, new_df], ignore_index=True)
+            self.refresh_master_derived_fields()
+        return {
+            "run_id": run_id,
+            "attached": sorted(attached),
+            "skipped_drift": sorted(skipped_drift),
+            "skipped_unknown": sorted(skipped_unknown),
+        }
+
+    def record_formal_refresh_evidence(
+        self,
+        *,
+        run_id: str,
+        records: list[Mapping[str, Any]],
+        methodology_hash: str,
+        source_path: str = "",
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """2026-06-10 unified merge: append FORMAL-methodology evidence from an UNGATED
+        refresh sweep (the full-catalog unified evaluation). Same metric口径 and engine as
+        the gated ``factor_lifecycle`` runs — the taxonomy is two-class (discovery = screening
+        / formal = lifecycle methodology) with the gated/ungated split carried by
+        ``formal_evidence_eligible``: refresh rows are ``run_type='factor_lifecycle_refresh'``,
+        ``evidence_class='unified_refresh'``, ``formal_evidence_eligible=False`` — they can
+        NEVER support a status change (the gated orchestrator run + human gate remains the
+        only path; resolve-but-label). Definition-bound FAIL-CLOSED exactly like
+        :meth:`record_lifecycle_evidence` (drifted / catalog-unknown factors are skipped).
+        Idempotent per ``(run_id, factor_id, version)``. Writes EVIDENCE only — never status.
+
+        Each record is a mapping from the unified-eval full-run output (keys: ``factor``,
+        ``heldout_rank_icir``, ``sign_consistency``, ``mean_rank_ic_hac_t``,
+        ``neutralized_rank_icir``, ``mono_shape``, ``coverage``, ``turnover_ann``,
+        oriented residuals, long-leg IRs, …); the WHOLE record is also packed verbatim into
+        ``unified_metrics_json`` so no metric is lost to the column subset.
+        """
+        now = generated_at or _now_str()
+        code_hashes = self.current_catalog_definition_hashes()
+        current = self.factor_master[self.factor_master["is_current"].fillna(False)]
+        evidence_rows: list[FactorEvidenceRecord] = []
+        attached: list[str] = []
+        skipped_unknown: list[str] = []
+        skipped_drift: list[str] = []
+        for rec in records:
+            fid = _coerce_string(rec.get("factor"))
+            match = current[current["factor_id"] == fid] if fid else current.iloc[0:0]
+            if not fid or match.empty:
+                skipped_unknown.append(fid)
+                continue
+            row = match.sort_values("version").iloc[-1]
+            registry_hash = _coerce_string(row.get("definition_hash"))
+            code_hash = code_hashes.get(fid)
+            if not registry_hash or code_hash is None or registry_hash != code_hash:
+                skipped_drift.append(fid)
+                continue
+            evidence_rows.append(FactorEvidenceRecord(
+                run_id=run_id, run_type="factor_lifecycle_refresh", factor_id=fid,
+                version=int(row["version"]), is_current_at_import=True,
+                grade="", rank_icir_5d=None, mean_rank_ic_5d=_coerce_float(rec.get("mean_rank_ic")),
+                ic_hit_rate_5d=None, monotonic=None, best_decay_horizon=None,
+                peak_decay_icir=None, ls_ann_return=None, validation_pass_count=None,
+                selected_fold_count=None, avg_validation_rank_icir=None,
+                source_run_dir="", evidence_time=now,
+                is_rank_icir=_coerce_float(rec.get("heldout_rank_icir")), oos_rank_icir=None,
+                sign_consistency=_coerce_float(rec.get("sign_consistency")),
+                oos_ls_sharpe=None, retain_pct=None, lo_excess_ann_gross=None,
+                lo_sharpe_gross=None, lo_hit=None,
+                evidence_class="unified_refresh", formal_evidence_eligible=False,
+                source_path=str(source_path), source_hash=registry_hash,
+                provider_build_id="", calendar_policy_id="",
+                methodology_hash=str(methodology_hash),
+                mean_rank_ic_hac_t=_coerce_float(rec.get("mean_rank_ic_hac_t")),
+                neutralized_rank_icir=_coerce_float(rec.get("neutralized_rank_icir")),
+                neutralized_hac_t=_coerce_float(rec.get("neutralized_hac_t")),
+                mono_shape=_coerce_string(rec.get("mono_shape")),
+                direction_source=_coerce_string(rec.get("direction_source")),
+                coverage=_coerce_float(rec.get("coverage")),
+                coverage_tier=_coerce_string(rec.get("coverage_tier")),
+                turnover_ann=_coerce_float(rec.get("turnover_ann")),
+                resid_ic_vs_approved_stable_oriented=_coerce_float(
+                    rec.get("resid_ic_vs_approved_stable_oriented")),
+                resid_ic_vs_style_controls_v1_oriented=_coerce_float(
+                    rec.get("resid_ic_vs_style_controls_v1_oriented")),
+                long_leg_ir_proxy_is_csi300=_coerce_float(rec.get("long_leg_ir_proxy_is_csi300")),
+                long_leg_ir_proxy_is_csi500=_coerce_float(rec.get("long_leg_ir_proxy_is_csi500")),
+                unified_metrics_json=json.dumps(
+                    {k: (None if isinstance(v, float) and v != v else v) for k, v in dict(rec).items()},
+                    ensure_ascii=False, default=str),
             ))
             attached.append(fid)
         if evidence_rows:
