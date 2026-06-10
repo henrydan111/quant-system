@@ -25,15 +25,109 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.alpha_research.factor_eval.ic_analysis import compute_ic_series
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
+
+from src.alpha_research.factor_eval.ic_analysis import compute_ic_series, compute_marginal_ic
+from src.alpha_research.factor_library.operators import cs_zscore, winsorize
 from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
 
 DEFAULT_DECAY_HORIZONS = (5, 10, 20, 40)
+
+# The FROZEN style-control set (Rev3 §B.7; all 14 verified present in the catalog). Residual IC vs
+# this proves a factor is not merely size/value/momentum/quality/liquidity beta. FROZEN + hashed —
+# choosing controls after seeing results would turn residual IC into another discovered metric.
+STYLE_CONTROLS_V1 = (
+    "size_ln_mcap", "size_ln_mcap_sq", "val_ep_ttm", "val_bp", "val_sp_ttm",
+    "mom_return_20d", "mom_return_120d", "rev_return_5d", "qual_gross_profitability",
+    "qual_accruals", "liq_log_dollar_vol", "liq_turnover_20d", "liq_amihud_20d", "risk_vol_20d",
+)
+
+
+def _f(v):
+    if v is None:
+        return None
+    try:
+        v = float(v)
+        return None if v != v else v
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_dt_inst(s: pd.Series) -> pd.Series:
     """Normalize a MultiIndex Series to (datetime, instrument)."""
     return (s.swaplevel(0, 1) if s.index.names[0] != "datetime" else s).sort_index()
+
+
+# ------------------------------------------------------- P1a: frozen methodology + style residual
+@dataclass(frozen=True)
+class EvalMethodology:
+    """The FROZEN, HASHED methodology for a unified-eval run (Rev3 §B.6).
+
+    The 185-factor dashboard is a discovery search surface → the whole methodology (style controls,
+    benchmark policy, HAC/bootstrap settings, cost, reference-set membership) MUST be frozen and hashed
+    BEFORE the full run so it can't be tuned after seeing results. ``methodology_hash`` is membership-
+    (not order-) stable for the set-like fields. Stamp it on every produced evidence row.
+    """
+    is_start: str
+    is_end: str
+    reference_set_stable: tuple    # approved factor ids EXCLUDING provisionals — the DEFAULT base
+    reference_set_current: tuple   # approved incl. provisionals (shown, flagged)
+    provisional_factors: tuple     # the canary-contingent approvals (e.g. report_rc eps_diffusion)
+    style_controls_v1: tuple = STYLE_CONTROLS_V1
+    hac_lags: int = 40
+    hac_lag_sensitivity: tuple = (20, 40, 60)
+    bootstrap_block_len: int = 20
+    cost_bps_per_turnover: float = 25.0
+    rebalance_days: int = 20
+    horizon: int = 20
+    decay_horizons: tuple = DEFAULT_DECAY_HORIZONS
+    top_q: float = 0.2
+    n_quantiles: int = 5
+    winsor_limits: tuple = (0.01, 0.99)
+    benchmarks: tuple = ("000300_SH", "000905_SH")  # show BOTH — no per-factor selection → no snooping
+    benchmark_policy: str = "show_both_no_selection"
+    mt_t_bar: float = 3.0
+
+    @property
+    def methodology_hash(self) -> str:
+        d = asdict(self)
+        for k in ("reference_set_stable", "reference_set_current", "provisional_factors",
+                  "style_controls_v1"):
+            d[k] = sorted(d[k])  # membership, not order, defines identity
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_return: pd.Series, *,
+                            control_names=STYLE_CONTROLS_V1, winsor=(0.01, 0.99), min_obs: int = 30,
+                            hac_lags: int = 40) -> dict:
+    """Residual IC of a candidate after orthogonalizing against the FROZEN style controls.
+
+    The Rev3 §B.7 pipeline (do NOT call ``compute_marginal_ic`` raw): per date winsorize → cross-
+    sectional z-score the candidate AND each control, then residualize the candidate on the controls
+    and correlate the residual with the forward return. Reports **residual_coverage** — the fraction of
+    the candidate's own non-null cells where ALL controls are also present (listwise deletion can move
+    the universe materially for sparse factors) — plus the HAC t of the residual RankIC (overlap-aware).
+    """
+    proc = {nm: cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1]))
+            for nm in [candidate_name, *control_names]}
+    fwd = _to_dt_inst(forward_return)
+    series, summ = compute_marginal_ic(proc, fwd, base_factors=list(control_names),
+                                       candidate=candidate_name, min_obs=min_obs)
+    rank_ic = (series["RankIC"] if "RankIC" in series.columns else series.iloc[:, -1]).dropna()
+    hac = hac_mean_tstat(rank_ic, lags=hac_lags)
+    cand = _to_dt_inst(factors_dict[candidate_name]).dropna()
+    ctrl = pd.DataFrame({nm: _to_dt_inst(factors_dict[nm]) for nm in control_names}).reindex(cand.index)
+    residual_coverage = float(ctrl.notna().all(axis=1).mean()) if len(cand) else float("nan")
+    return {
+        "residual_mean_rank_ic": _f(summ.get("mean_rank_ic")),
+        "residual_rank_icir": _f(summ.get("rank_icir")),
+        "residual_hac_t": hac.get("hac_t"),
+        "residual_coverage": residual_coverage,
+        "n_dates": int(len(rank_ic)),
+        "n_controls": len(control_names),
+    }
 
 
 # ------------------------------------------------------- P0b: overlap-adjusted significance

@@ -12,12 +12,14 @@ import pandas as pd
 import pytest
 
 from src.alpha_research.factor_eval.unified_eval import (
+    EvalMethodology,
     classify_quantile_shape,
     hac_mean_tstat,
     leak_safe_decay_ic_vector,
     long_leg_excess_ir,
     moving_block_bootstrap_mean_ci,
     one_way_turnover,
+    residual_ic_vs_controls,
     resolve_orientation,
 )
 
@@ -239,3 +241,38 @@ def test_long_leg_excess_fails_closed_on_missing_benchmark():
     partial_bench = pd.Series(0.0, index=pd.DatetimeIndex(dates[:50]))  # misses rebal date day 60
     with pytest.raises(ValueError):
         long_leg_excess_ir(factor, label, partial_bench, rebalance_days=20)
+
+
+# ----------------------------------------------------------------- P1a: methodology freeze + residual
+def _methodology(**kw):
+    base = dict(is_start="2014-01-01", is_end="2020-12-31",
+                reference_set_stable=("a", "b"), reference_set_current=("a", "b", "c"),
+                provisional_factors=("c",))
+    base.update(kw)
+    return EvalMethodology(**base)
+
+
+def test_methodology_hash_membership_stable_and_field_sensitive():
+    m1 = _methodology(reference_set_stable=("a", "b"), reference_set_current=("a", "b", "c"))
+    m2 = _methodology(reference_set_stable=("b", "a"), reference_set_current=("c", "b", "a"))  # reorder
+    assert m1.methodology_hash == m2.methodology_hash  # membership, not order
+    assert _methodology(cost_bps_per_turnover=30.0).methodology_hash != m1.methodology_hash
+    assert _methodology(hac_lags=60).methodology_hash != m1.methodology_hash
+    assert len(m1.methodology_hash) == 16
+
+
+def test_residual_ic_orthogonal_retains_redundant_collapses():
+    idx, dates, insts = _cs_panel(n_inst=60, n_days=80)
+    rng = np.random.default_rng(7)
+    c1 = pd.Series(rng.normal(size=len(idx)), index=idx)
+    c2 = pd.Series(rng.normal(size=len(idx)), index=idx)
+    new = pd.Series(rng.normal(size=len(idx)), index=idx)              # ⊥ controls
+    combo = 0.7 * c1 + 0.3 * c2                                        # a linear combo of controls
+    label = pd.Series(0.5 * new.to_numpy() + rng.normal(size=len(idx)) * 0.05, index=idx)  # driven by `new`
+    fd = {"c1": c1, "c2": c2, "new": new, "combo": combo}
+    orth = residual_ic_vs_controls("new", fd, label, control_names=["c1", "c2"], min_obs=20)
+    redun = residual_ic_vs_controls("combo", fd, label, control_names=["c1", "c2"], min_obs=20)
+    # the orthogonal-new factor keeps its predictive info after residualizing; the control-combo loses it
+    assert abs(orth["residual_mean_rank_ic"]) > abs(redun["residual_mean_rank_ic"])
+    assert orth["residual_coverage"] == pytest.approx(1.0, abs=0.02)  # synthetic = full coverage
+    assert orth["n_controls"] == 2
