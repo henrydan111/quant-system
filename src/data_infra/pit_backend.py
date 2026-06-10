@@ -3377,7 +3377,7 @@ class StagedQlibBackendBuilder:
         except (OSError, subprocess.CalledProcessError):
             source_commit = None
 
-        from src.data_infra.provider_manifest import emit_manifest_at_publish
+        from data_infra.provider_manifest import emit_manifest_at_publish
         try:
             emit_manifest_at_publish(
                 qlib_dir=self.paths.qlib_dir,

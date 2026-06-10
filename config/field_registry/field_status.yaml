@@ -180,6 +180,54 @@ datasets:
       - $op_of_gr
       - $ebit_of_gr
       - $profit_to_gr
+      # Wave-3 (2026-06-09): 33 level indicators added after re-fetching
+      # fina_indicator_vip with the FULL 167-field set (field-parity audit found 58
+      # non-default fields were dropped because no `fields=` was passed). Materialized
+      # into provider build indicators_fields_20260609. Same ann_date-anchored
+      # fina_indicator_vip family + pipeline as the fields above. The 25 q_* single-
+      # quarter fields were INTENTIONALLY NOT added (we self-compute PIT-correct
+      # pit_* equivalents; the vendor q_* are not guaranteed PIT-safe). Coverage
+      # 45-99% (debt/coverage ratios are undefined for net-cash/financial firms →
+      # sub-universe factors, not a data defect). Predictive factors MUST Ref(...,1).
+      # See approvals/2026-06-09_indicators_level_indicators.yaml.
+      # turnover / efficiency
+      - $arturn_days
+      - $inv_turn
+      - $invturn_days
+      - $total_fa_trun
+      # solvency / coverage
+      - $cash_to_liqdebt
+      - $cash_to_liqdebt_withinterest
+      - $ebit_to_interest
+      - $ebitda_to_debt
+      - $longdebt_to_workingcapital
+      - $ocf_to_interestdebt
+      - $ocf_to_netdebt
+      - $op_to_debt
+      - $op_to_liqdebt
+      # cash quality
+      - $ocf_to_opincome
+      - $ocf_to_or
+      - $ocf_to_profit
+      - $salescash_to_or
+      # profitability structure / quality
+      - $dtprofit_to_profit
+      - $investincome_of_ebt
+      - $n_op_profit_of_ebt
+      - $nop_to_ebt
+      - $op_to_ebt
+      - $opincome_of_ebt
+      - $roe_avg
+      - $roic_yearly
+      - $tax_to_ebt
+      # other / niche
+      - $capitalized_to_da
+      - $daa
+      - $interst_income
+      - $non_op_profit
+      - $profit_prefin_exp
+      - $rd_exp
+      - $valuechange_income
 
   reference:
     status: approved

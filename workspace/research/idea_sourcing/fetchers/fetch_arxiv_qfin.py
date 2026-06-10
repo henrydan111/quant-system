@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 import time
 import urllib.error
@@ -73,6 +74,69 @@ QFIN_CATEGORIES = [
     "q-fin.TR",  # Trading and Market Microstructure
 ]
 
+# Broadened set for THEMED harvesting: cross-sectional-equity work also lives in
+# ML / econometrics / stats categories. We only pull these WHEN anded with a
+# finance theme phrase (never bare — cs.LG alone is a generic-ML firehose).
+BROAD_CATEGORIES = QFIN_CATEGORIES + [
+    "cs.LG",    # Machine Learning  (ML-for-asset-pricing, return prediction)
+    "econ.EM",  # Econometrics      (cross-sectional return econometrics)
+    "stat.ML",  # Statistics-ML     (factor models, high-dim inference)
+    "stat.AP",  # Statistics-Applied
+]
+
+# Themed query pack aligned to the knowledge-taxonomy FRONTIER (analyst / event /
+# flow / ownership / behavioral) + China + the method dimensions we can apply to
+# data we have. Each phrase is run as  (BROAD_CATEGORIES) AND all:"<phrase>"  with
+# sortBy=relevance, so we harvest the most ON-TOPIC papers per direction rather
+# than the newest random slice. Results are unioned + deduped into the store.
+# Keep phrases as concept anchors; the value scorer does the fine grading.
+THEME_QUERIES: dict[str, list[str]] = {
+    "analyst_expectations": [
+        "analyst forecast revision", "analyst earnings forecast", "analyst recommendation",
+        "forecast dispersion stock returns", "earnings forecast revision cross-section",
+        "implied cost of capital returns",
+    ],
+    "earnings_events": [
+        "post earnings announcement drift", "earnings surprise cross-section",
+        "earnings momentum stock returns", "standardized unexpected earnings",
+    ],
+    "informed_flow": [
+        "order flow imbalance stock returns", "informed trading cross-section",
+        "institutional trading stock returns", "retail order flow returns",
+        "margin trading stock returns china", "fund flow stock returns",
+        "stock connect northbound returns",
+    ],
+    "ownership_holders": [
+        "institutional ownership stock returns", "insider trading returns",
+        "breadth of ownership returns", "ownership concentration stock returns",
+    ],
+    "behavioral_chips": [
+        "disposition effect stock returns", "capital gains overhang returns",
+        "lottery demand stock returns", "investor attention cross-section returns",
+        "reference price stock returns",
+    ],
+    "china": [
+        "chinese stock market anomaly", "cross-section returns china a-share",
+        "china stock return predictability", "factor model chinese stocks",
+    ],
+    "ml_method": [
+        "machine learning cross-section stock returns", "deep learning return prediction",
+        "empirical asset pricing machine learning", "conditional factor model",
+        "neural network stock returns",
+    ],
+    "factor_methodology": [
+        "factor zoo replication", "anomaly out-of-sample", "multiple testing asset pricing",
+        "cross-section of expected returns", "characteristic sorted portfolios",
+    ],
+    "text_nlp": [
+        "news sentiment stock returns", "textual analysis stock returns",
+        "large language model stock prediction",
+    ],
+    "seasonality_other": [
+        "seasonality cross-section stock returns", "supply chain momentum returns",
+    ],
+}
+
 ATOM = "http://www.w3.org/2005/Atom"
 OPENSEARCH = "http://a9.com/-/spec/opensearch/1.1/"
 ARXIV = "http://arxiv.org/schemas/atom"
@@ -90,13 +154,52 @@ def _build_search_query(categories: list[str], extra_term: str | None) -> str:
     return q
 
 
-def _fetch_page(search_query: str, start: int, page_size: int, retries: int = 3) -> bytes:
+_THEME_STOPWORDS = {"of", "the", "in", "on", "a", "an", "to", "and", "for", "with", "cross", "section"}
+
+
+def _themed_query(categories: list[str], phrase: str) -> str:
+    """(cat OR cat ...) AND all:w1 AND all:w2 ...  — an AND of the phrase's
+    significant words (NOT an exact-phrase quote). Exact 4-word phrases return
+    almost nothing on arXiv; ANDing the content words gives broad recall, and
+    relevance-sort + the value scorer do the grading. 'cross-section' is dropped
+    (hyphen tokenization is unreliable) — the return/equity words carry it."""
+    cat_clause = " OR ".join(f"cat:{c}" for c in categories)
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", phrase.lower())
+             if w and w not in _THEME_STOPWORDS and len(w) > 1]
+    term_clause = " AND ".join(f"all:{w}" for w in words)
+    return f"({cat_clause}) AND ({term_clause})"
+
+
+def _harvest(search_query: str, target: int, page_size: int, sleep: float,
+             sort_by: str, label: str = "") -> list[dict]:
+    """Page through one search_query up to `target` records. Returns parsed rows."""
+    rows: list[dict] = []
+    start, total = 0, None
+    while len(rows) < target:
+        ps = min(page_size, target - len(rows))
+        xml = _fetch_page(search_query, start, ps, sort_by=sort_by)
+        recs, total = _parse_entries(xml)
+        if not recs:
+            break
+        rows.extend(recs)
+        start += len(recs)
+        if total is not None and start >= total:
+            break
+        if len(rows) < target:
+            time.sleep(sleep)
+    if label:
+        log.info("  [%s] %d rows (arXiv total=%s)", label, len(rows), total)
+    return rows
+
+
+def _fetch_page(search_query: str, start: int, page_size: int, retries: int = 3,
+                sort_by: str = "submittedDate", sort_order: str = "descending") -> bytes:
     params = {
         "search_query": search_query,
         "start": start,
         "max_results": page_size,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending",
+        "sortBy": sort_by,
+        "sortOrder": sort_order,
     }
     url = f"{API_URL}?{urllib.parse.urlencode(params)}"
     ctx = ssl.create_default_context()
@@ -201,43 +304,69 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Fetch newest arXiv q-fin preprints into a local idea store.")
     ap.add_argument("--categories", default=",".join(QFIN_CATEGORIES),
                     help="Comma-separated arXiv categories (default: all q-fin.*).")
-    ap.add_argument("--max-results", type=int, default=100, help="Total newest papers to fetch.")
+    ap.add_argument("--max-results", type=int, default=100, help="Total newest papers to fetch (newest mode).")
     ap.add_argument("--page-size", type=int, default=100, help="Results per request (arXiv max 2000).")
     ap.add_argument("--query", default=None, help="Optional extra full-text AND term (all:<term>).")
     ap.add_argument("--sleep", type=float, default=3.0, help="Seconds between requests (arXiv ToU >=3).")
     ap.add_argument("--out", default=str(DEFAULT_STORE), help="Parquet store path.")
     ap.add_argument("--dry-run", action="store_true", help="Fetch + report, but do not write the store.")
+    # Themed relevance harvesting (the knowledge-framework corpus builder).
+    ap.add_argument("--query-pack", choices=["frontier"], default=None,
+                    help="Harvest the curated THEME_QUERIES pack (relevance-sorted, broadened categories) "
+                         "instead of newest-N. This is the high-signal corpus builder for scoring.")
+    ap.add_argument("--per-query", type=int, default=40,
+                    help="Papers per themed phrase (query-pack mode).")
+    ap.add_argument("--themes", default=None,
+                    help="Comma-separated subset of THEME_QUERIES keys (default: all).")
     args = ap.parse_args()
 
     if args.sleep < 3.0:
         log.warning("--sleep %.1f is below arXiv ToU (>=3s); raising to 3.0", args.sleep)
         args.sleep = 3.0
 
-    categories = [c.strip() for c in args.categories.split(",") if c.strip()]
-    search_query = _build_search_query(categories, args.query)
     out_path = Path(args.out)
-
-    log.info("query: %s", search_query)
-    log.info("target: newest %d (page size %d), store=%s%s",
-             args.max_results, args.page_size, out_path, "  [DRY RUN]" if args.dry_run else "")
-
     fetched: list[dict] = []
-    start, total = 0, None
-    while len(fetched) < args.max_results:
-        page_size = min(args.page_size, args.max_results - len(fetched))
-        xml = _fetch_page(search_query, start, page_size)
-        records, total = _parse_entries(xml)
-        if not records:
-            log.info("no more results at start=%d (total reported=%s)", start, total)
-            break
-        fetched.extend(records)
-        log.info("progress: %d/%d fetched (arXiv reports %s total matches)",
-                 len(fetched), args.max_results, total)
-        start += len(records)
-        if total is not None and start >= total:
-            break
-        if len(fetched) < args.max_results:
-            time.sleep(args.sleep)
+
+    if args.query_pack == "frontier":
+        # ---- themed relevance harvest across the frontier directions ----
+        want = {t.strip() for t in args.themes.split(",")} if args.themes else set(THEME_QUERIES)
+        phrases = [(theme, p) for theme, ps in THEME_QUERIES.items() if theme in want for p in ps]
+        log.info("query-pack=frontier: %d themed phrases x %d each, cats=%s%s",
+                 len(phrases), args.per_query, "BROAD", "  [DRY RUN]" if args.dry_run else "")
+        for i, (theme, phrase) in enumerate(phrases, 1):
+            q = _themed_query(BROAD_CATEGORIES, phrase)
+            log.info("(%d/%d) theme=%s  phrase=%r", i, len(phrases), theme, phrase)
+            rows = _harvest(q, args.per_query, args.page_size, args.sleep,
+                            sort_by="relevance", label=phrase[:40])
+            for r in rows:
+                r["theme_query"] = theme
+            fetched.extend(rows)
+            if i < len(phrases):
+                time.sleep(args.sleep)
+        log.info("themed harvest: %d rows pre-dedup across %d phrases", len(fetched), len(phrases))
+    else:
+        # ---- legacy newest-N (default) ----
+        categories = [c.strip() for c in args.categories.split(",") if c.strip()]
+        search_query = _build_search_query(categories, args.query)
+        log.info("query: %s", search_query)
+        log.info("target: newest %d (page size %d), store=%s%s",
+                 args.max_results, args.page_size, out_path, "  [DRY RUN]" if args.dry_run else "")
+        start, total = 0, None
+        while len(fetched) < args.max_results:
+            page_size = min(args.page_size, args.max_results - len(fetched))
+            xml = _fetch_page(search_query, start, page_size)
+            records, total = _parse_entries(xml)
+            if not records:
+                log.info("no more results at start=%d (total reported=%s)", start, total)
+                break
+            fetched.extend(records)
+            log.info("progress: %d/%d fetched (arXiv reports %s total matches)",
+                     len(fetched), args.max_results, total)
+            start += len(records)
+            if total is not None and start >= total:
+                break
+            if len(fetched) < args.max_results:
+                time.sleep(args.sleep)
 
     if not fetched:
         log.error("nothing fetched — aborting without touching the store.")

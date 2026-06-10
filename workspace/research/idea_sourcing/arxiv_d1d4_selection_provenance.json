@@ -1,0 +1,51 @@
+{
+  "artifact": "arxiv_d1d4_selection_provenance",
+  "created": "2026-06-10",
+  "selection_class": "a_priori_is_only",
+  "selection_class_note": "Selected on IS-only statistics (sandbox screens + marginal-contribution gate, all <= 2020-12-31). 2021-2026 is UNBURNED by our own numbers. NOT an oos_informed_backfill (unlike the Phase-6/7 87). Residual caveat: literature-informed selection — the source papers observed post-2020 data (arXiv:2505.20608 sampled A-shares 1995-2024).",
+  "funnel": {
+    "corpus": "671-paper themed arXiv harvest (knowledge framework, 2026-06-10)",
+    "directions_extracted": ["D1 cyq_perf CGO", "D2 moneyflow informed flow", "D3 SUE/PEAD", "D4 hk_hold northbound"],
+    "factors_screened": 19,
+    "screen": "eval_arxiv_d1d4.py (raw + size-neut RankIC/ICIR, fwd 5/20d, IS <= 2020-12-31) + arxiv_d4cov masked variants",
+    "marginal_gate": "eval_arxiv_marginal_test.py vs the cached 31-factor book (combined ICIR 0.791 full / 0.69-0.82 overlap windows); verdicts in workspace/outputs/idea_sourcing_arxiv/arxiv_marginal_test.json",
+    "added_to_catalog_as_draft": [
+      "alpha_chip_cgo_smooth_20d",
+      "earn_sue_ni_mcap",
+      "earn_sue_ni_assets",
+      "north_hold_change_20d_cov",
+      "north_hold_change_60d_cov"
+    ],
+    "dropped": {
+      "D2_entire_direction": "flow_lg_net (REDUNDANT, hypothesis fails), flow_sm_net (reversal repackaged, corr 0.79, inc +0.013)",
+      "behav_winner_rate": "sign-flipped vs prediction + REDUNDANT (inc -0.014)",
+      "behav_cost_disp": "low corr 0.55 but inc +0.008 below bar",
+      "north_level": "0.97 payoff corr to size_ln_mcap (size clone)",
+      "north_accel_20": "no signal (neut ICIR -0.02)",
+      "ni_yoy_growth": "dup-control row only",
+      "behav_cgo_unsmoothed": "already in catalog as alpha_chip_weight_avg_dev"
+    }
+  },
+  "lifecycle_gate": {
+    "profile": "factor_lifecycle (IS-only, 2014-01-01..2020-12-31, horizon 20d)",
+    "temp_validation_run": "workspace/outputs/phase6_factor_lifecycle_temp_arxiv_d1d4",
+    "live_run": "workspace/outputs/phase6_factor_lifecycle_live_arxiv_d1d4",
+    "live_run_note": "First live attempt failed with a TRANSIENT all-false field-eligibility (fail-closed behavior; standalone reproduction immediately after showed all 5 eligible, violations empty). Deleted the failed run dir and re-ran clean; verdicts bit-identical to the temp run.",
+    "verdicts": {
+      "alpha_chip_cgo_smooth_20d": {"heldout_rank_icir": 0.337, "sign_consistency": 1.0, "n_heldout_blocks": 3, "status": "candidate"},
+      "earn_sue_ni_assets": {"heldout_rank_icir": 0.354, "sign_consistency": 0.857, "n_heldout_blocks": 7, "status": "candidate"},
+      "earn_sue_ni_mcap": {"heldout_rank_icir": 0.409, "sign_consistency": 1.0, "n_heldout_blocks": 7, "status": "candidate"},
+      "north_hold_change_20d_cov": {"heldout_rank_icir": 0.597, "sign_consistency": 1.0, "n_heldout_blocks": 4, "status": "candidate"},
+      "north_hold_change_60d_cov": {"heldout_rank_icir": 0.541, "sign_consistency": 1.0, "n_heldout_blocks": 4, "status": "candidate"}
+    },
+    "gate_decision": "approved (drive_gates_arxiv_d1d4.py — batch-specific honest concern evidence, NOT the phase6 oos_informed text)",
+    "published": 5,
+    "registry_after": {"current_total": 190, "candidate": 93, "draft": 89, "approved": 8}
+  },
+  "next_gate": "candidate -> approved requires the SEPARATE single-shot sealed-OOS path (FrozenSelectionSet seal-key). 2021-2026 remains unburned by our own statistics for these 5; spend deliberately and note the literature-informed caveat in the frozen-set identity.",
+  "references": {
+    "screen_results": "workspace/research/idea_sourcing/knowledge/D1_D4_SCREEN_RESULTS.md",
+    "directions": "workspace/research/idea_sourcing/knowledge/TOP_DIRECTIONS.md",
+    "marginal_outputs": "workspace/outputs/idea_sourcing_arxiv/"
+  }
+}

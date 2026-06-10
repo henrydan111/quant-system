@@ -17,7 +17,7 @@ reviewer: henrydan111
 related_pr: gated-dataset-anomaly-review
 related_findings_id: null
 
-provider_build_id: report_rc_incr_20260608
+provider_build_id: indicators_fields_20260609
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

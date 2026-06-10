@@ -1,0 +1,1141 @@
+{
+ "factors": {
+  "alpha_block_discount_20d": {
+   "en": "20-day average discount of block-trade prices relative to market close",
+   "cn": "大宗交易成交价相对收盘价的20日平均折价率"
+  },
+  "alpha_block_event_density_20d": {
+   "en": "Count of days with block-trade activity in the past 20 days",
+   "cn": "过去20日内发生大宗交易的天数密度"
+  },
+  "alpha_block_volume_share_20d": {
+   "en": "20-day average share of volume transacted via block trades",
+   "cn": "大宗交易成交量占总成交量的20日均值比例"
+  },
+  "alpha_chip_cost_spread_pct": {
+   "en": "Width of chip-cost distribution (95th–5th pct) scaled by median cost",
+   "cn": "筹码成本分布宽度（95%分位与5%分位之差）除以中位成本"
+  },
+  "alpha_chip_price_vs_cost50": {
+   "en": "Current price deviation above or below the median chip-holding cost",
+   "cn": "当前收盘价相对于筹码分布50%分位均价的偏离程度"
+  },
+  "alpha_chip_weight_avg_dev": {
+   "en": "Price deviation from the chip-distribution weighted-average holding cost",
+   "cn": "收盘价相对于筹码加权平均成本的偏差率"
+  },
+  "alpha_chip_winner_rate_chg_20d": {
+   "en": "20-day change in the proportion of profitable chip holders",
+   "cn": "过去20日内筹码获利比例（获利盘）的变动幅度"
+  },
+  "alpha_chip_winner_rate_ema_10d": {
+   "en": "10-day exponential moving average of the chip winner (profitable holder) rate",
+   "cn": "筹码获利盘比例的10日指数移动平均值"
+  },
+  "alpha_holder_event_density_60d": {
+   "en": "Total count of major-shareholder trading events in the past 60 days",
+   "cn": "过去60日内重要股东买卖申报事件的累计发生次数"
+  },
+  "alpha_holder_gross_vol_60d": {
+   "en": "Total gross volume of major-shareholder trades over the past 60 days",
+   "cn": "过去60日内重要股东买卖交易的总累计成交量"
+  },
+  "alpha_holder_net_ratio_ema_20d": {
+   "en": "20-day EMA of the net buy/sell ratio of major shareholders",
+   "cn": "重要股东净买入比例的20日指数移动平均值"
+  },
+  "alpha_insider_net_buy_60d": {
+   "en": "60-day cumulative net buy ratio of insider/major-shareholder transactions",
+   "cn": "过去60日内重要股东（内部人）净买入比例的累计总和"
+  },
+  "alpha_inst_net_buy_20d": {
+   "en": "20-day cumulative net institutional buy volume from top-trader list",
+   "cn": "过去20日龙虎榜机构席位净买入金额的累计合计"
+  },
+  "alpha_topinst_hit_density_60d": {
+   "en": "Number of days the stock appeared on the institutional top-trader list in 60 days",
+   "cn": "过去60日内个股出现在机构龙虎榜的天数密度"
+  },
+  "alpha_topinst_net_buy_ema_20d": {
+   "en": "20-day EMA of daily institutional net buy amount from top-trader records",
+   "cn": "龙虎榜机构净买入金额的20日指数移动平均值"
+  },
+  "alpha_toplist_amount_over_mv_20d": {
+   "en": "20-day average ratio of top-list turnover amount to total market cap",
+   "cn": "龙虎榜成交金额占总市值的20日均值比例"
+  },
+  "alpha_toplist_hit_density_60d": {
+   "en": "Number of days the stock appeared on the dragon-tiger top-trader list in 60 days",
+   "cn": "过去60日内个股出现在龙虎榜的天数密度"
+  },
+  "alpha_toplist_net_rate_20d": {
+   "en": "20-day average net buy rate of dragon-tiger top-list traders",
+   "cn": "龙虎榜净买入率的20日移动平均值"
+  },
+  "comp_52w_position": {
+   "en": "Composite of price position relative to 20-day high and low (52-week surrogate)",
+   "cn": "价格相对20日高低点位置的复合因子（52周位置代理）"
+  },
+  "comp_anti_risk": {
+   "en": "Composite of low leverage and high current ratio for financial defense",
+   "cn": "低负债率与高流动比率的复合防御性因子"
+  },
+  "comp_cash_sheep": {
+   "en": "Composite of cash-flow-to-price and dividend yield for cash-return value",
+   "cn": "现金流市价比与股息率的复合现金回报价值因子"
+  },
+  "comp_defensive": {
+   "en": "Composite of high ROE and low volatility for defensive quality",
+   "cn": "高净资产收益率与低波动率的复合防御型质量因子"
+  },
+  "comp_garp": {
+   "en": "Growth at a reasonable price: blending net-profit YoY growth, earnings yield, and ROE",
+   "cn": "合理价格成长：净利润同比增速、盈利收益率与ROE的复合因子"
+  },
+  "comp_growth_value": {
+   "en": "Composite blending revenue YoY growth and TTM earnings yield",
+   "cn": "营收同比增速与TTM盈利收益率的复合成长价值因子"
+  },
+  "comp_low_vol_value": {
+   "en": "Composite of low 60-day volatility and high earnings yield",
+   "cn": "低60日波动率与高盈利收益率的复合低波价值因子"
+  },
+  "comp_magic_formula": {
+   "en": "Magic Formula composite of ROIC and earnings yield (Greenblatt-style)",
+   "cn": "格林布拉特魔法公式：ROIC与盈利收益率的复合因子"
+  },
+  "comp_momentum_quality": {
+   "en": "Composite of 120-day momentum and ROE for quality momentum tilt",
+   "cn": "120日价格动量与ROE的复合质量动量因子"
+  },
+  "comp_momentum_reversal": {
+   "en": "Composite of 120-day momentum and 5-day short-term reversal",
+   "cn": "120日中期动量与5日短期反转的复合因子"
+  },
+  "comp_multi_6": {
+   "en": "Six-factor composite: earnings yield, ROE, profit growth, momentum, volatility, and size",
+   "cn": "六因子复合：盈利收益率、ROE、净利润增速、动量、波动率与市值"
+  },
+  "comp_qual_grow": {
+   "en": "Composite of ROE quality and revenue YoY growth",
+   "cn": "ROE质量与营收同比增速的复合质量成长因子"
+  },
+  "comp_quality_growth": {
+   "en": "Composite of ROE and revenue YoY growth for quality-growth blend",
+   "cn": "ROE与营收同比增速复合的质量成长因子"
+  },
+  "comp_quality_value": {
+   "en": "Composite of ROE and book-to-price ratio for quality at value",
+   "cn": "ROE与账面市值比的复合质量价值因子"
+  },
+  "comp_relative_strength": {
+   "en": "Composite of 20-day return momentum and low short-term volatility",
+   "cn": "20日价格动量与低波动率的复合相对强弱因子"
+  },
+  "comp_rev_low_turn": {
+   "en": "Composite of short-term reversal and low turnover for mean-reversion signal",
+   "cn": "短期反转与低换手率的复合低换手反转因子"
+  },
+  "comp_size_quality": {
+   "en": "Composite of log market cap and ROE for size-tilted quality",
+   "cn": "对数总市值与ROE的复合规模质量因子"
+  },
+  "comp_small_value": {
+   "en": "Composite of small cap (log market cap) and high book-to-price value",
+   "cn": "小市值与高账面市值比的复合小市值价值因子"
+  },
+  "comp_val_mom": {
+   "en": "Composite of TTM earnings yield and 120-day price momentum",
+   "cn": "TTM盈利收益率与120日价格动量的复合价值动量因子"
+  },
+  "comp_val_qual": {
+   "en": "Composite of TTM earnings yield and ROE for value-quality blend",
+   "cn": "TTM盈利收益率与ROE的复合价值质量因子"
+  },
+  "earn_earnings_momentum": {
+   "en": "Binary flag scoring 1 when net profit YoY growth is positive for two consecutive periods",
+   "cn": "连续两期净利润同比增速均为正时赋值1的盈利持续性动量因子"
+  },
+  "earn_eps_diffusion_120": {
+   "en": "120-day EPS-revision breadth: net fraction of analysts raising FY1 EPS forecasts",
+   "cn": "过去120日分析师上调FY1每股收益预测的净比例（盈利预测扩散广度）"
+  },
+  "earn_eps_diffusion_60": {
+   "en": "60-day EPS-revision breadth: net fraction of analysts raising FY1 EPS forecasts",
+   "cn": "过去60日分析师上调FY1每股收益预测的净比例（盈利预测扩散广度）"
+  },
+  "earn_surprise_eps": {
+   "en": "EPS surprise proxy: current EPS relative to EPS five quarters ago",
+   "cn": "EPS盈利惊喜代理：当期每股收益相对五季前每股收益的变化率"
+  },
+  "earn_surprise_revenue": {
+   "en": "Revenue surprise proxy using reported operating revenue YoY growth rate",
+   "cn": "营业收入同比增速作为营收盈利惊喜的代理指标"
+  },
+  "flow_inflow_surge": {
+   "en": "Ratio of 5-day to 60-day average net money-flow amount, measuring recent inflow surge",
+   "cn": "5日净资金流入均值与60日均值之比，衡量近期资金流入加速程度"
+  },
+  "flow_large_buy_ratio_5d": {
+   "en": "5-day average ratio of large-order buy amount to total turnover",
+   "cn": "过去5日大单买入金额占总成交金额的均值比例"
+  },
+  "flow_large_net_pct_20d": {
+   "en": "20-day average net large-order flow as a percentage of total turnover",
+   "cn": "大单净买入金额占总成交额的20日均值百分比"
+  },
+  "flow_large_small_ratio": {
+   "en": "20-day ratio of large-order net flow to small-order net flow",
+   "cn": "大单净买入金额与小单净买入金额之比的20日均值"
+  },
+  "flow_net_inflow_20d": {
+   "en": "20-day average daily net total money-flow amount",
+   "cn": "主力资金净流入金额的20日移动平均值"
+  },
+  "flow_net_inflow_5d": {
+   "en": "5-day average daily net total money-flow amount",
+   "cn": "主力资金净流入金额的5日移动平均值"
+  },
+  "flow_small_net_pct_20d": {
+   "en": "20-day average net small-order flow as a percentage of total turnover",
+   "cn": "小单净买入金额占总成交额的20日均值百分比（散户资金流向）"
+  },
+  "grow_consistency": {
+   "en": "Negative standard deviation of net-profit YoY over 60 days — rewards stable growth",
+   "cn": "60日净利润同比增速标准差取反，衡量盈利增速的一致稳定性"
+  },
+  "grow_eps_yoy": {
+   "en": "Year-on-year growth rate of basic earnings per share",
+   "cn": "基本每股收益的同比增速"
+  },
+  "grow_gross_margin_chg": {
+   "en": "Quarter-on-quarter change in gross profit margin",
+   "cn": "毛利率相对上一期的季度环比变动幅度"
+  },
+  "grow_n_income_attr_p_yoy_accel_q": {
+   "en": "Quarterly acceleration of attributable net income YoY growth (second derivative)",
+   "cn": "归母净利润同比增速的季度加速度（二阶差分），衡量盈利改善加速"
+  },
+  "grow_netprofit_yoy": {
+   "en": "Year-on-year growth rate of net profit",
+   "cn": "净利润同比增速"
+  },
+  "grow_operate_profit_yoy_accel_q": {
+   "en": "Quarterly acceleration of operating profit YoY growth (second derivative)",
+   "cn": "营业利润同比增速的季度加速度（二阶差分），衡量经营利润改善加速"
+  },
+  "grow_opprofit_qoq": {
+   "en": "Quarter-on-quarter growth rate of operating profit",
+   "cn": "营业利润的季度环比增速"
+  },
+  "grow_opprofit_yoy": {
+   "en": "Year-on-year growth rate of operating profit",
+   "cn": "营业利润同比增速"
+  },
+  "grow_peg": {
+   "en": "Negative PEG ratio: TTM P/E divided by net-profit YoY growth (higher = cheaper growth)",
+   "cn": "负PEG比率：TTM市盈率除以净利润同比增速取反，越高表示成长越便宜"
+  },
+  "grow_profit_acceleration": {
+   "en": "Change in net-profit YoY growth rate between two consecutive reporting periods",
+   "cn": "相邻两期净利润同比增速之差，衡量盈利加速程度"
+  },
+  "grow_profit_trend": {
+   "en": "Slope of net-profit YoY growth rate over the most recent four periods",
+   "cn": "最近四期净利润同比增速的线性斜率，衡量盈利增长趋势"
+  },
+  "grow_rev_acceleration": {
+   "en": "Change in revenue YoY growth between two consecutive periods",
+   "cn": "相邻两期营收同比增速之差，衡量营收增长加速度"
+  },
+  "grow_rev_trend": {
+   "en": "Slope of revenue YoY growth rate over the most recent four periods",
+   "cn": "最近四期营收同比增速的线性斜率，衡量营收增长趋势"
+  },
+  "grow_revenue_yoy": {
+   "en": "Year-on-year growth rate of operating revenue",
+   "cn": "营业收入同比增速"
+  },
+  "grow_roe_improvement": {
+   "en": "Change in ROE between current quarter and five quarters ago",
+   "cn": "当期ROE相对五季前ROE的变动幅度，衡量盈利能力改善"
+  },
+  "grow_roe_yoy": {
+   "en": "Year-on-year change in return on equity",
+   "cn": "净资产收益率的同比变动幅度"
+  },
+  "grow_total_revenue_yoy_accel_q": {
+   "en": "Quarterly acceleration of total revenue YoY growth (second derivative)",
+   "cn": "总营收同比增速的季度加速度（二阶差分），衡量营收改善加速"
+  },
+  "lev_current_ratio": {
+   "en": "Current ratio: current assets divided by current liabilities",
+   "cn": "流动比率：流动资产除以流动负债，衡量短期偿债能力"
+  },
+  "lev_debt_capacity": {
+   "en": "Remaining debt capacity: one minus debt-to-assets ratio (scaled to 0–1)",
+   "cn": "剩余举债空间：1减去资产负债率（百分位），衡量财务余量"
+  },
+  "lev_debt_to_assets": {
+   "en": "Debt-to-assets ratio measuring total financial leverage",
+   "cn": "资产负债率，衡量公司总体财务杠杆水平"
+  },
+  "lev_deleverage": {
+   "en": "Negative period-over-period change in debt-to-assets — rewards deleveraging",
+   "cn": "资产负债率的期间降幅取反，越高表示去杠杆力度越强"
+  },
+  "lev_quick_ratio": {
+   "en": "Quick ratio: liquid assets excluding inventory divided by current liabilities",
+   "cn": "速动比率：剔除存货后的流动资产除以流动负债"
+  },
+  "liq_amihud_20d": {
+   "en": "20-day Amihud illiquidity ratio: average absolute return per unit of turnover value",
+   "cn": "20日Amihud非流动性比率：日绝对收益率除以成交金额的均值，越低流动性越好"
+  },
+  "liq_log_dollar_vol": {
+   "en": "Log of 20-day average daily turnover in yuan — proxy for stock liquidity capacity",
+   "cn": "20日日均成交额（元）的对数，衡量股票的资金容量与流动性"
+  },
+  "liq_spread_proxy_20d": {
+   "en": "20-day average intraday high-low spread relative to midpoint as a bid-ask spread proxy",
+   "cn": "20日日均高低价差除以中间价，作为买卖价差的代理指标"
+  },
+  "liq_turnover_10d": {
+   "en": "10-day average daily turnover rate",
+   "cn": "10日日均换手率"
+  },
+  "liq_turnover_20d": {
+   "en": "20-day average daily turnover rate",
+   "cn": "20日日均换手率"
+  },
+  "liq_turnover_5d": {
+   "en": "5-day average daily turnover rate",
+   "cn": "5日日均换手率"
+  },
+  "liq_turnover_60d": {
+   "en": "60-day average daily turnover rate",
+   "cn": "60日日均换手率"
+  },
+  "liq_turnover_f_20d": {
+   "en": "20-day average free-float-adjusted daily turnover rate",
+   "cn": "基于自由流通股本调整的20日日均换手率"
+  },
+  "liq_turnover_f_5d": {
+   "en": "5-day average free-float-adjusted daily turnover rate",
+   "cn": "基于自由流通股本调整的5日日均换手率"
+  },
+  "liq_turnover_ratio_5_60": {
+   "en": "Ratio of 5-day to 60-day average turnover rate — detects short-term activity surge",
+   "cn": "5日换手率均值与60日换手率均值之比，捕捉近期交易活跃度相对变化"
+  },
+  "liq_turnover_skew_20d": {
+   "en": "Skewness of daily turnover rate distribution over 20 days",
+   "cn": "20日换手率分布的偏度，反映换手率分布不对称性"
+  },
+  "liq_vol_cv_20d": {
+   "en": "Coefficient of variation (std/mean) of daily volume over 20 days",
+   "cn": "20日成交量的变异系数（标准差除以均值），衡量成交量的相对波动性"
+  },
+  "liq_vol_ratio_ma5": {
+   "en": "5-day average volume ratio (today's volume relative to a reference average)",
+   "cn": "5日量比均值：当日成交量相对基准均量的比值移动平均"
+  },
+  "liq_vol_surge": {
+   "en": "Ratio of 5-day to 60-day average volume — detects short-term volume surge",
+   "cn": "5日成交量均值与60日成交量均值之比，衡量近期成交量异常放大程度"
+  },
+  "liq_zero_ret_days_10d": {
+   "en": "Fraction of days with near-zero return in past 10 days — illiquidity signal",
+   "cn": "过去10日内日收益率接近零的天数占比，衡量市场流动性不足程度"
+  },
+  "margin_balance_pct": {
+   "en": "Margin finance outstanding balance as a percentage of circulating market cap",
+   "cn": "融资余额占流通市值的比例，衡量杠杆资金的相对持仓比例"
+  },
+  "margin_net_buy_20d": {
+   "en": "20-day average net margin-finance purchases (buy minus repayment)",
+   "cn": "融资净买入金额（融资买入减偿还）的20日移动平均值"
+  },
+  "margin_sl_balance_change": {
+   "en": "20-day change in short-selling (securities lending) outstanding balance",
+   "cn": "融券余额在过去20日内的变动量，衡量做空资金增减方向"
+  },
+  "mom_acceleration_20d": {
+   "en": "Difference between the most recent 20-day return and the prior 20-day return",
+   "cn": "最近20日涨跌幅与前20日涨跌幅之差，衡量动量加速度"
+  },
+  "mom_ewm_20d": {
+   "en": "20-day exponentially weighted moving average of daily returns",
+   "cn": "日收益率的20日指数加权移动平均，近期收益权重更高"
+  },
+  "mom_ewm_60d": {
+   "en": "60-day exponentially weighted moving average of daily returns",
+   "cn": "日收益率的60日指数加权移动平均，近期收益权重更高"
+  },
+  "mom_high_moment_20d": {
+   "en": "20-day average intraday upside range from open to daily high as a fraction of open price",
+   "cn": "过去20个交易日日内最高价相对开盘价的平均涨幅，衡量日内上行动能强度"
+  },
+  "mom_idio_20d": {
+   "en": "20-day price return residualized by size-and-industry neutralization (idiosyncratic momentum)",
+   "cn": "20日收益率经市值-行业中性化后的特质动量，剔除行业和规模共同因子的纯股票动量"
+  },
+  "mom_industry_rel_20d": {
+   "en": "20-day price return minus industry mean return (industry-relative momentum)",
+   "cn": "20日收益率减去同行业均值，衡量个股相对行业的超额动量"
+  },
+  "mom_intraday_20d": {
+   "en": "20-day average of daily close-to-open return capturing intraday directional drift",
+   "cn": "过去20日收盘价相对开盘价的平均日内涨幅，捕捉日内方向性漂移动能"
+  },
+  "mom_low_moment_20d": {
+   "en": "20-day average of the daily low-to-open gap measuring downside intraday pressure",
+   "cn": "过去20日日内最低价相对开盘价的平均偏离度，衡量日内下行压力强度"
+  },
+  "mom_overnight_20d": {
+   "en": "20-day average overnight gap return (open vs prior close), capturing after-hours information flow",
+   "cn": "过去20日隔夜跳空收益（当日开盘相对前日收盘）的均值，捕捉盘后信息驱动的价格跳升"
+  },
+  "mom_return_10d": {
+   "en": "10-day price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的10个交易日价格动量（滞后1日）"
+  },
+  "mom_return_120d": {
+   "en": "6-month price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的120个交易日（约6个月）价格动量（滞后1日）"
+  },
+  "mom_return_20d": {
+   "en": "1-month price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的20个交易日（约1个月）价格动量（滞后1日）"
+  },
+  "mom_return_250d": {
+   "en": "12-month price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的250个交易日（约1年）价格动量（滞后1日）"
+  },
+  "mom_return_5d": {
+   "en": "5-day price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的5个交易日（约1周）价格动量（滞后1日）"
+  },
+  "mom_return_60d": {
+   "en": "3-month price momentum using adjusted close, 1-day lagged",
+   "cn": "以复权收盘价计算的60个交易日（约3个月）价格动量（滞后1日）"
+  },
+  "mom_skip1m_252d": {
+   "en": "12-month momentum skipping most recent month (Fama-French standard skip-1 momentum)",
+   "cn": "跳过最近1个月的12个月价格动量，即标准Fama-French动量因子（skip-1）"
+  },
+  "mom_weighted_120d": {
+   "en": "120-day linearly-weighted (WMA) daily return momentum, down-weighting stale observations",
+   "cn": "120日加权移动平均日收益率，对近期收益赋予更高权重的中期动量因子"
+  },
+  "north_accumulation_20d": {
+   "en": "20-day cumulative change in northbound (Stock Connect) shareholding ratio",
+   "cn": "过去20个交易日北向资金持股比例的累计变动量，衡量外资持续净买入强度"
+  },
+  "north_flow_momentum": {
+   "en": "Linear trend slope of northbound shareholding ratio over 20 days",
+   "cn": "北向资金持股比例的20日线性斜率，衡量外资持仓趋势动能的方向与速度"
+  },
+  "north_hold_change_20d": {
+   "en": "20-day change in northbound (Stock Connect) shareholding ratio",
+   "cn": "北向资金（沪深股通）持股占比相对20日前的绝对变动量"
+  },
+  "north_hold_change_5d": {
+   "en": "5-day change in northbound (Stock Connect) shareholding ratio",
+   "cn": "北向资金（沪深股通）持股占比相对5日前的绝对变动量，衡量短期外资买卖方向"
+  },
+  "north_hold_pct": {
+   "en": "Current northbound (Stock Connect) shareholding percentage of total shares",
+   "cn": "北向资金当前持股占总股本的比例，衡量外资持仓水位"
+  },
+  "qual_accruals": {
+   "en": "Cash-based earnings quality ratio: operating cash flow per share divided by EPS (CFO-to-earnings)",
+   "cn": "现金盈利质量比率，每股经营现金流除以每股收益（CFO/EPS），值越高表示盈利含金量越高"
+  },
+  "qual_asset_turnover": {
+   "en": "Asset turnover ratio measuring revenue generation efficiency per unit of total assets",
+   "cn": "总资产周转率，衡量企业利用全部资产创造营业收入的效率"
+  },
+  "qual_cash_to_assets": {
+   "en": "Single-quarter cash and equivalents as a fraction of total assets (balance-sheet liquidity ratio)",
+   "cn": "最新单季货币资金占总资产比例，衡量企业资产负债表的现金充裕程度"
+  },
+  "qual_current_ratio": {
+   "en": "Current ratio measuring short-term liquidity coverage of current liabilities",
+   "cn": "流动比率，衡量企业流动资产对流动负债的短期偿债覆盖能力"
+  },
+  "qual_gross_margin": {
+   "en": "Gross profit margin: gross profit as a percentage of revenue (TTM or reported)",
+   "cn": "毛利率，即营业毛利占营业收入的百分比，衡量产品/服务的盈利能力"
+  },
+  "qual_gross_profitability": {
+   "en": "Novy-Marx gross profitability: gross margin multiplied by asset turnover (profitability per asset)",
+   "cn": "Novy-Marx毛利资产收益率，毛利率乘以总资产周转率，衡量单位资产创造毛利的能力"
+  },
+  "qual_leverage": {
+   "en": "Debt-to-assets ratio measuring total financial leverage of the balance sheet",
+   "cn": "资产负债率，总负债占总资产的比例，衡量企业资产负债表的整体财务杠杆水平"
+  },
+  "qual_margin_stability": {
+   "en": "Negative standard deviation of gross margin over 60 quarters, rewarding stable margins",
+   "cn": "毛利率60期标准差的负值，值越高表示毛利率越稳定，是盈利质量的稳健性度量"
+  },
+  "qual_margin_trend": {
+   "en": "Linear slope of gross profit margin over the most recent 4 reported quarters",
+   "cn": "最近4个报告期毛利率的线性趋势斜率，衡量毛利率改善或恶化的方向与速度"
+  },
+  "qual_net_margin": {
+   "en": "Net profit margin: net income as a fraction of revenue (TTM or reported)",
+   "cn": "净利润率，净利润占营业收入的比例，衡量企业将收入转化为利润的整体能力"
+  },
+  "qual_piotroski_fscore_9pt": {
+   "en": "Piotroski F-score: 9-point composite of single-quarter profitability, leverage, and efficiency signals",
+   "cn": "Piotroski F评分（9分制），综合最新单季盈利能力、杠杆变化和运营效率的9项二值信号"
+  },
+  "qual_q_gross_margin": {
+   "en": "Single-quarter gross profit margin derived from PIT quarterly revenue and operating cost",
+   "cn": "最新单季毛利率（PIT季度营业收入减营业成本除以营业收入），反映最新季度盈利能力"
+  },
+  "qual_q_net_margin": {
+   "en": "Single-quarter net profit margin: quarterly attributable net income over quarterly revenue",
+   "cn": "最新单季归母净利润率（归母净利润除以营业收入），衡量最新季度净盈利能力"
+  },
+  "qual_q_op_margin": {
+   "en": "Single-quarter operating profit margin: quarterly operating profit over quarterly revenue",
+   "cn": "最新单季营业利润率（营业利润除以营业收入），衡量最新季度核心经营盈利水平"
+  },
+  "qual_quick_ratio": {
+   "en": "Quick ratio (acid-test) measuring near-liquid asset coverage of current liabilities",
+   "cn": "速动比率（酸性测试比率），衡量企业速动资产对流动负债的即时偿债覆盖能力"
+  },
+  "qual_rd_to_assets": {
+   "en": "Single-quarter R&D expenditure as a fraction of total assets (R&D investment intensity)",
+   "cn": "最新单季研发费用占总资产比例，衡量企业研发投入强度（仅R&D报告股覆盖约31%）"
+  },
+  "qual_roa": {
+   "en": "Return on assets: net income divided by total assets measuring overall asset profitability",
+   "cn": "总资产收益率（ROA），净利润除以总资产，衡量企业利用全部资产创造利润的能力"
+  },
+  "qual_roe": {
+   "en": "Return on equity measuring net income generated per unit of book equity",
+   "cn": "净资产收益率（ROE），归母净利润除以净资产，衡量股东权益的盈利能力"
+  },
+  "qual_roe_change": {
+   "en": "Quarter-over-quarter change in ROE between the two most recent reported periods",
+   "cn": "最近两期ROE的环比变动量，衡量净资产盈利能力的短期改善或恶化"
+  },
+  "qual_roe_stability": {
+   "en": "Negative standard deviation of ROE over 60 periods, rewarding consistent profitability",
+   "cn": "ROE 60期标准差的负值，值越高表示净资产收益率越稳定，是盈利质量的稳定性度量"
+  },
+  "qual_roic": {
+   "en": "Return on invested capital measuring operating profit efficiency relative to total invested capital",
+   "cn": "投入资本回报率（ROIC），衡量企业每单位投入资本所产生的营业利润效率"
+  },
+  "rev_max_return_20d": {
+   "en": "Maximum single-day return over 20 days (extreme upside event indicator, used as reversal signal)",
+   "cn": "过去20个交易日最大单日涨幅，极端上涨事件指标，可作反转信号使用"
+  },
+  "rev_min_return_20d": {
+   "en": "Minimum single-day return over 20 days (extreme downside event indicator, used as reversal signal)",
+   "cn": "过去20个交易日最大单日跌幅，极端下跌事件指标，可作反转信号使用"
+  },
+  "rev_return_10d": {
+   "en": "Negative 10-day cumulative return (short-term reversal over 2 weeks)",
+   "cn": "10个交易日累计收益的负值，衡量约2周的短期价格反转信号"
+  },
+  "rev_return_1d": {
+   "en": "Negative prior-day return capturing the overnight/1-day price reversal",
+   "cn": "前一交易日收益的负值，捕捉最短期隔日价格反转效应"
+  },
+  "rev_return_3d": {
+   "en": "Negative 3-day cumulative return capturing short-term price mean reversion",
+   "cn": "3个交易日累计收益的负值，衡量极短期（约3日）价格均值回复信号"
+  },
+  "rev_return_5d": {
+   "en": "Negative 5-day cumulative return capturing 1-week price reversal",
+   "cn": "5个交易日累计收益的负值，衡量约1周的短期价格反转信号"
+  },
+  "rev_turnover_spike_5d": {
+   "en": "5-day reversal amplified by turnover spike: negative 5-day return scaled by short-vs-long-term turnover ratio",
+   "cn": "换手率放大的5日反转因子，用近期换手率与长期均值之比对5日跌幅加权，高换手超跌反转强度指标"
+  },
+  "rev_up_down_ratio_20d": {
+   "en": "Fraction of up-days over past 20 trading days (win-rate proxy for reversal timing)",
+   "cn": "过去20个交易日中上涨天数占比，衡量股价连涨频率，可用于判断超买超卖的反转时机"
+  },
+  "risk_downvol_20d": {
+   "en": "20-day downside semi-deviation: standard deviation of negative daily returns only",
+   "cn": "20日下行半标准差，仅对负收益日计算的标准差，衡量纯粹的下行波动风险"
+  },
+  "risk_downvol_60d": {
+   "en": "60-day downside semi-deviation: standard deviation of negative daily returns only",
+   "cn": "60日下行半标准差，仅对负收益日计算的标准差，衡量中期纯下行波动风险"
+  },
+  "risk_mdd_proxy_60d": {
+   "en": "60-day drawdown proxy: current price relative to rolling 60-day adjusted high",
+   "cn": "60日最大回撤代理指标，当前收盘价相对过去60日最高点的偏离度，衡量近期回撤幅度"
+  },
+  "risk_range_ratio_20d": {
+   "en": "20-day average of daily high-low range scaled by close price (intraday range ratio)",
+   "cn": "过去20日日内振幅（最高价减最低价除以收盘价）的均值，衡量日内波动幅度"
+  },
+  "risk_skew_60d": {
+   "en": "60-day skewness of daily returns measuring asymmetry of the return distribution",
+   "cn": "60日日收益率的偏度，衡量收益分布的非对称性（正偏=右尾肥厚，负偏=左尾风险大）"
+  },
+  "risk_tail_60d": {
+   "en": "60-day 5th-percentile daily return (left-tail VaR proxy, lower value = heavier tail risk)",
+   "cn": "60日日收益率的5%分位数（左尾VaR代理），越低表示极端下行尾部风险越大"
+  },
+  "risk_var_95_20d": {
+   "en": "20-day 5th-percentile daily return (short-term 95% historical VaR proxy)",
+   "cn": "20日日收益率的5%分位数，短期95%历史VaR代理指标，衡量短期极端下行风险"
+  },
+  "risk_vol_10d": {
+   "en": "10-day realized volatility of daily adjusted returns",
+   "cn": "10个交易日日收益率的标准差（已实现波动率），衡量短期价格波动强度"
+  },
+  "risk_vol_120d": {
+   "en": "120-day realized volatility of daily adjusted returns (6-month risk estimate)",
+   "cn": "120个交易日日收益率的标准差，衡量约6个月的中长期已实现波动率"
+  },
+  "risk_vol_20d": {
+   "en": "20-day realized volatility of daily adjusted returns (standard 1-month risk estimate)",
+   "cn": "20个交易日日收益率的标准差，标准1个月已实现波动率，最常用的波动风险度量"
+  },
+  "risk_vol_5d": {
+   "en": "5-day realized volatility of daily adjusted returns (very short-term risk estimate)",
+   "cn": "5个交易日日收益率的标准差，衡量极短期（约1周）价格波动强度"
+  },
+  "risk_vol_60d": {
+   "en": "60-day realized volatility of daily adjusted returns (3-month risk estimate)",
+   "cn": "60个交易日日收益率的标准差，衡量约3个月的中期已实现波动率"
+  },
+  "risk_vol_of_vol": {
+   "en": "Volatility-of-volatility: standard deviation of rolling 20-day vol computed over 60 days",
+   "cn": "波动率的波动率，对滚动20日波动率再取60日标准差，衡量波动率本身的不稳定程度"
+  },
+  "size_ln_circmv": {
+   "en": "Log of circulating (free-float) market capitalization in yuan",
+   "cn": "流通市值（元）的自然对数，衡量个股可交易市值规模（小盘股因子为其负值）"
+  },
+  "size_ln_free_float": {
+   "en": "Log of free-float shares outstanding measuring tradable share supply",
+   "cn": "自由流通股本的自然对数，衡量可供市场自由交易的股份数量规模"
+  },
+  "size_ln_mcap": {
+   "en": "Log of total market capitalization in yuan (standard size factor)",
+   "cn": "总市值（元）的自然对数，标准规模因子，数值越大代表市值越大"
+  },
+  "size_ln_mcap_sq": {
+   "en": "Square of log total market cap capturing nonlinear size curvature",
+   "cn": "对数总市值的平方，捕捉规模与收益关系中的非线性弯曲效应（二次项）"
+  },
+  "tech_bb_pct": {
+   "en": "Price position within 20-day high-low channel (Bollinger %B analog)",
+   "cn": "当前收盘价在20日高低通道内的相对位置（类Bollinger %B），0=下轨，1=上轨"
+  },
+  "tech_close_to_high_20d": {
+   "en": "Current close relative to 20-day rolling high (distance from recent peak)",
+   "cn": "当前收盘价相对过去20日最高价的偏离度，衡量股价距近期高点的回撤幅度"
+  },
+  "tech_close_to_low_20d": {
+   "en": "Current close relative to 20-day rolling low (distance above recent trough)",
+   "cn": "当前收盘价相对过去20日最低价的偏离度，衡量股价距近期低点的反弹幅度"
+  },
+  "tech_kurt_20d": {
+   "en": "20-day kurtosis of daily returns measuring fat-tail extreme event frequency",
+   "cn": "20日日收益率的峰度，衡量收益分布尾部极端值出现的频率（正值=尖峰厚尾）"
+  },
+  "tech_ma20_ma60_ratio": {
+   "en": "Ratio of 20-day to 60-day moving average (medium-term trend signal)",
+   "cn": "20日均线与60日均线之比，中期趋势多空信号（>1表示均线多头排列）"
+  },
+  "tech_ma5_ma20_ratio": {
+   "en": "Ratio of 5-day to 20-day moving average (short-term trend crossover signal)",
+   "cn": "5日均线与20日均线之比，短期趋势交叉信号（>1表示短期均线在长期均线上方）"
+  },
+  "tech_macd_signal": {
+   "en": "MACD histogram (12/26/9 EMA) normalized by price level (price-scaled MACD divergence)",
+   "cn": "标准MACD柱线（12/26/9 EMA差值减9日信号线），除以价格水平进行归一化处理"
+  },
+  "tech_price_to_ma20": {
+   "en": "Current price deviation above or below the 20-day moving average",
+   "cn": "当前收盘价相对20日均线的偏离率，衡量股价相对短期趋势的超买超卖程度"
+  },
+  "tech_price_to_ma60": {
+   "en": "Current price deviation above or below the 60-day moving average",
+   "cn": "当前收盘价相对60日均线的偏离率，衡量股价相对中期趋势的超买超卖程度"
+  },
+  "tech_rsi_28": {
+   "en": "28-day Relative Strength Index (RSI) measuring medium-term overbought/oversold momentum",
+   "cn": "28日相对强弱指数（RSI），中期超买超卖动能指标，平滑度高于14日RSI"
+  },
+  "tech_rsi_6": {
+   "en": "6-day Relative Strength Index (RSI) measuring very short-term overbought/oversold momentum",
+   "cn": "6日相对强弱指数（RSI），极短期超买超卖指标，对价格变化反应最灵敏"
+  },
+  "tech_skew_20d": {
+   "en": "20-day skewness of daily returns measuring short-term return distribution asymmetry",
+   "cn": "20日日收益率的偏度，衡量短期收益分布的非对称性（负偏=下行尾部风险偏大）"
+  },
+  "tech_williams_r_14": {
+   "en": "Williams %R (14-day): price position relative to 14-day high-low range (overbought/oversold)",
+   "cn": "威廉姆斯%R（14日），当前价格在14日高低范围内的位置，0=最高点，−100=最低点"
+  },
+  "val_bp": {
+   "en": "Book-to-price ratio (inverse P/B): book equity value per unit of market capitalization",
+   "cn": "账面市值比（B/P），市净率的倒数，衡量每单位市值对应的账面净资产，高B/P=价值股"
+  },
+  "val_bp_industry_rel": {
+   "en": "Book-to-price ratio minus industry mean (industry-relative value signal)",
+   "cn": "账面市值比（B/P）减去同行业均值，剔除行业估值差异后的相对价值信号"
+  },
+  "val_bps_to_price": {
+   "en": "Book value per share divided by current price (alternative B/P using per-share data)",
+   "cn": "每股净资产除以当前股价，基于每股数据构建的账面市值比，同B/P含义相近"
+  },
+  "val_cftp": {
+   "en": "Cash flow to price: operating cash flow per share divided by current price (CFO yield)",
+   "cn": "经营现金流市价比（CFO/P），每股经营现金流除以股价，衡量基于现金流的估值便宜程度"
+  },
+  "val_div_ratio": {
+   "en": "Dividend payout ratio: dividend yield to earnings ratio (dividend distribution intensity)",
+   "cn": "股息率相关的分红比率（dv_ratio/100），衡量企业净利润中用于分红的比例"
+  },
+  "val_div_yield": {
+   "en": "TTM dividend yield: trailing 12-month dividend per share divided by current price",
+   "cn": "TTM股息率，过去12个月每股股息除以当前股价，衡量持有股票的现金股息回报率"
+  },
+  "val_ep": {
+   "en": "Earnings-to-price ratio (inverse P/E, static): net income per unit of market cap",
+   "cn": "市盈率倒数（E/P，静态），即盈利收益率，每单位市值对应的静态净利润"
+  },
+  "val_ep_industry_rel": {
+   "en": "TTM earnings-to-price minus industry mean (industry-relative earnings yield signal)",
+   "cn": "TTM盈利收益率（E/P）减去同行业均值，剔除行业估值差异后的相对盈利收益率信号"
+  },
+  "val_ep_ttm": {
+   "en": "TTM earnings-to-price ratio (inverse TTM P/E): trailing earnings yield",
+   "cn": "TTM市盈率倒数（E/P，TTM），过去12个月盈利收益率，最常用的估值便宜程度指标"
+  },
+  "val_pb_change_60d": {
+   "en": "60-day change in P/B ratio measuring valuation expansion or compression",
+   "cn": "过去60个交易日市净率（P/B）的变动比率，衡量估值扩张或压缩的方向与幅度"
+  },
+  "val_relative_pe": {
+   "en": "Current TTM P/E divided by its own 750-day (3-year) average (relative historical valuation)",
+   "cn": "当前TTM市盈率除以自身近3年（750日）均值，衡量股票相对历史估值的高低程度"
+  },
+  "val_sp": {
+   "en": "Sales-to-price ratio (inverse P/S, static): revenue per unit of market capitalization",
+   "cn": "静态市销率倒数（S/P），每单位市值对应的静态营业收入，衡量收入层面的价值便宜度"
+  },
+  "val_sp_ttm": {
+   "en": "TTM sales-to-price ratio (inverse TTM P/S): trailing 12-month revenue yield",
+   "cn": "TTM市销率倒数（S/P，TTM），过去12个月营业收入收益率，衡量销售收入层面的估值水平"
+  },
+  "tech_rsi_14": {
+   "en": "14-day Relative Strength Index (RSI) measuring overbought/oversold price momentum",
+   "cn": "14日相对强弱指数（RSI），衡量近14日涨跌力度之比，判断超买超卖"
+  }
+ },
+ "categories": {
+  "Capital Flow": {
+   "en": "Capital Flow — moneyflow order-imbalance factors",
+   "cn": "资金流向 — 主力/大小单资金净流入类因子"
+  },
+  "Composite": {
+   "en": "Composite — multi-factor blended signals",
+   "cn": "复合因子 — 多因子加权合成信号"
+  },
+  "Earnings": {
+   "en": "Earnings — profit surprise and analyst forecast factors",
+   "cn": "盈利 — 盈利惊喜与分析师预测修正因子"
+  },
+  "Growth": {
+   "en": "Growth — revenue and profit growth rate factors",
+   "cn": "成长 — 营收与利润增速类因子"
+  },
+  "IndustryRelative": {
+   "en": "Industry-Relative — industry-neutralized factor variants",
+   "cn": "行业相对 — 行业中性化处理后的因子变体"
+  },
+  "Leverage": {
+   "en": "Leverage — balance-sheet solvency and leverage factors",
+   "cn": "杠杆 — 资产负债表偿债能力与财务杠杆因子"
+  },
+  "Liquidity": {
+   "en": "Liquidity — trading activity and market microstructure factors",
+   "cn": "流动性 — 交易活跃度与市场微观结构因子"
+  },
+  "Margin": {
+   "en": "Margin — margin-finance and short-selling balance factors",
+   "cn": "融资融券 — 融资融券余额与方向因子"
+  },
+  "Momentum": {
+   "en": "Momentum — price trend continuation factors",
+   "cn": "动量 — 价格趋势延续类因子"
+  },
+  "Northbound": {
+   "en": "Northbound — Hong Kong Stock Connect holding change factors",
+   "cn": "北向资金 — 沪深港通持股比例变动因子"
+  },
+  "Other": {
+   "en": "Other — alternative/event-driven factors (block trade, chip, insider, institutional)",
+   "cn": "另类事件 — 大宗交易、筹码分布、内部人及机构龙虎榜因子"
+  },
+  "Quality": {
+   "en": "Quality — profitability, accounting quality, and financial strength factors",
+   "cn": "质量 — 盈利能力、会计质量与财务实力因子"
+  },
+  "Reversal": {
+   "en": "Reversal — short-term mean-reversion factors",
+   "cn": "反转 — 短期均值回归类因子"
+  },
+  "Size": {
+   "en": "Size — market capitalization scale factors",
+   "cn": "规模 — 市值大小类因子"
+  },
+  "Technical": {
+   "en": "Technical — price-pattern and indicator-based factors",
+   "cn": "技术指标 — 基于价格形态与技术指标的因子"
+  },
+  "Value": {
+   "en": "Value — valuation ratio and yield factors",
+   "cn": "价值 — 估值倍数与股息收益率类因子"
+  },
+  "Volatility": {
+   "en": "Volatility — return dispersion and downside risk factors",
+   "cn": "波动率 — 收益率离散度与下行风险类因子"
+  }
+ },
+ "strategies": {
+  "大市值价值 top10": {
+   "en": "Event-driven large-cap value strategy, A-main-board top-10 by ROA with quality gates, monthly rebalance, 2014–2026",
+   "cn": "事件驱动大市值价值策略：主板仅选PB<1+正经营现金流+正扣非净利+ROA>0.15%+净利同比正增长的股票，按ROA排序取前10只，月度换仓，2014-2026年实盘对标结果"
+  },
+  "RAW 价值+低波 book": {
+   "en": "Sealed-OOS validated value-plus-low-volatility long-only book, superseded by the top-10 value strategy",
+   "cn": "已通过sealed-OOS验证的价值+低波多头组合，现已被大市值价值top10策略取代，但OOS验证结论仍有效"
+  }
+ },
+ "research_threads": {
+  "alpha_factors": {
+   "en": "Alpha factors research thread — alternative and event-driven factor exploration",
+   "cn": "另类事件驱动因子研究线程"
+  },
+  "alpha_mining": {
+   "en": "Alpha mining research thread — systematic factor discovery and screening",
+   "cn": "Alpha因子挖掘研究线程 — 系统性因子发现与筛选"
+  },
+  "data_audit": {
+   "en": "Local dataset vs Tushare API field-level consistency audit, findings and verification checklist",
+   "cn": "本地数据与Tushare接口字段一致性审计 — 结论与待验证清单"
+  },
+  "data_expansion": {
+   "en": "Data expansion research thread — new Tushare endpoint ingestion and coverage",
+   "cn": "数据扩展研究线程 — 新Tushare接口接入与数据覆盖扩充"
+  },
+  "factor_expansion": {
+   "en": "Factor expansion research thread — adding new factors to the catalog",
+   "cn": "因子扩展研究线程 — 向因子库新增因子"
+  },
+  "factor_expansion_newdata": {
+   "en": "New-data factor expansion: factors built on newly ingested Tushare endpoints",
+   "cn": "基于新接入数据源的因子扩展研究 — 新数据字段因子构建与评估"
+  },
+  "factor_selection_eval": {
+   "en": "Factor selection methodology: low-correlation marginal contribution outperforms standalone ICIR ranking",
+   "cn": "因子选择方法论评估：低相关度边际贡献优于单独ICIR排序的验证"
+  },
+  "idea_sourcing": {
+   "en": "Idea sourcing pipeline — fetching journals, research reports, and papers for alpha hypotheses",
+   "cn": "Alpha因子思路挖掘流水线 — 从学术论文与研报中提取因子假设"
+  },
+  "jq_deployment": {
+   "en": "JoinQuant deployment research thread — live/paper-trading strategy deployment",
+   "cn": "聚宽实盘/模拟部署研究线程"
+  },
+  "jq_regime_50cagr": {
+   "en": "JoinQuant-derived modules toward 50% CAGR target under clean PIT: findings and limitations",
+   "cn": "基于聚宽模块探索50%年化目标的研究 — 净PIT条件下的发现与局限"
+  },
+  "jq_replication": {
+   "en": "Faithful JoinQuant strategy replication and flaw-removal improvement findings",
+   "cn": "聚宽大市值价值策略忠实复刻与缺陷修复改进的研究结论"
+  },
+  "long_only_50cagr": {
+   "en": "Long-only A-share strategy research: 50% CAGR infeasible on clean PIT; best honest result documented",
+   "cn": "A股纯多头策略研究：干净PIT下50%年化不可行，记录当前最优诚实结果"
+  },
+  "market_neutral_leg": {
+   "en": "Market-neutral leg research thread — building a short side to complement the long-only book",
+   "cn": "市场中性腿研究线程 — 为多头组合构建对冲空头腿"
+  },
+  "model_tuning": {
+   "en": "Model tuning research thread — ML signal model parameter optimization",
+   "cn": "机器学习信号模型调参研究线程"
+  },
+  "strategy_dev": {
+   "en": "Strategy development research thread — end-to-end strategy construction and testing",
+   "cn": "策略开发研究线程 — 端到端策略构建与测试"
+  },
+  "theme_strategy": {
+   "en": "Theme strategy research thread — sector/theme-based signal and portfolio construction",
+   "cn": "主题策略研究线程 — 行业/主题驱动的信号与组合构建"
+  }
+ },
+ "_meta": {
+  "model": "claude-sonnet",
+  "source": "2-batch parallel subagents",
+  "factor_count": 185
+ },
+ "knowledge_dims": {
+  "momentum_reversal": {
+   "en": "Momentum & Reversal",
+   "cn": "动量与反转"
+  },
+  "value_accounting": {
+   "en": "Value & Accounting Quality",
+   "cn": "价值与会计质量"
+  },
+  "volatility_risk": {
+   "en": "Volatility & Higher Moments",
+   "cn": "波动率与高阶矩"
+  },
+  "liquidity": {
+   "en": "Liquidity",
+   "cn": "流动性"
+  },
+  "size": {
+   "en": "Size",
+   "cn": "市值规模"
+  },
+  "analyst_expectations": {
+   "en": "Analyst Expectations & Revisions",
+   "cn": "分析师预期与修正"
+  },
+  "earnings_events": {
+   "en": "Earnings Events & Drift",
+   "cn": "盈利事件与漂移"
+  },
+  "informed_flow": {
+   "en": "Informed Order Flow & Positioning",
+   "cn": "知情资金流与持仓"
+  },
+  "ownership_holders": {
+   "en": "Ownership & Insider Activity",
+   "cn": "股东结构与内部交易"
+  },
+  "behavioral_chips": {
+   "en": "Behavioral & Chip Distribution",
+   "cn": "行为金融与筹码分布"
+  },
+  "seasonality_calendar": {
+   "en": "Seasonality & Calendar Effects",
+   "cn": "季节性与日历效应"
+  },
+  "text_nlp": {
+   "en": "Text / NLP / LLM Signals",
+   "cn": "文本/NLP/大模型信号"
+  },
+  "microstructure_hf": {
+   "en": "Microstructure & High-Frequency",
+   "cn": "微观结构与高频"
+  },
+  "options_derived": {
+   "en": "Option-Implied Signals",
+   "cn": "期权隐含信号"
+  },
+  "network_supplychain": {
+   "en": "Network & Supply Chain",
+   "cn": "网络与供应链"
+  },
+  "patent_innovation": {
+   "en": "Innovation & Patents",
+   "cn": "创新与专利"
+  },
+  "ml_method": {
+   "en": "Machine Learning Methodology",
+   "cn": "机器学习方法论"
+  },
+  "portfolio_construction": {
+   "en": "Portfolio Construction & Costs",
+   "cn": "组合构建与交易成本"
+  },
+  "factor_methodology": {
+   "en": "Factor Zoo & Multiple Testing",
+   "cn": "因子动物园与多重检验"
+  },
+  "macro_timing": {
+   "en": "Macro & Factor Timing",
+   "cn": "宏观与因子择时"
+  }
+ },
+ "knowledge_directions": {
+  "D1": {
+   "en": "Unrealized-gain overhang from cyq_perf cost basis predicts cross-sectional returns via behavioral disposition effect.",
+   "cn": "利用筹码成本分布（cyq_perf）构建资本利得悬置因子，通过处置效应预测横截面收益"
+  },
+  "D2": {
+   "en": "Large/extra-large net inflow from moneyflow proxies institutional informed-trader positioning for alpha signals.",
+   "cn": "以大单/超大单净流入作为机构知情交易代理变量，从资金流数据中挖掘超额收益信号"
+  },
+  "D3": {
+   "en": "Standardized unexpected earnings (SUE) drift — a robust anomaly complementary to existing eps_diffusion factor.",
+   "cn": "构建标准化未预期盈利（SUE）衡量盈余公告后漂移（PEAD），与分析师预期修正因子形成互补"
+  },
+  "D4": {
+   "en": "Change and acceleration of northbound Stock-Connect holdings signal relatively informed foreign-investor positioning.",
+   "cn": "北向资金持仓变化与加速度作为相对知情的境外投资者定向信号，预测个股超额收益"
+  },
+  "M1": {
+   "en": "Empirical-Bayes shrinkage over large factor sets eliminates look-ahead bias while matching top-journal OOS performance.",
+   "cn": "经验贝叶斯收缩方法在大规模因子集上消除前视偏差，同时匹配顶刊样本外表现，用于改进筛选门控"
+  },
+  "B1": {
+   "en": "Speaker-weighted earnings-call sentiment yields high cross-sectional alpha but requires a transcript corpus not yet ingested.",
+   "cn": "按发言人加权的业绩会文本情绪因子潜在Alpha高，但当前缺乏文字稿语料库，属于高优先级数据缺口"
+  },
+  "B2": {
+   "en": "A firm's returns predicted by its key customers' past returns — requires a customer-supplier graph currently unavailable.",
+   "cn": "公司收益由核心客户历史收益预测，依赖供应链图谱数据，当前缺乏企业间关联图，暂时受阻"
+  },
+  "S1": {
+   "en": "Pre-Spring-Festival calendar tilt is real but low-capacity — a market-level timing tilt, not a stock-selection signal.",
+   "cn": "春节前市场存在日历效应，但容量有限，更适合作为市场层面择时信号而非选股因子，优先级较低"
+  },
+  "C1": {
+   "en": "Analyst EPS-revision breadth: net share of analysts raising FY1 EPS — first idea-sourced factor to reach approved (provisional).",
+   "cn": "分析师EPS预测上调广度因子（eps_diffusion）：净上调分析师占比，首个通过正式封存样本外检验获批的创新维度因子（暂定）。"
+  },
+  "C2": {
+   "en": "Gross-profits-to-assets (Novy-Marx): OSAP US-anomaly port, IS-strong but sealed out-of-sample sign-flipped — not approved.",
+   "cn": "总盈利除以资产因子（Novy-Marx移植）：样本内信号稳健，但封存样本外检验符号翻转，未能通过审批。"
+  }
+ },
+ "knowledge_papers": {
+  "2604.13260": {
+   "cn": "用FinBERT解析财报电话会议文本，发现不同发言人（管理层/分析师）的情绪对盈余公告后超额收益的影响存在显著差异"
+  },
+  "2505.20608": {
+   "cn": "在中国A股市场复现参考点依赖偏好理论，检验散户主导与投机氛围下风险收益权衡的截面规律"
+  },
+  "2603.20271": {
+   "cn": "用转移熵网络分析韩国股市不同类型投资者（外资/机构/散户）之间的信息传导与私有信息溢出机制"
+  },
+  "2509.11970": {
+   "cn": "通过四类情绪代理变量的结构化校准，研究情绪冲击在股票收益与异质投资者群体间的非对称传播规律"
+  },
+  "2303.13406": {
+   "cn": "提出基于柯西组合检验的序贯多重检验方法，在依赖统计量与稀疏信号场景下控制错误发现率，适用于因子筛选"
+  },
+  "2104.12484": {
+   "cn": "提出基于列表式排序学习（listwise LTR）的多因子截面股票排名算法，直接优化投资组合排序而非预测收益数值"
+  },
+  "2602.21125": {
+   "cn": "将Kyle(1985)内幕交易博弈推广至多资产无限维度设置，刻画知情交易者在高维价格信号中的最优策略"
+  },
+  "2212.01048": {
+   "cn": "引入集成高斯过程回归方法预测条件期望股票收益，在大幅降低计算复杂度的同时保持强样本外预测能力"
+  },
+  "2301.11394": {
+   "cn": "实证确认供应链动量效应：公司收益与其重要客户历史收益正相关，信息在供应链中慢速扩散驱动该异象"
+  },
+  "2506.06356": {
+   "cn": "针对A股市场构建融合深度学习的多日换手率量化交易算法，结合横截面预测与五大模块实现选股优化"
+  },
+  "2604.07870": {
+   "cn": "个股已实现偏度的横截面离散度与未来市场整体收益显著负相关，提供稳健的样本内外市场择时预测能力"
+  },
+  "2301.09173": {
+   "cn": "用行业间收益离散度（CID）度量劳动力市场跨行业转移风险，发现其对横截面预期收益有独立解释力"
+  },
+  "2509.04812": {
+   "cn": "提出伪孪生网络资产定价（SNAP）模型，用深度学习估计条件Alpha、Beta及风险溢价，适应高维特征动态变化"
+  },
+  "2209.13623": {
+   "cn": "系统量化资产定价研究中的发表偏差，发现已发表因子在实证检验中收益幅度被显著高估，提出统计修正框架"
+  },
+  "2504.07855": {
+   "cn": "用机器学习从全球47个市场的股票及指数历史收益中检测对本土公司有价值的境外信号，构建外资信号雷达"
+  },
+  "2112.07121": {
+   "cn": "提出半参数条件因子模型，将特征对因子暴露与Alpha的作用解耦，通过主成分提取潜在风险因子"
+  },
+  "2402.04775": {
+   "cn": "利用机器学习量化企业网络安全风险敞口，构建与传统财务因子低相关的网络安全风险截面收益预测变量"
+  },
+  "2512.19484": {
+   "cn": "用LLM从新闻中提取结构化事件特征，构建基于事件表示（SER）的深度学习模型预测股票截面收益"
+  },
+  "2606.04576": {
+   "cn": "提出大型尾部风险模型（ReSGA）联合学习VaR与期望损失（ES），在大数据环境下克服传统参数模型的误设缺陷"
+  },
+  "2601.11958": {
+   "cn": "部署具备实时搜索能力的LLM智能体对罗素1000成分股进行每日吸引力评分，测试完全自主AI预测股票收益的可行性"
+  },
+  "2507.07107": {
+   "cn": "针对A股涨跌停导致的收盘价不可执行问题提出偏差修正，将偏差校正嵌入滚动窗口多因子流水线以提升实际可执行性"
+  },
+  "2408.02694": {
+   "cn": "将柯尔莫哥洛夫-阿诺德网络（KAN）引入自编码器因子模型，以可学习激活函数替代传统MLP提取潜在资产定价因子"
+  },
+  "1606.03590": {
+   "cn": "构建含知情交易者、非知情交易者与启发式投资者的微观结构模型，分析2008年金融危机期间知情交易概率（PIN）动态"
+  },
+  "2602.17890": {
+   "cn": "识别SEC Form 144（预期出售申报）与Form 4（实际成交申报）之间的信息错位，量化内部人销售中被掩盖的信息租金"
+  },
+  "2410.18988": {
+   "cn": "在10-K年报叙述文本上微调小型语言模型，生成大市值S&P500股票长周期价格走势预测信号"
+  },
+  "2209.00391": {
+   "cn": "基于约束核范数正则化，提出估计高维条件潜在因子模型的统一框架，并给出大样本理论性质与高效算法"
+  },
+  "2311.10685": {
+   "cn": "对13.6万个多空策略应用经验贝叶斯，实现高通量资产定价：消除前视偏差同时匹配顶刊样本外表现"
+  },
+  "2304.12501": {
+   "cn": "探索量子神经网络与张量网络在股票截面收益预测中的应用，评估量子机器学习算法相对经典方法的优势与局限"
+  },
+  "2412.19245": {
+   "cn": "用多种LLM对美国金融新闻进行情绪分析，系统评估大模型在股市收益预测任务中的有效性与边际贡献"
+  },
+  "2009.03094": {
+   "cn": "用遗传算法优化监督学习捕捉盈余公告后漂移（PEAD）的动态非线性特征，显著改善传统线性模型表现"
+  },
+  "2605.28359": {
+   "cn": "构建含记忆控制机制的LLM交易智能体评测基准，系统揭示前视偏差和长期记忆污染两大评估失效模式"
+  },
+  "2308.00702": {
+   "cn": "实证研究中华老字号上市公司股票的节假日效应，发现节前与节后收益存在显著差异的市场异象"
+  },
+  "2206.10014": {
+   "cn": "将深度偏最小二乘（DPLS）应用于个股收益资产定价，在灵活利用条件信息的同时将超额收益归因于少量统计因子"
+  },
+  "1910.01491": {
+   "cn": "提出可迁移深度学习框架用于跨截面投资策略，通过域自适应提升因子模型在不同市场环境下的泛化能力"
+  },
+  "1801.01777": {
+   "cn": "将深度学习方法系统应用于股票截面收益预测，评估多层神经网络相对传统因子模型的预测增量"
+  },
+  "1908.01112": {
+   "cn": "提出带记忆机制的深度学习模型（Mnemonic DL）进行中期股价预测，通过规避异常值降低累积误差"
+  },
+  "2603.10559": {
+   "cn": "利用中美股市不重叠交易时间构建有向二部图，通过机器学习框架捕捉跨市场收益预测的经济结构信息"
+  },
+  "1804.09314": {
+   "cn": "用多层深度学习提取非线性复合因子预测资产收益，将资产定价研究纳入深度神经网络的非线性因子框架"
+  },
+  "2505.01921": {
+   "cn": "在大市值美股上应用动态结构MLP金字塔模型进行因子资产定价，评估多层感知机相对传统因子模型的表现"
+  },
+  "2403.02500": {
+   "cn": "提出基于变分循环自编码器（RVRAE）的动态因子模型，捕捉股票收益中的复杂非线性与时变动态结构"
+  }
+ }
+}

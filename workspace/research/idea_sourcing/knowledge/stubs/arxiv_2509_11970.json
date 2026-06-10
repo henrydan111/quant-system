@@ -1,0 +1,85 @@
+{
+  "hypothesis": {
+    "hypothesis_id": "hyp_arxiv_2509_11970_20260610_001",
+    "thesis_statement": "Paper 'Sentiment Feedback in Equity Markets: Asymmetries, Retail Heterogeneity, and Structural Calibration' (arXiv:2509.11970) proposes a signal in the 'behavioral_chips' dimension. Hypothesis: an A-share adaptation predicts the cross-section of forward returns. Test whether the published effect ports to A-shares.",
+    "mechanism": "Taxonomy dimension: behavioral_chips (FRONTIER_OPEN). Buildable on: chip_distribution(cyq_perf); price_ohlcv(market_daily). Abstract: We study how sentiment shocks propagate through equity returns and investor clientele using four independent proxies with sign-aligned kappa-rho parameters. A structural calibration links a one standard deviation innovation in sentiment to a pricing impact of 1.06 basis points with persistence parameter rho = 0.940, yielding a half-life of 11.2 months. The impulse response peaks around the 12-mont…",
+    "source": {
+      "source_type": "academic_paper",
+      "identifier": "arXiv:2509.11970",
+      "title": "Sentiment Feedback in Equity Markets: Asymmetries, Retail Heterogeneity, and Structural Calibration",
+      "authors": [],
+      "url": "https://arxiv.org/abs/2509.11970v1",
+      "publication_date": "2025",
+      "publisher": "arXiv preprint"
+    },
+    "factor_refs": [
+      {
+        "object_type": "composite_factor",
+        "object_name": "arxiv_behavioral_chips_2509_11970"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2015-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2024-12-31",
+      "walk_forward_config": {
+        "train_years": 3,
+        "validation_years": 1,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "5d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 0,
+    "expected_effect": null,
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.025,
+      "min_deflated_sharpe": 0.6,
+      "min_cost_adjusted_sharpe": 0.4,
+      "max_drawdown": 0.35,
+      "max_annual_turnover": 4.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "[DRAFT] The paper's effect may not survive A-share microstructure (T+1, limit boards, retail flow) or may be subsumed by existing factors after neutralization.",
+      "weakest_assumption": "[DRAFT] That the paper's construction maps faithfully to Tushare A-share fields without definitional drift.",
+      "what_would_falsify_this": "[DRAFT] Sealed-OOS rank-ICIR below the committed band, or hard rules failing after realistic costs.",
+      "priors_on_cost_sensitivity": "[DRAFT] Review turnover at the chosen rebalance."
+    },
+    "pre_registered_at": "",
+    "registered_by": ""
+  },
+  "_draft_review": {
+    "GENERATED_BY": "build_research_map.py — DRAFT, not registerable as-is",
+    "taxonomy_dimension": "behavioral_chips",
+    "dim_status": "FRONTIER_OPEN",
+    "buildable_now": true,
+    "value_score": 0.6534,
+    "matched_dims": "behavioral_chips(1); options_derived(1)",
+    "arxiv_evidence_context_only": {
+      "abstract": "We study how sentiment shocks propagate through equity returns and investor clientele using four independent proxies with sign-aligned kappa-rho parameters. A structural calibration links a one standard deviation innovation in sentiment to a pricing impact of 1.06 basis points with persistence parameter rho = 0.940, yielding a half-life of 11.2 months. The impulse response peaks around the 12-month horizon, indicating slow-moving amplification. Cross-sectionally, a simple D10-D1 portfolio earns 4.0 basis points per month with Sharpe ratios of 0.18-0.85, consistent with tradable exposure to the sentiment factor. Three regularities emerge: (i) positive sentiment innovations transmit more stron…",
+      "url": "https://arxiv.org/abs/2509.11970v1",
+      "citations_openalex": 0.0
+    },
+    "proposed_factor_name": "arxiv_behavioral_chips_2509_11970",
+    "todo_before_registering": [
+      "Read the full paper; extract the EXACT signal construction.",
+      "Implement 'arxiv_behavioral_chips_2509_11970' in factor_library mapping it to A-share Tushare/Qlib fields (PIT-safe Ref(...,1)); confirm fields are registered/approved.",
+      "Run the SANDBOX screen + size/industry-neutralized MARGINAL-contribution test vs the catalog (marginal IC × low correlation — the house rule), NOT standalone ICIR.",
+      "SET expected_effect = YOUR A-share prediction (point + CI + horizon).",
+      "CONFIRM the OOS window is unburned, then factor_lifecycle (draft→candidate) → sealed-OOS."
+    ]
+  }
+}

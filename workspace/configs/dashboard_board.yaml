@@ -1,0 +1,36 @@
+# ============================================================================
+# Dashboard 人工策展层 (curated overlay)
+# ----------------------------------------------------------------------------
+# src/dashboard/build_dashboard.py 会把这里的条目叠加到自动派生的内容之上。
+# 自动来源: Claude session transcripts / project_state.md / 各 registry / 字段治理。
+# 这里只放"机器推不出来、需要人脑判断"的东西。编辑后重新运行构建脚本即可生效。
+#
+#   in_progress : 你正在推进的事项（会与 session 未完成 todo / Task 任务合并）
+#   todo        : 明确的待办（会与自动信号如"工作树未提交"合并）
+#   recommended : 战略建议（会与启发式建议如"策略表为空"合并）
+#   strategies  : 已验证可部署的策略书（它们存在于 FINDINGS，不在 strategy_registry）
+# ============================================================================
+
+in_progress:
+  - "report_rc / eps_diffusion 因子注册线（分支 report-rc-registration）：4 个 $report_rc__* 已 approved，eps_diffusion_60/_120 已 approved（PROVISIONAL，canary-overridden）"
+  - "中心化 HTML 看板系统（本看板）：生成器 + session 采集 + 自动更新机制"
+
+todo:
+  - "⚠ 2026-06-15 到期：report_rc breadth-restatement canary 第二次快照——FAIL 则 re-quarantine report_rc 并撤销字段批准"
+  - "⚠ eps_diffusion_60 / eps_diffusion_120 的 approved 是 PROVISIONAL（绕过了 canary）：若 2026-06-15 canary 失败，必须 set_status → candidate 回滚这两个批准"
+  - "A2 遗留：fina_indicator 新增 58 字段仅入 raw 层，尚未进 PIT ledger / Qlib provider / field_status.yaml（要用需独立走 ledger 重建→provider 重建→字段治理）"
+  - "test_pr9 的 TestPR9bUniverseFieldGate ×5 为 pre-existing field-status 测试欠债（$ratio/top_list），需 data-governance owner 重设计合成 registry 修复"
+
+recommended:
+  - "建 market-neutral leg：low-corr MN 组合潜在 Sharpe ~1.46（{value_bp, growth, reversal} risk-parity），但需 index-futures 数据 + 一段干净 OOS；当前 100% long-only"
+  - "candidate→approved 闸用 marginal/orthogonal IC（IC×低相关）排序，而非 standalone ICIR——已在 31-factor 面板上实证（合并 ICIR 1.02 vs 0.70）"
+  - "leverage 不在范围内：所有策略按 1×（unlevered）评估与上报；50% CAGR 在 clean-PIT long-only 下不可达"
+
+# 已验证、可部署（数字为 event-driven 总收益口径；leverage=1×）
+strategies:
+  - name: "大市值价值 top10"
+    metrics: "+20.7% CAGR / −26.6% MDD / Sharpe 1.01"
+    note: "event-driven 2014-26；主板 only，gate pb<1 + OCF>0 + 扣非>0 + ROA>0.15% + 净利同比>0，ROA 降序 top10，月度，选不出即空仓。项目至今最强的诚实可部署 long-only 结果。见 workspace/research/jq_replication/FINDINGS.md"
+  - name: "RAW 价值+低波 book"
+    metrics: "+11.6% total return / −14.5% MDD（sealed-OOS）"
+    note: "前一个 sealed-OOS 验证过的 value+low-vol 书；已被上面的 top10 取代为推荐价值策略，但其 OOS 验证仍成立。"

@@ -1,0 +1,85 @@
+{
+  "hypothesis": {
+    "hypothesis_id": "hyp_arxiv_2604_13260_20260610_001",
+    "thesis_statement": "Paper 'Which Voices Move Markets? Speaker Identity and the Cross-Section of Post-Earnings Returns' (arXiv:2604.13260) proposes a signal in the 'earnings_events' dimension. Hypothesis: an A-share adaptation predicts the cross-section of forward returns. Test whether the published effect ports to A-shares.",
+    "mechanism": "Taxonomy dimension: earnings_events (FRONTIER_OPEN). Buildable on: earnings_preannounce(forecast/express); fundamentals(income/balancesheet/cashflow/pit_fundamentals/indicators). Abstract: We utilize FinBERT, a domain-specific transformer model, to parse 6.5 million sentences from 16,428 S&P 500 quarterly earnings call transcripts (2015-2025) and demonstrate that post-earnings stock returns are not equally affected by all speakers in a conference call. Our section-weighted sentiment, with empirically derived speaker weights (Analyst 49%, CFO 30%, Executive 16%, Other 5%), achieves a…",
+    "source": {
+      "source_type": "academic_paper",
+      "identifier": "arXiv:2604.13260",
+      "title": "Which Voices Move Markets? Speaker Identity and the Cross-Section of Post-Earnings Returns",
+      "authors": [],
+      "url": "https://arxiv.org/abs/2604.13260v1",
+      "publication_date": "2026",
+      "publisher": "arXiv preprint"
+    },
+    "factor_refs": [
+      {
+        "object_type": "composite_factor",
+        "object_name": "arxiv_earnings_events_2604_13260"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2015-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2024-12-31",
+      "walk_forward_config": {
+        "train_years": 3,
+        "validation_years": 1,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "5d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 0,
+    "expected_effect": null,
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.025,
+      "min_deflated_sharpe": 0.6,
+      "min_cost_adjusted_sharpe": 0.4,
+      "max_drawdown": 0.35,
+      "max_annual_turnover": 4.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "[DRAFT] The paper's effect may not survive A-share microstructure (T+1, limit boards, retail flow) or may be subsumed by existing factors after neutralization.",
+      "weakest_assumption": "[DRAFT] That the paper's construction maps faithfully to Tushare A-share fields without definitional drift.",
+      "what_would_falsify_this": "[DRAFT] Sealed-OOS rank-ICIR below the committed band, or hard rules failing after realistic costs.",
+      "priors_on_cost_sensitivity": "[DRAFT] Review turnover at the chosen rebalance."
+    },
+    "pre_registered_at": "",
+    "registered_by": ""
+  },
+  "_draft_review": {
+    "GENERATED_BY": "build_research_map.py — DRAFT, not registerable as-is",
+    "taxonomy_dimension": "earnings_events",
+    "dim_status": "FRONTIER_OPEN",
+    "buildable_now": true,
+    "value_score": 0.8,
+    "matched_dims": "earnings_events(2); text_nlp(1); ml_method(1)",
+    "arxiv_evidence_context_only": {
+      "abstract": "We utilize FinBERT, a domain-specific transformer model, to parse 6.5 million sentences from 16,428 S&P 500 quarterly earnings call transcripts (2015-2025) and demonstrate that post-earnings stock returns are not equally affected by all speakers in a conference call. Our section-weighted sentiment, with empirically derived speaker weights (Analyst 49%, CFO 30%, Executive 16%, Other 5%), achieves an out-of-sample Spearman IC of 0.142 versus 0.115 in-sample, generates monthly long-short alpha of 2.03% unexplained by the Fama-French five-factor model (t = 6.49), and remains significant after controlling for standardized unexpected earnings (SUE). FinBERT section-weighted sentiment entirely subs…",
+      "url": "https://arxiv.org/abs/2604.13260v1",
+      "citations_openalex": 0.0
+    },
+    "proposed_factor_name": "arxiv_earnings_events_2604_13260",
+    "todo_before_registering": [
+      "Read the full paper; extract the EXACT signal construction.",
+      "Implement 'arxiv_earnings_events_2604_13260' in factor_library mapping it to A-share Tushare/Qlib fields (PIT-safe Ref(...,1)); confirm fields are registered/approved.",
+      "Run the SANDBOX screen + size/industry-neutralized MARGINAL-contribution test vs the catalog (marginal IC × low correlation — the house rule), NOT standalone ICIR.",
+      "SET expected_effect = YOUR A-share prediction (point + CI + horizon).",
+      "CONFIRM the OOS window is unburned, then factor_lifecycle (draft→candidate) → sealed-OOS."
+    ]
+  }
+}

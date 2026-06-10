@@ -16,6 +16,7 @@ it inspires still runs the full IS-only → sealed-OOS lifecycle (CLAUDE.md §3.
 | [fetchers/fetch_arxiv_qfin.py](fetchers/fetch_arxiv_qfin.py) | Incremental, dedup'd, ToU-compliant fetcher for newest arXiv `q-fin.*` preprints → Parquet store. |
 | [fetchers/fetch_osap_signaldoc.py](fetchers/fetch_osap_signaldoc.py) | Pulls the Open Source Asset Pricing **SignalDoc catalog** (212 published predictors + 114 placebos, each with source paper / sign / economic category / original t-stat / GScholar cites / reproduction quality) → Parquet. Replicates only the public Google-Drive CSV path — **no `openassetpricing` install** (avoids `polars` + the paid-WRDS dependency, see below). |
 | [triage/triage_osap_to_ashare.py](triage/triage_osap_to_ashare.py) | **Extraction/triage layer (#3).** Turns the 212 OSAP predictors into a ranked A-share candidate shortlist (feasibility × novelty vs the live 177-catalog) + **draft hypothesis stubs** for human pre-registration. Does not register anything. |
+| **[knowledge/](knowledge/) — the arXiv Knowledge Framework (2026-06-10)** | **The intelligence layer that ranks the firehose.** [taxonomy.py](knowledge/taxonomy.py) (our data inventory + saturation-tagged research-dimension taxonomy + scoring lexicons) → [score_papers.py](knowledge/score_papers.py) (deterministic value scorer: relevance·dimension·empirical·recency·impact·china) → [build_research_map.py](knowledge/build_research_map.py) (dimension-clustered map + draft stubs). [enrich/enrich_openalex.py](enrich/enrich_openalex.py) attaches OpenAlex citations (impact). The fetcher gained `--query-pack frontier` (themed relevance harvest). **Full design: [knowledge/KNOWLEDGE_FRAMEWORK.md](knowledge/KNOWLEDGE_FRAMEWORK.md). Curated output: [knowledge/TOP_DIRECTIONS.md](knowledge/TOP_DIRECTIONS.md).** |
 | `store/arxiv_qfin.parquet` | One row per arXiv base id (latest version), with `first_seen`/`last_seen`. Gitignored. |
 | `store/osap_signaldoc.parquet` | One row per OSAP signal (331), `osap_release` + `fetched_utc` stamped. Gitignored. |
 | `triage/osap_ashare_triage.{parquet,md}` + `triage/stubs/*.json` | Ranked triage table + readable report + per-candidate draft stubs. |
@@ -238,4 +239,25 @@ price/accounting.
    ⚠ marginal increment is only +0.011 (PARTIAL in EW-composite — correlated 0.67 to `qual_roe`);
    ⚠ candidate→approved **sealed-OOS is HARD-GATED behind the 2026-06-15 breadth canary**.
    Remaining: `factor_lifecycle` IS gate now → sealed-OOS after the canary.
-3. **OpenAlex enrichment**; **Chinese 研报 slice** via AKShare.
+3. ✅ **arXiv Knowledge Framework built** (2026-06-10): the firehose is now value-ranked + clustered
+   into research directions — see [knowledge/KNOWLEDGE_FRAMEWORK.md](knowledge/KNOWLEDGE_FRAMEWORK.md).
+   First run (671-paper themed corpus) surfaced 4 Tier-1 buildable frontier directions
+   ([knowledge/TOP_DIRECTIONS.md](knowledge/TOP_DIRECTIONS.md)): **D1 Capital-Gains-Overhang from
+   `cyq_perf`** (⭐ China-tested, behavioral, orthogonal, unmined), **D2 informed order-flow from
+   `moneyflow`**, **D3 earnings-surprise/PEAD**, **D4 northbound flow from `hk_hold`** — plus
+   methodology upgrades (empirical-Bayes factor selection) and blocked data-acquisition targets
+   (earnings-call text, supply-chain graph). **✅ OpenAlex enrichment built** (impact signal).
+4. ✅ **D1-D4 explored** (2026-06-10): field probe → 4 sandbox screens (16 factors + 3 masked D4
+   variants, IS ≤2020, OOS unburned) → marginal gate vs the 31-factor book. **D1 CGO = winner**
+   (`behav_cgo_smooth_20` increment **+0.047**, the program's largest; Grinblatt-Han sign confirms
+   in A-shares); **D2 dropped** (informed-large-order fails, REDUNDANT); **D3 = growth refinement**
+   (SUE corr ~0.9 to `grow_netprofit_yoy`); **D4** within-coverage forms fix the `$ratio`
+   zero-densification (neut ICIR 0.20→0.47) but increments sit just under bar. Full results +
+   TOP_DIRECTIONS errata: [knowledge/D1_D4_SCREEN_RESULTS.md](knowledge/D1_D4_SCREEN_RESULTS.md);
+   scripts `build/probe_d1d4_fields.py`, `build/eval_arxiv_d1d4.py`, `build/eval_arxiv_marginal_test.py`.
+   **Same-day follow-through (user-approved): 5 drafts → catalog → `factor_lifecycle` IS gate →
+   ALL 5 published `candidate`** (heldout ICIR 0.34-0.60, a_priori IS-only selection, 2021-2026
+   unburned; provenance [arxiv_d1d4_selection_provenance.json](arxiv_d1d4_selection_provenance.json)).
+   Remaining: sealed-OOS (candidate→approved) — spend deliberately; D4 unmasked-catalog comparison
+   after unified-eval lands.
+5. **Chinese 研报 slice** via AKShare; **earnings-call / 公告 text pipeline** (the top blocked frontier).

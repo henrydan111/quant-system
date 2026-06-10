@@ -209,3 +209,11 @@ Thumbs.db
 # =============================================================================
 *.orig
 *.rej
+
+# =============================================================================
+# Dashboard (centralized board)
+# Generated board body lives at the project root; the data.json snapshot + the
+# session cache live under workspace/outputs/ (already ignored above).
+# =============================================================================
+/index.html
+/build_id.txt

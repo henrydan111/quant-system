@@ -137,6 +137,17 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # PIT-correct, formal-eligible handles. Provenance: workspace/research/idea_sourcing/.
     catalog['qual_cash_to_assets'] = "Ref($money_cap_q0, 1) / Ref($total_assets_q0, 1)"
     catalog['qual_rd_to_assets'] = "Ref($rd_exp_sq_q0, 1) / Ref($total_assets_q0, 1)"
+    # SINGLE-QUARTER margins (2026-06-09). The PIT-correct alternative to Tushare's vendor
+    # q_netprofit_margin / q_gsprofit_margin single-quarter ratios: built from OUR single-quarter
+    # _sq_q0 derivation (derive_single_quarter_value), which was parity-validated against the
+    # vendor q_* (≈90% near-exact, Spearman 0.97-0.98 — see workspace/research/data_audit/
+    # PIT_VS_VENDOR_Q_PARITY.md). Single-quarter margins capture recent-quarter profitability
+    # shifts the cumulative grossprofit_margin/netprofit_margin smooth over. All fields are
+    # field-approved income _sq_q0 (revenue/n_income_attr_p/oper_cost/operate_profit); each $field
+    # is Ref(...,1)-wrapped for PIT safety. Draft factors.
+    catalog['qual_q_net_margin'] = "Ref($n_income_attr_p_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
+    catalog['qual_q_gross_margin'] = "(Ref($revenue_sq_q0, 1) - Ref($oper_cost_sq_q0, 1)) / Ref($revenue_sq_q0, 1)"
+    catalog['qual_q_op_margin'] = "Ref($operate_profit_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 
@@ -296,6 +307,19 @@ def _add_northbound_factors(catalog):
     catalog['north_hold_change_20d'] = "Ref($ratio, 1) - Ref($ratio, 21)"
     catalog['north_accumulation_20d'] = "Sum(Delta(Ref($ratio, 1), 1), 20)"
     catalog['north_flow_momentum'] = "Slope(Ref($ratio, 1), 20)"
+    # Within-coverage variants (arXiv D4, 2026-06-10): the provider zero-densifies
+    # $ratio for non-Connect names (~half the universe ties at 0), diluting the
+    # unmasked forms above (size-neut ICIR 0.20 -> 0.47 once masked). Mask to the
+    # held sub-universe via If(ratio>0, ..., np.nan); rank within-coverage is then
+    # automatic. Marginal increment +0.019 vs the 31-factor book (just under the
+    # +0.02 bar) -> drafts pending the IS lifecycle gate. Expected sign: + (foreign
+    # accumulation -> continuation). See idea_sourcing/knowledge/D1_D4_SCREEN_RESULTS.md.
+    catalog['north_hold_change_20d_cov'] = (
+        "If(Ref($ratio, 1) > 0, Ref($ratio, 1) - Ref($ratio, 21), np.nan)"
+    )
+    catalog['north_hold_change_60d_cov'] = (
+        "If(Ref($ratio, 1) > 0, Ref($ratio, 1) - Ref($ratio, 61), np.nan)"
+    )
 
 
 def _add_margin_factors(catalog):
@@ -338,6 +362,23 @@ def _add_earnings_event_factors(catalog):
     # ⚠ sealed-OOS (candidate→approved) is HARD-GATED behind the 2026-06-15 breadth canary.
     catalog['earn_eps_diffusion_60'] = _report_rc_eps_diffusion(60)
     catalog['earn_eps_diffusion_120'] = _report_rc_eps_diffusion(120)
+    # Scaled SUE / PEAD (arXiv D3, 2026-06-10): YoY change in single-quarter
+    # attributable net income scaled by market cap / total assets — the classic
+    # 8-quarter SUE is NOT buildable (income family serves n_income_sq only to q3;
+    # attr_p has exactly q0+q4). Strongest standalone of the D1-D4 run (size-neut
+    # ICIR 0.50/0.30, beats plain YoY growth by +0.20) BUT payoff-corr 0.92/0.95 to
+    # grow_netprofit_yoy -> explicitly a GROWTH-FAMILY REFINEMENT, not a new
+    # dimension (marginal increment +0.015/+0.020). Statement fields are
+    # PIT-anchored on max(ann_date, f_ann_date); Ref(...,1) on top per the registry
+    # contract. Expected sign: + (PEAD drift). See D1_D4_SCREEN_RESULTS.md.
+    catalog['earn_sue_ni_mcap'] = (
+        "(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1)) "
+        "/ Ref($total_mv, 1)"
+    )
+    catalog['earn_sue_ni_assets'] = (
+        "(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1)) "
+        "/ Ref($total_assets_q0, 1)"
+    )
 
 
 def _add_sealed_oos_winners(catalog):
@@ -528,6 +569,20 @@ def _add_alpha_endpoint_factors(catalog):
     # reduction on the already-dense cyq_perf field.
     catalog['alpha_chip_winner_rate_ema_10d'] = (
         "EMA(Ref($cyq_perf__winner_rate, 1), 10)"
+    )
+
+    # 20d-smoothed Grinblatt-Han Capital Gains Overhang (arXiv D1 winner,
+    # 2026-06-10): the smoothed variant of `alpha_chip_weight_avg_dev` above.
+    # The D1-D4 exploration's top result — marginal increment +0.047 vs the
+    # 31-factor book (2018-2020 overlap window; 2x the GP precedent), size-neut
+    # ICIR +0.35, Grinblatt-Han sign (+) confirms in A-shares. Caveats carried
+    # into the lifecycle: cyq_perf coverage floor makes IS 2018+ only, and the
+    # 0.88 payoff-corr to qual_roa is period-confounded (2018-2020 quality
+    # rally). Expected sign: + (gain overhang -> continuation). See
+    # idea_sourcing/knowledge/D1_D4_SCREEN_RESULTS.md.
+    catalog['alpha_chip_cgo_smooth_20d'] = (
+        "Mean((Ref($close, 1) - Ref($cyq_perf__weight_avg, 1)) "
+        "/ Ref($cyq_perf__weight_avg, 1), 20)"
     )
 
     # ── Insider / holder transactions (stk_holdertrade aggregates) ──────
