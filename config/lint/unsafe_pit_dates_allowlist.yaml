@@ -86,6 +86,22 @@
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
 
+- path: workspace/scripts/validate_pit_vs_vendor_q.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Independent-recompute parity oracle for the 2026-06-08 field-parity audit
+    (Part B): recomputes OUR pit_* single-quarter YoY from the income ledger's
+    final cumulative values using the deployed primitives and compares to
+    Tushare's vendor q_* from the indicators ledger. The q_* vendor fields are
+    INTENTIONALLY unregistered (the sanctioned loader refuses them), and the
+    comparison validates the computation math on FINAL values — reading the raw
+    ledgers directly is the point; routing through pit_research_loader would be
+    circular. Read-only, no mutation; results recorded in
+    workspace/research/data_audit/PIT_VS_VENDOR_Q_PARITY.md.
+  permanent: true
+  link: workspace/research/data_audit/PIT_VS_VENDOR_Q_PARITY.md
+
 - path: workspace/scripts/diag_report_rc_review.py
   rule: PIT002
   owner: alpha-research
