@@ -149,6 +149,46 @@ live seal) — none may be re-tested as fresh. Honest reading:
   batch (and GP before them) — IS evidence, marginal increments included, does not survive
   regime change. Idea-sourcing cumulative: OSAP 12→1→0; arXiv D1-D4 19→5→1 (weak).
 
+## Masked vs unmasked northbound — unified-eval evidence-only comparison (2026-06-10)
+
+Run after the full-catalog unified eval landed (185/185): a subset re-evaluation of all 7
+northbound forms + the 3 other batch factors under ONE methodology hash (`6598094c`, the
+post-promotion 9-approved reference set), via the canonical driver's new `--factors/--outdir`
+subset mode (production `results.jsonl` untouched). Output:
+`workspace/outputs/unified_eval_north_cov_compare/unified_eval_full.parquet`.
+
+**The direct pair (the zero-densification verdict):**
+
+| metric | `north_hold_change_20d` (unmasked) | `north_hold_change_20d_cov` (masked) |
+|---|---|---|
+| neutralized RankICIR (size+industry) | 0.097 | **0.329** (3.4×) |
+| neutralized HAC-t | 0.83 (insignificant) | **2.79** |
+| tie_rate | 0.287 | **0.005** |
+| coverage | 0.608 | 0.287 (Connect sub-universe) |
+| heldout RankICIR (raw) | 0.607 | 0.597 (unchanged) |
+| long-leg IR proxy vs CSI500 | 0.12 | **1.80** |
+| quantile shape | bottom_reversal | U_shape |
+
+`north_hold_change_60d_cov` is stronger still: neut ICIR **0.458** / HAC-t 3.46, turnover 4.7,
+long-leg IR 2.31, and decay ICIR *rises* to 0.70 at 40d (slow-decay). The unmasked 5d change is
+the worst construction (tie_rate 0.478, neut ICIR 0.037).
+
+**Conclusion (evidence-only, no registry action):** the `$ratio` zero-densification was
+destroying the *neutralized* signal — the ~50% zero-tie mass absorbs the size/industry
+regression — while leaving the raw heldout ICIR intact (which is why the catalog forms looked
+fine un-neutralized). The within-coverage construction is decisively correct **as construction**.
+It does NOT rescue the dimension: the sealed-OOS (above) showed the masked forms sign-flip in
+2021-2026 anyway — better measurement of a signal whose direction reversed. **Standing lesson:
+any future hk_hold factor must mask to `ratio>0`; the 5 unmasked catalog drafts stay as-is (no
+point re-engineering drafts whose underlying signal failed OOS).**
+
+Appendix — the other 3 under the same hash: `earn_sue_ni_mcap` has the batch's strongest
+neutralized ICIR (0.562, HAC-t 6.3, top_reversal shape) yet failed the OOS LS bar;
+`earn_sue_ni_assets` (the approved one) is the only clean `monotonic_up` (neut 0.299, long-leg
+IR 1.09); `alpha_chip_cgo_smooth_20d` posts the batch's best approved-set residual (0.058) and
+0.97 ann. turnover — a beautiful IS row for a factor the OOS killed. Unified Tier-1 quality and
+OOS survival are different axes; the gates exist because the first does not imply the second.
+
 ## Recommended next actions (in order)
 
 1. **D1 → catalog draft + formal lifecycle**: add a smoothed-CGO draft (note:

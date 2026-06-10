@@ -297,10 +297,23 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
 
 
 def main() -> int:
+    global OUTDIR, RESULTS_JSONL, COMPONENT_CACHE, FINAL_PARQUET
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-size", type=int, default=15)
     ap.add_argument("--limit", type=int, default=0, help="evaluate at most N factors (smoke test)")
+    ap.add_argument("--factors", default="", help="comma list: restrict the eval to these catalog "
+                    "factors (subset evidence run, e.g. a masked-vs-unmasked comparison)")
+    ap.add_argument("--outdir", default="", help="redirect ALL outputs (results.jsonl/methodology/"
+                    "final parquet) to this dir — REQUIRED with --factors so a subset run can never "
+                    "mix into the production results.jsonl")
     args = ap.parse_args()
+    if args.factors and not args.outdir:
+        raise SystemExit("--factors requires --outdir (subset runs must not touch the production outdir)")
+    if args.outdir:
+        OUTDIR = Path(args.outdir)
+        RESULTS_JSONL = OUTDIR / "results.jsonl"
+        COMPONENT_CACHE = OUTDIR / "layer2_components.parquet"
+        FINAL_PARQUET = OUTDIR / "unified_eval_full.parquet"
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
     method = build_frozen_methodology(is_start=TIME_SPLIT.is_start, is_end=TIME_SPLIT.is_end)
@@ -336,6 +349,13 @@ def main() -> int:
     }, indent=2), encoding="utf-8")
 
     full = get_factor_catalog(include_new_data=True)
+    requested: list[str] = []
+    if args.factors:
+        requested = [f.strip() for f in args.factors.split(",") if f.strip()]
+        unknown = [f for f in requested if f not in full]
+        if unknown:
+            raise SystemExit(f"--factors not in catalog: {unknown}")
+        full = {n: full[n] for n in requested}
     elig = per_factor_field_eligible(list(full), stage="formal_validation")
     base_ok = sorted(n for n, v in elig.items() if v)
     base_bad = sorted(n for n, v in elig.items() if not v)
@@ -435,6 +455,8 @@ def main() -> int:
     comp_defs = get_composite_defs()
     ind_defs = get_industry_relative_defs()
     layer2_names = [c["name"] for c in comp_defs] + [d["name"] for d in ind_defs]
+    if requested:
+        layer2_names = [n for n in layer2_names if n in requested]
     layer2_todo = [n for n in layer2_names if n not in done]
     if layer2_todo and evaluated < limit:
         missing_comp = [n for n in comp_needed if n not in comp_store]
