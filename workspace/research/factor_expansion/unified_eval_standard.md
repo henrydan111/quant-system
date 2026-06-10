@@ -237,6 +237,37 @@ verified true against the committed code and implemented. **Must-fix-before-185 
 size² but monitor VIF); neutralized-signal long-leg IR for neutralized-only winners; size-bucket
 conditional IC + top-bucket style exposures.
 
+### Rev4 addendum — fourth-pass self-audit (2026-06-10, pre-185 gate)
+
+A line-by-line re-read of the whole module + drivers + a live lint run found and fixed:
+
+- **F1 (substantive):** `code_commit` / `reference_set_definition_hashes` / `style_control_definition_hashes`
+  existed as hashed FIELDS but the drivers left them EMPTY — the hash did not actually pin the code
+  version or factor definitions. FIXED via the shared builder
+  [workspace/scripts/unified_eval_common.py](../../../workspace/scripts/unified_eval_common.py)
+  `build_frozen_methodology()`: git HEAD + `FactorRegistryStore.current_catalog_definition_hashes()`
+  (the P1.3 definition-binding algorithm) + reference sets read LIVE from the registry (a revoked
+  provisional approval changes the hash and forces a recompute). Both drivers now share this one
+  construction → identical hash by construction. Hash `394e40c9` → **`e4508ffd`** (the pre-185 final).
+- **F2 (scale):** the measured cost was ~2 min/factor (≈6–10 h for 185), dominated by per-factor decay
+  panel rebuilds and per-candidate control re-transforms — both factor-INDEPENDENT. Added
+  `build_decay_labels()` (labels built once per horizon) + `preprocess_for_residual()` (winsor+cs-z
+  built once per name), with **equivalence tests** proving the fast paths reproduce the direct paths
+  bit-identically.
+- **F3 (compliance):** all 5 workspace scripts now carry the `SCRIPT_STATUS` header block
+  (`research_tooling`, `formal_research_allowed: false`, Class C).
+- **F4:** the frozen bootstrap settings are now actually USED — the driver emits
+  `mean_rank_ic_boot_ci` (moving-block CI) per factor.
+- **F5 (noted, not a violation):** the data driver reads `$total_mv` / index `$close` via bare
+  `D.features` — MARKET data, not PIT statement fundamentals; the bare-features lint scans `src/` only
+  (verified by running it). The script header marks this path sandbox-grade: its numbers must never
+  feed a formal run.
+- Minor: coverage-tier thresholds (0.90/0.50) moved into the hashed methodology
+  (`coverage_full_min`/`coverage_broad_min`); stale docstrings fixed; dead import removed; turnover
+  annualization caveat documented (compare `n_rebalances_used` vs `n_rebalance_candidates` for
+  gap-skipping factors). Pre-existing PIT002 hits in `validate_pit_vs_vendor_q.py` are unrelated
+  (earlier session's file).
+
 ---
 
 ## Design principles

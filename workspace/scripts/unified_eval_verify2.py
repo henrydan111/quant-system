@@ -1,3 +1,15 @@
+# ──────────────────────────────────────────────────────────────────────
+# script_status: research_tooling
+# formal_research_allowed: false
+# deployment_target: unified_eval_verification_probe
+# requires_provider_manifest: false
+# requires_preload_strict: false
+# pr2_audit_class: C
+# notes: |
+#   One-off verification probe for the unified factor-evaluation standard (superseded by
+#   unified_eval_driver.py / unified_eval_driver_data.py for production evidence). IS-only,
+#   zero OOS spend, read-only w.r.t. all registries.
+# ──────────────────────────────────────────────────────────────────────
 """Verify the two remaining unified-standard口径 pieces on the CACHED IS panel (no rebuild):
   (1) the complete monotonicity diagnostic — expected-direction-oriented adjacent-bucket sign
       vector + shape classifier + mono_frac_dominant — on the real 7 factors;

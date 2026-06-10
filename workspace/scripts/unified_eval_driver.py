@@ -1,16 +1,26 @@
+# ──────────────────────────────────────────────────────────────────────
+# script_status: research_tooling
+# formal_research_allowed: false
+# deployment_target: unified_eval_evidence_only
+# requires_provider_manifest: false
+# requires_preload_strict: false
+# pr2_audit_class: C
+# notes: |
+#   Unified-eval production driver (P1b, verify pass on 7 factors). IS-only, zero OOS spend,
+#   read-only w.r.t. all registries; output is descriptive EVIDENCE (workspace/outputs JSON),
+#   never a registry mutation and never formal-run input. Methodology is frozen+hashed via
+#   unified_eval_common.build_frozen_methodology (code commit + definition hashes included).
+# ──────────────────────────────────────────────────────────────────────
 """P1b — production driver (verify pass): wire the unified-eval helpers into an end-to-end per-factor
 record on the 7 representative factors, with the methodology FROZEN + HASHED.
 
 Computes (all IS-only, zero OOS spend, reusing the tested unified_eval helpers):
   Tier 1: heldout RankICIR + sign-consistency (run_is_walk_forward); mean RankIC + IC hit-rate +
-          HAC t (overlap-adjusted); monotonicity shape (NON-circular orientation = early-window sign);
-          one-way turnover; coverage + tier; leak-safe decay vector.
-  Tier 2: residual IC vs the approved-STABLE reference set (excl. provisionals, leave-one-out) AND vs
-          the frozen style_controls_v1.
-Each record is stamped with the EvalMethodology.methodology_hash.
-
-DEFERRED to P1b-data (need extra plumbing): neutralized IC (mcap+industry), long-leg-excess vs both
-benchmarks (index fwd returns). Read-only; no registry writes; panel cached to parquet.
+          HAC t (overlap-adjusted) + block-bootstrap CI; monotonicity shape (non-circular orientation,
+          judged on the heldout window); one-way turnover; coverage + tier; leak-safe decay vector.
+  Tier 2: residual IC vs approved-STABLE (leave-one-out) + approved-CURRENT + style_controls_v1
+          (signed AND oriented), with label-aligned effective coverage.
+Scale fast-paths: decay labels + residual control transforms precomputed ONCE (factor-independent).
 """
 from __future__ import annotations
 
@@ -37,12 +47,14 @@ from src.alpha_research.factor_library.catalog import get_factor_catalog
 from src.alpha_research.factor_eval import ic_analysis as ica
 from src.alpha_research.factor_eval import quantile_analysis as qa
 from src.alpha_research.factor_eval.unified_eval import (
-    EvalMethodology,
     STYLE_CONTROLS_V1,
+    build_decay_labels,
     classify_quantile_shape,
     hac_mean_tstat,
     leak_safe_decay_ic_vector,
+    moving_block_bootstrap_mean_ci,
     one_way_turnover,
+    preprocess_for_residual,
     residual_ic_vs_controls,
     resolve_orientation,
 )
@@ -51,6 +63,7 @@ from src.alpha_research.factor_lifecycle.walk_forward_validation import (
     run_is_walk_forward,
 )
 from src.alpha_research.walk_forward import TimeSplit
+from workspace.scripts.unified_eval_common import build_frozen_methodology
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("unified_eval_driver")
@@ -70,11 +83,6 @@ PICKS = {
     "qual_gross_profitability": "candidate", "rev_up_down_ratio_20d": "candidate",
     "qual_q_gross_margin": "draft",
 }
-APPROVED_8 = ["earn_eps_diffusion_60", "earn_eps_diffusion_120", "grow_n_income_attr_p_yoy_accel_q",
-              "grow_operate_profit_yoy_accel_q", "grow_total_revenue_yoy_accel_q",
-              "liq_zero_ret_days_10d", "qual_piotroski_fscore_9pt", "rev_turnover_spike_5d"]
-PROVISIONAL = ["earn_eps_diffusion_60", "earn_eps_diffusion_120"]
-REFERENCE_STABLE = [a for a in APPROVED_8 if a not in PROVISIONAL]
 
 
 def _to_dt_inst(s):
@@ -110,20 +118,19 @@ def _build_or_load_panel(needed):
 
 def main() -> int:
     OUTDIR.mkdir(parents=True, exist_ok=True)
-    needed = sorted(set(PICKS) | set(APPROVED_8) | set(STYLE_CONTROLS_V1))
+    method = build_frozen_methodology(is_start=TIME_SPLIT.is_start, is_end=TIME_SPLIT.is_end)
+    log.info("methodology_hash=%s (commit=%s)", method.methodology_hash, method.code_commit)
+    reference_stable = list(method.reference_set_stable)
+    approved_current = list(method.reference_set_current)
+
+    needed = sorted(set(PICKS) | set(approved_current) | set(STYLE_CONTROLS_V1))
     raw = _build_or_load_panel(needed)
 
     adj_close = raw[ADJ_COL]
     factor_panel = raw[[c for c in raw.columns if c != ADJ_COL]]
     windowed = build_is_windowed_panel(factor_panel, adj_close, is_end=TIME_SPLIT.is_end, horizon=HORIZON)
+    panel_index = factor_panel.index
     del factor_panel
-
-    method = EvalMethodology(
-        is_start=TIME_SPLIT.is_start, is_end=TIME_SPLIT.is_end,
-        reference_set_stable=tuple(REFERENCE_STABLE), reference_set_current=tuple(APPROVED_8),
-        provisional_factors=tuple(PROVISIONAL),
-    )
-    log.info("methodology_hash=%s", method.methodology_hash)
 
     # heldout ICIR + sign for ALL factors in one pass
     wf = run_is_walk_forward(panel=windowed, time_split=TIME_SPLIT, horizon=HORIZON, factor_origin="a_priori")
@@ -139,6 +146,15 @@ def main() -> int:
     orient_train = set(all_dates[:cut])                      # early window → orient sign ONLY
     shape_heldout = set(all_dates[cut:])                     # last 40% → judge shape (GPT R3: no circularity)
     rebal_schedule = all_dates[:: method.rebalance_days]     # FIXED cross-factor rebalance calendar
+
+    # P1c scale fast-paths — both are factor-INDEPENDENT, so compute ONCE for the whole run:
+    t0 = time.time()
+    decay_labels = build_decay_labels(panel_index, adj_close, is_end=TIME_SPLIT.is_end,
+                                      horizons=method.decay_horizons)
+    log.info("decay labels (%s) built once in %.0fs", list(method.decay_horizons), time.time() - t0)
+    t0 = time.time()
+    processed = preprocess_for_residual(fac, needed, winsor=method.winsor_limits)
+    log.info("winsor+cs-z transforms for %d names built once in %.0fs", len(processed), time.time() - t0)
 
     report = []
     for fid, status in PICKS.items():
@@ -166,25 +182,30 @@ def main() -> int:
         else:  # GPT R3: no intended-best shape claim when orientation is undetermined
             mono = {"mono_shape": None, "mono_reason": "orientation_undetermined"}
 
+        boot = moving_block_bootstrap_mean_ci(rank_ic, block_len=method.bootstrap_block_len,
+                                              n_boot=method.bootstrap_n_boot, ci=method.bootstrap_ci,
+                                              seed=method.bootstrap_seed)
         turn = one_way_turnover(fac[fid], rebalance_dates=rebal_schedule, top_q=method.top_q,
                                 trading_days=method.trading_days, min_names=method.turnover_min_names)
         cov = float(fac[fid].notna().mean())
-        cov_tier = "full" if cov >= 0.90 else ("broad" if cov >= 0.50 else "sub")
-        decay = leak_safe_decay_ic_vector(fac[fid], adj_close, is_end=TIME_SPLIT.is_end,
-                                          horizons=method.decay_horizons)
+        cov_tier = ("full" if cov >= method.coverage_full_min
+                    else ("broad" if cov >= method.coverage_broad_min else "sub"))
+        decay = leak_safe_decay_ic_vector(fac[fid], is_end=TIME_SPLIT.is_end,
+                                          horizons=method.decay_horizons,
+                                          precomputed_labels=decay_labels)
 
         # Tier 2: residual vs approved-STABLE (default) + approved-CURRENT (incl. provisionals, flagged)
         # + style_controls_v1; signed AND orientation-normalized (inverse factors: negative resid = good).
         osign = orient["sign"] if orient["orientation_valid"] else float("nan")
-        resid_appr = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in REFERENCE_STABLE if b != fid],
+        resid_appr = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in reference_stable if b != fid],
                                              winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                             hac_lags=method.hac_lags)
-        resid_cur = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in APPROVED_8 if b != fid],
+                                             hac_lags=method.hac_lags, processed_controls=processed)
+        resid_cur = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in approved_current if b != fid],
                                             winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                            hac_lags=method.hac_lags)
+                                            hac_lags=method.hac_lags, processed_controls=processed)
         resid_style = residual_ic_vs_controls(fid, fac, label, control_names=[c for c in STYLE_CONTROLS_V1 if c != fid],
                                               winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                              hac_lags=method.hac_lags)
+                                              hac_lags=method.hac_lags, processed_controls=processed)
 
         report.append({
             "factor": fid, "registry_status": status, "methodology_hash": method.methodology_hash,
@@ -193,6 +214,7 @@ def main() -> int:
                 "sign_consistency": wf_rows.get(fid, {}).get("sign_consistency"),
                 "mean_rank_ic": summ.get("mean_rank_ic"), "ic_hit_rate": summ.get("ic_hit_rate"),
                 "mean_rank_ic_hac_t": hac.get("hac_t"), "hac_small_sample": hac.get("small_sample_warning"),
+                "mean_rank_ic_boot_ci": [_f(boot.get("ci_low")), _f(boot.get("ci_high"))],
                 "mono_shape": mono.get("mono_shape"), "mono_reason": mono.get("mono_reason"),
                 "shape_eval_window": method.shape_eval_window,
                 "direction_source": orient["direction_source"], "orientation_valid": orient["orientation_valid"],
@@ -227,13 +249,16 @@ def main() -> int:
 
     payload = {
         "methodology": {
-            "hash": method.methodology_hash, "is_window": [TIME_SPLIT.is_start, TIME_SPLIT.is_end],
-            "reference_set_stable": REFERENCE_STABLE, "provisional_excluded": PROVISIONAL,
+            "hash": method.methodology_hash, "code_commit": method.code_commit,
+            "is_window": [TIME_SPLIT.is_start, TIME_SPLIT.is_end],
+            "reference_set_stable": reference_stable,
+            "provisional_excluded": list(method.provisional_factors),
             "style_controls_v1": list(STYLE_CONTROLS_V1), "hac_lags": method.hac_lags,
             "benchmark_policy": method.benchmark_policy, "mt_t_bar": method.mt_t_bar,
+            "definition_hashes_pinned": bool(method.reference_set_definition_hashes),
         },
-        "deferred_to_p1b_data": ["neutralized_rank_icir (mcap+industry)",
-                                 "long_leg_excess_ir_proxy_is vs CSI300/CSI500 (index fwd returns)"],
+        "companion_outputs": ["unified_eval_driver_data.json (neutralized IC + long-leg vs benchmarks, "
+                              "same methodology_hash)"],
         "factors": report,
     }
     OUT.write_text(json.dumps(payload, indent=2, default=lambda x: None), encoding="utf-8")

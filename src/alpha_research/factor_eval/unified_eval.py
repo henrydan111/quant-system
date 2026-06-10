@@ -1,22 +1,21 @@
-"""Unified factor evaluation — leak-safe composed metrics (P0a correctness core).
+"""Unified factor evaluation — the P0+P1 leak-safe correctness, significance, and frozen-methodology
+core (spec: ``workspace/research/factor_expansion/unified_eval_standard.md``, Revisions 3–4).
 
-The 2026-06-10 GPT 5.5 Pro code-grounded review (spec:
-``workspace/research/factor_expansion/unified_eval_standard.md`` Revision 3) flagged two
-correctness-critical gaps where existing primitives do NOT, by themselves, give a leak-safe
-composed metric. This module closes the two highest-priority ones plus the shared shape
-classifier:
-
-1. :func:`leak_safe_decay_ic_vector` — per-horizon ``is_end``-clipped decay. NEVER feed a single
-   price series to :func:`factor_eval.decay_analysis.compute_ic_decay` (it computes
-   ``price(t+h)/price(t)-1`` with NO ``is_end`` guard → a 40d label realizes past ``is_end`` → leak).
-   We rebuild a validated ``IsWindowedPanel`` per horizon (each independently drops factor dates whose
-   horizon-h realization exceeds ``is_end``) and compute IC against that panel's label.
-2. :func:`resolve_orientation` — non-circular direction for the monotonicity shape. NEVER use the
-   registry ``expected_direction`` (it is OBSERVED from the heldout ICIR via
-   ``walk_forward_validation._expected_direction`` → circular). Use a predeclared economic prior where
-   given, else a train-window-only IC sign; emit a ``direction_source``.
-3. :func:`classify_quantile_shape` — the oriented adjacent-bucket sign-vector shape classifier
-   (promoted from the probe script to a tested module fn), with the ``insufficient_quantiles`` guard.
+Contents:
+- **P0a correctness:** :func:`leak_safe_decay_ic_vector` (per-horizon ``is_end``-clipped decay — never
+  the unguarded ``compute_ic_decay``), :func:`resolve_orientation` (non-circular direction: economic
+  prior else train-window sign; NEVER the registry ``expected_direction``, which is observed from the
+  heldout ICIR), :func:`classify_quantile_shape` (oriented sign-vector shape classifier).
+- **P0b significance:** :func:`hac_mean_tstat` (Bartlett Newey-West HAC for overlapping labels),
+  :func:`moving_block_bootstrap_mean_ci` (dependence-preserving robustness CI).
+- **P0c deployable proxies:** :func:`one_way_turnover` (true equal-weight ``0.5·Σ|Δw|``),
+  :func:`long_leg_excess_ir` (A-share long-leg excess vs benchmark, fail-closed, screening proxy).
+- **P1 frozen methodology:** :class:`EvalMethodology` (hashed freeze incl. code commit + factor
+  definition hashes), :func:`residual_ic_vs_controls` (winsor→cs-z→residualize vs the frozen
+  ``STYLE_CONTROLS_V1``), :func:`neutralized_rank_icir`, :func:`index_forward_returns`.
+- **P1c scale helpers:** :func:`build_decay_labels` / ``precomputed_labels`` and
+  ``processed_controls`` fast paths (the labels and control transforms are factor-independent — build
+  once, reuse across the full catalog).
 
 All functions are IS-only and injectable (no Qlib needed for unit tests).
 """
@@ -27,7 +26,7 @@ import pandas as pd
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 from src.alpha_research.factor_eval.ic_analysis import compute_ic_series, compute_marginal_ic
 from src.alpha_research.factor_eval.neutralization import neutralize_size_industry
@@ -114,6 +113,9 @@ class EvalMethodology:
     neutralized_ic_min_obs: int = 30
     turnover_min_names: int = 5
     long_leg_min_names: int = 5
+    # coverage peer-grouping thresholds (were hardcoded in the driver — F-audit 2026-06-10)
+    coverage_full_min: float = 0.90
+    coverage_broad_min: float = 0.50
     # residual / neutralization construction
     residual_transform: str = "winsorize_then_cs_zscore"
     residual_metric: str = "rank_ic"
@@ -134,19 +136,38 @@ class EvalMethodology:
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def preprocess_for_residual(factors_dict: dict, names, *, winsor=(0.01, 0.99)) -> dict:
+    """Winsorize→cs-z-score a set of factor series ONCE (the residual-pipeline input transform).
+
+    The transform is per-factor and date-local — it does NOT depend on which candidate is being
+    residualized — so for a full-catalog run compute it once for every involved name and pass the
+    result to :func:`residual_ic_vs_controls` via ``processed_controls`` (the per-candidate
+    re-processing of 14 controls × 3 reference sets × N factors was the dominant cost at scale).
+    """
+    return {nm: cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1]))
+            for nm in names}
+
+
 def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_return: pd.Series, *,
                             control_names=STYLE_CONTROLS_V1, winsor=(0.01, 0.99), min_obs: int = 30,
-                            hac_lags: int = 40) -> dict:
+                            hac_lags: int = 40, processed_controls: dict | None = None) -> dict:
     """Residual IC of a candidate after orthogonalizing against the FROZEN style controls.
 
     The Rev3 §B.7 pipeline (do NOT call ``compute_marginal_ic`` raw): per date winsorize → cross-
     sectional z-score the candidate AND each control, then residualize the candidate on the controls
-    and correlate the residual with the forward return. Reports **residual_coverage** — the fraction of
-    the candidate's own non-null cells where ALL controls are also present (listwise deletion can move
-    the universe materially for sparse factors) — plus the HAC t of the residual RankIC (overlap-aware).
+    and correlate the residual with the forward return. Reports ``raw_control_coverage`` (fraction of
+    the candidate's non-null cells where ALL controls are present) AND ``effective_residual_coverage``
+    (label-aligned — the cells the residual IC is actually evaluated on), plus the HAC t of the
+    residual RankIC (overlap-aware). ``processed_controls`` may carry the output of
+    :func:`preprocess_for_residual` (covering candidate + controls) to skip re-transforming at scale.
     """
-    proc = {nm: cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1]))
-            for nm in [candidate_name, *control_names]}
+    if processed_controls is not None:
+        proc = {nm: (processed_controls[nm] if nm in processed_controls
+                     else cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1])))
+                for nm in [candidate_name, *control_names]}
+    else:
+        proc = {nm: cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1]))
+                for nm in [candidate_name, *control_names]}
     fwd = _to_dt_inst(forward_return)
     series, summ = compute_marginal_ic(proc, fwd, base_factors=list(control_names),
                                        candidate=candidate_name, min_obs=min_obs)
@@ -309,18 +330,24 @@ def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, rebalance_d
     and bucket size fractions. Returns both the candidate and the used (post-`min_names`) rebalance
     counts. Pass a FIXED ``rebalance_dates`` schedule (a trading-calendar grid) for cross-factor
     comparability — else each factor uses its own ``dates[::rebalance_days]`` (not comparable; GPT R3).
+
+    Annualization caveat: ``× trading_days/rebalance_days`` assumes every scheduled rebalance executes;
+    if a factor skips scheduled dates (cross-section < ``min_names``), per-executed-rebalance churn is
+    annualized at the SCHEDULE frequency — compare ``n_rebalances_used`` vs ``n_rebalance_candidates``
+    before trusting the annualized figure for gap-skipping factors.
     """
     f = _to_dt_inst(factor).dropna()
     df = f.reset_index()
     df.columns = ["datetime", "instrument", "val"]
-    dates = sorted(df["datetime"].unique())
+    by_date = {pd.Timestamp(d): g for d, g in df.groupby("datetime")}  # one pass, not a scan per date
+    dates = sorted(by_date)
     rebal = [pd.Timestamp(d) for d in rebalance_dates] if rebalance_dates is not None else dates[::rebalance_days]
     top_prev = bot_prev = None
     top_t, bot_t, top_tie, bot_tie, top_frac, bot_frac = [], [], [], [], [], []
     used = 0
     for d in rebal:
-        g = df[df["datetime"] == d]
-        n = len(g)
+        g = by_date.get(pd.Timestamp(d))
+        n = 0 if g is None else len(g)
         if n < min_names:
             continue
         used += 1
@@ -492,14 +519,38 @@ def _rank_icir(rank_ic: pd.Series) -> float:
     return float(r.mean() / r.std()) if len(r) > 1 and r.std() > 0 else float("nan")
 
 
+def build_decay_labels(index_template: pd.MultiIndex, adj_close: pd.Series, *, is_end,
+                       horizons=DEFAULT_DECAY_HORIZONS, trade_cal=None) -> dict:
+    """Build the per-horizon ``is_end``-clipped forward-return labels ONCE for a whole panel.
+
+    The decay label depends only on (index, adj_close, calendar, horizon) — NOT on the factor values —
+    so a full-catalog run must not rebuild it per factor (185×4 panel builds was the dominant decay
+    cost). Each horizon's label goes through :func:`build_is_windowed_panel` (a constant dummy column
+    on ``index_template``), inheriting every ``is_end`` belt; rows whose horizon-``h`` realization
+    exceeds ``is_end`` are absent from that label. Returns ``{h: {"label": Series(dt,inst),
+    "max_realization": str}}`` for :func:`leak_safe_decay_ic_vector`'s ``precomputed_labels``.
+    """
+    dummy = pd.DataFrame({"__d__": 1.0}, index=index_template)
+    out: dict[int, dict] = {}
+    for h in horizons:
+        panel = build_is_windowed_panel(dummy, adj_close, is_end=is_end, horizon=int(h),
+                                        trade_cal=trade_cal)
+        lab = panel.label
+        lab = (lab.swaplevel(0, 1) if lab.index.names[0] != "datetime" else lab).sort_index()
+        out[int(h)] = {"label": lab,
+                       "max_realization": str(pd.Timestamp(panel.max_label_realization_date).date())}
+    return out
+
+
 def leak_safe_decay_ic_vector(
     factor: pd.Series,
-    adj_close: pd.Series,
+    adj_close: pd.Series = None,
     *,
     is_end,
     horizons=DEFAULT_DECAY_HORIZONS,
     trade_cal=None,
     min_obs: int = 30,
+    precomputed_labels: dict | None = None,
 ) -> dict:
     """Leak-safe IC-decay vector: for each horizon, an INDEPENDENTLY ``is_end``-clipped panel.
 
@@ -507,28 +558,39 @@ def leak_safe_decay_ic_vector(
     :func:`build_is_windowed_panel`). For each ``h`` we build a fresh ``IsWindowedPanel`` — which
     drops every factor date whose horizon-``h`` realization exceeds ``is_end`` — and compute the
     cross-sectional RankIC vs that panel's label. Returns per-horizon
-    ``{mean_rank_ic, rank_icir, n_dates, max_realization}`` plus ``half_life`` (first horizon whose
-    ``|rank_icir|`` ≤ half the peak; ``None`` if it never decays that far within the grid).
+    ``{mean_rank_ic, rank_icir, n_dates, max_realization}`` plus ``half_life_vs_shortest``.
+
+    ``precomputed_labels`` (from :func:`build_decay_labels`, built on the SAME index/adj_close/is_end)
+    skips the per-factor panel rebuilds — required at full-catalog scale. The IC join restricts the
+    factor to the label's surviving cells, so the clipping is inherited unchanged.
 
     This is the SANCTIONED decay path — never call ``compute_ic_decay(price.shift(-h))`` (no guard).
     """
     factor = factor if isinstance(factor, pd.Series) else pd.Series(factor)
-    fdf = factor.to_frame("__f__")
+    f_dt = (factor.swaplevel(0, 1) if factor.index.names[0] != "datetime" else factor).sort_index()
     vec: dict[int, dict] = {}
     for h in horizons:
-        panel = build_is_windowed_panel(fdf, adj_close, is_end=is_end, horizon=int(h), trade_cal=trade_cal)
-        fser = panel.factor_panel["__f__"]
-        # normalize to (datetime, instrument) for the IC helper
-        fser = (fser.swaplevel(0, 1) if fser.index.names[0] != "datetime" else fser).sort_index()
-        lab = panel.label
-        lab = (lab.swaplevel(0, 1) if lab.index.names[0] != "datetime" else lab).sort_index()
+        if precomputed_labels is not None:
+            entry = precomputed_labels[int(h)]
+            lab, max_real = entry["label"], entry["max_realization"]
+            fser = f_dt
+        else:
+            if adj_close is None:
+                raise ValueError("adj_close is required when precomputed_labels is not given")
+            panel = build_is_windowed_panel(factor.to_frame("__f__"), adj_close, is_end=is_end,
+                                            horizon=int(h), trade_cal=trade_cal)
+            fser = panel.factor_panel["__f__"]
+            fser = (fser.swaplevel(0, 1) if fser.index.names[0] != "datetime" else fser).sort_index()
+            lab = panel.label
+            lab = (lab.swaplevel(0, 1) if lab.index.names[0] != "datetime" else lab).sort_index()
+            max_real = str(pd.Timestamp(panel.max_label_realization_date).date())
         ic = compute_ic_series(fser, lab, min_obs=min_obs)
         rank_ic = ic["RankIC"] if "RankIC" in ic.columns else ic.iloc[:, -1]
         vec[int(h)] = {
             "mean_rank_ic": float(rank_ic.dropna().mean()) if len(rank_ic.dropna()) else float("nan"),
             "rank_icir": _rank_icir(rank_ic),
             "n_dates": int(rank_ic.dropna().shape[0]),
-            "max_realization": str(pd.Timestamp(panel.max_label_realization_date).date()),
+            "max_realization": max_real,
         }
     # half-life vs the SHORTEST horizon's |rank_icir| (NOT peak-relative — peak selection is hidden
     # horizon mining; the shortest horizon is the freshest signal, a fixed non-selected reference).

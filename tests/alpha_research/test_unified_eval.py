@@ -13,6 +13,7 @@ import pytest
 
 from src.alpha_research.factor_eval.unified_eval import (
     EvalMethodology,
+    build_decay_labels,
     classify_quantile_shape,
     hac_mean_tstat,
     index_forward_returns,
@@ -21,6 +22,7 @@ from src.alpha_research.factor_eval.unified_eval import (
     moving_block_bootstrap_mean_ci,
     neutralized_rank_icir,
     one_way_turnover,
+    preprocess_for_residual,
     residual_ic_vs_controls,
     resolve_orientation,
 )
@@ -343,3 +345,34 @@ def test_turnover_accepts_fixed_rebalance_calendar():
     out = one_way_turnover(fac, rebalance_dates=fixed, top_q=0.2)
     assert out["n_rebalances_used"] >= 1
     assert 0.0 <= out["turnover_ann"] < 20.0
+
+
+# ----------------------------------------------------------------- P1c scale fast-path equivalence
+def test_precomputed_decay_labels_equal_direct_path():
+    factor, adj, is_end, cal = _synthetic_panel()
+    direct = leak_safe_decay_ic_vector(factor, adj, is_end=is_end, horizons=(5, 20),
+                                       trade_cal=cal, min_obs=10)
+    labels = build_decay_labels(factor.to_frame("__f__").index, adj, is_end=is_end,
+                                horizons=(5, 20), trade_cal=cal)
+    fast = leak_safe_decay_ic_vector(factor, is_end=is_end, horizons=(5, 20),
+                                     precomputed_labels=labels, min_obs=10)
+    for h in (5, 20):
+        assert fast["vector"][h]["rank_icir"] == pytest.approx(direct["vector"][h]["rank_icir"], rel=1e-12)
+        assert fast["vector"][h]["n_dates"] == direct["vector"][h]["n_dates"]
+        assert fast["vector"][h]["max_realization"] == direct["vector"][h]["max_realization"]
+        assert pd.Timestamp(fast["vector"][h]["max_realization"]) <= pd.Timestamp(is_end)
+
+
+def test_processed_controls_equal_unprocessed_path():
+    idx, dates, insts = _cs_panel(n_inst=60, n_days=80)
+    rng = np.random.default_rng(13)
+    fd = {"c1": pd.Series(rng.normal(size=len(idx)), index=idx),
+          "c2": pd.Series(rng.normal(size=len(idx)), index=idx),
+          "new": pd.Series(rng.normal(size=len(idx)), index=idx)}
+    label = pd.Series(0.5 * fd["new"].to_numpy() + rng.normal(size=len(idx)) * 0.05, index=idx)
+    slow = residual_ic_vs_controls("new", fd, label, control_names=["c1", "c2"], min_obs=20)
+    pre = preprocess_for_residual(fd, ["new", "c1", "c2"])
+    fast = residual_ic_vs_controls("new", fd, label, control_names=["c1", "c2"], min_obs=20,
+                                   processed_controls=pre)
+    assert fast["residual_mean_rank_ic"] == pytest.approx(slow["residual_mean_rank_ic"], rel=1e-12)
+    assert fast["effective_residual_coverage"] == pytest.approx(slow["effective_residual_coverage"])

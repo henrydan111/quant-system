@@ -1,3 +1,19 @@
+# ──────────────────────────────────────────────────────────────────────
+# script_status: research_tooling
+# formal_research_allowed: false
+# deployment_target: unified_eval_evidence_only
+# requires_provider_manifest: false
+# requires_preload_strict: false
+# pr2_audit_class: C
+# notes: |
+#   Unified-eval data driver (P1b-data). IS-only, zero OOS spend, read-only; output is
+#   descriptive EVIDENCE, never a registry mutation. Methodology frozen+hashed via
+#   unified_eval_common (identical hash to the main driver by construction).
+#   NB: loads $total_mv and index $close via bare D.features — MARKET data (not PIT statement
+#   fundamentals; the two sanctioned PIT doors do not apply), and this is a sandbox-grade
+#   evidence path: its numbers must never feed a formal run (the formal door stays
+#   qlib_windowed_features).
+# ──────────────────────────────────────────────────────────────────────
 """P1b-data — the two data-plumbing-heavy columns deferred from the P1b driver, on the 7 factors:
   - neutralized RankIC / ICIR (size $total_mv + PIT SW2021 industry)
   - long-leg-excess-vs-benchmark IR proxy vs BOTH CSI300 (000300_SH) and CSI500 (000905_SH)
@@ -25,12 +41,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.alpha_research.factor_eval import ic_analysis as ica
 from src.alpha_research.factor_eval.unified_eval import (
-    EvalMethodology,
     index_forward_returns,
     long_leg_excess_ir,
     neutralized_rank_icir,
     resolve_orientation,
 )
+from workspace.scripts.unified_eval_common import build_frozen_methodology
 from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
 from src.data_infra import provider_metadata as pm
 
@@ -47,11 +63,6 @@ ADJ_COL = "__adj_close__"
 BENCHMARKS = {"CSI300": "000300_SH", "CSI500": "000905_SH"}
 PICKS = ["earn_eps_diffusion_60", "liq_zero_ret_days_10d", "qual_piotroski_fscore_9pt",
          "liq_vol_cv_20d", "qual_gross_profitability", "rev_up_down_ratio_20d", "qual_q_gross_margin"]
-APPROVED_8 = ["earn_eps_diffusion_60", "earn_eps_diffusion_120", "grow_n_income_attr_p_yoy_accel_q",
-              "grow_operate_profit_yoy_accel_q", "grow_total_revenue_yoy_accel_q",
-              "liq_zero_ret_days_10d", "qual_piotroski_fscore_9pt", "rev_turnover_spike_5d"]
-PROVISIONAL = ["earn_eps_diffusion_60", "earn_eps_diffusion_120"]
-REFERENCE_STABLE = [a for a in APPROVED_8 if a not in PROVISIONAL]
 
 
 def _to_dt_inst(s):
@@ -103,11 +114,8 @@ def main() -> int:
     industry = pm.build_industry_series_asof(factor_panel.index, level="L1")
     benches = _bench_fwd_returns()
 
-    method = EvalMethodology(is_start=IS_START, is_end=IS_END,
-                             reference_set_stable=tuple(REFERENCE_STABLE),
-                             reference_set_current=tuple(APPROVED_8),
-                             provisional_factors=tuple(PROVISIONAL))
-    log.info("methodology_hash=%s", method.methodology_hash)
+    method = build_frozen_methodology(is_start=IS_START, is_end=IS_END)
+    log.info("methodology_hash=%s (commit=%s)", method.methodology_hash, method.code_commit)
     all_dates = sorted(label.index.get_level_values("datetime").unique())
     cut = int(len(all_dates) * method.orientation_train_frac)
     orient_train = set(all_dates[:cut])
