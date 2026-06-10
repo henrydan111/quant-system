@@ -304,6 +304,25 @@ def main() -> int:
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
     method = build_frozen_methodology(is_start=TIME_SPLIT.is_start, is_end=TIME_SPLIT.is_end)
+    # RESUME PINNING: a resumed run must stamp the SAME methodology_hash as the rows already on
+    # disk. If only code_commit moved (a mid-run commit unrelated to the eval), re-pin to the run's
+    # original commit; if anything ELSE differs (reference set / definitions / knobs), refuse to mix.
+    mfile = OUTDIR / "methodology.json"
+    if mfile.exists() and RESULTS_JSONL.exists():
+        saved = json.loads(mfile.read_text(encoding="utf-8"))
+        if saved.get("hash") and saved["hash"] != method.methodology_hash:
+            from dataclasses import replace
+            repinned = replace(method, code_commit=str(saved.get("code_commit", "")))
+            if repinned.methodology_hash == saved["hash"]:
+                log.warning("resume across a code commit (%s -> %s): re-pinning to the run's "
+                            "original methodology_hash %s", saved.get("code_commit"),
+                            method.code_commit, saved["hash"])
+                method = repinned
+            else:
+                raise RuntimeError(
+                    f"methodology drift on resume: saved hash {saved['hash']} != current "
+                    f"{method.methodology_hash} and not explained by code_commit alone — "
+                    "clear workspace/outputs/unified_eval/ to start a fresh run")
     log.info("methodology_hash=%s (commit=%s)", method.methodology_hash, method.code_commit)
     (OUTDIR / "methodology.json").write_text(json.dumps({
         "hash": method.methodology_hash, "code_commit": method.code_commit,
