@@ -181,6 +181,8 @@ tr.fdetail>td{background:var(--bg);padding:12px 14px}
 .cpill.soft{background:rgba(210,153,34,.1);color:var(--amber);border-color:rgba(210,153,34,.3)}
 .cpill.na{color:var(--grey);opacity:.7}
 .hfail{color:var(--red);font-weight:700}
+.warnt{color:var(--amber);font-weight:600}
+td .ok{color:var(--green);font-weight:600}
 .trsn{font-size:11.5px;color:var(--muted);line-height:1.5;margin:3px 0}
 .mtab{border-collapse:collapse;margin:5px 0;font-size:11.5px}
 .mtab th,.mtab td{border:1px solid var(--border);padding:3px 12px;text-align:right;font-variant-numeric:tabular-nums}
@@ -868,38 +870,87 @@ def _factors(ctx: dict) -> str:
         ("catalog", cat.get("total", "?"), f"base {cat.get('base','?')}·comp {cat.get('composite','?')}·ind {cat.get('industry_relative','?')}"),
         ("candidate_reg", f.get("candidates", 0), "研究候选"),
     ]))
-    out.append('<div class="note">中英文描述由 <b>Claude Sonnet</b> 依每个因子的表达式/类别生成（不含业绩声明）。<b>点击任一行</b>展开该因子的明细卡。</div>')
+    out.append('<div class="note">评估两类口径（Rev5）：<b>formal</b>＝lifecycle 方法学（✍ gated 签字行优先，🔄 refresh 自动全量兜底，'
+               'HAC |t|≥3 为重叠修正后显著；状态徽章永远来自注册表）；<b>discovery</b>＝screening 海选（降级小字）。'
+               '<b>点击任一行</b>展开明细卡。可搜 <span class="mono">cov:full/broad/sub · hac:pass/neut_only/no · shape:top_reversal</span> 等标记过滤。</div>')
     cats = sorted(f.get("category_dist", {}).keys())
-    out.append(_statusbar("#factor-list", ["approved", "candidate", "draft"], "按 id/中英文描述过滤…", cats=cats))
+    out.append(_statusbar("#factor-list", ["approved", "candidate", "draft"], "按 id/描述/cov:/hac:/shape: 过滤…", cats=cats))
     out.append('<div class="tablewrap" id="factor-list"><table><thead><tr><th></th>'
-               '<th class="sortable">factor_id</th><th class="sortable">类别</th><th class="sortable">kind</th>'
-               '<th class="sortable">状态</th><th class="sortable">评级</th>'
-               '<th class="sortable num">5d RankICIR</th><th class="sortable num">验证/折</th></tr></thead><tbody>')
+               '<th class="sortable">factor_id</th><th class="sortable">类别</th>'
+               '<th class="sortable">状态</th><th class="sortable num">formal ICIR</th>'
+               '<th class="sortable num">HAC-t</th><th class="sortable num">中性ICIR</th>'
+               '<th class="sortable">形状</th><th class="sortable">覆盖</th>'
+               '<th class="sortable num">边际</th><th class="sortable num">换手</th>'
+               '<th class="sortable">海选</th></tr></thead><tbody>')
     for x in facs:
-        # main clickable row
+        tier = x.get("coverage_tier") or ""
+        hac_sig = x.get("hac_sig") or ""
+        shape = x.get("mono_shape") or ""
+        src_mark = {"gated": "✍", "refresh": "🔄"}.get(x.get("heldout_src") or "", "")
+        drift = x.get("gated_refresh_drift")
+        drift_mark = ' <span class="hfail" title="gated 与 refresh 同口径分歧 — 数据/定义漂移信号">⚠</span>' \
+            if (drift is not None and drift > 0.005) else ""
+        hac_cls = {"pass": "ok", "neut_only": "warnt", "no": "muted"}.get(hac_sig, "muted")
+        hac_cell = (f'<span class="{hac_cls}">{_fmt(x.get("hac_t"))}'
+                    + ("*" if hac_sig == "neut_only" else "") + "</span>")
+        shape_cell = (f'<span class="hfail">{esc(shape)}</span>' if shape == "top_reversal"
+                      else (esc(shape) if shape else '<span class="muted">–</span>'))
+        cov_cell = (f'{_fmt(x.get("coverage"))} <span class="muted">{esc(tier)}</span>'
+                    if x.get("coverage") is not None else '<span class="muted">–</span>')
+        search_tokens = (f'cov:{tier} hac:{hac_sig} shape:{shape} src:{x.get("heldout_src") or ""}')
         out.append(f'<tr class="frow" data-row data-status="{esc(x["status"])}" data-cat="{esc(x["category"])}" '
-                   f'data-f="{esc(x["id"])} {esc(x["en"])} {esc(x["cn"])} {esc(x["category"])} {esc(x["status"])}">'
+                   f'data-f="{esc(x["id"])} {esc(x["en"])} {esc(x["cn"])} {esc(x["category"])} {esc(x["status"])} {esc(search_tokens)}">'
                    f'<td><span class="arrow">▶</span></td><td class="mono">{esc(x["id"])}</td><td class="muted">{esc(x["category"])}</td>'
-                   f'<td>{esc(x["kind"])}</td><td>{pill(x["status"])}</td><td>{_fmt(x["grade"])}</td>'
-                   f'<td class="num">{_fmt(x["rank_icir_5d"])}</td><td class="num">{_fmt(x["val_pass"])}/{_fmt(x["folds"])}</td></tr>')
+                   f'<td>{pill(x["status"])}</td>'
+                   f'<td class="num">{_fmt(x.get("heldout_icir"))} {src_mark}{drift_mark}</td>'
+                   f'<td class="num">{hac_cell}</td><td class="num">{_fmt(x.get("neut_icir"))}</td>'
+                   f'<td>{shape_cell}</td><td>{cov_cell}</td>'
+                   f'<td class="num">{_fmt(x.get("marginal"))}</td><td class="num">{_fmt(x.get("turnover_ann"))}</td>'
+                   f'<td class="muted">{_fmt(x.get("grade"))}</td></tr>')
         # detail row (hidden until click)
-        ev = []
+        fml = []
+        if x.get("heldout_icir") is not None:
+            fml.append(f'<span class="chip">留出ICIR <b>{esc(x["heldout_icir"])}</b> {src_mark}</span>')
+        if x.get("sign_cons") is not None:
+            fml.append(f'<span class="chip">符号一致 <b>{esc(x["sign_cons"])}</b></span>')
+        if x.get("hac_t") is not None:
+            sig_zh = {"pass": "显著", "neut_only": "仅中性化后显著", "no": "不显著"}.get(hac_sig, "")
+            fml.append(f'<span class="chip">HAC-t <b>{esc(x["hac_t"])}</b> {esc(sig_zh)}</span>')
+        if x.get("neut_icir") is not None:
+            fml.append(f'<span class="chip">中性化ICIR <b>{esc(x["neut_icir"])}</b> (t={esc(x.get("neut_hac_t"))})</span>')
+        if shape:
+            fml.append(f'<span class="chip">形状 <b>{esc(shape)}</b>'
+                       + (' ⚠long-top红旗' if shape == "top_reversal" else "") + "</span>")
+        if x.get("direction_source"):
+            fml.append(f'<span class="chip">定向 {esc(x["direction_source"])}</span>')
+        if x.get("coverage") is not None:
+            fml.append(f'<span class="chip">覆盖 <b>{esc(x["coverage"])}</b> {esc(tier)}</span>')
+        if x.get("turnover_ann") is not None:
+            fml.append(f'<span class="chip">年换手 <b>{esc(x["turnover_ann"])}</b>×</span>')
+        if x.get("marginal") is not None:
+            fml.append(f'<span class="chip">边际(vs approved) <b>{esc(x["marginal"])}</b></span>')
+        if x.get("resid_style") is not None:
+            fml.append(f'<span class="chip">风格残差 <b>{esc(x["resid_style"])}</b></span>')
+        if x.get("ll_ir_300") is not None or x.get("ll_ir_500") is not None:
+            fml.append(f'<span class="chip">长腿IR proxy 300/{esc(x.get("ll_ir_300"))} · 500/{esc(x.get("ll_ir_500"))}</span>')
+        if drift is not None:
+            ok = "一致 ✓" if drift <= 0.005 else f'<span class="hfail">分歧 {drift:.4f} ⚠</span>'
+            fml.append(f'<span class="chip">gated↔refresh {ok}</span>')
+        if x.get("methodology_hash"):
+            fml.append(f'<span class="chip mono">m#{esc(x["methodology_hash"])}</span>')
+        disc = []
         if x["grade"]:
-            ev.append(f'<span class="chip">评级 <b>{esc(x["grade"])}</b></span>')
+            disc.append(f'<span class="chip">海选评级 <b>{esc(x["grade"])}</b></span>')
         if x["rank_icir_5d"] is not None:
-            ev.append(f'<span class="chip">IS RankICIR <b>{esc(x["rank_icir_5d"])}</b></span>')
+            disc.append(f'<span class="chip">5d RankICIR <b>{esc(x["rank_icir_5d"])}</b></span>')
         if x["ls_ann"] is not None:
-            ev.append(f'<span class="chip">LS年化 <b>{esc(x["ls_ann"])}</b></span>')
-        if x["monotonic"]:
-            ev.append(f'<span class="chip">单调 {esc(x["monotonic"])}</span>')
-        if x["best_decay"]:
-            ev.append(f'<span class="chip">衰减 {esc(x["best_decay"])}</span>')
+            disc.append(f'<span class="chip">LS年化 <b>{esc(x["ls_ann"])}</b></span>')
         comp = ""
         if x.get("components"):
             cc = x["components"] if isinstance(x["components"], list) else []
             comp = f'<div class="kv"><b>成分</b> <span class="mono">{esc(", ".join(map(str, cc))[:240])}</span></div>'
         rec = (" " + pill(x["recommended"], "blue")) if x["recommended"] and x["recommended"] != x["status"] else ""
-        out.append('<tr class="fdetail"><td colspan="8"><div class="fdcard">'
+        out.append('<tr class="fdetail"><td colspan="12"><div class="fdcard">'
                    f'<div class="ft">{pill(x["status"])}{rec} <b class="mono">{esc(x["id"])}</b> <span class="muted">{esc(x["category_bi"])}</span></div>'
                    f'<div class="en">{esc(x["en"])}</div><div class="cn">{esc(x["cn"])}</div>'
                    f'<div class="kv">{esc(x["kind"])}'
@@ -908,7 +959,9 @@ def _factors(ctx: dict) -> str:
                    + (f' · 绑定 {esc(x["binding"])}' if x["binding"] else "")
                    + (f' · 更新 {esc(x["updated"])}' if x["updated"] else "") + "</div>"
                    f'<div class="fx mono">{esc(x["expr"])}</div>' + comp
-                   + (f'<div class="ev chips">{"".join(ev)}</div>' if ev else "")
+                   + (f'<div class="kv"><b>formal</b>（lifecycle 方法学）</div><div class="ev chips">{"".join(fml)}</div>' if fml else
+                      '<div class="kv muted">formal：无 refresh/gated 证据（字段不合格或未入本次 sweep）</div>')
+                   + (f'<div class="kv"><b>discovery</b>（海选，参考）</div><div class="ev chips">{"".join(disc)}</div>' if disc else "")
                    + (f'<div class="kv muted">{esc(x["notes"])}</div>' if x["notes"] else "")
                    + "</div></td></tr>")
     out.append("</tbody></table></div></section>")

@@ -338,7 +338,17 @@ def collect_data() -> dict:
 # --------------------------------------------------------------------------- #
 # 3. Factor layer (factor_registry_review.html parity)
 # --------------------------------------------------------------------------- #
-def _latest_evidence_by_factor() -> dict[str, dict]:
+def _evidence_by_class() -> dict[str, dict]:
+    """Per-factor latest evidence row PER CLASS (Rev5 two-class taxonomy).
+
+    {factor_id: {gated, refresh, discovery}} where
+      - gated    = latest ``factor_lifecycle`` row with ``formal_evidence_eligible=True``
+                   (the human-signed promotion evidence — the only rows that can back status)
+      - refresh  = latest ``factor_lifecycle_refresh`` row (ungated full-metric sweep)
+      - discovery= latest screening/research row that actually carries a grade
+    ``catalog_sync`` stamp rows are IGNORED for metrics — the old global last-wins let their
+    empty rows shadow real evidence (the original 评级 "—" bug).
+    """
     df = read_parquet(PROJECT_ROOT / "data" / "factor_registry" / "factor_evidence.parquet")
     out: dict[str, dict] = {}
     if df is None:
@@ -346,7 +356,15 @@ def _latest_evidence_by_factor() -> dict[str, dict]:
     if "evidence_time" in df.columns:
         df = df.sort_values("evidence_time")
     for r in df.to_dict("records"):
-        out[r.get("factor_id")] = r  # last wins = latest
+        fid = r.get("factor_id")
+        slot = out.setdefault(fid, {"gated": None, "refresh": None, "discovery": None})
+        rt = _s(r.get("run_type"))
+        if rt == "factor_lifecycle" and bool(r.get("formal_evidence_eligible")):
+            slot["gated"] = r          # last wins = latest per class
+        elif rt == "factor_lifecycle_refresh":
+            slot["refresh"] = r
+        elif rt in ("screening", "research") and _s(r.get("grade")):
+            slot["discovery"] = r
     return out
 
 
@@ -367,16 +385,41 @@ def collect_factors() -> dict:
             if "category" in cur.columns:
                 out["category_dist"] = {k: int(v) for k, v in cur["category"].value_counts().items()}
 
-            ev = _latest_evidence_by_factor()
+            ev = _evidence_by_class()
             order = {"approved": 0, "candidate": 1, "draft": 2}
             rows = sorted(cur.to_dict("records"),
                           key=lambda r: (order.get(r.get("status"), 9), str(r.get("category")), str(r.get("factor_id"))))
             for r in rows:
                 fid = r.get("factor_id")
-                e = ev.get(fid, {})
+                cls = ev.get(fid, {"gated": None, "refresh": None, "discovery": None})
+                g, f, d = cls["gated"] or {}, cls["refresh"] or {}, cls["discovery"] or {}
                 en, cn = factor_desc(fid)  # Sonnet-generated bilingual one-liner (cached)
                 cat = _s(r.get("category"))
                 cat_en, cat_cn = category_label(cat)
+
+                # formal headline: the signed (gated) number wins where it exists; refresh fills.
+                heldout = _num(g.get("is_rank_icir")) if g.get("is_rank_icir") is not None else _num(f.get("is_rank_icir"))
+                heldout_src = "gated" if g.get("is_rank_icir") is not None else ("refresh" if f.get("is_rank_icir") is not None else "")
+                sign_cons = _num(g.get("sign_consistency")) if g.get("sign_consistency") is not None else _num(f.get("sign_consistency"))
+                # gated-vs-refresh consistency canary (same engine — material divergence = drift)
+                drift = None
+                if g.get("is_rank_icir") is not None and f.get("is_rank_icir") is not None:
+                    try:
+                        drift = abs(float(g["is_rank_icir"]) - float(f["is_rank_icir"]))
+                    except (TypeError, ValueError):
+                        drift = None
+                # HAC significance (direction-aware |t| >= 3.0), neutralized-only labeling
+                hac_t = _num(f.get("mean_rank_ic_hac_t"))
+                neut_t = _num(f.get("neutralized_hac_t"))
+                if hac_t is not None and abs(hac_t) >= 3.0:
+                    hac_sig = "pass"
+                elif neut_t is not None and abs(neut_t) >= 3.0:
+                    hac_sig = "neut_only"
+                elif hac_t is not None or neut_t is not None:
+                    hac_sig = "no"
+                else:
+                    hac_sig = ""
+
                 out["factors"].append({
                     "id": fid, "zh": _s(r.get("display_name_zh")),
                     "category": cat, "category_bi": f"{cat_en} {cat_cn}".strip(),
@@ -385,12 +428,29 @@ def collect_factors() -> dict:
                     "direction": _s(r.get("expected_direction")), "binding": _s(r.get("definition_binding")),
                     "expr": _s(r.get("expression")), "components": _parse_json(r.get("components_json")),
                     "weights": _parse_json(r.get("weights_json")),
-                    "grade": _s(e.get("grade")) or _s(r.get("latest_screening_grade")),
-                    "rank_icir_5d": _num(e.get("rank_icir_5d")) if e.get("rank_icir_5d") is not None else _num(r.get("latest_rank_icir_5d")),
-                    "mean_rank_ic": _num(e.get("mean_rank_ic_5d")), "monotonic": _s(e.get("monotonic")),
-                    "best_decay": _s(e.get("best_decay_horizon")), "ls_ann": _num(e.get("ls_ann_return")),
-                    "val_pass": _intish(e.get("validation_pass_count"), r.get("latest_validation_pass_count")),
-                    "folds": _intish(e.get("selected_fold_count"), r.get("latest_selected_fold_count")),
+                    # ---- formal (lifecycle methodology): gated ✍ first, refresh 🔄 fills
+                    "heldout_icir": heldout, "heldout_src": heldout_src, "sign_cons": sign_cons,
+                    "gated_refresh_drift": _num(drift),
+                    "hac_t": hac_t, "hac_sig": hac_sig,
+                    "neut_icir": _num(f.get("neutralized_rank_icir")), "neut_hac_t": neut_t,
+                    "mono_shape": _s(f.get("mono_shape")),
+                    "direction_source": _s(f.get("direction_source")),
+                    "coverage": _num(f.get("coverage")), "coverage_tier": _s(f.get("coverage_tier")),
+                    "turnover_ann": _num(f.get("turnover_ann")),
+                    "marginal": _num(f.get("resid_ic_vs_approved_stable_oriented")),
+                    "resid_style": _num(f.get("resid_ic_vs_style_controls_v1_oriented")),
+                    "ll_ir_300": _num(f.get("long_leg_ir_proxy_is_csi300")),
+                    "ll_ir_500": _num(f.get("long_leg_ir_proxy_is_csi500")),
+                    "methodology_hash": _s(f.get("methodology_hash"))[:8],
+                    "unified_json": _s(f.get("unified_metrics_json")),
+                    # ---- discovery (screening triage) — demoted small print
+                    "grade": _s(d.get("grade")) or _s(r.get("latest_screening_grade")),
+                    "rank_icir_5d": _num(d.get("rank_icir_5d")) if d.get("rank_icir_5d") is not None else _num(r.get("latest_rank_icir_5d")),
+                    # ---- legacy fields kept for the detail card
+                    "mean_rank_ic": _num(d.get("mean_rank_ic_5d")), "monotonic": _s(d.get("monotonic")),
+                    "best_decay": _s(d.get("best_decay_horizon")), "ls_ann": _num(d.get("ls_ann_return")),
+                    "val_pass": _intish(d.get("validation_pass_count"), r.get("latest_validation_pass_count")),
+                    "folds": _intish(d.get("selected_fold_count"), r.get("latest_selected_fold_count")),
                     "notes": _s(r.get("notes"))[:240], "en": en, "cn": cn, "updated": _s(r.get("updated_at"))[:10],
                 })
 
