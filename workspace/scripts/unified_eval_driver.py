@@ -81,6 +81,14 @@ def _to_dt_inst(s):
     return (s.swaplevel(0, 1) if s.index.names[0] != "datetime" else s).sort_index()
 
 
+def _f(v):
+    try:
+        v = float(v)
+        return None if v != v else v
+    except (TypeError, ValueError):
+        return None
+
+
 def _build_or_load_panel(needed):
     if PANEL_CACHE.exists():
         log.info("Loading cached driver panel %s ...", PANEL_CACHE)
@@ -127,41 +135,56 @@ def main() -> int:
     # Helpers normalize index order on demand; per-factor copies are transient and freed each iter.
     fac = {n: raw[n] for n in needed}
     all_dates = sorted(label.index.get_level_values("datetime").unique())
-    orient_train = set(all_dates[: int(len(all_dates) * 0.6)])  # early-window orientation (non-circular)
+    cut = int(len(all_dates) * method.orientation_train_frac)
+    orient_train = set(all_dates[:cut])                      # early window → orient sign ONLY
+    shape_heldout = set(all_dates[cut:])                     # last 40% → judge shape (GPT R3: no circularity)
+    rebal_schedule = all_dates[:: method.rebalance_days]     # FIXED cross-factor rebalance calendar
 
     report = []
     for fid, status in PICKS.items():
       try:
         f_dt = _to_dt_inst(fac[fid])  # (datetime, instrument) for the IC/quantile helpers
-        ic = ica.compute_ic_series(f_dt, label, min_obs=30)
+        ic = ica.compute_ic_series(f_dt, label, min_obs=method.ic_min_obs)
         summ = ica.compute_ic_summary(ic)
         rank_ic = ic["RankIC"].dropna()
         hac = hac_mean_tstat(rank_ic, lags=method.hac_lags)
 
-        # NON-circular orientation → shape
-        orient = resolve_orientation(rank_ic.rename(None), train_dates=orient_train, min_train_t=1.0)
-        of = f_dt * orient["sign"]
-        try:
-            qdf = qa.compute_quantile_returns(of, label, n_quantiles=method.n_quantiles, min_obs=50)
-            qs = qa.compute_quantile_summary(qdf)
-            mono = classify_quantile_shape(qs["annualized_return"].tolist())
-        except Exception as e:  # noqa: BLE001
-            mono = {"mono_shape": None, "mono_reason": f"error:{e}"}
+        # NON-circular orientation: sign from TRAIN window only; shape judged on HELDOUT window only.
+        orient = resolve_orientation(rank_ic.rename(None), train_dates=orient_train,
+                                     min_train_t=method.orientation_min_train_t)
+        if orient["orientation_valid"]:
+            of = f_dt * orient["sign"]
+            oh = of[of.index.get_level_values("datetime").isin(shape_heldout)]
+            lh = label[label.index.get_level_values("datetime").isin(shape_heldout)]
+            try:
+                qs = qa.compute_quantile_summary(
+                    qa.compute_quantile_returns(oh, lh, n_quantiles=method.n_quantiles,
+                                                min_obs=method.quantile_min_obs))
+                mono = classify_quantile_shape(qs["annualized_return"].tolist())
+            except Exception as e:  # noqa: BLE001
+                mono = {"mono_shape": None, "mono_reason": f"error:{e}"}
+        else:  # GPT R3: no intended-best shape claim when orientation is undetermined
+            mono = {"mono_shape": None, "mono_reason": "orientation_undetermined"}
 
-        turn = one_way_turnover(fac[fid], rebalance_days=method.rebalance_days, top_q=method.top_q)
+        turn = one_way_turnover(fac[fid], rebalance_dates=rebal_schedule, top_q=method.top_q,
+                                trading_days=method.trading_days, min_names=method.turnover_min_names)
         cov = float(fac[fid].notna().mean())
         cov_tier = "full" if cov >= 0.90 else ("broad" if cov >= 0.50 else "sub")
-        # decay needs the RAW (instrument, datetime) factor + full adj_close (build_is_windowed_panel)
         decay = leak_safe_decay_ic_vector(fac[fid], adj_close, is_end=TIME_SPLIT.is_end,
                                           horizons=method.decay_horizons)
 
-        # Tier 2: residual vs approved-STABLE (leave-one-out) + vs style_controls_v1
-        base_stable = [b for b in REFERENCE_STABLE if b != fid]
-        resid_appr = residual_ic_vs_controls(fid, fac, label, control_names=base_stable,
-                                             winsor=method.winsor_limits, hac_lags=method.hac_lags)
-        ctrls = [c for c in STYLE_CONTROLS_V1 if c != fid]
-        resid_style = residual_ic_vs_controls(fid, fac, label, control_names=ctrls,
-                                              winsor=method.winsor_limits, hac_lags=method.hac_lags)
+        # Tier 2: residual vs approved-STABLE (default) + approved-CURRENT (incl. provisionals, flagged)
+        # + style_controls_v1; signed AND orientation-normalized (inverse factors: negative resid = good).
+        osign = orient["sign"] if orient["orientation_valid"] else float("nan")
+        resid_appr = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in REFERENCE_STABLE if b != fid],
+                                             winsor=method.winsor_limits, min_obs=method.residual_min_obs,
+                                             hac_lags=method.hac_lags)
+        resid_cur = residual_ic_vs_controls(fid, fac, label, control_names=[b for b in APPROVED_8 if b != fid],
+                                            winsor=method.winsor_limits, min_obs=method.residual_min_obs,
+                                            hac_lags=method.hac_lags)
+        resid_style = residual_ic_vs_controls(fid, fac, label, control_names=[c for c in STYLE_CONTROLS_V1 if c != fid],
+                                              winsor=method.winsor_limits, min_obs=method.residual_min_obs,
+                                              hac_lags=method.hac_lags)
 
         report.append({
             "factor": fid, "registry_status": status, "methodology_hash": method.methodology_hash,
@@ -171,19 +194,28 @@ def main() -> int:
                 "mean_rank_ic": summ.get("mean_rank_ic"), "ic_hit_rate": summ.get("ic_hit_rate"),
                 "mean_rank_ic_hac_t": hac.get("hac_t"), "hac_small_sample": hac.get("small_sample_warning"),
                 "mono_shape": mono.get("mono_shape"), "mono_reason": mono.get("mono_reason"),
+                "shape_eval_window": method.shape_eval_window,
                 "direction_source": orient["direction_source"], "orientation_valid": orient["orientation_valid"],
                 "turnover_ann": turn.get("turnover_ann"), "tie_rate": turn.get("tie_rate"),
+                "bottom_turnover_ann": turn.get("bottom_turnover_ann"),
                 "coverage": cov, "coverage_tier": cov_tier,
                 "decay_vector": {h: v["rank_icir"] for h, v in decay["vector"].items()},
                 "decay_half_life_vs_shortest": decay["half_life_vs_shortest"],
             },
             "tier2": {
-                "resid_ic_vs_approved_stable": resid_appr.get("residual_mean_rank_ic"),
-                "resid_icir_vs_approved_stable": resid_appr.get("residual_rank_icir"),
-                "resid_coverage_vs_approved_stable": resid_appr.get("residual_coverage"),
-                "resid_ic_vs_style_controls_v1": resid_style.get("residual_mean_rank_ic"),
+                # signed residual IC + orientation-normalized (inverse factors: a negative signed
+                # residual is GOOD; oriented = sign × signed, so "more positive oriented" = more marginal)
+                "resid_ic_vs_approved_stable_signed": resid_appr.get("residual_mean_rank_ic"),
+                "resid_ic_vs_approved_stable_oriented": _f(osign * resid_appr["residual_mean_rank_ic"])
+                    if resid_appr.get("residual_mean_rank_ic") is not None and osign == osign else None,
+                "resid_eff_coverage_vs_approved_stable": resid_appr.get("effective_residual_coverage"),
+                "resid_ic_vs_approved_current_signed": resid_cur.get("residual_mean_rank_ic"),
+                "resid_ic_vs_style_controls_v1_signed": resid_style.get("residual_mean_rank_ic"),
+                "resid_ic_vs_style_controls_v1_oriented": _f(osign * resid_style["residual_mean_rank_ic"])
+                    if resid_style.get("residual_mean_rank_ic") is not None and osign == osign else None,
                 "resid_hac_t_vs_style_controls_v1": resid_style.get("residual_hac_t"),
-                "resid_coverage_vs_style_controls_v1": resid_style.get("residual_coverage"),
+                "resid_eff_coverage_vs_style_controls_v1": resid_style.get("effective_residual_coverage"),
+                "reference_set_note": "stable EXCLUDES the 2 provisional report_rc approvals; current INCLUDES them",
             },
         })
         log.info("done %s", fid)
@@ -209,13 +241,16 @@ def main() -> int:
     log.info("%-28s %-9s %8s %8s %7s %6s %-14s %10s %10s", "factor", "status", "heldICIR", "HAC-t",
              "turn", "cov", "mono_shape", "rsd_appr", "rsd_style")
     for r in report:
+        if "error" in r:
+            log.info("%-28s FAILED: %s", r["factor"], r["error"])
+            continue
         t1, t2 = r["tier1"], r["tier2"]
         def p(x, n=3):
             return f"{x:.{n}f}" if isinstance(x, (int, float)) else "NA"
         log.info("%-28s %-9s %8s %8s %7s %6s %-14s %10s %10s", r["factor"], r["registry_status"],
                  p(t1["heldout_rank_icir"]), p(t1["mean_rank_ic_hac_t"], 2), p(t1["turnover_ann"], 1),
                  p(t1["coverage"], 2), str(t1["mono_shape"]),
-                 p(t2["resid_ic_vs_approved_stable"]), p(t2["resid_ic_vs_style_controls_v1"]))
+                 p(t2["resid_ic_vs_approved_stable_oriented"]), p(t2["resid_ic_vs_style_controls_v1_oriented"]))
     log.info("wrote %s", OUT)
     return 0
 

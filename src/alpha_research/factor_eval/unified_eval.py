@@ -33,6 +33,7 @@ from src.alpha_research.factor_eval.ic_analysis import compute_ic_series, comput
 from src.alpha_research.factor_eval.neutralization import neutralize_size_industry
 from src.alpha_research.factor_library.operators import cs_zscore, winsorize
 from src.alpha_research.factor_lifecycle.walk_forward_validation import (
+    IsEndLeakageError,
     build_is_windowed_panel,
     load_open_trading_days,
 )
@@ -83,22 +84,52 @@ class EvalMethodology:
     hac_lags: int = 40
     hac_lag_sensitivity: tuple = (20, 40, 60)
     bootstrap_block_len: int = 20
+    bootstrap_n_boot: int = 2000
+    bootstrap_ci: float = 0.95
+    bootstrap_seed: int = 42
     cost_bps_per_turnover: float = 25.0
+    include_initial_cost: bool = True
     rebalance_days: int = 20
     horizon: int = 20
     decay_horizons: tuple = DEFAULT_DECAY_HORIZONS
     top_q: float = 0.2
     n_quantiles: int = 5
     winsor_limits: tuple = (0.01, 0.99)
+    trading_days: int = 252
     benchmarks: tuple = ("000300_SH", "000905_SH")  # show BOTH — no per-factor selection → no snooping
     benchmark_policy: str = "show_both_no_selection"
-    mt_t_bar: float = 3.0
+    benchmark_close_field: str = "$close"
+    benchmark_calendar_policy: str = "exact_trade_calendar_capped_to_is_end"
+    mt_t_bar: float = 3.0  # applied as |hac_t| ≥ bar (direction-aware; inverse factors have hac_t<0)
+    # orientation (GPT R3: train-fold sign, shape judged on heldout — NOT the observed registry field)
+    orientation_policy: str = "economic_prior_else_train_heldout"
+    orientation_train_frac: float = 0.60
+    orientation_min_train_t: float = 1.0
+    shape_eval_window: str = "heldout_after_orientation"
+    # per-date sample minimums (each a distinct, hashed knob — no hidden defaults)
+    ic_min_obs: int = 30
+    quantile_min_obs: int = 50
+    residual_min_obs: int = 30
+    neutralize_min_obs: int = 50
+    neutralized_ic_min_obs: int = 30
+    turnover_min_names: int = 5
+    long_leg_min_names: int = 5
+    # residual / neutralization construction
+    residual_transform: str = "winsorize_then_cs_zscore"
+    residual_metric: str = "rank_ic"
+    neutralization_mcap_field: str = "$total_mv"
+    neutralization_industry_source: str = "PIT_SW2021_L1"
+    # provenance — distinct implementations with identical field values must NOT share a hash
+    code_commit: str = ""
+    reference_set_definition_hashes: tuple = ()   # ((factor_id, def_hash), …), driver fills
+    style_control_definition_hashes: tuple = ()
 
     @property
     def methodology_hash(self) -> str:
         d = asdict(self)
         for k in ("reference_set_stable", "reference_set_current", "provisional_factors",
-                  "style_controls_v1"):
+                  "style_controls_v1", "reference_set_definition_hashes",
+                  "style_control_definition_hashes"):
             d[k] = sorted(d[k])  # membership, not order, defines identity
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -123,12 +154,20 @@ def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_ret
     hac = hac_mean_tstat(rank_ic, lags=hac_lags)
     cand = _to_dt_inst(factors_dict[candidate_name]).dropna()
     ctrl = pd.DataFrame({nm: _to_dt_inst(factors_dict[nm]) for nm in control_names}).reindex(cand.index)
-    residual_coverage = float(ctrl.notna().all(axis=1).mean()) if len(cand) else float("nan")
+    raw_control_coverage = float(ctrl.notna().all(axis=1).mean()) if len(cand) else float("nan")
+    # effective coverage: candidate ∩ label ∩ all-controls, over candidate ∩ label (the cells the
+    # residual IC is actually evaluated on — listwise deletion + the label's trailing-horizon drop can
+    # make this materially smaller than raw_control_coverage).
+    lab_idx = fwd.dropna().index
+    cl = cand.index.intersection(lab_idx)
+    effective_residual_coverage = (float(ctrl.reindex(cl).notna().all(axis=1).mean())
+                                   if len(cl) else float("nan"))
     return {
         "residual_mean_rank_ic": _f(summ.get("mean_rank_ic")),
         "residual_rank_icir": _f(summ.get("rank_icir")),
         "residual_hac_t": hac.get("hac_t"),
-        "residual_coverage": residual_coverage,
+        "raw_control_coverage": raw_control_coverage,
+        "effective_residual_coverage": effective_residual_coverage,
         "n_dates": int(len(rank_ic)),
         "n_controls": len(control_names),
     }
@@ -136,14 +175,18 @@ def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_ret
 
 # ------------------------------------------------------- P1b-data: neutralized IC + index fwd returns
 def neutralized_rank_icir(factor: pd.Series, label: pd.Series, market_cap: pd.Series,
-                          industry: pd.Series, *, min_obs: int = 30, hac_lags: int = 40) -> dict:
+                          industry: pd.Series, *, min_obs: int = 30, neutralize_min_obs: int = 50,
+                          hac_lags: int = 40) -> dict:
     """Size+industry-neutralized RankIC / ICIR — separates genuine alpha from style beta.
 
     Per-date OLS-residualize the factor on log market cap + industry dummies
     (``neutralize_size_industry``), then RankIC vs the forward return + an overlap-aware HAC t.
+    ``neutralize_min_obs`` is the per-date min for the NEUTRALIZATION regression (explicitly passed —
+    NOT the neutralizer's hidden default 50); ``min_obs`` is the later IC min. Both are distinct,
+    hashed knobs (GPT round-3: do not hide the difference).
     """
     neut = neutralize_size_industry(_to_dt_inst(factor), _to_dt_inst(market_cap),
-                                    _to_dt_inst(industry))
+                                    _to_dt_inst(industry), min_obs=neutralize_min_obs)
     ic = compute_ic_series(_to_dt_inst(neut), _to_dt_inst(label), min_obs=min_obs)
     rank_ic = (ic["RankIC"] if "RankIC" in ic.columns else ic.iloc[:, -1]).dropna()
     hac = hac_mean_tstat(rank_ic, lags=hac_lags)
@@ -151,16 +194,19 @@ def neutralized_rank_icir(factor: pd.Series, label: pd.Series, market_cap: pd.Se
             "neutralized_hac_t": hac.get("hac_t"), "n_dates": int(len(rank_ic))}
 
 
-def index_forward_returns(index_close: pd.Series, *, horizon: int, trade_cal=None) -> pd.Series:
+def index_forward_returns(index_close: pd.Series, *, horizon: int, is_end, trade_cal=None) -> pd.Series:
     """Forward return of a benchmark index over ``horizon`` trading days, by the EXACT calendar.
 
-    ``index_close`` is a datetime-indexed close series (one index). For date ``t`` the return uses
-    ``close[open_days[pos(t)+horizon]] / close[t] − 1`` (same row-based realization as the factor
-    label); the trailing ``horizon`` dates with no realized close are dropped (leak-safe — cap
-    ``index_close`` at ``is_end`` and the last rebalance dates the factor can use are already ≤
-    is_end−horizon, so every used rebalance date has a realized benchmark return).
+    ``index_close`` is a datetime-indexed close series (one index), which MUST be capped at ``is_end``
+    (asserted — an uncapped series could realize a post-``is_end`` benchmark return = leak). For date
+    ``t`` the return uses ``close[open_days[pos(t)+horizon]] / close[t] − 1`` (same row-based
+    realization as the factor label); the trailing ``horizon`` dates with no realized close are dropped.
     """
     s = index_close.dropna().sort_index()
+    if len(s) and pd.Timestamp(s.index.max()) > pd.Timestamp(is_end):
+        raise IsEndLeakageError(
+            f"index_close max date {pd.Timestamp(s.index.max()).date()} > is_end "
+            f"{pd.Timestamp(is_end).date()} — cap the benchmark close at is_end (leak guard)")
     open_days = load_open_trading_days(trade_cal)
     dates = pd.DatetimeIndex(sorted(s.index))
     pos = open_days.searchsorted(dates, side="left")
@@ -253,21 +299,22 @@ def _one_way_weight_turnover(cur: set, prev: set) -> float:
     return 0.5 * s
 
 
-def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, top_q: float = 0.2,
-                     trading_days: int = 252, min_names: int = 5) -> dict:
+def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, rebalance_dates=None,
+                     top_q: float = 0.2, trading_days: int = 252, min_names: int = 5) -> dict:
     """Annualized TRUE equal-weight one-way portfolio turnover of the top bucket (the long book).
 
     Per rebalance, `turnover = 0.5·Σ|Δw|` (equal weights) — the cost-relevant metric, NOT membership
     churn (they differ when bucket sizes drift via ties/coverage). Bottom bucket reported separately.
     Plus instability diagnostics: top/bottom boundary `tie_rate` (fraction exactly on the threshold)
     and bucket size fractions. Returns both the candidate and the used (post-`min_names`) rebalance
-    counts.
+    counts. Pass a FIXED ``rebalance_dates`` schedule (a trading-calendar grid) for cross-factor
+    comparability — else each factor uses its own ``dates[::rebalance_days]`` (not comparable; GPT R3).
     """
     f = _to_dt_inst(factor).dropna()
     df = f.reset_index()
     df.columns = ["datetime", "instrument", "val"]
     dates = sorted(df["datetime"].unique())
-    rebal = dates[::rebalance_days]
+    rebal = [pd.Timestamp(d) for d in rebalance_dates] if rebalance_dates is not None else dates[::rebalance_days]
     top_prev = bot_prev = None
     top_t, bot_t, top_tie, bot_tie, top_frac, bot_frac = [], [], [], [], [], []
     used = 0
@@ -306,8 +353,9 @@ def one_way_turnover(factor: pd.Series, *, rebalance_days: int = 20, top_q: floa
 
 def long_leg_excess_ir(factor: pd.Series, label: pd.Series, benchmark_fwd_return: pd.Series, *,
                        top_q: float = 0.2, cost_bps_per_turnover: float = 25.0,
-                       rebalance_days: int = 20, horizon: int | None = None, trading_days: int = 252,
-                       min_names: int = 5, include_initial_cost: bool = True) -> dict:
+                       rebalance_days: int = 20, rebalance_dates=None, horizon: int | None = None,
+                       trading_days: int = 252, min_names: int = 5,
+                       include_initial_cost: bool = True) -> dict:
     """A-share deployable-PROXY (IS): equal-weight top-quantile LONG-ONLY excess vs benchmark, net cost.
 
     This is a SCREENING PROXY, NOT a backtest IR — it ignores limit-up/down, suspensions, T+1, ST/new-
@@ -332,13 +380,16 @@ def long_leg_excess_ir(factor: pd.Series, label: pd.Series, benchmark_fwd_return
     if joined.empty:
         return {"long_leg_excess_ann": None, "long_leg_excess_ir_proxy_is": None, "n_rebalances": 0}
     dates = sorted(joined.index.get_level_values("datetime").unique())
-    rebal = dates[::rebalance_days]
+    date_set = set(pd.Timestamp(d) for d in dates)
+    rebal = [pd.Timestamp(d) for d in rebalance_dates] if rebalance_dates is not None else dates[::rebalance_days]
     excess, prev_top = [], None
     for d in rebal:
-        g = joined.xs(d, level="datetime")
+        dt = pd.Timestamp(d)
+        if dt not in date_set:  # a fixed external schedule may name dates absent from this factor
+            continue
+        g = joined.xs(dt, level="datetime")
         if len(g) < min_names:
             continue
-        dt = pd.Timestamp(d)
         if dt not in bench_idx or pd.isna(benchmark_fwd_return.loc[dt]):
             raise ValueError(f"missing benchmark forward return at {dt.date()} (fail-closed; a "
                              "silently-dropped benchmark would corrupt the next row's turnover)")

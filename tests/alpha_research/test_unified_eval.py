@@ -276,7 +276,8 @@ def test_residual_ic_orthogonal_retains_redundant_collapses():
     redun = residual_ic_vs_controls("combo", fd, label, control_names=["c1", "c2"], min_obs=20)
     # the orthogonal-new factor keeps its predictive info after residualizing; the control-combo loses it
     assert abs(orth["residual_mean_rank_ic"]) > abs(redun["residual_mean_rank_ic"])
-    assert orth["residual_coverage"] == pytest.approx(1.0, abs=0.02)  # synthetic = full coverage
+    assert orth["effective_residual_coverage"] == pytest.approx(1.0, abs=0.02)  # synthetic = full
+    assert orth["raw_control_coverage"] == pytest.approx(1.0, abs=0.02)
     assert orth["n_controls"] == 2
 
 
@@ -295,10 +296,50 @@ def test_neutralized_ic_pure_size_collapses_orthogonal_retains():
     assert abs(neut_orth["neutralized_mean_rank_ic"]) > abs(neut_size["neutralized_mean_rank_ic"])
 
 
+def test_neutralized_rank_icir_passes_min_obs_to_neutralizer():
+    # 40 names/date: neutralize_min_obs=30 yields usable dates, =50 drops them all → proves the
+    # min_obs is actually forwarded to neutralize_size_industry (was hidden at its default 50).
+    idx, dates, insts = _cs_panel(n_inst=40, n_days=40)
+    rng = np.random.default_rng(9)
+    mcap = pd.Series(np.exp(rng.normal(10, 1, size=len(idx))), index=idx)
+    industry = pd.Series(rng.integers(0, 3, size=len(idx)).astype(str), index=idx)
+    factor = pd.Series(rng.normal(size=len(idx)), index=idx)
+    label = pd.Series(0.4 * factor.to_numpy() + rng.normal(size=len(idx)) * 0.1, index=idx)
+    r30 = neutralized_rank_icir(factor, label, mcap, industry, min_obs=20, neutralize_min_obs=30)
+    r50 = neutralized_rank_icir(factor, label, mcap, industry, min_obs=20, neutralize_min_obs=50)
+    assert r30["n_dates"] > r50["n_dates"]
+
+
 def test_index_forward_returns_exact_calendar_and_tail_drop():
     cal = pd.bdate_range("2020-01-01", periods=50)
     close = pd.Series(100.0 + np.arange(50), index=cal)  # 100,101,...,149
-    fwd = index_forward_returns(close, horizon=5, trade_cal=list(cal))
+    fwd = index_forward_returns(close, horizon=5, is_end=cal[-1], trade_cal=list(cal))
     assert fwd.iloc[0] == pytest.approx(105.0 / 100.0 - 1.0)   # close[5]/close[0]-1
     assert len(fwd) == 45                                      # trailing 5 have no realization → dropped
     assert fwd.index.max() == cal[44]
+
+
+def test_index_forward_returns_rejects_uncapped(monkeypatch=None):
+    from src.alpha_research.factor_lifecycle.walk_forward_validation import IsEndLeakageError
+    cal = pd.bdate_range("2020-01-01", periods=50)
+    close = pd.Series(100.0 + np.arange(50), index=cal)
+    with pytest.raises(IsEndLeakageError):  # close extends past is_end → leak guard fires
+        index_forward_returns(close, horizon=5, is_end=cal[40], trade_cal=list(cal))
+
+
+def test_methodology_hash_includes_orientation_and_minobs_knobs():
+    base = _methodology()
+    assert _methodology(orientation_train_frac=0.5).methodology_hash != base.methodology_hash
+    assert _methodology(neutralize_min_obs=30).methodology_hash != base.methodology_hash
+    assert _methodology(code_commit="abc123").methodology_hash != base.methodology_hash
+    assert _methodology(reference_set_definition_hashes=(("a", "h1"),)).methodology_hash != base.methodology_hash
+
+
+def test_turnover_accepts_fixed_rebalance_calendar():
+    idx, dates, insts = _cs_panel()
+    rng = np.random.default_rng(5)
+    fac = pd.Series(rng.normal(size=len(idx)), index=idx)
+    fixed = list(dates[::20])  # a shared trading-calendar schedule
+    out = one_way_turnover(fac, rebalance_dates=fixed, top_q=0.2)
+    assert out["n_rebalances_used"] >= 1
+    assert 0.0 <= out["turnover_ann"] < 20.0

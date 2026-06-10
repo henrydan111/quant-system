@@ -185,6 +185,60 @@ methodology. v2 §1 ✅/⚠️ labels are corrected above.
 
 ---
 
+## Revision 4 — GPT 5.5 Pro P1 review (2026-06-10, commit 199ead3)
+
+A third GPT 5.5 Pro review (of the COMPLETED P1 pipeline) gated the full-185 run on fixes — all
+verified true against the committed code and implemented. **Must-fix-before-185 (done):**
+
+1. **Orientation circularity (drivers).** The driver oriented on the first 60% of IS dates then judged
+   the shape on the FULL IS (incl. that 60%). FIXED: shape is now judged on the **heldout 40% only**
+   (`shape_eval_window=heldout_after_orientation`); the train window decides the sign, the heldout
+   window decides the shape.
+2. **`orientation_valid` gating.** `long_leg_excess_ir` and the intended-best shape were computed even
+   when `orientation_valid=False`. FIXED: both drivers now emit `None`+`orientation_undetermined`
+   when the orientation is weak/undetermined (no intended-best claim).
+3. **Methodology freeze incompleteness.** `EvalMethodology` now also hashes: orientation policy +
+   `orientation_train_frac`/`min_train_t`/`shape_eval_window`, every per-date `*_min_obs`/`*_min_names`,
+   `trading_days`, `include_initial_cost`, `residual_transform`/`residual_metric`, the neutralization
+   source fields, the benchmark close field + calendar policy, the bootstrap settings, `code_commit`,
+   and `reference_set_definition_hashes`/`style_control_definition_hashes` (ids-only was insufficient).
+4. **Data-driver hash gap.** `unified_eval_driver_data.py` now instantiates `EvalMethodology` and stamps
+   `methodology_hash` on every neutralized/benchmark row (was a hashless side JSON).
+5. **Neutralized `min_obs` bug.** `neutralized_rank_icir` now passes `neutralize_min_obs` INTO
+   `neutralize_size_industry` (was silently using its hidden default 50 while the wrapper said 30); the
+   neutralization-min and IC-min are now two distinct hashed knobs.
+6. **`index_forward_returns` leak guard.** Now takes `is_end` and raises `IsEndLeakageError` on an
+   uncapped benchmark close (was leak-safe only by caller discipline).
+7. **Fixed rebalance calendar.** `one_way_turnover` / `long_leg_excess_ir` accept a shared
+   `rebalance_dates` schedule (a trading-calendar grid) so factors are compared on the SAME rebalance
+   dates (was each factor's own `dates[::20]` → not comparable).
+8. **Signed vs oriented residuals.** Residual ICs are stored BOTH signed and orientation-normalized
+   (`*_signed` / `*_oriented`); an inverse factor's negative signed residual is GOOD, so a dashboard
+   must sort on the oriented value, never "more positive signed = better".
+9. **Effective coverage.** `residual_ic_vs_controls` reports `effective_residual_coverage` (candidate ∩
+   label ∩ controls, over candidate ∩ label) alongside `raw_control_coverage` — listwise deletion + the
+   label's trailing-horizon drop can make it materially smaller.
+10. **`resid_ic_vs_approved_current`.** The driver now computes residual IC vs BOTH the stable set
+    (default) and the current set (incl. the 2 provisionals, flagged).
+
+**Interpretation rules (Rev4):**
+- **Multiple-testing bar is direction-aware:** a factor passes on `|hac_t| ≥ mt_t_bar` (3.0), with the
+  SIGN reported separately — inverse factors have `hac_t < 0` and must NOT be failed by a literal `≥`.
+- **Neutralized-only significance is its own status:** a factor that clears the bar ONLY after
+  size+industry neutralization (e.g. `qual_gross_profitability`: raw HAC-t 1.37 → neutralized 3.17) is
+  `raw=weak / neutralized=significant` → deployable ONLY as a size+industry-neutralized construction,
+  NOT a raw-factor pass. Confirm with size-bucket conditional IC + before/after style exposures before
+  acting (size-neutralization can also remove a size-correlated NOISE component — promising, not
+  self-validating).
+- **Benchmark headline discipline:** show BOTH CSI300 and CSI500 long-leg IR; neither is a sortable
+  "best benchmark" column (CSI500 > CSI300 for all 7 must not become a post-hoc benchmark choice).
+
+**Deferred (nice-to-have):** residual-regression condition-number / effective-rank diagnostics (keep
+size² but monitor VIF); neutralized-signal long-leg IR for neutralized-only winners; size-bucket
+conditional IC + top-bucket style exposures.
+
+---
+
 ## Design principles
 
 1. **One口径 for all 185 factors.** Every factor gets the same intrinsic metric set, same
@@ -393,7 +447,14 @@ Dashboard column mapping:
     (date-level moving blocks, deterministic).
   - **P0c** — `one_way_turnover` (true `|Δ|/(|A|+|prev|)×252/rebal` + tie-rate + top/bottom) +
     `long_leg_excess_ir` (A-share deployable long-leg-excess-vs-benchmark IR, net long-side cost).
-- **NEXT (P1 → P2):** wire these helpers into a production driver, run the 7-factor verify with the
-  full corrected pipeline, **freeze + hash the methodology** (`style_controls_v1`, benchmark
-  assignment, HAC/bootstrap settings, cost, `reference_set_version`), then the full-catalog recompute
-  (IS-only, cached) → write evidence columns → repoint the dashboard 评级 (coverage-tier-peer-grouped).
+- **2026-06-10 (P1 + P1b-data implemented + 7-factor verify PASSED, methodology_hash 9ca32dc9):**
+  `EvalMethodology` (frozen+hashed), `residual_ic_vs_controls`, `neutralized_rank_icir`,
+  `index_forward_returns` + the two drivers. HAC significance works (gross_profitability raw HAC-t 1.37
+  below the 3.0 bar; neutralized 3.17 above → neutralized-only). 28→32 tests after the GPT-R3 fixes.
+- **2026-06-10 (GPT 5.5 Pro P1 review → Revision 4):** 10 must-fix items implemented (orientation
+  shape-on-heldout, `orientation_valid` gating, complete methodology freeze, data-driver hash stamp,
+  neutralized `min_obs` bug, `index_forward_returns` is_end guard, fixed rebalance calendar, signed vs
+  oriented residuals, effective coverage, `resid_ic_vs_approved_current`). See Revision 4.
+- **NEXT (full run → dashboard):** with the methodology frozen+hashed and the 7-factor pipeline GPT-
+  reviewed, run the full-catalog (185) IS-only recompute → write the evidence columns (raw / neutralized
+  / oriented-residual / long-leg-proxy, coverage-tier-peer-grouped) → repoint the dashboard 评级.

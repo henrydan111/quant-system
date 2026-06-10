@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.alpha_research.factor_eval import ic_analysis as ica
 from src.alpha_research.factor_eval.unified_eval import (
+    EvalMethodology,
     index_forward_returns,
     long_leg_excess_ir,
     neutralized_rank_icir,
@@ -46,6 +47,11 @@ ADJ_COL = "__adj_close__"
 BENCHMARKS = {"CSI300": "000300_SH", "CSI500": "000905_SH"}
 PICKS = ["earn_eps_diffusion_60", "liq_zero_ret_days_10d", "qual_piotroski_fscore_9pt",
          "liq_vol_cv_20d", "qual_gross_profitability", "rev_up_down_ratio_20d", "qual_q_gross_margin"]
+APPROVED_8 = ["earn_eps_diffusion_60", "earn_eps_diffusion_120", "grow_n_income_attr_p_yoy_accel_q",
+              "grow_operate_profit_yoy_accel_q", "grow_total_revenue_yoy_accel_q",
+              "liq_zero_ret_days_10d", "qual_piotroski_fscore_9pt", "rev_turnover_spike_5d"]
+PROVISIONAL = ["earn_eps_diffusion_60", "earn_eps_diffusion_120"]
+REFERENCE_STABLE = [a for a in APPROVED_8 if a not in PROVISIONAL]
 
 
 def _to_dt_inst(s):
@@ -77,7 +83,7 @@ def _bench_fwd_returns() -> dict:
         df = D.features([code], ["$close"], start_time=IS_START, end_time=IS_END)
         close = df["$close"].xs(code, level=df.index.names[0]) if df.index.nlevels > 1 else df["$close"]
         close.index = pd.DatetimeIndex([pd.Timestamp(d) for d in close.index])
-        out[name] = index_forward_returns(close, horizon=HORIZON)
+        out[name] = index_forward_returns(close, horizon=HORIZON, is_end=IS_END)
         log.info("%s (%s) fwd returns: %d dates", name, code, len(out[name]))
     return out
 
@@ -97,38 +103,54 @@ def main() -> int:
     industry = pm.build_industry_series_asof(factor_panel.index, level="L1")
     benches = _bench_fwd_returns()
 
+    method = EvalMethodology(is_start=IS_START, is_end=IS_END,
+                             reference_set_stable=tuple(REFERENCE_STABLE),
+                             reference_set_current=tuple(APPROVED_8),
+                             provisional_factors=tuple(PROVISIONAL))
+    log.info("methodology_hash=%s", method.methodology_hash)
     all_dates = sorted(label.index.get_level_values("datetime").unique())
-    orient_train = set(all_dates[: int(len(all_dates) * 0.6)])
+    cut = int(len(all_dates) * method.orientation_train_frac)
+    orient_train = set(all_dates[:cut])
+    rebal_schedule = all_dates[:: method.rebalance_days]  # FIXED cross-factor rebalance calendar
 
     report = []
     for fid in PICKS:
         f = raw[fid]
-        neut = neutralized_rank_icir(f, label, mcap, industry, min_obs=30, hac_lags=40)
-        # orient (non-circular early-window) for the long-leg
-        rank_ic = ica.compute_ic_series(_to_dt_inst(f), label, min_obs=30)["RankIC"].dropna()
-        orient = resolve_orientation(rank_ic.rename(None), train_dates=orient_train, min_train_t=1.0)
-        of = _to_dt_inst(f) * orient["sign"]
+        neut = neutralized_rank_icir(f, label, mcap, industry, min_obs=method.neutralized_ic_min_obs,
+                                     neutralize_min_obs=method.neutralize_min_obs, hac_lags=method.hac_lags)
+        rank_ic = ica.compute_ic_series(_to_dt_inst(f), label, min_obs=method.ic_min_obs)["RankIC"].dropna()
+        orient = resolve_orientation(rank_ic.rename(None), train_dates=orient_train,
+                                     min_train_t=method.orientation_min_train_t)
         legs = {}
-        for name, bench in benches.items():
-            try:
-                r = long_leg_excess_ir(of, label, bench, top_q=0.2, cost_bps_per_turnover=25.0,
-                                       rebalance_days=HORIZON, horizon=HORIZON)
-                legs[name] = {"excess_ann": r["long_leg_excess_ann"],
-                              "ir_proxy_is": r["long_leg_excess_ir_proxy_is"], "n": r["n_rebalances"]}
-            except Exception as e:  # noqa: BLE001
-                legs[name] = {"error": str(e)}
+        if not orient["orientation_valid"]:
+            # GPT R3: never emit an intended-best long-leg when orientation is undetermined
+            legs = {name: {"excess_ann": None, "ir_proxy_is": None, "reason": "orientation_undetermined"}
+                    for name in benches}
+        else:
+            of = _to_dt_inst(f) * orient["sign"]
+            for name, bench in benches.items():
+                try:
+                    r = long_leg_excess_ir(of, label, bench, top_q=method.top_q,
+                                           cost_bps_per_turnover=method.cost_bps_per_turnover,
+                                           rebalance_days=method.rebalance_days, rebalance_dates=rebal_schedule,
+                                           horizon=method.horizon, min_names=method.long_leg_min_names,
+                                           include_initial_cost=method.include_initial_cost)
+                    legs[name] = {"excess_ann": r["long_leg_excess_ann"],
+                                  "ir_proxy_is": r["long_leg_excess_ir_proxy_is"], "n": r["n_rebalances"]}
+                except Exception as e:  # noqa: BLE001
+                    legs[name] = {"error": str(e)}
         report.append({
-            "factor": fid,
+            "factor": fid, "methodology_hash": method.methodology_hash,
             "neutralized_rank_icir": neut["neutralized_rank_icir"],
             "neutralized_mean_rank_ic": neut["neutralized_mean_rank_ic"],
             "neutralized_hac_t": neut["neutralized_hac_t"],
-            "orientation_valid": orient["orientation_valid"],
+            "direction_source": orient["direction_source"], "orientation_valid": orient["orientation_valid"],
             "long_leg_excess": legs,
         })
         log.info("done %s", fid)
 
-    OUT.write_text(json.dumps({"factors": report,
-                               "benchmark_policy": "show_both_no_selection",
+    OUT.write_text(json.dumps({"methodology_hash": method.methodology_hash, "factors": report,
+                               "benchmark_policy": method.benchmark_policy,
                                "benchmarks": BENCHMARKS}, indent=2, default=lambda x: None),
                    encoding="utf-8")
     log.info("=== P1b-data (neutralized IC + long-leg-excess vs both benchmarks) ===")
