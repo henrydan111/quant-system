@@ -6,9 +6,12 @@ verdict** that sits on top of the deterministic triage prior — it maps the hig
 papers onto our exact data inventory, assesses orthogonality vs the 182-factor book, and proposes
 concrete, field-grounded factors with their validation path.*
 
-> **⚡ D1-D4 EXPLORED 2026-06-10 — results + errata in [D1_D4_SCREEN_RESULTS.md](D1_D4_SCREEN_RESULTS.md).
-> Follow-through same day: 5 factors (D1 winner + D3/D4 borderline) → catalog drafts → `factor_lifecycle`
-> IS gate → ALL 5 published `candidate` (heldout ICIR 0.34-0.60; a_priori IS-only, 2021-2026 unburned).**
+> **⚡ D1-D4 FULLY ADJUDICATED 2026-06-10 — screens + lifecycle + sealed OOS all same day; full story
+> in [D1_D4_SCREEN_RESULTS.md](D1_D4_SCREEN_RESULTS.md).** 5 factors → IS gate (all candidate,
+> 0.34-0.60) → **single-shot sealed OOS: ONLY `earn_sue_ni_assets` approved** (+0.026/LS 1.06,
+> scraped the bar). The D1 "winner" CGO **sign-flipped OOS** (−0.265, GP-style collapse — its +0.047
+> increment was a 2018-20 quality-rally IS artifact); both D4 `north_*_cov` sign-flipped. **The
+> 2021-2026 OOS is SPENT for all 5 — never re-test as fresh.** Sealed-OOS gate: 4/5 stopped.
 > Verdicts: **D1 WINNER** (CGO marginal increment +0.047, the program's largest; build next),
 > **D2 DROPPED** (informed-large-order hypothesis fails; retail-reversal side is `rev_return_5d`
 > repackaged), **D3 = growth-family refinement** (corr 0.9 to `grow_netprofit_yoy`, not a new

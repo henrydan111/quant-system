@@ -255,9 +255,14 @@ price/accounting.
    zero-densification (neut ICIR 0.20→0.47) but increments sit just under bar. Full results +
    TOP_DIRECTIONS errata: [knowledge/D1_D4_SCREEN_RESULTS.md](knowledge/D1_D4_SCREEN_RESULTS.md);
    scripts `build/probe_d1d4_fields.py`, `build/eval_arxiv_d1d4.py`, `build/eval_arxiv_marginal_test.py`.
-   **Same-day follow-through (user-approved): 5 drafts → catalog → `factor_lifecycle` IS gate →
-   ALL 5 published `candidate`** (heldout ICIR 0.34-0.60, a_priori IS-only selection, 2021-2026
-   unburned; provenance [arxiv_d1d4_selection_provenance.json](arxiv_d1d4_selection_provenance.json)).
-   Remaining: sealed-OOS (candidate→approved) — spend deliberately; D4 unmasked-catalog comparison
-   after unified-eval lands.
+   **Same-day full arc (user-directed): 5 drafts → IS `factor_lifecycle` (ALL 5 candidate,
+   heldout 0.34-0.60) → single-shot sealed OOS → ONLY 1/5 PASSED**: `earn_sue_ni_assets`
+   **approved** (OOS +0.026 / LS 1.06 — scraped the bar, ~93% decay from IS; weak). The
+   exploration's "winner" `alpha_chip_cgo_smooth_20d` **sign-FLIPPED** (−0.265, GP-style
+   collapse — the +0.047 marginal increment was a 2018-20 quality-rally IS artifact); both
+   `north_*_cov` sign-flipped; `earn_sue_ni_mcap` failed LS. 4 stay candidate with **2021-2026
+   OOS SPENT** (never re-test as fresh). Sealed-OOS gate: 4/5 IS-strong factors stopped.
+   Provenance: [arxiv_d1d4_selection_provenance.json](arxiv_d1d4_selection_provenance.json) +
+   [arxiv_d1d4_sealed_oos_promotion.json](arxiv_d1d4_sealed_oos_promotion.json). Remaining: D4
+   unmasked-catalog comparison after unified-eval lands (evidence-only — its OOS is now spent).
 5. **Chinese 研报 slice** via AKShare; **earnings-call / 公告 text pipeline** (the top blocked frontier).

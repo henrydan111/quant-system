@@ -115,6 +115,40 @@ literature-informed caveat recorded). Full provenance:
 attempt failed with a transient all-false field-eligibility (fail-closed working as designed);
 clean re-run reproduced the temp verdicts bit-identically.
 
+## Sealed-OOS outcome (2026-06-10, same day — THE FINAL VERDICT)
+
+User-directed single-shot sealed OOS (2021-01-01..2026-02-27) for all 5 candidates, one
+FrozenSelectionSet (`092524eb…`), real seal claimed at clean tree `5a946c13e724`, bar =
+`oos_rank_icir>0 ∧ oos_ls_sharpe>1.0` (the GP/eps_diffusion precedent). Driver
+[promote_arxiv_d1d4_sealed_oos.py](../../../scripts/../workspace/scripts/promote_arxiv_d1d4_sealed_oos.py);
+provenance [arxiv_d1d4_sealed_oos_promotion.json](../arxiv_d1d4_sealed_oos_promotion.json).
+
+| factor | IS heldout ICIR | OOS rank_icir | OOS LS Sharpe | verdict |
+|---|---|---|---|---|
+| `earn_sue_ni_assets` | +0.354 | **+0.026** | **1.06** | **APPROVED** (scraped the bar) |
+| `earn_sue_ni_mcap` | +0.409 | +0.066 | 0.77 | FAIL (LS) — stays candidate |
+| `alpha_chip_cgo_smooth_20d` | +0.337 | **−0.265** | −0.63 | **FAIL — GP-style sign-flip collapse** |
+| `north_hold_change_20d_cov` | +0.597 | −0.066 | 2.47 | FAIL (sign) — stays candidate |
+| `north_hold_change_60d_cov` | +0.541 | −0.114 | 1.83 | FAIL (sign) — stays candidate |
+
+**The 2021-2026 OOS is now SPENT for all 5** (observed via deterministic reproduction +
+live seal) — none may be re-tested as fresh. Honest reading:
+
+- **D1 CGO collapsed exactly as the pre-registered concern predicted**: the 0.88 payoff-corr
+  to `qual_roa` was the tell — the 2018-2020 IS window (quality/白马 rally) taught "gains →
+  continuation"; 2021-2026 (the quality crash) reversed it, sign-flipping the factor. The
+  exploration's biggest marginal increment (+0.047) was an IS-window artifact.
+- **D4 northbound sign-flipped too**: foreign accumulation predicted continuation pre-2021,
+  reversed in the foreign-outflow era (and the northbound disclosure cutoff ~end-2025
+  truncates the OOS tail). The high LS Sharpe values are sign-aligned-to-observed (i.e. the
+  FLIPPED direction traded well) — per the pre-registered positive direction they are FAILs.
+- **The lone survivor `earn_sue_ni_assets` is WEAK**: IS 0.35 → OOS +0.026 is a ~93% decay;
+  it cleared LS 1.06 by a hair. Treat it as a marginal, growth-adjacent surprise factor —
+  `approved` ≠ deployable (the deployment gate is separate and untested for it).
+- **Gate scorecard**: the sealed-OOS gate has now stopped 4 of 5 IS-strong factors in this
+  batch (and GP before them) — IS evidence, marginal increments included, does not survive
+  regime change. Idea-sourcing cumulative: OSAP 12→1→0; arXiv D1-D4 19→5→1 (weak).
+
 ## Recommended next actions (in order)
 
 1. **D1 → catalog draft + formal lifecycle**: add a smoothed-CGO draft (note:
