@@ -155,6 +155,14 @@ tr.frow.open .arrow{transform:rotate(90deg);display:inline-block}
 tr.fdetail{display:none}
 tr.fdetail.open{display:table-row}
 tr.fdetail>td{background:var(--bg);padding:12px 14px}
+.qbars{display:flex;align-items:flex-end;gap:3px;height:72px;margin:6px 0 2px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);max-width:420px}
+.qbars .qb{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+.qbars .qcol{width:100%;position:relative;height:58px}
+.qbars .qfill{position:absolute;left:15%;width:70%;border-radius:2px 2px 0 0}
+.qbars .qfill.pos{background:var(--ok,#1a7f4b);bottom:50%}
+.qbars .qfill.neg{background:var(--bad,#b3372f);top:50%;border-radius:0 0 2px 2px}
+.qbars .ql{font-size:9px;color:var(--muted);margin-top:2px}
+.qbars-cap{font-size:11px;color:var(--muted);margin-bottom:8px}
 .fdcard .en{margin:2px 0;font-size:13px}
 .fdcard .cn{color:var(--muted);margin-bottom:7px}
 .fdcard .fx{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:7px 0;white-space:pre-wrap;word-break:break-all;font-size:11.5px}
@@ -857,6 +865,31 @@ def _data(ctx: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+def _quantile_bars(profile) -> str:
+    """10-group oriented heldout annualized-return bars (留痕 2026-06-11).
+
+    ``profile``: list of {q, ann_return, mean_count} from unified_metrics_json;
+    empty string when absent (pre-directive evidence rows have no profile).
+    """
+    if not isinstance(profile, list) or not profile:
+        return ""
+    try:
+        vals = [(int(p["q"]), float(p["ann_return"]), p.get("mean_count")) for p in profile]
+    except (KeyError, TypeError, ValueError):
+        return ""
+    vmax = max(abs(v) for _, v, _ in vals) or 1.0
+    bars = []
+    for q, v, n in sorted(vals):
+        h = max(2, round(abs(v) / vmax * 28))  # half-height budget: 28px each side of baseline
+        cls = "pos" if v >= 0 else "neg"
+        tip = f"Q{q}: {v:+.1%}" + (f" ({n}只/期)" if n == n and n is not None else "")
+        bars.append(f'<div class="qb" title="{esc(tip)}"><div class="qcol">'
+                    f'<div class="qfill {cls}" style="height:{h}px"></div></div>'
+                    f'<div class="ql">{q}</div></div>')
+    return ('<div class="qbars">' + "".join(bars) + "</div>"
+            '<div class="qbars-cap">10分组 · 定向后留出窗年化收益（Q1 低 → Q10 高）</div>')
+
+
 def _factors(ctx: dict) -> str:
     f = ctx["factors"]; cur = f.get("current_tally", {}); cat = f.get("catalog", {}); facs = f.get("factors", [])
     out = ['<section class="layer hide" id="factors"><h2>🧮 因子层 '
@@ -945,6 +978,7 @@ def _factors(ctx: dict) -> str:
             disc.append(f'<span class="chip">5d RankICIR <b>{esc(x["rank_icir_5d"])}</b></span>')
         if x["ls_ann"] is not None:
             disc.append(f'<span class="chip">LS年化 <b>{esc(x["ls_ann"])}</b></span>')
+        qbars = _quantile_bars(x.get("quantile_profile"))
         comp = ""
         if x.get("components"):
             cc = x["components"] if isinstance(x["components"], list) else []
@@ -961,6 +995,7 @@ def _factors(ctx: dict) -> str:
                    f'<div class="fx mono">{esc(x["expr"])}</div>' + comp
                    + (f'<div class="kv"><b>formal</b>（lifecycle 方法学）</div><div class="ev chips">{"".join(fml)}</div>' if fml else
                       '<div class="kv muted">formal：无 refresh/gated 证据（字段不合格或未入本次 sweep）</div>')
+                   + qbars
                    + (f'<div class="kv"><b>discovery</b>（海选，参考）</div><div class="ev chips">{"".join(disc)}</div>' if disc else "")
                    + (f'<div class="kv muted">{esc(x["notes"])}</div>' if x["notes"] else "")
                    + "</div></td></tr>")

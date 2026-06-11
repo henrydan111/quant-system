@@ -443,6 +443,9 @@ def collect_factors() -> dict:
                     "ll_ir_500": _num(f.get("long_leg_ir_proxy_is_csi500")),
                     "methodology_hash": _s(f.get("methodology_hash"))[:8],
                     "unified_json": _s(f.get("unified_metrics_json")),
+                    # 10-group oriented heldout profile (留痕 2026-06-11): list of
+                    # {q, ann_return, mean_count}; None for pre-directive evidence rows.
+                    "quantile_profile": (_parse_json(f.get("unified_metrics_json")) or {}).get("quantile_profile"),
                     # ---- discovery (screening triage) — demoted small print
                     "grade": _s(d.get("grade")) or _s(r.get("latest_screening_grade")),
                     "rank_icir_5d": _num(d.get("rank_icir_5d")) if d.get("rank_icir_5d") is not None else _num(r.get("latest_rank_icir_5d")),

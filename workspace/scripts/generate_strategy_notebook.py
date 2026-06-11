@@ -437,7 +437,7 @@ def make_notebook():
 
     cells.append(new_code_cell(
         "# Quantile analysis of composite\n"
-        "q_ret = compute_quantile_returns(composite, fwd_5d, n_quantiles=5, min_obs=100)\n"
+        "q_ret = compute_quantile_returns(composite, fwd_5d, n_quantiles=10, min_obs=100)\n"
         "q_sum = compute_quantile_summary(q_ret)\n"
         "ls = compute_long_short_returns(q_ret, long_q=5, short_q=1)\n"
         "mono = test_monotonicity(q_sum)\n\n"
@@ -560,7 +560,7 @@ def make_notebook():
         "print(f'║  N Days:        {sum_oos.get(\"n_days\", 0)}                 ║')\n"
         "print('╚═══════════════════════════════════════════╝')\n\n"
         "# OOS L/S backtest\n"
-        "q_oos = compute_quantile_returns(comp_oos, fwd_oos, n_quantiles=5, min_obs=100)\n"
+        "q_oos = compute_quantile_returns(comp_oos, fwd_oos, n_quantiles=10, min_obs=100)\n"
         "if not q_oos.empty:\n"
         "    ls_oos = compute_long_short_returns(q_oos, long_q=5, short_q=1)\n"
         "    report_oos = generate_performance_report(ls_oos)\n"

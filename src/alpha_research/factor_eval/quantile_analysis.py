@@ -18,10 +18,16 @@ logger = logging.getLogger(__name__)
 from src.alpha_research.factor_eval._utils import _normalize_multiindex
 
 
+#: Per-bucket size below which a cross-section is counted toward the thin-bucket
+#: warning (10 groups on a 300-name index domain gives 30/bucket; sparse-coverage
+#: factors on sub-universes can fall under this).
+THIN_BUCKET_MIN = 20
+
+
 def compute_quantile_returns(
     factor: pd.Series,
     forward_return: pd.Series,
-    n_quantiles: int = 5,
+    n_quantiles: int = 10,
     min_obs: int = 50,
 ) -> pd.DataFrame:
     """Compute mean forward returns for each factor quantile, per date.
@@ -32,12 +38,17 @@ def compute_quantile_returns(
     Args:
         factor: Factor values with MultiIndex(datetime, instrument).
         forward_return: Forward returns with same index structure.
-        n_quantiles: Number of quantile groups (default 5 = quintiles).
+        n_quantiles: Number of quantile groups (default 10 = deciles, the unified
+            2026-06-11 standard across discovery + formal paths; pre-2026-06-11
+            evidence was quintile-based — pass 5 to reproduce it).
         min_obs: Minimum stocks per cross-section; dates with fewer are skipped.
 
     Returns:
         DataFrame with columns [date, quantile, mean_return, count].
-        Quantile 1 = lowest factor value, quantile N = highest.
+        Quantile 1 = lowest factor value, quantile N = highest. The group count is
+        NOT silently degraded on thin cross-sections: buckets smaller than
+        THIN_BUCKET_MIN trigger one aggregate WARNING (count of affected dates), and
+        per-bucket sizes are in the ``count`` column for downstream diagnostics.
     """
     df = pd.DataFrame({"factor": _normalize_multiindex(factor),
                         "fwd": _normalize_multiindex(forward_return)}).dropna()
@@ -47,6 +58,8 @@ def compute_quantile_returns(
 
     date_level = df.index.names[0] if df.index.names[0] is not None else 0
     results = []
+    thin_dates = 0
+    n_dates = 0
 
     for date, group in df.groupby(level=date_level):
         if len(group) < min_obs:
@@ -58,15 +71,28 @@ def compute_quantile_returns(
         except ValueError:
             continue
 
+        n_dates += 1
         actual_n = labels.nunique()
+        date_min_bucket = None
         for q in range(actual_n):
             mask = labels == q
+            bucket_n = int(mask.sum())
+            date_min_bucket = bucket_n if date_min_bucket is None else min(date_min_bucket, bucket_n)
             results.append({
                 "date": date,
                 "quantile": q + 1,
                 "mean_return": group.loc[mask, "fwd"].mean(),
-                "count": mask.sum(),
+                "count": bucket_n,
             })
+        if date_min_bucket is not None and date_min_bucket < THIN_BUCKET_MIN:
+            thin_dates += 1
+
+    if thin_dates:
+        logger.warning(
+            "compute_quantile_returns: %d/%d cross-sections have buckets thinner than "
+            "%d names (n_quantiles=%d) — group count kept, interpret bucket stats with care",
+            thin_dates, n_dates, THIN_BUCKET_MIN, n_quantiles,
+        )
 
     return pd.DataFrame(results)
 

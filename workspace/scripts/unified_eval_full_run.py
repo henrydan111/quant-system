@@ -197,14 +197,26 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
             oh = of[of.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
             lh = label[label.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
             try:
-                qs = qa.compute_quantile_summary(
-                    qa.compute_quantile_returns(oh, lh, n_quantiles=method.n_quantiles,
-                                                min_obs=method.quantile_min_obs))
+                qdf = qa.compute_quantile_returns(oh, lh, n_quantiles=method.n_quantiles,
+                                                  min_obs=method.quantile_min_obs)
+                qs = qa.compute_quantile_summary(qdf)
                 mono = classify_quantile_shape(qs["annualized_return"].tolist())
+                # 留痕 (2026-06-11 directive): persist the full per-bucket profile —
+                # oriented heldout-window annualized return + mean names per bucket —
+                # so the 10-group performance survives into unified_metrics_json and
+                # the dashboard. q=1 lowest oriented factor value, q=N highest.
+                bucket_counts = qdf.groupby("quantile")["count"].mean()
+                q_profile = [
+                    {"q": int(q), "ann_return": round(float(r), 6),
+                     "mean_count": round(float(bucket_counts.get(q, float("nan"))), 1)}
+                    for q, r in qs["annualized_return"].items()
+                ]
             except Exception as e:  # noqa: BLE001
                 mono = {"mono_shape": None, "mono_reason": f"error:{e}"}
+                q_profile = None
         else:
             mono = {"mono_shape": None, "mono_reason": "orientation_undetermined"}
+            q_profile = None
 
         turn = one_way_turnover(f_raw, rebalance_dates=ctx["rebal_schedule"], top_q=method.top_q,
                                 trading_days=method.trading_days, min_names=method.turnover_min_names)
@@ -263,6 +275,7 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
             "neutralized_rank_icir": _f(neut.get("neutralized_rank_icir")),
             "neutralized_hac_t": _f(neut.get("neutralized_hac_t")),
             "mono_shape": mono.get("mono_shape"), "mono_reason": mono.get("mono_reason"),
+            "quantile_profile": q_profile,
             "direction_source": orient["direction_source"], "orientation_valid": orient["orientation_valid"],
             "turnover_ann": _f(turn.get("turnover_ann")), "tie_rate": _f(turn.get("tie_rate")),
             "coverage": cov, "coverage_tier": cov_tier,

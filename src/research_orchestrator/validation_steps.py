@@ -1169,7 +1169,7 @@ def _compute_extended_metrics(
         from src.alpha_research.factor_eval.quantile_analysis import (
             compute_quantile_returns, test_monotonicity,
         )
-        q_returns = compute_quantile_returns(composite_signal, forward_returns, n_quantiles=5)
+        q_returns = compute_quantile_returns(composite_signal, forward_returns, n_quantiles=10)
         mono = test_monotonicity(q_returns)
         metrics["monotonicity_pvalue"] = float(mono.get("p_value", float("nan")))
     except Exception as exc:  # noqa: BLE001

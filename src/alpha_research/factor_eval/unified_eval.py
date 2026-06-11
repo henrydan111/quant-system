@@ -91,8 +91,12 @@ class EvalMethodology:
     rebalance_days: int = 20
     horizon: int = 20
     decay_horizons: tuple = DEFAULT_DECAY_HORIZONS
+    # top_q is the LONG-LEG deployable-proxy book size (top 20% ≈ a realistic holding
+    # set even on index domains) — deliberately NOT tied to n_quantiles: the 10-group
+    # profile is the descriptive/shape standard (2026-06-11 unification, matches
+    # factor_lifecycle + the CICC protocol), the proxy book is an implementability metric.
     top_q: float = 0.2
-    n_quantiles: int = 5
+    n_quantiles: int = 10
     winsor_limits: tuple = (0.01, 0.99)
     trading_days: int = 252
     benchmarks: tuple = ("000300_SH", "000905_SH")  # show BOTH — no per-factor selection → no snooping

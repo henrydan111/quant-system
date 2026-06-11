@@ -416,7 +416,7 @@ def make_notebook():
 
     cells.append(new_code_cell(
         "# Quantile analysis\n"
-        "q_returns = compute_quantile_returns(factor, FWD_HORIZON, n_quantiles=5, min_obs=100)\n"
+        "q_returns = compute_quantile_returns(factor, FWD_HORIZON, n_quantiles=10, min_obs=100)\n"
         "q_summary = compute_quantile_summary(q_returns)\n"
         "ls_returns = compute_long_short_returns(q_returns)\n"
         "mono = test_monotonicity(q_summary)\n\n"
@@ -461,7 +461,7 @@ def make_notebook():
         "        if ic.empty:\n"
         "            continue\n"
         "        summary = compute_ic_summary(ic)\n\n"
-        "        q_ret = compute_quantile_returns(factor, fwd_5d, n_quantiles=5, min_obs=100)\n"
+        "        q_ret = compute_quantile_returns(factor, fwd_5d, n_quantiles=10, min_obs=100)\n"
         "        if not q_ret.empty:\n"
         "            q_sum = compute_quantile_summary(q_ret)\n"
         "            ls = compute_long_short_returns(q_ret)\n"
@@ -800,7 +800,7 @@ def make_notebook():
         "ls_curves = {}\n"
         "ls_stats = []\n\n"
         "for name in core_pool:\n"
-        "    q_ret = compute_quantile_returns(factors[name], fwd_5d, n_quantiles=5, min_obs=100)\n"
+        "    q_ret = compute_quantile_returns(factors[name], fwd_5d, n_quantiles=10, min_obs=100)\n"
         "    if q_ret.empty:\n"
         "        continue\n"
         "    q_sum = compute_quantile_summary(q_ret)\n"
