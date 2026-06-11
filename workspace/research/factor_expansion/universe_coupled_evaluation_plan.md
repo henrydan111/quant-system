@@ -1,8 +1,11 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:**Draft-6**,2026-06-11(Draft-5 + GPT Round-2 五项最小条件全部落地:taint 机械
-> 后果 / idea-family 污染记账 / max-stat 校准合同 / F4 残留清理 / 薄域旧 fallback 删除;
-> Round-2 终判 APPROVE WITH CONDITIONS,条件齐后即 APPROVE)。Draft-5:**评估永远全域,无可选项**——
+> 版本:**Draft-7(终稿)**,2026-06-11 — **GPT 5.5 Pro Round-3 终判 APPROVE**
+> (五项条件全部 RESOLVED,无阻断项)。Draft-7 = Draft-6 + Round-3 五项实施层建议
+> (语义指纹三档归族 / external_prior 证据标准 / 统一 TaintLedger / 前瞻新鲜窗 /
+> FactorSetClaim),见 §3.1c/§3.8/§3.4。设计评审关闭;待用户批复 D1-D7 后进入实现。
+> 历史:Draft-6 = Round-2 五条件(taint 机械后果/idea-family 污染/max-stat 校准合同/
+> F4 清理/薄域 fallback 删除)。Draft-5:**评估永远全域,无可选项**——
 > discovery 与 formal 的每次评估一律覆盖全部 universe;"声明"只决定哪个域的 claim
 > 享受未调整门槛,绝不决定评估范围)。Draft-4 内容:GPT 5.5 Pro Round-1 全部必改项,
 > 裁决见 [universe_plan_cross_review_round1_response.md](universe_plan_cross_review_round1_response.md)
@@ -102,9 +105,17 @@ ResearchIdeaTaint:
   taint_effect: internal 来源 → post_hoc_max_stat
 ```
 
-- **自动归族为默认**:新因子的字段集聚类与既有族重叠 → 默认继承族的已观察域 taint;
-  要按"干净 singleton primary"过门必须显式论证 `external_prior`(可审计)。
-  自报仅是补充,不是唯一防线。
+- **自动归族为默认,按语义指纹三档置信(R3-B1,防"泛 taint 拖死研究"与"换字段逃逸"两面)**:
+  归族依据不是裸字段重叠,而是 `FactorSemanticFingerprint`(经济通道/特异字段组/
+  算子骨架/持有期桶/中性化轮廓/目标域先验);基础字段(`$close/$vol/$amount/$total_mv/
+  行业码`)为 **stopword——单独重叠不触发硬 taint**。三档:high(同机制+相近 horizon+
+  相似表达式或明确成分关系)→ 自动继承族 taint;medium(共享关键字段组但机制不全同)
+  → dashboard 提醒 + reviewer 确认/拆族;low(仅共享基础字段)→ 只记 relatedness 不 taint。
+- **`external_prior` 证据标准(R3-B2,防"经济学故事"后门复活)**:要把 high/medium
+  taint 降回 clean primary,须同时满足:①时间戳早于该族×域的首个内部证据;②内容
+  具体(域+方向+持有期+机制+失效边界——"微盘股更容易有 alpha"不合格);③与本表达式
+  构造直接相关。**`informed_by_evidence_ids` 非空时,external_prior 只能作解释材料,
+  不能重置为 clean**。自报仅是补充,不是唯一防线。
 - **域选择新鲜度是被消耗品(R2-C3)**:非声明域的 formal 证据不花 OOS 封条,但
   **花掉该(族×域)的域选择新鲜度**——对同因子、声明后代、矩阵筛选复合、以及
   `informed_by` 引用它的 idea-family 后继,全部产生 observed-domain taint。
@@ -195,10 +206,16 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 - (Draft-6 删除旧"<200 只附 CI 即可"软护栏——硬地板是入场券,bootstrap CI 只是
   附加诊断,不构成 status-bearing 资格;语义由上方硬地板条目唯一定义)
 
-### 3.4 sealed OOS candidate → approved(机制不变,激活既有字段)
+### 3.4 sealed OOS candidate → approved(机制不变,激活既有字段;**Draft-7 补选集层**)
 `FrozenSelectionSet` 冻结身份**本就含 universe** —— 声明域写入冻结集,封条按
 (选集+域) 花。无代码改动,只是从"从未用过非全市场"变为"按声明域使用"。
 bar 不变(rank_icir 同号 + LS Sharpe>1.0,decile 口径)。
+**R3-B5(因子组/策略选集启用前必须实现)**:跨域选集(如"微盘 IS 强 ∧ 成长域不崩"
+挑出的 5 因子组)的封条身份必须包含**选择所用的全部域**——`FactorSetClaim`:
+`selected_factor_claim_ids + selection_evidence_ids + selection_domains(全部!)
++ deployment_universe + selection_methodology_hash`。只冻结 5 个 factor_id +
+部署域会把 growth 域的选择偏差藏出账外。复合部署域(微盘∩成长)须生成 PIT-safe
+`composite_universe_hash` 正式域,不得写成两个普通域的并列说明。
 
 ### 3.5 approved 的域语义(**Draft-4 重写:三字段分离,review §3;原 validity_domains 撤回**)
 原案把 OOS 验证域与 evidence-only 域混入同一 `validity_domains` 字段——中间层丢标签
@@ -218,6 +235,45 @@ evidence-only 域要进策略:prescription 显式 `allow_descriptive_domain_evid
 
 ### 3.6 部署门(不变)
 事件驱动 + 真实成本 + 1× + 目标域(通常 univ_liquid_top300 或基准域)。
+
+### 3.6b 统一 TaintLedger 与 claim 档位解析(**Draft-7,R3-B3:五类 taint 一个状态机**)
+
+实现上**不做五套独立状态机**——exploratory/lineage/成分选择/idea-family/非声明域
+formal 证据全部写入一个 `TaintLedger`(source_type 区分),门裁决只调一个函数:
+
+```yaml
+TaintLedgerEntry:
+  source_type: exploratory_eval | lineage | component_selection |
+               idea_family | non_primary_formal_evidence | manual_override
+  factor_id / research_family_id / universe_id / observed_at / evidence_ids
+  taint_effect: none | disclose | post_hoc_max_stat | block_status_claim
+# 裁决:claim_class = resolve_claim_class(factor, family, universe, pre_registered_at)
+# 输出仅四档:clean_singleton_primary | predeclared_multi_domain |
+#           tainted_post_hoc_max_stat | evidence_only_not_status_bearing
+```
+
+**实施 MVP 顺序(R3 终判给出的防护价值/成本比)**:①三字段域语义 + F4 生产 block;
+②TaintLedger + claim_class resolver(归族第一版只做 high-confidence + medium-review);
+③薄域硬地板 + max-stat 校准 schema 先落库(置换引擎稳定前,非 clean claim 用保守
+上界或 reviewer-block,**绝不退回"只披露不调门槛"**)。
+
+### 3.6c 新鲜度终局与前瞻恢复(**Draft-7,R3-B4**)
+
+全员全域评估的自然终态:成熟族(反转/动量/流动性/规模/价值)终将在全部 7 域"已观察",
+clean singleton primary 趋于稀缺,max-stat 档成为常态——**这是设计终态,不是缺陷**
+(置换 max-stat 在有效独立域 ~2-3 下不等于"全员死刑")。**禁止 taint 随时间衰减**
+(统计污染不是过期记忆)。唯一合法恢复 = **前瞻新鲜窗**:
+
+```yaml
+ProspectiveFreshWindowClaim:
+  fresh_window_start: max(内部证据标签终点, taint 观察点标签终点) + embargo
+  evaluation_window: 仅 fresh_window_start 之后的新标签
+  historical_evidence_use: descriptive_only   # 旧窗口永远只是背景
+  claim_class: prospective_clean | prospective_post_hoc
+```
+
+12-24 个月新标签自然到来后,成熟族可开 prospective-only claim 用纯新数据裁决——
+历史不洗白,但系统不会永远无法给成熟族产生新 status-bearing 证据。
 
 ### 3.7 横截面变换的归一化域(Layer-1.5,Draft-3 review 补充)
 

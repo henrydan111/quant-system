@@ -50,3 +50,21 @@
 (claim_adjudicated=false),绝不暴露 `formal_pass@域`。
 
 **GPT 原话:"补上 idea-level taint 后,我会给 APPROVE。" Draft-6 已补齐全部条件。**
+
+
+---
+
+# Round-3 终验(GPT 终判 **APPROVE** → Draft-7 终稿)
+
+五项条件全部 RESOLVED,零阻断项。五项实施层建议全部 ACCEPT 并落 Draft-7:
+
+| R3 建议 | 落点 |
+|---|---|
+| B1 语义指纹三档归族(裸字段重叠会两头漏:$close/$total_mv 泛 taint 拖死研究 vs 换字段实现同一 idea 逃逸);基础字段 stopword | §3.1c |
+| B2 external_prior 三要件(时间戳早于内部证据/内容具体到域+方向+持有期+失效边界/与构造直接相关);informed_by 非空时只可解释不可重置 clean | §3.1c |
+| B3 统一 TaintLedger(五类 source_type 一个状态机)+ claim_class resolver 四档输出;MVP 顺序=三字段+block → TaintLedger → 地板+max-stat schema | 新 §3.6b |
+| B4 新鲜度耗尽是设计终态非缺陷;**禁止时间衰减**,唯一恢复=前瞻新鲜窗(仅 taint 后新标签可裁决,历史永远 descriptive_only) | 新 §3.6c |
+| B5 FactorSetClaim:跨域选集封条身份必须含全部选择域(只冻 factor_id+部署域会把选择偏差藏出账外);复合域须 PIT-safe composite_universe_hash | §3.4 |
+
+**评审弧线收官:Draft-1 → 7,用户三指令 + GPT 三轮(CHANGES REQUIRED → APPROVE WITH
+CONDITIONS → APPROVE)。设计评审关闭,待用户批复 D1-D7 后进入实现(MVP 顺序见 §3.6b)。**
