@@ -1,6 +1,8 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:**Draft-5**,2026-06-11(Draft-4 + 用户指令:**评估永远全域,无可选项**——
+> 版本:**Draft-6**,2026-06-11(Draft-5 + GPT Round-2 五项最小条件全部落地:taint 机械
+> 后果 / idea-family 污染记账 / max-stat 校准合同 / F4 残留清理 / 薄域旧 fallback 删除;
+> Round-2 终判 APPROVE WITH CONDITIONS,条件齐后即 APPROVE)。Draft-5:**评估永远全域,无可选项**——
 > discovery 与 formal 的每次评估一律覆盖全部 universe;"声明"只决定哪个域的 claim
 > 享受未调整门槛,绝不决定评估范围)。Draft-4 内容:GPT 5.5 Pro Round-1 全部必改项,
 > 裁决见 [universe_plan_cross_review_round1_response.md](universe_plan_cross_review_round1_response.md)
@@ -85,6 +87,32 @@ FactorDomainClaim:
 表达式与 definition_hash 保持 universe 无关(P1:同一表达式在任何域评估,计算结果
 不变;目录是复用库,绑域会致条目爆炸 + definition_hash 去重语义崩坏)。
 
+### 3.1c Idea-family 污染记账(**Draft-6,R2 条件2 = Round-2 最大新发现**)
+全域 formal 证据会**跨因子**污染:factor_A 的 microcap 在案结果启发研究者设计
+factor_B(非 clone、不引用 A、表达式不同),直接声明 primary=microcap 享受原 bar——
+这是 post-hoc 域选择,选择证据来自 A 的全域证据而非 B 自己的矩阵。对冲:
+
+```yaml
+ResearchIdeaTaint:
+  research_family_id        # 想法族(QA 按字段集聚类 + 类别自动归族,非纯自报)
+  domain_prior_source: external_prior | pre_registered_theory |
+                       internal_evidence_matrix | prior_factor_formal_evidence
+  informed_by_evidence_ids: [...]   # 启发本因子的在案证据(强制声明)
+  idea_taint_domains: [...]         # 族内已观察域(自动并集)
+  taint_effect: internal 来源 → post_hoc_max_stat
+```
+
+- **自动归族为默认**:新因子的字段集聚类与既有族重叠 → 默认继承族的已观察域 taint;
+  要按"干净 singleton primary"过门必须显式论证 `external_prior`(可审计)。
+  自报仅是补充,不是唯一防线。
+- **域选择新鲜度是被消耗品(R2-C3)**:非声明域的 formal 证据不花 OOS 封条,但
+  **花掉该(族×域)的域选择新鲜度**——对同因子、声明后代、矩阵筛选复合、以及
+  `informed_by` 引用它的 idea-family 后继,全部产生 observed-domain taint。
+  "没花 OOS"≠"以后还能装没看过"。
+- **family 级记账**:testing ledger 在 (factor, universe) 之上增加
+  (research_family_id, universe) 维度;批量注册低成本变体收割全域信号地图
+  (domain lottery farming)会在族级账上立即显形。
+
 ### 3.1b 入目录即全域体检(**用户指令 2026-06-11,已定**)
 **任何因子进入 draft 时,自动在当前全部 universe 上各评估一遍**(unified discovery
 方法学 × 7 域,证据行按 (factor, universe) 落表)——出生证明即全域有效性档案。
@@ -96,9 +124,18 @@ FactorDomainClaim:
 - **探索台账(Draft-4,review §1)**:所有 sanctioned 评估入口(batch_screening /
   unified_eval / cicc_protocol 驱动)每次调用强制落账:expression_hash(规范化)×
   字段集 × universe × methodology × 时间;无 claim 上下文的运行标 `exploratory_tainted`。
-  门复核时对声明域**自动检索**台账中相似表达式的历史评估并披露。诚实边界:裸 pandas
-  不可技术性禁止——本控制的目标是"干净声明可被验证",非"作弊不可能";本系统评估
-  几乎全走 sanctioned 工具,实际覆盖率高
+  门复核时对声明域**自动检索**台账中相似表达式的历史评估并披露。
+  **Draft-6(R2 条件1):taint 命中有机械后果,不止披露**——
+  ```yaml
+  if similar_exploratory_tainted_run_found:
+    default_claim_class: post_hoc        # 自动降档,适用 max-stat 阈值
+    reviewer_override: required          # 要回到原 bar 必须显式 override
+    override_reason_required: true
+    override_is_audit_event: true        # override 本身入审计账
+  ```
+  诚实边界:裸 pandas 不可技术性禁止——本控制的目标是"干净声明可被验证",非"作弊
+  不可能";**表达纪律(R2-B1)**:门报告只能写"在当前审计覆盖下未发现 sanctioned 路径
+  taint",不得写"无污染"。本系统评估几乎全走 sanctioned 工具,实际覆盖率高
 - **成本**:面板计算共享、域掩码廉价,单因子 ×7 域为分钟级;批量注册(如 D5 的
   ~24 个)合并为一次批跑
 - 与 §3.2 的关系:F2 的全目录矩阵 = 存量 190 的一次性回填;本条 = 新增量的常设
@@ -132,9 +169,14 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
   | post-hoc 改域 / 声明晚于矩阵 | 7 域 family **置换 max-stat** 阈值,或只能 evidence-only |
   | 存量回填 / clone / composite 派生 | 默认 7 域已观察,按 post-hoc 从严 |
 
-  校准:域间强相关(univ_all 包含其余),Bonferroni/7 过度修正——以 **block
-  permutation 经验零分布的 max-stat** 为准(190×7 回填矩阵即校准样本),Bonferroni
-  仅作无置换条件时的保守上界
+  **校准合同(Draft-6,R2 条件3,版本化)**:域间强相关(univ_all 包含其余),
+  Bonferroni/7 过度修正——以 **block permutation / block sign-flip 经验零分布的
+  max-stat** 为准,且:置换单位 = 月/调仓周期(非 iid 日);统计量 = 与门裁决完全
+  一致(heldout RankICIR + 符号一致性组合分);max 维度 = claim family 内全部已观察
+  域;保留域嵌套结构、月度跨域协方差与因子可得性掩码;`calibration_methodology_hash`
+  + 阈值版本入库。**190×7 真实回填矩阵不得直接当 null**(含真 alpha/同源因子/历史
+  选择偏差)——只用于估计相关结构与 sanity check;null 必须来自标签置换/区块符号
+  翻转等破坏 alpha 关系但保留依赖结构的过程。Bonferroni 仅作无置换条件时的保守上界
 - **Draft-4 薄域硬地板(review §5;不满足 → 该域只能 discovery/evidence-only)**:
   `valid_names_total_p10 ≥ 300 · min_decile_count_p10 ≥ 30 · 两腿 effective_N_p10 ≥ 25 ·
   腿内行业集中度 p90 ≤ 35% · block bootstrap 单位 = 调仓周期(非 iid 日)`。
@@ -143,11 +185,15 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 - 判据不变:heldout RankICIR + 符号一致性(每域在掩码后截面上计算)
 - candidate 记录 `gated_universe`;dashboard 状态徽章旁标注域(如 `candidate@微盘`),
   详情卡展示全部 7 域的门运行结果(声明域高亮,其余标"在案,未裁决")
+- **命名纪律(R2-C4)**:非声明域结果对外绝不暴露为 `formal_pass@域`——必须是
+  `automated_formal_method_evidence@域` + `claim_adjudicated: false` +
+  `future_claim_default: post_hoc_max_stat`。"formal"只能描述方法学口径,
+  不得暗示通过了 formal 门
 - **多重检验纪律**:同一因子在第 2 个域申请过门 = 新检验,testing ledger 按
   (factor, universe) 记账;**禁止结果驱动换域**(在 A 域失败后换 B 域申请,须在
   hypothesis 里披露 A 域的失败记录,门复核时可见)
-- 薄域护栏:声明域月均截面 < 200 只(微盘400/液体300 边缘)时 heldout 方差大,
-  门报告强制附 bootstrap CI(unified_eval 已有该机制)
+- (Draft-6 删除旧"<200 只附 CI 即可"软护栏——硬地板是入场券,bootstrap CI 只是
+  附加诊断,不构成 status-bearing 资格;语义由上方硬地板条目唯一定义)
 
 ### 3.4 sealed OOS candidate → approved(机制不变,激活既有字段)
 `FrozenSelectionSet` 冻结身份**本就含 universe** —— 声明域写入冻结集,封条按
@@ -219,7 +265,7 @@ evidence-only 域要进策略:prescription 显式 `allow_descriptive_domain_evid
 | **F1** | `universe_id` 进 EvalMethodology + 证据行 + store 列 | schema 变更 + 测试 | 旧行兼容读;新行带域 | 无 |
 | **F2** | 全目录 × 7 域 discovery 矩阵首跑 | (190+新增) × 7 域证据 | 分批断点续跑完成;矩阵入 dashboard | F1, D5 |
 | **F3** | IS 门声明域(prescription.universe_id + testing ledger 按域记账 + 披露规则) | factor_lifecycle 合同修改 + 测试 | 缺省 univ_all 向后兼容;多域纪律测试 | **§8-D1 批准** |
-| **F4** | approved 有效域元数据 + 策略层过滤 warn | registry 列 + resolver 标注 | resolve-but-label 不破坏 | F2 |
+| **F4** | approved 三字段域语义(§3.5)+ 生产 resolver 硬规则 | claim 表 + resolver:目标域 ∈ oos_validated → allow;仅 ∈ domain_evidence → **block**(除非 research-only override,且 override 不得进部署门) | 生产路径无 warn-and-pass;research override 可审计 | F2 |
 | **E** | 价量 ~135 因子复刻(真值现读现对,4 域含 csi1000) | 定义模块 + 对照报告 | exact 档 IC 通过率 ≥ Phase D 同档水平 | D5 模式复用 |
 | **G** | 全目录统一方法论重评(7 域、10 组、最新 unified_eval) | 全量证据刷新 + dashboard | 替代全部旧口径展示 | F1-F2 |
 | 后续 | 分析师类子阶段(2022-05+ 窗)、复合因子合成、域限定策略研究(如微盘反转敞口) | — | — | E, F |
@@ -235,8 +281,8 @@ promotion 流程,有先例模板)。
 2. 薄域(微盘400/液体300)统计功效低:10 组=40/30 只每组,门报告强制 CI;**不因薄域
    放宽 bar**
 3. csi1000 域 2014-11 起,IS/OOS 切窗比其他域短 5 年——门报告须标注有效窗长
-4. 有效域元数据的"evidence-only 域"可能被误读为已验证——dashboard 与 resolver
-   的标注措辞要把"过门域 vs 描述域"打死,不给含糊空间
+4. (Draft-6 改写)三字段分离后误读风险移至实现层:生产 resolver 必须 block
+   evidence-only 域(非 warn 后放行),F4 验收项;命名纪律见 §3.3(R2-C4)
 5. 全市场缺省保证了零迁移成本:不声明域 = 现状行为,所有存量 candidate/approved
    语义不变(等价于 gated_universe=univ_all)
 

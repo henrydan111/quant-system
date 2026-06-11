@@ -26,3 +26,27 @@
 
 1. GPT 把评估入口强制 claim 写成"airtight 方案"——我们如实降格为"审计可验证方案"(裸 pandas 不可禁,见 #1 诚实边界)。
 2. Bonferroni/Holm 按 7 硬除:域强相关(univ_all 包含其余全部),有效独立域 ~2-3,硬除过度修正会误杀真 alpha——以置换 max-stat 为准,Bonferroni 仅作无置换条件时的保守上界。
+
+
+---
+
+# Round-2 裁决(GPT 终判 APPROVE WITH CONDITIONS → Draft-6)
+
+四项必改核销:① PARTIALLY(已补:taint 机械后果)② RESOLVED ③④ RESOLVED+文字清理(已清)。
+两处程度修正(台账降格、置换 max-stat 替代 Bonferroni/7)均获 GPT 仲裁**成立**,附带的
+表达纪律("在当前审计覆盖下未发现 taint",不得写"无污染")与实现合同已采纳。
+
+五项最小条件全部 ACCEPT 并落入 Draft-6:
+
+| 条件 | 落点 |
+|---|---|
+| 1. exploratory_tainted 默认调门槛(非仅披露),override 须显式+入审计账 | §3.1b taint_effect 块 |
+| 2. **idea-family 污染记账(Round-2 最大新发现)**:factor_A 的全域在案结果启发 factor_B 的域选择 = post-hoc;ResearchIdeaTaint(族id/先验来源/informed_by/族内已观察域);QA 字段集自动归族为默认,自报仅补充;非声明域 formal 证据"不花 OOS 但花域选择新鲜度";族级 ledger 维度反 domain-lottery-farming | 新 §3.1c |
+| 3. max-stat 校准合同版本化(置换单位=调仓周期/统计量=门裁决量/保留嵌套与协方差/calibration_methodology_hash);**190×7 真实矩阵不得当 null**(修正本方 Round-1 表述错误——它含真 alpha 与选择偏差,只可估相关结构) | §3.3 校准合同 |
+| 4. F4 残留 resolve-but-label 清理:生产 resolver 对 evidence-only 域 **block**(非 warn 后放行),research override 不得进部署门 | §6-F4 + §7-风险4 |
+| 5. 删除薄域"<200 只附 CI"旧软护栏(CI 是诊断不是入场券) | §3.3 |
+
+另采纳 R2-C4 命名纪律:非声明域结果暴露为 `automated_formal_method_evidence@域`
+(claim_adjudicated=false),绝不暴露 `formal_pass@域`。
+
+**GPT 原话:"补上 idea-level taint 后,我会给 APPROVE。" Draft-6 已补齐全部条件。**
