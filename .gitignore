@@ -180,6 +180,13 @@ Knowledge/**/*.parquet
 Knowledge/**/*.csv
 Knowledge/**/*.xlsx
 Knowledge/**/*.pkl
+# CICC handbook raw artifacts — bulky source HTML + downloaded CDN images +
+# verification crops; the structured markdown (CICC_*.md) is the committed product.
+# Images are re-fetchable via workspace/scripts/cicc_fetch_images.py.
+Knowledge/**/_extracted/
+Knowledge/**/_verify/
+Knowledge/AI量化增强/*.html
+Knowledge/AI量化增强/*.pdf
 # Factor-expansion GPT 5.5 Pro review CSVs — tracked so the handoff artifact set is
 # complete in-repo (referenced by the factor_expansion proposal + README).
 !Knowledge/factor_expansion_gpt_review_new_candidates.csv
