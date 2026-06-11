@@ -1,7 +1,7 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:Draft-2,2026-06-11(Draft-1 + review 修订:universe 声明前移至 draft 必填,
-> 见 §3.1/§3.3 加粗修订与 §8-D5)。作者:Claude(本 session)。
+> 版本:Draft-3,2026-06-11(Draft-2 + 用户指令:**入目录即全域体检**——任何因子
+> 进 draft 时自动在全部 universe 上评估一遍,见 §3.1b)。作者:Claude(本 session)。
 > 覆盖:因子评估链路的 universe 一等公民化设计 + 配套执行计划(Phase D 收尾 → F → G)。
 > 已定事项与待批事项分列;待批事项见 §8,**review 时重点看 §3.3 与 §8**。
 
@@ -56,6 +56,19 @@
 **设计边界(review 已确认)**:universe 进的是**生命周期声明**,不进**计算身份**——
 表达式与 definition_hash 保持 universe 无关(P1:同一表达式在任何域评估,计算结果
 不变;目录是复用库,绑域会致条目爆炸 + definition_hash 去重语义崩坏)。
+
+### 3.1b 入目录即全域体检(**用户指令 2026-06-11,已定**)
+**任何因子进入 draft 时,自动在当前全部 universe 上各评估一遍**(unified discovery
+方法学 × 7 域,证据行按 (factor, universe) 落表)——出生证明即全域有效性档案。
+- **执行形态**:注册驱动 = 一个事务序列「写目录 + `intended_universe` 声明 →
+  sync_catalog → 自动触发 7 域 sweep」;声明时间戳天然先于全部矩阵证据,§3.1 的
+  时序锁由机械流程保证而非自觉
+- **守门**:daily QA 增加检查——任何现役 draft 在当前 methodology_hash 下缺任一
+  域的证据行 → WARNING(不阻断注册本身;评估失败可重跑,身份不悬置)
+- **成本**:面板计算共享、域掩码廉价,单因子 ×7 域为分钟级;批量注册(如 D5 的
+  ~24 个)合并为一次批跑
+- 与 §3.2 的关系:F2 的全目录矩阵 = 存量 190 的一次性回填;本条 = 新增量的常设
+  入口规则,两者用同一引擎与口径
 
 ### 3.2 discovery(自动,evidence-only)
 **升级:全目录 × 7 域矩阵评估**。`universe_id` 进 `EvalMethodology`(入
@@ -114,7 +127,7 @@ bar 不变(rank_icir 同号 + LS Sharpe>1.0,decile 口径)。
 
 | 阶段 | 内容 | 交付物 | 验收 | 依赖 |
 |---|---|---|---|---|
-| **D5**(下一步) | exact 档 ~24 复刻因子去重入目录 | catalog 新 draft + 映射表(CICC码↔目录id) | definition_hash 零冲突;PIT-safety 测试过 | 无 |
+| **D5**(下一步) | exact 档 ~24 复刻因子去重入目录(**首批走"入目录即全域体检"流程**:声明+注册+7域 sweep 一体) | catalog 新 draft + 映射表(CICC码↔目录id)+ 每因子 7 域证据 | definition_hash 零冲突;PIT-safety 测试过;7 域证据行齐 | F1(证据行带域) |
 | **D4** | 槽位字段注册(balancesheet q1、cashflow q4-q7、income op/attr_p q1-q3) | 批准 YAML + parity 测试 + 12 个 D 后缀因子补做 | parity 0-mismatch;真值对照 IC 容差内 | 无(与 D5 并行) |
 | **F1** | `universe_id` 进 EvalMethodology + 证据行 + store 列 | schema 变更 + 测试 | 旧行兼容读;新行带域 | 无 |
 | **F2** | 全目录 × 7 域 discovery 矩阵首跑 | (190+新增) × 7 域证据 | 分批断点续跑完成;矩阵入 dashboard | F1, D5 |
@@ -149,6 +162,7 @@ promotion 流程,有先例模板)。
 | D3 | discovery 矩阵 7 域全开 vs 先 4 域(all/300/500/1000) | 7 域全开(一次算完,边际成本低) | 计算时长 +75% |
 | D4 | "结果驱动换域须披露前域失败"写入门复核清单 | 批准(§5 纪律的执行抓手) | 门复核多一项 |
 | **D5**(Draft-2 新增,源自 review) | `intended_universe` 在 draft 注册时**必填**,声明须先于该因子任何矩阵证据;门声明域须等于 draft 声明(改域走披露流程) | **批准**(预注册时点前移,堵"看完矩阵再声明"的污染;计算身份仍 universe 无关) | sync_catalog/注册表加必填列;存量 190 因子批量回填 univ_all(其历史矩阵证据视为已看,任何改域均按 post-hoc 处理) |
+| ~~D6~~ | ~~入目录即全域体检~~ | **已由用户直接指令确定(2026-06-11),不再是决策点** — 见 §3.1b | 注册驱动一体化 + daily QA 缺域检查 |
 
 ---
 *Review 通过后:D5/D4/F1 立即并行开工;F3 待 D1 批准。*
