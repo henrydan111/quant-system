@@ -1,7 +1,9 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:Draft-3,2026-06-11(Draft-2 + 用户指令:**入目录即全域体检**——任何因子
-> 进 draft 时自动在全部 universe 上评估一遍,见 §3.1b)。作者:Claude(本 session)。
+> 版本:**Draft-4**,2026-06-11(Draft-3 + GPT 5.5 Pro cross-review Round-1 全部必改项,
+> 裁决见 [universe_plan_cross_review_round1_response.md](universe_plan_cross_review_round1_response.md))。
+> 关键升级:域生命周期改为 **FactorDomainClaim** 数据模型;评估入口探索台账;分层多重
+> 检验门槛(置换 max-stat 校准);approved 域三字段分离;薄域硬地板;血缘强制声明。
 > 覆盖:因子评估链路的 universe 一等公民化设计 + 配套执行计划(Phase D 收尾 → F → G)。
 > 已定事项与待批事项分列;待批事项见 §8,**review 时重点看 §3.3 与 §8**。
 
@@ -47,12 +49,35 @@
 每个 `$field` must be approved in field_status.yaml;新数据走 ledger→provider→注册,
 禁止手搓 PIT(lint 硬拦)。
 
-### 3.1 入目录 draft(不变 + 一处新增;**Draft-2 修订:声明必填**)
+### 3.0b 域生命周期数据模型:FactorDomainClaim(Draft-4,源自 review §7)
+
+因子定义与域声明彻底拆开:**FactorDefinition**(factor_id/expression/definition_hash,
+universe 无关,不变)+ **FactorDomainClaim** 表(域生命周期的事实源):
+
+```yaml
+FactorDomainClaim:
+  claim_id / factor_id / universe_id / hypothesis_id
+  pre_registered_at          # 时间戳,与探索台账交叉验证
+  status: draft_claim | candidate_claim | approved_claim | rejected_claim
+  multiplicity_adjustment    # 本 claim 适用的门槛层(§3.3 表)
+  lineage_taint_domains      # 继承自血缘的已观察域
+  gate_evidence_id / sealed_oos_id
+```
+
+"approved 的是 claim,不是 factor"。向后兼容:`factor.status` = 其 primary claim
+状态的**非规范化视图**(42 个调用点与既有写入门零迁移);7 域 discovery 矩阵永远是
+独立的 EvidenceMatrix,不进任何 claim 字段。
+
+### 3.1 入目录 draft(Draft-2 声明必填 + **Draft-4 血缘强制**)
 表达式 `Ref(...,1)` 包裹入 factor_library → `sync_catalog` → draft。
-**新增(必填):注册时声明 `intended_universe`**(可为列表:主域+备域;天然子域因子
-填 univ_all+覆盖说明)。声明时间戳**必须先于该因子的任何 discovery 矩阵证据**——
-这是预注册时点:声明(draft)→ 看矩阵(discovery)→ 申请门(formal)的时序锁,
-在源头掐死"先看 7 域分数再挑域声明"。
+**新增(必填):`primary_intended_universe`(单值)+ `secondary_universes`(可选,
+预先计入多重检验)**;天然子域因子填 univ_all+覆盖说明。声明时间戳**必须先于该因子的
+任何 discovery 矩阵证据**——时序锁:声明(draft)→ 看矩阵(discovery)→ 申请门(formal)。
+**Draft-4 血缘强制**:注册必须声明 `derived_from_factor_ids` +
+`component_selection_basis(pre_registered|matrix_selected|external_prior)`;凡引用旧因子/
+旧矩阵筛选结果的派生(含 clone:zscore 包裹、winsor 顺序微调等),**继承全部成分的
+已观察域 taint**;无血缘声明不得进 formal 门;QA 以字段集重叠+表达式规范化相似度
+检测疑似未披露血缘(clone 洗白与 composite 洗白的对冲)。
 **设计边界(review 已确认)**:universe 进的是**生命周期声明**,不进**计算身份**——
 表达式与 definition_hash 保持 universe 无关(P1:同一表达式在任何域评估,计算结果
 不变;目录是复用库,绑域会致条目爆炸 + definition_hash 去重语义崩坏)。
@@ -65,6 +90,12 @@
   时序锁由机械流程保证而非自觉
 - **守门**:daily QA 增加检查——任何现役 draft 在当前 methodology_hash 下缺任一
   域的证据行 → WARNING(不阻断注册本身;评估失败可重跑,身份不悬置)
+- **探索台账(Draft-4,review §1)**:所有 sanctioned 评估入口(batch_screening /
+  unified_eval / cicc_protocol 驱动)每次调用强制落账:expression_hash(规范化)×
+  字段集 × universe × methodology × 时间;无 claim 上下文的运行标 `exploratory_tainted`。
+  门复核时对声明域**自动检索**台账中相似表达式的历史评估并披露。诚实边界:裸 pandas
+  不可技术性禁止——本控制的目标是"干净声明可被验证",非"作弊不可能";本系统评估
+  几乎全走 sanctioned 工具,实际覆盖率高
 - **成本**:面板计算共享、域掩码廉价,单因子 ×7 域为分钟级;批量注册(如 D5 的
   ~24 个)合并为一次批跑
 - 与 §3.2 的关系:F2 的全目录矩阵 = 存量 190 的一次性回填;本条 = 新增量的常设
@@ -80,9 +111,26 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 ### 3.3 IS 门 draft → candidate(**待批的合同修改,§8-D1;Draft-2 修订**)
 - hypothesis 注册时**声明评估域**(prescription 增加 `universe_id`,缺省 univ_all
   = 完全向后兼容,现有 candidate 全部等价于"univ_all 域过门")
-- **Draft-2:门的声明域必须等于 draft 时的 `intended_universe`**;改域走显式变更
-  流程——披露已看过的该因子矩阵结果 + 新域的经济学先验,门复核可见;"声明晚于
+- **Draft-2:门的声明域必须等于 draft 时的 `primary_intended_universe`**;改域走显式
+  变更流程——披露已看过的该因子矩阵结果 + 新域的经济学先验,门复核可见;"声明晚于
   矩阵"的域自动标记 post-hoc,按更高怀疑等级复核
+- **Draft-4 分层门槛(review §2,"记账披露"升级为"bar 本身分层")**:
+
+  | 场景 | IS 门 bar |
+  |---|---|
+  | 单一事前 primary 域(声明先于一切证据,无血缘 taint) | 原 bar |
+  | 声明 k 个域(primary+secondary) | 按 k 调整(Holm 或置换 max-stat) |
+  | post-hoc 改域 / 声明晚于矩阵 | 7 域 family **置换 max-stat** 阈值,或只能 evidence-only |
+  | 存量回填 / clone / composite 派生 | 默认 7 域已观察,按 post-hoc 从严 |
+
+  校准:域间强相关(univ_all 包含其余),Bonferroni/7 过度修正——以 **block
+  permutation 经验零分布的 max-stat** 为准(190×7 回填矩阵即校准样本),Bonferroni
+  仅作无置换条件时的保守上界
+- **Draft-4 薄域硬地板(review §5;不满足 → 该域只能 discovery/evidence-only)**:
+  `valid_names_total_p10 ≥ 300 · min_decile_count_p10 ≥ 30 · 两腿 effective_N_p10 ≥ 25 ·
+  腿内行业集中度 p90 ≤ 35% · block bootstrap 单位 = 调仓周期(非 iid 日)`。
+  如实后果:univ_microcap 与 univ_liquid_top300 在地板线上为边缘域,逐因子覆盖率
+  决定能否承载 status-bearing claim
 - 门在声明域上跑 IS walk-forward(掩码后截面;heldout RankICIR + 符号一致性,bar 不变)
 - candidate 记录 `gated_universe`;dashboard 状态徽章旁标注域(如 `candidate@微盘`)
 - **多重检验纪律**:同一因子在第 2 个域申请过门 = 新检验,testing ledger 按
@@ -96,13 +144,21 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 (选集+域) 花。无代码改动,只是从"从未用过非全市场"变为"按声明域使用"。
 bar 不变(rank_icir 同号 + LS Sharpe>1.0,decile 口径)。
 
-### 3.5 approved + **有效域元数据(新增)**
-- approved 仍是单一状态(P6:不搞 7 域状态矩阵,避免 OOS 预算×7 的多重检验灾难)
-- 批准时写入 `validity_domains`:= {过门域} ∪ {discovery 矩阵中指标过同等 bar 的域,
-  标注 evidence-only}。两类来源区分清楚:**过门域是被 sealed-OOS 验证的;其余域是
-  描述性证据**,策略引用非过门域时自担风险并在 prescription 里显式确认
-- 策略/部署层按目标域过滤:`resolve` 时目标域 ∉ validity_domains → warn(不阻断,
-  resolve-but-label 原则)
+### 3.5 approved 的域语义(**Draft-4 重写:三字段分离,review §3;原 validity_domains 撤回**)
+原案把 OOS 验证域与 evidence-only 域混入同一 `validity_domains` 字段——中间层丢标签
+即等于绕过封条(`if target in validity_domains` 失败场景成立)。改为:
+
+```yaml
+approved_scope:
+  oos_validated_domains: [...]    # 唯一来源 = approved_claim;生产 resolver 只读这里
+domain_evidence:                   # 描述性矩阵投影;status_power=none;含 post_hoc 标记
+  descriptive_pass_domains: [...]
+deployment_policy:
+  allowed_domains: [...]           # 默认 = oos_validated_domains
+```
+
+evidence-only 域要进策略:prescription 显式 `allow_descriptive_domain_evidence: true`,
+且该策略默认 research-only,不得直接进部署门。
 
 ### 3.6 部署门(不变)
 事件驱动 + 真实成本 + 1× + 目标域(通常 univ_liquid_top300 或基准域)。
@@ -116,6 +172,12 @@ bar 不变(rank_icir 同号 + LS Sharpe>1.0,decile 口径)。
   归一化一律在**固定估计域**(univ_all 过剔除屏)上做,算一次、值唯一、
   universe 无关,definition_hash 锁定。逐股缩放(如 /自身市值)不涉横截面,
   纯 Layer-1,无此问题。
+- **Draft-4(review §4):`neutralization_weighting` 为显式哈希参数**——新建身份层
+  中性化因子默认 `sqrt_float_cap` WLS(等权回归的斜率被小票数量主导,残差在大盘/
+  流动域携带残留 size/流动性倾斜);存量 EW 因子不静默重定义,作命名变体
+  (`ew_univ_all` vs `sqrt_cap_univ_all`)。**门报告增加硬暴露审计**:因子值对
+  ln_mcap / 行业哑变量 / ADV / 上市年龄在**目标域内**的残留暴露须低于阈值,
+  否则不得声称 size/industry-neutral alpha。
 - **评估诊断层**:unified_eval 的"中性化 IC"在**评估域内**重新回归
   (EvalMethodology 旋钮,进 methodology_hash)——它回答"X 域内部扣掉 X 域
   自己的尺寸/行业结构后还剩多少信号",与上一条是**不同的问题**,名字必须分开。
@@ -172,12 +234,13 @@ promotion 流程,有先例模板)。
 
 | # | 决策 | 推荐 | 影响 |
 |---|---|---|---|
-| **D1** | IS 门接受事前声明域(§3.3) | **批准**(行业范式 P3;缺省 univ_all 零迁移) | factor_lifecycle 合同修改;出现域限定 candidate |
-| D2 | 有效域中 evidence-only 域允许策略引用(带 warn) | 批准(resolve-but-label 一致) | 否则策略只能用过门域,过严 |
-| D3 | discovery 矩阵 7 域全开 vs 先 4 域(all/300/500/1000) | 7 域全开(一次算完,边际成本低) | 计算时长 +75% |
-| D4 | "结果驱动换域须披露前域失败"写入门复核清单 | 批准(§5 纪律的执行抓手) | 门复核多一项 |
-| **D5**(Draft-2 新增,源自 review) | `intended_universe` 在 draft 注册时**必填**,声明须先于该因子任何矩阵证据;门声明域须等于 draft 声明(改域走披露流程) | **批准**(预注册时点前移,堵"看完矩阵再声明"的污染;计算身份仍 universe 无关) | sync_catalog/注册表加必填列;存量 190 因子批量回填 univ_all(其历史矩阵证据视为已看,任何改域均按 post-hoc 处理) |
-| ~~D6~~ | ~~入目录即全域体检~~ | **已由用户直接指令确定(2026-06-11),不再是决策点** — 见 §3.1b | 注册驱动一体化 + daily QA 缺域检查 |
+| **D1** | IS 门接受事前声明域(§3.3) | **批准(GPT 条件版)**:singleton primary 用原 bar;多域/post-hoc 按 §3.3 分层表调门槛;门前 7 域矩阵必须已存在 | factor_lifecycle 合同修改 + 分层 bar |
+| D2 | evidence-only 域策略引用 | **原案撤回(GPT §3)**:三字段分离;生产 resolver 只认 oos_validated_domains;显式 override 仅 research-only | §3.5 重写 |
+| D3 | discovery 矩阵 7 域全开 | 批准,**但全开即制造 observed-domain taint**——此后任何域选择按 7 域 family 处理 | 写入 §5 规则 |
+| D4 | 换域披露 | 批准并升级(GPT §1/§6):探索台账 + 血缘 + 成分选择全部机器可审计,不止 hypothesis 文本 | 台账 + lineage 字段 |
+| **D5** | draft 必填声明 | 批准修订版:`primary_intended_universe` 必填(单值)+ `secondary_universes` 预先计入多重检验;存量 190 回填 univ_all 且 7 域视为已观察;派生因子继承 taint | sync_catalog 必填列 + claim 表 |
+| ~~D6~~ | ~~入目录即全域体检~~ | **已由用户直接指令确定(2026-06-11)** — 见 §3.1b | 注册驱动一体化 + daily QA 缺域检查 |
+| **D7**(Draft-4 新增) | FactorDomainClaim 数据模型(§3.0b)取代散落的 gated_universe/validity_domains 元数据 | **批准建议**(GPT §7 部分采纳:claim 表为域生命周期事实源,factor.status=primary claim 视图,零迁移) | 注册表加 claim 表 |
 
 ---
 *Review 通过后:D5/D4/F1 立即并行开工;F3 待 D1 批准。*
