@@ -567,6 +567,16 @@ Total Columns: 4
 | `trade_date` | Trade Date | 交易日期 |
 | `weight` | Weight | 权重 |
 
+**Vendor quirk (verified 2026-06-11)**: Tushare `index_weight` returns EMPTY for `000300.SH`
+before ~2016; the SZSE mirror code `399300.SZ` serves the SAME index (member sets and weights
+verified identical on 2024-01-31) back to 2008-01, with DAILY snapshots pre-2016 (monthly after).
+The 2008-01..2015-12 CSI300 hole was backfilled 2026-06-11 via
+`scripts/backfill_index_weights.py --index 399300.SZ --relabel-as 000300.SH` (rows stored under
+the canonical `000300.SH`). Snapshot cadence is otherwise monthly (doc_id=96) — daily constituent
+data does not exist upstream post-2016; consumers as-of carry-forward (see
+`src/data_infra/universe_membership.py` for the PIT semantics and the semi-annual-rebalance
+staleness note).
+
 ### industry_sw2021 (申万行业2021)
 Total Columns: 7
 
