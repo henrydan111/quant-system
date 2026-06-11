@@ -1,6 +1,7 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:Draft-1,2026-06-11。作者:Claude(本 session)。
+> 版本:Draft-2,2026-06-11(Draft-1 + review 修订:universe 声明前移至 draft 必填,
+> 见 §3.1/§3.3 加粗修订与 §8-D5)。作者:Claude(本 session)。
 > 覆盖:因子评估链路的 universe 一等公民化设计 + 配套执行计划(Phase D 收尾 → F → G)。
 > 已定事项与待批事项分列;待批事项见 §8,**review 时重点看 §3.3 与 §8**。
 
@@ -46,10 +47,15 @@
 每个 `$field` must be approved in field_status.yaml;新数据走 ledger→provider→注册,
 禁止手搓 PIT(lint 硬拦)。
 
-### 3.1 入目录 draft(不变 + 一处新增)
+### 3.1 入目录 draft(不变 + 一处新增;**Draft-2 修订:声明必填**)
 表达式 `Ref(...,1)` 包裹入 factor_library → `sync_catalog` → draft。
-**新增:catalog 元数据可选 `intended_universe`**(因子设计时的目标域假设,如反转类
-声明 univ_csi1000;缺省 = univ_all)。仅是研究意图记录,不影响计算。
+**新增(必填):注册时声明 `intended_universe`**(可为列表:主域+备域;天然子域因子
+填 univ_all+覆盖说明)。声明时间戳**必须先于该因子的任何 discovery 矩阵证据**——
+这是预注册时点:声明(draft)→ 看矩阵(discovery)→ 申请门(formal)的时序锁,
+在源头掐死"先看 7 域分数再挑域声明"。
+**设计边界(review 已确认)**:universe 进的是**生命周期声明**,不进**计算身份**——
+表达式与 definition_hash 保持 universe 无关(P1:同一表达式在任何域评估,计算结果
+不变;目录是复用库,绑域会致条目爆炸 + definition_hash 去重语义崩坏)。
 
 ### 3.2 discovery(自动,evidence-only)
 **升级:全目录 × 7 域矩阵评估**。`universe_id` 进 `EvalMethodology`(入
@@ -58,9 +64,12 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 证据行新增 `universe_id` 列;dashboard 因子详情 = 7 域有效性档案 + 域切换。
 **产物:全目录"因子×域"有效性矩阵**——P2 的落地。状态照旧不动。
 
-### 3.3 IS 门 draft → candidate(**待批的合同修改,§8-D1**)
+### 3.3 IS 门 draft → candidate(**待批的合同修改,§8-D1;Draft-2 修订**)
 - hypothesis 注册时**声明评估域**(prescription 增加 `universe_id`,缺省 univ_all
   = 完全向后兼容,现有 candidate 全部等价于"univ_all 域过门")
+- **Draft-2:门的声明域必须等于 draft 时的 `intended_universe`**;改域走显式变更
+  流程——披露已看过的该因子矩阵结果 + 新域的经济学先验,门复核可见;"声明晚于
+  矩阵"的域自动标记 post-hoc,按更高怀疑等级复核
 - 门在声明域上跑 IS walk-forward(掩码后截面;heldout RankICIR + 符号一致性,bar 不变)
 - candidate 记录 `gated_universe`;dashboard 状态徽章旁标注域(如 `candidate@微盘`)
 - **多重检验纪律**:同一因子在第 2 个域申请过门 = 新检验,testing ledger 按
@@ -139,6 +148,7 @@ promotion 流程,有先例模板)。
 | D2 | 有效域中 evidence-only 域允许策略引用(带 warn) | 批准(resolve-but-label 一致) | 否则策略只能用过门域,过严 |
 | D3 | discovery 矩阵 7 域全开 vs 先 4 域(all/300/500/1000) | 7 域全开(一次算完,边际成本低) | 计算时长 +75% |
 | D4 | "结果驱动换域须披露前域失败"写入门复核清单 | 批准(§5 纪律的执行抓手) | 门复核多一项 |
+| **D5**(Draft-2 新增,源自 review) | `intended_universe` 在 draft 注册时**必填**,声明须先于该因子任何矩阵证据;门声明域须等于 draft 声明(改域走披露流程) | **批准**(预注册时点前移,堵"看完矩阵再声明"的污染;计算身份仍 universe 无关) | sync_catalog/注册表加必填列;存量 190 因子批量回填 univ_all(其历史矩阵证据视为已看,任何改域均按 post-hoc 处理) |
 
 ---
 *Review 通过后:D5/D4/F1 立即并行开工;F3 待 D1 批准。*
