@@ -1,9 +1,10 @@
 # 因子 × Universe 耦合评估:设计与执行方案(供 Review)
 
-> 版本:**Draft-4**,2026-06-11(Draft-3 + GPT 5.5 Pro cross-review Round-1 全部必改项,
-> 裁决见 [universe_plan_cross_review_round1_response.md](universe_plan_cross_review_round1_response.md))。
-> 关键升级:域生命周期改为 **FactorDomainClaim** 数据模型;评估入口探索台账;分层多重
-> 检验门槛(置换 max-stat 校准);approved 域三字段分离;薄域硬地板;血缘强制声明。
+> 版本:**Draft-5**,2026-06-11(Draft-4 + 用户指令:**评估永远全域,无可选项**——
+> discovery 与 formal 的每次评估一律覆盖全部 universe;"声明"只决定哪个域的 claim
+> 享受未调整门槛,绝不决定评估范围)。Draft-4 内容:GPT 5.5 Pro Round-1 全部必改项,
+> 裁决见 [universe_plan_cross_review_round1_response.md](universe_plan_cross_review_round1_response.md)
+> (FactorDomainClaim 模型/探索台账/分层门槛/三字段分离/薄域硬地板/血缘强制)。
 > 覆盖:因子评估链路的 universe 一等公民化设计 + 配套执行计划(Phase D 收尾 → F → G)。
 > 已定事项与待批事项分列;待批事项见 §8,**review 时重点看 §3.3 与 §8**。
 
@@ -22,7 +23,7 @@
 |---|---|---|
 | P1 | 因子 Layer-1 全市场计算,Layer-2 域掩码,绝不先过滤后算 | Barra 估计域/投资域分离;已是本仓铁律(§8.1) |
 | P2 | 每因子 × 每域出有效性档案,矩阵常驻可见 | 卖方金工(中金/华泰)按域出表 |
-| P3 | 正式评估的 universe **事前声明**,声明域=评估域;扫多域则检验次数按域累计 | WorldQuant:universe 是 alpha 身份 |
+| P3 | **评估永远全域**(discovery 与 formal 每次评估覆盖全部 universe,无可选);事前声明只决定哪个域的 **claim** 用未调整门槛 | 用户指令 + WorldQuant 声明纪律(作用于 claim 而非评估范围) |
 | P4 | 策略按目标域(基准)过滤可用因子 | 指数增强:基准即域 |
 | P5 | 对外评估分类只有 discovery / formal 两类(refresh 已退役) | 用户指令 2026-06-11 |
 | P6 | 自动证据永不驱动状态(`formal_evidence_eligible` 承重墙);OOS 单发花封条 | 本仓既有治理,不动 |
@@ -70,9 +71,11 @@ FactorDomainClaim:
 
 ### 3.1 入目录 draft(Draft-2 声明必填 + **Draft-4 血缘强制**)
 表达式 `Ref(...,1)` 包裹入 factor_library → `sync_catalog` → draft。
-**新增(必填):`primary_intended_universe`(单值)+ `secondary_universes`(可选,
-预先计入多重检验)**;天然子域因子填 univ_all+覆盖说明。声明时间戳**必须先于该因子的
-任何 discovery 矩阵证据**——时序锁:声明(draft)→ 看矩阵(discovery)→ 申请门(formal)。
+**新增(必填):`primary_intended_universe`(单值)+ `secondary_universes`(可预先声明
+多个,均预先计入多重检验)**;天然子域因子填 univ_all+覆盖说明。声明时间戳**必须先于
+该因子的任何评估证据**——时序锁:声明(draft)→ 看全域矩阵(discovery)→ 申请门(formal)。
+**Draft-5 澄清:声明不限制评估范围**——评估(discovery 与 formal)永远全域;声明只决定
+哪个域的 claim 在门上用未调整 bar(§3.3)。
 **Draft-4 血缘强制**:注册必须声明 `derived_from_factor_ids` +
 `component_selection_basis(pre_registered|matrix_selected|external_prior)`;凡引用旧因子/
 旧矩阵筛选结果的派生(含 clone:zscore 包裹、winsor 顺序微调等),**继承全部成分的
@@ -108,12 +111,18 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
 证据行新增 `universe_id` 列;dashboard 因子详情 = 7 域有效性档案 + 域切换。
 **产物:全目录"因子×域"有效性矩阵**——P2 的落地。状态照旧不动。
 
-### 3.3 IS 门 draft → candidate(**待批的合同修改,§8-D1;Draft-2 修订**)
-- hypothesis 注册时**声明评估域**(prescription 增加 `universe_id`,缺省 univ_all
-  = 完全向后兼容,现有 candidate 全部等价于"univ_all 域过门")
-- **Draft-2:门的声明域必须等于 draft 时的 `primary_intended_universe`**;改域走显式
-  变更流程——披露已看过的该因子矩阵结果 + 新域的经济学先验,门复核可见;"声明晚于
-  矩阵"的域自动标记 post-hoc,按更高怀疑等级复核
+### 3.3 IS 门 draft → candidate(**待批的合同修改,§8-D1;Draft-5 重构:全域评估+声明域裁决**)
+- **Draft-5:每次门运行一律计算全部 7 域的 IS walk-forward 报告**(同引擎同口径,
+  无可选项)。**评估全域,裁决按声明**:
+  - 声明域(= draft 时的 `primary_intended_universe`)的结果用**原 bar** 裁决
+    claim → candidate_claim
+  - 其余 6 域的结果**自动落为 formal 证据**(自动类,status_power=none)——将来任何
+    对这些域的 claim 申请天然属于 post-hoc(§3.3 分层表 max-stat 档),且其当时结果
+    已在案,**披露由系统结构自动完成,不依赖研究者自觉**(GPT §1/§4 的最强对冲)
+  - hypothesis prescription 的 `universe_id` 缺省 univ_all = 完全向后兼容,现有
+    candidate 全部等价于"univ_all 域过门"
+- 改声明域走显式变更流程——全域 formal 结果本就在案,变更申请须给新域经济学先验,
+  按 post-hoc 档复核
 - **Draft-4 分层门槛(review §2,"记账披露"升级为"bar 本身分层")**:
 
   | 场景 | IS 门 bar |
@@ -131,8 +140,9 @@ methodology_hash,每域一个哈希);unified_eval 每因子产出 7 行域限定
   腿内行业集中度 p90 ≤ 35% · block bootstrap 单位 = 调仓周期(非 iid 日)`。
   如实后果:univ_microcap 与 univ_liquid_top300 在地板线上为边缘域,逐因子覆盖率
   决定能否承载 status-bearing claim
-- 门在声明域上跑 IS walk-forward(掩码后截面;heldout RankICIR + 符号一致性,bar 不变)
-- candidate 记录 `gated_universe`;dashboard 状态徽章旁标注域(如 `candidate@微盘`)
+- 判据不变:heldout RankICIR + 符号一致性(每域在掩码后截面上计算)
+- candidate 记录 `gated_universe`;dashboard 状态徽章旁标注域(如 `candidate@微盘`),
+  详情卡展示全部 7 域的门运行结果(声明域高亮,其余标"在案,未裁决")
 - **多重检验纪律**:同一因子在第 2 个域申请过门 = 新检验,testing ledger 按
   (factor, universe) 记账;**禁止结果驱动换域**(在 A 域失败后换 B 域申请,须在
   hypothesis 里披露 A 域的失败记录,门复核时可见)
