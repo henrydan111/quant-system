@@ -53,15 +53,20 @@ def approved_reference_sets() -> tuple[list, list]:
     return stable, current
 
 
-def build_frozen_methodology(*, is_start: str, is_end: str) -> EvalMethodology:
-    """The ONE construction both drivers must use (identical hash by construction)."""
+def build_frozen_methodology(*, is_start: str, is_end: str,
+                             universe_id: str = "univ_all") -> EvalMethodology:
+    """The ONE construction all drivers must use (identical hash by construction).
+
+    F2: ``universe_id`` scopes the evaluation domain (one methodology hash per
+    domain); the default keeps every pre-F2 caller bit-identical.
+    """
     stable, current = approved_reference_sets()
     from src.alpha_research.factor_registry.store import FactorRegistryStore
     def_hashes = FactorRegistryStore(PROJECT_ROOT / "data" / "factor_registry") \
         .current_catalog_definition_hashes()
     ref_members = sorted(set(current) | set(PROVISIONAL_FACTORS))
     return EvalMethodology(
-        is_start=is_start, is_end=is_end,
+        is_start=is_start, is_end=is_end, universe_id=universe_id,
         reference_set_stable=tuple(stable), reference_set_current=tuple(current),
         provisional_factors=tuple(p for p in PROVISIONAL_FACTORS if p in current),
         code_commit=_git_head(),

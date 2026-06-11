@@ -25,8 +25,17 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PY = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
-DRIVER = PROJECT_ROOT / "workspace" / "scripts" / "unified_eval_full_run.py"
-OUTDIR = PROJECT_ROOT / "workspace" / "outputs" / "unified_eval"
+import argparse
+
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--driver", default="unified_eval_full_run.py",
+                 help="driver script under workspace/scripts (F2: unified_eval_universe_matrix.py)")
+_ap.add_argument("--outdir", default="unified_eval", help="log dir under workspace/outputs")
+_ap.add_argument("--batch-size", default="10")
+_ARGS = _ap.parse_args()
+
+DRIVER = PROJECT_ROOT / "workspace" / "scripts" / _ARGS.driver
+OUTDIR = PROJECT_ROOT / "workspace" / "outputs" / _ARGS.outdir
 RUN_LOG = OUTDIR / "full_run.log"
 SUP_LOG = OUTDIR / "supervisor.log"
 MAX_ATTEMPTS = 80
@@ -44,7 +53,7 @@ def main() -> int:
     for attempt in range(1, MAX_ATTEMPTS + 1):
         _log(f"attempt {attempt}: launching driver")
         with RUN_LOG.open("a", encoding="utf-8") as out:
-            rc = subprocess.run([str(PY), str(DRIVER), "--batch-size", "10"],
+            rc = subprocess.run([str(PY), str(DRIVER), "--batch-size", str(_ARGS.batch_size)],
                                 cwd=str(PROJECT_ROOT), stdout=out, stderr=out).returncode
         _log(f"attempt {attempt}: driver exit={rc}")
         if rc == 0:

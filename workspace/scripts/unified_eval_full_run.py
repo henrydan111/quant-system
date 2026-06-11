@@ -99,20 +99,24 @@ def _f(v):
         return None
 
 
-def _done_factors() -> set:
-    if not RESULTS_JSONL.exists():
+def _done_factors(results_path=None) -> set:
+    path = results_path or RESULTS_JSONL
+    if not path.exists():
         return set()
     done = set()
-    for line in RESULTS_JSONL.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         try:
-            done.add(json.loads(line)["factor"])
+            rec = json.loads(line)
+            done.add((rec["factor"], rec.get("universe_id")) if "universe_id" in rec
+                     else rec["factor"])
         except Exception:  # noqa: BLE001
             continue
     return done
 
 
-def _append_result(rec: dict) -> None:
-    with RESULTS_JSONL.open("a", encoding="utf-8") as fh:
+def _append_result(rec: dict, results_path=None) -> None:
+    path = results_path or RESULTS_JSONL
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, default=lambda x: None) + "\n")
 
 
@@ -163,8 +167,15 @@ def _compute_batch(names: list, include_adj: bool) -> pd.DataFrame:
 
 
 def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
-    """Evaluate `names` (columns of batch_df) and append one JSONL record each."""
+    """Evaluate `names` (columns of batch_df) and append one JSONL record each.
+
+    F2: ctx may carry ``results_path`` (output JSONL override) and ``record_extra``
+    (dict merged into every record — the universe-matrix driver stamps
+    ``universe_id`` this way). Defaults preserve the original single-domain run.
+    """
     method = ctx["method"]
+    results_path = ctx.get("results_path")
+    record_extra = ctx.get("record_extra") or {}
     # heldout walk-forward for the whole batch in one pass
     windowed = build_is_windowed_panel(batch_df[names], ctx["adj_close"], is_end=TIME_SPLIT.is_end,
                                        horizon=HORIZON)
@@ -220,7 +231,11 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
 
         turn = one_way_turnover(f_raw, rebalance_dates=ctx["rebal_schedule"], top_q=method.top_q,
                                 trading_days=method.trading_days, min_names=method.turnover_min_names)
-        cov = float(f_raw.notna().mean())
+        # F2: in a domain run the denominator must be the DOMAIN breadth, not the full
+        # panel (a factor covering 80% of csi300 must not read cov=0.07). ctx carries
+        # the total in-domain cells count for the masked panel; default = full panel.
+        domain_cells = ctx.get("domain_total_cells")
+        cov = float(f_raw.notna().sum() / domain_cells) if domain_cells else float(f_raw.notna().mean())
         cov_tier = ("full" if cov >= method.coverage_full_min
                     else ("broad" if cov >= method.coverage_broad_min else "sub"))
         decay = leak_safe_decay_ic_vector(f_raw, is_end=TIME_SPLIT.is_end,
@@ -264,7 +279,7 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
 
         reg = ctx["registry"].get(fid, {})
         _append_result({
-            "factor": fid, "field_eligible": True,
+            "factor": fid, "field_eligible": True, **record_extra,
             "registry_status": reg.get("status"), "factor_kind": reg.get("kind"),
             "category": reg.get("category"), "methodology_hash": method.methodology_hash,
             "heldout_rank_icir": _f(wf_rows.get(fid, {}).get("heldout_rank_icir")),
@@ -300,13 +315,15 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
             "long_leg_excess_ann_csi500": _f(legs.get("CSI500", {}).get("excess_ann")),
             "long_leg_ir_proxy_is_csi500": _f(legs.get("CSI500", {}).get("ir_proxy_is")),
             "eval_seconds": round(time.time() - t0, 1),
-        })
-        log.info("done %s (%.0fs)", fid, time.time() - t0)
+        }, results_path)
+        log.info("done %s%s (%.0fs)", fid,
+                 f"@{record_extra.get('universe_id')}" if record_extra.get('universe_id') else "",
+                 time.time() - t0)
       except Exception as exc:  # noqa: BLE001
         log.error("FAILED %s: %s", fid, exc)
         traceback.print_exc()
-        _append_result({"factor": fid, "field_eligible": True,
-                        "error": f"{type(exc).__name__}: {exc}"})
+        _append_result({"factor": fid, "field_eligible": True, **record_extra,
+                        "error": f"{type(exc).__name__}: {exc}"}, results_path)
 
 
 def main() -> int:

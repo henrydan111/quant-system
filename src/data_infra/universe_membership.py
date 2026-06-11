@@ -35,7 +35,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from data_infra.provider_metadata import ts_code_to_qlib
+try:
+    from src.data_infra.provider_metadata import ts_code_to_qlib
+except ImportError:  # src-on-path callers (tests/data_infra style)
+    from data_infra.provider_metadata import ts_code_to_qlib
 
 logger = logging.getLogger(__name__)
 
