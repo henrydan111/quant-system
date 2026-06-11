@@ -76,9 +76,14 @@ class EvalMethodology:
     """
     is_start: str
     is_end: str
-    reference_set_stable: tuple    # approved factor ids EXCLUDING provisionals — the DEFAULT base
-    reference_set_current: tuple   # approved incl. provisionals (shown, flagged)
-    provisional_factors: tuple     # the canary-contingent approvals (e.g. report_rc eps_diffusion)
+    # F1a (universe plan Draft-7 §3.2): the evaluation domain. Every metric in a run
+    # is computed on THIS universe's masked cross-section; one methodology_hash per
+    # domain. "univ_all" = the historical full-market behavior (backward compatible:
+    # all pre-F1 evidence rows are semantically univ_all).
+    universe_id: str = "univ_all"
+    reference_set_stable: tuple = ()   # approved factor ids EXCLUDING provisionals — the DEFAULT base
+    reference_set_current: tuple = ()  # approved incl. provisionals (shown, flagged)
+    provisional_factors: tuple = ()    # the canary-contingent approvals (e.g. report_rc eps_diffusion)
     style_controls_v1: tuple = STYLE_CONTROLS_V1
     hac_lags: int = 40
     hac_lag_sensitivity: tuple = (20, 40, 60)

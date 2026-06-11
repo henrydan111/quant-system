@@ -126,6 +126,7 @@ FACTOR_EVIDENCE_COLUMNS = [
     # formal_evidence_eligible). These columns carry the unified metric set; the full record
     # (decay vector, CIs, signed residuals, …) is packed in unified_metrics_json.
     "methodology_hash",
+    "universe_id",
     "mean_rank_ic_hac_t",
     "neutralized_rank_icir",
     "neutralized_hac_t",
@@ -247,6 +248,7 @@ FACTOR_EVIDENCE_SCHEMA = {
     "calendar_policy_id": "string",
     # 2026-06-10 unified formal-eval merge (see FACTOR_EVIDENCE_COLUMNS note)
     "methodology_hash": "string",
+    "universe_id": "string",
     "mean_rank_ic_hac_t": "Float64",
     "neutralized_rank_icir": "Float64",
     "neutralized_hac_t": "Float64",
@@ -578,6 +580,9 @@ class FactorEvidenceRecord:
     calendar_policy_id: str = ""
     # 2026-06-10 unified formal-eval merge (defaults keep existing constructors unchanged)
     methodology_hash: str = ""
+    # F1b (universe plan §3.2): the evaluation domain of this evidence row.
+    # Empty/null on legacy rows == semantically univ_all (pre-F1 full-market runs).
+    universe_id: str = ""
     mean_rank_ic_hac_t: float | None = None
     neutralized_rank_icir: float | None = None
     neutralized_hac_t: float | None = None
@@ -1252,6 +1257,7 @@ class FactorRegistryStore:
                 source_path=str(source_path), source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
                 methodology_hash=str(methodology_hash),
+                universe_id=_coerce_string(rec.get("universe_id")) or "univ_all",
                 mean_rank_ic_hac_t=_coerce_float(rec.get("mean_rank_ic_hac_t")),
                 neutralized_rank_icir=_coerce_float(rec.get("neutralized_rank_icir")),
                 neutralized_hac_t=_coerce_float(rec.get("neutralized_hac_t")),
@@ -1272,14 +1278,20 @@ class FactorRegistryStore:
             ))
             attached.append(fid)
         if evidence_rows:
-            new_keys = {(run_id, r.factor_id, int(r.version)) for r in evidence_rows}
+            # F1b: replace key includes universe_id so per-domain imports of the SAME
+            # run are additive (a csi300 import must not delete the univ_all rows).
+            # Legacy rows with empty universe_id coerce to univ_all for keying.
+            new_keys = {(run_id, r.factor_id, int(r.version), r.universe_id or "univ_all")
+                        for r in evidence_rows}
             existing = self.factor_evidence
             if not existing.empty:
+                has_univ = "universe_id" in existing.columns
                 keep = ~existing.apply(
                     lambda x: (
                         _coerce_string(x["run_id"]),
                         _coerce_string(x["factor_id"]),
                         _coerce_int(x["version"]),
+                        (_coerce_string(x["universe_id"]) if has_univ else "") or "univ_all",
                     ) in new_keys,
                     axis=1,
                 )
