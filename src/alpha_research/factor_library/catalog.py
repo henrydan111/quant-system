@@ -148,6 +148,71 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['qual_q_net_margin'] = "Ref($n_income_attr_p_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
     catalog['qual_q_gross_margin'] = "(Ref($revenue_sq_q0, 1) - Ref($oper_cost_sq_q0, 1)) / Ref($revenue_sq_q0, 1)"
     catalog['qual_q_op_margin'] = "Ref($operate_profit_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
+
+    # ═══════════════════════════════════════════════════════════════
+    # CICC handbook replication batch (Phase D5, 2026-06-12) — 18 factors.
+    # Constructions truth-certified against the 中金基本面手册 published tables
+    # (exact-tier non-size IC 99% within tolerance over 2010-2022 × 3 domains;
+    # workspace/research/cicc_replication/PHASE_D_ROUND1_REPORT.md). These are PIT
+    # statement-slot TTM constructions — materially DIFFERENT from the vendor
+    # cumulative-period indicator factors already in the catalog (qual_roa, val_ep_ttm
+    # etc.): the Phase-C turnover fingerprint showed level constructions differ ~2× in
+    # cross-section refresh cadence. Dedup mapping (CICC code ↔ catalog id, incl. the
+    # 7 SKIPPED rank-identical codes): workspace/research/cicc_replication/D5_REGISTRATION_MAP.md.
+    # NI_TTM uses n_income (incl. minority — attr_p has no q1-q3 slots; recorded caveat).
+    # All claims on univ_all/csi300/csi500 are TAINTED post-hoc by construction (their
+    # 2010-2022 IS evidence was observed in the replication batch before registration —
+    # recorded in the TaintLedger; honest class per universe plan Draft-7).
+    _ni_ttm = ("(Ref($n_income_sq_q0, 1) + Ref($n_income_sq_q1, 1)"
+               " + Ref($n_income_sq_q2, 1) + Ref($n_income_sq_q3, 1))")
+    _ocf_ttm = ("(Ref($n_cashflow_act_sq_q0, 1) + Ref($n_cashflow_act_sq_q1, 1)"
+                " + Ref($n_cashflow_act_sq_q2, 1) + Ref($n_cashflow_act_sq_q3, 1))")
+    _rev_ttm = ("(Ref($total_revenue_sq_q0, 1) + Ref($total_revenue_sq_q1, 1)"
+                " + Ref($total_revenue_sq_q2, 1) + Ref($total_revenue_sq_q3, 1))")
+    _rev_ttm_prev = ("(Ref($total_revenue_sq_q1, 1) + Ref($total_revenue_sq_q2, 1)"
+                     " + Ref($total_revenue_sq_q3, 1) + Ref($total_revenue_sq_q4, 1))")
+    _cost_ttm = ("(Ref($oper_cost_sq_q0, 1) + Ref($oper_cost_sq_q1, 1)"
+                 " + Ref($oper_cost_sq_q2, 1) + Ref($oper_cost_sq_q3, 1))")
+    _cost_ttm_prev = ("(Ref($oper_cost_sq_q1, 1) + Ref($oper_cost_sq_q2, 1)"
+                      " + Ref($oper_cost_sq_q3, 1) + Ref($oper_cost_sq_q4, 1))")
+    _capex_ttm = ("(Ref($c_pay_acq_const_fiolta_sq_q0, 1) + Ref($c_pay_acq_const_fiolta_sq_q1, 1)"
+                  " + Ref($c_pay_acq_const_fiolta_sq_q2, 1) + Ref($c_pay_acq_const_fiolta_sq_q3, 1))")
+    _avg_assets = "((Ref($total_assets_q0, 1) + Ref($total_assets_q4, 1)) / 2)"
+    _mv_yuan = "(Ref($total_mv, 1) * 10000)"
+    # 盈利/营运 levels (CICC: CFOA, ROA_TTM, NPM_TTM, AT, INVT, RAT, GPMD)
+    catalog['qual_cfoa_ttm'] = f"{_ocf_ttm} / Ref($total_assets_q0, 1)"
+    catalog['qual_roa_ttm'] = f"{_ni_ttm} / Ref($total_assets_q0, 1)"
+    catalog['qual_npm_ttm'] = f"{_ni_ttm} / {_rev_ttm}"
+    catalog['qual_at_ttm'] = f"{_rev_ttm} / {_avg_assets}"
+    catalog['qual_invt_ttm'] = (f"{_cost_ttm} / ((Ref($inventories_q0, 1)"
+                                " + Ref($inventories_q4, 1)) / 2)")
+    catalog['qual_rat_ttm'] = (f"{_rev_ttm} / ((Ref($accounts_receiv_q0, 1)"
+                               " + Ref($accounts_receiv_q4, 1)) / 2)")
+    catalog['qual_gpmd_ttm'] = (f"(1 - {_cost_ttm}/{_rev_ttm})"
+                                f" - (1 - {_cost_ttm_prev}/{_rev_ttm_prev})")
+    # 盈余/安全 (CICC: CSR, CCR)
+    catalog['qual_csr'] = "Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
+    catalog['qual_ccr_ttm'] = f"{_ocf_ttm} / Ref($total_cur_liab_q0, 1)"
+    # 成长 single-quarter LEVELS (CICC: NP_Q_YOY/NP_QOQ/OP_Q_YOY/OR_Q_YOY/TA_YOY) — the
+    # catalog so far held only their ACCELERATIONS (grow_*_yoy_accel_q = Delta of these).
+    # Abs() denominators per the CICC convention (negative bases flip a plain ratio).
+    catalog['grow_ni_attr_q_yoy'] = ("(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1))"
+                                     " / Abs(Ref($n_income_attr_p_sq_q4, 1))")
+    catalog['grow_ni_q_qoq'] = ("(Ref($n_income_sq_q0, 1) - Ref($n_income_sq_q1, 1))"
+                                " / Abs(Ref($n_income_sq_q1, 1))")
+    catalog['grow_op_q_yoy'] = ("(Ref($operate_profit_sq_q0, 1) - Ref($operate_profit_sq_q4, 1))"
+                                " / Abs(Ref($operate_profit_sq_q4, 1))")
+    catalog['grow_or_q_yoy'] = ("(Ref($total_revenue_sq_q0, 1) - Ref($total_revenue_sq_q4, 1))"
+                                " / Abs(Ref($total_revenue_sq_q4, 1))")
+    catalog['grow_total_assets_yoy'] = ("(Ref($total_assets_q0, 1) - Ref($total_assets_q4, 1))"
+                                        " / Abs(Ref($total_assets_q4, 1))")
+    # 估值 PIT-TTM (CICC: EP_TTM/OCFP_TTM/FCFP_TTM) — keep loss-makers ranked lowest
+    # (1/pe_ttm drops them as NaN); TTM vs the vendor's cumulative-period basis.
+    catalog['val_ep_ttm_pit'] = f"{_ni_ttm} / {_mv_yuan}"
+    catalog['val_ocfp_ttm_pit'] = f"{_ocf_ttm} / {_mv_yuan}"
+    catalog['val_fcfp_ttm'] = f"({_ocf_ttm} - {_capex_ttm}) / {_mv_yuan}"
+    # 规模结构 (CICC: FC_MC 流通占比 — a bounded ratio, distinct from the ln-size levels)
+    catalog['size_float_ratio'] = "Ref($circ_mv, 1) / Ref($total_mv, 1)"
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 
