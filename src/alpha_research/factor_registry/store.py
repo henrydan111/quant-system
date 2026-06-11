@@ -1204,8 +1204,8 @@ class FactorRegistryStore:
         refresh sweep (the full-catalog unified evaluation). Same metric口径 and engine as
         the gated ``factor_lifecycle`` runs — the taxonomy is two-class (discovery = screening
         / formal = lifecycle methodology) with the gated/ungated split carried by
-        ``formal_evidence_eligible``: refresh rows are ``run_type='factor_lifecycle_refresh'``,
-        ``evidence_class='unified_refresh'``, ``formal_evidence_eligible=False`` — they can
+        ``formal_evidence_eligible``: automated rows are ``run_type='factor_lifecycle_auto'``,
+        ``evidence_class='formal_auto'``, ``formal_evidence_eligible=False`` — they can
         NEVER support a status change (the gated orchestrator run + human gate remains the
         only path; resolve-but-label). Definition-bound FAIL-CLOSED exactly like
         :meth:`record_lifecycle_evidence` (drifted / catalog-unknown factors are skipped).
@@ -1237,7 +1237,7 @@ class FactorRegistryStore:
                 skipped_drift.append(fid)
                 continue
             evidence_rows.append(FactorEvidenceRecord(
-                run_id=run_id, run_type="factor_lifecycle_refresh", factor_id=fid,
+                run_id=run_id, run_type="factor_lifecycle_auto", factor_id=fid,
                 version=int(row["version"]), is_current_at_import=True,
                 grade="", rank_icir_5d=None, mean_rank_ic_5d=_coerce_float(rec.get("mean_rank_ic")),
                 ic_hit_rate_5d=None, monotonic=None, best_decay_horizon=None,
@@ -1248,7 +1248,7 @@ class FactorRegistryStore:
                 sign_consistency=_coerce_float(rec.get("sign_consistency")),
                 oos_ls_sharpe=None, retain_pct=None, lo_excess_ann_gross=None,
                 lo_sharpe_gross=None, lo_hit=None,
-                evidence_class="unified_refresh", formal_evidence_eligible=False,
+                evidence_class="formal_auto", formal_evidence_eligible=False,
                 source_path=str(source_path), source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
                 methodology_hash=str(methodology_hash),
@@ -1297,6 +1297,10 @@ class FactorRegistryStore:
             "skipped_unknown": sorted(skipped_unknown),
         }
 
+
+    # 2026-06-11 directive: the "refresh" label is retired — external taxonomy is
+    # discovery / formal only. New rows write run_type='factor_lifecycle_auto'.
+    record_formal_auto_evidence = record_formal_refresh_evidence
     def set_status(
         self,
         *,

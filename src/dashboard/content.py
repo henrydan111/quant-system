@@ -339,15 +339,20 @@ def collect_data() -> dict:
 # 3. Factor layer (factor_registry_review.html parity)
 # --------------------------------------------------------------------------- #
 def _evidence_by_class() -> dict[str, dict]:
-    """Per-factor latest evidence row PER CLASS (Rev5 two-class taxonomy).
+    """Per-factor latest evidence row per provenance (two evaluation types only:
+    discovery / formal — user directive 2026-06-11 removed the "refresh" label).
 
-    {factor_id: {gated, refresh, discovery}} where
-      - gated    = latest ``factor_lifecycle`` row with ``formal_evidence_eligible=True``
-                   (the human-signed promotion evidence — the only rows that can back status)
-      - refresh  = latest ``factor_lifecycle_refresh`` row (ungated full-metric sweep)
+    {factor_id: {signed, auto, discovery}} where
+      - signed   = latest ``factor_lifecycle`` row with ``formal_evidence_eligible=True``
+                   (human-signed — the ONLY rows that can back a status change; this
+                   governance flag is load-bearing and survives the label removal)
+      - auto     = latest automated formal-methodology sweep row (same engine,
+                   evidence-only; historically stored as run_type
+                   ``factor_lifecycle_refresh`` — old rows keep that string)
       - discovery= latest screening/research row that actually carries a grade
-    ``catalog_sync`` stamp rows are IGNORED for metrics — the old global last-wins let their
-    empty rows shadow real evidence (the original 评级 "—" bug).
+    Externally both signed+auto present as ONE "formal" evaluation; provenance is
+    internal. ``catalog_sync`` stamp rows are IGNORED for metrics — the old global
+    last-wins let their empty rows shadow real evidence (the original 评级 "—" bug).
     """
     df = read_parquet(PROJECT_ROOT / "data" / "factor_registry" / "factor_evidence.parquet")
     out: dict[str, dict] = {}
@@ -357,12 +362,12 @@ def _evidence_by_class() -> dict[str, dict]:
         df = df.sort_values("evidence_time")
     for r in df.to_dict("records"):
         fid = r.get("factor_id")
-        slot = out.setdefault(fid, {"gated": None, "refresh": None, "discovery": None})
+        slot = out.setdefault(fid, {"signed": None, "auto": None, "discovery": None})
         rt = _s(r.get("run_type"))
         if rt == "factor_lifecycle" and bool(r.get("formal_evidence_eligible")):
-            slot["gated"] = r          # last wins = latest per class
-        elif rt == "factor_lifecycle_refresh":
-            slot["refresh"] = r
+            slot["signed"] = r          # last wins = latest per provenance
+        elif rt in ("factor_lifecycle_refresh", "factor_lifecycle_auto"):
+            slot["auto"] = r
         elif rt in ("screening", "research") and _s(r.get("grade")):
             slot["discovery"] = r
     return out
@@ -391,17 +396,17 @@ def collect_factors() -> dict:
                           key=lambda r: (order.get(r.get("status"), 9), str(r.get("category")), str(r.get("factor_id"))))
             for r in rows:
                 fid = r.get("factor_id")
-                cls = ev.get(fid, {"gated": None, "refresh": None, "discovery": None})
-                g, f, d = cls["gated"] or {}, cls["refresh"] or {}, cls["discovery"] or {}
+                cls = ev.get(fid, {"signed": None, "auto": None, "discovery": None})
+                g, f, d = cls["signed"] or {}, cls["auto"] or {}, cls["discovery"] or {}
                 en, cn = factor_desc(fid)  # Sonnet-generated bilingual one-liner (cached)
                 cat = _s(r.get("category"))
                 cat_en, cat_cn = category_label(cat)
 
-                # formal headline: the signed (gated) number wins where it exists; refresh fills.
+                # formal headline: the human-signed number wins where it exists; automated fills.
                 heldout = _num(g.get("is_rank_icir")) if g.get("is_rank_icir") is not None else _num(f.get("is_rank_icir"))
-                heldout_src = "gated" if g.get("is_rank_icir") is not None else ("refresh" if f.get("is_rank_icir") is not None else "")
+                heldout_src = "signed" if g.get("is_rank_icir") is not None else ("auto" if f.get("is_rank_icir") is not None else "")
                 sign_cons = _num(g.get("sign_consistency")) if g.get("sign_consistency") is not None else _num(f.get("sign_consistency"))
-                # gated-vs-refresh consistency canary (same engine — material divergence = drift)
+                # signed-vs-automated consistency canary (same engine — material divergence = drift)
                 drift = None
                 if g.get("is_rank_icir") is not None and f.get("is_rank_icir") is not None:
                     try:
@@ -428,9 +433,9 @@ def collect_factors() -> dict:
                     "direction": _s(r.get("expected_direction")), "binding": _s(r.get("definition_binding")),
                     "expr": _s(r.get("expression")), "components": _parse_json(r.get("components_json")),
                     "weights": _parse_json(r.get("weights_json")),
-                    # ---- formal (lifecycle methodology): gated ✍ first, refresh 🔄 fills
+                    # ---- formal (lifecycle methodology): signed first, automated fills
                     "heldout_icir": heldout, "heldout_src": heldout_src, "sign_cons": sign_cons,
-                    "gated_refresh_drift": _num(drift),
+                    "formal_consistency_drift": _num(drift),
                     "hac_t": hac_t, "hac_sig": hac_sig,
                     "neut_icir": _num(f.get("neutralized_rank_icir")), "neut_hac_t": neut_t,
                     "mono_shape": _s(f.get("mono_shape")),

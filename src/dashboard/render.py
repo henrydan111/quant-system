@@ -903,7 +903,7 @@ def _factors(ctx: dict) -> str:
         ("catalog", cat.get("total", "?"), f"base {cat.get('base','?')}·comp {cat.get('composite','?')}·ind {cat.get('industry_relative','?')}"),
         ("candidate_reg", f.get("candidates", 0), "研究候选"),
     ]))
-    out.append('<div class="note">评估两类口径（Rev5）：<b>formal</b>＝lifecycle 方法学（✍ gated 签字行优先，🔄 refresh 自动全量兜底，'
+    out.append('<div class="note">评估两类口径：<b>formal</b>＝lifecycle 方法学（人签证据优先、自动全量兜底，'
                'HAC |t|≥3 为重叠修正后显著；状态徽章永远来自注册表）；<b>discovery</b>＝screening 海选（降级小字）。'
                '<b>点击任一行</b>展开明细卡。可搜 <span class="mono">cov:full/broad/sub · hac:pass/neut_only/no · shape:top_reversal</span> 等标记过滤。</div>')
     cats = sorted(f.get("category_dist", {}).keys())
@@ -919,9 +919,9 @@ def _factors(ctx: dict) -> str:
         tier = x.get("coverage_tier") or ""
         hac_sig = x.get("hac_sig") or ""
         shape = x.get("mono_shape") or ""
-        src_mark = {"gated": "✍", "refresh": "🔄"}.get(x.get("heldout_src") or "", "")
-        drift = x.get("gated_refresh_drift")
-        drift_mark = ' <span class="hfail" title="gated 与 refresh 同口径分歧 — 数据/定义漂移信号">⚠</span>' \
+        src_mark = ""
+        drift = x.get("formal_consistency_drift")
+        drift_mark = ' <span class="hfail" title="人签与自动同口径分歧 — 数据/定义漂移信号">⚠</span>' \
             if (drift is not None and drift > 0.005) else ""
         hac_cls = {"pass": "ok", "neut_only": "warnt", "no": "muted"}.get(hac_sig, "muted")
         hac_cell = (f'<span class="{hac_cls}">{_fmt(x.get("hac_t"))}'
@@ -968,7 +968,7 @@ def _factors(ctx: dict) -> str:
             fml.append(f'<span class="chip">长腿IR proxy 300/{esc(x.get("ll_ir_300"))} · 500/{esc(x.get("ll_ir_500"))}</span>')
         if drift is not None:
             ok = "一致 ✓" if drift <= 0.005 else f'<span class="hfail">分歧 {drift:.4f} ⚠</span>'
-            fml.append(f'<span class="chip">gated↔refresh {ok}</span>')
+            fml.append(f'<span class="chip">同口径一致性 {ok}</span>')
         if x.get("methodology_hash"):
             fml.append(f'<span class="chip mono">m#{esc(x["methodology_hash"])}</span>')
         disc = []
@@ -994,7 +994,7 @@ def _factors(ctx: dict) -> str:
                    + (f' · 更新 {esc(x["updated"])}' if x["updated"] else "") + "</div>"
                    f'<div class="fx mono">{esc(x["expr"])}</div>' + comp
                    + (f'<div class="kv"><b>formal</b>（lifecycle 方法学）</div><div class="ev chips">{"".join(fml)}</div>' if fml else
-                      '<div class="kv muted">formal：无 refresh/gated 证据（字段不合格或未入本次 sweep）</div>')
+                      '<div class="kv muted">formal：无证据（字段不合格或未入本次 sweep）</div>')
                    + qbars
                    + (f'<div class="kv"><b>discovery</b>（海选，参考）</div><div class="ev chips">{"".join(disc)}</div>' if disc else "")
                    + (f'<div class="kv muted">{esc(x["notes"])}</div>' if x["notes"] else "")

@@ -866,7 +866,8 @@ class FormalRefreshEvidenceTests(unittest.TestCase):
 
     Two-class taxonomy: discovery (screening) / formal (lifecycle methodology). Refresh rows
     share the formal methodology but must NEVER look gate-approved — run_type
-    'factor_lifecycle_refresh', evidence_class 'unified_refresh', formal_evidence_eligible=False.
+    'factor_lifecycle_auto', evidence_class 'formal_auto', formal_evidence_eligible=False
+    (the "refresh" label was retired 2026-06-11 — external taxonomy is discovery/formal only).
     """
 
     def _record(self, fid: str, **over) -> dict:
@@ -897,8 +898,8 @@ class FormalRefreshEvidenceTests(unittest.TestCase):
             self.assertEqual(out["attached"], [fid])
             ev = store.factor_evidence
             row = ev[ev["factor_id"] == fid].iloc[-1]
-            self.assertEqual(row["run_type"], "factor_lifecycle_refresh")
-            self.assertEqual(row["evidence_class"], "unified_refresh")
+            self.assertEqual(row["run_type"], "factor_lifecycle_auto")
+            self.assertEqual(row["evidence_class"], "formal_auto")
             self.assertFalse(bool(row["formal_evidence_eligible"]))  # NEVER gate-eligible
             self.assertEqual(row["methodology_hash"], "testhash")
             self.assertAlmostEqual(float(row["is_rank_icir"]), 0.30)
