@@ -52,8 +52,10 @@ HORIZON = fr.HORIZON
 ADJ_COL = fr.ADJ_COL
 OUTDIR = PROJECT_ROOT / "workspace" / "outputs" / "unified_eval_matrix"
 RESULTS = OUTDIR / "results.jsonl"
-MASK_CACHE = OUTDIR / "universe_masks.parquet"
-MASK_WARMUP_START = "2013-09-01"  # ADV20 needs >=20d before is_start
+MASK_CACHE = OUTDIR / f"universe_masks_{fr.TIME_SPLIT.is_start[:4]}.parquet"
+SEED_CACHE = OUTDIR / f"resident_panel_{fr.TIME_SPLIT.is_start[:4]}.parquet"
+MCAP_CACHE = OUTDIR / f"mcap_{fr.TIME_SPLIT.is_start[:4]}.parquet"
+MASK_WARMUP_START = "2009-09-01"  # ADV20 needs >=20d before is_start (2010 window)
 
 UNIVERSES = ("univ_all", "univ_csi300", "univ_csi500", "univ_csi1000",
              "univ_microcap", "univ_growth", "univ_liquid_top300")
@@ -160,12 +162,22 @@ def main() -> int:
     done = fr._done_factors(RESULTS)
     log.info("eligible %d | done pairs %d", len(base_ok), len(done))
 
-    # shared context pieces (built once, domain-independent)
-    seed = pd.read_parquet(fr.SEED_PANEL)
+    # shared context pieces (built once, domain-independent). The seed panel is
+    # WINDOW-SPECIFIC (the legacy unified_eval_driver_panel covers 2014+ only) —
+    # build our own resident panel for the configured TIME_SPLIT window.
     resident_names = sorted(set(STYLE_CONTROLS_V1) | set(methods[universes[0]].reference_set_current))
+    if SEED_CACHE.exists():
+        seed = pd.read_parquet(SEED_CACHE)
+        log.info("loaded resident panel cache %s", SEED_CACHE.name)
+    else:
+        seed = fr._compute_batch(resident_names, include_adj=True)
+        OUTDIR.mkdir(parents=True, exist_ok=True)
+        seed.to_parquet(SEED_CACHE)
     missing_res = [n for n in resident_names if n not in seed.columns]
     if missing_res:
         seed = pd.concat([seed, fr._compute_batch(missing_res, include_adj=False)], axis=1)
+        seed.to_parquet(SEED_CACHE)
+    fr.MCAP_CACHE = MCAP_CACHE  # window-specific mcap for within-domain neutralization
     adj_close = seed[ADJ_COL]
     panel_index = seed.index
     masks = _build_masks(panel_index)

@@ -74,7 +74,10 @@ from workspace.scripts.unified_eval_common import build_frozen_methodology
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("unified_eval_full")
 
-TIME_SPLIT = TimeSplit("2014-01-01", "2020-12-31", "2021-01-01", "2022-01-01")
+# IS window 2010-2020 (user decision 2026-06-12: data exists from 2008; TTM warmup +
+# GFC regime exclude 2008-09; five style regimes covered. Pre-decision evidence rows
+# carry the old 2014-window methodology hashes — never mix.)
+TIME_SPLIT = TimeSplit("2010-01-01", "2020-12-31", "2021-01-01", "2022-01-01")
 HORIZON = 20
 QLIB_DIR = PROJECT_ROOT / "data" / "qlib_data"
 OUTDIR = PROJECT_ROOT / "workspace" / "outputs" / "unified_eval"
@@ -278,8 +281,18 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
                     for b in ctx["benches"]}
 
         reg = ctx["registry"].get(fid, {})
+        # effective-window governance (2026-06-12): first-class window-truncation fields.
+        # effective_start/end from the IC date axis (cross-sections meeting ic_min_obs);
+        # window_tier per the governance rule: full >=90% / partial >=50% / short <50%.
+        _ic_dates = rank_ic.index
+        _wcov = float(len(_ic_dates) / max(1, len(ctx["orient_train"]) + len(ctx["shape_heldout"])))
+        _tier = "full_window" if _wcov >= 0.9 else ("partial_window" if _wcov >= 0.5 else "short_window")
         _append_result({
             "factor": fid, "field_eligible": True, **record_extra,
+            "effective_start": str(_ic_dates.min().date()) if len(_ic_dates) else None,
+            "effective_end": str(_ic_dates.max().date()) if len(_ic_dates) else None,
+            "effective_ic_days": int(len(_ic_dates)),
+            "window_coverage": round(_wcov, 4), "window_tier": _tier,
             "registry_status": reg.get("status"), "factor_kind": reg.get("kind"),
             "category": reg.get("category"), "methodology_hash": method.methodology_hash,
             "heldout_rank_icir": _f(wf_rows.get(fid, {}).get("heldout_rank_icir")),

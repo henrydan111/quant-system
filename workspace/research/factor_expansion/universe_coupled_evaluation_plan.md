@@ -296,6 +296,31 @@ ProspectiveFreshWindowClaim:
 - 现状:目录的行业相对复合已是全市场计算(合规);unified_eval 中性化 IC 目前
   为全市场样本 —— **F1 实现按域评估时,诊断端切换为域内样本**(实现项)。
 
+### 3.9 有效窗异质性治理(2026-06-12 用户指令:正式窗扩至 2010-2020 时一并设计)
+
+数据起点晚于窗口起点的因子(hk_hold 2017+、report_rc 厂商回填锚 2010+ 等),其指标只在
+**有效窗**内计算(全链路 pairwise-dropna,无填零)。机制无害——同一因子在长短窗下的
+评估逐位相同;风险全部在**跨因子比较与治理层**。规则:
+
+1. **测量一等公民化(每行证据)**:`effective_start / effective_end / effective_ic_days /
+   window_coverage / window_tier`(full ≥90% / partial ≥50% / short <50%)——已实现于
+   评估引擎,所有矩阵行自动携带。
+2. **比较纪律**:点估计 ICIR **只在同 window_tier 内可比**;跨 tier 比较必须用
+   HAC-t / bootstrap CI(短窗的 CI 自动更宽=统计上自动诚实);dashboard 短窗因子
+   标 ⏳ + effective_start,排序默认按 tier 分组。
+3. **时间维度地板(与 §3.3 薄域地板对称:那是广度地板,这是深度地板)**:
+   status-bearing claim 要求 `effective_ic_days ≥ 756`(约 36 个月)且至少覆盖 2 个
+   风格政权段;不足 → 该 claim 只能 evidence-only。不放宽 bar——短窗因子靠
+   更宽 CI 下仍显著过门,不靠降门槛。
+4. **赢家诅咒对冲**:置换 max-stat 校准的 null 必须**按候选因子的有效窗长**生成
+   (校准合同新增 window-matched 条款)——短窗+幸运的组合在与之匹配的 null 下
+   不再占便宜。
+5. **复合成分漂移**:复合因子的有效窗 = 成分有效窗的**交集**;若某成分起点晚于
+   复合起点(skipna 语义导致配方随时间变化)→ `composition_drift` 旗标,正式
+   评估只认交集窗。
+6. **窗口决定记录**:正式 IS 窗 2010-01-01..2020-12-31(2008-09 因 TTM 预热 + GFC
+   政权 + 行业标签覆盖排除);2014 窗的历史证据行带旧方法学哈希,永不混比。
+
 ## 4. 证据与留痕模型
 
 - 证据行主键语义:(factor_id, universe_id, methodology_hash, run_id);
