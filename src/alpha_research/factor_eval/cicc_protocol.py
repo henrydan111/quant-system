@@ -60,6 +60,7 @@ class CiccFactorResult:
     n_periods: int
     direction: int
     long_ann: float
+    long_ann_arith: float  # arithmetic mean×12 (常见研报年化口径; geometric is long_ann)
     long_excess_ann: float
     excess_mdd: float
     long_turnover: float
@@ -73,7 +74,8 @@ class CiccFactorResult:
             "IC均值": self.ic_mean, "IC_IR": self.ic_ir, "t值": self.ic_t,
             "P(IC>0)": self.p_ic_pos, "P(IC>0.02)": self.p_ic_gt2,
             "P(IC<0)": self.p_ic_neg, "P(IC<-0.02)": self.p_ic_ltm2,
-            "多头年化": self.long_ann, "多头超额": self.long_excess_ann,
+            "多头年化": self.long_ann, "多头年化(算术)": self.long_ann_arith,
+            "多头超额": self.long_excess_ann,
             "超额回撤": self.excess_mdd, "换手": self.long_turnover,
             "单调性": self.monotonicity, "n_periods": self.n_periods,
             "direction": self.direction,
@@ -196,6 +198,7 @@ def evaluate_cicc_protocol(
     excess_monthly = long_monthly - bench_monthly
 
     long_ann = _annualize(long_monthly, cfg.annualization)
+    long_ann_arith = float(long_monthly.mean()) * cfg.annualization
     # CICC's 多头超额 is the annualized active return; geometric difference of the
     # compounded curves is the calibration default (a dark knob — see module doc).
     bench_ann = _annualize(bench_monthly, cfg.annualization)
@@ -222,7 +225,7 @@ def evaluate_cicc_protocol(
         p_ic_pos=float((ic_arr > 0).mean()), p_ic_gt2=float((ic_arr > 0.02).mean()),
         p_ic_neg=float((ic_arr < 0).mean()), p_ic_ltm2=float((ic_arr < -0.02).mean()),
         n_periods=n, direction=direction,
-        long_ann=long_ann, long_excess_ann=long_excess_ann,
+        long_ann=long_ann, long_ann_arith=long_ann_arith, long_excess_ann=long_excess_ann,
         excess_mdd=excess_mdd, long_turnover=long_turnover,
         monotonicity=mono, group_ann=group_ann,
         group_mean_count=[float(np.mean(group_counts[g])) for g in range(1, cfg.n_groups + 1)],
