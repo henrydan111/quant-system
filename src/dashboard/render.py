@@ -163,6 +163,10 @@ tr.fdetail>td{background:var(--bg);padding:12px 14px}
 .qbars .qfill.neg{background:var(--bad,#b3372f);top:50%;border-radius:0 0 2px 2px}
 .qbars .ql{font-size:9px;color:var(--muted);margin-top:2px}
 .qbars-cap{font-size:11px;color:var(--muted);margin-bottom:8px}
+table.dmat{border-collapse:collapse;font-size:11px;margin:4px 0 8px}
+table.dmat th,table.dmat td{border:1px solid var(--line);padding:2px 8px;text-align:left}
+table.dmat td.num{text-align:right;font-variant-numeric:tabular-nums}
+table.dmat th{background:var(--bg);color:var(--muted);font-weight:600}
 .fdcard .en{margin:2px 0;font-size:13px}
 .fdcard .cn{color:var(--muted);margin-bottom:7px}
 .fdcard .fx{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:7px 0;white-space:pre-wrap;word-break:break-all;font-size:11.5px}
@@ -865,6 +869,36 @@ def _data(ctx: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+_UNIV_LABEL = {"univ_all": "全市场", "univ_csi300": "沪深300", "univ_csi500": "中证500",
+               "univ_csi1000": "中证1000", "univ_microcap": "微盘", "univ_growth": "成长",
+               "univ_liquid_top300": "流动300"}
+_UNIV_ORDER = ["univ_all", "univ_csi300", "univ_csi500", "univ_csi1000",
+               "univ_microcap", "univ_growth", "univ_liquid_top300"]
+
+
+def _domain_matrix(dm) -> str:
+    """F4: per-universe heldout/neut ICIR + window tier mini-table (7 域有效性档案)."""
+    if not isinstance(dm, dict) or not dm:
+        return ""
+    rows = []
+    for u in _UNIV_ORDER:
+        if u not in dm:
+            continue
+        c = dm[u]
+        tier = c.get("tier") or ""
+        tmark = {"full_window": "", "partial_window": " ⏳", "short_window": " ⏳⏳"}.get(tier, "")
+        rows.append(
+            f'<tr><td>{esc(_UNIV_LABEL.get(u, u))}{tmark}</td>'
+            f'<td class="num">{_fmt(c.get("heldout"))}</td>'
+            f'<td class="num">{_fmt(c.get("neut"))}</td>'
+            f'<td class="num">{_fmt(c.get("cov"))}</td></tr>')
+    if not rows:
+        return ""
+    return ('<div class="kv"><b>7 域有效性</b>(留出ICIR / 中性ICIR / 覆盖;⏳=短窗)</div>'
+            '<table class="dmat"><thead><tr><th>域</th><th>留出</th><th>中性</th><th>覆盖</th></tr></thead>'
+            '<tbody>' + "".join(rows) + "</tbody></table>")
+
+
 def _quantile_bars(profile) -> str:
     """10-group oriented heldout annualized-return bars (留痕 2026-06-11).
 
@@ -979,6 +1013,7 @@ def _factors(ctx: dict) -> str:
         if x["ls_ann"] is not None:
             disc.append(f'<span class="chip">LS年化 <b>{esc(x["ls_ann"])}</b></span>')
         qbars = _quantile_bars(x.get("quantile_profile"))
+        dmat = _domain_matrix(x.get("domain_matrix"))
         comp = ""
         if x.get("components"):
             cc = x["components"] if isinstance(x["components"], list) else []
@@ -995,7 +1030,7 @@ def _factors(ctx: dict) -> str:
                    f'<div class="fx mono">{esc(x["expr"])}</div>' + comp
                    + (f'<div class="kv"><b>formal</b>（lifecycle 方法学）</div><div class="ev chips">{"".join(fml)}</div>' if fml else
                       '<div class="kv muted">formal：无证据（字段不合格或未入本次 sweep）</div>')
-                   + qbars
+                   + qbars + dmat
                    + (f'<div class="kv"><b>discovery</b>（海选，参考）</div><div class="ev chips">{"".join(disc)}</div>' if disc else "")
                    + (f'<div class="kv muted">{esc(x["notes"])}</div>' if x["notes"] else "")
                    + "</div></td></tr>")

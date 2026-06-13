@@ -362,12 +362,17 @@ def _evidence_by_class() -> dict[str, dict]:
         df = df.sort_values("evidence_time")
     for r in df.to_dict("records"):
         fid = r.get("factor_id")
-        slot = out.setdefault(fid, {"signed": None, "auto": None, "discovery": None})
+        slot = out.setdefault(fid, {"signed": None, "auto": None, "discovery": None, "domains": {}})
         rt = _s(r.get("run_type"))
+        univ = _s(r.get("universe_id")) or "univ_all"
         if rt == "factor_lifecycle" and bool(r.get("formal_evidence_eligible")):
             slot["signed"] = r          # last wins = latest per provenance
         elif rt in ("factor_lifecycle_refresh", "factor_lifecycle_auto"):
-            slot["auto"] = r
+            # F4: 7-domain matrix → keep the per-domain rows AND keep the headline on
+            # univ_all (the canonical all-market number; never let a random domain win).
+            slot["domains"][univ] = r
+            if univ == "univ_all" or slot["auto"] is None:
+                slot["auto"] = r
         elif rt in ("screening", "research") and _s(r.get("grade")):
             slot["discovery"] = r
     return out
@@ -396,8 +401,16 @@ def collect_factors() -> dict:
                           key=lambda r: (order.get(r.get("status"), 9), str(r.get("category")), str(r.get("factor_id"))))
             for r in rows:
                 fid = r.get("factor_id")
-                cls = ev.get(fid, {"signed": None, "auto": None, "discovery": None})
+                cls = ev.get(fid, {"signed": None, "auto": None, "discovery": None, "domains": {}})
                 g, f, d = cls["signed"] or {}, cls["auto"] or {}, cls["discovery"] or {}
+                # F4: compact per-domain matrix (heldout ICIR + window_tier per universe)
+                domain_matrix = {
+                    u: {"heldout": _num(rr.get("is_rank_icir")),
+                        "neut": _num(rr.get("neutralized_rank_icir")),
+                        "tier": _s((_parse_json(rr.get("unified_metrics_json")) or {}).get("window_tier")),
+                        "cov": _num(rr.get("coverage"))}
+                    for u, rr in (cls.get("domains") or {}).items()
+                }
                 en, cn = factor_desc(fid)  # Sonnet-generated bilingual one-liner (cached)
                 cat = _s(r.get("category"))
                 cat_en, cat_cn = category_label(cat)
@@ -451,6 +464,7 @@ def collect_factors() -> dict:
                     # 10-group oriented heldout profile (留痕 2026-06-11): list of
                     # {q, ann_return, mean_count}; None for pre-directive evidence rows.
                     "quantile_profile": (_parse_json(f.get("unified_metrics_json")) or {}).get("quantile_profile"),
+                    "domain_matrix": domain_matrix,   # F4: {universe: {heldout,neut,tier,cov}}
                     # ---- discovery (screening triage) — demoted small print
                     "grade": _s(d.get("grade")) or _s(r.get("latest_screening_grade")),
                     "rank_icir_5d": _num(d.get("rank_icir_5d")) if d.get("rank_icir_5d") is not None else _num(r.get("latest_rank_icir_5d")),

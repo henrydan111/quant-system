@@ -61,6 +61,10 @@ def main() -> int:
         print(f"{uid}: methodology {mhash} -> {out if not isinstance(out, dict) else {k: (len(v) if isinstance(v, list) else v) for k, v in out.items()}}")
         total_attached += (len(out.get('attached', [])) if isinstance(out, dict) else 0)
 
+    if args.live:
+        store.save()   # PERSIST — record_formal_auto_evidence only mutates in-memory
+        print("store.save() committed to disk")
+
     ev = store.factor_evidence
     n_univ = ev["universe_id"].notna().sum() if "universe_id" in ev.columns else 0
     print(f"evidence table now {len(ev)} rows; rows with universe_id: {n_univ}")
