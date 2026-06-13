@@ -403,14 +403,33 @@ def collect_factors() -> dict:
                 fid = r.get("factor_id")
                 cls = ev.get(fid, {"signed": None, "auto": None, "discovery": None, "domains": {}})
                 g, f, d = cls["signed"] or {}, cls["auto"] or {}, cls["discovery"] or {}
-                # F4: compact per-domain matrix (heldout ICIR + window_tier per universe)
-                domain_matrix = {
-                    u: {"heldout": _num(rr.get("is_rank_icir")),
-                        "neut": _num(rr.get("neutralized_rank_icir")),
-                        "tier": _s((_parse_json(rr.get("unified_metrics_json")) or {}).get("window_tier")),
-                        "cov": _num(rr.get("coverage"))}
-                    for u, rr in (cls.get("domains") or {}).items()
-                }
+                # F4 / by-universe view: compact FULL per-domain metric record so the
+                # dashboard can switch every displayed indicator to a chosen universe.
+                # Keys kept short to bound the embedded-JSON size (208×7 records).
+                domain_full = {}
+                for u, rr in (cls.get("domains") or {}).items():
+                    umj = _parse_json(rr.get("unified_metrics_json")) or {}
+                    ht = _num(rr.get("mean_rank_ic_hac_t")); nt = _num(rr.get("neutralized_hac_t"))
+                    sig = ("pass" if ht is not None and abs(ht) >= 3.0
+                           else ("neut_only" if nt is not None and abs(nt) >= 3.0
+                                 else ("no" if (ht is not None or nt is not None) else "")))
+                    qp = umj.get("quantile_profile")
+                    domain_full[u] = {
+                        "h": _num(rr.get("is_rank_icir")), "sc": _num(rr.get("sign_consistency")),
+                        "t": ht, "ts": sig, "n": _num(rr.get("neutralized_rank_icir")),
+                        "s": _s(rr.get("mono_shape")), "c": _num(rr.get("coverage")),
+                        "ct": _s(rr.get("coverage_tier")) or _s(umj.get("window_tier")),
+                        "m": _num(rr.get("resid_ic_vs_approved_stable_oriented")),
+                        "rs": _num(rr.get("resid_ic_vs_style_controls_v1_oriented")),
+                        "tu": _num(rr.get("turnover_ann")),
+                        "i3": _num(rr.get("long_leg_ir_proxy_is_csi300")),
+                        "i5": _num(rr.get("long_leg_ir_proxy_is_csi500")),
+                        "qp": [round(float(p["ann_return"]), 5) for p in qp] if isinstance(qp, list) and qp else None,
+                        "qo": (qp[0].get("oriented") if isinstance(qp, list) and qp else None),
+                    }
+                # back-compat alias used by the static 7-domain detail mini-table
+                domain_matrix = {u: {"heldout": r2["h"], "neut": r2["n"], "tier": r2["ct"], "cov": r2["c"]}
+                                 for u, r2 in domain_full.items()}
                 en, cn = factor_desc(fid)  # Sonnet-generated bilingual one-liner (cached)
                 cat = _s(r.get("category"))
                 cat_en, cat_cn = category_label(cat)
@@ -465,6 +484,7 @@ def collect_factors() -> dict:
                     # {q, ann_return, mean_count}; None for pre-directive evidence rows.
                     "quantile_profile": (_parse_json(f.get("unified_metrics_json")) or {}).get("quantile_profile"),
                     "domain_matrix": domain_matrix,   # F4: {universe: {heldout,neut,tier,cov}}
+                    "domain_full": domain_full,       # by-universe switch: compact full metric record
                     # ---- discovery (screening triage) — demoted small print
                     "grade": _s(d.get("grade")) or _s(r.get("latest_screening_grade")),
                     "rank_icir_5d": _num(d.get("rank_icir_5d")) if d.get("rank_icir_5d") is not None else _num(r.get("latest_rank_icir_5d")),

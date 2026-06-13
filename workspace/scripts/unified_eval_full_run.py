@@ -206,30 +206,34 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
                                               seed=method.bootstrap_seed)
         orient = resolve_orientation(rank_ic.rename(None), train_dates=ctx["orient_train"],
                                      min_train_t=method.orientation_min_train_t)
-        if orient["orientation_valid"]:
-            of = f_dt * orient["sign"]
-            oh = of[of.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
-            lh = label[label.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
-            try:
-                qdf = qa.compute_quantile_returns(oh, lh, n_quantiles=method.n_quantiles,
-                                                  min_obs=method.quantile_min_obs)
-                qs = qa.compute_quantile_summary(qdf)
+        # decile profile: oriented when orientation is valid; otherwise UN-oriented
+        # (raw factor-ascending) fallback so every factor with enough cross-sections
+        # still gets a 10-group chart (orientation_undetermined factors are weak-signal,
+        # raw deciles are the honest view — we don't claim a direction). The profile is
+        # tagged `oriented` so the dashboard can mark raw bars.
+        oriented = bool(orient["orientation_valid"])
+        of = (f_dt * orient["sign"]) if oriented else f_dt
+        oh = of[of.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
+        lh = label[label.index.get_level_values("datetime").isin(ctx["shape_heldout"])]
+        try:
+            qdf = qa.compute_quantile_returns(oh, lh, n_quantiles=method.n_quantiles,
+                                              min_obs=method.quantile_min_obs)
+            qs = qa.compute_quantile_summary(qdf)
+            if oriented:
                 mono = classify_quantile_shape(qs["annualized_return"].tolist())
-                # 留痕 (2026-06-11 directive): persist the full per-bucket profile —
-                # oriented heldout-window annualized return + mean names per bucket —
-                # so the 10-group performance survives into unified_metrics_json and
-                # the dashboard. q=1 lowest oriented factor value, q=N highest.
-                bucket_counts = qdf.groupby("quantile")["count"].mean()
-                q_profile = [
-                    {"q": int(q), "ann_return": round(float(r), 6),
-                     "mean_count": round(float(bucket_counts.get(q, float("nan"))), 1)}
-                    for q, r in qs["annualized_return"].items()
-                ]
-            except Exception as e:  # noqa: BLE001
-                mono = {"mono_shape": None, "mono_reason": f"error:{e}"}
+            else:
+                mono = {"mono_shape": None, "mono_reason": "orientation_undetermined"}
+            bucket_counts = qdf.groupby("quantile")["count"].mean()
+            q_profile = [
+                {"q": int(q), "ann_return": round(float(r), 6),
+                 "mean_count": round(float(bucket_counts.get(q, float("nan"))), 1),
+                 "oriented": oriented}
+                for q, r in qs["annualized_return"].items()
+            ]
+            if not q_profile:
                 q_profile = None
-        else:
-            mono = {"mono_shape": None, "mono_reason": "orientation_undetermined"}
+        except Exception as e:  # noqa: BLE001
+            mono = {"mono_shape": None, "mono_reason": f"error:{e}"}
             q_profile = None
 
         turn = one_way_turnover(f_raw, rebalance_dates=ctx["rebal_schedule"], top_q=method.top_q,

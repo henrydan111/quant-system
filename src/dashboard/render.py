@@ -167,6 +167,16 @@ table.dmat{border-collapse:collapse;font-size:11px;margin:4px 0 8px}
 table.dmat th,table.dmat td{border:1px solid var(--line);padding:2px 8px;text-align:left}
 table.dmat td.num{text-align:right;font-variant-numeric:tabular-nums}
 table.dmat th{background:var(--bg);color:var(--muted);font-weight:600}
+.univbar{display:flex;align-items:center;gap:8px;margin:6px 0 2px;flex-wrap:wrap}
+.univbar .lbl{font-size:12px;color:var(--muted)}
+.univbar select{padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);font-size:13px}
+.univbar .univ-note{font-size:11px}
+tr.frow.udim td{opacity:.4}
+.udom-banner{font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 9px;margin-bottom:8px}
+.metric-help dt{font-weight:600;margin-top:8px;font-size:13px}
+.metric-help dd{margin:2px 0 2px 0;color:var(--muted);font-size:12px;line-height:1.5}
+.metric-help{columns:2;column-gap:28px}
+@media(max-width:760px){.metric-help{columns:1}}
 .fdcard .en{margin:2px 0;font-size:13px}
 .fdcard .cn{color:var(--muted);margin-bottom:7px}
 .fdcard .fx{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:7px 0;white-space:pre-wrap;word-break:break-all;font-size:11.5px}
@@ -329,6 +339,56 @@ sb.addEventListener('input',()=>{const q=sb.value.trim().toLowerCase();
   document.querySelectorAll('[data-f]').forEach(el=>{el.classList.toggle('hide', q && !el.getAttribute('data-f').toLowerCase().includes(q));});
 });
 show('actions');
+
+// by-universe view (① 2026-06-13): switch every factor metric to a chosen domain.
+(function(){
+  const pick=document.getElementById('univ-pick'); if(!pick) return;
+  const ULAB={univ_all:'全市场',univ_csi300:'沪深300',univ_csi500:'中证500',univ_csi1000:'中证1000',univ_microcap:'微盘',univ_growth:'成长',univ_liquid_top300:'流动300'};
+  const fmt=v=>(v===null||v===undefined||v==='')?'—':(typeof v==='number'?(Math.round(v*10000)/10000).toString():v);
+  const keys=['h','t','n','s','c','m','tu'];
+  function snap(row){ if(row._o)return; row._o={}; keys.forEach(k=>{const td=row.querySelector('.c-'+k); if(td)row._o[k]=td.innerHTML;}); }
+  function restore(row){ if(!row._o)return; for(const k in row._o){const td=row.querySelector('.c-'+k); if(td)td.innerHTML=row._o[k];} }
+  function qbarsHTML(qp,oriented){
+    if(!qp||!qp.length)return '';
+    const vmax=Math.max.apply(null,qp.map(v=>Math.abs(v)))||1;
+    let s='<div class="qbars">';
+    qp.forEach((v,i)=>{const h=Math.max(2,Math.round(Math.abs(v)/vmax*28));const cls=v>=0?'pos':'neg';
+      s+='<div class="qb" title="Q'+(i+1)+': '+(v*100).toFixed(1)+'%"><div class="qcol"><div class="qfill '+cls+'" style="height:'+h+'px"></div></div><div class="ql">'+(i+1)+'</div></div>';});
+    s+='</div><div class="qbars-cap">10分组 · '+(oriented?'定向后':'原始(方向未定)')+'留出窗年化(Q1→Q10)</div>';
+    return s;
+  }
+  function card(row){ const d=row.nextElementSibling; return (d&&d.classList.contains('fdetail'))?d:null; }
+  function apply(u){
+    document.querySelectorAll('#factor-list tr.frow').forEach(row=>{
+      snap(row);
+      let dm={}; try{dm=JSON.parse(row.getAttribute('data-dm')||'{}');}catch(e){}
+      const c=card(row);
+      if(u==='all'){ restore(row); row.classList.remove('udim');
+        if(c){const b=c.querySelector('.udom-banner'); if(b)b.remove(); const qb=c.querySelector('.qbars-dyn'); if(qb)qb.style.display='none'; const so=c.querySelector('.qbars-orig'); if(so)so.style.display='';}
+        return; }
+      const r=dm[u], set=(k,v)=>{const td=row.querySelector('.c-'+k); if(td)td.innerHTML=v;};
+      if(!r){ keys.forEach(k=>set(k,'<span class="muted">·</span>')); row.classList.add('udim');
+        if(c){let b=c.querySelector('.udom-banner'); if(!b){b=document.createElement('div');b.className='udom-banner';c.querySelector('.fdcard').prepend(b);} b.innerHTML='<b>'+(ULAB[u]||u)+'</b>:该域无此因子证据(覆盖不足/未评估)';}
+        return; }
+      row.classList.remove('udim');
+      set('h',fmt(r.h));
+      const tc={pass:'ok',neut_only:'warnt',no:'muted'}[r.ts]||'muted';
+      set('t','<span class="'+tc+'">'+fmt(r.t)+(r.ts==='neut_only'?'*':'')+'</span>');
+      set('n',fmt(r.n));
+      set('s',r.s?(r.s==='top_reversal'?'<span class="hfail">top_reversal</span>':r.s):'<span class="muted">–</span>');
+      set('c',(r.c!==null&&r.c!==undefined)?fmt(r.c)+' <span class="muted">'+(r.ct||'')+'</span>':'<span class="muted">–</span>');
+      set('m',fmt(r.m)); set('tu',fmt(r.tu));
+      if(c){ const fd=c.querySelector('.fdcard');
+        let b=c.querySelector('.udom-banner'); if(!b){b=document.createElement('div');b.className='udom-banner';fd.prepend(b);}
+        b.innerHTML='显示 <b>'+(ULAB[u]||u)+'</b> 域指标 · 留出ICIR '+fmt(r.h)+' · HAC-t '+fmt(r.t)+' · 中性 '+fmt(r.n)+' · 覆盖 '+fmt(r.c)+(r.ct?' '+r.ct:'')+' · 换手 '+fmt(r.tu)+' · 长腿IR 300/'+fmt(r.i3)+' 500/'+fmt(r.i5);
+        const so=c.querySelector('.qbars-orig'); if(so)so.style.display='none';
+        let qd=c.querySelector('.qbars-dyn'); if(!qd){qd=document.createElement('div');qd.className='qbars-dyn';(so?so.parentNode.insertBefore(qd,so.nextSibling):fd.appendChild(qd));}
+        qd.style.display=''; qd.innerHTML=r.qp?qbarsHTML(r.qp,r.qo):'<div class="qbars-cap muted">该域无 10 分组数据(方向未定或覆盖不足)</div>';
+      }
+    });
+  }
+  pick.addEventListener('change',()=>apply(pick.value));
+})();
 
 // lightweight auto-refresh: poll the tiny build_id.txt every 30s. A new build
 // silently reloads background/idle tabs; an actively-used tab gets a click-to-
@@ -920,8 +980,33 @@ def _quantile_bars(profile) -> str:
         bars.append(f'<div class="qb" title="{esc(tip)}"><div class="qcol">'
                     f'<div class="qfill {cls}" style="height:{h}px"></div></div>'
                     f'<div class="ql">{q}</div></div>')
-    return ('<div class="qbars">' + "".join(bars) + "</div>"
-            '<div class="qbars-cap">10分组 · 定向后留出窗年化收益（Q1 低 → Q10 高）</div>')
+    oriented = profile[0].get("oriented", True) if profile else True
+    cap = "定向后" if oriented else "原始(方向未定)"
+    return ('<div class="qbars-orig"><div class="qbars">' + "".join(bars) + "</div>"
+            f'<div class="qbars-cap">10分组 · {cap}留出窗年化收益（Q1 低 → Q10 高）</div></div>')
+
+
+def _metric_help() -> str:
+    """③ 指标含义说明(折叠)。每个 dashboard 因子指标的口径解释。"""
+    items = [
+        ("formal ICIR / 留出ICIR", "IS-only walk-forward 的留出折(后 40%)上,RankIC 的均值/标准差。衡量因子横截面预测力的稳定性;|值| 越大越强,符号即方向。人签 gated 行优先,自动全量行兜底。"),
+        ("HAC-t", "RankIC 序列的 Newey-West(Bartlett)异方差自相关稳健 t 值。20 日重叠标签使朴素 t 虚高数倍,故用 HAC。|t|≥3 记为显著(pass);仅市值/行业中性化后才显著记 neut_only(带 *);否则 no。"),
+        ("中性ICIR", "对市值+行业做横截面中性化(估计域=全市场)后残差的 RankICIR。剔除尺寸/行业暴露后仍存的纯 alpha;比原始 ICIR 更能识别'换皮的风格暴露'。"),
+        ("形状 (mono_shape)", "留出窗 10 分组定向后年化收益曲线的相邻组差分符号向量分类:monotonic_up/down(单调)、top_reversal(顶组反转,A股长头部署红旗)、u_shape 等。方向未定的弱信号因子无形状。"),
+        ("覆盖 (coverage)", "因子在评估域内有值的(股票×日)占比;tier=full(≥90%)/broad(≥50%)/sub(<50%)。子域(微盘/流动300)或稀疏字段(分析师/R&D)覆盖低 → 评估功效弱。"),
+        ("边际 (marginal)", "对当前 approved 因子集做正交后的残差 RankIC(定向)。衡量增量贡献——高 ICIR 但与已有集高度相关的因子边际≈0。选因子看边际正交贡献,非单体 ICIR。"),
+        ("风格残差", "对 14 个人尽皆知风格控制(市值/价值/动量/波动/流动性/盈利/成长/杠杆/换手/Beta/行业等)做正交后的残差 RankIC(定向)。衡量是否独立于公开风格因子。"),
+        ("换手 (turnover_ann)", "年化单边换手 = 0.5·Σ|Δw| 按调仓日历折算。越高交易成本越大、容量越小。"),
+        ("长腿IR proxy", "A股不可做空 → 用多头腿(top 20%)相对基准(沪深300/中证500)的净成本超额信息比率作可部署性代理。proxy_is = IS 窗口口径,非可交易实盘数。"),
+        ("10 分组柱状图", "留出窗按因子值由小到大等分 10 组的各组年化收益。定向后 Q1 低→Q10 高;方向未定的弱信号因子显示原始(未定向)分组。绿=正/红=负,高度按组内|年化|相对最大值。"),
+        ("7 域有效性", "同一因子在 7 个 universe(全市场/沪深300/500/1000/微盘/成长/流动300)各自的留出ICIR、中性ICIR、覆盖。⏳=短窗(如中证1000 自 2014-11、覆盖<窗口)。因子'有效'从来是'在某域有效'。"),
+        ("状态 (draft/candidate/approved)", "draft=入目录即可发现;candidate=过 IS-only 人签闸;approved=过单次 sealed-OOS。状态徽章永远来自注册表,自动证据永不驱动状态(resolve-but-label)。"),
+        ("海选 (grade)", "discovery 层 batch_screening 的字母评级 + 5d RankICIR,仅作优先级参考,对状态零权力。"),
+        ("评估域口径", "选定某 universe 后,上表所有指标只显示该域的表现(留出/HAC/中性/形状/覆盖/边际/换手/10组图全切换);'全部'默认全市场 + 详情卡保留 7 域档案表。"),
+    ]
+    dts = "".join(f"<dt>{esc(t)}</dt><dd>{esc(d)}</dd>" for t, d in items)
+    return ('<details class="exp"><summary>📖 指标含义说明(点击展开)</summary>'
+            f'<dl class="metric-help">{dts}</dl></details>')
 
 
 def _factors(ctx: dict) -> str:
@@ -940,8 +1025,22 @@ def _factors(ctx: dict) -> str:
     out.append('<div class="note">评估两类口径：<b>formal</b>＝lifecycle 方法学（人签证据优先、自动全量兜底，'
                'HAC |t|≥3 为重叠修正后显著；状态徽章永远来自注册表）；<b>discovery</b>＝screening 海选（降级小字）。'
                '<b>点击任一行</b>展开明细卡。可搜 <span class="mono">cov:full/broad/sub · hac:pass/neut_only/no · shape:top_reversal</span> 等标记过滤。</div>')
+    out.append(_metric_help())
     cats = sorted(f.get("category_dist", {}).keys())
     out.append(_statusbar("#factor-list", ["approved", "candidate", "draft"], "按 id/描述/cov:/hac:/shape: 过滤…", cats=cats))
+    # by-universe view selector (① user 2026-06-13): switch every metric to a chosen domain;
+    # "全部" = univ_all headline + the per-factor 7-domain mini-table.
+    out.append('<div class="univbar"><span class="lbl">评估域</span>'
+               '<select id="univ-pick">'
+               '<option value="all">全部(全市场 + 7域档案)</option>'
+               '<option value="univ_all">全市场 univ_all</option>'
+               '<option value="univ_csi300">沪深300</option>'
+               '<option value="univ_csi500">中证500</option>'
+               '<option value="univ_csi1000">中证1000</option>'
+               '<option value="univ_microcap">微盘</option>'
+               '<option value="univ_growth">成长</option>'
+               '<option value="univ_liquid_top300">流动300</option></select>'
+               '<span class="univ-note muted">选定域后,下表所有指标只显示该域的表现</span></div>')
     out.append('<div class="tablewrap" id="factor-list"><table><thead><tr><th></th>'
                '<th class="sortable">factor_id</th><th class="sortable">类别</th>'
                '<th class="sortable">状态</th><th class="sortable num">formal ICIR</th>'
@@ -965,14 +1064,16 @@ def _factors(ctx: dict) -> str:
         cov_cell = (f'{_fmt(x.get("coverage"))} <span class="muted">{esc(tier)}</span>'
                     if x.get("coverage") is not None else '<span class="muted">–</span>')
         search_tokens = (f'cov:{tier} hac:{hac_sig} shape:{shape} src:{x.get("heldout_src") or ""}')
+        dm_attr = esc(json.dumps(x.get("domain_full") or {}, ensure_ascii=False, separators=(",", ":")))
         out.append(f'<tr class="frow" data-row data-status="{esc(x["status"])}" data-cat="{esc(x["category"])}" '
+                   f'data-dm="{dm_attr}" '
                    f'data-f="{esc(x["id"])} {esc(x["en"])} {esc(x["cn"])} {esc(x["category"])} {esc(x["status"])} {esc(search_tokens)}">'
                    f'<td><span class="arrow">▶</span></td><td class="mono">{esc(x["id"])}</td><td class="muted">{esc(x["category"])}</td>'
                    f'<td>{pill(x["status"])}</td>'
-                   f'<td class="num">{_fmt(x.get("heldout_icir"))} {src_mark}{drift_mark}</td>'
-                   f'<td class="num">{hac_cell}</td><td class="num">{_fmt(x.get("neut_icir"))}</td>'
-                   f'<td>{shape_cell}</td><td>{cov_cell}</td>'
-                   f'<td class="num">{_fmt(x.get("marginal"))}</td><td class="num">{_fmt(x.get("turnover_ann"))}</td>'
+                   f'<td class="num c-h">{_fmt(x.get("heldout_icir"))} {src_mark}{drift_mark}</td>'
+                   f'<td class="num c-t">{hac_cell}</td><td class="num c-n">{_fmt(x.get("neut_icir"))}</td>'
+                   f'<td class="c-s">{shape_cell}</td><td class="c-c">{cov_cell}</td>'
+                   f'<td class="num c-m">{_fmt(x.get("marginal"))}</td><td class="num c-tu">{_fmt(x.get("turnover_ann"))}</td>'
                    f'<td class="muted">{_fmt(x.get("grade"))}</td></tr>')
         # detail row (hidden until click)
         fml = []
