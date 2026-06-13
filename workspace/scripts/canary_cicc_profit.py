@@ -111,6 +111,8 @@ def main() -> int:
             oos_eligible_gates_met=dec.oos_eligible_gates_met,
             cohort_denominator_membership=["formalization_candidate"],
             truth_label_end=info["row"].truth_table_label_end,
+            oos_quarantine_start=info.get("oos_quarantine_start", ""),
+            oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
             notes="D-COMP canary: comp_cicc_profit (CFOA+ROE+ROIC) first CICC composite",
         )
         print(f"4. governance record persisted: status_ceiling={rec.status_ceiling}")
