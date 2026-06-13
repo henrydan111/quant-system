@@ -1,4 +1,4 @@
-# 剩余中金因子 → 正式评估 全量路线图(Rev2,2026-06-13)
+# 剩余中金因子 → 正式评估 全量路线图(Rev4(终稿,GPT 三轮 APPROVE),2026-06-13)
 
 > 目标:把三本中金手册里**所有可复刻**的剩余因子带进正式评估链路
 > (draft → 入目录即 7 域矩阵 → IS 门 → candidate → sealed OOS → approved)。
@@ -85,6 +85,19 @@ CFOAD/ROAD/ROED/ROICD/CCRD/CURD/DAD/DTED/QRD/CSRD/APRD + OCF 同比。
   避免单一供应商黑箱。
 - 两路径下 CAFR/EEP/FORE_*/EEChange/EOPChange 均覆盖 **2010-2026 全历史**;EINS_75D/RPP_75D 用现有
   n_active_analysts/事件计数即可。
+**D6 路径状态机(Rev4,GPT R3-B1:防 vendor 核查无限挂起)**:
+```yaml
+D6_path_state:
+  pending_vendor_feasibility:        # 有显式截止,不无限 pending
+    exit_by: first_D6_work_sprint_end
+    required_checks: [license_ok, historical_range_ok, PIT_timestamp_ok,
+                      local_provider_ingest_ok, field_mapping_ok]
+  vendor_primary_ready: {path: vendor_pit_consensus, tier: formula_equivalent_pending->exact}
+  vendor_not_production_ready:       # 到期未过 = 默认回退,不继续 pending
+    path: report_rc_reconstruction, tier: derived_methodology_proxy, status_ceiling: candidate
+    may_upgrade_only_if: [vendor_oracle_rank_decile_coverage_strong_match, prospective_oos_pass]
+  dropped_or_deferred: {reason_required: true}
+```
 **⚠ 边界**:eps_diffusion(breadth/二阶差分)仍受 2026-06-15 restatement 金丝雀硬门约束,水平层 PIT 不解除该门。
 
 ## 4. 需新 Tushare 端点的 wave(先读接口文档 §6.1,部分可能不可行)
@@ -232,7 +245,13 @@ oos_eligibility_for_approved:
     max_status: candidate_validated_short_oos   # 不得直接 approved
     approved_requires: prospective_fresh_window  # 用 2026+ 纯前瞻新数据滚动积累(方案 §3.6c)
 ```
-历史 truth-parity 仍保留为 exact-cert 证据,但**不冒充 sealed OOS**。
+**Rev4 校准说明(GPT R3-B2)**:60c/5y/3y 是**初始保守 floor,非最终统计定理**——approved 决策前
+必须用系统历史 sealed OOS kill-rate + window-matched null + 因子 horizon/换仓周期/universe breadth
+校准;未校准时按保守 floor 执行(不放宽)。`candidate_validated_short_oos` 的意义**不是"准 approved"**,
+而是三件事:①证明公式/字段/窗口忠实复刻且短前瞻窗未立即崩 ②进 prospective watchlist 等 2026+ 新标签
+滚动 ③供研报/cohort tracking,**不作生产级 approved 域**。**诚实代价**:整本价量手册短期内多数只能停在
+candidate——这是为"看了 truth table 做 exact-cert"必然付的;**绝不为此放宽到"3.5y 也 approved"
+(否则回到 Round-1 的真值表 OOS 泄漏漏洞)**。历史 truth-parity 仅作 exact-cert 证据,**不冒充 sealed OOS**。
 
 ## 10. 算子与重建一致预期认证门(Rev2 新增,GPT §2/§4)
 
@@ -317,6 +336,21 @@ ReplicationGovernanceRecord:
 ```
 每个 gate 只问两题:**(1) 这个 claim 的 status ceiling 是什么?(2) 进下一状态还缺哪些 cert?**
 既保留治理,又不让系统被认证对象淹没。
+
+**12.4 确定性 status_ceiling lattice + reason codes(Rev4,GPT R3-B3:防 ceiling 散在 5 cert 里难追)**:
+status_ceiling 不是从 5 个 cert 完成度临时拼,而是一个**确定性 lattice**,每 claim 物化**单一**结果 +
+reason codes:
+```yaml
+status_ceiling_lattice:   # 由严到松
+  blocked:            [non_pit_data_provider, uncertified_operator, missing_required_field, failed_truth_table_QA]
+  dev_evidence_only:  [operator_experimental, data_pit_cert_pending, truth_table_unreviewed]
+  evidence_only:      [availability_floor_fail, non_approved_universe, structural_break_unresolved]
+  candidate_ceiling:  [proxy_approx, derived_methodology_proxy, oos_already_spent_same_family, short_oos_power_floor_fail]
+  eligible_for_oos:   [clean_or_calibrated_claim, certified_operator, coverage_pass, denominator_frozen]
+  eligible_for_approved: [sealed_oos_pass, power_floor_pass, no_status_ceiling_remaining]
+# 每 claim 页只显示:current_status_ceiling + blocking_reasons + nonblocking_missing_certs + next_actions
+```
+→ "为什么卡住"机器可解释,统一记录反而比 6 套独立账更易追。
 
 ---
 

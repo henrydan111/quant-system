@@ -60,3 +60,25 @@ draft→candidate→sealed OOS。
 **前 3 高价值/成本比机制(GPT 给 + 采纳)**:① cohort manifest + truth_label_end/OOS 隔离 ② OperatorCertification 非真值表版 ③ P-GATE/F4 + availability_audit。
 
 **无方向分歧**;唯一附 caveat 的是条件 4(vendor feed 可生产性需先核,不盲目翻主路径)。Round-3 应收敛 APPROVE。
+
+---
+
+# Round-3 终验(GPT 终判 **APPROVE** → Rev4 收尾)
+
+6/6 RESOLVED,零 blocking。3 项非阻断实施收口建议全部 ACCEPT(GPT 已给修法),折进 Rev4。**设计评审三轮收官:CHANGES REQUIRED → APPROVE WITH CONDITIONS → APPROVE。**
+
+| B 项 | 裁决 | Rev4 动作 |
+|---|---|---|
+| B1 D6 缺默认回退→易无限挂起 | **ACCEPT** | §10B 加 `D6_path_state` 状态机:vendor 可生产性核查设 `exit_by`(首个 D6 sprint 末);**到期未过 → 自动转 report_rc_proxy_capped_at_candidate,不继续 pending**;不阻塞 D-COMP/D4a/E1 |
+| B2 power floor 是拍的/会否封死价量 approved | **ACCEPT(方向不松,文字校准)** | §9.4 改:60c/5y/3y 为**初始保守 floor,approved 前必须用历史 kill-rate + window-matched null 校准,未校准按保守执行**;新增 `truth_observed_replication_path`——short_oos ceiling 不是"准 approved",而是 ①复刻忠实度证明 ②prospective watchlist(2026+ 新标签滚动)③报告/cohort tracking 用,非生产 approved。**整本价量手册短期多停 candidate 是诚实代价,不放宽到"3.5y 也 approved"(否则回到 Round-1 漏洞)** |
+| B3 统一记录隐藏复杂度(ceiling 散在 5 cert) | **ACCEPT** | §12 加确定性 `status_ceiling_lattice`(blocked/dev_evidence_only/evidence_only/candidate_ceiling/eligible_for_oos/eligible_for_approved)+ 物化 reason codes;每 claim 页只显示一个 `current_status_ceiling` + `blocking_reasons` + `nonblocking_missing_certs` + `next_actions`——"为什么卡住"机器可解释 |
+
+## 可开工最小前置集(GPT 给 + 采纳,= 让 D-COMP/D4a 干净进正式评估的最小集)
+
+1. **治理骨架落库**:cohort manifest + 5 层 denominator + replication_tier + truth_label_end/oos_quarantine_start 字段 + ReplicationGovernanceRecord + status_ceiling resolver。
+2. **P-GATE/F4 + 现有证据入库**:FactorDomainClaim/TaintLedger 接入门 + 1,449 行 7 域矩阵入 registry/dashboard + 生产 resolver block evidence-only 域 + availability_audit 自动 + 短OOS/coverage fail 的 ceiling 可被 gate 读。
+3. **第一批最小工程资产**:D-COMP(成分冻结+taint 继承+交集有效窗+research_family+ceiling)/ D4a(field_status 注册+approval YAML+parity 0+log+表达式 hash+availability_audit+claim)。
+
+**P-OP / D6 / D7 不是 D-COMP/D4a 的前置;P-CAL 最低要求=tainted claim 用保守上界或 reviewer-block,不退回旧 univ_all 原 bar。**
+
+**评审关闭。下一步实现起点 = 上面三组最小前置 → 首批 D-COMP/D4a canary。**
