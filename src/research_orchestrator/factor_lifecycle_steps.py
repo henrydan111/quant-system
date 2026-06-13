@@ -431,7 +431,8 @@ def _composite_components(factor_id: str) -> list:
 
 
 def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store,
-                    system_oos_start: str = "2021-01-01", current_definition_hash: str = ""):
+                    system_oos_start: str = "2021-01-01", current_definition_hash: str = "",
+                    certified_operators=frozenset()):
     """Adjudicate the replication status ceiling for one (factor, universe) by composing the
     cohort manifest (tier + oos_eligibility), the 7-domain matrix evidence (coverage + depth)
     and the FactorDomainClaim (class). Returns ``None`` ONLY if the factor is in NO cohort
@@ -524,9 +525,12 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
                 break
     oos_quarantine_start, oos_quarantine_approximate = compute_oos_quarantine_start(
         truth_label_end, system_oos_start)
-    # F7: operators outside the built-in whitelist are uncertified (P-OP not built).
+    # F7 + P-OP: an operator is certified iff it is a trusted built-in OR has a `certified`
+    # OperatorCertification record; anything else is uncertified → hard-block (a wrong
+    # operator silently produces plausible-but-wrong alpha, §10A).
     required_ops = set(getattr(row, "required_operators", ()) or ())
-    has_uncertified_operator = bool(required_ops - CERTIFIED_BUILTIN_OPERATORS)
+    certified = set(CERTIFIED_BUILTIN_OPERATORS) | set(certified_operators)
+    has_uncertified_operator = bool(required_ops - certified)
 
     decision = resolve_replication_ceiling(
         replication_tier=row.replication_tier_planned, claim_class=claim_class,
@@ -603,6 +607,14 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     _cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
     def_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
                    for _, r in _cur.iterrows()} if len(_cur) else {})
+    # P-OP: operators with a `certified` OperatorCertification (fail-safe — if the cert store
+    # can't be read, no operator is treated as certified → uncertified ones block).
+    try:
+        from src.alpha_research.factor_library.operator_certification import OperatorCertStore
+        certified_ops = OperatorCertStore(rd["factor_registry_dir"]).certified_operators()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P-OP cert store read failed (fail-closed: none certified): %s", e)
+        certified_ops = frozenset()
     cohort_adj: dict[str, dict] = {}
     refused: list[str] = []
     cohort_errors: dict[str, str] = {}
@@ -615,6 +627,7 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
                 fid, gate_universe, manifests=manifests, evidence_df=store.factor_evidence,
                 claim_store=claim_store, system_oos_start=system_oos_start,
                 current_definition_hash=def_hashes.get(fid, ""),
+                certified_operators=certified_ops,
             )
         except Exception as e:  # noqa: BLE001
             logger.error("P-GATE adjudication FAILED for %s — refusing (fail-closed): %s", fid, e)
