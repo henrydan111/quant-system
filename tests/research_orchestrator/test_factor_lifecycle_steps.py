@@ -425,6 +425,51 @@ class FactorLifecyclePublishTests(unittest.TestCase):
                 self.assertEqual(result.outputs["published"], 0)
                 self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")  # unchanged
 
+    def test_pgate_refuses_cohort_factor_below_candidate_ceiling(self):
+        # P-GATE/F3 (item 2b): a CICC-cohort factor whose adjudicated ceiling is below
+        # candidate is REFUSED promotion (stays draft); a candidate_ceiling cohort factor
+        # and a NON-cohort factor both promote. Governance records persisted for the cohort.
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        from src.alpha_research.factor_registry.replication_governance import (
+            CohortFactorRow, CohortManifest,
+        )
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d", "val_bp", "qual_roe"])
+            synth = CohortManifest(
+                source_cohort_id="cicc_test_cohort", handbook_label_window_end="2022-12-31",
+                denominators={"source": 3, "daily_replicability": 2, "formalization_candidate": 2},
+                factor_rows=[
+                    CohortFactorRow(factor_name_original="X", catalog_factor_id="mom_return_5d",
+                                    replication_tier_planned="not_replicable", oos_eligibility="pending"),
+                    CohortFactorRow(factor_name_original="Y", catalog_factor_id="val_bp",
+                                    replication_tier_planned="exact_certified", oos_eligibility="short_window"),
+                ],
+            )
+            with patch.object(fls, "_load_cohort_manifests", lambda: [synth]):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            # mom_return_5d: cohort + not_replicable -> blocked -> REFUSED (stays draft)
+            self.assertIn("mom_return_5d", result.outputs["refused_by_ceiling"])
+            self.assertNotIn("mom_return_5d", result.outputs["promoted_to_candidate"])
+            self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")
+            store = FactorRegistryStore(rd["factor_registry_dir"])
+            refused_ev = store.factor_evidence[
+                (store.factor_evidence["factor_id"] == "mom_return_5d")
+                & (store.factor_evidence["run_type"] == "factor_lifecycle")
+            ]
+            self.assertEqual(len(refused_ev), 0)  # refused -> NO signed evidence
+            # val_bp: cohort + exact_certified + short_window -> candidate_ceiling -> promoted
+            self.assertIn("val_bp", result.outputs["promoted_to_candidate"])
+            self.assertEqual(self._status_of(rd, "val_bp"), "candidate")
+            # qual_roe: NON-cohort -> promoted (unchanged behavior)
+            self.assertIn("qual_roe", result.outputs["promoted_to_candidate"])
+            # governance records persisted for the two cohort factors with the resolved ceilings
+            gov = {g["factor"]: g for g in result.outputs["replication_governance"]}
+            self.assertEqual(gov["mom_return_5d"]["status_ceiling"], "blocked")
+            self.assertFalse(gov["mom_return_5d"]["promoted"])
+            self.assertEqual(gov["val_bp"]["status_ceiling"], "candidate_ceiling")
+            self.assertTrue(gov["val_bp"]["promoted"])
+
     def test_evidence_idempotent_on_reapprove(self):
         with self._temp() as d:
             root = Path(d)
