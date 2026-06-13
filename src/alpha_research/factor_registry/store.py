@@ -1153,6 +1153,17 @@ class FactorRegistryStore:
                 # FAIL-CLOSED: drifted (or unknown to catalog) -> no FORMAL evidence.
                 skipped_drift.append(fid)
                 continue
+            # Window + universe provenance (2026-06-14 re-sign support). A verdict MAY carry
+            # the IS window it was computed on (``effective_start``/``effective_end``) +
+            # ``universe_id``. When present they are stamped (universe_id column +
+            # unified_metrics_json) so the dashboard can establish SAME-WINDOW comparability
+            # vs the automated sweep — the gate itself emits no methodology_hash, so the
+            # window is the only sound equality key. Legacy gate callers pass none → both
+            # stay empty (semantically univ_all on the row's historical window; unchanged).
+            _univ = _coerce_string(v.get("universe_id")) or "univ_all"
+            _win = {k: v.get(k) for k in ("effective_start", "effective_end") if v.get(k)}
+            _umj = (json.dumps({**_win, "universe_id": _univ}, ensure_ascii=False)
+                    if _win else "")
             evidence_rows.append(FactorEvidenceRecord(
                 run_id=run_id, run_type="factor_lifecycle", factor_id=fid,
                 version=int(row["version"]), is_current_at_import=True,
@@ -1168,6 +1179,7 @@ class FactorRegistryStore:
                 evidence_class=str(evidence_class), formal_evidence_eligible=True,
                 source_path="", source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
+                universe_id=_univ, unified_metrics_json=_umj,
             ))
             attached.append(fid)
         if evidence_rows:

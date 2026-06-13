@@ -438,13 +438,43 @@ def collect_factors() -> dict:
                 heldout = _num(g.get("is_rank_icir")) if g.get("is_rank_icir") is not None else _num(f.get("is_rank_icir"))
                 heldout_src = "signed" if g.get("is_rank_icir") is not None else ("auto" if f.get("is_rank_icir") is not None else "")
                 sign_cons = _num(g.get("sign_consistency")) if g.get("sign_consistency") is not None else _num(f.get("sign_consistency"))
-                # signed-vs-automated consistency canary (same engine — material divergence = drift)
+                # signed-vs-automated consistency canary. The premise "same engine →
+                # divergence = data/definition drift" ONLY holds when both rows are on the SAME
+                # IS window. The candidate gate emits NO methodology_hash, so the window
+                # (effective_start/effective_end, stamped on re-sign) is the sound equality key.
+                #   • same window  → |Δ| is a real reproduce-drift signal (⚠ if > 0.005)
+                #   • diff window  → signed predates the current window (re-sign pending, ↻)
+                #   • diff window AND the current-window auto metric fails the candidate bar
+                #     (|ICIR|<0.10 or sign_cons<0.70, or uncomputable) → "weakened on the wider
+                #     window" (▼). The 8 such candidates (user 2026-06-14) KEEP candidate status
+                #     (resolve-but-label); the flag is informational, not a downgrade.
                 drift = None
-                if g.get("is_rank_icir") is not None and f.get("is_rank_icir") is not None:
-                    try:
-                        drift = abs(float(g["is_rank_icir"]) - float(f["is_rank_icir"]))
-                    except (TypeError, ValueError):
-                        drift = None
+                signed_stale = False
+                signed_weakened = False
+                if g.get("is_rank_icir") is not None:
+                    gj_ = _parse_json(g.get("unified_metrics_json")) or {}
+                    fj_ = _parse_json(f.get("unified_metrics_json")) or {}
+                    sig_win = (gj_.get("effective_start"), gj_.get("effective_end"))
+                    auto_win = (fj_.get("effective_start"), fj_.get("effective_end"))
+                    same_window = all(sig_win) and all(auto_win) and sig_win == auto_win
+                    if same_window and f.get("is_rank_icir") is not None:
+                        try:
+                            drift = abs(float(g["is_rank_icir"]) - float(f["is_rank_icir"]))
+                        except (TypeError, ValueError):
+                            drift = None
+                    elif not same_window:
+                        signed_stale = True
+                        if f:  # auto row exists but is on a different (current) window
+                            airc, asc = f.get("is_rank_icir"), f.get("sign_consistency")
+                            try:
+                                if airc is None:
+                                    signed_weakened = True  # uncomputable on the wider window
+                                else:
+                                    a = abs(float(airc)); s = float(asc) if asc is not None else None
+                                    if a < 0.10 or (s is not None and s < 0.70):
+                                        signed_weakened = True
+                            except (TypeError, ValueError):
+                                pass
                 # HAC significance (direction-aware |t| >= 3.0), neutralized-only labeling
                 hac_t = _num(f.get("mean_rank_ic_hac_t"))
                 neut_t = _num(f.get("neutralized_hac_t"))
@@ -467,7 +497,8 @@ def collect_factors() -> dict:
                     "weights": _parse_json(r.get("weights_json")),
                     # ---- formal (lifecycle methodology): signed first, automated fills
                     "heldout_icir": heldout, "heldout_src": heldout_src, "sign_cons": sign_cons,
-                    "formal_consistency_drift": _num(drift),
+                    "formal_consistency_drift": _num(drift), "signed_stale": signed_stale,
+                    "signed_weakened": signed_weakened,
                     "hac_t": hac_t, "hac_sig": hac_sig,
                     "neut_icir": _num(f.get("neutralized_rank_icir")), "neut_hac_t": neut_t,
                     "mono_shape": _s(f.get("mono_shape")),

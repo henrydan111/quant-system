@@ -1,0 +1,883 @@
+{
+  "run_id": "resign_univ_all_2010_2020",
+  "generated_at": "2026-06-14T00:05:45",
+  "live": true,
+  "is_window": {
+    "effective_start": "2010-01-04",
+    "effective_end": "2020-12-03",
+    "nominal_time_split": "2010-01-01..2020-12-31"
+  },
+  "candidate_bar": {
+    "heldout_icir_min": 0.1,
+    "sign_consistency_min": 0.7
+  },
+  "gate_authorization": "User explicitly authorized on 2026-06-14 (AskUserQuestion: 'Re-sign the 87, flag the 8' + 'Flag only, keep candidate status'). This is the human gate-review approval. Numbers are the 2010-2020 run_is_walk_forward(factor_origin='a_priori') results from unified_eval_matrix (bit-identical to the candidate gate).",
+  "source": "E:\\量化系统\\workspace\\outputs\\unified_eval_matrix\\results.jsonl",
+  "signed_set_size": 95,
+  "auto_missing": [],
+  "resigned": [
+    {
+      "factor": "alpha_chip_cgo_smooth_20d",
+      "status": "candidate",
+      "new_icir": 0.3996886551026647,
+      "new_sign_cons": 1.0,
+      "effective_start": "2018-01-03",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_52w_position",
+      "status": "candidate",
+      "new_icir": -0.23939055182364513,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_cash_sheep",
+      "status": "candidate",
+      "new_icir": 0.19752358985836266,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_defensive",
+      "status": "candidate",
+      "new_icir": 0.37435463092359295,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_growth_value",
+      "status": "candidate",
+      "new_icir": 0.29828494097355684,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_low_vol_value",
+      "status": "candidate",
+      "new_icir": 0.2908209342503037,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_multi_6",
+      "status": "candidate",
+      "new_icir": 0.3789347257334584,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_quality_value",
+      "status": "candidate",
+      "new_icir": 0.24808524017033246,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_rev_low_turn",
+      "status": "candidate",
+      "new_icir": 0.5533886681137264,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_size_quality",
+      "status": "candidate",
+      "new_icir": 0.6204508130722848,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "comp_small_value",
+      "status": "candidate",
+      "new_icir": 0.4461618260669052,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "earn_eps_diffusion_120",
+      "status": "approved",
+      "new_icir": 0.43821929251132197,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-02-02",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "earn_eps_diffusion_60",
+      "status": "approved",
+      "new_icir": 0.5105031494931246,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-02-02",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "earn_sue_ni_assets",
+      "status": "approved",
+      "new_icir": 0.426877545670279,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "earn_sue_ni_mcap",
+      "status": "candidate",
+      "new_icir": 0.45450273277783676,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "grow_rev_acceleration",
+      "status": "candidate",
+      "new_icir": 0.16357058955495352,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-19",
+      "effective_end": "2020-11-03"
+    },
+    {
+      "factor": "grow_rev_trend",
+      "status": "candidate",
+      "new_icir": 0.24862029298404917,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-19",
+      "effective_end": "2020-11-05"
+    },
+    {
+      "factor": "liq_amihud_20d",
+      "status": "candidate",
+      "new_icir": 0.5008849911576372,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_log_dollar_vol",
+      "status": "candidate",
+      "new_icir": -0.7069962173465294,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_spread_proxy_20d",
+      "status": "candidate",
+      "new_icir": -0.4264501988711867,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_10d",
+      "status": "candidate",
+      "new_icir": -0.48385359716339,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_20d",
+      "status": "candidate",
+      "new_icir": -0.4481554681157924,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_5d",
+      "status": "candidate",
+      "new_icir": -0.4993085376984735,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_60d",
+      "status": "candidate",
+      "new_icir": -0.3454810788790549,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_f_20d",
+      "status": "candidate",
+      "new_icir": -0.5494677165311959,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_f_5d",
+      "status": "candidate",
+      "new_icir": -0.595563483846314,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_turnover_ratio_5_60",
+      "status": "candidate",
+      "new_icir": -0.4308962565963828,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_vol_cv_20d",
+      "status": "candidate",
+      "new_icir": -0.6832185835302376,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_vol_ratio_ma5",
+      "status": "candidate",
+      "new_icir": -0.2041100504312392,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "liq_vol_surge",
+      "status": "candidate",
+      "new_icir": -0.43098760921907153,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_acceleration_20d",
+      "status": "candidate",
+      "new_icir": -0.3428256392597586,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_ewm_20d",
+      "status": "candidate",
+      "new_icir": -0.44184792901717584,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_ewm_60d",
+      "status": "candidate",
+      "new_icir": -0.4743087698481311,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_high_moment_20d",
+      "status": "candidate",
+      "new_icir": -0.5234473647765305,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_industry_rel_20d",
+      "status": "candidate",
+      "new_icir": -0.5701690624560614,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_intraday_20d",
+      "status": "candidate",
+      "new_icir": -0.5244891199834203,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_low_moment_20d",
+      "status": "candidate",
+      "new_icir": 0.2618268984013108,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_overnight_20d",
+      "status": "candidate",
+      "new_icir": 0.20073800457541924,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_10d",
+      "status": "candidate",
+      "new_icir": -0.3433563648917522,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_120d",
+      "status": "candidate",
+      "new_icir": -0.271597768735577,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_20d",
+      "status": "candidate",
+      "new_icir": -0.4540967208414252,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_250d",
+      "status": "candidate",
+      "new_icir": -0.1766095335127839,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_5d",
+      "status": "candidate",
+      "new_icir": -0.27397444805381715,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_return_60d",
+      "status": "candidate",
+      "new_icir": -0.39827682837834455,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "mom_weighted_120d",
+      "status": "candidate",
+      "new_icir": -0.41679469249937373,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "north_hold_change_20d_cov",
+      "status": "candidate",
+      "new_icir": 0.6260083070090445,
+      "new_sign_cons": 1.0,
+      "effective_start": "2017-02-08",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "north_hold_change_60d_cov",
+      "status": "candidate",
+      "new_icir": 0.5619415967979756,
+      "new_sign_cons": 1.0,
+      "effective_start": "2017-04-07",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "qual_gross_profitability",
+      "status": "candidate",
+      "new_icir": 0.22288168230703614,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "qual_margin_stability",
+      "status": "candidate",
+      "new_icir": 0.30383163420861364,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "rev_max_return_20d",
+      "status": "candidate",
+      "new_icir": -0.646182399619685,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "rev_return_10d",
+      "status": "candidate",
+      "new_icir": 0.3433563648917522,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "rev_return_3d",
+      "status": "candidate",
+      "new_icir": 0.2323391366122104,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "rev_return_5d",
+      "status": "candidate",
+      "new_icir": 0.27397444805381715,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "rev_up_down_ratio_20d",
+      "status": "candidate",
+      "new_icir": -0.13572227118632774,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_downvol_60d",
+      "status": "candidate",
+      "new_icir": -0.18460899357687738,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_range_ratio_20d",
+      "status": "candidate",
+      "new_icir": -0.4190890073257883,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_skew_60d",
+      "status": "candidate",
+      "new_icir": -0.550291923615606,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_tail_60d",
+      "status": "candidate",
+      "new_icir": 0.22381480625389433,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_var_95_20d",
+      "status": "candidate",
+      "new_icir": 0.1883808022611666,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_10d",
+      "status": "candidate",
+      "new_icir": -0.4231291237400817,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_120d",
+      "status": "candidate",
+      "new_icir": -0.34337359169371023,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_20d",
+      "status": "candidate",
+      "new_icir": -0.4059124699744544,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_5d",
+      "status": "candidate",
+      "new_icir": -0.40132063805996876,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_60d",
+      "status": "candidate",
+      "new_icir": -0.37348674849861613,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "risk_vol_of_vol",
+      "status": "candidate",
+      "new_icir": -0.4640947812960982,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_bb_pct",
+      "status": "candidate",
+      "new_icir": -0.20260356098904334,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_close_to_low_20d",
+      "status": "candidate",
+      "new_icir": -0.38569704362658797,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_ma20_ma60_ratio",
+      "status": "candidate",
+      "new_icir": -0.3281675181820059,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_ma5_ma20_ratio",
+      "status": "candidate",
+      "new_icir": -0.3579454957076221,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_macd_signal",
+      "status": "candidate",
+      "new_icir": -0.22779213989458724,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_price_to_ma20",
+      "status": "candidate",
+      "new_icir": -0.3950519744153983,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_price_to_ma60",
+      "status": "candidate",
+      "new_icir": -0.45002067208230645,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_rsi_14",
+      "status": "candidate",
+      "new_icir": -0.2911946439708904,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_rsi_28",
+      "status": "candidate",
+      "new_icir": -0.37352880456815457,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_rsi_6",
+      "status": "candidate",
+      "new_icir": -0.16648429793113428,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_skew_20d",
+      "status": "candidate",
+      "new_icir": -0.540197146402257,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "tech_williams_r_14",
+      "status": "candidate",
+      "new_icir": -0.14919806157522245,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_bp",
+      "status": "candidate",
+      "new_icir": 0.2106672186020671,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_bp_industry_rel",
+      "status": "candidate",
+      "new_icir": 0.3627971766357685,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_bps_to_price",
+      "status": "candidate",
+      "new_icir": 0.2173501231049494,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_div_ratio",
+      "status": "candidate",
+      "new_icir": 0.2986160273261632,
+      "new_sign_cons": 0.8181818181818182,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_div_yield",
+      "status": "candidate",
+      "new_icir": 0.20210262506111978,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_ep",
+      "status": "candidate",
+      "new_icir": 0.1604727024113048,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_ep_industry_rel",
+      "status": "candidate",
+      "new_icir": 0.32316718279574963,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_ep_ttm",
+      "status": "candidate",
+      "new_icir": 0.19681741520833376,
+      "new_sign_cons": 0.7272727272727273,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_pb_change_60d",
+      "status": "candidate",
+      "new_icir": -0.4698860384729152,
+      "new_sign_cons": 1.0,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    },
+    {
+      "factor": "val_relative_pe",
+      "status": "candidate",
+      "new_icir": -0.32007009283672744,
+      "new_sign_cons": 0.9090909090909091,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03"
+    }
+  ],
+  "flagged_weakened_kept_candidate": [
+    {
+      "factor": "comp_relative_strength",
+      "status": "candidate",
+      "new_icir": 0.06202436975620609,
+      "new_sign_cons": 0.5454545454545454,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.062<0.1 or sign_cons=0.55<0.7"
+    },
+    {
+      "factor": "mom_idio_20d",
+      "status": "candidate",
+      "new_icir": null,
+      "new_sign_cons": null,
+      "effective_start": null,
+      "effective_end": null,
+      "reason": "uncomputable on new window"
+    },
+    {
+      "factor": "qual_accruals",
+      "status": "candidate",
+      "new_icir": 0.13215309931088948,
+      "new_sign_cons": 0.6,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.132<0.1 or sign_cons=0.60<0.7"
+    },
+    {
+      "factor": "rev_min_return_20d",
+      "status": "candidate",
+      "new_icir": 0.12979390024407692,
+      "new_sign_cons": 0.6363636363636364,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.130<0.1 or sign_cons=0.64<0.7"
+    },
+    {
+      "factor": "risk_downvol_20d",
+      "status": "candidate",
+      "new_icir": -0.13948856319743194,
+      "new_sign_cons": 0.6363636363636364,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.139<0.1 or sign_cons=0.64<0.7"
+    },
+    {
+      "factor": "val_cftp",
+      "status": "candidate",
+      "new_icir": 0.15266985346386214,
+      "new_sign_cons": 0.6363636363636364,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.153<0.1 or sign_cons=0.64<0.7"
+    },
+    {
+      "factor": "val_sp",
+      "status": "candidate",
+      "new_icir": 0.12756739249971918,
+      "new_sign_cons": 0.6363636363636364,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.128<0.1 or sign_cons=0.64<0.7"
+    },
+    {
+      "factor": "val_sp_ttm",
+      "status": "candidate",
+      "new_icir": 0.14765930370402813,
+      "new_sign_cons": 0.6363636363636364,
+      "effective_start": "2010-01-04",
+      "effective_end": "2020-12-03",
+      "reason": "|ICIR|=0.148<0.1 or sign_cons=0.64<0.7"
+    }
+  ],
+  "recorder_result": {
+    "attached": [
+      "alpha_chip_cgo_smooth_20d",
+      "comp_52w_position",
+      "comp_cash_sheep",
+      "comp_defensive",
+      "comp_growth_value",
+      "comp_low_vol_value",
+      "comp_multi_6",
+      "comp_quality_value",
+      "comp_rev_low_turn",
+      "comp_size_quality",
+      "comp_small_value",
+      "earn_eps_diffusion_120",
+      "earn_eps_diffusion_60",
+      "earn_sue_ni_assets",
+      "earn_sue_ni_mcap",
+      "grow_rev_acceleration",
+      "grow_rev_trend",
+      "liq_amihud_20d",
+      "liq_log_dollar_vol",
+      "liq_spread_proxy_20d",
+      "liq_turnover_10d",
+      "liq_turnover_20d",
+      "liq_turnover_5d",
+      "liq_turnover_60d",
+      "liq_turnover_f_20d",
+      "liq_turnover_f_5d",
+      "liq_turnover_ratio_5_60",
+      "liq_vol_cv_20d",
+      "liq_vol_ratio_ma5",
+      "liq_vol_surge",
+      "mom_acceleration_20d",
+      "mom_ewm_20d",
+      "mom_ewm_60d",
+      "mom_high_moment_20d",
+      "mom_industry_rel_20d",
+      "mom_intraday_20d",
+      "mom_low_moment_20d",
+      "mom_overnight_20d",
+      "mom_return_10d",
+      "mom_return_120d",
+      "mom_return_20d",
+      "mom_return_250d",
+      "mom_return_5d",
+      "mom_return_60d",
+      "mom_weighted_120d",
+      "north_hold_change_20d_cov",
+      "north_hold_change_60d_cov",
+      "qual_gross_profitability",
+      "qual_margin_stability",
+      "rev_max_return_20d",
+      "rev_return_10d",
+      "rev_return_3d",
+      "rev_return_5d",
+      "rev_up_down_ratio_20d",
+      "risk_downvol_60d",
+      "risk_range_ratio_20d",
+      "risk_skew_60d",
+      "risk_tail_60d",
+      "risk_var_95_20d",
+      "risk_vol_10d",
+      "risk_vol_120d",
+      "risk_vol_20d",
+      "risk_vol_5d",
+      "risk_vol_60d",
+      "risk_vol_of_vol",
+      "tech_bb_pct",
+      "tech_close_to_low_20d",
+      "tech_ma20_ma60_ratio",
+      "tech_ma5_ma20_ratio",
+      "tech_macd_signal",
+      "tech_price_to_ma20",
+      "tech_price_to_ma60",
+      "tech_rsi_14",
+      "tech_rsi_28",
+      "tech_rsi_6",
+      "tech_skew_20d",
+      "tech_williams_r_14",
+      "val_bp",
+      "val_bp_industry_rel",
+      "val_bps_to_price",
+      "val_div_ratio",
+      "val_div_yield",
+      "val_ep",
+      "val_ep_industry_rel",
+      "val_ep_ttm",
+      "val_pb_change_60d",
+      "val_relative_pe"
+    ],
+    "skipped_drift": [],
+    "skipped_unknown": []
+  }
+}

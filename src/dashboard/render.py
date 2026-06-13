@@ -990,6 +990,7 @@ def _metric_help() -> str:
     """③ 指标含义说明(折叠)。每个 dashboard 因子指标的口径解释。"""
     items = [
         ("formal ICIR / 留出ICIR", "IS-only walk-forward 的留出折(后 40%)上,RankIC 的均值/标准差。衡量因子横截面预测力的稳定性;|值| 越大越强,符号即方向。人签 gated 行优先,自动全量行兜底。"),
+        ("同口径一致性 (⚠ / ↻ / ▼)", "人签证据与自动全量证据应同引擎复现,比较键是 IS 窗(候选闸不产出 methodology_hash)。⚠＝两者【同窗】仍 |留出ICIR差|>0.005 = 真·数据/定义漂移红旗。↻＝人签基于旧窗(2014-2020)、自动全量在新窗(2010-2020),换窗预期差异(非漂移),该因子在新窗重签后消失。▼＝该 candidate 在更宽的新窗上不再过候选闸(|ICIR|<0.10 或 符号一致<0.70,或不可计算)＝宽窗再验证未过——维持 candidate 状态(resolve-but-label),属真实发现非错误。"),
         ("HAC-t", "RankIC 序列的 Newey-West(Bartlett)异方差自相关稳健 t 值。20 日重叠标签使朴素 t 虚高数倍,故用 HAC。|t|≥3 记为显著(pass);仅市值/行业中性化后才显著记 neut_only(带 *);否则 no。"),
         ("中性ICIR", "对市值+行业做横截面中性化(估计域=全市场)后残差的 RankICIR。剔除尺寸/行业暴露后仍存的纯 alpha;比原始 ICIR 更能识别'换皮的风格暴露'。"),
         ("形状 (mono_shape)", "留出窗 10 分组定向后年化收益曲线的相邻组差分符号向量分类:monotonic_up/down(单调)、top_reversal(顶组反转,A股长头部署红旗)、u_shape 等。方向未定的弱信号因子无形状。"),
@@ -1054,8 +1055,15 @@ def _factors(ctx: dict) -> str:
         shape = x.get("mono_shape") or ""
         src_mark = ""
         drift = x.get("formal_consistency_drift")
-        drift_mark = ' <span class="hfail" title="人签与自动同口径分歧 — 数据/定义漂移信号">⚠</span>' \
+        drift_mark = ' <span class="hfail" title="人签与自动【同 IS 窗】分歧 — 数据/定义漂移信号">⚠</span>' \
             if (drift is not None and drift > 0.005) else ""
+        if not drift_mark and x.get("signed_weakened"):
+            drift_mark = (' <span class="hfail" title="该 candidate 在更宽的 2010-2020 窗上不再过候选闸'
+                          '(|ICIR|<0.10 或 符号一致<0.70，或新窗不可计算)：维持 candidate 状态(resolve-but-label)，'
+                          '人签证据未在新窗重签。属真实再验证发现，非数据错误。">▼</span>')
+        elif not drift_mark and x.get("signed_stale"):
+            drift_mark = (' <span class="muted" title="人签证据基于旧 IS 窗(2014-2020)，自动全量在新窗(2010-2020)：'
+                          '换窗预期差异，非漂移；待该因子在新窗重签后此标记消失。">↻</span>')
         hac_cls = {"pass": "ok", "neut_only": "warnt", "no": "muted"}.get(hac_sig, "muted")
         hac_cell = (f'<span class="{hac_cls}">{_fmt(x.get("hac_t"))}'
                     + ("*" if hac_sig == "neut_only" else "") + "</span>")
@@ -1103,7 +1111,12 @@ def _factors(ctx: dict) -> str:
             fml.append(f'<span class="chip">长腿IR proxy 300/{esc(x.get("ll_ir_300"))} · 500/{esc(x.get("ll_ir_500"))}</span>')
         if drift is not None:
             ok = "一致 ✓" if drift <= 0.005 else f'<span class="hfail">分歧 {drift:.4f} ⚠</span>'
-            fml.append(f'<span class="chip">同口径一致性 {ok}</span>')
+            fml.append(f'<span class="chip">同口径一致性（同窗）{ok}</span>')
+        elif x.get("signed_weakened"):
+            fml.append('<span class="chip"><span class="hfail">▼ 宽窗再验证未过候选闸</span> '
+                       '2010-2020 窗 |ICIR|<0.10 或 符号一致<0.70（或不可计算）；维持 candidate(resolve-but-label)，待人工复核</span>')
+        elif x.get("signed_stale"):
+            fml.append('<span class="chip">人签证据待重签 <b>↻</b> 旧窗 2014-2020 → 新窗 2010-2020（换窗预期差异，非漂移）</span>')
         if x.get("methodology_hash"):
             fml.append(f'<span class="chip mono">m#{esc(x["methodology_hash"])}</span>')
         disc = []
