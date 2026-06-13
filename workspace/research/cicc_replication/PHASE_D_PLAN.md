@@ -55,8 +55,20 @@ EV2EBITDA(income.ebitda 单季 100% 空,已知)、NCFP_TTM(净现金流增量科
 NP_SD/OP_SD(稳健增速定义不明)、QPT(分层打分配方未披露,留待逆向)、
 Comp_opt/TOP_MANA_INCOME(高管薪酬——新端点,§6.1 先读文档)、
 IHN_diff/Ln_IH/LHRD(机构持仓/十大股东明细——新端点)、
-分析师 12/16(需一致预期**水平值**,report_rc 仅 4 个事件流原语;EINS_75D/RPP_75D
-两个可做,但分析师类整体窗口限 2022-05+,独立子阶段处理)。
+分析师 12/16(**blocked-FIELDS,非 blocked-window**——更正 2026-06-13):**report_rc 的
+report_date+1 锚点经验证自 2010 起即真 PIT**(create_time=2022-05 只是 Tushare 批量入库戳,
+非 report_date 不可信的证据;三测全 PASS:水平对账 corr +0.997、误差对账 Tushare 比 JQ
+oracle 更不准 +0.054=无 lookahead、全市场 17,717 点池化 Spearman +0.950 含退市股;详见
+[REPORT_RC_PIT_ANCHOR_VALIDATION.md](../data_expansion/REPORT_RC_PIT_ANCHOR_VALIDATION.md))。
+所以 CAFR/EEP/FORE_Earning/FORE_EPS/FORE_OP/EEChange/EOPChange 这些**一致预期水平值因子可
+覆盖 2010-2026 全历史**——真正的缺口是:目前只注册了 4 个事件流原语
+($report_rc__eps_up/eps_dn/eps_revision_count/n_active_analysts),需把一致预期**水平值**
+字段(FY1 一致预期盈利/EPS/营收、离散度等;验证里已从 report_date+1 明细重建过,证明可做)
+**物化进 ledger+provider 并注册**才能复刻。RatingChange/TargetReturn 另需 report_rc 原始的
+评级/目标价列(待核)。EINS_75D/RPP_75D(机构数/报告数)用现有 n_active_analysts/事件计数即可。
+⚠ **eps_diffusion(breadth/二阶差分)单独受 6-15 restatement 金丝雀硬门约束**——水平层 PIT
+已证,但 breadth 对单条修改记录更敏感,canary PASS 前 OOS 不能动(eps_diffusion 的 provisional
+approved 状态不因本次水平验证而解除)。)
 NP_SUE0/1 槽深不够(8 季 σ)→ 已有 earn_sue_ni_assets(approved)为同族,不重复造。
 
 ### 去重(不重复注册,映射表对照真值)
