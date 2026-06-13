@@ -1,10 +1,16 @@
-# 剩余中金因子 → 正式评估 全量路线图(2026-06-13)
+# 剩余中金因子 → 正式评估 全量路线图(Rev2,2026-06-13)
 
 > 目标:把三本中金手册里**所有可复刻**的剩余因子带进正式评估链路
 > (draft → 入目录即 7 域矩阵 → IS 门 → candidate → sealed OOS → approved)。
 > 排序按**约束就绪度**(数据/字段/算子),不按因子数——约束才是瓶颈。
 > 全部新因子按 universe 方案 Draft-7 走:入 draft 自动 7 域体检;凡其中金真值表已被观察的
 > 域,claim 按 `tainted_post_hoc_max_stat` 记账(与 D5 同,无特例)。
+>
+> **Rev2(GPT 5.5 Pro cross-review,6 项 minimum-change 全 ACCEPT,裁决见
+> [REMAINING_PLAN_cross_review_response.md](REMAINING_PLAN_cross_review_response.md))**:新增 §9
+> handbook-cohort 多重检验治理 + 真值表 OOS 隔离;§10 算子/重建一致预期认证门;§7 口径降为
+> 分层 replication_tier(删除"100% 进 approved"过满表述);执行顺序改为 D-COMP/D4a 作 P-GATE
+> canary、E1 待算子认证。**当前状态:工程准备阶段,未批准一次性大规模灌入 OOS。**
 
 ## 0. 现状基线
 
@@ -112,10 +118,14 @@ Wave D7(新端点核查 → ~12,部分可能放弃)─────┘
 | D4 | 12 | 字段注册一轮 | 无 | 基本面 D 后缀齐 |
 | D6 | ~11 | 一致预期水平值物化 | 无 | 分析师类 2010+ 复刻 |
 | D7 | ~12 | 新端点(部分) | 无 | 治理/股东/税费类(能做的) |
-| **合计** | **~183** | | | 中金可复刻因子全部进入正式评估 |
+| **合计** | **~183 formalization candidates** | | | 见 §7 分层口径(非"全部 approved") |
 
-终态:目录从 208 → ~390;全目录 × 7 域矩阵 ~2,730 单元;中金三本手册里日频可复刻的因子
-100% 进入 draft→candidate→approved 链路;高频 68 显式存档不做。
+终态:目录从 208 → ~390;全目录 × 7 域矩阵 ~2,730 单元。**口径(Rev2 更正,删除"100%
+approved"过满表述)**:~183 formalization candidates 按 `replication_tier` 分层——
+`exact_certified`(公式+字段+窗口+truth rank/IC 均过阈)/ `formula_equivalent_pending`(公式可写,
+truth 待转录验)/ `proxy_approx`(字段或构造与中金不完全一致)/ `derived_methodology_proxy`(D6 自建
+一致预期)/ `not_replicable`(高频/缺数据)。**只有 exact_certified 计入"忠实复刻"**;北向/筹码等
+OOS 已花或制度断点(2024-08)族**封顶在 evidence/candidate,不进 approved 链路**;高频 68 存档不做。
 
 ## 8. 数据工作流兼容性核验(2026-06-13,逐 bin 实测)
 
@@ -144,5 +154,85 @@ Wave D7(新端点核查 → ~12,部分可能放弃)─────┘
 零数据零 rebuild;D4 的大部分(~10 个 D 后缀)从"需 rebuild"更正为"仅注册"(bin 实测已存在)。
 真正触发 provider rebuild 的只有三处:D4b(cashflow 加深到 q7)、D6(report_rc materializer 扩
 一致预期水平值)、D7 的真新端点——全部落在既有的 `build_qlib_backend --mode update --datasets`
-标准路径上,无需新机制。**建议把这三个 rebuild 合并成一次 provider 增量构建**(cashflow 深槽 +
-report_rc 水平值 + D7 已核查可物化项),避免三次 ~3h 的 Windows copytree。
+标准路径上,无需新机制。**Rev2 更正(GPT §6.2)**:三处共享同一 release train + 一次 final publish
+可以,但**每 dataset 独立 materializer / parity log / PIT canary / rollback tag**——不把未认证的
+D6 重建一致预期和 D7 新端点塞进同一个**不可拆**的 provider 发布(否则 D6 方法错会连带污染
+cashflow q7 + D7,调试成本更高)。原"合并成一次构建"的提法过度优化 Windows copytree 成本,撤回。
+
+## 9. Handbook-cohort 多重检验治理(Rev2 新增,GPT §1/§1b)
+
+per-(factor, universe) 台账抓不住"批量复刻整本手册"的 garden-of-forking-paths:180 个候选即使全噪声,
+单因子 5% 假阳性 → 期望 ~9 个假过 OOS;"复刻 N 过 M = 手册有 M 个 alpha"是无效叙述。且"可复刻"本身
+是隐性筛选器(排高频/弃 D7/价量近似混入数据可得性+公式清晰度)。
+
+**9.1 冻结 cohort manifest(任何批量注册前)**:
+```yaml
+CICCHandbookReplicationCohort:
+  source_cohort_id: cicc_{fundamental|price_volume|high_freq}_handbook_v1
+  manifest_sha:
+  factor_rows:
+    - factor_name_original / handbook_id / chart_id / formula_source
+      replication_tier_planned: exact|formula_equivalent|proxy_approx|derived_methodology|not_replicable
+      exclusion_reason / required_fields / required_operators
+      truth_table_domains_available / truth_table_label_end
+      primary_claim_universe / oos_eligibility
+```
+
+**9.2 两层多重检验**:`FactorDomainClaim` 仍按单因子×域裁决;新增 `CohortClaim` 负责手册级有效性
+报告——任何"复刻通过率"陈述**必须带分母 + family error/FDR + OOS attempts**;**sealed OOS 不能无限
+替补**(失败一个挑下一个 = 同一 cohort 反复开奖,计入 family);"从 180 里挑 5 做组合"必须生成
+cohort-level selection claim(对接方案 §3.4 FactorSetClaim),不能只引 5 个单因子 approved。
+
+**9.3 真值表 OOS 隔离(critical)**:中金 truth table 已展示 2010-2022 表现 → 我方做 parity 即**已观察**
+该窗口表现。每张 truth table 记 `label_window_end`;中金复刻因子 sealed OOS 起点 =
+`max(system_oos_start, truth_label_end + horizon + embargo)`。**实例**:价量动量(图表5/7/8/9)
+已转录到 2022.07 → 其 sealed OOS 起点 ≈ 2022-07 + embargo,可用窗缩到 ~3.5y(2022-07..2026-02);
+未转录真值表的因子未被观察,但一旦为 exact-cert 做 parity 即触发同样隔离 → 转录 vs 保全 OOS 窗
+是显式权衡。基本面 D5 的 18 因子已观察 2010-2022×3域 → 其域 claim 已是 post-hoc(与既有 taint 一致)。
+
+## 10. 算子与重建一致预期认证门(Rev2 新增,GPT §2/§4)
+
+PIT-safe 只证无未来数据,**不证中金公式正确**;错算子静默产出"看似对实则错"的 alpha 并骗过 IS。
+
+**10A `OperatorCertification`(P-OP 阻断门)**:未认证算子的因子只能 dev evidence(status_power=none),
+**不得进 formal IS gate**:
+```yaml
+OperatorCertification:
+  operator_id / spec_source / formula_text / reference_impl_hash / vectorized_impl_hash
+  alignment_policy: {window_closed: left|right, min_periods, lag, adjustment_policy}
+  tests: {golden_panel, property_based, reference_vs_vectorized_random, truth_table_parity, PIT_alignment}
+  status: experimental|certified|blocked
+```
+最低测试(按算子类型):振幅条件和(条件恒真退化为 rolling sum/恒假为0/rank方向+tie+NaN+停牌+涨跌停 golden)、
+路径动量(同端点更曲折惩罚方向、单调路径近普通动量)、信息离散度(集中 vs 平滑排序符定义、尺度不变 rank)、
+影线族(**raw/adjusted OHLC 一致性 + 除权日 canary + high≥max(open,close) 异常**)、截面/时序 rank
+(**两维不可混** + mask/停牌/缺失固定)、滚动 OLS 残差(y=a+bx 残差≈0、常数x→NaN、**窗口边界+lag toy oracle**)。
+每算子必有"慢速参考实现 vs 生产 vectorized"随机面板对拍;算子版本变 → 下游 definition_hash 失效重算。
+
+**10B `DerivedConsensusCertification`(D6 专属)**:重建一致预期是 derived methodology 非 vendor consensus,
+重建规则决定因子值(财年滚动/stale 剔除/券商同日去重/股本回溯/min-analyst 覆盖/report_date+1 是否覆盖
+盘后发布)。level corr +0.997 **必要不充分**(因子靠横截面 rank 与变化,非水平):
+```yaml
+DerivedConsensusCertification:
+  derived_provider_id: report_rc_consensus_recon_v1
+  methodology_hash: {fiscal_year_roll, stale_forecast, broker_dedup, same_day_revision,
+                     share_adjustment, availability_lag, min_analyst_count}
+  validation: {oracle_corr_level, oracle_rank_corr, decile_membership_overlap,
+               coverage_by_year_universe, delay_sensitivity_t0_t1_t2, stale_policy_sensitivity}
+```
+D6 因子标 `replication_tier: reconstructed_consensus_proxy`;失败场景记录:财年映射错配会让 EEChange
+在财报季系统性跳变(IS 看着好,实为 fiscal-year bug);保留 stale forecast 会产生"陈旧度"伪因子。
+
+## 11. 通用覆盖/有效域 gate + 真值表转录 QA(Rev2 新增,GPT §6.3-6.5)
+
+**11.1 覆盖 gate(把 §3.9 有效窗推广为字段覆盖)**:分析师只覆盖研报股、北向/融资融券有起始日+制度断点
+→ univ_all claim 实为"覆盖子集"。每 factor×universe gate report 增 `availability_audit`:
+`valid_value_ratio_by_year / effective_universe_size_p10 / missingness_corr_with_{size,liquidity} /
+stale_value_ratio / first_usable_date / structural_break_dates`;不满足覆盖地板的域只能 evidence-only。
+
+**11.2 D7 重定性为 data-PIT-certification project**(排最后 + 默认 droppable):持仓/股东/薪酬类有
+报告期/公告期/入库期三套时间 + 回填修订 + 薄 effective window,PIT 风险高于普通财报字段,逐端点独立认证。
+
+**11.3 truth table 转录 QA**:手工转录错 → 错 oracle 变"忠实复刻"门。每张表加 `truth_table_manifest`
+(chart_id/source_page/transcribed_by/reviewed_by/numeric_checksum/units/domain_mapping/metric_definition);
+无 QA 的因子不得标 `exact_certified`。
