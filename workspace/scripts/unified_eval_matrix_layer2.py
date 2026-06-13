@@ -58,6 +58,7 @@ COMP_CACHE = OUTDIR / f"layer2_components_{TIME_SPLIT.is_start[:4]}.parquet"
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--batch-size", type=int, default=0, help="ignored; accepted for supervisor compat")
     args = ap.parse_args()
 
     universes = list(mx.UNIVERSES)
