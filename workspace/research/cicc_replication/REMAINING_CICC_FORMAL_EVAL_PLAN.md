@@ -116,3 +116,33 @@ Wave D7(新端点核查 → ~12,部分可能放弃)─────┘
 
 终态:目录从 208 → ~390;全目录 × 7 域矩阵 ~2,730 单元;中金三本手册里日频可复刻的因子
 100% 进入 draft→candidate→approved 链路;高频 68 显式存档不做。
+
+## 8. 数据工作流兼容性核验(2026-06-13,逐 bin 实测)
+
+核验路径:parquet → PIT ledger → qlib provider bins → field_status 注册 → 因子 `$field`。
+**每个 wave 的"解锁条件"必须落在这条管线的某个具体操作上,实测如下。**
+
+### 两层解锁成本(原路线图混淆了,现明确区分)
+
+- **(A) bin 已物化,仅需注册**:field_status.yaml + approval YAML + parity 0-mismatch + append-only log。**无 provider rebuild**。
+- **(B) bin 未物化,需物化**:扩 pit_backend normalizer/materializer → ledger rebuild → `build_qlib_backend --mode update --datasets X --stage full` → 注册。
+
+### 逐 wave 实测结论
+
+| Wave | 实测 | 成本层 |
+|---|---|---|
+| **E1 价量主体** | **全部就绪**:动量/波动/流动/相关用 `$open/$high/$low/$close/$vol/$amount/$adj_factor/$up_limit/$down_limit`(servable);筹码=`$cyq_perf__cost_{5,15,50,85,95}pct / __winner_rate / __weight_avg / __his_high/low`(实测 bin 存在,namespaced);资金流=`$buy_{elg,lg,md,sm}_amount/_vol / $net_mf_amount`(存在);北向=`$ratio`(hk_hold,存在);融资融券=`$rzye/$rqye`(存在)。**全部 approved(唯一非 approved 是 margin_detail_repayment 隔离)**。→ **零数据/零 rebuild,只需 P-OP 算子 + 写表达式** | 仅算子 |
+| **D-COMP 复合** | 成分皆 servable;`add_composites` 现成 | 零数据 |
+| **D4a D 后缀差分(~10)** | **实测 bins 已存在**:`total_assets_q1/q3`、`total_liab_q1`、`inventories_q1`、`money_cap_q1`、`operate_profit_sq_q1/q3`、`n_income_attr_p_sq_q1/q2`、`n_cashflow_act_sq_q0..q4` 全部存在。CFOAD/ROAD/ROED/CCRD/CURD/DAD/DTED/QRD/CSRD/APRD 的当季-上季 TTM 差分**只需 q0-q4 → 已够 → 仅注册**(原计划误判为需 rebuild) | **(A) 仅注册** |
+| **D4b OCF 同比族(2)** | OCF_YOY/OCF_Q_YOY 需 TTM vs 去年 TTM = cashflow q0-3 vs **q4-7**;实测 `n_cashflow_act_sq` 只到 **q4**,q5/q6/q7 缺 → 需加深 SLOT_DEPTH 重物化 cashflow | **(B) rebuild** |
+| **D6 分析师水平值** | report_rc 当前 `_materialize_report_rc_consensus` 只产 4 个事件流原语 bin;一致预期**水平值**(FY1 盈利/EPS/营收/离散度)需**扩 materializer**(按 report_date+1 重建,验证脚本已证可重建)→ ledger+provider rebuild → 注册。report_rc PIT 2010+ 已验证,路径标准 | **(B) rebuild** |
+| **D7 新端点** | 标准 fetch→parquet→ledger→provider→register。**先零成本核查**:report_rc 原始 parquet 是否已含评级/目标价列、报表是否已含应交税费/缴税科目(若含=仅 materializer+注册,免 fetch);EBITDA 单季 100% 空=替代源或放弃;高管薪酬/机构持仓/十大股东=真新端点(读文档 §6.1) | (A) 或 (B) 视核查 |
+
+### 兼容性总结
+
+**路线图与现行数据工作流完全兼容,且比初稿更省**:E1(最大块,~135)是纯算子+表达式工作,
+零数据零 rebuild;D4 的大部分(~10 个 D 后缀)从"需 rebuild"更正为"仅注册"(bin 实测已存在)。
+真正触发 provider rebuild 的只有三处:D4b(cashflow 加深到 q7)、D6(report_rc materializer 扩
+一致预期水平值)、D7 的真新端点——全部落在既有的 `build_qlib_backend --mode update --datasets`
+标准路径上,无需新机制。**建议把这三个 rebuild 合并成一次 provider 增量构建**(cashflow 深槽 +
+report_rc 水平值 + D7 已核查可物化项),避免三次 ~3h 的 Windows copytree。
