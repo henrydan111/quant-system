@@ -97,6 +97,10 @@ CEILING_CAP_REASONS = {
     "evidence_only": (
         "availability_floor_fail", "non_approved_universe",
         "structural_break_unresolved", "insufficient_cross_sections",
+        # fail-closed governance-incompleteness caps (GPT 2026-06-14 review F6/F8): a cohort
+        # factor with NO active domain claim, or with NO 7-domain matrix/availability evidence
+        # yet, cannot be status-bearing — absence is a cap, never a silent pass.
+        "missing_domain_claim", "availability_audit_missing",
     ),
     "candidate_ceiling": (
         "proxy_approx", "derived_methodology_proxy",
@@ -110,6 +114,11 @@ OOS_ELIGIBLE_GATES = (
     "clean_or_calibrated_claim", "certified_operator", "coverage_pass", "denominator_frozen",
 )
 APPROVED_GATES = ("sealed_oos_pass", "power_floor_pass")
+
+# Operators trusted WITHOUT a P-OP OperatorCertification: only built-in rank-combination /
+# difference ops that introduce no new alpha logic (GPT review F7). Anything NOT in this set
+# is uncertified until P-OP exists — "no cert store yet" must NEVER mean "certified".
+CERTIFIED_BUILTIN_OPERATORS = frozenset({"add_composites"})
 
 # §11.1b: weak-signal / uncomputable flags that are RECORDED but DO NOT lower the
 # ceiling (a weak signal is not a disqualified factor). Passing one as a cap reason
@@ -276,6 +285,9 @@ def resolve_replication_ceiling(
     denominator_frozen: bool = True,
     sealed_oos_pass: bool = False,
     power_floor_pass: bool = False,
+    truth_observed: bool = False,
+    coverage_observed: bool = True,
+    require_claim: bool = False,
     min_effective_ic_days: int = MIN_EFFECTIVE_IC_DAYS,
 ) -> ReplicationCeilingDecision:
     """Compose all governance inputs for one (factor, universe) into a status ceiling.
@@ -285,7 +297,19 @@ def resolve_replication_ceiling(
     (``max_stat_calibrated``), so it cannot reach OOS-eligible on its own — it sits at
     candidate until calibrated or reviewer-overridden (Rev5: "tainted claim 用保守上界或
     reviewer-block,不退回旧 univ_all 原 bar"). An uncertified operator hard-blocks
-    (P-OP not done). The result is the SINGLE ceiling + reason codes (§12.4)."""
+    (P-OP not done).
+
+    Fail-CLOSED additions (GPT 2026-06-14 review):
+      * F4 — ``truth_observed`` AND not ``power_floor_pass`` → ``short_oos_power_floor_fail``
+        (the OOS quarantine is computed mechanically from the truth-table label window;
+        a truth-observed factor caps at candidate until a power-floor pass is COMPUTED — it
+        no longer depends on the manual ``oos_eligibility=short_window`` flag, which remains
+        only as an additional override trigger);
+      * F6 — ``require_claim`` AND no ``claim_class`` → ``missing_domain_claim`` (a cohort
+        factor with no active domain claim cannot be status-bearing);
+      * F8 — not ``coverage_observed`` → ``availability_audit_missing`` (absence of the
+        7-domain matrix / availability evidence is a cap, NEVER a pass).
+    The result is the SINGLE ceiling + reason codes (§12.4)."""
     if replication_tier not in REPLICATION_TIERS:
         raise ValueError(f"unknown replication_tier {replication_tier!r}")
     caps: list = []
@@ -296,6 +320,12 @@ def resolve_replication_ceiling(
         min_effective_ic_days=min_effective_ic_days)
     caps += oos_eligibility_cap_reasons(oos_eligibility)
     caps += claim_cap_reasons(claim_class)
+    if truth_observed and not power_floor_pass:
+        caps.append("short_oos_power_floor_fail")          # F4 mechanical short-OOS fail-safe
+    if require_claim and not claim_class:
+        caps.append("missing_domain_claim")                # F6
+    if not coverage_observed:
+        caps.append("availability_audit_missing")          # F8
     if has_uncertified_operator:
         caps.append("uncertified_operator")
     caps = list(dict.fromkeys(caps))   # de-dup, stable order
@@ -308,7 +338,8 @@ def resolve_replication_ceiling(
         oos_gates.append("clean_or_calibrated_claim")
     if not has_uncertified_operator:
         oos_gates.append("certified_operator")
-    if "availability_floor_fail" not in caps and "insufficient_cross_sections" not in caps:
+    _avail_caps = {"availability_floor_fail", "insufficient_cross_sections", "availability_audit_missing"}
+    if not (_avail_caps & set(caps)):
         oos_gates.append("coverage_pass")
     app_gates = [g for g, ok in (("sealed_oos_pass", sealed_oos_pass),
                                  ("power_floor_pass", power_floor_pass)) if ok]

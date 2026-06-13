@@ -393,8 +393,12 @@ def _parse_umj(v: Any) -> dict:
 
 
 def _load_cohort_manifests() -> list:
-    """Load every frozen cohort manifest under config/replication/. A malformed manifest is
-    skipped with a warning — it must never break the human-gated publish."""
+    """Load every frozen cohort manifest under config/replication/. A manifest that fails to
+    load (e.g. a ``manifest_sha`` mismatch — the frozen content was edited) is a HARD
+    governance stop (GPT review F2): it RAISES rather than being skipped, so a broken manifest
+    can NEVER make a cohort factor silently look non-cohort and slip through the gate. In a
+    healthy system every manifest loads, so non-cohort publish runs are unaffected; only a
+    genuinely broken manifest halts the publish step."""
     from src.alpha_research.factor_registry.replication_governance import (
         DEFAULT_MANIFEST_DIR,
         load_cohort_manifest,
@@ -406,27 +410,54 @@ def _load_cohort_manifests() -> list:
             try:
                 out.append(load_cohort_manifest(p))
             except Exception as e:  # noqa: BLE001
-                logger.warning("skipping malformed cohort manifest %s: %s", p, e)
+                raise ValueError(
+                    f"cohort manifest {p.name} failed to load ({e}); refusing the publish step — "
+                    "a broken cohort manifest is a hard governance stop (GPT review F2), not a "
+                    "warning, so no cohort factor can slip through the gate as non-cohort") from e
     return out
 
 
-def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store):
+def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store,
+                    system_oos_start: str = "2021-01-01"):
     """Adjudicate the replication status ceiling for one (factor, universe) by composing the
     cohort manifest (tier + oos_eligibility), the 7-domain matrix evidence (coverage + depth)
-    and the FactorDomainClaim (class). Returns ``None`` if the factor is NOT in any cohort
-    manifest (→ the gate is unchanged for it)."""
-    from src.alpha_research.factor_registry.replication_governance import resolve_replication_ceiling
+    and the FactorDomainClaim (class). Returns ``None`` ONLY if the factor is in NO cohort
+    manifest (→ the gate is unchanged for it). Everything that can fail is done AFTER cohort
+    membership is confirmed, so the caller can treat any raised exception as a cohort-factor
+    failure and fail closed (GPT review F1). Fail-closed details:
+      * >1 manifest match → ambiguous membership → raise (F3);
+      * a non-univ_all ``primary_claim_universe`` → raise (the univ_all-only gate cannot
+        adjudicate it, F9);
+      * the OOS quarantine is computed from the truth-table label window (F4);
+      * required operators outside the built-in whitelist → uncertified (F7);
+      * missing claim / missing matrix evidence are passed through as fail-closed caps (F6/F8).
+    """
+    from src.alpha_research.factor_registry.replication_governance import (
+        CERTIFIED_BUILTIN_OPERATORS,
+        compute_oos_quarantine_start,
+        resolve_replication_ceiling,
+    )
 
-    row = cohort_id = None
+    matches = []
     for m in manifests:
         r = m.row_for(catalog_factor_id=factor_id)
         if r is not None:
-            row, cohort_id = r, m.source_cohort_id
-            break
-    if row is None:
+            matches.append((m.source_cohort_id, r))
+    if not matches:
         return None
+    if len(matches) > 1:
+        raise ValueError(
+            f"{factor_id} matches {len(matches)} cohort manifest rows ({[c for c, _ in matches]}) "
+            "— ambiguous cohort membership, failing closed (F3)")
+    cohort_id, row = matches[0]
 
-    coverage_tier, effective_ic_days = "", None
+    primary = str(getattr(row, "primary_claim_universe", "univ_all") or "univ_all")
+    if primary != universe_id:
+        raise ValueError(
+            f"{factor_id} manifest primary_claim_universe={primary!r} != gate universe "
+            f"{universe_id!r}; the univ_all-only lifecycle gate cannot adjudicate it (F9)")
+
+    coverage_tier, effective_ic_days, coverage_observed = "", None, False
     if evidence_df is not None and len(evidence_df):
         auto = evidence_df[
             (evidence_df["factor_id"] == factor_id)
@@ -437,6 +468,7 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
             rr = auto.sort_values("evidence_time").iloc[-1]
             coverage_tier = str(rr.get("coverage_tier") or "")
             effective_ic_days = _parse_umj(rr.get("unified_metrics_json")).get("effective_ic_days")
+            coverage_observed = bool(coverage_tier) or effective_ic_days is not None
 
     claim_class = claim_id = ""
     claims = claim_store.claims()
@@ -447,12 +479,24 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
             claim_class = str(cc.iloc[-1]["claim_class"] or "")
             claim_id = str(cc.iloc[-1]["claim_id"] or "")
 
+    # F4: compute the OOS quarantine from the truth-table label window. Until a power-floor
+    # engine exists, power_floor_pass stays False → a truth-observed factor caps at candidate
+    # (no reliance on the manual oos_eligibility flag).
+    truth_label_end = str(getattr(row, "truth_table_label_end", "") or "")
+    oos_quarantine_start, _approx = compute_oos_quarantine_start(truth_label_end, system_oos_start)
+    # F7: operators outside the built-in whitelist are uncertified (P-OP not built).
+    required_ops = set(getattr(row, "required_operators", ()) or ())
+    has_uncertified_operator = bool(required_ops - CERTIFIED_BUILTIN_OPERATORS)
+
     decision = resolve_replication_ceiling(
         replication_tier=row.replication_tier_planned, claim_class=claim_class,
         coverage_tier=coverage_tier, effective_ic_days=effective_ic_days,
-        oos_eligibility=row.oos_eligibility,
+        oos_eligibility=row.oos_eligibility, truth_observed=bool(truth_label_end),
+        coverage_observed=coverage_observed, require_claim=True,
+        has_uncertified_operator=has_uncertified_operator,
     )
-    return {"decision": decision, "cohort_id": cohort_id, "row": row, "claim_id": claim_id}
+    return {"decision": decision, "cohort_id": cohort_id, "row": row, "claim_id": claim_id,
+            "oos_quarantine_start": oos_quarantine_start}
 
 
 def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> StepExecutionResult:
@@ -500,28 +544,36 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     store = FactorRegistryStore(rd["factor_registry_dir"])
     run_id = Path(str(context.run_dir)).name or "factor_lifecycle_run"
 
-    # P-GATE/F3 (item 2b): adjudicate CICC-cohort factors against the replication ceiling
-    # (univ_all — the gate is univ_all-primary). Non-cohort factors return None and are
-    # unaffected. Errors fail OPEN to the prior behavior: a bug in new governance must not
-    # break the human-gated publish — `candidate` is resolve-but-label and the sealed-OOS
-    # gate still protects `approved`. A clean below-candidate ceiling DOES refuse promotion.
+    # P-GATE/F3 (item 2b, GPT-review-hardened): adjudicate CICC-cohort factors against the
+    # replication ceiling (univ_all — the gate is univ_all-primary). Non-cohort factors return
+    # None and are unaffected. FAIL-CLOSED (GPT review F1): `_cohort_ceiling` does all fallible
+    # work AFTER confirming cohort membership, so a raised exception is a COHORT factor whose
+    # adjudication failed → REFUSE it (never fall back to non-cohort promotion). A broken
+    # manifest already hard-stopped in `_load_cohort_manifests` (F2).
     gate_universe = "univ_all"
+    try:
+        system_oos_start = str(_lifecycle_time_split(context.request).oos_start)
+    except Exception:  # noqa: BLE001
+        system_oos_start = "2021-01-01"
     manifests = _load_cohort_manifests()
     claim_store = DomainClaimStore(rd["factor_registry_dir"])
     cohort_adj: dict[str, dict] = {}
     refused: list[str] = []
+    cohort_errors: dict[str, str] = {}
     for v in candidate_verdicts:
         fid = str(v.get("factor", ""))
         if not fid:
             continue
         try:
             info = _cohort_ceiling(
-                fid, gate_universe, manifests=manifests,
-                evidence_df=store.factor_evidence, claim_store=claim_store,
+                fid, gate_universe, manifests=manifests, evidence_df=store.factor_evidence,
+                claim_store=claim_store, system_oos_start=system_oos_start,
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("P-GATE ceiling adjudication errored for %s (fail-open): %s", fid, e)
-            info = None
+            logger.error("P-GATE adjudication FAILED for %s — refusing (fail-closed): %s", fid, e)
+            refused.append(fid)
+            cohort_errors[fid] = str(e)
+            continue
         if info is not None:
             cohort_adj[fid] = info
             if info["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS:
@@ -530,7 +582,26 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     refused_set = set(refused)
     to_promote = [v for v in candidate_verdicts if str(v.get("factor", "")) not in refused_set]
 
-    # Evidence FIRST (idempotent) for the promotable set, then the candidate status change.
+    # F10: persist EVERY cohort factor's ReplicationGovernanceRecord BEFORE any status write.
+    # The upsert raises on a store failure, so no cohort candidate promotion is committed
+    # without its durable ceiling record (was previously persisted AFTER set_status).
+    if cohort_adj:
+        gov_store = ReplicationGovernanceStore(rd["factor_registry_dir"])
+        for fid, info in cohort_adj.items():
+            dec, row = info["decision"], info["row"]
+            gov_store.upsert(
+                cohort_id=info["cohort_id"], factor_id=fid,
+                factor_domain_claim_id=info["claim_id"] or f"{fid}:{gate_universe}",
+                replication_tier=row.replication_tier_planned,
+                active_cap_reasons=dec.active_cap_reasons,
+                oos_eligible_gates_met=dec.oos_eligible_gates_met,
+                cohort_denominator_membership=["formalization_candidate"],
+                truth_label_end=row.truth_table_label_end,
+                oos_quarantine_start=info.get("oos_quarantine_start", ""),
+                notes=f"P-GATE adjudicated at registry_publish (universe={gate_universe})",
+            )
+
+    # Evidence (idempotent) for the promotable set, then the candidate status change.
     ev_report = store.record_lifecycle_evidence(
         run_id=run_id, verdicts=to_promote, evidence_class=evidence_kind,
         source_run_dir=str(context.run_dir),
@@ -552,27 +623,15 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             promoted.append(fid)
     store.save()
 
-    # Persist a ReplicationGovernanceRecord for EVERY cohort factor (promoted + refused) so
-    # the ceiling + reason codes are gate-readable (Rev5 §item-2).
-    governance: list[dict] = []
-    if cohort_adj:
-        gov_store = ReplicationGovernanceStore(rd["factor_registry_dir"])
-        for fid, info in cohort_adj.items():
-            dec, row = info["decision"], info["row"]
-            gov_store.upsert(
-                cohort_id=info["cohort_id"], factor_id=fid,
-                factor_domain_claim_id=info["claim_id"] or f"{fid}:{gate_universe}",
-                replication_tier=row.replication_tier_planned,
-                active_cap_reasons=dec.active_cap_reasons,
-                oos_eligible_gates_met=dec.oos_eligible_gates_met,
-                cohort_denominator_membership=["formalization_candidate"],
-                truth_label_end=row.truth_table_label_end,
-                notes=f"P-GATE adjudicated at registry_publish (universe={gate_universe})",
-            )
-            governance.append({
-                "factor": fid, "universe": gate_universe, "status_ceiling": dec.status_ceiling,
-                "blocking_reasons": list(dec.blocking_reasons), "promoted": fid in set(promoted),
-            })
+    # gate-readable governance summary for step_outputs (accurate `promoted` after the loop).
+    promoted_set = set(promoted)
+    governance = [
+        {"factor": fid, "universe": gate_universe,
+         "status_ceiling": info["decision"].status_ceiling,
+         "blocking_reasons": list(info["decision"].blocking_reasons),
+         "promoted": fid in promoted_set}
+        for fid, info in cohort_adj.items()
+    ]
 
     # produced_objects for orchestrator lineage (GPT PR-#34 review): the promoted factors,
     # recorded at lifecycle status `candidate` (never typed-registry `approved` artifacts).
@@ -585,7 +644,10 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
         "evidence_attached": ev_report["attached"],
         "promoted_to_candidate": sorted(promoted),
         "published": len(promoted),
-        "refused_by_ceiling": sorted(refused),
+        "refused_by_ceiling": sorted(
+            fid for fid in cohort_adj
+            if cohort_adj[fid]["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS),
+        "refused_by_adjudication_error": cohort_errors,
         "replication_governance": governance,
         "skipped_drift": ev_report.get("skipped_drift", []),
         "skipped_unknown": ev_report.get("skipped_unknown", []),

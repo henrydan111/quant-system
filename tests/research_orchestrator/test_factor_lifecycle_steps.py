@@ -425,50 +425,89 @@ class FactorLifecyclePublishTests(unittest.TestCase):
                 self.assertEqual(result.outputs["published"], 0)
                 self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")  # unchanged
 
-    def test_pgate_refuses_cohort_factor_below_candidate_ceiling(self):
-        # P-GATE/F3 (item 2b): a CICC-cohort factor whose adjudicated ceiling is below
-        # candidate is REFUSED promotion (stays draft); a candidate_ceiling cohort factor
-        # and a NON-cohort factor both promote. Governance records persisted for the cohort.
-        from unittest.mock import patch
-        from src.research_orchestrator import factor_lifecycle_steps as fls
+    def _synth_manifest(self, rows):
         from src.alpha_research.factor_registry.replication_governance import (
             CohortFactorRow, CohortManifest,
         )
+        return CohortManifest(
+            source_cohort_id="cicc_test_cohort", handbook_label_window_end="2022-12-31",
+            denominators={"source": 3, "daily_replicability": 2, "formalization_candidate": 2},
+            factor_rows=[CohortFactorRow(**r) for r in rows])
+
+    def test_pgate_refuses_cohort_below_candidate_and_failclosed(self):
+        # P-GATE/F3 (GPT-hardened): cohort factors below candidate are REFUSED. With no matrix
+        # evidence + no claim in this temp registry, even an exact_certified row caps at
+        # evidence_only (F8 availability_audit_missing / F6 missing_domain_claim) — absence is a
+        # cap, never a silent pass. A not_replicable row is blocked. The NON-cohort factor promotes.
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
         with self._temp() as d:
             ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d", "val_bp", "qual_roe"])
-            synth = CohortManifest(
-                source_cohort_id="cicc_test_cohort", handbook_label_window_end="2022-12-31",
-                denominators={"source": 3, "daily_replicability": 2, "formalization_candidate": 2},
-                factor_rows=[
-                    CohortFactorRow(factor_name_original="X", catalog_factor_id="mom_return_5d",
-                                    replication_tier_planned="not_replicable", oos_eligibility="pending"),
-                    CohortFactorRow(factor_name_original="Y", catalog_factor_id="val_bp",
-                                    replication_tier_planned="exact_certified", oos_eligibility="short_window"),
-                ],
-            )
+            synth = self._synth_manifest([
+                dict(factor_name_original="X", catalog_factor_id="mom_return_5d",
+                     replication_tier_planned="not_replicable", oos_eligibility="pending"),
+                dict(factor_name_original="Y", catalog_factor_id="val_bp",
+                     replication_tier_planned="exact_certified", oos_eligibility="pending"),
+            ])
             with patch.object(fls, "_load_cohort_manifests", lambda: [synth]):
                 result = handle_factor_lifecycle_registry_publish(ctx)
-            # mom_return_5d: cohort + not_replicable -> blocked -> REFUSED (stays draft)
-            self.assertIn("mom_return_5d", result.outputs["refused_by_ceiling"])
-            self.assertNotIn("mom_return_5d", result.outputs["promoted_to_candidate"])
+            # both cohort factors refused (different reasons); only the non-cohort promotes
+            self.assertEqual(result.outputs["promoted_to_candidate"], ["qual_roe"])
             self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")
-            store = FactorRegistryStore(rd["factor_registry_dir"])
-            refused_ev = store.factor_evidence[
-                (store.factor_evidence["factor_id"] == "mom_return_5d")
-                & (store.factor_evidence["run_type"] == "factor_lifecycle")
-            ]
-            self.assertEqual(len(refused_ev), 0)  # refused -> NO signed evidence
-            # val_bp: cohort + exact_certified + short_window -> candidate_ceiling -> promoted
-            self.assertIn("val_bp", result.outputs["promoted_to_candidate"])
-            self.assertEqual(self._status_of(rd, "val_bp"), "candidate")
-            # qual_roe: NON-cohort -> promoted (unchanged behavior)
-            self.assertIn("qual_roe", result.outputs["promoted_to_candidate"])
-            # governance records persisted for the two cohort factors with the resolved ceilings
+            self.assertEqual(self._status_of(rd, "val_bp"), "draft")
             gov = {g["factor"]: g for g in result.outputs["replication_governance"]}
             self.assertEqual(gov["mom_return_5d"]["status_ceiling"], "blocked")
-            self.assertFalse(gov["mom_return_5d"]["promoted"])
+            self.assertEqual(gov["val_bp"]["status_ceiling"], "evidence_only")  # F8: missing matrix evidence
+            self.assertIn("availability_audit_missing", gov["val_bp"]["blocking_reasons"])
+            self.assertFalse(gov["val_bp"]["promoted"])
+
+    def test_pgate_promotes_cohort_at_candidate_ceiling(self):
+        # routing: when _cohort_ceiling yields candidate_ceiling, the cohort factor promotes
+        # AND a governance record is persisted (the resolver composition itself is unit-tested
+        # in test_replication_governance).
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        from src.alpha_research.factor_registry.replication_governance import ReplicationCeilingDecision
+        dec = ReplicationCeilingDecision(
+            status_ceiling="candidate_ceiling", blocking_reasons=("short_oos_power_floor_fail",),
+            nonblocking_missing_certs=(), next_actions=(),
+            active_cap_reasons=("short_oos_power_floor_fail",),
+            oos_eligible_gates_met=("denominator_frozen", "coverage_pass"))
+        row = self._synth_manifest([dict(factor_name_original="Y", catalog_factor_id="val_bp",
+                                         replication_tier_planned="exact_certified")]).factor_rows[0]
+        fake = {"decision": dec, "cohort_id": "cicc_test_cohort", "row": row, "claim_id": "",
+                "oos_quarantine_start": "2023-02-01"}
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["val_bp", "qual_roe"])
+            with patch.object(fls, "_load_cohort_manifests", lambda: [object()]), \
+                 patch.object(fls, "_cohort_ceiling",
+                              lambda fid, u, **kw: fake if fid == "val_bp" else None):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertIn("val_bp", result.outputs["promoted_to_candidate"])      # candidate_ceiling promotes
+            self.assertEqual(self._status_of(rd, "val_bp"), "candidate")
+            gov = {g["factor"]: g for g in result.outputs["replication_governance"]}
             self.assertEqual(gov["val_bp"]["status_ceiling"], "candidate_ceiling")
             self.assertTrue(gov["val_bp"]["promoted"])
+
+    def test_pgate_failclosed_on_adjudication_error(self):
+        # GPT F1: an exception from _cohort_ceiling means a COHORT factor whose adjudication
+        # failed → REFUSE it (fail-closed), never fall back to non-cohort promotion.
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+
+        def boom(fid, u, **kw):
+            if fid == "val_bp":
+                raise RuntimeError("synthetic adjudication failure")
+            return None
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["val_bp", "qual_roe"])
+            with patch.object(fls, "_load_cohort_manifests", lambda: [object()]), \
+                 patch.object(fls, "_cohort_ceiling", boom):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertNotIn("val_bp", result.outputs["promoted_to_candidate"])   # refused, not fail-open
+            self.assertEqual(self._status_of(rd, "val_bp"), "draft")
+            self.assertIn("val_bp", result.outputs["refused_by_adjudication_error"])
+            self.assertIn("qual_roe", result.outputs["promoted_to_candidate"])    # non-cohort unaffected
 
     def test_evidence_idempotent_on_reapprove(self):
         with self._temp() as d:

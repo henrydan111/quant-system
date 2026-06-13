@@ -166,6 +166,42 @@ class TestReplicationCeilingAdjudicator:
         with pytest.raises(ValueError, match="unknown replication_tier"):
             resolve_replication_ceiling(replication_tier="bogus")
 
+    # ---- GPT 2026-06-14 fail-closed hardening ----
+    def test_truth_observed_caps_short_oos_without_power_floor(self):
+        # F4: truth-table observation quarantines the OOS window; until a power-floor pass is
+        # COMPUTED, a truth-observed factor caps at candidate — independent of any manual flag.
+        d = self._clean(truth_observed=True, oos_eligibility="eligible")
+        assert d.status_ceiling == "candidate_ceiling"
+        assert "short_oos_power_floor_fail" in d.blocking_reasons
+        d2 = self._clean(truth_observed=True, power_floor_pass=True, oos_eligibility="eligible")
+        assert d2.status_ceiling == "eligible_for_oos"   # computed power-floor pass advances it
+
+    def test_missing_claim_caps_evidence_only(self):
+        # F6: a cohort factor that requires a claim but has none caps at evidence_only.
+        d = resolve_replication_ceiling(
+            replication_tier="exact_certified", claim_class="", coverage_tier="full",
+            effective_ic_days=2654, oos_eligibility="eligible", require_claim=True)
+        assert d.status_ceiling == "evidence_only"
+        assert "missing_domain_claim" in d.blocking_reasons
+
+    def test_missing_matrix_evidence_caps_not_passes(self):
+        # F8: absence of coverage/depth evidence is a cap (availability_audit_missing), NEVER a
+        # coverage_pass — auto-evidence may lower the ceiling but its ABSENCE must not pass.
+        d = self._clean(coverage_observed=False, coverage_tier="", effective_ic_days=None)
+        assert d.status_ceiling == "evidence_only"
+        assert "availability_audit_missing" in d.blocking_reasons
+        assert "coverage_pass" not in d.oos_eligible_gates_met
+
+    def test_auto_evidence_is_a_one_way_floor(self):
+        # F12 invariant: auto evidence may only LOWER the ceiling, never raise it; missing
+        # required evidence is not a pass.
+        from src.alpha_research.factor_registry.replication_governance import STATUS_CEILINGS
+        full = self._clean()                                              # coverage observed
+        missing = self._clean(coverage_observed=False, coverage_tier="", effective_ic_days=None)
+        assert (STATUS_CEILINGS.index(missing.status_ceiling)
+                <= STATUS_CEILINGS.index(full.status_ceiling))            # never higher
+        assert missing.status_ceiling == "evidence_only"                  # strictly lower
+
 
 # --------------------------------------------------------------------------- #
 # 2. OOS quarantine from truth-table observation (§9.3)
