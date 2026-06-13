@@ -84,8 +84,12 @@ def main() -> int:
 
     # 3. adjudicate the ceiling via the SAME helper the wired publish gate uses
     manifests = _load_cohort_manifests()
+    _cur = store.factor_master[store.factor_master["is_current"].fillna(False)]  # noqa: E712
+    _dh = _cur[_cur["factor_id"] == FACTOR_ID]
+    cur_def_hash = str(_dh.iloc[0]["definition_hash"]) if len(_dh) else ""
     info = _cohort_ceiling(FACTOR_ID, UNIVERSE, manifests=manifests,
-                           evidence_df=store.factor_evidence, claim_store=claims)
+                           evidence_df=store.factor_evidence, claim_store=claims,
+                           current_definition_hash=cur_def_hash)
     if info is None:
         print("3. adjudication: NOT a cohort factor (manifest linkage missing) — check catalog_factor_id")
         return 1

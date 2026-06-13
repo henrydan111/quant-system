@@ -417,8 +417,21 @@ def _load_cohort_manifests() -> list:
     return out
 
 
+def _composite_components(factor_id: str) -> list:
+    """Component factor ids of a composite (empty if not a composite). Used for F5-lite
+    composite truth-observation inheritance (GPT R2 Cond-4)."""
+    try:
+        from src.alpha_research.factor_library.catalog import get_composite_defs
+        for d in get_composite_defs():
+            if d.get("name") == factor_id:
+                return [str(c) for c in d.get("components", [])]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
 def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store,
-                    system_oos_start: str = "2021-01-01"):
+                    system_oos_start: str = "2021-01-01", current_definition_hash: str = ""):
     """Adjudicate the replication status ceiling for one (factor, universe) by composing the
     cohort manifest (tier + oos_eligibility), the 7-domain matrix evidence (coverage + depth)
     and the FactorDomainClaim (class). Returns ``None`` ONLY if the factor is in NO cohort
@@ -442,14 +455,14 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
     for m in manifests:
         r = m.row_for(catalog_factor_id=factor_id)
         if r is not None:
-            matches.append((m.source_cohort_id, r))
+            matches.append((m.source_cohort_id, r, str(m.handbook_label_window_end or "")))
     if not matches:
         return None
     if len(matches) > 1:
         raise ValueError(
-            f"{factor_id} matches {len(matches)} cohort manifest rows ({[c for c, _ in matches]}) "
+            f"{factor_id} matches {len(matches)} cohort manifest rows ({[c for c, *_ in matches]}) "
             "— ambiguous cohort membership, failing closed (F3)")
-    cohort_id, row = matches[0]
+    cohort_id, row, handbook_label_end = matches[0]
 
     primary = str(getattr(row, "primary_claim_universe", "univ_all") or "univ_all")
     if primary != universe_id:
@@ -457,12 +470,17 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
             f"{factor_id} manifest primary_claim_universe={primary!r} != gate universe "
             f"{universe_id!r}; the univ_all-only lifecycle gate cannot adjudicate it (F9)")
 
+    # F8 + freshness (GPT R2 Cond-1b): matrix evidence counts as coverage ONLY when its
+    # source_hash matches the factor's CURRENT definition_hash — a stale row from before an
+    # expression change must NOT satisfy the availability audit. Unknown current hash or no
+    # matching fresh row → coverage_observed stays False → availability_audit_missing cap.
     coverage_tier, effective_ic_days, coverage_observed = "", None, False
-    if evidence_df is not None and len(evidence_df):
+    if evidence_df is not None and len(evidence_df) and current_definition_hash:
         auto = evidence_df[
             (evidence_df["factor_id"] == factor_id)
             & (evidence_df["run_type"].isin(["factor_lifecycle_auto", "factor_lifecycle_refresh"]))
             & (evidence_df["universe_id"].fillna("univ_all") == universe_id)
+            & (evidence_df["source_hash"].astype("string").fillna("") == current_definition_hash)
         ]
         if len(auto):
             rr = auto.sort_values("evidence_time").iloc[-1]
@@ -470,20 +488,42 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
             effective_ic_days = _parse_umj(rr.get("unified_metrics_json")).get("effective_ic_days")
             coverage_observed = bool(coverage_tier) or effective_ic_days is not None
 
+    # F6 + exactly-one (GPT R2 Cond-2): a cohort factor must resolve to EXACTLY one active
+    # claim for the adjudicated universe — 0 → missing_domain_claim cap (in the resolver);
+    # >1 → ambiguous, fail closed (DataFrame order must not silently pick the ceiling).
     claim_class = claim_id = ""
     claims = claim_store.claims()
     if len(claims):
         cc = claims[(claims["factor_id"] == factor_id) & (claims["universe_id"] == universe_id)
                     & (claims["status"] != "rejected_claim")]
+        if len(cc) > 1:
+            raise ValueError(
+                f"{factor_id} has {len(cc)} active claims for {universe_id!r} — ambiguous, failing "
+                "closed; expected exactly one active claim (GPT R2 Cond-2)")
         if len(cc):
-            claim_class = str(cc.iloc[-1]["claim_class"] or "")
-            claim_id = str(cc.iloc[-1]["claim_id"] or "")
+            claim_class = str(cc.iloc[0]["claim_class"] or "")
+            claim_id = str(cc.iloc[0]["claim_id"] or "")
 
-    # F4: compute the OOS quarantine from the truth-table label window. Until a power-floor
-    # engine exists, power_floor_pass stays False → a truth-observed factor caps at candidate
-    # (no reliance on the manual oos_eligibility flag).
-    truth_label_end = str(getattr(row, "truth_table_label_end", "") or "")
-    oos_quarantine_start, _approx = compute_oos_quarantine_start(truth_label_end, system_oos_start)
+    # F4 (+ GPT R2 Cond-3): truth-observation quarantines the OOS window. The row's own
+    # truth_table_label_end takes precedence; if blank, fall back to the cohort-level
+    # handbook_label_window_end so a lazily-enumerated row cannot escape the short-OOS cap.
+    truth_label_end = str(getattr(row, "truth_table_label_end", "") or "") or handbook_label_end
+    # F5-lite (GPT R2 Cond-4): a COMPOSITE inherits truth-observation from any truth-observed
+    # component — closes the leak where a composite's own row omits truth_label_end while its
+    # components were observed. (Full §3.1c lineage taint remains deferred.)
+    if not truth_label_end:
+        for comp in _composite_components(factor_id):
+            for m in manifests:
+                cr = m.row_for(catalog_factor_id=comp)
+                if cr is not None:
+                    truth_label_end = (str(getattr(cr, "truth_table_label_end", "") or "")
+                                       or str(m.handbook_label_window_end or ""))
+                    if truth_label_end:
+                        break
+            if truth_label_end:
+                break
+    oos_quarantine_start, oos_quarantine_approximate = compute_oos_quarantine_start(
+        truth_label_end, system_oos_start)
     # F7: operators outside the built-in whitelist are uncertified (P-OP not built).
     required_ops = set(getattr(row, "required_operators", ()) or ())
     has_uncertified_operator = bool(required_ops - CERTIFIED_BUILTIN_OPERATORS)
@@ -496,7 +536,8 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
         has_uncertified_operator=has_uncertified_operator,
     )
     return {"decision": decision, "cohort_id": cohort_id, "row": row, "claim_id": claim_id,
-            "oos_quarantine_start": oos_quarantine_start}
+            "oos_quarantine_start": oos_quarantine_start,
+            "oos_quarantine_approximate": oos_quarantine_approximate}
 
 
 def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> StepExecutionResult:
@@ -557,6 +598,11 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
         system_oos_start = "2021-01-01"
     manifests = _load_cohort_manifests()
     claim_store = DomainClaimStore(rd["factor_registry_dir"])
+    # current definition_hash per factor — matrix evidence must match it to count as fresh
+    # coverage (GPT R2 Cond-1b: a stale row from before an expression change must not pass).
+    _cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+    def_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
+                   for _, r in _cur.iterrows()} if len(_cur) else {})
     cohort_adj: dict[str, dict] = {}
     refused: list[str] = []
     cohort_errors: dict[str, str] = {}
@@ -568,6 +614,7 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             info = _cohort_ceiling(
                 fid, gate_universe, manifests=manifests, evidence_df=store.factor_evidence,
                 claim_store=claim_store, system_oos_start=system_oos_start,
+                current_definition_hash=def_hashes.get(fid, ""),
             )
         except Exception as e:  # noqa: BLE001
             logger.error("P-GATE adjudication FAILED for %s — refusing (fail-closed): %s", fid, e)
@@ -598,6 +645,7 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
                 cohort_denominator_membership=["formalization_candidate"],
                 truth_label_end=row.truth_table_label_end,
                 oos_quarantine_start=info.get("oos_quarantine_start", ""),
+                oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
                 notes=f"P-GATE adjudicated at registry_publish (universe={gate_universe})",
             )
 
@@ -644,9 +692,15 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
         "evidence_attached": ev_report["attached"],
         "promoted_to_candidate": sorted(promoted),
         "published": len(promoted),
-        "refused_by_ceiling": sorted(
+        # GPT R2 Finding-4: distinguish "the evidence producer never ran" from "real
+        # governance failure" so the operator knows which to fix.
+        "refused_by_missing_prerequisite": sorted(
             fid for fid in cohort_adj
-            if cohort_adj[fid]["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS),
+            if "availability_audit_missing" in cohort_adj[fid]["decision"].blocking_reasons),
+        "refused_by_true_governance_cap": sorted(
+            fid for fid in cohort_adj
+            if cohort_adj[fid]["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS
+            and "availability_audit_missing" not in cohort_adj[fid]["decision"].blocking_reasons),
         "refused_by_adjudication_error": cohort_errors,
         "replication_governance": governance,
         "skipped_drift": ev_report.get("skipped_drift", []),

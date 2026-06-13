@@ -460,6 +460,11 @@ class FactorLifecyclePublishTests(unittest.TestCase):
             self.assertEqual(gov["val_bp"]["status_ceiling"], "evidence_only")  # F8: missing matrix evidence
             self.assertIn("availability_audit_missing", gov["val_bp"]["blocking_reasons"])
             self.assertFalse(gov["val_bp"]["promoted"])
+            # GPT R2 Finding-4 output split: val_bp lacks the matrix prerequisite; mom_return_5d
+            # is a true governance cap (not_replicable -> blocked).
+            self.assertIn("val_bp", result.outputs["refused_by_missing_prerequisite"])
+            self.assertIn("mom_return_5d", result.outputs["refused_by_true_governance_cap"])
+            self.assertNotIn("val_bp", result.outputs["refused_by_true_governance_cap"])
 
     def test_pgate_promotes_cohort_at_candidate_ceiling(self):
         # routing: when _cohort_ceiling yields candidate_ceiling, the cohort factor promotes
@@ -522,6 +527,86 @@ class FactorLifecyclePublishTests(unittest.TestCase):
                 & (store.factor_evidence["run_type"] == "factor_lifecycle")
             ]
             self.assertEqual(len(ev), 1)  # idempotent by (run_id, factor_id, version)
+
+
+class CohortCeilingUnitTests(unittest.TestCase):
+    """Unit tests for `_cohort_ceiling` — the GPT R2 cheap-hardening behaviors."""
+
+    def _mani(self, rows, handbook="2022-12-31"):
+        from src.alpha_research.factor_registry.replication_governance import (
+            CohortFactorRow, CohortManifest,
+        )
+        return CohortManifest(
+            source_cohort_id="c", handbook_label_window_end=handbook,
+            denominators={"source": 2, "daily_replicability": 2, "formalization_candidate": 1},
+            factor_rows=[CohortFactorRow(**r) for r in rows])
+
+    def _claims(self, rows):
+        import types
+        import pandas as pd
+        cols = ["factor_id", "universe_id", "status", "claim_class", "claim_id"]
+        return types.SimpleNamespace(claims=lambda: pd.DataFrame(rows, columns=cols))
+
+    def _ev(self, rows):
+        import pandas as pd
+        cols = ["factor_id", "run_type", "universe_id", "evidence_time",
+                "coverage_tier", "unified_metrics_json", "source_hash"]
+        return pd.DataFrame(rows, columns=cols)
+
+    def test_stale_matrix_evidence_does_not_satisfy_coverage(self):
+        # GPT R2 Cond-1b: matrix evidence counts only when source_hash == current definition_hash.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified",
+                             truth_table_label_end="2022-12-31")])
+        claims = self._claims([dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl1")])
+        ev = self._ev([dict(factor_id="comp_x", run_type="factor_lifecycle_auto", universe_id="univ_all",
+                            evidence_time="2026-06-13", coverage_tier="full",
+                            unified_metrics_json='{"effective_ic_days": 2654}', source_hash="HASH_OLD")])
+        fresh = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=ev,
+                                    claim_store=claims, current_definition_hash="HASH_OLD")
+        self.assertEqual(fresh["decision"].status_ceiling, "candidate_ceiling")  # fresh coverage
+        stale = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=ev,
+                                    claim_store=claims, current_definition_hash="HASH_NEW")
+        self.assertEqual(stale["decision"].status_ceiling, "evidence_only")       # stale -> ignored
+        self.assertIn("availability_audit_missing", stale["decision"].blocking_reasons)
+
+    def test_multiple_active_claims_fail_closed(self):
+        # GPT R2 Cond-2: >1 active claim for the universe is ambiguous -> fail closed.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified")])
+        claims = self._claims([
+            dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                 claim_class="clean_singleton_primary", claim_id="cl1"),
+            dict(factor_id="comp_x", universe_id="univ_all", status="candidate_claim",
+                 claim_class="tainted_post_hoc_max_stat", claim_id="cl2"),
+        ])
+        with self.assertRaises(ValueError):
+            fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H")
+
+    def test_composite_inherits_component_truth_observation(self):
+        # GPT R2 Cond-4 (F5-lite): comp_cicc_profit's own row omits truth + handbook is blank,
+        # but a component (qual_cfoa_ttm) is truth-observed -> the composite inherits it -> the
+        # short-OOS cap fires (composite cannot reach eligible_for_oos despite observed members).
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([
+            dict(factor_name_original="Profit", catalog_factor_id="comp_cicc_profit",
+                 replication_tier_planned="formula_equivalent_pending"),
+            dict(factor_name_original="CFOA", catalog_factor_id="qual_cfoa_ttm",
+                 replication_tier_planned="exact_certified", truth_table_label_end="2022-12-31"),
+        ], handbook="")  # blank handbook so the composite's OWN row is not truth-observed
+        claims = self._claims([dict(factor_id="comp_cicc_profit", universe_id="univ_all",
+                                    status="draft_claim", claim_class="clean_singleton_primary", claim_id="cl1")])
+        ev = self._ev([dict(factor_id="comp_cicc_profit", run_type="factor_lifecycle_auto",
+                            universe_id="univ_all", evidence_time="2026-06-13", coverage_tier="full",
+                            unified_metrics_json='{"effective_ic_days": 2654}', source_hash="H")])
+        d = fls._cohort_ceiling("comp_cicc_profit", "univ_all", manifests=[m], evidence_df=ev,
+                                claim_store=claims, current_definition_hash="H")
+        self.assertIn("short_oos_power_floor_fail", d["decision"].active_cap_reasons)
+        self.assertEqual(d["decision"].status_ceiling, "candidate_ceiling")
 
 
 if __name__ == "__main__":
