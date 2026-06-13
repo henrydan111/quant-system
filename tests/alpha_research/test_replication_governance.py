@@ -228,6 +228,26 @@ class TestCohortManifest:
         edited = load_cohort_manifest(p)
         assert edited.manifest_sha != good.manifest_sha   # content change is detectable
 
+    def test_catalog_factor_id_excluded_from_sha(self):
+        # post-registration linkage (catalog_factor_id) is operational, not part of the
+        # frozen scientific declaration → linking a factor must NOT churn the frozen sha.
+        from src.alpha_research.factor_registry.replication_governance import (
+            CohortFactorRow, CohortManifest,
+        )
+        base = dict(source_cohort_id="c", handbook_label_window_end="2022-12-31",
+                    denominators={"source": 2, "daily_replicability": 2, "formalization_candidate": 2})
+        unlinked = CohortManifest(factor_rows=[
+            CohortFactorRow(factor_name_original="Profit", handbook_id="C_Profit")], **base)
+        linked = CohortManifest(factor_rows=[
+            CohortFactorRow(factor_name_original="Profit", handbook_id="C_Profit",
+                            catalog_factor_id="comp_cicc_profit")], **base)
+        assert unlinked.manifest_sha == linked.manifest_sha   # linkage does not change the freeze
+        # but a tier change DOES
+        retiered = CohortManifest(factor_rows=[
+            CohortFactorRow(factor_name_original="Profit", handbook_id="C_Profit",
+                            replication_tier_planned="proxy_approx")], **base)
+        assert retiered.manifest_sha != unlinked.manifest_sha
+
     def test_missing_frozen_denominator_raises(self):
         with pytest.raises(ValueError, match="freeze denominators"):
             CohortManifest(source_cohort_id="x", handbook_label_window_end="2022-12-31",

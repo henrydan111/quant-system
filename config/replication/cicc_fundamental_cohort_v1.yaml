@@ -16,7 +16,7 @@
 # 2022 → handbook_label_window_end below drives the §9.3 OOS quarantine.
 
 source_cohort_id: cicc_fundamental_handbook_v1
-manifest_sha: "3dad964c2436e7b5"          # pins the frozen content; load_cohort_manifest raises on mismatch
+manifest_sha: "5d3f761498cbb36b"          # pins the frozen content; load_cohort_manifest raises on mismatch (excl. catalog_factor_id linkage)
 handbook_label_window_end: "2022-12-31"   # Phase-D observed 2010-2022; per-chart exact end refined at FactorReplicationCertification (§12.2 lazy)
 
 # --- the five pre-frozen denominators (§9.2). The first three are FROZEN here; ---
@@ -63,7 +63,7 @@ factor_rows:
   # ---- Wave D-COMP: fundamental composites + un-built approx (roadmap §2; components in catalog) ----
   - {factor_name_original: QQC,    handbook_id: C_QQC,    replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: Growth, handbook_id: C_Growth, replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
-  - {factor_name_original: Profit, handbook_id: C_Profit, replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: Profit, handbook_id: C_Profit, replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], catalog_factor_id: comp_cicc_profit, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: Safe,   handbook_id: C_Safe,   replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: Acc,    handbook_id: C_Acc,    replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: QPT,    handbook_id: F_QPT,    replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # 业绩趋势分层打分

@@ -404,12 +404,18 @@ class CohortManifest:
         self.manifest_sha = self._compute_sha()
 
     def _compute_sha(self) -> str:
+        # ``catalog_factor_id`` is EXCLUDED: it is post-registration operational linkage (our
+        # registry id once the CICC factor is implemented), not part of the frozen scientific
+        # declaration. The freeze pins what §9.2 needs anti-p-hacking — the factor identity,
+        # replication tier, exclusion reason, truth window, OOS eligibility, denominators — so
+        # linking a factor to a row never churns the frozen hash.
         payload = {
             "source_cohort_id": self.source_cohort_id,
             "handbook_label_window_end": self.handbook_label_window_end,
             "denominators": {k: self.denominators[k] for k in sorted(self.denominators)},
             "factor_rows": [
-                {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(r).items()}
+                {k: (list(v) if isinstance(v, tuple) else v)
+                 for k, v in asdict(r).items() if k != "catalog_factor_id"}
                 for r in self.factor_rows
             ],
         }

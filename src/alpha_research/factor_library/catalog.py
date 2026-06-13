@@ -848,6 +848,16 @@ def get_composite_defs():
             'components': ['tech_close_to_high_20d', 'tech_close_to_low_20d'],
             'weights': [0.5, 0.5],
         },
+        # ── CICC handbook composite: Profit 综合盈利因子 = CFOA + ROE + ROIC 等权 (手册 §11) ──
+        # The first faithfully-constructible CICC composite (D-COMP wave): all three members
+        # are already field-eligible catalog factors. The other handbook composites are not
+        # cleanly buildable yet — Growth needs OP_SD/QPT, Opt needs OCFA (regression operator),
+        # QQC needs all six; Acc/Safe are single-base (rank-equivalent to grow_profit_acceleration
+        # / qual_ccr_ttm → not registered, dedup discipline).
+        {
+            'name': 'comp_cicc_profit',
+            'components': ['qual_cfoa_ttm', 'qual_roe', 'qual_roic'],
+        },
     ]
 
 
