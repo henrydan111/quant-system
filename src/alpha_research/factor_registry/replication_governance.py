@@ -191,6 +191,136 @@ def resolve_status_ceiling(
 
 
 # --------------------------------------------------------------------------- #
+# 1b. the P-GATE adjudicator — compose existing governance inputs into a ceiling
+# --------------------------------------------------------------------------- #
+# These map the THREE standing evidence sources a (factor, universe) already has —
+# the cohort manifest (replication_tier + oos_eligibility), the 7-domain matrix
+# evidence (coverage_tier + effective_ic_days), and the FactorDomainClaim (claim_class)
+# — into the cap reasons + positive gates that :func:`resolve_status_ceiling` consumes.
+# This is the gate "brain": the orchestrator gate (P-GATE/F3, next increment) will call
+# :func:`resolve_replication_ceiling`; here it can already run over the existing matrix so
+# the ceilings are computed + persisted ("gate-readable", Rev5 §item-2) without recomputing.
+
+# §3.9 depth floor: a status-bearing claim needs ~36 months (~756 trading days) of
+# effective IC observations spanning ≥2 style regimes.
+MIN_EFFECTIVE_IC_DAYS = 756
+
+
+def tier_cap_reasons(replication_tier: str) -> list:
+    """replication_tier → ceiling caps (§7). exact/formula_equivalent carry no tier cap;
+    proxy/derived cap at candidate (§9.4); not_replicable is hard-blocked."""
+    return {
+        "proxy_approx": ["proxy_approx"],
+        "derived_methodology_proxy": ["derived_methodology_proxy"],
+        "not_replicable": ["missing_required_field"],
+    }.get(replication_tier, [])
+
+
+def availability_cap_reasons(*, coverage_tier: str = "", effective_ic_days=None,
+                             cross_section_below_min: bool = False,
+                             min_effective_ic_days: int = MIN_EFFECTIVE_IC_DAYS) -> list:
+    """§11.1 coverage gate + §3.9 depth floor (both an availability concern). A 'sub'
+    coverage tier (<50% cross-sectional) or too few effective IC days fails the floor →
+    the domain can only be evidence-only; too-thin per-date cross-sections →
+    insufficient_cross_sections."""
+    reasons = []
+    if coverage_tier == "sub":
+        reasons.append("availability_floor_fail")
+    if effective_ic_days is not None and float(effective_ic_days) < min_effective_ic_days:
+        reasons.append("availability_floor_fail")   # temporal-depth floor (§3.9)
+    if cross_section_below_min:
+        reasons.append("insufficient_cross_sections")
+    # de-dup, preserve order
+    return list(dict.fromkeys(reasons))
+
+
+def oos_eligibility_cap_reasons(oos_eligibility: str) -> list:
+    """manifest oos_eligibility → caps (§9.3/§9.4). short_window (truth-table observed →
+    post-quarantine OOS too short) and spent_same_family cap at candidate;
+    institutional_break is a structural break (evidence-only)."""
+    return {
+        "short_window": ["short_oos_power_floor_fail"],
+        "spent_same_family": ["oos_already_spent_same_family"],
+        "institutional_break": ["structural_break_unresolved"],
+    }.get(oos_eligibility, [])
+
+
+def claim_cap_reasons(claim_class: str) -> list:
+    """FactorDomainClaim class → caps. An evidence_only claim cannot be status-bearing in
+    that domain (§3.5 three-field semantics)."""
+    if claim_class == "evidence_only_not_status_bearing":
+        return ["non_approved_universe"]
+    return []
+
+
+@dataclass(frozen=True)
+class ReplicationCeilingDecision:
+    status_ceiling: str
+    blocking_reasons: tuple
+    nonblocking_missing_certs: tuple
+    next_actions: tuple
+    active_cap_reasons: tuple        # the full set fed to the lattice (audit)
+    oos_eligible_gates_met: tuple
+
+
+def resolve_replication_ceiling(
+    *,
+    replication_tier: str,
+    claim_class: str = "",
+    coverage_tier: str = "",
+    effective_ic_days=None,
+    oos_eligibility: str = "pending",
+    cross_section_below_min: bool = False,
+    has_uncertified_operator: bool = False,
+    max_stat_calibrated: bool = False,
+    denominator_frozen: bool = True,
+    sealed_oos_pass: bool = False,
+    power_floor_pass: bool = False,
+    min_effective_ic_days: int = MIN_EFFECTIVE_IC_DAYS,
+) -> ReplicationCeilingDecision:
+    """Compose all governance inputs for one (factor, universe) into a status ceiling.
+
+    Conservative-by-construction (the GPT-review spirit): a ``tainted_post_hoc_max_stat``
+    claim is NOT ``clean_or_calibrated`` until the P-CAL max-stat engine is available
+    (``max_stat_calibrated``), so it cannot reach OOS-eligible on its own — it sits at
+    candidate until calibrated or reviewer-overridden (Rev5: "tainted claim 用保守上界或
+    reviewer-block,不退回旧 univ_all 原 bar"). An uncertified operator hard-blocks
+    (P-OP not done). The result is the SINGLE ceiling + reason codes (§12.4)."""
+    if replication_tier not in REPLICATION_TIERS:
+        raise ValueError(f"unknown replication_tier {replication_tier!r}")
+    caps: list = []
+    caps += tier_cap_reasons(replication_tier)
+    caps += availability_cap_reasons(
+        coverage_tier=coverage_tier, effective_ic_days=effective_ic_days,
+        cross_section_below_min=cross_section_below_min,
+        min_effective_ic_days=min_effective_ic_days)
+    caps += oos_eligibility_cap_reasons(oos_eligibility)
+    caps += claim_cap_reasons(claim_class)
+    if has_uncertified_operator:
+        caps.append("uncertified_operator")
+    caps = list(dict.fromkeys(caps))   # de-dup, stable order
+
+    oos_gates: list = []
+    if denominator_frozen:
+        oos_gates.append("denominator_frozen")
+    if claim_class in ("clean_singleton_primary", "predeclared_multi_domain") or (
+            claim_class == "tainted_post_hoc_max_stat" and max_stat_calibrated):
+        oos_gates.append("clean_or_calibrated_claim")
+    if not has_uncertified_operator:
+        oos_gates.append("certified_operator")
+    if "availability_floor_fail" not in caps and "insufficient_cross_sections" not in caps:
+        oos_gates.append("coverage_pass")
+    app_gates = [g for g, ok in (("sealed_oos_pass", sealed_oos_pass),
+                                 ("power_floor_pass", power_floor_pass)) if ok]
+
+    d = resolve_status_ceiling(caps, oos_eligible_gates_met=oos_gates, approved_gates_met=app_gates)
+    return ReplicationCeilingDecision(
+        status_ceiling=d.status_ceiling, blocking_reasons=d.blocking_reasons,
+        nonblocking_missing_certs=d.nonblocking_missing_certs, next_actions=d.next_actions,
+        active_cap_reasons=tuple(caps), oos_eligible_gates_met=tuple(oos_gates))
+
+
+# --------------------------------------------------------------------------- #
 # 2. OOS quarantine from truth-table observation (§9.3)
 # --------------------------------------------------------------------------- #
 def compute_oos_quarantine_start(

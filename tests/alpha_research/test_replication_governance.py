@@ -20,6 +20,7 @@ from src.alpha_research.factor_registry.replication_governance import (
     cohort_pass_rate,
     compute_oos_quarantine_start,
     load_cohort_manifest,
+    resolve_replication_ceiling,
     resolve_status_ceiling,
 )
 
@@ -93,6 +94,77 @@ class TestStatusCeilingLattice:
     def test_unknown_reason_fail_closed(self):
         with pytest.raises(ValueError, match="unknown cap reason"):
             resolve_status_ceiling(["totally_made_up_reason"])
+
+
+# --------------------------------------------------------------------------- #
+# 1b. the P-GATE adjudicator (resolve_replication_ceiling)
+# --------------------------------------------------------------------------- #
+class TestReplicationCeilingAdjudicator:
+    def _clean(self, **over):
+        # a clean, full-coverage, eligible exact factor baseline
+        kw = dict(replication_tier="exact_certified", claim_class="clean_singleton_primary",
+                  coverage_tier="full", effective_ic_days=2654, oos_eligibility="eligible")
+        kw.update(over)
+        return resolve_replication_ceiling(**kw)
+
+    def test_clean_exact_eligible_reaches_oos(self):
+        d = self._clean()
+        assert d.status_ceiling == "eligible_for_oos"
+        assert d.blocking_reasons == ()
+
+    def test_short_window_caps_at_candidate(self):
+        # the D5 case: exact + clean construction but truth-table observed → short OOS
+        d = self._clean(oos_eligibility="short_window")
+        assert d.status_ceiling == "candidate_ceiling"
+        assert "short_oos_power_floor_fail" in d.blocking_reasons
+
+    def test_proxy_and_derived_cap_at_candidate(self):
+        assert self._clean(replication_tier="proxy_approx").status_ceiling == "candidate_ceiling"
+        assert self._clean(replication_tier="derived_methodology_proxy").status_ceiling == "candidate_ceiling"
+
+    def test_not_replicable_is_blocked(self):
+        d = self._clean(replication_tier="not_replicable")
+        assert d.status_ceiling == "blocked"
+        assert "missing_required_field" in d.blocking_reasons
+
+    def test_sub_coverage_is_evidence_only(self):
+        d = self._clean(coverage_tier="sub")
+        assert d.status_ceiling == "evidence_only"
+        assert "availability_floor_fail" in d.blocking_reasons
+
+    def test_shallow_depth_is_evidence_only(self):
+        # §3.9 temporal-depth floor: < ~756 effective IC days can't carry a status claim
+        d = self._clean(effective_ic_days=400)
+        assert d.status_ceiling == "evidence_only"
+        assert "availability_floor_fail" in d.blocking_reasons
+
+    def test_tainted_claim_needs_calibration_for_oos(self):
+        # tainted_post_hoc_max_stat is NOT clean_or_calibrated until P-CAL is available →
+        # sits at candidate (missing the gate, not a hard cap), even when otherwise clean.
+        d = self._clean(claim_class="tainted_post_hoc_max_stat")
+        assert d.status_ceiling == "candidate_ceiling"
+        assert "clean_or_calibrated_claim" in d.nonblocking_missing_certs
+        # once calibrated, it advances
+        d2 = self._clean(claim_class="tainted_post_hoc_max_stat", max_stat_calibrated=True)
+        assert d2.status_ceiling == "eligible_for_oos"
+
+    def test_uncertified_operator_blocks(self):
+        d = self._clean(has_uncertified_operator=True)
+        assert d.status_ceiling == "blocked"
+        assert "uncertified_operator" in d.blocking_reasons
+
+    def test_evidence_only_claim_blocks_status(self):
+        d = self._clean(claim_class="evidence_only_not_status_bearing")
+        assert d.status_ceiling == "evidence_only"
+        assert "non_approved_universe" in d.blocking_reasons
+
+    def test_approved_when_oos_passed(self):
+        d = self._clean(sealed_oos_pass=True, power_floor_pass=True)
+        assert d.status_ceiling == "eligible_for_approved"
+
+    def test_unknown_tier_fail_closed(self):
+        with pytest.raises(ValueError, match="unknown replication_tier"):
+            resolve_replication_ceiling(replication_tier="bogus")
 
 
 # --------------------------------------------------------------------------- #
