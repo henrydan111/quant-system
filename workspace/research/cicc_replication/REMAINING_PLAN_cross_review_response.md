@@ -41,3 +41,22 @@
 **一句话**:数据工程拓扑基本正确,但"统计 cohort 治理"+"算子/方法学认证"未达批量正式评估强度。
 Rev2 补齐 6 项后,适合从"工程准备"转入"分批受控正式评估";仍不批准一次性大规模灌入
 draft→candidate→sealed OOS。
+
+---
+
+# Round-2 裁决(GPT 终判 APPROVE WITH CONDITIONS → Rev3)
+
+总判 APPROVE WITH CONDITIONS,5 项最小条件。**5/5 全 ACCEPT**(2 项是我 Round-2 prompt 主动交出的攻击点 B3/B4 被坐实),外加 §C 的 lazy-certification + 统一记录 ACCEPT;1 处 ACCEPT 带诚实 caveat(D6 vendor feed 可生产性)。6 项必改核销:②⑤ RESOLVED,①③④⑥ PARTIALLY → Rev3 补齐。
+
+| 条件 | 裁决 | Rev3 动作 |
+|---|---|---|
+| 1. 预冻结 denominator 层级(防 p-hacking 从挑因子转到挑分母)| **ACCEPT(B2 尖锐)** | §9.2 加 `cohort_denominators` 5 层(source/daily_replicability/formalization_candidate/exact_oos_eligible/sealed_attempt);任何通过率必须同报后三个;primary 在 manifest 冻结时声明,不得事后选 |
+| 2. 拆 OperatorCertification ↔ FactorReplicationCertification(破依赖环)| **ACCEPT(B3,我自曝)** | §10A 拆分:OperatorCertification 只用 synthetic golden/property/慢速参考/PIT 对齐,**不要求 truth parity**;truth parity 归 `FactorReplicationCertification`(exact-cert 专属,触发 OOS 隔离)。用 mmt_range 的因子可先以 `formula_equivalent_pending` 进 formal IS,升 exact 才转录真值表+吃 OOS 隔离 |
+| 3. 短 OOS status ceiling(隔离后窗太短不能自动 approved)| **ACCEPT(B1)** | 新 §9.4:OOS 隔离后剩余窗 < power floor(≥60 调仓周期/≥5 日历年/≥3 结构稳定年)→ `max_status=candidate_validated_short_oos`,approved 需 prospective fresh-window(对接方案 §3.6c);历史 truth-parity 仍作 exact-cert 证据但不冒充 sealed OOS |
+| 4. D6 vendor PIT consensus 作主路径 | **ACCEPT 原则,带 caveat** | §10B:vendor PIT 一致预期(JQ 朝阳永续)若**可生产化**(可入 ledger/provider + 许可/历史满足)则作 formal 主路径,report_rc 重建降为 `derived_methodology_proxy`/交叉验证/fallback。**诚实 caveat**:JQ 朝阳永续此前是云端研究 oracle(jqfactor 快照),能否落地为生产 PIT feed未核;若只能云端取,则 report_rc 重建仍是唯一生产路径,封顶 candidate(条件3),除非 rank/decile/coverage 与 oracle 强一致 + prospective OOS。**先核 feed 可生产性再定路径** |
+| 5. 清 §3 D4 旧文本冲突 | **ACCEPT** | §3 改为与 §8 一致的 D4a(q0-q4 已存仅注册)/ D4b(q5-q7 rebuild)拆分 |
+| §C lazy certification + 统一 ReplicationGovernanceRecord | **ACCEPT(防治理拖死)** | 新 §12:不为 183 个全量前置办证;统一 `ReplicationGovernanceRecord`(替 6 套账);每 gate 只问"status ceiling? 进下一状态缺哪些 cert?";触发式认证表(truth_manifest 仅 exact-cert 时/availability_audit 进 formal IS 自动/DerivedConsensus 仅 D6→candidate/D7 cert 仅非 droppable) |
+
+**前 3 高价值/成本比机制(GPT 给 + 采纳)**:① cohort manifest + truth_label_end/OOS 隔离 ② OperatorCertification 非真值表版 ③ P-GATE/F4 + availability_audit。
+
+**无方向分歧**;唯一附 caveat 的是条件 4(vendor feed 可生产性需先核,不盲目翻主路径)。Round-3 应收敛 APPROVE。
