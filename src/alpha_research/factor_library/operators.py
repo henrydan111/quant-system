@@ -326,6 +326,94 @@ def up_down_ratio(window):
     return f"Sum(If({DAILY_RET} > 0, 1, 0), {window}) / {window}"
 
 
+# ─────────── CICC price-volume 系列7 图表4 — momentum (E1a, P-OP certified) ───────────
+# Each builder below has its operator SEMANTICS certified through the OperatorCertification
+# harness (workspace/scripts/certify_e1a_operators.py) BEFORE any factor using it may enter
+# the formal IS gate (§10A). The certified pandas reference was verified to match the Qlib
+# primitives used here (Sum/Abs, Sign+Mean, IdxMax, Rank) — see the operators they compile to.
+
+def path_adjusted_momentum(window):
+    """Path-adjusted (efficiency-ratio) momentum over N days — CICC mmt_route.
+
+    Formula (PIT-safe): Sum(daily_ret, N) / Sum(|daily_ret|, N), guarded to 0 over a fully
+    flat / suspended window (zero path length). |value| <= 1: +1 = pure uptrend, -1 = pure
+    downtrend, ~0 = choppy. Built on DAILY_RET so every $field sits inside a Ref(...,1) frame.
+
+    Price basis: adjusted close-to-close daily returns. Decay: short (1M form) to medium (1Y).
+    Operator semantics certified via the P-OP harness (operator_id=path_adjusted_momentum).
+
+    Args:
+        window: Lookback in trading days (20 = 1M, 250 = 1Y per the handbook).
+
+    Returns:
+        Qlib expression string.
+    """
+    return (f"If(Sum(Abs({DAILY_RET}), {window}) > 0, "
+            f"Sum({DAILY_RET}, {window}) / Sum(Abs({DAILY_RET}), {window}), 0)")
+
+
+def up_down_day_share(window):
+    """Up-minus-down day share over N days — CICC mmt_discrete (信息离散度动量).
+
+    Formula (PIT-safe): Mean(Sign(daily_ret), N) = (#up - #down)/N, range [-1, 1]. Flat days
+    (ret == 0) contribute 0 (sign(0)=0) — the ONLY thing distinguishing it from the up-day
+    fraction ``up_down_ratio`` (rank-equivalent to it modulo flat-day handling).
+
+    Price basis: adjusted close-to-close daily returns. Decay: short to medium.
+    Operator semantics certified via the P-OP harness (operator_id=up_down_day_share).
+
+    Args:
+        window: Lookback in trading days.
+
+    Returns:
+        Qlib expression string.
+    """
+    return f"Mean(Sign({DAILY_RET}), {window})"
+
+
+def days_since_high(window):
+    """Trading days since the rolling-N high — CICC mmt_highest_days.
+
+    Formula (PIT-safe): N - IdxMax(adj_high_{t-1}, N). Qlib IdxMax is 1-indexed (today=N), so
+    N - IdxMax == (N-1) - argmax0: 0 = the high is the most recent (t-1) bar, N-1 = the oldest
+    bar in the window. First-occurrence tie-break. Higher = price has fallen further from its
+    peak (weaker / more reverted).
+
+    Price basis: adjusted high. Decay: medium (1Y form). Operator semantics certified via the
+    P-OP harness (operator_id=days_since_high). Warmup: Qlib uses min_periods=1 so the first
+    N-1 bars carry partial-window values (dropped by the eval warmup buffer).
+
+    Args:
+        window: Lookback in trading days (250 = 1Y per the handbook).
+
+    Returns:
+        Qlib expression string.
+    """
+    return f"{window} - IdxMax({ADJ_HIGH_T1}, {window})"
+
+
+def ts_rank(window, field=None):
+    """Rolling time-series percentile rank of the current value within trailing N — the
+    building block of CICC mmt_time_rank (时序rank动量).
+
+    Formula (PIT-safe): Rank(field_{t-1}, N) in [0, 1] (1 = current value is the window max;
+    average-tie percentile). Defaults to the adjusted close. Compose with an outer Mean for
+    the handbook factor: ``Mean(ts_rank(250), 20)``.
+
+    Price basis: adjusted close (default). Operator semantics certified via the P-OP harness
+    (operator_id=ts_rank).
+
+    Args:
+        window: Rolling window over which the current value is ranked.
+        field: PIT-safe Qlib sub-expression to rank (defaults to ADJ_CLOSE_T1).
+
+    Returns:
+        Qlib expression string.
+    """
+    base = ADJ_CLOSE_T1 if field is None else field
+    return f"Rank({base}, {window})"
+
+
 # ─────────────────────── Value ───────────────────────
 
 def earnings_yield(kind="ttm"):

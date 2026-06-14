@@ -75,6 +75,22 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # `get_industry_relative_defs()` + `operators.add_industry_relative_composites`
     # (Layer 2 post-processing — requires external SW2021 industry labels).
 
+    # ── CICC price-volume 系列7 图表4 — momentum replication (E1a) ──
+    # Genuinely-new constructions backed by P-OP-certified operators
+    # (path_adjusted_momentum / up_down_day_share / ts_rank / days_since_high).
+    # _M = 1 month (20d), _A = 1 year (250d). Linked into
+    # config/replication/cicc_price_volume_cohort_v1.yaml by catalog_factor_id.
+    # Dedup notes: mmt_normal_M≈mom_return_20d, mmt_normal_A≈mom_skip1m_252d,
+    # mmt_intraday_M≈mom_intraday_20d, mmt_overnight_M≈mom_overnight_20d (NOT registered);
+    # mmt_discrete_20d is rank-equivalent to rev_up_down_ratio_20d modulo flat-day handling
+    # (registered anyway — the gate's resid_ic_vs_controls adjudicates redundancy empirically).
+    catalog['mmt_route_20d'] = op.path_adjusted_momentum(20)        # mmt_route_M
+    catalog['mmt_route_250d'] = op.path_adjusted_momentum(250)      # mmt_route_A
+    catalog['mmt_discrete_20d'] = op.up_down_day_share(20)          # mmt_discrete_M
+    catalog['mmt_discrete_250d'] = op.up_down_day_share(250)        # mmt_discrete_A
+    catalog['mmt_time_rank_20d'] = f"Mean({op.ts_rank(250)}, 20)"   # mmt_time_rank_M: 20d-mean of 250d price rank
+    catalog['mmt_highest_days_250d'] = op.days_since_high(250)      # mmt_highest_days_A
+
     # ═══════════════════════════════════════════════════════════════
     # 2. REVERSAL (短期反转) — 8 factors
     # ═══════════════════════════════════════════════════════════════
