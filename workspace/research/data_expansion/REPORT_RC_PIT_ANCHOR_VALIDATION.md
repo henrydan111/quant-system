@@ -191,3 +191,46 @@ remaining primitives (eps_same / dispersion / FY1-level / coverage), the catalog
 - JQ oracle inputs: `聚宽回测明细/jq_consensus_pit_test.csv`, `jq_consensus_canary_SNAP1.csv`
 
 No OOS touched. Sandbox; reads raw `data/` only.
+
+## 2026-06-14/15 — restatement canary run + create_time lag + deep-history buffer sweep
+
+User asked: can the ingestion-lag buffer be established from EXISTING data (no live forward
+measurement)? **Answer: yes — and it confirms the anchor already in `pit_backend` is correct.**
+
+**(1) Restatement canary actually run** (`report_rc_backfill_canary.py recheck`, SNAP1
+`20260607T164452Z` vs SNAP2 `20260614T150700Z`): raw verdict "PIT-RISK" (812 backfilled), BUT
+**674 were a lookback-overshoot artifact** (SNAP2 window started 4 days before SNAP1's) — the
+genuine count is **138 backfilled + 0 report_date drift + 26 payload restatements**. The 138 are
+**all weekend-dated** (Sat 06-06 / Sun 06-07), absent at a Mon-00:44 **pre-market** snapshot,
+present by 06-14 → a short, edge-concentrated ingestion lag, partly a pre-market-snapshot artifact.
+
+**(2) `create_time` IS a real per-row ingestion stamp for 2022-05+** (verified on the on-disk raw
+`data/analyst/report_rc/report_rc_{YYYY}.parquet`): 2023/2024/2026 `create_time − report_date` =
+**p50=1, p99=2, max≈4 calendar days**, zero negatives. Pre-2022 files carry the **frozen 2022-05
+backfill stamp** (useless for lag); 2022 is the transition (59% real). So the lag is measurable
+directly from disk for the contemporaneous era — no forward measurement needed.
+
+**(3) Deep-history buffer sweep vs the JQ PIT oracle** (`report_rc_pit_buffer_sweep.py`, 2012-2021,
+9 semi-annual as-of, 17,717 pooled): `report_date + {1,2,3} td` ALL give mean per-date Spearman
+**0.940** / pooled 0.949-0.950 / median ratio **0.91** (stable, **<1 → no "leading"/lookahead**).
+Buffer is insensitive in this range → no staleness cost to a safer buffer, no lookahead at the small
+end. → **`report_date + 2 td` is a validated, no-lookahead deep-history anchor** (and the create_time
+p99=2-cal measurement on 2022+ agrees).
+
+**(4) This VALIDATES the anchor already in `pit_backend` (2026-06-08).** The provider already anchors
+report_rc at `next_open(create_time)` (contemporaneous, gap≤45d) / `next_open(report_date +
+REPORT_RC_VENDOR_LAG_OPEN_DAYS=2)` (backfill/deep). So the deployed factor (`Ref($report_rc__*,1)`)
+sits at **`create_time+1` / `report_date+3`** — NOT raw `report_date+1`. The buffer sweep + create_time
+both confirm this anchor is no-lookahead. **No anchor change is needed** (the "+1→+2" framing was a
+mis-statement; the field has been at +2/create_time since 2026-06-08).
+
+**(5) Honest residual (what is STILL not covered):** the JQ oracle is consensus-LEVEL + 9 semi-annual
+snapshots → it validates **arrival/level visibility**, NOT per-report **breadth restatement**.
+`create_time` stamps FIRST ingestion only, so the **26 payload restatements/week (0.04%)** are
+re-dated by neither create_time nor the +2 buffer (the provider uses best-known-state) → a small
+retroactive-breadth residual. This + the unexplained "too-good" `eps_diffusion` LS Sharpe (7.24
+gross/5d/sub-universe) are why the two `eps_diffusion` approvals are revoked to candidate (below) —
+**not** a backfill-lookahead (that is handled), but the un-cleared contamination/restatement concern.
+
+Artifacts: `report_rc_pit_buffer_sweep.py` → `workspace/outputs/report_rc_pit_buffer_sweep.csv`;
+canary snapshots `data/external/report_rc_canary/snapshot_2026061{4}T*.parquet`.
