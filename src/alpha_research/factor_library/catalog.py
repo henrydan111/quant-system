@@ -216,9 +216,12 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # CICC D4a — quarter-over-quarter TTM DIFFERENCE factors (Δ of the D5 levels = current-
     # quarter TTM ratio minus prior-quarter TTM ratio). The prior-quarter TTM uses the q1..q4
     # slots registered 2026-06-14 (register-only: bins materialized, same _sq/_q derivation as
-    # the approved q0..q3/q0+q4 siblings — see approvals/2026-06-14_*). Maps to CICC CFOAD/
-    # ROAD/CCRD/CSRD. ROED/DTED/CURD/QRD/DAD/APRD deferred (need equity / cur_assets / liab /
-    # accounts_payable q1 slots — a second registration batch).
+    # the approved q0..q3/q0+q4 siblings — see approvals/2026-06-14_*; positional parity q1=prior /
+    # q4=4th-prior + no-future-ann checked by workspace/scripts/canary_qslot_value_parity.py, R3).
+    # FIDELITY TIERS (factor-logic cross-review R3, 2026-06-14 — cohort manifest v2):
+    #   * CFOAD/ROAD/CCRD/CSRD/DAD/CURD — mechanically faithful (formula_equivalent_pending).
+    #   * ROED/DTED/QRD — PROXIES (proxy_approx, hard candidate ceiling): see per-factor notes.
+    #   * APRD — REMOVED (the prior qual_aprd was mis-built; see the batch-3 note below).
     _ni_ttm_prev = ("(Ref($n_income_sq_q1, 1) + Ref($n_income_sq_q2, 1)"
                     " + Ref($n_income_sq_q3, 1) + Ref($n_income_sq_q4, 1))")
     _ocf_ttm_prev = ("(Ref($n_cashflow_act_sq_q1, 1) + Ref($n_cashflow_act_sq_q2, 1)"
@@ -233,23 +236,30 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
                             " - Ref($money_cap_q1, 1) / Ref($total_cur_liab_q1, 1)")
     # D4a batch-2 — leverage/liquidity ratio differences (CICC DAD/CURD/QRD). q1 slots
     # registered 2026-06-14 batch-2 (total_liab_q1 / total_cur_assets_q1 / inventories_q1).
+    # qual_qrd is a PROXY (proxy_approx): CICC 速动比率 subtracts more from current assets
+    # ((流动资产 − 存货 − 1年内到期非流动资产 − 待摊费用 − 预付款)/流动负债) than this
+    # inventory-only quick ratio; those extra balance-sheet lines have no registered q0/q1 slots,
+    # so this is the simplified inventory-only form, not the exact CICC quick ratio.
     catalog['qual_dad'] = ("Ref($total_liab_q0, 1) / Ref($total_assets_q0, 1)"
                            " - Ref($total_liab_q1, 1) / Ref($total_assets_q1, 1)")
     catalog['qual_curd'] = ("Ref($total_cur_assets_q0, 1) / Ref($total_cur_liab_q0, 1)"
                             " - Ref($total_cur_assets_q1, 1) / Ref($total_cur_liab_q1, 1)")
     catalog['qual_qrd'] = ("(Ref($total_cur_assets_q0, 1) - Ref($inventories_q0, 1)) / Ref($total_cur_liab_q0, 1)"
                            " - (Ref($total_cur_assets_q1, 1) - Ref($inventories_q1, 1)) / Ref($total_cur_liab_q1, 1)")
-    # D4a batch-3 — ROE / debt-to-equity / payables-turnover differences (CICC ROED/DTED/APRD).
-    # Equity = INCL-minority ($total_hldr_eqy_inc_min_int) matched to the _ni_ttm incl-minority
-    # numerator (mixing total NI with 归母 equity would overstate ROE — same documented basis as
-    # qual_roa_ttm). APRD uses PERIOD-MATCHED denominators (accounts_pay_q0 vs q1), NOT the
-    # fixed-denominator form that degenerated to revenue momentum in Phase-D (RATD/ATD/INVTD) —
-    # caveat: turnover *differences* were weak there, interpret with care. Fields registered batch-3.
+    # D4a batch-3 — ROE / debt-to-equity differences (CICC ROED/DTED). Equity uses
+    # $total_hldr_eqy_inc_min_int (INCL-minority), matched to the incl-minority _ni_ttm numerator
+    # (mixing total NI with 归母 equity would overstate ROE — same documented basis as qual_roa_ttm).
+    # Both are PROXIES (proxy_approx): CICC ROE / 产权比率 are 归母 (exc-minority equity, and 归母
+    # net profit). The exc_min_int equity slots AND the 归母-NI single-quarter slots are unregistered,
+    # so the faithful 归母 form is not buildable yet — these are incl-minority approximations.
+    # (CICC APRD 应计利润占比变动 was REMOVED here 2026-06-14/R3: the prior qual_aprd computed
+    # payables turnover Δ(营业成本TTM / 应付账款), unrelated to the handbook's accruals ratio
+    # 应计利润TTM / 营业利润TTM. The faithful build needs operate_profit_sq q1-q3 — only q0/q4 are
+    # registered — plus a transcribed 应计利润 numerator; until then APRD stays un-built. The
+    # accounts_pay_q0/q1 slots registered for it are now unconsumed — see the approval YAML note.)
     catalog['qual_roed'] = f"{_ni_ttm} / Ref($total_hldr_eqy_inc_min_int_q0, 1) - {_ni_ttm_prev} / Ref($total_hldr_eqy_inc_min_int_q1, 1)"
     catalog['qual_dted'] = ("Ref($total_liab_q0, 1) / Ref($total_hldr_eqy_inc_min_int_q0, 1)"
                             " - Ref($total_liab_q1, 1) / Ref($total_hldr_eqy_inc_min_int_q1, 1)")
-    catalog['qual_aprd'] = (f"{_cost_ttm} / Ref($accounts_pay_q0, 1)"
-                            f" - {_cost_ttm_prev} / Ref($accounts_pay_q1, 1)")
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 

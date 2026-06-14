@@ -9,6 +9,15 @@
 # lacks q1..q3 slots), so ROE/DTE must use the MATCHED total-equity denominator — mixing
 # total NI with 归母 equity would overstate ROE. Same documented incl-minority basis as
 # qual_roa_ttm.
+#
+# ░░ R3 UPDATE (factor-logic cross-review, 2026-06-14) ░░
+# The `accounts_pay_q0/q1` slots are now UNCONSUMED: they were registered for `qual_aprd`, which
+# was a mis-built payables-turnover factor (Δ营业成本TTM/应付账款) — NOT the CICC accruals ratio
+# (应计利润TTM/营业利润TTM) that APRD denotes. qual_aprd has been REMOVED from the catalog; APRD
+# stays un-built (faithful build needs operate_profit_sq q1-q3 + a transcribed 应计利润 numerator).
+# `total_hldr_eqy_inc_min_int_q0/q1` REMAIN consumed by qual_roed/qual_dted (now proxy_approx).
+# accounts_pay stays `approved` — a registered-but-unused valid PIT field is harmless; de-registering
+# would churn the log for no benefit. See workspace/research/cicc_replication/FACTOR_LOGIC_cross_review_response.md.
 
 approval_id: 2026-06-14_balancesheet_d4a_equity_payables_to_approved
 date: 2026-06-14

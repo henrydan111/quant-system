@@ -25,7 +25,10 @@ from src.alpha_research.factor_registry.replication_governance import (
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_MANIFEST = _PROJECT_ROOT / "config" / "replication" / "cicc_fundamental_cohort_v1.yaml"
+# v2 is the active manifest (factor-logic cross-review R3 fidelity correction: proxy_approx caps on
+# Profit/ROED/DTED/QRD, APRD unlinked). v1 is preserved unchanged under archive/ as the original
+# pre-results declaration (and is out of the gate's config/replication/*.yaml glob).
+_MANIFEST = _PROJECT_ROOT / "config" / "replication" / "cicc_fundamental_cohort_v2.yaml"
 
 
 # --------------------------------------------------------------------------- #
