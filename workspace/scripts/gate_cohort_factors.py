@@ -53,7 +53,10 @@ def main() -> int:
     cur = store.factor_master[store.factor_master["is_current"].fillna(False)]  # noqa: E712
     # F3: factors carrying a ledger link or a factor_master stamp "claim CICC" → fail closed on
     # a dropped manifest link.
-    linked_ids = set(linkage.linked_factor_ids())
+    _active = linkage.active_links()
+    linked_ids = set(_active["factor_id"].astype(str).tolist()) if len(_active) else set()
+    linked_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
+                      for _, r in _active.iterrows()} if len(_active) else {})
     if len(cur) and "replication_cohort_id" in cur.columns:
         st = cur[cur["replication_cohort_id"].notna()]
         if len(st):
@@ -74,7 +77,8 @@ def main() -> int:
         info = _cohort_ceiling(fid, UNIVERSE, manifests=manifests, evidence_df=store.factor_evidence,
                                claim_store=claims, current_definition_hash=def_hash,
                                certified_operators=certified_ops, trade_calendar=oos_cal,
-                               is_cohort_linked=(fid in linked_ids))
+                               is_cohort_linked=(fid in linked_ids),
+                               linked_definition_hash=linked_hashes.get(fid, ""))
         if info is None:
             print(f"{fid:14} NOT a cohort factor (manifest link missing)"); continue
         dec = info["decision"]
@@ -91,13 +95,14 @@ def main() -> int:
                 oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
                 notes="D4a batch adjudication via gate_cohort_factors",
             )
-            # F3 + F11: stamp the reverse link + append a definition-hash-bound ledger event.
+            # F3 + F11: stamp the reverse link (idempotent) + append a `linked` ledger event only
+            # for a NEW link (drift on an existing link already raised in _cohort_ceiling; no churn).
             hb = str(getattr(info["row"], "handbook_id", "") or "")
             store.set_replication_link(factor_id=fid, cohort_id=info["cohort_id"], handbook_id=hb)
-            linkage.record_linkage(
-                cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
-                definition_hash=def_hash,
-                event=("relinked" if fid in linked_ids else "linked"), notes="gate_cohort_factors")
+            if fid not in linked_ids:
+                linkage.record_linkage(
+                    cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
+                    definition_hash=def_hash, event="linked", notes="gate_cohort_factors")
     if args.live:
         store.save()   # persist the factor_master replication_cohort_id stamps
         print("claims + governance records + linkage stamps persisted")

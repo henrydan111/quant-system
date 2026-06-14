@@ -639,6 +639,24 @@ class CohortCeilingUnitTests(unittest.TestCase):
         self.assertNotIn("missing_domain_claim", info["decision"].active_cap_reasons)
         self.assertIn("availability_audit_missing", info["decision"].active_cap_reasons)
 
+    def test_f11_definition_drift_fails_closed(self):
+        # GPT scale-review #3: an active linkage bound at definition_hash H1, but the factor's
+        # current definition_hash is H2 → stale linkage (definition drifted) → fail closed.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified",
+                             truth_table_label_end="2022-12-31")])
+        claims = self._claims([dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl1")])
+        with self.assertRaises(ValueError):
+            fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H2",
+                                linked_definition_hash="H1")                 # drift → raise
+        info = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                   claim_store=claims, current_definition_hash="H1",
+                                   linked_definition_hash="H1")               # same hash → no drift
+        self.assertIsNotNone(info)
+
 
 if __name__ == "__main__":
     unittest.main()

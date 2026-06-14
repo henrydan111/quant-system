@@ -372,12 +372,57 @@ def _assert_gate_allows_publication(context: StepExecutionContext) -> None:
         context.state["publish_status_override"] = "under_review"
 
 
+def _assert_cicc_oos_quarantine(context: StepExecutionContext, prescription, oos_window_start: str) -> None:
+    """Fail-closed OOS-quarantine guard for CICC-cohort factors (§9.3 / R1 F9), enforced at the
+    UNIVERSAL seal-claim chokepoint so EVERY sealed-OOS path is covered (event-driven, vectorized,
+    promotion-evidence — all route through ``_claim_holdout_access_if_needed``), not just one handler
+    (GPT scale-review #2).
+
+    If any factor named in the prescription carries a ``ReplicationGovernanceRecord``, the OOS window
+    must start at/after its EXACT (``approximate=False``) quarantine — else
+    ``assert_oos_quarantine_satisfied`` raises ``OosQuarantineError``. A pure no-op for non-cohort
+    prescriptions (no governance store / no matching record). Only the STORE LOAD is guarded
+    (a missing store must not break non-CICC OOS); the assertion itself is never swallowed."""
+    if prescription is None:
+        return
+    try:
+        from src.alpha_research.factor_registry.replication_governance import (
+            ReplicationGovernanceStore,
+            assert_oos_quarantine_satisfied,
+        )
+        rd = getattr(context, "registry_dirs", None) or {}
+        gov_dir = rd.get("factor_registry_dir")
+        if not gov_dir:
+            return
+        recs = ReplicationGovernanceStore(gov_dir).records()
+    except Exception:  # noqa: BLE001 — store/import problems must not break non-CICC OOS runs
+        return
+    if recs is None or not len(recs):
+        return
+    fids = {str(getattr(c, "factor_name", "")) for c in getattr(prescription, "components", ())}
+    fids.discard("")
+    if not fids:
+        return
+    hits = recs[recs["factor_id"].astype("string").isin(fids)]
+    for _, r in hits.iterrows():
+        assert_oos_quarantine_satisfied(
+            oos_quarantine_start=str(r.get("oos_quarantine_start") or ""),
+            oos_quarantine_approximate=bool(r.get("oos_quarantine_approximate", False)),
+            oos_window_start=str(oos_window_start),
+            factor_id=str(r.get("factor_id") or ""),
+        )
+
+
 def _claim_holdout_access_if_needed(context: StepExecutionContext) -> None:
     hypothesis = context.request.hypothesis
     if hypothesis is None or hypothesis.time_split is None:
         return
     if _gate_stage(context) != "oos_test":
         return
+    # OOS-quarantine enforcement at the universal seal-claim chokepoint — refuse a sealed-OOS claim
+    # for a CICC-cohort component whose quarantine is approximate or unsatisfied, BEFORE the seal is
+    # spent (no-op for non-cohort prescriptions). Covers every OOS path that claims a seal here.
+    _assert_cicc_oos_quarantine(context, hypothesis.prescription, str(hypothesis.time_split.oos_start))
     seal_store = HoldoutSealStore(context.registry_dirs["holdout_seal_dir"])
     seal_store.claim_holdout_access(
         design_hash=hypothesis.design_hash(),

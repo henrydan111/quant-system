@@ -1016,42 +1016,6 @@ def _emit_skipped_due_to_is_gate(
     )
 
 
-def _assert_cicc_oos_quarantine(context, prescription, oos_window_start: str) -> None:
-    """Fail-closed OOS-quarantine guard for CICC-cohort factors (§9.3 / R1 F9).
-
-    If any factor named in the prescription has a ``ReplicationGovernanceRecord``, the OOS window
-    must start at/after its EXACT (``approximate=False``) quarantine — else
-    ``assert_oos_quarantine_satisfied`` raises ``OosQuarantineError``. A pure no-op for non-cohort
-    prescriptions (no governance store / no matching record). Only the STORE LOAD is guarded
-    (a missing store must not break non-CICC OOS); the assertion itself is never swallowed."""
-    try:
-        from src.alpha_research.factor_registry.replication_governance import (
-            ReplicationGovernanceStore,
-            assert_oos_quarantine_satisfied,
-        )
-        rd = getattr(context, "registry_dirs", None) or {}
-        gov_dir = rd.get("factor_registry_dir")
-        if not gov_dir:
-            return
-        recs = ReplicationGovernanceStore(gov_dir).records()
-    except Exception:  # noqa: BLE001 — store/import problems must not break non-CICC OOS runs
-        return
-    if recs is None or not len(recs):
-        return
-    fids = {str(getattr(c, "factor_name", "")) for c in getattr(prescription, "components", ())}
-    fids.discard("")
-    if not fids:
-        return
-    hits = recs[recs["factor_id"].astype("string").isin(fids)]
-    for _, r in hits.iterrows():
-        assert_oos_quarantine_satisfied(
-            oos_quarantine_start=str(r.get("oos_quarantine_start") or ""),
-            oos_quarantine_approximate=bool(r.get("oos_quarantine_approximate", False)),
-            oos_window_start=str(oos_window_start),
-            factor_id=str(r.get("factor_id") or ""),
-        )
-
-
 def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepExecutionResult:
     """Run the event-driven backtest on the OOS window after explicitly
     claiming the holdout seal. Short-circuits if the upstream IS gate
@@ -1095,11 +1059,10 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
         raise ValueError("handle_validation_event_backtest_oos requires hypothesis.prescription")
     prescription = hypothesis.prescription
 
-    # OOS-quarantine enforcement (§9.3 / R1 F9): if any factor in this prescription carries a CICC
-    # ReplicationGovernanceRecord, refuse to spend OOS that is APPROXIMATE-quarantined or starts
-    # before the (exact) quarantine. Done BEFORE the seal claim so a refused run never spends the
-    # seal slot. No-op for non-cohort prescriptions (no governance record).
-    _assert_cicc_oos_quarantine(context, prescription, str(hypothesis.time_split.oos_start))
+    # OOS-quarantine enforcement now lives at the UNIVERSAL seal-claim chokepoint
+    # (steps._claim_holdout_access_if_needed → _assert_cicc_oos_quarantine), so every sealed-OOS
+    # path (event-driven here, vectorized, promotion-evidence) is covered, not just this handler
+    # (GPT scale-review #2). No per-handler call needed.
 
     # PR 8d Blocker 1: claim the holdout seal BEFORE invoking
     # run_event_driven_window. The claim uses hypothesis.design_hash() +

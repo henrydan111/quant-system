@@ -432,3 +432,39 @@ class TestCohortFactorLinkageStore:
         s = CohortFactorLinkageStore(tmp_path)
         with pytest.raises(ValueError, match="unknown linkage event"):
             s.record_linkage(cohort_id="c1", factor_id="f1", event="bogus")
+
+
+class TestSealClaimQuarantineChokepoint:
+    """GPT scale-review #2: the OOS quarantine is enforced at the universal seal-claim chokepoint
+    (steps._assert_cicc_oos_quarantine), keyed on prescription component factor_names."""
+
+    def _ctx(self, gov_dir):
+        import types
+        return types.SimpleNamespace(registry_dirs={"factor_registry_dir": str(gov_dir)})
+
+    def _presc(self, *factor_names):
+        import types
+        return types.SimpleNamespace(
+            components=tuple(types.SimpleNamespace(factor_name=n) for n in factor_names))
+
+    def test_chokepoint_enforces_and_noops(self, tmp_path):
+        from src.research_orchestrator import steps
+        gov = ReplicationGovernanceStore(tmp_path)
+        gov.upsert(cohort_id="c", factor_id="qual_x", factor_domain_claim_id="k",
+                   replication_tier="formula_equivalent_pending",
+                   oos_quarantine_start="2023-02-13", oos_quarantine_approximate=False)
+        ctx, presc = self._ctx(tmp_path), self._presc("qual_x")
+        with pytest.raises(OosQuarantineError):                       # window before quarantine
+            steps._assert_cicc_oos_quarantine(ctx, presc, "2022-06-01")
+        steps._assert_cicc_oos_quarantine(ctx, presc, "2024-01-01")   # after quarantine → ok
+        steps._assert_cicc_oos_quarantine(ctx, self._presc("not_cohort"), "2020-01-01")  # no match → no-op
+        steps._assert_cicc_oos_quarantine(ctx, None, "2020-01-01")    # no prescription → no-op
+
+    def test_chokepoint_refuses_approximate(self, tmp_path):
+        from src.research_orchestrator import steps
+        gov = ReplicationGovernanceStore(tmp_path)
+        gov.upsert(cohort_id="c", factor_id="qual_y", factor_domain_claim_id="k",
+                   replication_tier="formula_equivalent_pending",
+                   oos_quarantine_start="2023-02-13", oos_quarantine_approximate=True)
+        with pytest.raises(OosQuarantineError, match="APPROXIMATE"):
+            steps._assert_cicc_oos_quarantine(self._ctx(tmp_path), self._presc("qual_y"), "2024-01-01")

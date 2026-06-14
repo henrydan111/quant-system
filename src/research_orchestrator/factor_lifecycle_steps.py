@@ -449,7 +449,7 @@ def _oos_trade_calendar() -> tuple:
 def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store,
                     system_oos_start: str = "2021-01-01", current_definition_hash: str = "",
                     certified_operators=frozenset(), trade_calendar=None,
-                    is_cohort_linked: bool = False):
+                    is_cohort_linked: bool = False, linked_definition_hash: str = ""):
     """Adjudicate the replication status ceiling for one (factor, universe) by composing the
     cohort manifest (tier + oos_eligibility), the 7-domain matrix evidence (coverage + depth)
     and the FactorDomainClaim (class). Returns ``None`` ONLY if the factor is in NO cohort
@@ -490,6 +490,17 @@ def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df,
             f"{factor_id} matches {len(matches)} cohort manifest rows ({[c for c, *_ in matches]}) "
             "— ambiguous cohort membership, failing closed (F3)")
     cohort_id, row, handbook_label_end = matches[0]
+
+    # F11 drift (GPT scale-review #3): if an active linkage ledger row exists for this factor, its
+    # definition_hash (the implementation bound to the cohort at link time) must equal the CURRENT
+    # registry definition_hash. A mismatch = the factor's definition drifted since it was linked →
+    # fail closed (do NOT silently relink). An explicit relink (relinked event) is required after
+    # confirming the change, so a definition change can't quietly ride the old cohort linkage.
+    if linked_definition_hash and current_definition_hash and linked_definition_hash != current_definition_hash:
+        raise ValueError(
+            f"{factor_id} cohort linkage definition_hash {linked_definition_hash[:12]}… != current "
+            f"{current_definition_hash[:12]}… — STALE linkage (definition drifted since link); failing "
+            "closed (F11 drift). Re-link explicitly after confirming the change.")
 
     # F9-full (GPT R1, now enforced): the gate adjudicates the REQUESTED ``universe_id`` directly,
     # not only the manifest ``primary_claim_universe``. The replication tier is domain-agnostic;
@@ -652,10 +663,14 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     from src.alpha_research.factor_registry.replication_governance import CohortFactorLinkageStore
     linkage_store = CohortFactorLinkageStore(rd["factor_registry_dir"])
     try:
-        linked_ids = set(linkage_store.linked_factor_ids())
+        _active = linkage_store.active_links()
+        linked_ids = set(_active["factor_id"].astype(str).tolist()) if len(_active) else set()
+        # per-factor linked definition_hash (latest active link) for the F11 drift check
+        linked_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
+                          for _, r in _active.iterrows()} if len(_active) else {})
     except Exception as e:  # noqa: BLE001
         logger.warning("linkage ledger read failed (fail-safe: stamp-only): %s", e)
-        linked_ids = set()
+        linked_ids, linked_hashes = set(), {}
     if len(_cur) and "replication_cohort_id" in _cur.columns:
         stamped = _cur[_cur["replication_cohort_id"].notna()]
         if len(stamped):
@@ -676,6 +691,7 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
                 current_definition_hash=def_hashes.get(fid, ""),
                 certified_operators=certified_ops,
                 trade_calendar=oos_cal, is_cohort_linked=(fid in linked_ids),
+                linked_definition_hash=linked_hashes.get(fid, ""),
             )
         except Exception as e:  # noqa: BLE001
             logger.error("P-GATE adjudication FAILED for %s — refusing (fail-closed): %s", fid, e)
@@ -692,17 +708,19 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
     # genuine members are stamped; a future dropped manifest link then trips the is_cohort_linked
     # fail-closed path. Non-fatal (the load-bearing governance record is persisted by F10 below);
     # a stamp/ledger failure is logged, not promoted-around. The stamp is in-memory until store.save().
+    # GPT scale-review #4: linkage persistence is FATAL for confirmed cohort factors — a stamp/
+    # ledger write failure raises BEFORE any status write (a promoted factor without a durable link
+    # would defeat the future dropped-link fail-closed check). #3: drift already raised in
+    # _cohort_ceiling, so we never silently relink — append a `linked` event only for a NEW link
+    # (idempotent stamp always; no ledger churn for an unchanged existing link).
     for fid, info in cohort_adj.items():
         hb = str(getattr(info["row"], "handbook_id", "") or "")
-        try:
-            store.set_replication_link(factor_id=fid, cohort_id=info["cohort_id"], handbook_id=hb)
+        store.set_replication_link(factor_id=fid, cohort_id=info["cohort_id"], handbook_id=hb)
+        if fid not in linked_ids:
             linkage_store.record_linkage(
                 cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
-                definition_hash=def_hashes.get(fid, ""),
-                event=("relinked" if fid in linked_ids else "linked"),
+                definition_hash=def_hashes.get(fid, ""), event="linked",
                 notes=f"P-GATE registry_publish (universe={gate_universe})")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("F3/F11 linkage stamp/ledger failed for %s (non-fatal): %s", fid, e)
 
     # F9-full: adjudicate every OTHER declared domain (active-claim universe != univ_all) the
     # factor carries, persisting a governance record PER domain (resolve-but-label). Promotion is
@@ -721,7 +739,8 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
                         claim_store=claim_store, system_oos_start=system_oos_start,
                         current_definition_hash=def_hashes.get(fid, ""),
                         certified_operators=certified_ops, trade_calendar=oos_cal,
-                        is_cohort_linked=(fid in linked_ids))
+                        is_cohort_linked=(fid in linked_ids),
+                        linked_definition_hash=linked_hashes.get(fid, ""))
                 except Exception as e:  # noqa: BLE001
                     logger.error("F9-full per-domain adjudication failed for %s@%s: %s", fid, dom, e)
                     continue
