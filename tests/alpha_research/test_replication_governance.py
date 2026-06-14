@@ -15,8 +15,11 @@ import pytest
 from src.alpha_research.factor_registry.replication_governance import (
     APPROVED_GATES,
     OOS_ELIGIBLE_GATES,
+    CohortFactorLinkageStore,
     CohortManifest,
+    OosQuarantineError,
     ReplicationGovernanceStore,
+    assert_oos_quarantine_satisfied,
     cohort_pass_rate,
     compute_oos_quarantine_start,
     load_cohort_manifest,
@@ -355,3 +358,77 @@ class TestGovernanceStore:
         )
         assert rec.status_ceiling == "eligible_for_oos"      # not lowered by the weak-signal flag
         assert rec.uncomputable_metrics["univ_microcap_q10_q1"] == "orientation_undetermined"
+
+
+class TestOosQuarantineEnforcement:
+    """R1 Finding-9: refuse a sealed-OOS spend before the quarantine is exact + satisfied."""
+
+    def test_approximate_quarantine_refused(self):
+        with pytest.raises(OosQuarantineError, match="APPROXIMATE"):
+            assert_oos_quarantine_satisfied(
+                oos_quarantine_start="2023-02-09", oos_quarantine_approximate=True,
+                oos_window_start="2024-01-01", factor_id="f")
+
+    def test_window_before_quarantine_refused(self):
+        with pytest.raises(OosQuarantineError, match="reaches into"):
+            assert_oos_quarantine_satisfied(
+                oos_quarantine_start="2023-02-09", oos_quarantine_approximate=False,
+                oos_window_start="2022-06-01", factor_id="f")
+
+    def test_exact_and_after_quarantine_ok(self):
+        # exact + window starts on/after the quarantine → no raise
+        assert_oos_quarantine_satisfied(
+            oos_quarantine_start="2023-02-09", oos_quarantine_approximate=False,
+            oos_window_start="2023-02-09")
+        assert_oos_quarantine_satisfied(
+            oos_quarantine_start="2023-02-09", oos_quarantine_approximate=False,
+            oos_window_start="2024-01-01")
+
+    def test_blank_quarantine_is_noop(self):
+        # no truth observation → nothing to enforce (even if flagged approximate)
+        assert_oos_quarantine_satisfied(
+            oos_quarantine_start="", oos_quarantine_approximate=True, oos_window_start="2020-01-01")
+
+    def test_injected_calendar_makes_quarantine_exact(self):
+        # the candidate gate injects a trading calendar so the persisted quarantine is exact.
+        cal = [f"2023-01-{d:02d}" for d in range(1, 32)] + [f"2023-02-{d:02d}" for d in range(1, 29)]
+        start, approx = compute_oos_quarantine_start(
+            "2022-12-31", "2021-01-01", trade_calendar=cal, horizon_trading_days=20, embargo_trading_days=5)
+        assert approx is False                # injected calendar → exact
+        assert start > "2022-12-31"           # advanced past the truth window
+        # without a calendar it falls back to approximate
+        _, approx2 = compute_oos_quarantine_start("2022-12-31", "2021-01-01")
+        assert approx2 is True
+
+
+class TestCohortFactorLinkageStore:
+    """R1 Finding-11: append-only cohort↔factor linkage ledger, definition-hash-bound."""
+
+    def test_record_is_append_only_and_definition_bound(self, tmp_path):
+        s = CohortFactorLinkageStore(tmp_path)
+        s.record_linkage(cohort_id="c1", factor_id="f1", handbook_id="F_X",
+                         definition_hash="h1", event="linked")
+        s.record_linkage(cohort_id="c1", factor_id="f1", handbook_id="F_X",
+                         definition_hash="h2", event="relinked")   # append, never edit
+        df = s.links()
+        assert len(df) == 2                                        # both events retained
+        assert set(df["definition_hash"]) == {"h1", "h2"}          # definition_hash bound per event
+
+    def test_active_links_excludes_unlinked(self, tmp_path):
+        s = CohortFactorLinkageStore(tmp_path)
+        s.record_linkage(cohort_id="c1", factor_id="f1", event="linked")
+        s.record_linkage(cohort_id="c1", factor_id="f2", event="linked")
+        s.record_linkage(cohort_id="c1", factor_id="f2", event="unlinked")   # latest = unlinked
+        assert s.linked_factor_ids() == {"f1"}                     # f2 dropped (latest is unlinked)
+
+    def test_relink_after_unlink_is_active(self, tmp_path):
+        s = CohortFactorLinkageStore(tmp_path)
+        s.record_linkage(cohort_id="c1", factor_id="f1", event="linked")
+        s.record_linkage(cohort_id="c1", factor_id="f1", event="unlinked")
+        s.record_linkage(cohort_id="c1", factor_id="f1", event="relinked")   # latest = relinked
+        assert s.linked_factor_ids() == {"f1"}
+
+    def test_unknown_event_rejected(self, tmp_path):
+        s = CohortFactorLinkageStore(tmp_path)
+        with pytest.raises(ValueError, match="unknown linkage event"):
+            s.record_linkage(cohort_id="c1", factor_id="f1", event="bogus")

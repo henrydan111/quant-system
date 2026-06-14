@@ -608,6 +608,37 @@ class CohortCeilingUnitTests(unittest.TestCase):
         self.assertIn("short_oos_power_floor_fail", d["decision"].active_cap_reasons)
         self.assertEqual(d["decision"].status_ceiling, "candidate_ceiling")
 
+    def test_f3_linked_factor_zero_manifest_match_fails_closed(self):
+        # R1 F3: a factor carrying a cohort link but resolving to 0 manifest rows is a dropped/
+        # forgotten link → fail closed; an UNLINKED factor with 0 matches is genuinely non-cohort.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="other_factor",
+                             replication_tier_planned="exact_certified")])
+        claims = self._claims([])
+        self.assertIsNone(fls._cohort_ceiling(
+            "ghost", "univ_all", manifests=[m], evidence_df=self._ev([]), claim_store=claims,
+            current_definition_hash="H", is_cohort_linked=False))            # non-cohort → unchanged
+        with self.assertRaises(ValueError):                                  # linked + 0 match → closed
+            fls._cohort_ceiling("ghost", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H", is_cohort_linked=True)
+
+    def test_f9_full_adjudicates_non_univ_all_domain(self):
+        # R1 F9-full: a non-univ_all universe is now ADJUDICATED (no longer a hard refuse). With a
+        # matching csi300 claim but no csi300 matrix evidence → evidence_only (coverage missing),
+        # using the csi300 claim (not missing_domain_claim).
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="ROED", catalog_factor_id="qual_roed",
+                             replication_tier_planned="proxy_approx",
+                             truth_table_label_end="2022-12-31")])  # primary defaults to univ_all
+        claims = self._claims([dict(factor_id="qual_roed", universe_id="csi300", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl_csi300")])
+        info = fls._cohort_ceiling("qual_roed", "csi300", manifests=[m], evidence_df=self._ev([]),
+                                   claim_store=claims, current_definition_hash="H")
+        self.assertIsNotNone(info)                                           # adjudicated, did NOT raise
+        self.assertEqual(info["claim_id"], "cl_csi300")                      # used the csi300 claim
+        self.assertNotIn("missing_domain_claim", info["decision"].active_cap_reasons)
+        self.assertIn("availability_audit_missing", info["decision"].active_cap_reasons)
+
 
 if __name__ == "__main__":
     unittest.main()

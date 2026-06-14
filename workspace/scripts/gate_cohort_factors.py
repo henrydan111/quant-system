@@ -22,10 +22,14 @@ for p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
 from src.alpha_research.factor_registry import FactorRegistryStore  # noqa: E402
 from src.alpha_research.factor_registry.domain_claims import DomainClaimStore  # noqa: E402
 from src.alpha_research.factor_library.operator_certification import OperatorCertStore  # noqa: E402
-from src.alpha_research.factor_registry.replication_governance import ReplicationGovernanceStore  # noqa: E402
+from src.alpha_research.factor_registry.replication_governance import (  # noqa: E402
+    CohortFactorLinkageStore,
+    ReplicationGovernanceStore,
+)
 from src.research_orchestrator.factor_lifecycle_steps import (  # noqa: E402
     _cohort_ceiling,
     _load_cohort_manifests,
+    _oos_trade_calendar,
 )
 
 UNIVERSE = "univ_all"
@@ -44,7 +48,17 @@ def main() -> int:
     manifests = _load_cohort_manifests()
     certified_ops = OperatorCertStore(reg).certified_operators()
     gov = ReplicationGovernanceStore(reg)
+    linkage = CohortFactorLinkageStore(reg)
+    oos_cal = _oos_trade_calendar() or None   # exact OOS quarantine (R1 F9)
     cur = store.factor_master[store.factor_master["is_current"].fillna(False)]  # noqa: E712
+    # F3: factors carrying a ledger link or a factor_master stamp "claim CICC" → fail closed on
+    # a dropped manifest link.
+    linked_ids = set(linkage.linked_factor_ids())
+    if len(cur) and "replication_cohort_id" in cur.columns:
+        st = cur[cur["replication_cohort_id"].notna()]
+        if len(st):
+            st = st[st["replication_cohort_id"].astype("string").str.strip() != ""]
+            linked_ids |= set(st["factor_id"].astype(str).tolist())
 
     for fid in factors:
         row = cur[cur["factor_id"] == fid]
@@ -59,7 +73,8 @@ def main() -> int:
                                   hypothesis_id="cicc_d4a", declared_domain_count=1)
         info = _cohort_ceiling(fid, UNIVERSE, manifests=manifests, evidence_df=store.factor_evidence,
                                claim_store=claims, current_definition_hash=def_hash,
-                               certified_operators=certified_ops)
+                               certified_operators=certified_ops, trade_calendar=oos_cal,
+                               is_cohort_linked=(fid in linked_ids))
         if info is None:
             print(f"{fid:14} NOT a cohort factor (manifest link missing)"); continue
         dec = info["decision"]
@@ -76,8 +91,16 @@ def main() -> int:
                 oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
                 notes="D4a batch adjudication via gate_cohort_factors",
             )
+            # F3 + F11: stamp the reverse link + append a definition-hash-bound ledger event.
+            hb = str(getattr(info["row"], "handbook_id", "") or "")
+            store.set_replication_link(factor_id=fid, cohort_id=info["cohort_id"], handbook_id=hb)
+            linkage.record_linkage(
+                cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
+                definition_hash=def_hash,
+                event=("relinked" if fid in linked_ids else "linked"), notes="gate_cohort_factors")
     if args.live:
-        print("claims + governance records persisted")
+        store.save()   # persist the factor_master replication_cohort_id stamps
+        print("claims + governance records + linkage stamps persisted")
     else:
         print("dry-run — re-run with --live to register claims + persist records")
     return 0

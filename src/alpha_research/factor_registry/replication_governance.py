@@ -656,3 +656,120 @@ class ReplicationGovernanceStore:
             out = out[GOVERNANCE_COLUMNS]
             out.to_parquet(self.path, index=False)
         return rec
+
+
+# --------------------------------------------------------------------------- #
+# 5. OOS-quarantine enforcement (§9.3, GPT R1 Finding-9 — "before any sealed OOS")
+# --------------------------------------------------------------------------- #
+class OosQuarantineError(RuntimeError):
+    """Raised when a sealed-OOS spend is attempted before the quarantine is satisfied."""
+
+
+def assert_oos_quarantine_satisfied(
+    *,
+    oos_quarantine_start: str,
+    oos_quarantine_approximate: bool,
+    oos_window_start: str,
+    factor_id: str = "",
+) -> None:
+    """Fail-closed gate for spending sealed OOS on a CICC-replicated factor (§9.3 / R1 F9).
+
+    A factor whose parity was checked against a handbook truth table OBSERVED that label window,
+    so its sealed OOS may not begin before ``oos_quarantine_start`` (= ``max(system_oos_start,
+    truth_label_end + horizon + embargo)``). Two refusals:
+
+      * ``oos_quarantine_approximate`` is True  → the quarantine date was computed WITHOUT a
+        trading calendar (calendar-day fallback) and is only approximate; refuse until it is
+        recomputed with an injected trade calendar (``approximate=False``). A conservative-but-
+        approximate boundary must NEVER authorize a real, irreversible OOS spend.
+      * ``oos_window_start < oos_quarantine_start`` → the OOS window reaches into the observed
+        (quarantined) period → leakage; refuse.
+
+    Dates are ``YYYY-MM-DD`` strings (lexical compare == chronological). A blank quarantine start
+    means none was computed (no truth observation) → nothing to enforce.
+    """
+    if not oos_quarantine_start:
+        return
+    if oos_quarantine_approximate:
+        raise OosQuarantineError(
+            f"{factor_id or 'factor'}: OOS quarantine {oos_quarantine_start!r} is APPROXIMATE "
+            "(computed without a trading calendar); refusing to spend sealed OOS until it is "
+            "recomputed with an injected trade calendar (approximate=False) — §9.3 / R1 F9")
+    if str(oos_window_start) < str(oos_quarantine_start):
+        raise OosQuarantineError(
+            f"{factor_id or 'factor'}: OOS window starts {oos_window_start!r} < quarantine start "
+            f"{oos_quarantine_start!r} — the window reaches into the truth-observed period "
+            "(lookahead); refusing the sealed-OOS spend (§9.3)")
+
+
+# --------------------------------------------------------------------------- #
+# 6. cohort↔factor linkage ledger (§12.3 / R1 F11) — append-only, definition-bound
+# --------------------------------------------------------------------------- #
+# ``catalog_factor_id`` is EXCLUDED from the manifest sha (operational linkage, not frozen
+# science), so the freeze cannot itself detect a DROPPED link. This append-only ledger is the
+# durable record of every (cohort, factor) linkage event + the factor's ``definition_hash`` at
+# link time. Two uses: (1) audit/reporting of how factors were linked; (2) the F3 fail-closed
+# check — a factor that has EVER been linked (and not since unlinked) but no longer resolves to
+# exactly one manifest row is a "forgotten link" and must fail closed, never silently revert to
+# being treated as a non-cohort factor.
+LINKAGE_COLUMNS = [
+    "linkage_id", "cohort_id", "factor_id", "handbook_id",
+    "definition_hash", "event", "linked_at", "notes",
+]
+LINKAGE_EVENTS = ("linked", "relinked", "unlinked")
+
+
+class CohortFactorLinkageStore:
+    """Append-only parquet ledger of cohort↔factor linkage events (locked writes).
+
+    NEVER mutates a prior row — every link/relink/unlink is a new append. The CURRENT linkage
+    state of a factor is the latest event per (cohort_id, factor_id); ``active_links`` filters out
+    pairs whose latest event is ``unlinked``.
+    """
+
+    def __init__(self, base_dir: str | Path | None = None):
+        self.base_dir = Path(base_dir) if base_dir else DEFAULT_GOV_DIR
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.base_dir / "cohort_factor_linkage.parquet"
+        self._lock = self.base_dir / ".cohort_factor_linkage.lock"
+
+    def links(self) -> pd.DataFrame:
+        if self.path.exists():
+            return pd.read_parquet(self.path)
+        return pd.DataFrame(columns=LINKAGE_COLUMNS)
+
+    def record_linkage(
+        self, *, cohort_id: str, factor_id: str, handbook_id: str = "",
+        definition_hash: str = "", event: str = "linked", notes: str = "",
+    ) -> dict:
+        """Append one linkage event (append-only; never edits a prior row)."""
+        if event not in LINKAGE_EVENTS:
+            raise ValueError(f"unknown linkage event {event!r}; expected one of {LINKAGE_EVENTS}")
+        now = _utcnow()
+        row = {
+            "linkage_id": f"{cohort_id}::{factor_id}::{now}",
+            "cohort_id": cohort_id, "factor_id": factor_id, "handbook_id": handbook_id,
+            "definition_hash": definition_hash, "event": event, "linked_at": now, "notes": notes,
+        }
+        with file_lock(self._lock):
+            df = self.links()
+            out = pd.concat([df, pd.DataFrame([row])], ignore_index=True)[LINKAGE_COLUMNS]
+            out.to_parquet(self.path, index=False)
+        return row
+
+    def active_links(self, factor_id: str | None = None) -> pd.DataFrame:
+        """Latest event per (cohort_id, factor_id) whose latest event is NOT ``unlinked``."""
+        df = self.links()
+        if df.empty:
+            return df
+        if factor_id is not None:
+            df = df[df["factor_id"] == factor_id]
+            if df.empty:
+                return df
+        latest = (df.sort_values("linked_at").groupby(["cohort_id", "factor_id"], as_index=False).tail(1))
+        return latest[latest["event"] != "unlinked"]
+
+    def linked_factor_ids(self) -> set:
+        """Set of factor_ids with at least one currently-active cohort link (for the F3 check)."""
+        act = self.active_links()
+        return set(act["factor_id"].tolist()) if not act.empty else set()

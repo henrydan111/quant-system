@@ -84,6 +84,13 @@ FACTOR_MASTER_COLUMNS = [
     "last_revalidated_at",
     "latest_provider_build_id",
     "latest_calendar_policy_id",
+    # P-GATE/F3 (GPT R1 deferred): reverse cohort linkage stamped at gate adjudication. A factor
+    # carrying a replication_cohort_id "claims CICC metadata"; the gate fails closed if it then
+    # resolves to != 1 manifest row (a forgotten/dropped link). Metadata-only — does NOT affect
+    # status / approval_validity / definition_hash. The append-only audit history + definition_hash
+    # binding live in the CohortFactorLinkageStore (F11).
+    "replication_cohort_id",
+    "replication_handbook_id",
 ]
 
 FACTOR_EVIDENCE_COLUMNS = [
@@ -210,6 +217,8 @@ FACTOR_MASTER_SCHEMA = {
     "last_revalidated_at": "string",
     "latest_provider_build_id": "string",
     "latest_calendar_policy_id": "string",
+    "replication_cohort_id": "string",
+    "replication_handbook_id": "string",
 }
 
 FACTOR_EVIDENCE_SCHEMA = {
@@ -1485,6 +1494,27 @@ class FactorRegistryStore:
             )
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         self.factor_master.at[index, "expected_direction"] = ed
+        self.factor_master.at[index, "updated_at"] = _now_str()
+
+    def set_replication_link(
+        self,
+        *,
+        factor_id: str,
+        cohort_id: str,
+        handbook_id: str = "",
+        version: int | None = None,
+    ) -> None:
+        """Metadata-only: stamp the reverse cohort linkage (P-GATE/F3) on the current row. Set at
+        gate adjudication once the factor resolves to exactly one manifest row, so a later DROPPED
+        manifest link (a factor still carrying the stamp but resolving to != 1 row) fails closed
+        instead of silently reverting to non-cohort. Does NOT touch status / approval_validity /
+        definition_hash and writes NO status-history row. Blank cohort_id is a no-op."""
+        cid = str(cohort_id or "").strip()
+        if not cid:
+            return
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        self.factor_master.at[index, "replication_cohort_id"] = cid
+        self.factor_master.at[index, "replication_handbook_id"] = str(handbook_id or "")
         self.factor_master.at[index, "updated_at"] = _now_str()
 
     def export_current(
