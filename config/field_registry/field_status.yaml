@@ -401,6 +401,7 @@ datasets:
       - $accounts_receiv_q4
       - $goodwill_q0
       - $inventories_q0
+      - $inventories_q1
       - $inventories_q4
       - $lt_borr_q0
       - $money_cap_q0
@@ -411,11 +412,13 @@ datasets:
       - $total_assets_q1
       - $total_assets_q4
       - $total_cur_assets_q0
+      - $total_cur_assets_q1
       - $total_cur_assets_q4
       - $total_cur_liab_q0
       - $total_cur_liab_q1
       - $total_cur_liab_q4
       - $total_liab_q0
+      - $total_liab_q1
       - $total_liab_q4
 
   cashflow:

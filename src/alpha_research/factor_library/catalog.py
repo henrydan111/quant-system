@@ -231,6 +231,14 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
                             f" - {_ocf_ttm_prev} / Ref($total_cur_liab_q1, 1)")
     catalog['qual_csrd'] = ("Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
                             " - Ref($money_cap_q1, 1) / Ref($total_cur_liab_q1, 1)")
+    # D4a batch-2 — leverage/liquidity ratio differences (CICC DAD/CURD/QRD). q1 slots
+    # registered 2026-06-14 batch-2 (total_liab_q1 / total_cur_assets_q1 / inventories_q1).
+    catalog['qual_dad'] = ("Ref($total_liab_q0, 1) / Ref($total_assets_q0, 1)"
+                           " - Ref($total_liab_q1, 1) / Ref($total_assets_q1, 1)")
+    catalog['qual_curd'] = ("Ref($total_cur_assets_q0, 1) / Ref($total_cur_liab_q0, 1)"
+                            " - Ref($total_cur_assets_q1, 1) / Ref($total_cur_liab_q1, 1)")
+    catalog['qual_qrd'] = ("(Ref($total_cur_assets_q0, 1) - Ref($inventories_q0, 1)) / Ref($total_cur_liab_q0, 1)"
+                           " - (Ref($total_cur_assets_q1, 1) - Ref($inventories_q1, 1)) / Ref($total_cur_liab_q1, 1)")
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 
