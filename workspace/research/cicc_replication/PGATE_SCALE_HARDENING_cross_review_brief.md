@@ -5,7 +5,7 @@
 > I have now implemented all 4. This brief asks you to verify them and **hunt for new fail-open
 > holes** — gate-at-scale is exactly where the earlier rounds found that "absence" silently passed.
 >
-> Web-based — repo `henrydan111/quant-system`, branch `report-rc-registration`, commit `<pending>`.
+> Web-based — repo `henrydan111/quant-system`, branch `report-rc-registration`, commit `d683eed`.
 > - governance store + ledger + OOS assertion: https://github.com/henrydan111/quant-system/blob/report-rc-registration/src/alpha_research/factor_registry/replication_governance.py
 > - gate adjudicator + handler: https://github.com/henrydan111/quant-system/blob/report-rc-registration/src/research_orchestrator/factor_lifecycle_steps.py
 > - sealed-OOS handler guard: https://github.com/henrydan111/quant-system/blob/report-rc-registration/src/research_orchestrator/validation_steps.py
