@@ -239,6 +239,17 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
                             " - Ref($total_cur_assets_q1, 1) / Ref($total_cur_liab_q1, 1)")
     catalog['qual_qrd'] = ("(Ref($total_cur_assets_q0, 1) - Ref($inventories_q0, 1)) / Ref($total_cur_liab_q0, 1)"
                            " - (Ref($total_cur_assets_q1, 1) - Ref($inventories_q1, 1)) / Ref($total_cur_liab_q1, 1)")
+    # D4a batch-3 — ROE / debt-to-equity / payables-turnover differences (CICC ROED/DTED/APRD).
+    # Equity = INCL-minority ($total_hldr_eqy_inc_min_int) matched to the _ni_ttm incl-minority
+    # numerator (mixing total NI with 归母 equity would overstate ROE — same documented basis as
+    # qual_roa_ttm). APRD uses PERIOD-MATCHED denominators (accounts_pay_q0 vs q1), NOT the
+    # fixed-denominator form that degenerated to revenue momentum in Phase-D (RATD/ATD/INVTD) —
+    # caveat: turnover *differences* were weak there, interpret with care. Fields registered batch-3.
+    catalog['qual_roed'] = f"{_ni_ttm} / Ref($total_hldr_eqy_inc_min_int_q0, 1) - {_ni_ttm_prev} / Ref($total_hldr_eqy_inc_min_int_q1, 1)"
+    catalog['qual_dted'] = ("Ref($total_liab_q0, 1) / Ref($total_hldr_eqy_inc_min_int_q0, 1)"
+                            " - Ref($total_liab_q1, 1) / Ref($total_hldr_eqy_inc_min_int_q1, 1)")
+    catalog['qual_aprd'] = (f"{_cost_ttm} / Ref($accounts_pay_q0, 1)"
+                            f" - {_cost_ttm_prev} / Ref($accounts_pay_q1, 1)")
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 

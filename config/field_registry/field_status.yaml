@@ -397,6 +397,8 @@ datasets:
     status: approved
     reason: "Tushare balance-sheet line-items (period-end _q* snapshots). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
     fields:
+      - $accounts_pay_q0
+      - $accounts_pay_q1
       - $accounts_receiv_q0
       - $accounts_receiv_q4
       - $goodwill_q0
@@ -417,6 +419,8 @@ datasets:
       - $total_cur_liab_q0
       - $total_cur_liab_q1
       - $total_cur_liab_q4
+      - $total_hldr_eqy_inc_min_int_q0
+      - $total_hldr_eqy_inc_min_int_q1
       - $total_liab_q0
       - $total_liab_q1
       - $total_liab_q4
