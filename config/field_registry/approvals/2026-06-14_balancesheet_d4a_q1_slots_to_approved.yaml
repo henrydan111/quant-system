@@ -1,0 +1,49 @@
+# Field-registry approval evidence (2026-06-14) — balancesheet q1 slots for D4a differences.
+#
+# Adds the q1 (one-quarter-back) period-end snapshot slots of three already-approved
+# balance-sheet line items to the `balancesheet` family: $money_cap_q1, $total_assets_q1,
+# $total_cur_liab_q1. Materialized by the SAME pit_backend period-end (_q*) snapshot
+# derivation as the approved q0/q4 slots — just the q1 slot, unregistered until now.
+# Unlocks the D4a quarter-over-quarter TTM DIFFERENCE factors, whose prior-quarter ratio
+# leg divides by the q1-dated balance-sheet denominator: CFOAD/ROAD (/total_assets_q1),
+# CCRD/CSRD (/total_cur_liab_q1), CSRD numerator (money_cap_q1).
+
+approval_id: 2026-06-14_balancesheet_d4a_q1_slots_to_approved
+date: 2026-06-14
+dataset_id: balancesheet
+source_endpoint: tushare.balancesheet
+from_status: unregistered
+to_status: approved
+reviewer: henrydan111
+related_pr: cicc-d4a-field-registration
+related_findings_id: null
+
+provider_build_id: indicators_fields_20260609
+calendar_policy_id: frozen_20260227_system_build
+
+fields:
+  - $money_cap_q1
+  - $total_assets_q1
+  - $total_cur_liab_q1
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Period-end balance-sheet snapshots, q1 slot. PIT-anchored on max(ann_date, f_ann_date) —
+# IDENTICAL derivation + anchoring as the approved q0/q4 slots. Coverage over 2020-H2
+# (800-name sample) == each field's approved q0 sibling: total_assets_q1 1.000,
+# total_cur_liab_q1 0.987 (current-liabilities not reported by some financials — same
+# sub-universe property as the approved total_cur_liab_q0), money_cap_q1 0.996. Predictive
+# factors MUST wrap these in Ref(...,1).
+pit_contract:
+  availability_column: ann_date
+  knowable_at: disclosure_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: period_end_q1_snapshot_from_balancesheet

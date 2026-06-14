@@ -1,0 +1,43 @@
+# Field-registry approval evidence (2026-06-14) — cashflow $n_cashflow_act_sq_q4 (OCF, q4 slot).
+#
+# Adds the q4 single-quarter slot of operating cash flow to the already-approved `cashflow`
+# statement family. Materialized by the SAME pit_backend single-quarter (_sq_q*) derivation as
+# the approved $n_cashflow_act_sq_q0..q3 — just the next slot back (4 quarters), unregistered
+# until now. Unlocks D4a CFOAD/CCRD (ΔCFOA / ΔCCR) which need OCF_TTM(q1..q4) = the
+# prior-quarter trailing-twelve-month operating cash flow.
+
+approval_id: 2026-06-14_cashflow_n_cashflow_act_sq_q4_to_approved
+date: 2026-06-14
+dataset_id: cashflow
+source_endpoint: tushare.cashflow
+from_status: unregistered
+to_status: approved
+reviewer: henrydan111
+related_pr: cicc-d4a-field-registration
+related_findings_id: null
+
+provider_build_id: indicators_fields_20260609
+calendar_policy_id: frozen_20260227_system_build
+
+fields:
+  - $n_cashflow_act_sq_q4
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# OCF single-quarter, q4 slot. PIT-anchored on max(ann_date, f_ann_date) — IDENTICAL
+# derivation + anchoring as the approved $n_cashflow_act_sq_q0..q3. Coverage 1.000 over
+# 2020-H2 (800-name sample) == the approved q3 sibling. Predictive factors MUST wrap
+# $n_cashflow_act_sq_q4 in Ref(...,1).
+pit_contract:
+  availability_column: ann_date
+  knowable_at: disclosure_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: single_quarter_sq_q4_derived_from_cashflow_statement

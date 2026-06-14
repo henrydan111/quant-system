@@ -213,6 +213,24 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['val_fcfp_ttm'] = f"({_ocf_ttm} - {_capex_ttm}) / {_mv_yuan}"
     # 规模结构 (CICC: FC_MC 流通占比 — a bounded ratio, distinct from the ln-size levels)
     catalog['size_float_ratio'] = "Ref($circ_mv, 1) / Ref($total_mv, 1)"
+    # CICC D4a — quarter-over-quarter TTM DIFFERENCE factors (Δ of the D5 levels = current-
+    # quarter TTM ratio minus prior-quarter TTM ratio). The prior-quarter TTM uses the q1..q4
+    # slots registered 2026-06-14 (register-only: bins materialized, same _sq/_q derivation as
+    # the approved q0..q3/q0+q4 siblings — see approvals/2026-06-14_*). Maps to CICC CFOAD/
+    # ROAD/CCRD/CSRD. ROED/DTED/CURD/QRD/DAD/APRD deferred (need equity / cur_assets / liab /
+    # accounts_payable q1 slots — a second registration batch).
+    _ni_ttm_prev = ("(Ref($n_income_sq_q1, 1) + Ref($n_income_sq_q2, 1)"
+                    " + Ref($n_income_sq_q3, 1) + Ref($n_income_sq_q4, 1))")
+    _ocf_ttm_prev = ("(Ref($n_cashflow_act_sq_q1, 1) + Ref($n_cashflow_act_sq_q2, 1)"
+                     " + Ref($n_cashflow_act_sq_q3, 1) + Ref($n_cashflow_act_sq_q4, 1))")
+    catalog['qual_cfoad'] = (f"{_ocf_ttm} / Ref($total_assets_q0, 1)"
+                             f" - {_ocf_ttm_prev} / Ref($total_assets_q1, 1)")
+    catalog['qual_road'] = (f"{_ni_ttm} / Ref($total_assets_q0, 1)"
+                            f" - {_ni_ttm_prev} / Ref($total_assets_q1, 1)")
+    catalog['qual_ccrd'] = (f"{_ocf_ttm} / Ref($total_cur_liab_q0, 1)"
+                            f" - {_ocf_ttm_prev} / Ref($total_cur_liab_q1, 1)")
+    catalog['qual_csrd'] = ("Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
+                            " - Ref($money_cap_q1, 1) / Ref($total_cur_liab_q1, 1)")
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 

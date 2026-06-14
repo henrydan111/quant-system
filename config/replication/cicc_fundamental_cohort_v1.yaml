@@ -71,15 +71,15 @@ factor_rows:
   - {factor_name_original: OP_SD,  handbook_id: F_OP_SD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
 
   # ---- Wave D4a: D-suffix quarter-over-quarter TTM differences (bins materialized → register-only) ----
-  - {factor_name_original: CFOAD, handbook_id: F_CFOAD, replication_tier_planned: formula_equivalent_pending, required_fields: ["$n_cashflow_act_sq_q0", "$total_assets_q0"], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
-  - {factor_name_original: ROAD,  handbook_id: F_ROAD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: CFOAD, handbook_id: F_CFOAD, replication_tier_planned: formula_equivalent_pending, required_fields: ["$n_cashflow_act_sq_q0", "$total_assets_q0"], catalog_factor_id: qual_cfoad, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: ROAD,  handbook_id: F_ROAD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_road, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: ROED,  handbook_id: F_ROED,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
-  - {factor_name_original: CCRD,  handbook_id: F_CCRD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: CCRD,  handbook_id: F_CCRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_ccrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: CURD,  handbook_id: F_CURD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: DAD,   handbook_id: F_DAD,   replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: DTED,  handbook_id: F_DTED,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: QRD,   handbook_id: F_QRD,   replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
-  - {factor_name_original: CSRD,  handbook_id: F_CSRD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: CSRD,  handbook_id: F_CSRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_csrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: APRD,  handbook_id: F_APRD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
 
   # ---- Wave D4b: OCF year-over-year (needs cashflow q5-q7 rebuild) ----

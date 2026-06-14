@@ -376,6 +376,7 @@ datasets:
       - $n_income_sq_q1
       - $n_income_sq_q2
       - $n_income_sq_q3
+      - $n_income_sq_q4
       - $oper_cost_sq_q0
       - $oper_cost_sq_q1
       - $oper_cost_sq_q2
@@ -403,13 +404,16 @@ datasets:
       - $inventories_q4
       - $lt_borr_q0
       - $money_cap_q0
+      - $money_cap_q1
       - $retained_earnings_q0
       - $st_borr_q0
       - $total_assets_q0
+      - $total_assets_q1
       - $total_assets_q4
       - $total_cur_assets_q0
       - $total_cur_assets_q4
       - $total_cur_liab_q0
+      - $total_cur_liab_q1
       - $total_cur_liab_q4
       - $total_liab_q0
       - $total_liab_q4
@@ -430,3 +434,4 @@ datasets:
       - $n_cashflow_act_sq_q1
       - $n_cashflow_act_sq_q2
       - $n_cashflow_act_sq_q3
+      - $n_cashflow_act_sq_q4
