@@ -75,3 +75,23 @@ GPT's hypothesis is correct: the 4 "strong" D4a (IS heldout ΔROE 0.48 / ΔROA 0
 - Strong-D4a redundancy recorded for the selection step.
 
 GPT's gate ("CFOAD/ROAD/CCRD/CSRD/DAD/CURD may continue into controlled formal evaluation; APRD/ROED/DTED/QRD/comp_cicc_profit must not enter exact-tier as written") is now enforced mechanically by the v2 tiers.
+
+## R3 round-2 — APPROVE WITH CONDITIONS fold-in (commit after 0c1fb5c)
+
+GPT reviewed the fold-in and returned **APPROVE WITH CONDITIONS** ("comfortable continuing controlled draft/candidate-ceiling work"). All 4 conditions folded in:
+
+| Cond | GPT condition | Action |
+|---|---|---|
+| 1 | Stale `comp_cicc_profit` catalog comment still says "first faithfully-constructible" | **Rewritten** to mark it `proxy_approx` / hard candidate cap, basis-mismatch reason, "do NOT trust this prose as faithful; manifest tier is source of truth". |
+| 2 | Keep q4 parity open; **attribute** the clean-window q4 residual (or reconstruct from raw) before exact-tier | **Attributed** ([attribute_q4_breaks.py](../../scripts/attribute_q4_breaks.py)): **100%** of clean-window mature q4 breaks are deep-slot-specific (q1 CLEAN at the same date, **0%** stack-wide), relerr p50 ~9-10% → verified OLD-period restatement (audited annual revising year-old interim quarters), NOT an off-by-one. Raw-cumulative reconstruction remains the documented gold-standard before exact-tier. |
+| 3 | CSRD `money_cap` fidelity rests on the D5 CSR source-line assumption | **Caveat added** to the `qual_csrd` catalog comment + the manifest CSRD row (inherits qual_csr CSR=money_cap parity; kept `formula_equivalent_pending` per GPT). |
+| 4 | APRD's unlinked row reads as buildable `formula_equivalent_pending` | **New tier** `formula_unbuilt_pending_source_transcription` added to `REPLICATION_TIERS` (hard-blocked via `missing_required_field`; stays a formalization candidate so the frozen denominator stays 46, unlike `not_replicable`). APRD row set to it. v2 sha re-pinned `ba94f3bcb0cf5fc1 → 721e1be4c3fcd788`. |
+
+**Verified attribution result (Cond 2 — the strongest remaining item):**
+```
+n_income_sq:       29 clean-window mature q4 breaks → 29/29 deep-slot-specific (q1 clean), 0 stack-wide; relerr p50 8.7% / p90 68.3%
+n_cashflow_act_sq: 49 clean-window mature q4 breaks → 49/49 deep-slot-specific (q1 clean), 0 stack-wide; relerr p50 10.4% / p90 124.2%
+```
+A positional/off-by-one bug would break q1 too (q1 is 99.7-100% clean) or hit clean stocks (20/20). It does neither. The q4 residual is 100% old-period restatement — verified, no longer asserted.
+
+**Status:** all 4 conditions satisfied; GPT's draft/candidate-ceiling continuation is unblocked. q4 raw-cumulative reconstruction stays the documented prerequisite before any exact-tier formal evidence (none is claimed). R wave: R1 P-GATE impl → R2 → R3 factor-logic (CHANGES REQUIRED → fold-in → APPROVE WITH CONDITIONS → conditions folded).

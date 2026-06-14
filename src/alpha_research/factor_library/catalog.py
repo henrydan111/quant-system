@@ -232,6 +232,10 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
                             f" - {_ni_ttm_prev} / Ref($total_assets_q1, 1)")
     catalog['qual_ccrd'] = (f"{_ocf_ttm} / Ref($total_cur_liab_q0, 1)"
                             f" - {_ocf_ttm_prev} / Ref($total_cur_liab_q1, 1)")
+    # CSRD (现金比率变动): money_cap (货币资金, balance-sheet) is a close proxy for CICC's CSR
+    # 现金及现金等价资产; its fidelity INHERITS the D5 CSR (qual_csr) source-line / truth-parity
+    # assumption (if CICC CSR means cash-flow-statement cash-and-equivalents, money_cap is near but
+    # not exact). Kept formula_equivalent_pending (per R3) contingent on that CSR=money_cap parity.
     catalog['qual_csrd'] = ("Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
                             " - Ref($money_cap_q1, 1) / Ref($total_cur_liab_q1, 1)")
     # D4a batch-2 — leverage/liquidity ratio differences (CICC DAD/CURD/QRD). q1 slots
@@ -896,11 +900,14 @@ def get_composite_defs():
             'weights': [0.5, 0.5],
         },
         # ── CICC handbook composite: Profit 综合盈利因子 = CFOA + ROE + ROIC 等权 (手册 §11) ──
-        # The first faithfully-constructible CICC composite (D-COMP wave): all three members
-        # are already field-eligible catalog factors. The other handbook composites are not
-        # cleanly buildable yet — Growth needs OP_SD/QPT, Opt needs OCFA (regression operator),
-        # QQC needs all six; Acc/Safe are single-base (rank-equivalent to grow_profit_acceleration
-        # / qual_ccr_ttm → not registered, dedup discipline).
+        # PROXY (proxy_approx — HARD candidate_ceiling cap in cohort manifest v2; factor-logic R3).
+        # This is NOT a faithful CICC Profit: it rank-combines a PIT-TTM CFOA (qual_cfoa_ttm) with the
+        # VENDOR cumulative-YTD ROE/ROIC (qual_roe/qual_roic = fina_indicator) — a time-basis mismatch
+        # (TTM vs YTD sawtooth). An exact TTM-ROIC is not cleanly buildable (handbook flags ROIC
+        # ⚠️投入资本口径). Do NOT trust this prose as "faithful"; the manifest tier is the source of truth.
+        # The other handbook composites are also not cleanly buildable yet — Growth needs OP_SD/QPT,
+        # Opt needs OCFA (regression operator), QQC needs all six; Acc/Safe are single-base
+        # (rank-equivalent to grow_profit_acceleration / qual_ccr_ttm → not registered, dedup discipline).
         {
             'name': 'comp_cicc_profit',
             'components': ['qual_cfoa_ttm', 'qual_roe', 'qual_roic'],

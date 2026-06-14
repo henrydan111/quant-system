@@ -37,7 +37,7 @@
 # handbook_label_window_end below drives the §9.3 OOS quarantine.
 
 source_cohort_id: cicc_fundamental_handbook_v1
-manifest_sha: "ba94f3bcb0cf5fc1"          # pins the frozen content; load_cohort_manifest raises on mismatch (excl. catalog_factor_id linkage)
+manifest_sha: "721e1be4c3fcd788"          # pins the frozen content; load_cohort_manifest raises on mismatch (excl. catalog_factor_id linkage)
 handbook_label_window_end: "2022-12-31"   # Phase-D observed 2010-2022; per-chart exact end refined at FactorReplicationCertification (§12.2 lazy)
 
 # --- the five pre-frozen denominators (§9.2). The first three are FROZEN here; ---
@@ -103,8 +103,8 @@ factor_rows:
   - {factor_name_original: DAD,   handbook_id: F_DAD,   replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_dad, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
   - {factor_name_original: DTED,  handbook_id: F_DTED,  replication_tier_planned: proxy_approx, catalog_factor_id: qual_dted, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: incl-minority equity; CICC 产权比率 is 归母
   - {factor_name_original: QRD,   handbook_id: F_QRD,   replication_tier_planned: proxy_approx, catalog_factor_id: qual_qrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: inventory-only quick ratio; CICC subtracts 1年内到期非流动资产+待摊费用+预付款 (no slots)
-  - {factor_name_original: CSRD,  handbook_id: F_CSRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_csrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
-  - {factor_name_original: APRD,  handbook_id: F_APRD,  replication_tier_planned: formula_equivalent_pending, exclusion_reason: "R3_unbuilt_misbuilt_payables_turnover_removed; faithful build needs operate_profit_sq q1-q3 (only q0/q4 registered) + transcribed 应计利润 numerator", truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: CSRD,  handbook_id: F_CSRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_csrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3 caveat: money_cap (货币资金) proxies CICC 现金及现金等价资产 — fidelity inherits the D5 CSR (qual_csr) source-line/truth-parity assumption
+  - {factor_name_original: APRD,  handbook_id: F_APRD,  replication_tier_planned: formula_unbuilt_pending_source_transcription, exclusion_reason: "R3_unbuilt_misbuilt_payables_turnover_removed; faithful build needs operate_profit_sq q1-q3 (only q0/q4 registered) + transcribed 应计利润 numerator", truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3-r2: unbuilt tier (not formula_equivalent_pending) so the unlinked row never reads as buildable
 
   # ---- Wave D4b: OCF year-over-year (needs cashflow q5-q7 rebuild) ----
   - {factor_name_original: OCF_YOY,   handbook_id: F_OCF_YOY,   replication_tier_planned: formula_equivalent_pending, required_fields: ["$n_cashflow_act_sq_q4"], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}

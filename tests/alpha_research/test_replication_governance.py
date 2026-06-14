@@ -130,6 +130,13 @@ class TestReplicationCeilingAdjudicator:
         assert d.status_ceiling == "blocked"
         assert "missing_required_field" in d.blocking_reasons
 
+    def test_unbuilt_pending_source_transcription_is_blocked(self):
+        # factor-logic R3-r2: an unbuilt-pending-source factor (e.g. APRD) is hard-blocked if ever
+        # adjudicated — but unlike not_replicable it remains a formalization candidate.
+        d = self._clean(replication_tier="formula_unbuilt_pending_source_transcription")
+        assert d.status_ceiling == "blocked"
+        assert "missing_required_field" in d.blocking_reasons
+
     def test_sub_coverage_is_evidence_only(self):
         d = self._clean(coverage_tier="sub")
         assert d.status_ceiling == "evidence_only"

@@ -61,6 +61,14 @@ REPLICATION_TIERS = (
     "formula_equivalent_pending",
     "proxy_approx",
     "derived_methodology_proxy",
+    # ``formula_unbuilt_pending_source_transcription`` (factor-logic R3): a row that is STILL a
+    # formalization candidate (we intend to build it faithfully → it counts in the denominator,
+    # unlike ``not_replicable``) but is NOT yet built because a required field or a handbook source
+    # definition is missing. Distinct from ``formula_equivalent_pending`` (which implies a faithful
+    # implementation exists). Hard-blocked if ever adjudicated; in practice such rows carry no
+    # ``catalog_factor_id`` so the gate never resolves them. Example: APRD (needs operate_profit_sq
+    # q1-q3 + a transcribed 应计利润 numerator).
+    "formula_unbuilt_pending_source_transcription",
     "not_replicable",
 )
 
@@ -217,10 +225,12 @@ MIN_EFFECTIVE_IC_DAYS = 756
 
 def tier_cap_reasons(replication_tier: str) -> list:
     """replication_tier → ceiling caps (§7). exact/formula_equivalent carry no tier cap;
-    proxy/derived cap at candidate (§9.4); not_replicable is hard-blocked."""
+    proxy/derived cap at candidate (§9.4); not_replicable AND unbuilt-pending-source-transcription
+    are hard-blocked (the latter literally lacks a required field / source definition)."""
     return {
         "proxy_approx": ["proxy_approx"],
         "derived_methodology_proxy": ["derived_methodology_proxy"],
+        "formula_unbuilt_pending_source_transcription": ["missing_required_field"],
         "not_replicable": ["missing_required_field"],
     }.get(replication_tier, [])
 
