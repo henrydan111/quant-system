@@ -234,3 +234,18 @@ gross/5d/sub-universe) are why the two `eps_diffusion` approvals are revoked to 
 
 Artifacts: `report_rc_pit_buffer_sweep.py` → `workspace/outputs/report_rc_pit_buffer_sweep.csv`;
 canary snapshots `data/external/report_rc_canary/snapshot_2026061{4}T*.parquet`.
+
+**(6) Restatement-stability of breadth (the residual JQ/create_time can't cover) — MEASURED negligible.**
+`report_rc_restatement_stability.py` decomposes the 26 SNAP1→SNAP2 payload restatements (0.040% of
+65,004 in-both rows over 1 week): the churn is in tp/np/op_rt/pe/rd/roe (12 each) + rating (6), but
+**`eps` changed by > EPS_REVISION_EPSILON (1e-4) on 0 of 26** (the 12 eps deltas flagged at rtol=1e-6
+are sub-epsilon rounding dust). Since `eps_diffusion`'s up/dn classification keys on eps moves > 1e-4,
+**no breadth classification could flip from these restatements → breadth is restatement-stable in this
+sample.** So the eps_diffusion PIT picture is: arrival handled (provider create_time/+2, validated),
+deep-history buffer validated (+2 td, JQ sweep), restatement eps-immaterial (this week). LIMITATION:
+one 1-week window (26 restatements) — a fuller restatement-lag distribution needs periodic snapshots
+(esp. across an earnings-revision-heavy window); this is a favorable spot estimate / prior, not the
+full distribution. Remaining open before re-approval: deployment-grade OOS on the 2022-05+ create_time
+window + the suspiciously-high gross LS Sharpe (7.24 — §3.5 attributes it to gross/5d/sub-universe
+construction, not necessarily contamination). The two factors stay `candidate`; re-approval is a gated
+decision (promotion gate + human sign), not implied by this stability result alone.
