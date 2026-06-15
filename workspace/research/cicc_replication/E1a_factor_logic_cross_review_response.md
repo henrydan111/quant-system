@@ -65,3 +65,22 @@ Created **[cicc_price_volume_cohort_v2.yaml](https://github.com/henrydan111/quan
 With Q1 + Q7 folded in: **APPROVE to register the 6 E1a drafts + link the v2 manifest?** (or any
 residual CHANGES REQUIRED). The 6: `mmt_route_20d/_250d`, `mmt_discrete_20d/_250d`,
 `mmt_time_rank_20d`, `mmt_highest_days_250d`.
+
+---
+
+## VERDICT (GPT 5.5 Pro, 2026-06-15): APPROVE to register the 6 E1a drafts + link v2
+
+Q1 OK · Q7 OK (v2 sha change = legitimate pre-registration correction) · Q2/Q3/Q4/Q5/Q6/Q8 OK ·
+warmup OK-for-registration-but-formal-gate-prereq. Explicitly **NOT formal-IS approval** — the warmup
+enforcement + matrix/gate harness must drop partial-window rows before formal evaluation. `mmt_range_M/A`
+stay deferred (manifest-declared but operator-blocked until `amplitude_top_bottom_20pct_return_spread`
+is built+certified).
+
+**One non-blocking cleanup before the formal gate (batched into #34):** `certify_e1a_operators.py --live`
+persists `last_results` from `W_GRID[-1]` only (with a both-windows note); persist an aggregate/both-window
+result payload so the durable cert evidence doesn't rely on the printed run log.
+
+**Action taken (2026-06-15):** registered the 6 drafts via `sync_catalog` (§13 authorized by the user
+relaying APPROVE) — all 6 are `draft` v1 in `factor_master`; all 6 `catalog_factor_id`s resolve to their
+v2 rows; `mmt_range` remains unlinked. Task #33 closed; #34 (7-domain matrix + IS gate, where warmup
+enforcement + the per-window cert payload + F3/F11 land) is next.
