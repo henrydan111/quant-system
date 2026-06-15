@@ -59,9 +59,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=0, help="ignored; accepted for supervisor compat")
+    ap.add_argument("--universes", default="", help="comma subset (smoke); default = all 7 (must match "
+                    "the base matrix run — the A1 guard refuses universes whose base methodology is absent)")
     args = ap.parse_args()
 
-    universes = list(mx.UNIVERSES)
+    universes = [u.strip() for u in args.universes.split(",") if u.strip()] or list(mx.UNIVERSES)
     methods = {u: build_frozen_methodology(is_start=TIME_SPLIT.is_start,
                                            is_end=TIME_SPLIT.is_end, universe_id=u)
                for u in universes}
