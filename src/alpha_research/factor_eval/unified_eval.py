@@ -48,6 +48,25 @@ STYLE_CONTROLS_V1 = (
     "qual_accruals", "liq_log_dollar_vol", "liq_turnover_20d", "liq_amihud_20d", "risk_vol_20d",
 )
 
+# Reference-decoupling (GPT 5.5 Pro review): the ONLY `_evaluate_batch` output columns that depend on
+# the approved-factor BOOK. Every other emitted column is reference-INVARIANT (walk-forward IC/ICIR,
+# quantile/decay/turnover/coverage, neutralized IC, the STYLE_CONTROLS_V1 residual, long-leg). This is
+# the canonical list shared by the R4 invariance test and the evidence-migration byte-equality proof —
+# keep it here (a property of the eval output), never duplicate it. `reference_set_*_hash` IDENTIFY the
+# book a residual used (book-dependent by design); `methodology_hash` is the legacy reference-INCLUDED
+# identity (changes when the book changes). The reference-EXCLUDED `layer1_methodology_hash` is INVARIANT
+# and intentionally NOT here.
+BOOK_DEPENDENT_LAYER1_FIELDS = (
+    "resid_ic_vs_approved_stable_signed",
+    "resid_ic_vs_approved_stable_oriented",
+    "resid_hac_t_vs_approved_stable",
+    "resid_eff_coverage_vs_approved_stable",
+    "resid_ic_vs_approved_current_signed",
+    "reference_set_stable_hash",
+    "reference_set_current_hash",
+    "methodology_hash",
+)
+
 
 def _f(v):
     if v is None:
@@ -128,6 +147,14 @@ class EvalMethodology:
     # residual / neutralization construction
     residual_transform: str = "winsorize_then_cs_zscore"
     residual_metric: str = "rank_ic"
+    # GPT 5.5 Pro residual-control-scope ruling (2026-06-15): winsorize/z-score the residual candidate
+    # AND controls on a FIXED broad estimation universe (transform), THEN mask to the evaluation
+    # universe (per-date OLS residual + IC). "ESTU_STYLE_V1" == the full panel / univ_all for now. A
+    # HASHED knob — changing the scope forces a residual-matrix rerun. Supersedes the prior bug where a
+    # control's winsorization scope depended on its eval-batch membership (full-market for non-resident
+    # factors, universe-masked for batch-0 resident factors). See
+    # workspace/research/cicc_replication/RESIDUAL_CONTROL_SCOPE_FIX_plan.md.
+    residual_preprocess_scope: str = "ESTU_STYLE_V1"
     neutralization_mcap_field: str = "$total_mv"
     neutralization_industry_source: str = "PIT_SW2021_L1"
     # provenance — distinct implementations with identical field values must NOT share a hash
@@ -203,9 +230,18 @@ def preprocess_for_residual(factors_dict: dict, names, *, winsor=(0.01, 0.99)) -
             for nm in names}
 
 
+def _mask_to_eval_universe(s: pd.Series, mask_dt: pd.Series) -> pd.Series:
+    """NaN out the rows of a (datetime, instrument)-oriented series outside the evaluation universe.
+    ``mask_dt`` is the boolean universe mask, already ``_to_dt_inst``-normalized."""
+    aligned = mask_dt.reindex(s.index)
+    keep = aligned.fillna(False).to_numpy(dtype=bool)
+    return s.where(keep)
+
+
 def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_return: pd.Series, *,
                             control_names=STYLE_CONTROLS_V1, winsor=(0.01, 0.99), min_obs: int = 30,
-                            hac_lags: int = 40, processed_controls: dict | None = None) -> dict:
+                            hac_lags: int = 40, processed_controls: dict | None = None,
+                            eval_mask: pd.Series | None = None, preprocess_scope: str = "") -> dict:
     """Residual IC of a candidate after orthogonalizing against the FROZEN style controls.
 
     The Rev3 §B.7 pipeline (do NOT call ``compute_marginal_ic`` raw): per date winsorize → cross-
@@ -215,6 +251,15 @@ def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_ret
     (label-aligned — the cells the residual IC is actually evaluated on), plus the HAC t of the
     residual RankIC (overlap-aware). ``processed_controls`` may carry the output of
     :func:`preprocess_for_residual` (covering candidate + controls) to skip re-transforming at scale.
+
+    SCOPE (GPT 5.5 Pro residual-control-scope ruling, 2026-06-15): the canonical metric winsorizes +
+    z-scores the candidate AND controls on a FIXED broad estimation universe (``processed_controls``
+    must be the broad-ESTU/full-panel transform — NOT pre-masked), THEN restricts to the evaluation
+    universe via ``eval_mask`` before the per-date OLS residual + IC. This makes the residual a
+    universe-INDEPENDENT exposure definition (Barra/Axioma style), removing the prior batch-order
+    dependence where a control's winsorization scope depended on its eval-batch membership. With
+    ``eval_mask=None`` the regression/IC run on the full panel (the univ_all / broad-ESTU case),
+    identical to the pre-scope-fix univ_all behavior. ``preprocess_scope`` is a provenance label only.
     """
     if processed_controls is not None:
         proc = {nm: (processed_controls[nm] if nm in processed_controls
@@ -224,11 +269,18 @@ def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_ret
         proc = {nm: cs_zscore(winsorize(_to_dt_inst(factors_dict[nm]), winsor[0], winsor[1]))
                 for nm in [candidate_name, *control_names]}
     fwd = _to_dt_inst(forward_return)
+    # broad-ESTU transform DONE; now mask to the evaluation universe (transform-then-mask).
+    cand_raw = _to_dt_inst(factors_dict[candidate_name])
+    if eval_mask is not None:
+        mask_dt = _to_dt_inst(eval_mask)
+        proc = {nm: _mask_to_eval_universe(s, mask_dt) for nm, s in proc.items()}
+        fwd = _mask_to_eval_universe(fwd, mask_dt)
+        cand_raw = _mask_to_eval_universe(cand_raw, mask_dt)
     series, summ = compute_marginal_ic(proc, fwd, base_factors=list(control_names),
                                        candidate=candidate_name, min_obs=min_obs)
     rank_ic = (series["RankIC"] if "RankIC" in series.columns else series.iloc[:, -1]).dropna()
     hac = hac_mean_tstat(rank_ic, lags=hac_lags)
-    cand = _to_dt_inst(factors_dict[candidate_name]).dropna()
+    cand = cand_raw.dropna()
     ctrl = pd.DataFrame({nm: _to_dt_inst(factors_dict[nm]) for nm in control_names}).reindex(cand.index)
     raw_control_coverage = float(ctrl.notna().all(axis=1).mean()) if len(cand) else float("nan")
     # effective coverage: candidate ∩ label ∩ all-controls, over candidate ∩ label (the cells the

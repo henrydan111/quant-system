@@ -164,9 +164,11 @@ def main() -> int:
             continue
         masked = mx._mask_panel(l2_df, todo, masks[uid])
         aligned = masks[uid].reindex(l2_df.index).fillna(False)
+        # residual-control-scope fix: residuals use the UNMASKED panel (broad-ESTU) + eval_mask.
         ctx = {**base_ctx, "method": methods[uid], "results_path": RESULTS,
                "record_extra": {"universe_id": uid},
-               "domain_total_cells": float(aligned.sum())}
+               "domain_total_cells": float(aligned.sum()),
+               "residual_panel": l2_df, "eval_mask": masks[uid]}
         log.info("layer-2: %d factors @ %s", len(todo), uid)
         fr._evaluate_batch(masked, todo, ctx)
         evaluated += len(todo)

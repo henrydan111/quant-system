@@ -43,11 +43,20 @@ def main() -> int:
 
     full = pd.read_parquet(EVAL_DIR / "unified_eval_full.parquet")
     meta = json.loads((EVAL_DIR / "methodology.json").read_text(encoding="utf-8"))
-    mhash = meta["hash"]
+    mhash = meta["hash"]               # legacy reference-INCLUDED hash (kept as the legacy column)
+    # V5: run_id is keyed on the reference-INVARIANT layer1 hash, so an approval/revoke does not
+    # fork the run_id. Native rows (row_role="native_layer1") thus live under a fresh run_id and
+    # never collide with the pre-decoupling legacy ("") rows under unified_refresh_<legacy_hash>.
+    l1 = meta.get("layer1_hash")
+    if not l1:
+        raise SystemExit("methodology.json is LEGACY (no layer1_hash) — re-run the unified sweep to "
+                         "re-stamp under the new schema before importing (GPT impl-review V5).")
+    schema = meta.get("methodology_schema_version") or "v0"
+    run_id = f"unified_refresh_{schema}_{l1}"
     records = [r for r in full.to_dict("records") if not r.get("error")]
     n_err = len(full) - len(records)
     print(f"sweep rows: {len(full)} | importable: {len(records)} | error rows skipped: {n_err}")
-    print(f"methodology_hash: {mhash} (commit {meta.get('code_commit')})")
+    print(f"run_id: {run_id} | legacy methodology_hash: {mhash} (commit {meta.get('code_commit')})")
 
     if args.live:
         root = REGISTRY

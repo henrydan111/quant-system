@@ -147,6 +147,19 @@ FACTOR_EVIDENCE_COLUMNS = [
     "long_leg_ir_proxy_is_csi300",
     "long_leg_ir_proxy_is_csi500",
     "unified_metrics_json",
+    # Reference-decoupling provenance (GPT impl-review). layer1_methodology_hash is the
+    # reference-INVARIANT identity; methodology_hash above is legacy (reference-included).
+    # row_role: "" / "legacy" = pre-decoupling; "native_layer1" = produced under the new schema;
+    # "migrated_layer1" = derived row appended by the migration. resid_ic_vs_approved_* above is a
+    # CACHE — the canonical marginal-vs-book metric lives in the Layer2ResidualStore.
+    "methodology_schema_version",
+    "layer1_methodology_hash",
+    "reference_set_stable_hash",
+    "reference_set_current_hash",
+    "row_role",
+    "legacy_methodology_hash",
+    "migration_id",
+    "layer1_value_digest",
 ]
 
 RUN_INDEX_COLUMNS = [
@@ -271,6 +284,15 @@ FACTOR_EVIDENCE_SCHEMA = {
     "long_leg_ir_proxy_is_csi300": "Float64",
     "long_leg_ir_proxy_is_csi500": "Float64",
     "unified_metrics_json": "string",
+    # Reference-decoupling provenance (GPT impl-review; all string, default "").
+    "methodology_schema_version": "string",
+    "layer1_methodology_hash": "string",
+    "reference_set_stable_hash": "string",
+    "reference_set_current_hash": "string",
+    "row_role": "string",
+    "legacy_methodology_hash": "string",
+    "migration_id": "string",
+    "layer1_value_digest": "string",
 }
 
 RUN_INDEX_SCHEMA = {
@@ -423,6 +445,43 @@ def _apply_schema(df: pd.DataFrame, columns: list[str], schema: dict[str, str]) 
             working[column] = pd.Series([pd.NA] * len(working))
         working[column] = _coerce_series(working[column], schema[column])
     return working[columns]
+
+
+# Reference-decoupling: row_role precedence for the canonical Layer-1 view (GPT impl-review).
+# A native re-eval (produced under the new schema) supersedes a migration-derived row, which in
+# turn supersedes the original immutable legacy row it was derived from.
+ROW_ROLE_PRECEDENCE = {"native_layer1": 3, "migrated_layer1": 2, "legacy": 1, "": 1}
+# the reference-decoupled (unified-eval / matrix) evidence family — the only rows that carry row_role
+LAYER1_AUTO_RUN_TYPES = {"factor_lifecycle_auto", "factor_lifecycle_refresh"}
+
+
+def canonical_layer1_evidence(evidence: pd.DataFrame) -> pd.DataFrame:
+    """Collapse reference-decoupled Layer-1 evidence to ONE canonical row per
+    (factor_id, version, universe_id) so a ``migrated_layer1`` sibling never double-counts against
+    the immutable ``legacy`` ("") row it was derived from (GPT impl-review item 1: a dedupe /
+    default-view that keeps migrated XOR legacy, never both).
+
+    Precedence: native_layer1 > migrated_layer1 > legacy(""), then most-recent evidence_time. Only
+    the unified-eval / matrix family (run_type in :data:`LAYER1_AUTO_RUN_TYPES`) is deduped; rows of
+    every other run_type pass through untouched (they are not reference-decoupled). Use this for any
+    aggregation/comparison over auto/matrix Layer-1 evidence (dashboard, marginal-contribution reads).
+    """
+    if evidence.empty:
+        return evidence
+    is_auto = evidence["run_type"].map(_coerce_string).isin(LAYER1_AUTO_RUN_TYPES)
+    auto = evidence[is_auto].copy()
+    other = evidence[~is_auto]
+    if auto.empty:
+        return evidence
+    auto["__role_rank"] = auto["row_role"].map(
+        lambda v: ROW_ROLE_PRECEDENCE.get(_coerce_string(v), 1))
+    auto["__t"] = pd.to_datetime(auto["evidence_time"], errors="coerce")
+    auto["__uni"] = auto["universe_id"].map(lambda v: _coerce_string(v) or "univ_all")
+    # highest role-rank, then latest time, then run_id wins -> .last() after a stable sort
+    auto = auto.sort_values(["__role_rank", "__t", "run_id"], kind="stable")
+    dedup = (auto.groupby(["factor_id", "version", "__uni"], as_index=False, dropna=False)
+             .last().drop(columns=["__role_rank", "__t", "__uni"]))
+    return pd.concat([other, dedup], ignore_index=True)
 
 
 def _sort_with_version(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -605,6 +664,20 @@ class FactorEvidenceRecord:
     long_leg_ir_proxy_is_csi300: float | None = None
     long_leg_ir_proxy_is_csi500: float | None = None
     unified_metrics_json: str = ""
+    # Reference-decoupling provenance (GPT impl-review; defaults keep existing constructors unchanged).
+    # layer1_methodology_hash is the reference-INVARIANT identity; methodology_hash is legacy. row_role:
+    # "" / "legacy" = pre-decoupling row; "native_layer1" = produced under the new schema;
+    # "migrated_layer1" = a derived row appended by the migration (carries legacy_methodology_hash +
+    # layer1_value_digest proving Layer-1 values are unchanged). resid_ic_vs_approved_* above is a CACHE
+    # (Option B) — the canonical marginal-vs-book metric lives in the Layer2ResidualStore.
+    methodology_schema_version: str = ""
+    layer1_methodology_hash: str = ""
+    reference_set_stable_hash: str = ""
+    reference_set_current_hash: str = ""
+    row_role: str = ""
+    legacy_methodology_hash: str = ""
+    migration_id: str = ""
+    layer1_value_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -1296,23 +1369,47 @@ class FactorRegistryStore:
                 unified_metrics_json=json.dumps(
                     {k: (None if isinstance(v, float) and v != v else v) for k, v in dict(rec).items()},
                     ensure_ascii=False, default=str),
+                # Reference-decoupling provenance (GPT impl-review). The LIVE identity is
+                # layer1_methodology_hash (reference-INVARIANT); methodology_hash above is legacy.
+                # A native sweep/matrix row is row_role="native_layer1" with empty legacy/migration
+                # fields; the migration writes "migrated_layer1" siblings via its own path. The
+                # reference hashes identify the ACTUAL neutralization book used for the resid_* cache.
+                methodology_schema_version=_coerce_string(rec.get("methodology_schema_version")),
+                layer1_methodology_hash=_coerce_string(rec.get("layer1_methodology_hash")),
+                reference_set_stable_hash=_coerce_string(rec.get("reference_set_stable_hash")),
+                reference_set_current_hash=_coerce_string(rec.get("reference_set_current_hash")),
+                row_role=_coerce_string(rec.get("row_role")) or "native_layer1",
+                legacy_methodology_hash=_coerce_string(rec.get("legacy_methodology_hash")),
+                migration_id=_coerce_string(rec.get("migration_id")),
+                layer1_value_digest=_coerce_string(rec.get("layer1_value_digest")),
             ))
             attached.append(fid)
         if evidence_rows:
             # F1b: replace key includes universe_id so per-domain imports of the SAME
             # run are additive (a csi300 import must not delete the univ_all rows).
             # Legacy rows with empty universe_id coerce to univ_all for keying.
-            new_keys = {(run_id, r.factor_id, int(r.version), r.universe_id or "univ_all")
+            # GPT impl-review V5: the key ALSO includes row_role so the migration can append
+            # a "migrated_layer1" sibling WITHOUT deleting the immutable legacy ("") row that
+            # shares (run_id, factor, version, universe). Native imports use a fresh
+            # run_id=<prefix>_<schema>_<layer1_hash> (never a legacy run_id) so a native row
+            # (row_role="native_layer1") can never collide with a legacy row_role="" row.
+            new_keys = {(run_id, r.factor_id, int(r.version), r.universe_id or "univ_all",
+                         r.row_role or "native_layer1")
                         for r in evidence_rows}
             existing = self.factor_evidence
             if not existing.empty:
                 has_univ = "universe_id" in existing.columns
+                has_role = "row_role" in existing.columns
+                # existing-side row_role uses its ACTUAL value (legacy "" stays "") — a native
+                # import (role "native_layer1") then never matches a legacy "" row even under a
+                # shared key, so legacy/migrated rows are always preserved (V5 immutability).
                 keep = ~existing.apply(
                     lambda x: (
                         _coerce_string(x["run_id"]),
                         _coerce_string(x["factor_id"]),
                         _coerce_int(x["version"]),
                         (_coerce_string(x["universe_id"]) if has_univ else "") or "univ_all",
+                        (_coerce_string(x["row_role"]) if has_role else ""),
                     ) in new_keys,
                     axis=1,
                 )
@@ -1334,6 +1431,13 @@ class FactorRegistryStore:
     # 2026-06-11 directive: the "refresh" label is retired — external taxonomy is
     # discovery / formal only. New rows write run_type='factor_lifecycle_auto'.
     record_formal_auto_evidence = record_formal_refresh_evidence
+
+    def canonical_layer1_evidence(self) -> pd.DataFrame:
+        """The reference-decoupled Layer-1 evidence, deduped to one row per
+        (factor, version, universe) by row_role precedence (migrated XOR legacy). See the
+        module-level :func:`canonical_layer1_evidence`."""
+        return canonical_layer1_evidence(self.factor_evidence)
+
     def set_status(
         self,
         *,

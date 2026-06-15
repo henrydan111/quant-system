@@ -29,24 +29,18 @@ from workspace.scripts import unified_eval_full_run as fr
 from src.alpha_research.factor_eval.unified_eval import (
     EvalMethodology,
     STYLE_CONTROLS_V1,
+    BOOK_DEPENDENT_LAYER1_FIELDS,
     build_decay_labels,
     preprocess_for_residual,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# The ONLY columns allowed to differ when the approved book changes (+ the timing field).
-BOOK_DEPENDENT = {
-    "resid_ic_vs_approved_stable_signed",
-    "resid_ic_vs_approved_stable_oriented",
-    "resid_hac_t_vs_approved_stable",
-    "resid_eff_coverage_vs_approved_stable",
-    "resid_ic_vs_approved_current_signed",
-    # PR-1b: the reference-set hashes IDENTIFY the book used for the residuals above — they are
-    # book-dependent BY DESIGN (their whole purpose is to record which book a residual used).
-    "reference_set_stable_hash",
-    "reference_set_current_hash",
-}
+# The ONLY columns allowed to differ when the approved book changes (+ the timing field). Sourced
+# from the CANONICAL list in unified_eval (shared with the evidence-migration byte-equality proof);
+# methodology_hash is constant in THIS test (one fixed `method` object run under two books) so its
+# presence in the set is harmless here.
+BOOK_DEPENDENT = set(BOOK_DEPENDENT_LAYER1_FIELDS)
 ALLOWED_DIFF = BOOK_DEPENDENT | {"eval_seconds"}
 
 
@@ -195,3 +189,34 @@ def test_extract_layer2_from_results_jsonl(tmp_path):
     # A2: member JSON populated + sorted
     stable_row = recs[recs["reference_book_type"] == "stable"].iloc[0]
     assert json.loads(stable_row["reference_set_members_json"]) == ["a", "b"]
+
+
+# ── canonical Layer-1 default-view (migrated XOR legacy) — fast unit test ──────
+def test_canonical_layer1_evidence_dedups_migrated_xor_legacy():
+    from src.alpha_research.factor_registry.store import canonical_layer1_evidence
+
+    def row(role, t, ic, run_id, rt="factor_lifecycle_auto", fid="f1", uni="univ_all"):
+        return {"run_id": run_id, "run_type": rt, "factor_id": fid, "version": 1,
+                "universe_id": uni, "row_role": role, "evidence_time": t, "is_rank_icir": ic}
+
+    # f1: legacy + migrated sibling + a fresh native row -> native wins (highest precedence)
+    # f2: legacy + migrated only -> migrated wins (supersedes the immutable legacy row)
+    # a non-auto (revalidation) row must pass through untouched, never deduped
+    ev = pd.DataFrame([
+        row("", "2026-01-01", 0.10, "matrix_legacyA"),
+        row("migrated_layer1", "2026-06-01", 0.11, "matrix_legacyA"),
+        row("native_layer1", "2026-06-10", 0.12, "matrix_v1_L1"),
+        row("", "2026-01-01", 0.20, "matrix_legacyB", fid="f2"),
+        row("migrated_layer1", "2026-06-01", 0.21, "matrix_legacyB", fid="f2"),
+        row("", "2026-02-02", 0.99, "reval_run", rt="revalidation", fid="f3"),
+    ])
+    out = canonical_layer1_evidence(ev)
+    f1 = out[(out.factor_id == "f1")]
+    assert len(f1) == 1 and f1.iloc[0]["row_role"] == "native_layer1"
+    assert float(f1.iloc[0]["is_rank_icir"]) == 0.12
+    f2 = out[(out.factor_id == "f2")]
+    assert len(f2) == 1 and f2.iloc[0]["row_role"] == "migrated_layer1"
+    assert float(f2.iloc[0]["is_rank_icir"]) == 0.21
+    f3 = out[(out.factor_id == "f3")]   # non-auto row untouched
+    assert len(f3) == 1 and float(f3.iloc[0]["is_rank_icir"]) == 0.99
+    assert len(out) == 3

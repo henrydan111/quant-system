@@ -186,10 +186,19 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
                              factor_origin="a_priori")
     wf_rows = {r["factor"]: dict(r) for r in wf.rows}
     del windowed
-    batch_processed = preprocess_for_residual({n: batch_df[n] for n in names}, names,
+    # Residual control-scope fix (GPT 5.5 Pro ruling 2026-06-15): the residual candidate + controls are
+    # winsorized/z-scored on the BROAD estimation universe (the UNMASKED panel), then masked to the
+    # evaluation universe inside residual_ic_vs_controls (transform-then-mask). `residual_panel` is the
+    # full-market batch (matrix passes the UNMASKED df); for the univ_all sweep it defaults to batch_df
+    # (already full-market). resident_processed is broad-ESTU by construction; batch_processed is now
+    # ALSO broad (built from the unmasked panel), so the two no longer disagree on scope, and a
+    # control's winsorization scope no longer depends on its eval-batch membership.
+    resid_panel = ctx.get("residual_panel", batch_df)
+    batch_processed = preprocess_for_residual({n: resid_panel[n] for n in names}, names,
                                               winsor=method.winsor_limits)
     processed = {**ctx["resident_processed"], **batch_processed}
-    fac_all = {**ctx["resident_raw"], **{n: batch_df[n] for n in names}}
+    fac_all = {**ctx["resident_raw"], **{n: resid_panel[n] for n in names}}
+    eval_mask = ctx.get("eval_mask")   # None for univ_all/full-market; universe bool mask for the matrix
     label = ctx["label"]
 
     for fid in names:
@@ -256,15 +265,12 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
         stable = [b for b in ctx["reference_stable"] if b != fid]
         current = [b for b in ctx["approved_current"] if b != fid]
         styles = [c for c in STYLE_CONTROLS_V1 if c != fid]
-        r_st = residual_ic_vs_controls(fid, fac_all, label, control_names=stable,
-                                       winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                       hac_lags=method.hac_lags, processed_controls=processed)
-        r_cu = residual_ic_vs_controls(fid, fac_all, label, control_names=current,
-                                       winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                       hac_lags=method.hac_lags, processed_controls=processed)
-        r_sty = residual_ic_vs_controls(fid, fac_all, label, control_names=styles,
-                                        winsor=method.winsor_limits, min_obs=method.residual_min_obs,
-                                        hac_lags=method.hac_lags, processed_controls=processed)
+        _rkw = dict(winsor=method.winsor_limits, min_obs=method.residual_min_obs,
+                    hac_lags=method.hac_lags, processed_controls=processed, eval_mask=eval_mask,
+                    preprocess_scope=method.residual_preprocess_scope)
+        r_st = residual_ic_vs_controls(fid, fac_all, label, control_names=stable, **_rkw)
+        r_cu = residual_ic_vs_controls(fid, fac_all, label, control_names=current, **_rkw)
+        r_sty = residual_ic_vs_controls(fid, fac_all, label, control_names=styles, **_rkw)
         legs = {}
         if orient["orientation_valid"]:
             of = f_dt * orient["sign"]
