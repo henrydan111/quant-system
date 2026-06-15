@@ -133,6 +133,26 @@ def main() -> int:
     ap.add_argument("--universes", default="", help="comma subset (smoke)")
     args = ap.parse_args()
     OUTDIR.mkdir(parents=True, exist_ok=True)
+
+    # Warmup guarantee (GPT 5.5 Pro E1a review): Qlib computes rolling expressions over the FULL
+    # store and slices to [is_start, is_end], so a factor's window is full at is_start iff the store
+    # has >= window trading days BEFORE is_start. Assert the buffer covers the price-volume cohort's
+    # deepest window (270d = mmt_time_rank: Ref1 + Rank250 + Mean20) → no partial-window leak in the
+    # IS eval (empirically verified: matrix factors at is_start == a deeper-buffer recompute, 0.0 diff).
+    # NOTE: a few legacy catalog factors exceed the buffer (e.g. val_relative_pe 750d) and carry a
+    # known minor early-window artifact — pre-existing, tracked separately, not introduced here.
+    PV_COHORT_MAX_WARMUP_DAYS = 270
+    _cal = pd.to_datetime(pd.read_csv(PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt",
+                                      header=None)[0])
+    _buffer = int((_cal < pd.Timestamp(TIME_SPLIT.is_start)).sum())
+    if _buffer < PV_COHORT_MAX_WARMUP_DAYS:
+        raise RuntimeError(
+            f"store has only {_buffer} trading days before is_start={TIME_SPLIT.is_start}; need "
+            f">= {PV_COHORT_MAX_WARMUP_DAYS} to fill price-volume rolling windows without a "
+            f"partial-window leak. Move is_start later or extend the store history.")
+    log.info("warmup buffer: %d trading days before is_start (>= %d PV-cohort max) — rolling windows "
+             "full at is_start", _buffer, PV_COHORT_MAX_WARMUP_DAYS)
+
     universes = [u.strip() for u in args.universes.split(",") if u.strip()] or list(UNIVERSES)
 
     methods = {u: build_frozen_methodology(is_start=TIME_SPLIT.is_start,
@@ -140,20 +160,34 @@ def main() -> int:
                for u in universes}
     mfile = OUTDIR / "methodologies.json"
     saved = json.loads(mfile.read_text(encoding="utf-8")) if mfile.exists() else {}
+    # Reference-decoupling (PR-1c): the resume identity is layer1_methodology_hash (reference-EXCLUDED),
+    # so approving/revoking a factor never trips drift (the bug being fixed); a protocol / STYLE_CONTROLS
+    # change still does (a deliberate re-baseline). A LEGACY methodologies.json (only "hash", no
+    # "layer1_hash") is transparently re-stamped on this first run — NOT treated as drift.
     for u, m in methods.items():
-        if saved.get(u, {}).get("hash") and saved[u]["hash"] != m.methodology_hash:
+        saved_l1 = saved.get(u, {}).get("layer1_hash")
+        if saved_l1 and saved_l1 != m.layer1_methodology_hash:
             from dataclasses import replace
             repinned = replace(m, code_commit=str(saved[u].get("code_commit", "")))
-            if repinned.methodology_hash == saved[u]["hash"]:
+            if repinned.layer1_methodology_hash == saved_l1:
                 log.warning("%s: re-pinning methodology to the run's original commit", u)
                 methods[u] = repinned
             else:
-                raise RuntimeError(f"methodology drift on resume for {u} — clear {OUTDIR}")
+                raise RuntimeError(
+                    f"LAYER-1 methodology drift on resume for {u} (protocol/STYLE_CONTROLS change, NOT "
+                    f"approval churn) — a deliberate re-baseline; clear {OUTDIR}")
+        elif saved.get(u, {}).get("hash") and not saved_l1:
+            log.warning("%s: legacy methodologies.json (no layer1_hash) — re-stamping under schema %s "
+                        "(approval-churn drift retired)", u, m.methodology_schema_version)
     mfile.write_text(json.dumps(
-        {u: {"hash": m.methodology_hash, "code_commit": m.code_commit} for u, m in methods.items()},
+        {u: {"hash": m.methodology_hash, "layer1_hash": m.layer1_methodology_hash,
+             "methodology_schema_version": m.methodology_schema_version,
+             "reference_set_stable_hash": m.reference_set_stable_hash,
+             "reference_set_current_hash": m.reference_set_current_hash,
+             "code_commit": m.code_commit} for u, m in methods.items()},
         indent=2), encoding="utf-8")
     for u, m in methods.items():
-        log.info("%s methodology=%s", u, m.methodology_hash)
+        log.info("%s layer1=%s (legacy=%s)", u, m.layer1_methodology_hash, m.methodology_hash)
 
     full = get_factor_catalog(include_new_data=True)
     elig = per_factor_field_eligible(list(full), stage="formal_validation")
@@ -179,7 +213,14 @@ def main() -> int:
         seed.to_parquet(SEED_CACHE)
     fr.MCAP_CACHE = MCAP_CACHE  # window-specific mcap for within-domain neutralization
     adj_close = seed[ADJ_COL]
-    panel_index = seed.index
+    # R5 (GPT decoupling review): anchor the panel index to the STABLE basis (ADJ + STYLE_CONTROLS_V1),
+    # NOT the approved book. compute_factors returns a fixed universe×calendar grid regardless of the
+    # requested factor set (premise-check 2026-06-15: identical index for style-only vs style+approved,
+    # index.equals=True), and test_matrix_reference_invariance LOCKS that the approved book changes no
+    # Layer-1 metric. Sourcing the index from style+market (not the union seed) makes the anchoring
+    # structural + intent-explicit; the approved factors enter ONLY as residual controls (resident_raw).
+    _anchor_cols = [ADJ_COL] + [c for c in STYLE_CONTROLS_V1 if c in seed.columns]
+    panel_index = seed[_anchor_cols].index
     masks = _build_masks(panel_index)
     masks = {u: m for u, m in masks.items() if u in universes}
 

@@ -137,3 +137,52 @@ def test_layer1_metrics_are_reference_invariant(tmp_path):
         "approved-book membership changed Layer-1 column(s) that must be reference-invariant: "
         f"{sorted(unexpected)}\n  (A, B) = {detail}"
     )
+
+
+# ── Layer-2 store (PR-1c) — fast unit tests, no eval ──────────────────────────
+def test_layer2_store_is_append_only_and_latest_wins(tmp_path):
+    from src.alpha_research.factor_eval.layer2_residual_store import Layer2ResidualStore
+    s = Layer2ResidualStore(tmp_path)
+    base = {"factor_id": "f1", "universe_id": "univ_all", "layer1_methodology_hash": "L1",
+            "reference_book_type": "current"}
+    s.append([{**base, "reference_set_hash": "BOOK_A", "residual_mean_rank_ic": 0.10,
+               "computed_at": "2026-06-15T00:00:00Z"}])
+    s.append([{**base, "reference_set_hash": "BOOK_B", "residual_mean_rank_ic": 0.20,
+               "computed_at": "2026-06-15T01:00:00Z"}])  # an approval changed the book -> APPEND
+    assert len(s.records()) == 2, "append-only: the BOOK_A row must not be overwritten"
+    latest = s.latest_descriptive(universe_id="univ_all", layer1_methodology_hash="L1",
+                                  reference_book_type="current")
+    assert len(latest) == 1 and float(latest.iloc[0]["residual_mean_rank_ic"]) == 0.20
+    with pytest.raises(ValueError):
+        s.append([{**base, "reference_book_type": "bogus", "reference_set_hash": "X"}])
+
+
+def test_layer2_assert_single_reference_blocks_cross_book_comparison():
+    from src.alpha_research.factor_eval.layer2_residual_store import Layer2ResidualStore
+    df = pd.DataFrame([{"factor_id": "f1", "reference_set_hash": "A"},
+                       {"factor_id": "f2", "reference_set_hash": "B"}])
+    with pytest.raises(ValueError):
+        Layer2ResidualStore.assert_single_reference(df)
+    Layer2ResidualStore.assert_single_reference(df[df.reference_set_hash == "A"])  # single book -> ok
+
+
+def test_extract_layer2_from_results_jsonl(tmp_path):
+    from src.alpha_research.factor_eval.layer2_residual_store import (
+        Layer2ResidualStore, extract_layer2_residuals,
+    )
+    rj = tmp_path / "results.jsonl"
+    rj.write_text("\n".join([
+        json.dumps({"factor": "f1", "universe_id": "univ_all", "layer1_methodology_hash": "L1",
+                    "reference_set_stable_hash": "S", "reference_set_current_hash": "C",
+                    "resid_ic_vs_approved_stable_signed": 0.05,
+                    "resid_ic_vs_approved_stable_oriented": 0.05,
+                    "resid_ic_vs_approved_current_signed": 0.04}),
+        json.dumps({"factor": "f2", "field_eligible": True, "error": "boom"}),         # skipped
+        json.dumps({"factor": "f3", "reference_set_stable_hash": None}),               # skipped (no book)
+    ]), encoding="utf-8")
+    store = Layer2ResidualStore(tmp_path)
+    n = extract_layer2_residuals(rj, store, computed_at="2026-06-15T00:00:00Z")
+    assert n == 2  # f1 -> stable + current; f2/f3 skipped
+    recs = store.records()
+    assert set(recs["reference_book_type"]) == {"stable", "current"}
+    assert set(recs["reference_set_hash"]) == {"S", "C"}
