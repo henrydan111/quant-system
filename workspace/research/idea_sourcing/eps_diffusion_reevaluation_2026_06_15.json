@@ -1,0 +1,82 @@
+{
+  "event": "eps_diffusion_re_evaluation_for_re_approval",
+  "date": "2026-06-15",
+  "directive": "user: re-evaluate eps_diffusion, try to reach approved again",
+  "factors": ["earn_eps_diffusion_60", "earn_eps_diffusion_120"],
+  "status_at_start": "candidate (both; revoked approved->candidate 2026-06-14)",
+  "revoke_concerns_resolved": {
+    "restatement_residual": "RESOLVED — breadth restatement-stability canary re-run (SNAP1 2026-06-07 vs SNAP2 2026-06-14): 65004 reports in both, 26 payload-restated (0.04%/wk), 0 with material EPS change (>1e-4) → breadth (net % raising FY1 EPS) is restatement-stable; the tp/rating/np/roe churn is not breadth-relevant.",
+    "pit_anchoring": "CLOSED (validation MD) — create_time real per-row 2022-05+ (p50=1/p99=2 cal d), report_date+2td no-lookahead (JQ buffer sweep Spearman 0.940), provider at create_time+1/report_date+3; backfill handled."
+  },
+  "ls_sharpe_decomposition": {
+    "method": "DIAGNOSTIC over the already-SPENT OOS (no seal claimed, no fresh-OOS pass). run_batch_screening(engine=batch, n_quantiles=5, horizons=5/10/20) over the factor recomputed via compute_factors(stage=oos_test); full-window reproduces the registered 7.24/2.59 + 0.131/0.070 EXACTLY (machinery validated). Split full 2021-2026 vs clean 2022-05+ (real per-row create_time, no deep-history JQ approximation).",
+    "script": "workspace/research/idea_sourcing/eps_diffusion_lssharpe_decomposition.py",
+    "earn_eps_diffusion_60": {
+      "is_heldout_rank_icir": 0.42,
+      "deep_2021_to_2022_04": {"rank_icir_5d": 0.246, "rank_icir_10d": 0.304, "rank_icir_20d": 0.364, "ls_sharpe_5d": 8.65, "n_days_20d": 320},
+      "full_2021_2026": {"rank_icir_5d": 0.115, "rank_icir_10d": 0.133, "rank_icir_20d": 0.131, "ls_sharpe_5d": 7.24, "n_days_20d": 1226},
+      "clean_2022_05plus": {"rank_icir_5d": 0.066, "rank_icir_10d": 0.067, "rank_icir_20d": 0.041, "ls_sharpe_5d": 1.36, "n_days_20d": 906},
+      "decay": "deep OOS 0.364 ≈ 87% of IS 0.42 (~13% decay = NO decay); clean OOS 0.041 = ~90% decay vs IS"
+    },
+    "earn_eps_diffusion_120": {
+      "is_heldout_rank_icir": 0.34,
+      "deep_2021_to_2022_04": {"rank_icir_5d": 0.216, "rank_icir_10d": 0.269, "rank_icir_20d": 0.314, "ls_sharpe_5d": 3.58, "n_days_20d": 320},
+      "full_2021_2026": {"rank_icir_5d": 0.073, "rank_icir_10d": 0.077, "rank_icir_20d": 0.070, "ls_sharpe_5d": 2.59, "n_days_20d": 1226},
+      "clean_2022_05plus": {"rank_icir_5d": 0.020, "rank_icir_10d": 0.004, "rank_icir_20d": -0.023, "ls_sharpe_5d": -0.51, "n_days_20d": 906},
+      "decay": "deep OOS 0.314 ≈ 92% of IS 0.34 (NO decay); clean OOS SIGN-FLIPPED negative"
+    }
+  },
+  "why_so_different_vs_prior": {
+    "no_methodology_discrepancy": "full-window reproduces the 2026-06-09 approval EXACTLY (0.131/7.24, 0.070/2.59). Same code/path. The 'difference' is a WINDOW SPLIT of the same single OOS number, not a re-evaluation.",
+    "concentration": "ALL headline strength is in the 16-month deep window (2021-01..2022-04): ICIR_20d 0.364/0.314, LS 8.65/3.58. The 44-month clean window is 0.041/neg. Full = the blend.",
+    "the_tell": "the deep-window OOS ICIR (0.36/0.31) is at IN-SAMPLE level (~13%/8% decay from IS 0.42/0.34). Genuine OOS decays ~70-90% (the clean window does). An 'OOS' sub-window performing at IS level, on EXACTLY the JQ-consensus-backfilled/approximated-breadth period, is the signature of a data-RECONSTRUCTION artifact (the 2022-05 backfill carries information not available in real time), NOT a favorable regime (regime does not lift OOS IC to IS levels).",
+    "regime_confound": "2022-05 (data-trust boundary) ≈ the 2022 growth/momentum crash (regime boundary) — confounded. But magnitude (IS-level OOS on the backfilled portion) favors the artifact reading.",
+    "cannot_fully_separate": "definitive separation needs a truly point-in-time per-revision deep-history breadth, which is UNRECOVERABLE (Tushare granular-not-PIT / JQ PIT-not-granular scissors). The trustworthy per-row window (2022-05+) is the only honest OOS, and there the factor is weak (_60) / dead (_120)."
+  },
+  "oos_decay_pit_attribution": {
+    "question": "is the OOS decay because the analyst factor STILL has a PIT problem?",
+    "structural": "create_time real per-row only 2022-05+; IS(2014-2020) + deep-OOS(2021-01..2022-04) breadth are BOTH the frozen 2022-05 JQ backfill. So the IS 0.42 benchmark was NEVER PIT-clean — same compromised vintage as the deep OOS. The ONLY real-per-row evaluation is the clean 2022-05+ window.",
+    "lag_stress_script": "workspace/research/idea_sourcing/eps_diffusion_pit_attribution.py",
+    "lag_stress": {
+      "deep_backfill_lag_invariant": "_60 ICIR 0.364@+0td -> 0.371@+5td; _120 0.314 -> 0.317. Pushing the visibility anchor 5td LATER does NOT erode the IC -> the 'signal' is baked into the reconstructed VALUES irrespective of read timing -> a DATA-VINTAGE PIT artifact (the 2022-05 JQ reconstruction encodes end-state consensus retroactively, not as-of). No anchor/lag fixes it because the values themselves are not point-in-time. Lag-invariance also RULES OUT a favorable-regime explanation (a real signal decays with staleness; this does not).",
+      "clean_lag_decays": "_60 ICIR 0.041@+0 -> 0.033@+2 -> 0.020@+5 -> 0.005@+10td (steep decay toward 0); _120 already negative. Pushing the anchor LATER removes the signal -> the (weak) clean signal is REAL and TIMELY (alpha in the fresh revision, decaying with staleness) — the OPPOSITE of a lookahead (a lookahead inflates early reads and vanishes when pushed to the correct time). So the clean window is PIT-CLEAN; the deployed create_time+1 anchor is the honest read."
+    },
+    "answer": "TWO layers. (1) The backfilled deep history (IS + deep OOS) DOES carry a PIT problem — a data-VINTAGE artifact (lag-invariant => values not as-of), which is the root cause of the inflated 0.42/0.36. The user's instinct is correct for the STRONG numbers. (2) The clean 2022-05+ window does NOT have a residual PIT problem (signal decays with staleness => genuine + timely); the deployed anchor is honest. The factor is simply genuinely WEAK there (_60 0.041) / DEAD (_120 negative). So the decay is: backfill-vintage PIT inflation removed -> the factor's true PIT-clean weak edge revealed. It is NOT a live-anchoring PIT bug.",
+    "caveat": "the factor has NO clean evidence of ever being strong: every strong number is on the unrecoverable 2022-05 backfill vintage; its only PIT-clean evaluation is weak/dead."
+  },
+  "verdict_INITIAL_SUPERSEDED": {
+    "note": "INITIAL Tushare-only verdict (2026-06-15 AM) — SUPERSEDED by the JoinQuant genuine-PIT benchmark below. Preserved for the audit trail.",
+    "earn_eps_diffusion_120": "RE-APPROVAL NOT SUPPORTED (initial)",
+    "earn_eps_diffusion_60": "RE-APPROVAL MARGINAL / NOT RECOMMENDED (initial)",
+    "overall": "RE-APPROVAL NOT SUPPORTED (initial)",
+    "correction_reason": "I argued the pre-2022 Tushare strength was a backfill VINTAGE artifact based on the lag-invariance of the deep window (ICIR 0.36 -> 0.37 at +5td). That inference was STRUCTURALLY WRONG for a slow-moving consensus signal: a 60-120d rolling breadth on slow analyst-consensus drift is INHERENTLY lag-insensitive at small +td shifts WHETHER the values are first-state or end-state. Lag-invariance was equally consistent with 'real persistent signal' and 'vintage artifact' -> the test could not discriminate."
+  },
+  "joinquant_pit_benchmark_2026_06_15": {
+    "directive": "user: replicate IS evaluation on JoinQuant 朝阳永续 (genuinely-PIT) as the artifact-vs-decay discriminator",
+    "notebook": "workspace/research/data_expansion/jq_eps_diffusion_benchmark.py",
+    "result_csv": "data/external/jq_eps_diffusion_benchmark.csv",
+    "method": "JoinQuant cloud research: monthly as-of grid (survivorship-correct universes via get_all_securities(date=asof)), VALIDATED PIT consensus EP series predicted_earnings_to_price_ratio (the 朝阳永续 PIT level), reconstruct genuine-PIT consensus FY1 EPS = EP * RAW close (price cancels exactly -> earnings), take 2m/4m EPS-revision as the breadth proxy, score RankIC vs 5/10/20d adj fwd returns. Two windows: PRE 2014-2021 (n=87 month-ends), POST 2022-05+ (n=44).",
+    "results_20d_horizon": {
+      "PRE_2014_2021_EPrev_60d_proxy": {"rank_icir": 0.339, "mean_rank_ic": 0.024, "n_dates": 87, "tushare_deep_match": "ICIR 0.36"},
+      "PRE_2014_2021_EPrev_120d_proxy": {"rank_icir": 0.262, "mean_rank_ic": 0.021, "n_dates": 83, "tushare_deep_match": "ICIR 0.31"},
+      "POST_2022_05plus_EPrev_60d_proxy": {"rank_icir": 0.042, "mean_rank_ic": 0.003, "n_dates": 44, "tushare_clean_match": "ICIR 0.041"},
+      "POST_2022_05plus_EPrev_120d_proxy": {"rank_icir": -0.077, "mean_rank_ic": -0.007, "n_dates": 42, "tushare_clean_match": "ICIR -0.023"}
+    },
+    "two_pit_sources_two_signal_constructions_agree": "Tushare per-analyst breadth vs JQ consensus-EPS revision — DIFFERENT signal constructions, INDEPENDENT data sources, agree on ICIR magnitude in BOTH windows (~0.30 PRE / ~0.04 POST). The probability of matching by coincidence is ~zero -> the pre-2022 strength is the REAL underlying analyst-sentiment-shift economic signal, and the post-2022 weakness is REAL decay.",
+    "scissors_resolved": "the 'Tushare granular-not-PIT / JQ PIT-not-granular' scissors does NOT actually block this question, because both proxies measure the same economic signal (analyst sentiment shift) and the IC magnitudes match across both windows."
+  },
+  "verdict_FINAL": {
+    "earn_eps_diffusion_60": "RE-APPROVAL SUPPORTED — original 2026-06-09 sealed-OOS pass (RankICIR_20d 0.131, LS_5d 7.24, FrozenSelectionSet c5335681...) is on REAL data, not contamination. The full-window number blended ~16mo of still-strong signal (~0.34 PIT-confirmed) with ~44mo of decay (~0.04). The 2026-06-14 revoke was based on a WRONG attribution (lag-invariance does not discriminate signal vs vintage on a slow-moving consensus). Recommend revoke->reverse, stamp the DECAY context in the approval reason.",
+    "earn_eps_diffusion_120": "RE-APPROVAL SUPPORTED, with DECAY CAVEAT — same as _60 logic. JQ confirms 0.26 PRE / -0.08 POST. The original 0.070/2.59 OOS pass is on real data; current edge is weaker / negative on the clean window. Approve but flag the stronger decay (the 120d form lost more, perhaps because longer rolling smooths through more of the regime change).",
+    "overall": "Both factors RE-APPROVABLE on the corrected attribution. The original 2026-06-09 approval was rigorously done on genuinely-PIT-equivalent data; the 2026-06-14 revoke was based on my wrong lag-stress interpretation. The 2026-06-14 'breadth restatement canary residual' concern (too-good 7.24 LS Sharpe) is explained by decay/regime, not artifact: the 2021/early-2022 window was a genuine analyst-revision regime that DECAYED post-2022. The factor is a real-but-decaying alpha — common, valid, but the DECAY must be stamped on the approval so future allocators don't extrapolate the headline 7.24.",
+    "deployment_context_unchanged": "deployment gate (long-only top-K, 1x, realistic costs) showed +4.5-9.8% net/liquid CAGR with -62 to -65% MDD — uninvestable as a standalone strategy. `approved` factor != deployable strategy — still true. Re-approval restores factor-level status, NOT deployment-readiness.",
+    "side_effect_unblocks_e1a": "RE-APPROVING both restores the approved set 7 -> 9, which restores the methodology hash the matrix run was built under -> the E1a 7-domain matrix methodology drift (#34) AUTO-RESOLVES (the resume picks up the cached 218 factors and evaluates only the 6 new E1a pairs)."
+  },
+  "oos_status": "2021-2026 OOS remains SPENT (FrozenSelectionSet c5335681...). All re-evaluation since the revoke (Tushare lag-stress, deep-vs-clean split, JQ benchmark) is post-hoc diagnostic on already-observed data, NOT new spends. The original sealed-OOS verdict is the load-bearing one; this diagnostic chain CORRECTED a wrong attribution that wrongly revoked it.",
+  "lessons": [
+    "Lag-stress is NOT a vintage discriminator for slow-moving (consensus) signals — both real persistence and end-state values produce the same +td flatness.",
+    "Two independent PIT sources + two different signal constructions agreeing on IC magnitudes is the gold-standard test for real-vs-artifact; the user's instinct to run the JQ benchmark was decisive.",
+    "When in doubt about a revoke, the JQ 朝阳永续 PIT benchmark is the reference oracle — bake this into the canary discharge protocol for any report_rc / analyst-derived factor in the future.",
+    "Pre-registered interpretation MATTERS: I committed to the read 'PRE strong -> Tushare verdict overturned' BEFORE seeing JQ numbers, which is why I am revising honestly now instead of rationalizing."
+  ]
+}
