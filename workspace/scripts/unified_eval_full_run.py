@@ -299,6 +299,13 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
             "window_coverage": round(_wcov, 4), "window_tier": _tier,
             "registry_status": reg.get("status"), "factor_kind": reg.get("kind"),
             "category": reg.get("category"), "methodology_hash": method.methodology_hash,
+            # reference-decoupling (PR-1b): the LIVE identity is layer1_methodology_hash (stable across
+            # approved-book churn); the two reference hashes identify the ACTUAL neutralization book used
+            # for r_st/r_cu below (ctx book == method book in production). methodology_hash retained as legacy.
+            "methodology_schema_version": method.methodology_schema_version,
+            "layer1_methodology_hash": method.layer1_methodology_hash,
+            "reference_set_stable_hash": method._ref_hash(ctx["reference_stable"]),
+            "reference_set_current_hash": method._ref_hash(ctx["approved_current"]),
             "heldout_rank_icir": _f(wf_rows.get(fid, {}).get("heldout_rank_icir")),
             "sign_consistency": _f(wf_rows.get(fid, {}).get("sign_consistency")),
             "mean_rank_ic": _f(summ.get("mean_rank_ic")), "ic_hit_rate": _f(summ.get("ic_hit_rate")),

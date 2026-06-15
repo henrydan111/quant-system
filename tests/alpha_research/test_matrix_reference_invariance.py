@@ -42,6 +42,10 @@ BOOK_DEPENDENT = {
     "resid_hac_t_vs_approved_stable",
     "resid_eff_coverage_vs_approved_stable",
     "resid_ic_vs_approved_current_signed",
+    # PR-1b: the reference-set hashes IDENTIFY the book used for the residuals above — they are
+    # book-dependent BY DESIGN (their whole purpose is to record which book a residual used).
+    "reference_set_stable_hash",
+    "reference_set_current_hash",
 }
 ALLOWED_DIFF = BOOK_DEPENDENT | {"eval_seconds"}
 
