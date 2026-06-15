@@ -333,14 +333,18 @@ def up_down_ratio(window):
 # primitives used here (Sum/Abs, Sign+Mean, IdxMax, Rank) — see the operators they compile to.
 
 def path_adjusted_momentum(window):
-    """Path-adjusted (efficiency-ratio) momentum over N days — CICC mmt_route.
+    """Path-adjusted momentum over N days — CICC mmt_route (路径调整动量).
 
-    Formula (PIT-safe): Sum(daily_ret, N) / Sum(|daily_ret|, N), guarded to 0 over a fully
-    flat / suspended window (zero path length). |value| <= 1: +1 = pure uptrend, -1 = pure
-    downtrend, ~0 = choppy. Built on DAILY_RET so every $field sits inside a Ref(...,1) frame.
+    Formula (PIT-safe, literal handbook transcription): period_return(N) / Sum(|daily_ret|, N),
+    i.e. the N-day PERIOD return (adj_close_{t-1}/adj_close_{t-N-1} - 1) divided by the total
+    path length Sum(|daily_ret|, N), guarded to 0 over a fully flat / suspended window. NOT the
+    Kaufman efficiency ratio Sum(ret)/Sum(|ret|) — the handbook numerator "过去N内收益率" is the
+    period return (the same reading op.momentum uses for "收益率"; GPT 5.5 Pro E1a cross-review
+    Q1). So the value is NOT bounded by +-1 (compounding lifts a pure uptrend slightly above 1).
+    Numerator + denominator are both Ref(...,1)-wrapped via ADJ_CLOSE / DAILY_RET.
 
-    Price basis: adjusted close-to-close daily returns. Decay: short (1M form) to medium (1Y).
-    Operator semantics certified via the P-OP harness (operator_id=path_adjusted_momentum).
+    Price basis: adjusted close. Decay: short (1M) to medium (1Y). Operator semantics certified
+    via the P-OP harness at W in {20, 250} (operator_id=path_adjusted_momentum).
 
     Args:
         window: Lookback in trading days (20 = 1M, 250 = 1Y per the handbook).
@@ -348,8 +352,9 @@ def path_adjusted_momentum(window):
     Returns:
         Qlib expression string.
     """
-    return (f"If(Sum(Abs({DAILY_RET}), {window}) > 0, "
-            f"Sum({DAILY_RET}, {window}) / Sum(Abs({DAILY_RET}), {window}), 0)")
+    period_ret = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {window + 1}) - 1)"
+    den = f"Sum(Abs({DAILY_RET}), {window})"
+    return f"If({den} > 0, {period_ret} / {den}, 0)"
 
 
 def up_down_day_share(window):
@@ -379,8 +384,12 @@ def days_since_high(window):
     bar in the window. First-occurrence tie-break. Higher = price has fallen further from its
     peak (weaker / more reverted).
 
-    Price basis: adjusted high. Decay: medium (1Y form). Operator semantics certified via the
-    P-OP harness (operator_id=days_since_high). Warmup: Qlib uses min_periods=1 so the first
+    Price basis: adjusted high — used because cross-day high comparisons must be on a comparable
+    adjusted-price basis. NOTE: an ex-rights adjustment CAN change which date is the window max,
+    so the adjusted-high argmax may differ from the raw-high argmax around splits/dividends; that
+    is the REASON adjusted is correct here, not an accident to work around (GPT 5.5 Pro E1a
+    cross-review Q4). Decay: medium (1Y form). Operator semantics certified via the P-OP harness
+    at W in {20, 250} (operator_id=days_since_high). Warmup: Qlib uses min_periods=1 so the first
     N-1 bars carry partial-window values (dropped by the eval warmup buffer).
 
     Args:

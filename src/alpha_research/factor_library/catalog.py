@@ -79,7 +79,7 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # Genuinely-new constructions backed by P-OP-certified operators
     # (path_adjusted_momentum / up_down_day_share / ts_rank / days_since_high).
     # _M = 1 month (20d), _A = 1 year (250d). Linked into
-    # config/replication/cicc_price_volume_cohort_v1.yaml by catalog_factor_id.
+    # config/replication/cicc_price_volume_cohort_v2.yaml by catalog_factor_id.
     # Dedup notes: mmt_normal_M≈mom_return_20d, mmt_normal_A≈mom_skip1m_252d,
     # mmt_intraday_M≈mom_intraday_20d, mmt_overnight_M≈mom_overnight_20d (NOT registered);
     # mmt_discrete_20d is rank-equivalent to rev_up_down_ratio_20d modulo flat-day handling

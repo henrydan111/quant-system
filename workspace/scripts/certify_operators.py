@@ -1,12 +1,19 @@
 # SCRIPT_STATUS: ACTIVE — P-OP worked example: certify a new operator through the harness
-"""Certify the first new E1 operator — ``amplitude_conditional_sum`` (the CICC mmt_range
-building block: the rolling sum of daily returns over the lookback window restricted to
-HIGH-AMPLITUDE days) — through the OperatorCertification harness, and persist the cert.
+"""Certify ``amplitude_threshold_4pct_conditional_sum`` — the rolling sum of daily returns over
+the lookback window restricted to days whose intraday amplitude exceeds a FIXED 4% threshold —
+through the OperatorCertification harness, and persist the cert.
 
-This is both the worked example for the P-OP skeleton and the "generate command" an E1
-operator goes through before any factor using it may enter the formal IS gate (§10A). It
-proves operator SEMANTICS / ALIGNMENT / PIT-causality only — it reads no market data and
-consults no truth table (so it burns no OOS window; truth parity is a separate concern).
+⚠ THIS IS NOT THE HANDBOOK ``mmt_range`` OPERATOR. The CICC 价量 图表4 mmt_range construction is
+"振幅大的前20%的收盘收益率 − 振幅小的后20%的收盘收益率" = a top-20%-vs-bottom-20%-BY-RANK return
+SPREAD, which is a different operator (id ``amplitude_top_bottom_20pct_return_spread``, PENDING —
+not yet built/certified). The fixed-4%-threshold operator here is a BUILDING-BLOCK worked example
+only; do not bind any mmt_range factor to it (GPT 5.5 Pro E1a cross-review Q7). The earlier name
+``amplitude_conditional_sum`` is DEPRECATED for being ambiguous between the two.
+
+This is the worked example for the P-OP skeleton and the "generate command" an operator goes
+through before any factor using it may enter the formal IS gate (§10A). It proves operator
+SEMANTICS / ALIGNMENT / PIT-causality only — it reads no market data and consults no truth table
+(so it burns no OOS window; truth parity is a separate concern).
 
 Dry-run prints the test results + resolved status; ``--live`` persists the cert row.
 """
@@ -104,7 +111,7 @@ def main() -> int:
     args = ap.parse_args()
 
     results = run_certification(
-        operator_id="amplitude_conditional_sum",
+        operator_id="amplitude_threshold_4pct_conditional_sum",
         reference_fn=amplitude_conditional_sum_ref,
         vectorized_fn=amplitude_conditional_sum_vec,
         random_panels=_random_panels(),
@@ -117,19 +124,20 @@ def main() -> int:
     store = OperatorCertStore()
     if args.live:
         dec = store.certify(
-            operator_id="amplitude_conditional_sum", test_results=results,
-            spec_source="CICC price-volume handbook — mmt_range (振幅条件滚动和)",
+            operator_id="amplitude_threshold_4pct_conditional_sum", test_results=results,
+            spec_source="4%-amplitude-threshold conditional return sum (BUILDING BLOCK; NOT handbook mmt_range)",
             formula_text=f"rolling_sum(ret where amp>{THRESHOLD}, window={WINDOW})",
             reference_impl_hash=_hash_fn(amplitude_conditional_sum_ref),
             vectorized_impl_hash=_hash_fn(amplitude_conditional_sum_vec),
             alignment_policy={"window_closed": "right", "min_periods": WINDOW, "lag": 0,
                               "adjustment_policy": "adjusted_returns"},
-            notes="P-OP worked example; first E1 operator certified through the harness",
+            notes=("P-OP worked example (building block). NOT mmt_range — that is "
+                   "amplitude_top_bottom_20pct_return_spread (top/bottom-20%-by-rank), PENDING."),
         )
         print(f"persisted: status={dec.status} failed={dec.failed} missing={dec.missing}")
     else:
         from src.alpha_research.factor_library.operator_certification import resolve_operator_status
-        dec = resolve_operator_status("amplitude_conditional_sum", results)
+        dec = resolve_operator_status("amplitude_threshold_4pct_conditional_sum", results)
         print(f"[dry-run] would persist status={dec.status} failed={dec.failed} missing={dec.missing}")
     return 0 if dec.status == "certified" else 1
 

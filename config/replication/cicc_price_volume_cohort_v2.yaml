@@ -1,0 +1,141 @@
+# CICC price-volume handbook (系列7) — frozen replication cohort manifest v2 (roadmap Rev5 §9.1/§9.2)
+#
+# ░░ v1 → v2 FIDELITY CORRECTION (GPT 5.5 Pro E1a factor-logic cross-review, 2026-06-15) ░░
+# v1 (archive/cicc_price_volume_cohort_v1.yaml, sha 01dbe38b9281a968) is preserved UNCHANGED as the
+# original pre-results declaration. v2 supersedes it. Per the frozen contract ("revise by bumping to a
+# new version file, never silently edit"), the correction lives here. NO result was observed for any PV
+# factor before this edit (no factor gated, no OOS spent) → a pre-registration correction, the opposite
+# of p-hacking. Denominators unchanged. source_cohort_id unchanged so ReplicationGovernanceRecords stay
+# keyed to the same cohort. Changes vs v1:
+#   * mmt_range_M/A required_operators: [amplitude_conditional_sum] -> [amplitude_top_bottom_20pct_return_spread]
+#       (review Q7). The certified amplitude_conditional_sum (renamed amplitude_threshold_4pct_conditional_sum)
+#       is a FIXED-4%-threshold conditional sum; the handbook mmt_range is a top-20%/bottom-20%-BY-RANK
+#       return spread — a different operator (PENDING build+cert; mmt_range stays deferred).
+#   * catalog_factor_id linked for the 6 E1a momentum factors now registered (sha-excluded -> no sha churn).
+#   * E1a operators (path_adjusted_momentum/up_down_day_share/days_since_high/ts_rank) certified at
+#       W in {20,250}; path_adjusted_momentum numerator corrected to the PERIOD return (review Q1, operators.py).
+#   * mmt_discrete dedup note (review Q6) + per-factor warmup minima (review additional finding) below.
+#
+# FROZEN governance artifact for Wave E1. Locked BEFORE any E1 batch registration so the cohort
+# denominators, replication tiers, exclusion reasons, truth-table label window and OOS eligibility
+# cannot be chosen AFTER seeing results (§9.2 anti-p-hacking). Loaded + sha-verified by
+# replication_governance.load_cohort_manifest; the gate matches factors by catalog_factor_id.
+#
+# Source handbook: Knowledge/AI量化增强/CICC_价量因子定义.md (《中金量化多因子系列7价量因子手册》,
+# 图表4/16/28/40/52/64/76/88/100). Test window 2010.01.04–2022.07.01 (CSI1000 from 2014.11.01),
+# monthly, 10 groups, {univ_all, csi300, csi500, csi1000}.
+#
+# §9.3 OOS quarantine: the handbook已展示 2010–2022.07 表现 → doing parity OBSERVES that window,
+# so a price-volume replicated factor's sealed OOS may not start before
+# max(system_oos_start, handbook_label_window_end + horizon + embargo) ≈ 2022-07 + … → SHORT window.
+# All rows oos_eligibility: short_window accordingly (north資金 = spent_same_family, see below).
+#
+# GRANULARITY (explicit, §11.1b not-silent): rows enumerate the FORMALIZATION-CANDIDATE factors at
+# the handbook's natural granularity. Systematic vol_/liq_ families carry a `# ×3 {1M,3M,6M}` note;
+# the per-window + per-factor catalog_factor_id linkage and the per-factor truth-table transcription
+# are LAZY (§12.2) — added when a factor registers / claims exact_certified. The frozen content here
+# is the candidate SET + tiers + required_operators + truth window + oos eligibility.
+# DEDUP (§0): rank-equivalent duplicates of existing catalog factors (mmt_normal_M≈mom, basic
+# vol_std≈risk_vol_*, basic liq_turn≈liq_turnover_*, basic north/flow ≈ north_*/flow_*) are NOT
+# formalization candidates; the genuinely-new constructions (new operators / new fields) are.
+
+source_cohort_id: cicc_price_volume_handbook_v1
+manifest_sha: "3e07e048b35cdd87"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
+handbook_label_window_end: "2022-07-01"   # handbook test end → drives §9.3 OOS quarantine (short window)
+
+denominators:
+  source: 150                  # enumerated handbook price-volume factors: 动量19 + 波动39 + 流动21 + 量价相关8 + 筹码10 + 资金流32 + 北向9 + 融资融券12 (composite recipe = Layer-2 reference, not a base row)
+  daily_replicability: 144     # source − 6 融券-side factors (rqye/rqchl quarantine: margin_sell_sec_prop / net_margin_sell_sec_shift_dist / margin_sec_bal_growth / margin_sec_avg / margin_sec_bal_prop / net_margin_buy(含融券)). ESTIMATED; tighten at per-factor registration.
+  formalization_candidate: 88  # genuinely-new constructions (NOT rank-equiv dups of existing mom_/risk_/liq_/flow_/north_). ESTIMATED — the rows below enumerate the families/factors; per-factor dedup is lazy (§12.2) and finalized at registration. Provenance below.
+
+denominator_provenance:
+  source: "CICC_价量因子定义.md per-category counts (图表4/16/28/40/52/64/76/88)"
+  daily_replicability: "source − 融券-side (rqye/rqchl quarantine); estimated"
+  formalization_candidate: "new-construction factors (new operator OR new field OR new combination) minus rank-equiv catalog dups; estimated, finalized per-factor at registration (§12.2)"
+  exact_oos_eligible: "TRACKED downstream (exact_certified ∧ post-quarantine power floor); not frozen"
+  sealed_attempt: "TRACKED downstream (attempts that spent sealed OOS); not frozen"
+
+# replication_tier_planned: nearly all formula_equivalent_pending (formula clear, per-factor truth
+# transcription lazy). Operator-dependent factors are still formula_equivalent_pending at the manifest
+# level but are BLOCKED from formal IS until their P-OP operator is certified (§10A, enforced by the
+# gate's certified_operators check, NOT by the manifest tier).
+
+factor_rows:
+  # ===== 1. 动量&反转 (图表4) — the NEW constructions; mmt_normal_M / mom-equivalents are catalog dups =====
+  # E1a warmup minima (review Q5 / additional finding — the eval MUST drop partial-window rows per
+  # expression, NOT rely on a generic 60d buffer; Qlib rolling uses min_periods=1): mmt_route_20d ≥ 22,
+  # mmt_route_250d ≥ 252, mmt_discrete_20d ≥ 22, mmt_discrete_250d ≥ 252, mmt_time_rank_20d ≥ 270
+  # (Ref1 + Rank250 + Mean20), mmt_highest_days_250d ≥ 251. Enforced by the #34 gate harness.
+  # mmt_range_M/A: PENDING — required operator amplitude_top_bottom_20pct_return_spread (top/bottom-20%-BY-RANK
+  # return spread) is NOT YET BUILT/CERTIFIED; the certified amplitude_threshold_4pct_conditional_sum is a
+  # FIXED-4%-threshold building block, NOT this construction (review Q7). Deferred from the E1a tranche.
+  - {factor_name_original: mmt_range_M,        handbook_id: F_mmt_range_M,    chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [amplitude_top_bottom_20pct_return_spread], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # top-20% − bottom-20% amplitude-day return SPREAD (by rank)
+  - {factor_name_original: mmt_range_A,        handbook_id: F_mmt_range_A,    chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [amplitude_top_bottom_20pct_return_spread], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_route_M,        handbook_id: F_mmt_route_M,    chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [path_adjusted_momentum], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_route_20d}    # period_return(20) / Σ|daily ret|(20)
+  - {factor_name_original: mmt_route_A,        handbook_id: F_mmt_route_A,    chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [path_adjusted_momentum], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_route_250d}   # period_return(250) / Σ|daily ret|(250)
+  # mmt_discrete_20d KNOWN NEAR-DUPLICATE of rev_up_down_ratio_20d (rank-equiv modulo flat-day handling;
+  # review Q6). Selection rule: must clear resid_ic_vs_controls / marginal contribution at the #34 gate;
+  # do NOT count as an independent discovery unless the residual passes. mmt_discrete_250d has no existing analogue.
+  - {factor_name_original: mmt_discrete_M,     handbook_id: F_mmt_discrete_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [up_down_day_share], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_discrete_20d}    # up-days% − down-days% (≈ rev_up_down_ratio_20d)
+  - {factor_name_original: mmt_discrete_A,     handbook_id: F_mmt_discrete_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [up_down_day_share], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_discrete_250d}
+  - {factor_name_original: mmt_sec_rank_M,     handbook_id: F_mmt_sec_rank_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [cs_rank_time_avg], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # mean of daily cross-sectional return rank
+  - {factor_name_original: mmt_sec_rank_A,     handbook_id: F_mmt_sec_rank_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [cs_rank_time_avg], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_time_rank_M,    handbook_id: F_mmt_time_rank_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [ts_rank], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_time_rank_20d}   # Mean(Rank(close,250),20) — 20d mean of 250d price ts-rank
+  - {factor_name_original: mmt_intraday_M,     handbook_id: F_mmt_intraday_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # Σ intraday(=close/open−1) over 1M
+  - {factor_name_original: mmt_intraday_A,     handbook_id: F_mmt_intraday_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_overnight_M,    handbook_id: F_mmt_overnight_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # Σ overnight(=open/prevclose−1) over 1M (≈ existing mom_overnight_20d — dedup at reg)
+  - {factor_name_original: mmt_overnight_A,    handbook_id: F_mmt_overnight_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_off_limit_M,    handbook_id: F_mmt_off_limit_M, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_fields: ["$up_limit", "$down_limit"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # ex-limit-day close momentum
+  - {factor_name_original: mmt_off_limit_A,    handbook_id: F_mmt_off_limit_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_fields: ["$up_limit", "$down_limit"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_avg_M,          handbook_id: F_mmt_avg_M,      chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # close / 20d avg price
+  - {factor_name_original: mmt_avg_A,          handbook_id: F_mmt_avg_A,      chart_id: "4", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_highest_days_A, handbook_id: F_mmt_highest_days_A, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_operators: [days_since_high], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: mmt_highest_days_250d}   # 250 − IdxMax(high,250)
+  - {factor_name_original: mmt_report_overnight, handbook_id: F_mmt_report_overnight, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ann_date"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # pre-earnings overnight (event-anchored)
+  - {factor_name_original: mmt_report_jump,    handbook_id: F_mmt_report_jump, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ann_date"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: mmt_report_period,  handbook_id: F_mmt_report_period, chart_id: "4", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ann_date"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+
+  # ===== 2. 波动率 (图表16) — 13 subtypes × 3 windows {1M,3M,6M} = 39. Shadow families are new; basic vol_std ≈ risk_vol_* (dedup). =====
+  - {factor_name_original: vol_upshadow,       handbook_id: F_vol_upshadow,   chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [shadow_line], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # (high−max(open,close))/high ; ×3 {1M,3M,6M} × {avg,std}
+  - {factor_name_original: vol_downshadow,     handbook_id: F_vol_downshadow, chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [shadow_line], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # (min(open,close)−low)/low
+  - {factor_name_original: vol_w_upshadow,     handbook_id: F_vol_w_upshadow, chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [shadow_line], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # William: (high−close)/high
+  - {factor_name_original: vol_w_downshadow,   handbook_id: F_vol_w_downshadow, chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [shadow_line], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # William: (close−low)/low
+  - {factor_name_original: vol_highlow,        handbook_id: F_vol_highlow,    chart_id: "16", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # high/low ; avg+std × 3 windows
+  - {factor_name_original: vol_down_std,       handbook_id: F_vol_down_std,   chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [sign_conditional_std], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # std of ret on down days ×3 (≈ risk_downvol — dedup)
+  - {factor_name_original: vol_up_std,         handbook_id: F_vol_up_std,     chart_id: "16", replication_tier_planned: formula_equivalent_pending, required_operators: [sign_conditional_std], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # std of ret on up days ×3
+
+  # ===== 3. 流动性 (图表28) — 7 subtypes × 3 windows = 21. amihud/shortcut/vstd new; basic turn ≈ liq_turnover (dedup). =====
+  - {factor_name_original: liq_amihud,         handbook_id: F_liq_amihud,     chart_id: "28", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # mean/std of |ret|/amount ×3 (≈ liq_amihud_20d — dedup the 20d)
+  - {factor_name_original: liq_shortcut,       handbook_id: F_liq_shortcut,   chart_id: "28", replication_tier_planned: formula_equivalent_pending, required_operators: [kbar_shortcut], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # (2(high−low)−|open−close|)/amount ×3
+  - {factor_name_original: liq_vstd,           handbook_id: F_liq_vstd,       chart_id: "28", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # amount / std(ret) ×3
+
+  # ===== 4. 量价相关性 (图表40) — 8, lead/lag corr (new corr-lag constructions) =====
+  - {factor_name_original: corr_price_turn,    handbook_id: F_corr_price_turn, chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(turn, close) sync/lead/lag = 3
+  - {factor_name_original: corr_ret_turn,      handbook_id: F_corr_ret_turn,  chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(turn, ret) sync/lead/lag = 3
+  - {factor_name_original: corr_ret_turnd,     handbook_id: F_corr_ret_turnd, chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(Δturn, ret) sync/lag = 2
+
+  # ===== 5. 筹码分布 (图表52) — 10, cyq_perf (approved) =====
+  - {factor_name_original: distribution_ret_avg,  handbook_id: F_dist_ret_avg,  chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__*"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: distribution_ret_std,  handbook_id: F_dist_ret_std,  chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__*"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: distribution_ret_skew, handbook_id: F_dist_ret_skew, chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__*"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: distribution_ret_kurt, handbook_id: F_dist_ret_kurt, chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__*"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: distribution_winner,   handbook_id: F_dist_winner,   chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__winner_rate"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # profit/loss 占比族 via cyq_perf winner_rate + cost percentiles (5 sub-factors: bal/profit_l/profit_s/loss_s/loss_l)
+
+  # ===== 6. 资金流 (图表64) — 32, moneyflow (approved). shift_dist + open/close + size-bucket families. =====
+  - {factor_name_original: flow_act_buy_prop,     handbook_id: F_act_buy_prop,  chart_id: "64", replication_tier_planned: formula_equivalent_pending, required_fields: ["$buy_elg_amount", "$buy_lg_amount", "$net_mf_amount"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # net active-buy / amount; +size buckets {xl,l,m,s}
+  - {factor_name_original: flow_shift_dist,       handbook_id: F_shift_dist,    chart_id: "64", replication_tier_planned: formula_equivalent_pending, required_operators: [shift_distance_ratio], required_fields: ["$net_mf_amount"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # Σnet / Σ|in|+|out| ; +size buckets
+  - {factor_name_original: flow_inflow_open,      handbook_id: F_inflow_open,   chart_id: "64", replication_tier_planned: proxy_approx, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # PROXY: open/close intraday-segment flow needs intraday tags; moneyflow is daily-aggregated → approximate
+  - {factor_name_original: flow_inflow_close,     handbook_id: F_inflow_close,  chart_id: "64", replication_tier_planned: proxy_approx, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # PROXY: same — no intraday open/close split in daily moneyflow
+
+  # ===== 7. 北向资金 (图表76) — 9, hk_hold (approved). OOS ALREADY SPENT same family (E1g, north_* 2021-2026 + 2024-08 institutional break). =====
+  - {factor_name_original: north_hold_prop,       handbook_id: F_north_hold_prop, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
+  - {factor_name_original: north_hold_prefer,     handbook_id: F_north_hold_prefer, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
+  - {factor_name_original: north_inflow_shift_dist, handbook_id: F_north_inflow_shift_dist, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_operators: [shift_distance_ratio], required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
+
+  # ===== 8. 融资融券 (图表88) — 12. 融资侧 approved; 融券侧 not_replicable (rqye/rqchl quarantine). =====
+  - {factor_name_original: margin_buy_money_prop,    handbook_id: F_margin_buy_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzmre"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: margin_money_bal_prop,    handbook_id: F_margin_bal_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzye"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: margin_money_bal_growth,  handbook_id: F_margin_bal_growth, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzye"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: margin_sell_sec_prop,     handbook_id: F_margin_sell_sec, chart_id: "88", replication_tier_planned: not_replicable, exclusion_reason: "rqye/rqchl 融券 fields quarantine (margin_detail_repayment) — same blocker as margin_net_buy_20d", truth_table_label_end: "2022-07-01", oos_eligibility: pending, primary_claim_universe: univ_all}
+
+  # ===== 9. 价量复合 (图表100) — Layer-2 reference recipe (formula_equivalent_pending; built via add_composites once components registered) =====
+  - {factor_name_original: comp_cicc_price_volume, handbook_id: C_PV, chart_id: "100", replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
