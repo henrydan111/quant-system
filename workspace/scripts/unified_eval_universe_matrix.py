@@ -16,8 +16,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import logging
+import os
+import socket
 import sys
 import time
 import warnings
@@ -64,6 +67,68 @@ MASK_FIELDS = {
     "up_limit": "$up_limit", "down_limit": "$down_limit",
     "total_mv": "$total_mv", "amount": "$amount",
 }
+
+RUN_LOCK = OUTDIR / "run.lock"
+CACHE_MANIFEST = OUTDIR / "cache_manifest.json"
+
+
+def _git_commit() -> str:
+    import subprocess
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                      cwd=PROJECT_ROOT, text=True).strip()
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"],
+                                             cwd=PROJECT_ROOT, text=True).strip())
+        return f"{sha}{'-dirty' if dirty else ''}"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _acquire_run_lock(meta: dict, *, force: bool) -> None:
+    """GPT pre-flight item 5: a single-writer lock on the matrix OUTDIR (prevents two sessions
+    appending to the same results.jsonl / Layer-2 store). A crash leaves a stale lock; the operator
+    re-runs with --force after confirming no live writer."""
+    if RUN_LOCK.exists() and not force:
+        raise SystemExit(
+            f"run.lock present at {RUN_LOCK} — another matrix writer may be active. If it is STALE "
+            f"(prior crash) and NO matrix process is running, re-run with --force.\n--- lock ---\n"
+            f"{RUN_LOCK.read_text(encoding='utf-8')}")
+    RUN_LOCK.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _release_run_lock() -> None:
+    try:
+        RUN_LOCK.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _cache_digest(path: Path) -> str:
+    if not path.exists():
+        return ""
+    st = path.stat()
+    return f"{st.st_size}:{int(st.st_mtime)}"
+
+
+def _check_cache_manifest(methods: dict, universes: list) -> dict:
+    """GPT pre-flight item 10: record (and tripwire on) the inputs the cached seed/mcap/mask panels
+    depend on. A time_split or schema change vs a prior manifest means the caches are STALE — fail
+    closed (clear OUTDIR). resident-set GROWTH is handled separately by the producer's missing_res
+    rebuild, so it is not a tripwire here."""
+    cur = {"time_split": [TIME_SPLIT.is_start, TIME_SPLIT.is_end],
+           "schema": next(iter(methods.values())).methodology_schema_version,
+           "git_commit": _git_commit(),
+           "layer1_hashes": {u: methods[u].layer1_methodology_hash for u in universes},
+           "cache_digests": {p.name: _cache_digest(p) for p in (SEED_CACHE, MCAP_CACHE, MASK_CACHE)}}
+    if CACHE_MANIFEST.exists():
+        prev = json.loads(CACHE_MANIFEST.read_text(encoding="utf-8"))
+        if prev.get("time_split") != cur["time_split"] or prev.get("schema") != cur["schema"]:
+            raise SystemExit(
+                f"cache_manifest mismatch — time_split/schema changed since the caches were built "
+                f"(prev {prev.get('time_split')}/{prev.get('schema')} vs cur {cur['time_split']}/"
+                f"{cur['schema']}). The seed/mcap/mask caches are STALE; clear {OUTDIR} and rebuild.")
+    CACHE_MANIFEST.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+    return cur
 
 
 def _build_masks(panel_index: pd.MultiIndex) -> dict[str, pd.Series]:
@@ -201,6 +266,8 @@ def main() -> int:
                     help="explicitly authorize re-stamping a LEGACY methodologies.json (only 'hash', "
                          "no 'layer1_hash') under the new schema. Backs up the old file first. Required "
                          "because the legacy run's residuals used the OLD approved book (GPT impl-review V1).")
+    ap.add_argument("--force", action="store_true",
+                    help="override a STALE run.lock (only after confirming no other matrix writer is running).")
     args = ap.parse_args()
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
@@ -281,13 +348,33 @@ def main() -> int:
     for u, m in methods.items():
         log.info("%s layer1=%s (legacy=%s)", u, m.layer1_methodology_hash, m.methodology_hash)
 
+    # GPT pre-flight item 5: single-writer lock on the OUTDIR (no two sessions appending to the same
+    # results.jsonl). Held for the whole run; released in the finally below; --force overrides a stale lock.
+    _acquire_run_lock({"pid": os.getpid(), "hostname": socket.gethostname(),
+                       "git_commit": _git_commit(), "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                       "schema": next(iter(methods.values())).methodology_schema_version,
+                       "layer1_hashes": {u: methods[u].layer1_methodology_hash for u in universes}},
+                      force=args.force)
+    atexit.register(_release_run_lock)   # release on normal exit OR unhandled exception
+
     full = get_factor_catalog(include_new_data=True)
     elig = per_factor_field_eligible(list(full), stage="formal_validation")
     base_ok = sorted(n for n, v in elig.items() if v)
-    done = fr._done_factors(RESULTS)
-    log.info("eligible %d | done pairs %d", len(base_ok), len(done))
+    # GPT pre-flight: sanitize a partial/corrupt JSONL tail BEFORE any append, and count a (factor,
+    # universe) pair as DONE only if its row is a success record under the CURRENT methodology
+    # (schema + this universe's layer1 hash) — error / stale-hash / partial rows must recompute.
+    _san = fr._sanitize_results_tail(RESULTS)
+    if _san["dropped"] or _san["backup"]:
+        log.warning("sanitized results.jsonl tail: kept=%d dropped=%d backup=%s",
+                    _san["kept"], _san["dropped"], _san["backup"])
+    _schema = next(iter(methods.values())).methodology_schema_version
+    _l1_by_u = {u: m.layer1_methodology_hash for u, m in methods.items()}
+    done = fr._done_factors(RESULTS, validator=lambda r: fr._is_success_record(
+        r, expected_schema=_schema, expected_layer1_by_universe=_l1_by_u))
+    log.info("eligible %d | done pairs %d (methodology-validated)", len(base_ok), len(done))
 
     base_ctx, masks, seed = build_base_ctx(universes, methods)
+    _check_cache_manifest(methods, universes)   # GPT pre-flight item 10: tripwire on stale caches
 
     def eval_units(df: pd.DataFrame, names: list):
         """Run `names` through every requested universe (skipping done pairs)."""

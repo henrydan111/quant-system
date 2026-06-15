@@ -102,19 +102,103 @@ def _f(v):
         return None
 
 
-def _done_factors(results_path=None) -> set:
+def _is_success_record(rec: dict, *, expected_schema: str | None = None,
+                       expected_layer1_by_universe: dict | None = None) -> bool:
+    """A resume-safe 'this (factor, universe) is genuinely DONE' test (GPT pre-flight review).
+
+    An error row, a partial/garbage row, or a row produced under a DIFFERENT methodology
+    (schema / layer1 hash / residual scope) must NOT count as done — else a transient failure or a
+    stale-methodology row becomes permanent (the factor never recomputes) and the matrix silently
+    misses valid evidence. When ``expected_*`` are given (the matrix/full-run pass them), the row must
+    match the live methodology; always, the row must be a completed eval row carrying the core
+    Layer-1 metrics."""
+    if not isinstance(rec, dict) or rec.get("error"):
+        return False
+    if expected_schema is not None and rec.get("methodology_schema_version") != expected_schema:
+        return False
+    if expected_layer1_by_universe is not None:
+        uid = rec.get("universe_id", "univ_all")
+        if rec.get("layer1_methodology_hash") != expected_layer1_by_universe.get(uid):
+            return False
+    # residuals may legitimately be None (low coverage), but the row must be a completed eval
+    return all(k in rec for k in ("heldout_rank_icir", "mean_rank_ic", "coverage", "effective_ic_days"))
+
+
+def _done_factors(results_path=None, *, validator=None) -> set:
+    """The set of COMPLETED (factor, universe) pairs. ``validator(rec)->bool`` gates what counts as
+    done (default: any non-error parseable row). The matrix/full-run pass a methodology-aware
+    validator so stale-hash / error / partial rows never block recompute (GPT pre-flight)."""
     path = results_path or RESULTS_JSONL
     if not path.exists():
         return set()
+    if validator is None:
+        validator = lambda r: isinstance(r, dict) and not r.get("error")  # noqa: E731
     done = set()
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
-            done.add((rec["factor"], rec.get("universe_id")) if "universe_id" in rec
-                     else rec["factor"])
         except Exception:  # noqa: BLE001
             continue
+        if not validator(rec):
+            continue
+        done.add((rec["factor"], rec.get("universe_id")) if "universe_id" in rec else rec["factor"])
     return done
+
+
+def _sanitize_results_tail(results_path=None) -> dict:
+    """Before any append on resume, remove a partial/corrupt tail so the next append cannot
+    concatenate onto a half-written line (which would destroy the next record too). Keeps ONLY
+    complete, parseable JSON lines; if anything was dropped, the original is backed up to
+    results.corrupt.<n>.jsonl first. Returns {kept, dropped, backup}. (GPT pre-flight blocker B.)"""
+    path = results_path or RESULTS_JSONL
+    if not path.exists():
+        return {"kept": 0, "dropped": 0, "backup": None}
+    raw = path.read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    good = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            json.loads(line)
+            good.append(line)
+        except Exception:  # noqa: BLE001
+            pass
+    dropped = len([l for l in lines if l.strip()]) - len(good)
+    # also treat a missing trailing newline as a (potential) partial tail to rewrite
+    needs_rewrite = dropped > 0 or (raw and not raw.endswith("\n"))
+    backup = None
+    if needs_rewrite:
+        n = 0
+        while (cand := path.with_suffix(f".corrupt.{n}.jsonl")).exists():
+            n += 1
+        cand.write_text(raw, encoding="utf-8")
+        backup = cand.name
+        path.write_text(("\n".join(good) + "\n") if good else "", encoding="utf-8")
+    return {"kept": len(good), "dropped": dropped, "backup": backup}
+
+
+def _assert_residual_panel_broad(resid_panel, names, eval_mask) -> None:
+    """FAIL-CLOSED (GPT pre-flight blocker 3): when an eval_mask restricts to a sub-universe, the
+    ``residual_panel`` MUST be the BROAD (unmasked) panel — else broad-ESTU residual preprocessing
+    silently degrades to universe-masked (the exact bug being fixed). Aggregate check (robust to
+    individually sparse factors): if the mask drops any rows, the residual_panel must carry SOME
+    non-null value outside the eval universe across the batch. An already-masked panel (all-NaN
+    outside) raises, as does a mask/panel index mismatch."""
+    em = eval_mask.reindex(resid_panel.index)
+    n_missing = int(em.isna().sum())
+    if n_missing:
+        raise RuntimeError(f"eval_mask missing {n_missing} rows vs residual_panel index")
+    outside = ~em.fillna(False).to_numpy(dtype=bool)
+    if not outside.any():
+        return
+    rp_outside_nonnull = int(sum(int(pd.notna(resid_panel[n].to_numpy()[outside]).sum())
+                                 for n in names))
+    if rp_outside_nonnull == 0:
+        raise RuntimeError(
+            "residual_panel has ZERO non-null values outside the eval universe across the batch — it "
+            "appears already universe-masked; broad-ESTU residual preprocessing would be invalid. "
+            "Pass the UNMASKED panel as residual_panel.")
 
 
 def _append_result(rec: dict, results_path=None) -> None:
@@ -193,12 +277,17 @@ def _evaluate_batch(batch_df: pd.DataFrame, names: list, ctx: dict) -> None:
     # (already full-market). resident_processed is broad-ESTU by construction; batch_processed is now
     # ALSO broad (built from the unmasked panel), so the two no longer disagree on scope, and a
     # control's winsorization scope no longer depends on its eval-batch membership.
+    eval_mask = ctx.get("eval_mask")   # None for univ_all/full-market; universe bool mask for the matrix
     resid_panel = ctx.get("residual_panel", batch_df)
+    if eval_mask is not None:
+        if ctx.get("residual_panel") is None:
+            raise RuntimeError("eval_mask present but residual_panel missing — refusing a "
+                               "universe-masked residual fallback (broad-ESTU preprocessing required)")
+        _assert_residual_panel_broad(resid_panel, names, eval_mask)
     batch_processed = preprocess_for_residual({n: resid_panel[n] for n in names}, names,
                                               winsor=method.winsor_limits)
     processed = {**ctx["resident_processed"], **batch_processed}
     fac_all = {**ctx["resident_raw"], **{n: resid_panel[n] for n in names}}
-    eval_mask = ctx.get("eval_mask")   # None for univ_all/full-market; universe bool mask for the matrix
     label = ctx["label"]
 
     for fid in names:

@@ -451,6 +451,12 @@ def _apply_schema(df: pd.DataFrame, columns: list[str], schema: dict[str, str]) 
 # A native re-eval (produced under the new schema) supersedes a migration-derived row, which in
 # turn supersedes the original immutable legacy row it was derived from.
 ROW_ROLE_PRECEDENCE = {"native_layer1": 3, "migrated_layer1": 2, "legacy": 1, "": 1}
+# Rows positively quarantined as KNOWN-CONTAMINATED (GPT pre-flight blocker 4) — excluded from the
+# canonical view entirely (never selected, even if they are the only row for a (factor, universe)).
+# `legacy_contaminated_residual_scope` = a pre-fix matrix/refresh row whose residual columns used the
+# batch-order-dependent control scope. Kept in the raw table for audit; fail-closed out of default reads.
+LEGACY_CONTAMINATED_RESIDUAL_SCOPE = "legacy_contaminated_residual_scope"
+QUARANTINE_ROLES = {LEGACY_CONTAMINATED_RESIDUAL_SCOPE}
 # the reference-decoupled (unified-eval / matrix) evidence family — the only rows that carry row_role
 LAYER1_AUTO_RUN_TYPES = {"factor_lifecycle_auto", "factor_lifecycle_refresh"}
 
@@ -463,8 +469,10 @@ def canonical_layer1_evidence(evidence: pd.DataFrame) -> pd.DataFrame:
 
     Precedence: native_layer1 > migrated_layer1 > legacy(""), then most-recent evidence_time. Only
     the unified-eval / matrix family (run_type in :data:`LAYER1_AUTO_RUN_TYPES`) is deduped; rows of
-    every other run_type pass through untouched (they are not reference-decoupled). Use this for any
-    aggregation/comparison over auto/matrix Layer-1 evidence (dashboard, marginal-contribution reads).
+    every other run_type pass through untouched (they are not reference-decoupled). Rows whose row_role
+    is in :data:`QUARANTINE_ROLES` (known-contaminated) are DROPPED entirely (GPT pre-flight blocker 4),
+    so a stale contaminated row can never surface as canonical. Use this for any aggregation/comparison
+    over auto/matrix Layer-1 evidence (dashboard, marginal-contribution reads).
     """
     if evidence.empty:
         return evidence
@@ -473,6 +481,10 @@ def canonical_layer1_evidence(evidence: pd.DataFrame) -> pd.DataFrame:
     other = evidence[~is_auto]
     if auto.empty:
         return evidence
+    # fail-closed: drop quarantined (known-contaminated) rows before selecting the canonical row
+    auto = auto[~auto["row_role"].map(_coerce_string).isin(QUARANTINE_ROLES)]
+    if auto.empty:
+        return other
     auto["__role_rank"] = auto["row_role"].map(
         lambda v: ROW_ROLE_PRECEDENCE.get(_coerce_string(v), 1))
     auto["__t"] = pd.to_datetime(auto["evidence_time"], errors="coerce")
@@ -1437,6 +1449,30 @@ class FactorRegistryStore:
         (factor, version, universe) by row_role precedence (migrated XOR legacy). See the
         module-level :func:`canonical_layer1_evidence`."""
         return canonical_layer1_evidence(self.factor_evidence)
+
+    def quarantine_legacy_residual_scope(self, *, dry_run: bool = True) -> dict:
+        """Positively mark pre-fix matrix/refresh rows as ``legacy_contaminated_residual_scope`` so
+        default reads (:func:`canonical_layer1_evidence`) exclude them (GPT pre-flight blocker 4).
+        Target = auto/refresh rows with an EMPTY ``layer1_methodology_hash`` — i.e. produced before
+        the residual-scope fix + hash stamping (their residual columns used the batch-order-dependent
+        control scope). NATIVE rows from the fixed rerun carry the new hash and are spared; already-
+        quarantined rows are idempotently skipped. Rows are KEPT in the table for audit. Returns a
+        summary; ``dry_run=False`` mutates in-memory (caller must ``save()``)."""
+        ev = self.factor_evidence
+        if ev.empty:
+            return {"matched": 0, "dry_run": dry_run}
+        is_auto = ev["run_type"].map(_coerce_string).isin(LAYER1_AUTO_RUN_TYPES)
+        no_l1 = ev["layer1_methodology_hash"].map(_coerce_string) == ""
+        not_already = ~ev["row_role"].map(_coerce_string).isin(QUARANTINE_ROLES)
+        target = is_auto & no_l1 & not_already
+        n = int(target.sum())
+        by_run = (ev.loc[target, "run_id"].map(_coerce_string).value_counts().to_dict()
+                  if n else {})
+        if not dry_run and n:
+            self.factor_evidence.loc[target, "row_role"] = LEGACY_CONTAMINATED_RESIDUAL_SCOPE
+            self.refresh_master_derived_fields()
+        return {"matched": n, "dry_run": dry_run, "by_run_id": by_run,
+                "marker": LEGACY_CONTAMINATED_RESIDUAL_SCOPE}
 
     def set_status(
         self,

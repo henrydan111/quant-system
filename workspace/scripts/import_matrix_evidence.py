@@ -39,16 +39,18 @@ from src.alpha_research.factor_eval.layer2_residual_store import (  # noqa: E402
 MATRIX_DIR = PROJECT_ROOT / "workspace" / "outputs" / "unified_eval_matrix"
 
 
-def _run_id(method: dict) -> str:
-    """V5: reference-INVARIANT import run_id. Fail-closed if the methodologies.json is LEGACY
-    (no layer1_hash) — the matrix producer refuses to emit such a file without an explicit
-    --migrate-legacy-methodology-json, so reaching here without it is a real error."""
+def _run_id(method: dict, universe_id: str) -> str:
+    """Reference-INVARIANT import run_id, keyed PER UNIVERSE (GPT pre-flight item 8): the layer1 hash
+    differs by universe, so a single global run_id with per-universe hashes would be ambiguous —
+    encode the universe explicitly: ``matrix_<schema>_<universe>_<layer1_hash>``. Fail-closed if the
+    methodologies.json is LEGACY (no layer1_hash) — the matrix producer refuses to emit such a file
+    without --migrate-legacy-methodology-json, so reaching here without it is a real error."""
     l1 = method.get("layer1_hash")
     if not l1:
         raise SystemExit("methodologies.json is LEGACY (no layer1_hash) — re-run the base matrix "
                          "to re-stamp under the new schema before importing (GPT impl-review V5).")
     schema = method.get("methodology_schema_version") or "v0"
-    return f"matrix_{schema}_{l1}"
+    return f"matrix_{schema}_{universe_id}_{l1}"
 
 
 def main() -> int:
@@ -77,7 +79,7 @@ def main() -> int:
     total_attached = 0
     for uid, recs in sorted(by_universe.items()):
         method = methods[uid]
-        rid = _run_id(method)
+        rid = _run_id(method, uid)
         out = store.record_formal_auto_evidence(
             run_id=rid, records=recs, methodology_hash=method["hash"],
             source_path=str(MATRIX_DIR / "results.jsonl"),

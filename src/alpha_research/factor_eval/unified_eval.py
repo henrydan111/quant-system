@@ -232,10 +232,26 @@ def preprocess_for_residual(factors_dict: dict, names, *, winsor=(0.01, 0.99)) -
 
 def _mask_to_eval_universe(s: pd.Series, mask_dt: pd.Series) -> pd.Series:
     """NaN out the rows of a (datetime, instrument)-oriented series outside the evaluation universe.
-    ``mask_dt`` is the boolean universe mask, already ``_to_dt_inst``-normalized."""
+    ``mask_dt`` is the boolean universe mask, already ``_to_dt_inst``-normalized.
+
+    FAIL-CLOSED (GPT pre-flight review): a missing mask entry for a row present in ``s`` is a
+    mask/panel index mismatch (a bug), NOT a legitimate absence — sparse factor coverage shows up as
+    NaN in ``s``, not as a missing mask row. We raise rather than ``fillna(False)`` (which would
+    silently drop those rows from the residual universe). The mask is applied via ``Series.where`` so
+    index alignment is preserved (no positional ``to_numpy`` mismatch)."""
+    if not s.index.is_unique:
+        raise ValueError("residual series index is not unique — cannot mask to eval universe safely")
+    if not mask_dt.index.is_unique:
+        raise ValueError("eval_mask index is not unique")
+    if s.index.names != mask_dt.index.names:
+        raise ValueError(f"index level mismatch: series {s.index.names} vs mask {mask_dt.index.names}")
     aligned = mask_dt.reindex(s.index)
-    keep = aligned.fillna(False).to_numpy(dtype=bool)
-    return s.where(keep)
+    n_missing = int(aligned.isna().sum())
+    if n_missing:
+        raise ValueError(f"eval_mask missing {n_missing}/{len(s)} rows for a processed series — "
+                         "mask/panel index mismatch (sparse coverage must be NaN in the series, "
+                         "not a missing mask row)")
+    return s.where(aligned.astype(bool))
 
 
 def residual_ic_vs_controls(candidate_name: str, factors_dict: dict, forward_return: pd.Series, *,

@@ -87,7 +87,13 @@ def main() -> int:
     comp_defs = get_composite_defs()
     ind_defs = get_industry_relative_defs()
     layer2_names = [c["name"] for c in comp_defs] + [d["name"] for d in ind_defs]
-    done = fr._done_factors(RESULTS)
+    # GPT pre-flight: sanitize the JSONL tail + methodology-validated done-set (shares RESULTS with the
+    # base matrix; composites must recompute if their row is an error / stale-hash / partial).
+    fr._sanitize_results_tail(RESULTS)
+    _schema = next(iter(methods.values())).methodology_schema_version
+    _l1_by_u = {u: m.layer1_methodology_hash for u, m in methods.items()}
+    done = fr._done_factors(RESULTS, validator=lambda r: fr._is_success_record(
+        r, expected_schema=_schema, expected_layer1_by_universe=_l1_by_u))
     todo_any = [n for n in layer2_names if any((n, u) not in done for u in universes)]
     log.info("layer-2 factors: %d total, %d with pending domains", len(layer2_names), len(todo_any))
     if not todo_any:

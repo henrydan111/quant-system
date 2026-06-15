@@ -65,6 +65,48 @@ canonical resid_ic_vs_style_controls_v1 / resid_ic_vs_approved_*:
 5. **Universe guard** — `processed_full` non-null outside the universe; after masking, `compute_marginal_ic`
    sees only universe names (n rows == universe breadth).
 
+## Selection criterion (user decision 2026-06-15): anchor on the STYLE residual
+
+Factor selection anchors on `resid_ic_vs_style_controls_v1` — the residual vs the FROZEN 14-factor
+institutional style set (size/value/momentum/reversal/quality/liquidity/vol), a reference-INVARIANT
+Layer-1 metric. `resid_ic_vs_approved_{stable,current}` (marginal-vs-book) is **demoted to a descriptive
+Layer-2 metric** (combination-time / dashboard), NOT a selection criterion.
+
+Verified: NO code makes a pass/fail/selection decision on `resid_ic_vs_approved` — it appears only in the
+dashboard display (`content.py`, labelled "marginal") and the evidence store. The formal gates
+(`factor_lifecycle` IS walk-forward, sealed-OOS, `_cohort_ceiling`) read IC/ICIR/sign-consistency/
+OOS-Sharpe/governance, never the residuals. So this decision changes the **selection principle + dashboard
+emphasis**, not the formal-gate code.
+
+Consequence: the "recompute on every approval" pressure leaves the selection path entirely — the selection
+basis (style residual) is reference-invariant by construction. The two-layer architecture is validated:
+**Layer-1 (matrix, invariant, incl. style residual) = selection basis; Layer-2 (approved residual) =
+descriptive**. The D4a "re-confirm" is therefore a **re-rank of the cohort by the rebuilt style residual**,
+not the reversal of any landed formal decision (none read the approved residual).
+
+## GPT pre-flight review (conditional GO) — hardening status
+
+GPT 5.5 Pro pre-flighted the ~30h rebuild and returned **conditional GO**: do NOT launch until the
+fail-closed hardening lands + the 3-path smoke passes. Status:
+
+| # | GPT requirement | Status |
+|---|---|---|
+| 1 | `_done_factors` must NOT count error / partial / wrong-hash-or-scope rows as done | **DONE** — `_is_success_record(rec, expected_schema, expected_layer1_by_universe)` + validator-gated `_done_factors`; matrix + layer2 pass the methodology-aware validator. Unit-tested. |
+| 2 | Sanitize/truncate the JSONL tail before append (not just ignore a partial line) | **DONE** — `_sanitize_results_tail` backs up `results.corrupt.<n>.jsonl` + rewrites valid-only, ends with `\n`; called at producer startup. Unit-tested. |
+| 3 | Assert `residual_panel` is UNMASKED when `eval_mask` present (no silent masked fallback) | **DONE** — `_assert_residual_panel_broad` (aggregate non-null-outside check, robust to sparse factors) in `_evaluate_batch`. Unit-tested (raises on a masked panel). |
+| 4 | Positively QUARANTINE old contaminated rows before import (not rely on a helper) | **DONE** — `row_role=legacy_contaminated_residual_scope`; `canonical_layer1_evidence` DROPS quarantine roles; `store.quarantine_legacy_residual_scope()` + `quarantine_legacy_residual_scope.py` (dry-run default). Unit-tested. |
+| 5 | Run lock (single writer) | **DONE** — `run.lock` (pid/host/git/hashes), refuse-if-exists + `--force` for stale, released via `atexit`. |
+| 6 | 3-path smoke (batch-0 resident + non-resident remaining-batch + Layer-2; batch-order invariance) | **RUNNING** (matrix `--limit 20 univ_all,csi1000` + layer2). |
+| 7 | `eval_mask` alignment fail-closed (missing mask rows RAISE, not `fillna(False)`; `Series.where`) | **DONE** — `_mask_to_eval_universe` raises on missing rows + asserts unique/aligned index. Unit-tested. |
+| 8 | run_id per-universe (hashes differ by universe) | **DONE** — `matrix_<schema>_<universe>_<layer1_hash>`. |
+| 9 | Don't reuse smoke records — full run from a CLEAN outdir | **PENDING (op)** — delete smoke `results.jsonl`/`methodologies.json` before the full run (caches + legacy archive kept). |
+| 10 | Cache manifest (stale-cache tripwire) | **DONE** — `cache_manifest.json` (time_split/schema/hashes/cache-digests); fails closed on time_split/schema drift. |
+
+**Launch checklist (GPT):** clean outdir · JSONL sanitizer + validated done-set · residual-panel guard ·
+3-path smoke · cache manifest · legacy quarantine · run lock. All code-side items landed + tested
+(83 green across the touched files); remaining = run the 3-path smoke (in flight) + the operational
+pre-launch steps (clean outdir, quarantine run).
+
 ## Sequence
 
 1. Patch residual scope (Option C) + `residual_preprocess_scope` hashed.
