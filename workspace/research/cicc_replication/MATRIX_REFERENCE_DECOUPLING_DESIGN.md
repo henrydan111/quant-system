@@ -129,3 +129,77 @@ import key. I'll enumerate + update all before implementing. Anything structural
 Per Q1–Q8: OK / CHANGES REQUIRED (+ fix). Overall: APPROVE the decoupling design / CHANGES REQUIRED /
 REJECT (+ alternative). If APPROVE, also: should migration re-stamp existing evidence in place, or
 write a NEW methodology-version namespace and leave the old rows as legacy?
+
+---
+
+## GPT 5.5 Pro verdict (2026-06-15): CHANGES REQUIRED — architecture approved, 6 changes before code
+
+Direction approved (decouple Layer-1 research from the live approved book); 6 required changes folded
+in below. GPT verified the code premises (hash fields, live registry read, the 3 residual calls; only
+stable/current approved-book residuals are reference-dependent).
+
+**R1 — TWO reference hashes, not one.** The engine computes BOTH `r_st` (vs `reference_set_stable`)
+and `r_cu` (vs `reference_set_current`). A single `reference_set_hash` over `current` doesn't identify
+the stable residual. Stamp **`reference_set_stable_hash`** AND **`reference_set_current_hash`** (each
+over membership + def-hashes), plus the member lists.
+
+**R2 — Layer-2 append-only / separate table, NOT overwrite-in-place.** Overwriting `resid_ic_vs_approved_*`
+falsifies audit. Store Layer-2 in its own table keyed by `(factor_id, universe_id, layer1_methodology_hash,
+reference_book_type ∈ {stable,current}, reference_set_hash, computed_at)`; comparison queries select one hash.
+
+**R3 — Decision-time Layer-2 freeze (the real anti-snooping guard).** `r_st`/`r_cu` answer "additive vs
+the book?" — inherently selection-relevant. Live recompute is fine for DASHBOARD DISPLAY (`layer2_usage =
+descriptive_live`), but ANY selection / marginal-contribution / portfolio decision must cite ONE frozen
+`Layer2DecisionSnapshot{decision_id, factor_pool, universe_id, reference_set_stable_hash,
+reference_set_current_hash, members, def_hashes, computed_at, layer1_methodology_hash}` with ALL pooled
+factors recomputed against that single snapshot (`layer2_usage = frozen_decision_snapshot`).
+
+**R4 — Regression test: approved-book membership must NOT change ANY Layer-1 column.** Run the same
+factor/universe/protocol under TWO different approved books; assert byte-identical
+`heldout_rank_icir / sign_consistency / mean_rank_ic / quantile_profile / turnover / coverage / decay_* /
+neutralized_* / resid_ic_vs_style_controls_v1_* / long_leg_*`. ONLY `resid_ic_vs_approved_stable/current`
++ their reference hashes may differ. **This test is the implementation GATE.**
+
+**R5 — Anchor seed/panel/index to STYLE + canonical market data, NOT the live approved set.** Today
+`resident_names = STYLE_CONTROLS_V1 ∪ reference_set_current` ([unified_eval_universe_matrix.py:168]),
+and `panel_index = seed.index` drives labels/masks/coverage. If `compute_factors` returns a
+field-dependent index, the approved set could silently shift Layer-1 inputs. Fix: build the seed
+index from STYLE_CONTROLS_V1 + ADJ/market only; the approved-book factor values are pulled separately
+for Layer-2. **R4 empirically proves this is necessary or already-safe** (see premise-check below).
+
+**R6 — New methodology schema namespace; legacy rows IMMUTABLE.** Do not mutate existing rows' hashes
+(falsifies historical provenance). Introduce `methodology_schema_version = unified_eval_layer1_ref_invariant_v1`;
+new `layer1_methodology_hash`; migrate by APPENDING derived rows carrying `legacy_methodology_hash` +
+`migration_assertion{layer1_values_unchanged:true, approved_book_residuals_moved_to_layer2:true}` +
+both reference hashes (the books actually used). Old rows stay as immutable legacy evidence.
+
+**Also (R-extra):** resume guard compares Layer-1 hash only (warn on stale Layer-2 ref hashes); style
+model versioned by SIGNED decision only (style change → new Layer-1 hash → full re-baseline; approval
+churn → never); formal gates may NOT read live `resid_ic_vs_approved_*` unless tied to a frozen
+`Layer2DecisionSnapshot`.
+
+### Revised implementation order (test-first)
+1. **Premise-check / R4 gate** — empirically verify `panel_index` (hence all Layer-1 metrics) is
+   independent of the approved set. If dependent → R5 seed-anchoring is a REQUIRED fix first.
+2. R5 seed/index anchoring (if the premise-check shows dependence).
+3. `methodology_hash` → exclude reference sets + `methodology_schema_version` + `layer1_methodology_hash` (R6).
+4. Two reference hashes (R1) + Layer-2 separate append-only table (R2).
+5. `Layer2DecisionSnapshot` + `layer2_usage` discipline (R3).
+6. Migration: append derived rows, legacy immutable (R6); update drift guard / resume / dashboard / import keys (R-extra).
+7. Encode R4 as a committed regression test.
+
+### Premise-check result (2026-06-15) — R5 concern resolved favorably
+
+Empirical check (`compute_factors` over 2018-2019, style-only `{val_ep_ttm, mom_return_20d}` vs
+style+approved `{…, liq_zero_ret_days_10d, qual_piotroski_fscore_9pt}`): **both produce the IDENTICAL
+panel index (1,730,317 rows; `index.equals` = True).** `compute_factors` returns a fixed
+(instrument, datetime) grid over the universe × calendar regardless of the requested factor set, so
+the seed `panel_index` — hence every Layer-1 label/mask/coverage/walk-forward metric — is
+**reference-invariant**. Consequences:
+- The "Layer-1 is reference-invariant → migration is value-safe" premise HOLDS empirically.
+- R5 (seed anchoring) is a **hardening** (anchor the seed index explicitly to STYLE + ADJ/market so
+  it STAYS invariant, and lock it with the R4 regression test), NOT a required bug fix.
+- R6's new-namespace migration is still adopted (audit integrity — don't falsify historical hashes),
+  but it is now provably a metadata operation over unchanged Layer-1 values.
+- R4 (the committed byte-identical-Layer-1-columns test under two books) remains the gate; this
+  premise-check de-risks it (the index — the one indirect path GPT flagged — is invariant).
