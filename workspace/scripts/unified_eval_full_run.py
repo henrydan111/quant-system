@@ -186,10 +186,13 @@ def _assert_residual_panel_broad(resid_panel, names, eval_mask) -> None:
     non-null value outside the eval universe across the batch. An already-masked panel (all-NaN
     outside) raises, as does a mask/panel index mismatch."""
     em = eval_mask.reindex(resid_panel.index)
-    n_missing = int(em.isna().sum())
-    if n_missing:
-        raise RuntimeError(f"eval_mask missing {n_missing} rows vs residual_panel index")
-    outside = ~em.fillna(False).to_numpy(dtype=bool)
+    # a panel cell absent from the mask = outside-universe (membership artifact has small gaps); only a
+    # GROSS absence (>50%) is an index/orientation bug -> fail closed (matches _mask_to_eval_universe).
+    frac_missing = float(em.isna().mean()) if len(em) else 0.0
+    if frac_missing > 0.5:
+        raise RuntimeError(f"eval_mask absent for {frac_missing:.1%} of the residual_panel index — "
+                           "gross mask/panel mismatch (orientation/level bug)")
+    outside = ~em.astype("boolean").fillna(False).to_numpy(dtype=bool)
     if not outside.any():
         return
     rp_outside_nonnull = int(sum(int(pd.notna(resid_panel[n].to_numpy()[outside]).sum())

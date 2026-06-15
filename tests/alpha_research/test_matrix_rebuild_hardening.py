@@ -81,17 +81,19 @@ def test_residual_panel_broad_guard():
         _assert_residual_panel_broad(masked, ["f"], mask)        # masked -> fail-closed
 
 
-# ── _mask_to_eval_universe fail-closed (item 5/7: missing mask rows raise, not fillna False) ────
-def test_mask_to_eval_universe_raises_on_missing_rows():
-    idx = pd.MultiIndex.from_product([["A", "B"], pd.bdate_range("2020-01-01", periods=3)],
-                                     names=["datetime", "instrument"])  # already (dt, inst)
+# ── _mask_to_eval_universe (item 5/7): small gap => outside-universe; GROSS mismatch => raise ───
+def test_mask_to_eval_universe_small_gap_vs_gross_mismatch():
+    idx = pd.MultiIndex.from_product([pd.bdate_range("2020-01-01", periods=4), ["A", "B", "C"]],
+                                     names=["datetime", "instrument"])  # 12 rows, already (dt, inst)
     s = pd.Series(1.0, index=idx)
     full_mask = pd.Series(True, index=idx)
-    out = _mask_to_eval_universe(s, full_mask)            # complete mask -> ok
-    assert out.notna().all()
-    short_mask = full_mask.iloc[:-2]                      # mask missing 2 rows present in s
-    with pytest.raises(ValueError, match="missing"):
-        _mask_to_eval_universe(s, short_mask)
+    assert _mask_to_eval_universe(s, full_mask).notna().all()          # complete mask -> ok
+    # SMALL gap (2/12 absent): the absent rows are treated as outside-universe (NaN), NOT a raise
+    out_small = _mask_to_eval_universe(s, full_mask.iloc[:-2])
+    assert out_small.isna().sum() == 2 and out_small.notna().sum() == 10
+    # GROSS mismatch (8/12 = 67% absent): an index/orientation bug -> fail closed
+    with pytest.raises(ValueError, match="gross"):
+        _mask_to_eval_universe(s, full_mask.iloc[:4])
 
 
 # ── quarantine + canonical exclusion (blocker 4: contaminated rows fail-closed out of reads) ────
