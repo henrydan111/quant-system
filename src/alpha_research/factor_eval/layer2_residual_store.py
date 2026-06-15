@@ -33,6 +33,9 @@ LAYER2_COLUMNS = [
     "computed_at",
 ]
 BOOK_TYPES = ("stable", "current")
+# keys that uniquely identify a Layer-2 row — must be non-empty at write time (GPT impl-review V2)
+REQUIRED_KEYS = ("factor_id", "universe_id", "layer1_methodology_hash",
+                 "reference_book_type", "reference_set_hash", "computed_at")
 
 
 def _utcnow() -> str:
@@ -64,6 +67,11 @@ class Layer2ResidualStore:
             row = {c: r.get(c) for c in LAYER2_COLUMNS}
             row["layer2_usage"] = row.get("layer2_usage") or "descriptive_live"
             row["computed_at"] = row.get("computed_at") or _utcnow()
+            # V2: enforce key integrity at WRITE time — a Layer-2 row that can't be located by its
+            # (factor, universe, layer1_hash, book_type, reference_hash) key is an audit orphan.
+            missing = [k for k in REQUIRED_KEYS if row.get(k) in (None, "")]
+            if missing:
+                raise ValueError(f"Layer2 row missing required key(s) {missing}: {row}")
             norm.append(row)
         new_df = pd.DataFrame(norm)[LAYER2_COLUMNS]
         existing = self.records()
@@ -100,12 +108,23 @@ class Layer2ResidualStore:
 
 
 def extract_layer2_residuals(results_jsonl: str | Path, store: Layer2ResidualStore, *,
-                             computed_at: str | None = None) -> int:
+                             computed_at: str | None = None,
+                             members_by_book: dict | None = None) -> int:
     """Populate the canonical Layer-2 store from a matrix ``results.jsonl`` (the inline CACHE produced
-    by `_evaluate_batch`). Each evaluated row yields up to two Layer-2 rows (stable + current). Rows
-    without the reference hashes (legacy / pre-PR-1b) are skipped. Append-only; returns rows appended."""
+    by `_evaluate_batch`). Each evaluated row yields up to two Layer-2 rows (stable + current).
+
+    SKIPPED rows (V2 key integrity): error rows, rows without the reference hashes (legacy/pre-PR-1b),
+    and rows without a ``layer1_methodology_hash`` (an un-keyable orphan). ``members_by_book`` (optional)
+    = ``{"stable": [...], "current": [...]}`` from the methodology snapshot → populates
+    ``reference_set_members_json`` for auditability (A2). Append-only; returns rows appended."""
     computed_at = computed_at or _utcnow()
+    members_by_book = members_by_book or {}
     path = Path(results_jsonl)
+
+    def _members_json(book_type: str) -> str | None:
+        mem = members_by_book.get(book_type)
+        return json.dumps(sorted(mem)) if mem else None
+
     rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -114,10 +133,13 @@ def extract_layer2_residuals(results_jsonl: str | Path, store: Layer2ResidualSto
         if rec.get("error") or not rec.get("reference_set_stable_hash"):
             continue
         l1 = rec.get("layer1_methodology_hash")
+        if not l1:   # V2: an un-keyable row would become an audit orphan — skip it explicitly
+            continue
         fid, uni = rec.get("factor"), rec.get("universe_id", "univ_all")
         rows.append({
             "factor_id": fid, "universe_id": uni, "layer1_methodology_hash": l1,
             "reference_book_type": "stable", "reference_set_hash": rec.get("reference_set_stable_hash"),
+            "reference_set_members_json": _members_json("stable"),
             "residual_mean_rank_ic": rec.get("resid_ic_vs_approved_stable_signed"),
             "residual_oriented": rec.get("resid_ic_vs_approved_stable_oriented"),
             "residual_hac_t": rec.get("resid_hac_t_vs_approved_stable"),
@@ -127,6 +149,7 @@ def extract_layer2_residuals(results_jsonl: str | Path, store: Layer2ResidualSto
         rows.append({
             "factor_id": fid, "universe_id": uni, "layer1_methodology_hash": l1,
             "reference_book_type": "current", "reference_set_hash": rec.get("reference_set_current_hash"),
+            "reference_set_members_json": _members_json("current"),
             "residual_mean_rank_ic": rec.get("resid_ic_vs_approved_current_signed"),
             "residual_oriented": None, "residual_hac_t": None, "effective_residual_coverage": None,
             "layer2_usage": "descriptive_live", "computed_at": computed_at,

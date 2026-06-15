@@ -155,6 +155,10 @@ def test_layer2_store_is_append_only_and_latest_wins(tmp_path):
     assert len(latest) == 1 and float(latest.iloc[0]["residual_mean_rank_ic"]) == 0.20
     with pytest.raises(ValueError):
         s.append([{**base, "reference_book_type": "bogus", "reference_set_hash": "X"}])
+    # V2: a row missing a required key (e.g. layer1_methodology_hash) is rejected at WRITE time
+    with pytest.raises(ValueError):
+        s.append([{"factor_id": "f1", "universe_id": "univ_all", "reference_book_type": "current",
+                   "reference_set_hash": "BOOK_C"}])  # no layer1_methodology_hash
 
 
 def test_layer2_assert_single_reference_blocks_cross_book_comparison():
@@ -177,12 +181,17 @@ def test_extract_layer2_from_results_jsonl(tmp_path):
                     "resid_ic_vs_approved_stable_signed": 0.05,
                     "resid_ic_vs_approved_stable_oriented": 0.05,
                     "resid_ic_vs_approved_current_signed": 0.04}),
-        json.dumps({"factor": "f2", "field_eligible": True, "error": "boom"}),         # skipped
+        json.dumps({"factor": "f2", "field_eligible": True, "error": "boom"}),         # skipped (error)
         json.dumps({"factor": "f3", "reference_set_stable_hash": None}),               # skipped (no book)
+        json.dumps({"factor": "f4", "reference_set_stable_hash": "S", "reference_set_current_hash": "C"}),  # skipped (no layer1 hash)
     ]), encoding="utf-8")
     store = Layer2ResidualStore(tmp_path)
-    n = extract_layer2_residuals(rj, store, computed_at="2026-06-15T00:00:00Z")
-    assert n == 2  # f1 -> stable + current; f2/f3 skipped
+    n = extract_layer2_residuals(rj, store, computed_at="2026-06-15T00:00:00Z",
+                                 members_by_book={"stable": ["b", "a"], "current": ["a", "b", "c"]})
+    assert n == 2  # f1 -> stable + current; f2 (error) / f3 (no book) / f4 (no layer1 hash) skipped
     recs = store.records()
     assert set(recs["reference_book_type"]) == {"stable", "current"}
     assert set(recs["reference_set_hash"]) == {"S", "C"}
+    # A2: member JSON populated + sorted
+    stable_row = recs[recs["reference_book_type"] == "stable"].iloc[0]
+    assert json.loads(stable_row["reference_set_members_json"]) == ["a", "b"]

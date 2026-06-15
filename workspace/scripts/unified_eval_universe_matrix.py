@@ -131,6 +131,10 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=12)
     ap.add_argument("--limit", type=int, default=0, help="max factors (smoke)")
     ap.add_argument("--universes", default="", help="comma subset (smoke)")
+    ap.add_argument("--migrate-legacy-methodology-json", action="store_true",
+                    help="explicitly authorize re-stamping a LEGACY methodologies.json (only 'hash', "
+                         "no 'layer1_hash') under the new schema. Backs up the old file first. Required "
+                         "because the legacy run's residuals used the OLD approved book (GPT impl-review V1).")
     args = ap.parse_args()
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
@@ -176,9 +180,25 @@ def main() -> int:
                 raise RuntimeError(
                     f"LAYER-1 methodology drift on resume for {u} (protocol/STYLE_CONTROLS change, NOT "
                     f"approval churn) — a deliberate re-baseline; clear {OUTDIR}")
-        elif saved.get(u, {}).get("hash") and not saved_l1:
-            log.warning("%s: legacy methodologies.json (no layer1_hash) — re-stamping under schema %s "
-                        "(approval-churn drift retired)", u, m.methodology_schema_version)
+    # V1 (GPT impl-review): a LEGACY methodologies.json (only "hash", no "layer1_hash") must NOT be
+    # silently re-stamped — its residuals were computed under the OLD approved book, and overwriting
+    # the metadata destroys the audit trail the legacy-residual extraction needs. Require an explicit
+    # flag + back up the old file first.
+    legacy_universes = [u for u in universes
+                        if saved.get(u, {}).get("hash") and not saved.get(u, {}).get("layer1_hash")]
+    if legacy_universes:
+        if not args.migrate_legacy_methodology_json:
+            raise SystemExit(
+                f"methodologies.json is LEGACY (no layer1_hash) for {legacy_universes}. Its residuals "
+                f"used the OLD approved book. Re-run with --migrate-legacy-methodology-json to back it "
+                f"up + re-stamp under schema {next(iter(methods.values())).methodology_schema_version}, "
+                f"AND migrate the legacy evidence / Layer-2 residuals separately. Refusing to silently "
+                f"rewrite the audit trail.")
+        from datetime import datetime, timezone
+        bak = OUTDIR / f"methodologies.legacy.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+        bak.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+        log.warning("backed up LEGACY methodologies.json -> %s before re-stamping %s under the new schema",
+                    bak.name, legacy_universes)
     mfile.write_text(json.dumps(
         {u: {"hash": m.methodology_hash, "layer1_hash": m.layer1_methodology_hash,
              "methodology_schema_version": m.methodology_schema_version,

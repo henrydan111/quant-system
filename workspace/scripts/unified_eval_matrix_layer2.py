@@ -69,13 +69,20 @@ def main() -> int:
     mfile = OUTDIR / "methodologies.json"
     saved = json.loads(mfile.read_text(encoding="utf-8"))
     for u, m in methods.items():
-        if saved.get(u, {}).get("hash") != m.methodology_hash:
+        # A1 (GPT impl-review): consistency vs the base matrix on the reference-EXCLUDED layer1 hash
+        # (approval churn must not trip this either). The base matrix re-stamps layer1_hash first.
+        saved_l1 = saved.get(u, {}).get("layer1_hash")
+        if not saved_l1:
+            raise SystemExit(f"base matrix methodologies.json is LEGACY (no layer1_hash) for {u} — "
+                             "re-run the base matrix to re-stamp before the layer2 pass (GPT impl-review A1)")
+        if saved_l1 != m.layer1_methodology_hash:
             from dataclasses import replace
             repinned = replace(m, code_commit=str(saved[u].get("code_commit", "")))
-            if repinned.methodology_hash == saved[u]["hash"]:
+            if repinned.layer1_methodology_hash == saved_l1:
                 methods[u] = repinned
             else:
-                raise RuntimeError(f"methodology drift vs base matrix for {u}")
+                raise RuntimeError(f"LAYER-1 methodology drift vs base matrix for {u} "
+                                   "(protocol/STYLE_CONTROLS change, not approval churn)")
 
     comp_defs = get_composite_defs()
     ind_defs = get_industry_relative_defs()

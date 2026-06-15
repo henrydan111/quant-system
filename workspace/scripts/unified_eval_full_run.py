@@ -377,22 +377,36 @@ def main() -> int:
     mfile = OUTDIR / "methodology.json"
     if mfile.exists() and RESULTS_JSONL.exists():
         saved = json.loads(mfile.read_text(encoding="utf-8"))
-        if saved.get("hash") and saved["hash"] != method.methodology_hash:
-            from dataclasses import replace
-            repinned = replace(method, code_commit=str(saved.get("code_commit", "")))
-            if repinned.methodology_hash == saved["hash"]:
-                log.warning("resume across a code commit (%s -> %s): re-pinning to the run's "
-                            "original methodology_hash %s", saved.get("code_commit"),
-                            method.code_commit, saved["hash"])
-                method = repinned
-            else:
-                raise RuntimeError(
-                    f"methodology drift on resume: saved hash {saved['hash']} != current "
-                    f"{method.methodology_hash} and not explained by code_commit alone — "
-                    "clear workspace/outputs/unified_eval/ to start a fresh run")
-    log.info("methodology_hash=%s (commit=%s)", method.methodology_hash, method.code_commit)
+        # A1 (GPT impl-review): resume identity is layer1_methodology_hash (reference-EXCLUDED) so
+        # approval churn does NOT force a rebaseline here either; a protocol/STYLE change still does.
+        saved_l1 = saved.get("layer1_hash")
+        if saved_l1:
+            if saved_l1 != method.layer1_methodology_hash:
+                from dataclasses import replace
+                repinned = replace(method, code_commit=str(saved.get("code_commit", "")))
+                if repinned.layer1_methodology_hash == saved_l1:
+                    log.warning("resume across a code commit: re-pinning to the run's original "
+                                "layer1 hash %s", saved_l1)
+                    method = repinned
+                else:
+                    raise RuntimeError(
+                        f"LAYER-1 methodology drift on resume: saved layer1 {saved_l1} != current "
+                        f"{method.layer1_methodology_hash} (protocol/STYLE_CONTROLS change, NOT approval "
+                        "churn) — clear workspace/outputs/unified_eval/ for a deliberate re-baseline")
+        elif saved.get("hash"):
+            raise SystemExit(
+                "workspace/outputs/unified_eval/methodology.json is LEGACY (no layer1_hash) — its "
+                f"residuals used the OLD approved book. Clear the dir to re-run under schema "
+                f"{method.methodology_schema_version}, or migrate it explicitly. Refusing to silently "
+                "rewrite the audit trail (GPT impl-review A1).")
+    log.info("layer1=%s (legacy=%s commit=%s)", method.layer1_methodology_hash,
+             method.methodology_hash, method.code_commit)
     (OUTDIR / "methodology.json").write_text(json.dumps({
-        "hash": method.methodology_hash, "code_commit": method.code_commit,
+        "hash": method.methodology_hash, "layer1_hash": method.layer1_methodology_hash,
+        "methodology_schema_version": method.methodology_schema_version,
+        "reference_set_stable_hash": method.reference_set_stable_hash,
+        "reference_set_current_hash": method.reference_set_current_hash,
+        "code_commit": method.code_commit,
         "is_window": [TIME_SPLIT.is_start, TIME_SPLIT.is_end],
         "reference_set_stable": list(method.reference_set_stable),
         "reference_set_current": list(method.reference_set_current),
