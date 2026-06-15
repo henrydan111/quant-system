@@ -134,15 +134,61 @@ class EvalMethodology:
     code_commit: str = ""
     reference_set_definition_hashes: tuple = ()   # ((factor_id, def_hash), …), driver fills
     style_control_definition_hashes: tuple = ()
+    # Reference-decoupling (GPT 5.5 Pro round-2, 2026-06-15): the live methodology identity is
+    # layer1_methodology_hash (reference-EXCLUDED) so approving/revoking factors never churns the
+    # matrix. methodology_hash is retained, bit-identical to the pre-decoupling value, as the LEGACY
+    # provenance hash. methodology_schema_version is recorded but NEVER hashed (so adding it did not
+    # change the legacy hash). See workspace/research/cicc_replication/MATRIX_REFERENCE_DECOUPLING_DESIGN.md.
+    methodology_schema_version: str = "unified_eval_layer1_ref_invariant_v1"
+
+    # set-like fields whose MEMBERSHIP (not order) defines identity
+    _SET_FIELDS = ("reference_set_stable", "reference_set_current", "provisional_factors",
+                   "style_controls_v1", "reference_set_definition_hashes",
+                   "style_control_definition_hashes")
+    # fields the LIVE (layer1) identity must NOT depend on — the approved-alpha book
+    _LAYER1_EXCLUDED = ("reference_set_stable", "reference_set_current", "provisional_factors",
+                        "reference_set_definition_hashes")
+
+    def _compute_hash(self, *, layer1_only: bool) -> str:
+        d = asdict(self)
+        d.pop("methodology_schema_version", None)   # recorded, never hashed
+        if layer1_only:
+            for k in self._LAYER1_EXCLUDED:
+                d.pop(k, None)
+        for k in self._SET_FIELDS:
+            if k in d:
+                d[k] = sorted(d[k])   # membership, not order, defines identity
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
+
+    def _ref_hash(self, members) -> str:
+        members = sorted(members)
+        member_set = set(members)
+        dh = sorted([list(x) for x in self.reference_set_definition_hashes if x[0] in member_set])
+        return hashlib.sha256(json.dumps({"members": members, "def_hashes": dh},
+                                         sort_keys=True).encode()).hexdigest()[:16]
 
     @property
     def methodology_hash(self) -> str:
-        d = asdict(self)
-        for k in ("reference_set_stable", "reference_set_current", "provisional_factors",
-                  "style_controls_v1", "reference_set_definition_hashes",
-                  "style_control_definition_hashes"):
-            d[k] = sorted(d[k])  # membership, not order, defines identity
-        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
+        """LEGACY reference-INCLUDED hash — bit-identical to the pre-decoupling value (the new
+        methodology_schema_version field is excluded so adding it did not churn it). Retained as
+        legacy provenance; the live identity is ``layer1_methodology_hash``."""
+        return self._compute_hash(layer1_only=False)
+
+    @property
+    def layer1_methodology_hash(self) -> str:
+        """Reference-EXCLUDED hash — the LIVE methodology identity. Stable across approved-book
+        churn (approvals/revokes never change it); only protocol + STYLE_CONTROLS_V1 changes do."""
+        return self._compute_hash(layer1_only=True)
+
+    @property
+    def reference_set_stable_hash(self) -> str:
+        """Identity of the stable (approved-minus-provisional) neutralization book."""
+        return self._ref_hash(self.reference_set_stable)
+
+    @property
+    def reference_set_current_hash(self) -> str:
+        """Identity of the current (approved-incl-provisional) neutralization book."""
+        return self._ref_hash(self.reference_set_current)
 
 
 def preprocess_for_residual(factors_dict: dict, names, *, winsor=(0.01, 0.99)) -> dict:

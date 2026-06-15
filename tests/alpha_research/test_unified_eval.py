@@ -265,6 +265,33 @@ def test_methodology_hash_membership_stable_and_field_sensitive():
     assert len(m1.methodology_hash) == 16
 
 
+def test_layer1_methodology_hash_is_reference_book_invariant():
+    """Reference-decoupling (PR-1a): layer1_methodology_hash must NOT depend on the approved book,
+    while the legacy methodology_hash + the two reference hashes MUST. This is the hash-level
+    counterpart of the R4 byte-identical-Layer-1 regression test."""
+    book_a = _methodology(reference_set_stable=("a", "b"), reference_set_current=("a", "b", "c"),
+                          provisional_factors=("c",),
+                          reference_set_definition_hashes=(("a", "1"), ("b", "2"), ("c", "3")))
+    book_b = _methodology(reference_set_stable=("p",), reference_set_current=("p", "q"),
+                          provisional_factors=(),
+                          reference_set_definition_hashes=(("p", "9"), ("q", "8")))
+    # the LIVE identity is stable across the approved book (the whole point of the decoupling)
+    assert book_a.layer1_methodology_hash == book_b.layer1_methodology_hash
+    assert len(book_a.layer1_methodology_hash) == 16
+    # the legacy + reference hashes are book-SENSITIVE
+    assert book_a.methodology_hash != book_b.methodology_hash
+    assert book_a.reference_set_stable_hash != book_b.reference_set_stable_hash
+    assert book_a.reference_set_current_hash != book_b.reference_set_current_hash
+    # a PROTOCOL change still changes layer1 (it is not reference-only-invariant)
+    assert _methodology(hac_lags=60).layer1_methodology_hash != book_a.layer1_methodology_hash
+    # a STYLE-control change still changes layer1 (the stable risk basis IS part of the identity)
+    assert (_methodology(style_control_definition_hashes=(("size", "z"),)).layer1_methodology_hash
+            != book_a.layer1_methodology_hash)
+    # the recorded-but-never-hashed schema version does not affect any hash
+    assert (_methodology(methodology_schema_version="other").methodology_hash
+            == _methodology().methodology_hash)
+
+
 def test_residual_ic_orthogonal_retains_redundant_collapses():
     idx, dates, insts = _cs_panel(n_inst=60, n_days=80)
     rng = np.random.default_rng(7)
