@@ -52,7 +52,14 @@ def-hashes) recording which book it was computed against.
 Net effect: the per-factor research (Layer 1) is tied to the stable style model; the "additive vs our
 current book?" question (Layer 2) is tied to the changing book but is seconds-cheap to refresh.
 
-## 3. Concrete changes (for review — not yet implemented)
+## 3. Concrete changes — ⚠️ SUPERSEDED, DO NOT IMPLEMENT
+
+> This original §3 is preserved for history ONLY. It contains the single-`reference_set_hash`,
+> overwrite-`resid_ic_vs_approved_*`-in-place, and re-stamp-existing-rows-in-place choices that were
+> REJECTED in GPT 5.5 Pro round-1 (R1/R2/R6) and round-2 (C1). **The authoritative implementation
+> contract is "Round-2 verdict + authoritative implementation plan" at the bottom of this doc** (two
+> reference hashes, Layer-2 append-only table, new namespace with immutable legacy rows). Do not
+> implement anything from this section.
 
 1. **`EvalMethodology.methodology_hash`**: remove `reference_set_stable`, `reference_set_current`,
    `provisional_factors`, `reference_set_definition_hashes` from the hashed dict. KEEP them as recorded
@@ -203,3 +210,62 @@ the seed `panel_index` — hence every Layer-1 label/mask/coverage/walk-forward 
   but it is now provably a metadata operation over unchanged Layer-1 values.
 - R4 (the committed byte-identical-Layer-1-columns test under two books) remains the gate; this
   premise-check de-risks it (the index — the one indirect path GPT flagged — is invariant).
+
+---
+
+## Round-2 verdict + authoritative implementation plan (GPT 5.5 Pro, 2026-06-15)
+
+**Verdict:** CHANGES REQUIRED first (clean the doc: §3 marked superseded above — done), then PROCEED
+with the split below. C1 confirmed the R1–R6 fold-in is faithful; C2/C3/C4 refined sequencing,
+PR-split, and migration. **This section is the authoritative implementation contract.**
+
+**Hard rule (C2):** the R4 byte-identical-Layer-1 regression test must be GREEN on current code
+BEFORE any hash / namespace / migration / storage code lands, and must stay green after.
+
+### PR-0 — R4 regression test ONLY (no behavior change)
+Run the same factor/universe/protocol through the eval under TWO different approved books; assert
+byte-identical: `heldout_rank_icir, sign_consistency, mean_rank_ic, quantile profile, coverage,
+turnover, decay_*, neutralized_*, resid_ic_vs_style_controls_v1_*, long_leg_*`. ONLY
+`resid_ic_vs_approved_stable/current` + their reference hashes may differ. Must pass on current code.
+
+### PR-1 — core decoupling + minimal Layer-2 storage (the unblock for E1a)
+- R5 seed/index hardening: anchor seed/index to `STYLE_CONTROLS_V1 + ADJ/market`, NOT the live approved set.
+- `methodology_schema_version = unified_eval_layer1_ref_invariant_v1`; `layer1_methodology_hash` (reference-excluded).
+- `reference_set_stable_hash` + `reference_set_current_hash` (each over members + def-hashes) + member lists.
+- **Minimal append-only `Layer2Residual` table** keyed by `(factor_id, universe_id, layer1_methodology_hash,
+  reference_book_type∈{stable,current}, reference_set_hash, computed_at)`. `resid_ic_vs_approved_stable/current`
+  are NOT canonical inline Layer-1 columns for new rows — write them to this table; expose a read-time
+  "latest descriptive" view for dashboard compatibility (Option A, preferred). (Option B shim: keep inline
+  display columns marked derived/cache-only with both reference hashes, never as canonical storage/import key.)
+- Append-only migrated rows; legacy rows immutable.
+- **PR-1 must NOT create a live-residual selection path** (no selection consumes live Layer-2 before PR-2's snapshots exist).
+
+### PR-2 — decision snapshot + selection discipline
+`Layer2DecisionSnapshot` + `layer2_usage` enforcement (descriptive_live vs frozen_decision_snapshot) +
+selection/marginal-contribution APIs recompute ALL pooled factors against ONE frozen book snapshot +
+dashboard comparison guards.
+
+### C4 — migration row fields (append-only; legacy immutable)
+```yaml
+row_role: legacy | migrated_layer1 | native_layer1
+methodology_schema_version: unified_eval_layer1_ref_invariant_v1
+layer1_methodology_hash:
+legacy_methodology_hash:
+legacy_row_id:
+migration_id:
+migration_run_at:
+migration_assertion: {layer1_values_unchanged: true, approved_book_residuals_moved_to_layer2: true}
+layer1_value_digest:        # digest of the Layer-1 columns — proves values unchanged vs legacy
+reference_set_stable_hash:
+reference_set_current_hash:
+reference_set_stable_members:
+reference_set_current_members:
+```
+
+### C4 — wire-up rules (all 6 required)
+1. **Drift guard**: compare `methodology_schema_version + layer1_methodology_hash` only; stale Layer-2 ref hashes WARN (no rebaseline).
+2. **Resume guard**: fail if Layer-1 hash changes; warn if the latest live Layer-2 book changed.
+3. **Dashboard**: show Layer-1 methodology separately from Layer-2 reference snapshots; approved-book residuals display their stable/current reference hashes.
+4. **Comparison queries**: refuse to compare `resid_ic_vs_approved_*` across different reference hashes.
+5. **`record_formal_auto_evidence` import key**: include schema version + Layer-1 hash; Layer-2 residuals get a separate key/table, never mutating Layer-1 evidence identity.
+6. **Migration dedupe**: default views select migrated XOR legacy rows, never both (avoids double-counting / self-comparison); legacy visible only under explicit `row_role='legacy'` / `include_legacy=true`.
