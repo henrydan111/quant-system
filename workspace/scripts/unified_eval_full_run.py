@@ -49,6 +49,8 @@ from src.alpha_research.factor_library import operators as op
 from src.alpha_research.factor_eval import ic_analysis as ica
 from src.alpha_research.factor_eval import quantile_analysis as qa
 from src.alpha_research.factor_eval.unified_eval import (
+    MASK_GROSS_MISMATCH_FRACTION,
+    MASK_MISSING_WARN_FRACTION,
     STYLE_CONTROLS_V1,
     build_decay_labels,
     classify_quantile_shape,
@@ -186,12 +188,18 @@ def _assert_residual_panel_broad(resid_panel, names, eval_mask) -> None:
     non-null value outside the eval universe across the batch. An already-masked panel (all-NaN
     outside) raises, as does a mask/panel index mismatch."""
     em = eval_mask.reindex(resid_panel.index)
-    # a panel cell absent from the mask = outside-universe (membership artifact has small gaps); only a
-    # GROSS absence (>50%) is an index/orientation bug -> fail closed (matches _mask_to_eval_universe).
+    # a panel cell absent from the mask = outside-universe (membership artifact has a tiny gap); WARN
+    # above the warn level, FAIL above the gross threshold — shared with _mask_to_eval_universe so the
+    # batch-level guard and the per-series mask use one calibrated threshold (GPT pre-flight round 2).
     frac_missing = float(em.isna().mean()) if len(em) else 0.0
-    if frac_missing > 0.5:
-        raise RuntimeError(f"eval_mask absent for {frac_missing:.1%} of the residual_panel index — "
-                           "gross mask/panel mismatch (orientation/level bug)")
+    if frac_missing > MASK_GROSS_MISMATCH_FRACTION:
+        raise RuntimeError(f"eval_mask absent for {frac_missing:.2%} of the residual_panel index (> "
+                           f"{MASK_GROSS_MISMATCH_FRACTION:.0%}) — mask/panel mismatch (coverage/orientation bug)")
+    if frac_missing > MASK_MISSING_WARN_FRACTION:
+        import logging as _lg
+        _lg.getLogger("unified_eval.mask").warning(
+            "residual_panel eval_mask missing %.3f%% — above the %.1f%% warn level",
+            frac_missing * 100, MASK_MISSING_WARN_FRACTION * 100)
     outside = ~em.astype("boolean").fillna(False).to_numpy(dtype=bool)
     if not outside.any():
         return

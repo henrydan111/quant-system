@@ -131,6 +131,33 @@ def _check_cache_manifest(methods: dict, universes: list) -> dict:
     return cur
 
 
+def _log_mask_stats(masks: dict, panel_index: pd.MultiIndex) -> dict:
+    """GPT pre-flight round 2: log per-universe mask coverage once at startup so mask-missingness
+    DRIFT is auditable during the long run (a universe suddenly missing several % of panel cells, or
+    a date-block/instrument-code coverage break, is investigated before it silently scopes residuals)."""
+    pr = len(panel_index)
+    stats = {}
+    for u, m in masks.items():
+        aligned = m.reindex(panel_index)
+        miss = int(aligned.isna().sum())
+        frac = miss / max(1, pr)
+        stats[u] = {"panel_rows": pr, "mask_rows": int(len(m)), "missing": miss,
+                    "missing_fraction": round(frac, 6), "true_fraction": round(float(m.fillna(False).mean()), 4)}
+        lvl = log.warning if frac > 0.001 else log.info
+        lvl("mask[%-18s] panel=%d mask=%d missing=%d (%.4f%%) true_frac=%.3f names=%s",
+            u, pr, len(m), miss, 100 * frac, stats[u]["true_fraction"], list(m.index.names))
+    return stats
+
+
+def _write_progress(done: set, total: int, last_fid: str, last_uid: str, l1_by_u: dict) -> None:
+    """GPT pre-flight round 2 (operational): a small progress manifest so a ~40h run is monitorable."""
+    (OUTDIR / "progress.json").write_text(json.dumps({
+        "last_update_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "completed_pairs": len(done), "total_pairs": total,
+        "last_success_factor": last_fid, "last_success_universe": last_uid,
+        "layer1_hashes_by_universe": l1_by_u}, indent=2), encoding="utf-8")
+
+
 def _build_masks(panel_index: pd.MultiIndex) -> dict[str, pd.Series]:
     """7 universe masks as MultiIndex-aligned bool Series over the IS window.
 
@@ -375,6 +402,8 @@ def main() -> int:
 
     base_ctx, masks, seed = build_base_ctx(universes, methods)
     _check_cache_manifest(methods, universes)   # GPT pre-flight item 10: tripwire on stale caches
+    _log_mask_stats(masks, base_ctx["adj_close"].index)   # per-universe mask coverage (drift audit)
+    total_pairs = len(base_ok) * len(universes)
 
     def eval_units(df: pd.DataFrame, names: list):
         """Run `names` through every requested universe (skipping done pairs)."""
@@ -395,6 +424,7 @@ def main() -> int:
             fr._evaluate_batch(masked, todo, ctx)
             for n in todo:
                 done.add((n, uid))
+            _write_progress(done, total_pairs, todo[-1], uid, _l1_by_u)   # 40h-run monitor
 
     evaluated = 0
     limit = args.limit or 10**9

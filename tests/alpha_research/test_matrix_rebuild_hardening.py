@@ -81,19 +81,19 @@ def test_residual_panel_broad_guard():
         _assert_residual_panel_broad(masked, ["f"], mask)        # masked -> fail-closed
 
 
-# ── _mask_to_eval_universe (item 5/7): small gap => outside-universe; GROSS mismatch => raise ───
+# ── _mask_to_eval_universe (item 5/7): tiny gap (<1%) => outside-universe; >1% => raise ─────────
 def test_mask_to_eval_universe_small_gap_vs_gross_mismatch():
-    idx = pd.MultiIndex.from_product([pd.bdate_range("2020-01-01", periods=4), ["A", "B", "C"]],
-                                     names=["datetime", "instrument"])  # 12 rows, already (dt, inst)
+    idx = pd.MultiIndex.from_product([pd.bdate_range("2020-01-01", periods=100), ["A", "B", "C"]],
+                                     names=["datetime", "instrument"])  # 300 rows, already (dt, inst)
     s = pd.Series(1.0, index=idx)
     full_mask = pd.Series(True, index=idx)
     assert _mask_to_eval_universe(s, full_mask).notna().all()          # complete mask -> ok
-    # SMALL gap (2/12 absent): the absent rows are treated as outside-universe (NaN), NOT a raise
-    out_small = _mask_to_eval_universe(s, full_mask.iloc[:-2])
-    assert out_small.isna().sum() == 2 and out_small.notna().sum() == 10
-    # GROSS mismatch (8/12 = 67% absent): an index/orientation bug -> fail closed
-    with pytest.raises(ValueError, match="gross"):
-        _mask_to_eval_universe(s, full_mask.iloc[:4])
+    # TINY gap (1/300 = 0.33% < 1%): absent rows treated as outside-universe (NaN), NOT a raise
+    out_small = _mask_to_eval_universe(s, full_mask.iloc[:-1])
+    assert out_small.isna().sum() == 1 and out_small.notna().sum() == 299
+    # GROSS mismatch (60/300 = 20% > 1%): an index/coverage bug -> fail closed
+    with pytest.raises(ValueError, match="mismatch"):
+        _mask_to_eval_universe(s, full_mask.iloc[:240])
 
 
 # ── quarantine + canonical exclusion (blocker 4: contaminated rows fail-closed out of reads) ────

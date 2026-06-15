@@ -26,6 +26,7 @@ import pandas as pd
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass
 
 from src.alpha_research.factor_eval.ic_analysis import compute_ic_series, compute_marginal_ic
@@ -232,10 +233,15 @@ def preprocess_for_residual(factors_dict: dict, names, *, winsor=(0.01, 0.99)) -
 
 # A panel cell ABSENT from the universe mask = membership unknown/absent => treat as OUTSIDE the
 # universe (False). The universe mask is built separately (raw membership fields) and legitimately has
-# small coverage gaps vs the resident factor panel. But a GROSS mismatch (a level-swap / wrong-index
-# bug) shows up as a near-total absence — that we fail closed on. Threshold chosen far above any
-# legitimate gap (empirically ~0.0002) and far below an orientation bug (~1.0).
-MASK_GROSS_MISMATCH_FRACTION = 0.5
+# a TINY coverage gap vs the resident factor panel (empirically ~0.0002). Two-level guard (GPT
+# pre-flight round 2 — a 50% threshold would only catch a catastrophic orientation swap, not a partial
+# index / stale-mask / calendar-truncation / instrument-code-normalization bug):
+#   * > MASK_MISSING_WARN_FRACTION  (0.10%) → WARN (membership drift worth investigating)
+#   * > MASK_GROSS_MISMATCH_FRACTION (1.00%) → FAIL closed (a real index/coverage bug)
+# Both sit far above the ~0.02% legitimate gap and far below an orientation bug (~100%).
+MASK_MISSING_WARN_FRACTION = 0.001
+MASK_GROSS_MISMATCH_FRACTION = 0.01
+_mask_log = logging.getLogger("unified_eval.mask")
 
 
 def _mask_to_eval_universe(s: pd.Series, mask_dt: pd.Series) -> pd.Series:
@@ -243,10 +249,10 @@ def _mask_to_eval_universe(s: pd.Series, mask_dt: pd.Series) -> pd.Series:
     ``mask_dt`` is the boolean universe mask, already ``_to_dt_inst``-normalized.
 
     Cells of ``s`` absent from the mask are treated as outside-universe (``fillna(False)``) — the mask
-    is a separately-built membership artifact with legitimate small coverage gaps. FAIL-CLOSED on a
-    GROSS mismatch (GPT pre-flight intent): if more than :data:`MASK_GROSS_MISMATCH_FRACTION` of ``s``
-    is absent from the mask, that is an index/orientation bug, not a membership gap — raise. The mask
-    is applied via ``Series.where`` so alignment is index-preserving."""
+    is a separately-built membership artifact with a tiny legitimate coverage gap. WARN above
+    :data:`MASK_MISSING_WARN_FRACTION`; FAIL closed above :data:`MASK_GROSS_MISMATCH_FRACTION` (an
+    index/orientation/coverage bug, not a membership gap). The mask is applied via ``Series.where`` so
+    alignment is index-preserving."""
     if not s.index.is_unique:
         raise ValueError("residual series index is not unique — cannot mask to eval universe safely")
     if not mask_dt.index.is_unique:
@@ -256,8 +262,13 @@ def _mask_to_eval_universe(s: pd.Series, mask_dt: pd.Series) -> pd.Series:
     aligned = mask_dt.reindex(s.index)
     frac_missing = float(aligned.isna().mean()) if len(s) else 0.0
     if frac_missing > MASK_GROSS_MISMATCH_FRACTION:
-        raise ValueError(f"eval_mask absent for {frac_missing:.1%} of the series — a gross "
-                         "mask/panel index mismatch (orientation/level bug), not a membership gap")
+        raise ValueError(f"eval_mask absent for {frac_missing:.2%} of the series (> "
+                         f"{MASK_GROSS_MISMATCH_FRACTION:.0%}) — a mask/panel index mismatch "
+                         "(orientation/coverage bug), not a membership gap")
+    if frac_missing > MASK_MISSING_WARN_FRACTION:
+        _mask_log.warning("eval_mask missing %.3f%% of the series — above the %.1f%% warn level; "
+                          "membership drift worth investigating", frac_missing * 100,
+                          MASK_MISSING_WARN_FRACTION * 100)
     return s.where(aligned.astype("boolean").fillna(False).to_numpy(dtype=bool))
 
 
