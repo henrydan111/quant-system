@@ -91,6 +91,28 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['mmt_time_rank_20d'] = f"Mean({op.ts_rank(250)}, 20)"   # mmt_time_rank_M: 20d-mean of 250d price rank
     catalog['mmt_highest_days_250d'] = op.days_since_high(250)      # mmt_highest_days_A
 
+    # ── CICC price-volume 系列7 图表16 — volatility replication (E1b) ──
+    # 13 subtypes × {20,60,120}d (1M/3M/6M); 36 registered (vol_std == risk_vol_{20,60,120}d EXACT
+    # dedup, SKIPPED). vol_down/up_std = TRUE subset std (sign_conditional_std, limit-excluded via the
+    # certified $limit_status field) — distinct from the zero-fill risk_downvol proxy. vol_highlow =
+    # high/low (distinct from risk_range_ratio = (high-low)/close). Shadows via elementwise
+    # Greater/Less (adjustment cancels in the ratio). GPT 5.5 Pro E1b factor-logic review APPROVED
+    # (B1-B4 folded: full subset-std contract, $limit_status basis, 36-count, vol_std dedup lock).
+    # Linked into config/replication/cicc_price_volume_cohort_v2.yaml.
+    for w in [20, 60, 120]:
+        catalog[f'vol_down_std_{w}d'] = op.sign_conditional_std("down", w)
+        catalog[f'vol_up_std_{w}d'] = op.sign_conditional_std("up", w)
+        catalog[f'vol_highlow_avg_{w}d'] = f"Mean({op.intraday_highlow()}, {w})"
+        catalog[f'vol_highlow_std_{w}d'] = f"Std({op.intraday_highlow()}, {w})"
+        catalog[f'vol_upshadow_avg_{w}d'] = f"Mean({op.norm_upper_shadow()}, {w})"
+        catalog[f'vol_upshadow_std_{w}d'] = f"Std({op.norm_upper_shadow()}, {w})"
+        catalog[f'vol_downshadow_avg_{w}d'] = f"Mean({op.norm_lower_shadow()}, {w})"
+        catalog[f'vol_downshadow_std_{w}d'] = f"Std({op.norm_lower_shadow()}, {w})"
+        catalog[f'vol_w_upshadow_avg_{w}d'] = f"Mean({op.williams_upper_shadow()}, {w})"
+        catalog[f'vol_w_upshadow_std_{w}d'] = f"Std({op.williams_upper_shadow()}, {w})"
+        catalog[f'vol_w_downshadow_avg_{w}d'] = f"Mean({op.williams_lower_shadow()}, {w})"
+        catalog[f'vol_w_downshadow_std_{w}d'] = f"Std({op.williams_lower_shadow()}, {w})"
+
     # ═══════════════════════════════════════════════════════════════
     # 2. REVERSAL (短期反转) — 8 factors
     # ═══════════════════════════════════════════════════════════════

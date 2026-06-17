@@ -126,6 +126,11 @@ ADJ_LOW_T1 = f"Ref({ADJ_LOW}, 1)"
 # Every operator built on DAILY_RET inherits this PIT-safe base.
 DAILY_RET = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, 2) - 1)"
 
+# PIT-safe limit-day flag (the materialized, basis-certified $limit_status field; approved 2026-06-17):
+# +1 close-at-up-limit, -1 close-at-down-limit, 0 normal, NaN suspended/no-limit. Ref(...,1) aligns it
+# with DAILY_RET (both reference the t-1 bar). Single certified source for 剔除涨跌停日 exclusion.
+LIMIT_STATUS_T1 = "Ref($limit_status, 1)"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  LAYER 1: QLIB EXPRESSION OPERATORS
@@ -421,6 +426,79 @@ def ts_rank(window, field=None):
     """
     base = ADJ_CLOSE_T1 if field is None else field
     return f"Rank({base}, {window})"
+
+
+# ─────────────────────── Volatility (CICC 价量 图表16, Wave E1b) ───────────────────────
+# Shadow lines are RATIOS, so the price-adjustment factor cancels (adjusted ≡ raw) — adjusted _T1
+# atoms are used for basis consistency. ``Greater``/``Less`` are Qlib ELEMENTWISE max/min (first use
+# in this catalog; verified). All per-day quantities are Ref(...,1)-wrapped (PIT-safe), aggregated by
+# an outer Mean/Std over the window.
+
+def sign_conditional_std(sign, window):
+    """Subset standard deviation of daily returns over only the SIGN-matching, LIMIT-EXCLUDED days in
+    the window — CICC 下行/上行波动率 (vol_down_std / vol_up_std, 图表16).
+
+    Handbook: std of adjusted daily returns on days with 涨跌幅<0 (down) or >0 (up), EXCLUDING 涨跌停日.
+    This is a TRUE subset std (only the matching days enter the statistic), NOT the zero-fill proxy
+    ``Std(If(ret<0, ret, 0), N)`` that ``risk_downvol`` uses (zero-fill keeps non-matching days at 0,
+    changing both the mean and the count). Limit exclusion reads the materialized ``$limit_status``
+    field (basis-certified) — never an inline raw/adjusted comparison (GPT E1b review B1/B2).
+
+    Construction (ddof=1, to match Qlib ``Std``): with the selection indicator
+    ``sel = [ret<0] * (1 - [|limit_status|>=0.5])`` (down; ``ret>0`` for up), and ``m = sel*ret`` (0 on
+    non-selected, NaN-safe via ``If``), the sample variance is ``(Σm² - (Σm)²/n) / (n-1)`` where
+    ``n = Σsel``. This form yields NaN automatically when ``n < 2`` (0/0), so the handbook's
+    "min 2 observations" floor needs no separate guard. NaN ``limit_status`` (no published limit) →
+    ``[|·|>=0.5]`` is 0 → the day is INCLUDED (we exclude only KNOWN limit days). NaN ``ret``
+    (suspended) → ``[ret<0]`` is 0 → not selected. ``Std = Power(var, 0.5)`` (Qlib has no ``Sqrt``).
+
+    Operator semantics certified via the P-OP harness (operator_id=sign_conditional_std). Args:
+        sign: ``"down"`` (ret<0) or ``"up"`` (ret>0).
+        window: lookback in trading days (20/60/120 = 1M/3M/6M).
+    Returns: Qlib expression string.
+    """
+    cmp = "Lt" if sign == "down" else "Gt"
+    is_signed = f"{cmp}({DAILY_RET}, 0)"
+    sel = f"({is_signed} * (1 - Ge(Abs({LIMIT_STATUS_T1}), 0.5)))"
+    masked = f"If({sel} > 0.5, {DAILY_RET}, 0)"
+    n = f"Sum({sel}, {window})"
+    s1 = f"Sum({masked}, {window})"
+    s2 = f"Sum(({masked} * {masked}), {window})"
+    var = f"(({s2} - {s1} * {s1} / {n}) / ({n} - 1))"
+    # Greater(var, 0) clamps a tiny-NEGATIVE float (sum-of-squares cancellation when the selected
+    # returns are ~equal -> zero variance) up to 0 before the root. The n<2 -> NaN floor can't rely on
+    # the 0/0 in var (rolling-sum float error makes the numerator tiny-nonzero -> +-inf, and the clamp
+    # would mask -inf as 0), so it is enforced explicitly by the mask Ge(n,2)/Ge(n,2) = 1 for n>=2 and
+    # 0/0 = NaN for n<2 (anything * NaN = NaN). Qlib Ge returns a BOOL array and bool/bool raises,
+    # so cast to float (* 1.0) before the division: 1.0/1.0=1 (n>=2), 0.0/0.0=NaN (n<2).
+    mask = f"((Ge({n}, 2) * 1.0) / (Ge({n}, 2) * 1.0))"
+    return f"Power(Greater({var}, 0), 0.5) * {mask}"
+
+
+def norm_upper_shadow():
+    """Standardized upper shadow (上影线), per-day: (high - max(open, close)) / high. CICC 图表16."""
+    return f"(({ADJ_HIGH_T1} - Greater({ADJ_OPEN_T1}, {ADJ_CLOSE_T1})) / {ADJ_HIGH_T1})"
+
+
+def norm_lower_shadow():
+    """Standardized lower shadow (下影线), per-day: (min(open, close) - low) / low. CICC 图表16."""
+    return f"((Less({ADJ_OPEN_T1}, {ADJ_CLOSE_T1}) - {ADJ_LOW_T1}) / {ADJ_LOW_T1})"
+
+
+def williams_upper_shadow():
+    """Williams upper shadow (威廉上影线), per-day: (high - close) / high. CICC 图表16."""
+    return f"(({ADJ_HIGH_T1} - {ADJ_CLOSE_T1}) / {ADJ_HIGH_T1})"
+
+
+def williams_lower_shadow():
+    """Williams lower shadow (威廉下影线), per-day: (close - low) / low. CICC 图表16."""
+    return f"(({ADJ_CLOSE_T1} - {ADJ_LOW_T1}) / {ADJ_LOW_T1})"
+
+
+def intraday_highlow():
+    """Intraday amplitude (日内振幅), per-day: high / low. CICC 图表16 (distinct from
+    risk_range_ratio = (high-low)/close)."""
+    return f"({ADJ_HIGH_T1} / {ADJ_LOW_T1})"
 
 
 # ─────────────────────── Value ───────────────────────
