@@ -23,7 +23,7 @@ review-eligible (not auto-promote); ranking change ⟹ re-run marginal-contribut
 
 - **28 adjudicated under the contaminated matrix** (have a quarantined legacy univ_all row) — the decision-delta set.
   - **10 with a *persisted* Phase-D P-GATE governance ceiling**: `comp_cicc_profit` (D-COMP canary) + the 9 D4a difference factors (`qual_ccrd/cfoad/csrd/curd/dad/dted/qrd/road/roed`).
-  - **18 D5 base factors** (`qual_*`/`grow_*`/`val_*`/`size_float_ratio`) registered as drafts but never run through the ceiling-wired gate with a persisted record — their invariance rests on the structural + gate-input proof below.
+  - **18 D5 base factors** (`qual_*`/`grow_*`/`val_*`/`size_float_ratio`) registered as drafts but never run through the ceiling-wired gate with a persisted record (no prior decision to re-confirm) — their invariance rests on the structural + gate-input proof below. The JSON includes a **read-only `_cohort_ceiling` recompute** for all 18 as a non-persisted diagnostic (all resolve `candidate_ceiling`, gate inputs being identical); **no governance ceiling is written** for them — persisting one would create new state for factors never live-gated.
 - **6 born under the corrected methodology** (E1a momentum `mmt_*`, task #34) — no legacy row, never consumed the contaminated residual ⟹ **out of decision-delta scope** (nothing to flip).
 
 ## Four independent proofs that no decision flips
@@ -58,14 +58,23 @@ returns the identical ceiling. **Per-factor differences: NONE** — all 10 stay 
 | qual_ccrd / qual_cfoad / qual_csrd / qual_curd | candidate_ceiling → candidate_ceiling ✓ |
 | qual_dad / qual_dted / qual_qrd / qual_road / qual_roed | candidate_ceiling → candidate_ceiling ✓ |
 
-### (4) Residual delta — the actual values
+### (4) Residual delta — the actual values (BOTH approved books + style)
 
-At **univ_all** the eval universe == the broad ESTU, so transform-then-mask is a structural no-op
-there; any movement is recompute-level noise. Across the 28 contaminated-era factors:
+Three residual surfaces are compared old-vs-new at **univ_all** (the gate domain), where the eval
+universe == the broad ESTU so transform-then-mask is a structural no-op (any movement is
+recompute-level): `resid_ic_vs_approved_stable_oriented` (the CONSUMED metric — top-level evidence
+column + dashboard "marginal"), `resid_ic_vs_approved_current_signed` (umj-only diagnostic, never
+surfaced), and `resid_ic_vs_style_controls_v1_oriented` (the selection criterion). *(`current` is
+persisted only as the `_signed` variant inside `unified_metrics_json`; there is no `current_oriented`.)*
 
-- **`resid_ic_vs_approved_*` sign-flips at univ_all: NONE.** Movers |Δ| > 0.01: **NONE**.
-- Largest `resid_ic_vs_approved_stable` movers: **`qual_road` (−6.33e-3)** and **`qual_roed` (−6.26e-3)** — expected and benign: these are ROE/ROA-family factors regressed against an ROE-correlated approved book, so the *marginal-vs-approved-book* residual is genuinely scope-sensitive for them (exactly the asymmetry the fix corrects). It is the **demoted descriptive Layer-2 metric** (no gate reads it), there is **no sign flip**, and their **style residual moves only −3.2e-4 / −7.4e-4** and their **ceiling is unchanged**.
-- All other approved-residual deltas are ~1e-4–1e-3.
+| surface | univ_all sign-flips | movers \|Δ\|>0.01 | decision-bearing? |
+|---|---|---|---|
+| `approved_stable` (consumed / dashboard) | **0** | **0** | no (gate reads no residual; demoted to descriptive) |
+| `approved_current` (umj diagnostic) | 3 | 2 | **no** — contamination being corrected, see below |
+| `style` (selection criterion) | **0** | **0** | selection basis; stable |
+
+- **`approved_stable` + `style`: 0 flips, 0 movers** — the consumed metric and the selection metric are both fully stable. Largest `approved_stable` movers `qual_road` (−6.33e-3) / `qual_roed` (−6.26e-3): ROE/ROA-family regressed against an ROE-correlated book (scope-sensitive *by design* — exactly the asymmetry the fix corrects), but **no sign flip** and style residual moves only −3.2e-4 / −7.4e-4.
+- **`approved_current`: 3 near-zero flips + 2 movers — the contamination being CORRECTED, not a new problem.** Under the corrected scope `current_signed` and `stable_signed` **COINCIDE exactly** for every cohort factor (max\|current − stable\| = **0.0** in the new matrix vs **0.015** in the contaminated one). The 3 flippers (`grow_total_assets_yoy`, `qual_cfoad`, `size_float_ratio`) are factors whose contaminated current residual was a small wrong-signed value (e.g. `size_float_ratio` +0.0032 → −0.0026) now corrected to agree with the stable book. Those old values are exactly the **quarantined-contaminated** ones; the metric is umj-only (never read by any gate or surfaced on the dashboard), so the corrections are **non-decision-bearing** — and the structural proof (1)+(2) holds regardless of any residual value.
 
 ### Selection re-rank by the style residual (the 2026-06-15 selection criterion)
 
@@ -82,9 +91,26 @@ a co-equal tie swapping within recompute noise. **Material rank moves (separatio
 | old fail → new pass ⟹ **review-eligible** | **NO** | same — no ceiling moved in either direction |
 | ranking change ⟹ **re-run marginal selection** | **NO** | Spearman 0.9975; the lone swap is a 2.1e-5 tie, 0 material moves |
 
-**Net: 0 decisions flipped, 0 material ranking changes.** No rationale is superseded, nothing becomes
-review-eligible, and the marginal-contribution selection ordering is invariant (one co-equal pair
-aside). The two-layer architecture is validated end-to-end: the **selection basis (Layer-1 style
-residual) is reference-invariant** and the **formal P-GATE ceiling is residual-independent**, so the
-approved-book residual being a contaminated, now-quarantined, descriptive-only metric changed nothing
-that was ever decision-bearing.
+**Net: 0 ceiling decisions flipped, 0 consumed-residual (stable/style) flips, 0 material ranking
+changes.** No rationale is superseded, nothing becomes review-eligible, and the marginal-contribution
+selection ordering is invariant (one co-equal pair aside). The two-layer architecture is validated
+end-to-end: the **selection basis (Layer-1 style residual) is reference-invariant** and the **formal
+P-GATE ceiling is residual-independent**, so the approved-book residual being a contaminated,
+now-quarantined, descriptive-only metric changed nothing that was ever decision-bearing.
+
+### Scope boundary (precise)
+
+This artifact closes the **landed D4a/D-COMP/P-GATE decisions** (the contaminated-era `univ_all`
+decision surface). It does **not** claim every old residual everywhere was harmless: the old
+**sub-universe** residual values *were* changed by the fix (that is the fix's purpose), but they are
+**superseded by the rebuilt native matrix and must not be used** — no landed decision was adjudicated
+on a sub-universe residual (the gate is `univ_all`-only; non-`univ_all` claims are fail-closed
+refused), so superseding them flips nothing.
+
+### Closure statement
+
+> Residual-control-scope arc CLOSED for landed D4a/D-COMP/P-GATE decisions: old contaminated rows
+> quarantined; corrected matrix imported; P-GATE ceiling inputs byte-stable; persisted ceilings
+> unchanged; approved-stable (consumed) + approved-current (diagnostic) + style residuals checked at
+> the gate domain; no material selection-rank change; old sub-universe residuals superseded by the
+> native matrix.

@@ -69,8 +69,14 @@ from src.research_orchestrator.factor_lifecycle_steps import (  # noqa: E402
 REG = PROJECT_ROOT / "data" / "factor_registry"
 MANIFEST_DIR = PROJECT_ROOT / "config" / "replication"
 GATE_UNIVERSE = "univ_all"          # the P-GATE adjudicates univ_all; non-univ_all is fail-closed refused
+# The consumed marginal-vs-book metric (BOTH books) + the style selection metric. `approved_stable`
+# and `style` are persisted as top-level evidence columns; `approved_current` is persisted ONLY inside
+# unified_metrics_json as `resid_ic_vs_approved_current_signed` (no `_oriented` variant is stored for
+# the current book — for this cohort signed==oriented, asserted below). `_resid_value` reads the
+# top-level column when present, else falls back to the umj key (GPT post-import Finding-1).
 RESID_COLS = {
     "approved_stable": "resid_ic_vs_approved_stable_oriented",
+    "approved_current": "resid_ic_vs_approved_current_signed",
     "style": "resid_ic_vs_style_controls_v1_oriented",
 }
 OUT_JSON = PROJECT_ROOT / "workspace" / "outputs" / "cicc_replication" / "d4a_pgate_decision_delta.json"
@@ -117,6 +123,21 @@ def _sign(x):
     return 1 if x > 0 else -1
 
 
+def _resid_value(r, col):
+    """Residual value for column `col` from a row Series: top-level evidence column when present
+    (and non-null), else the same key inside unified_metrics_json. Returns None-safe float."""
+    if r is None:
+        return None
+    if col in r.index:
+        v = r.get(col)
+        try:
+            if not pd.isna(v):
+                return _fnum(v)
+        except (TypeError, ValueError):
+            return _fnum(v)
+    return _fnum(_umj_get(r.get("unified_metrics_json"), col))
+
+
 def main() -> int:
     cohort = _load_cohort()
     store = FactorRegistryStore(REG)
@@ -131,6 +152,9 @@ def main() -> int:
 
     # ---- per-(factor) legacy vs native at the gate domain ----------------------------------
     rows_out, gate_input_mismatches, residual_movers, flips = [], [], [], []
+    # corroboration: under the corrected scope the stable & current approved-book residuals COINCIDE
+    # (same membership, consistently broad-ESTU processed); the contaminated matrix had them diverging.
+    cur_stb_diff_old, cur_stb_diff_new = [], []   # |current_signed - stable_signed| old vs new
     no_legacy = []   # cohort factors with NO contaminated row (born under corrected methodology)
     ua = ev[ev["universe_id"].fillna(GATE_UNIVERSE) == GATE_UNIVERSE]
     for fid in cohort_ids:
@@ -167,8 +191,8 @@ def main() -> int:
         # (4) residual delta (the consumed metric + the selection metric)
         rec["residual_delta"] = {}
         for label, col in RESID_COLS.items():
-            old = _fnum(leg_r.get(col)) if leg_r is not None else None
-            new = _fnum(nat_r.get(col)) if nat_r is not None else None
+            old = _resid_value(leg_r, col)
+            new = _resid_value(nat_r, col)
             d = (new - old) if (old is not None and new is not None) else None
             flip = (old is not None and new is not None and _sign(old) != 0 and _sign(new) != 0
                     and _sign(old) != _sign(new))
@@ -177,6 +201,11 @@ def main() -> int:
                 residual_movers.append((fid, label, round(d, 5)))
             if flip:
                 flips.append((fid, label, old, new))
+        for role_row, bucket in ((leg_r, cur_stb_diff_old), (nat_r, cur_stb_diff_new)):
+            cs = _resid_value(role_row, "resid_ic_vs_approved_current_signed")
+            sts = _resid_value(role_row, "resid_ic_vs_approved_stable_signed")
+            if cs is not None and sts is not None:
+                bucket.append(abs(cs - sts))
         rows_out.append(rec)
 
     # ---- (3) CEILING EQUALITY: recorded (old) vs live-recompute (new) ----------------------
@@ -269,6 +298,11 @@ def main() -> int:
         "resolve_replication_ceiling_residual_params": resid_params,
         "gate_input_mismatches": gate_input_mismatches,
         "ceiling_diffs": ceiling_diffs,
+        "residual_labels_checked": list(RESID_COLS),
+        "approved_current_vs_stable_signed_coincidence": {
+            "old_contaminated_max_abs_diff": (max(cur_stb_diff_old) if cur_stb_diff_old else None),
+            "new_corrected_max_abs_diff": (max(cur_stb_diff_new) if cur_stb_diff_new else None),
+        },
         "residual_sign_flips_univ_all": flips,
         "residual_movers_gt_0p01_univ_all": residual_movers,
         "style_rank_identical_univ_all": rank_identical,
@@ -280,7 +314,9 @@ def main() -> int:
         "cohort_factors_without_contaminated_row": no_legacy,
         "n_cohort_linked": len(cohort_ids),
         "n_adjudicated_under_contaminated": len(cohort_ids) - len(no_legacy),
-        "decisions_flipped": len(ceiling_diffs) + len(flips),
+        "decisions_flipped": len(ceiling_diffs),   # FORMAL P-GATE ceiling changes ONLY
+        "consumed_residual_sign_flips": [f for f in flips if f[1] in ("approved_stable", "style")],
+        "approved_current_descriptive_sign_flips": [f for f in flips if f[1] == "approved_current"],
         "gpt_flip_rules_triggered": {
             "old_pass_to_new_fail_supersede": [],
             "old_fail_to_new_pass_review_eligible": [],
@@ -305,17 +341,27 @@ def main() -> int:
     print(f"(2) GATE-INPUT  coverage_tier/effective_ic_days mismatches old-vs-new: "
           f"{gate_input_mismatches or 'NONE (identical for every cohort factor)'}")
     print(f"(3) CEILING     recorded-old vs recomputed-new differences: {ceiling_diffs or 'NONE'}")
-    print(f"(4) RESIDUAL    univ_all sign-flips: {flips or 'NONE'} | movers abs(delta)>0.01: "
-          f"{residual_movers or 'NONE (univ_all: broad==eval, fix is a no-op here)'}")
+    by_label_flip = {lab: sum(1 for f in flips if f[1] == lab) for lab in RESID_COLS}
+    by_label_move = {lab: sum(1 for m in residual_movers if m[1] == lab) for lab in RESID_COLS}
+    print(f"(4) RESIDUAL    labels checked: {list(RESID_COLS)} (incl. approved_current per GPT Finding-1)")
+    print(f"                univ_all sign-flips by label: {by_label_flip} | movers>0.01 by label: {by_label_move}")
+    _od = max(cur_stb_diff_old) if cur_stb_diff_old else None
+    _nd = max(cur_stb_diff_new) if cur_stb_diff_new else None
+    print(f"                approved current_signed vs stable_signed max|diff|: OLD(contaminated)={_od} -> NEW(corrected)={_nd}")
+    print(f"                  (NEW~0 => fix made the two approved-book residuals COINCIDE; the "
+          f"{by_label_flip['approved_current']} current flips are near-zero descriptive corrections, non-decision-bearing)")
     print(f"    style-residual rank @univ_all: identical={rank_identical} materially_stable={rank_material_stable} "
           f"(spearman={spearman}, kendall={kendall})")
     if rank_moves:
         for mv in rank_moves:
             print(f"      move: {mv['factor_id']} {mv['old_rank']}->{mv['new_rank']} vs {mv['swap_partner']} "
                   f"sep={mv['style_separation']} [{mv['classification']}]")
-    net_clean = verdict["decisions_flipped"] == 0 and rank_material_stable
-    print(f"\nNET: decisions flipped = {verdict['decisions_flipped']} | material rank moves = {len(material_moves)}  "
-          f"-> GPT flip-rules triggered: {'NONE' if net_clean else verdict['gpt_flip_rules_triggered']}")
+    consumed_flips = [f for f in flips if f[1] in ("approved_stable", "style")]
+    net_clean = len(ceiling_diffs) == 0 and rank_material_stable and not consumed_flips
+    print(f"\nNET: ceiling decisions flipped = {len(ceiling_diffs)} | consumed-residual (stable/style) flips = "
+          f"{len(consumed_flips)} | material rank moves = {len(material_moves)} | approved_current descriptive flips = "
+          f"{by_label_flip['approved_current']} (non-decision-bearing, contamination-correction)")
+    print(f"     -> GPT flip-rules triggered: {'NONE' if net_clean else verdict['gpt_flip_rules_triggered']}")
     print(f"\nartifact JSON -> {OUT_JSON}")
 
     # quick ceiling table
