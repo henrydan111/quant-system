@@ -84,6 +84,7 @@ def _assert_scope_and_reference_consistency(methods: dict) -> None:
         raise SystemExit("reference-book membership/hashes DIFFER across universes — cannot pass a single "
                          "member list to Layer-2 extraction (GPT pre-import condition 4). Universe-specific "
                          "member metadata would be required.")
+    from dataclasses import replace
     for uid, m in methods.items():
         rebuilt = build_frozen_methodology(is_start=fr.TIME_SPLIT.is_start, is_end=fr.TIME_SPLIT.is_end,
                                            universe_id=uid)
@@ -91,8 +92,15 @@ def _assert_scope_and_reference_consistency(methods: dict) -> None:
             raise SystemExit(f"{uid}: current methodology residual_preprocess_scope="
                              f"{rebuilt.residual_preprocess_scope!r} != {EXPECTED_SCOPE!r} — refuse import.")
         if rebuilt.layer1_methodology_hash != m.get("layer1_hash"):
-            raise SystemExit(f"{uid}: rebuilt layer1 hash {rebuilt.layer1_methodology_hash} != "
-                             f"methodologies.json {m.get('layer1_hash')} — methodology drift; refuse import.")
+            # A benign post-rebuild commit changes code_commit (a hashed provenance field) without
+            # changing the eval methodology. Re-pin code_commit to the rebuild's recorded value (exactly
+            # the matrix drift-guard's logic) — if the re-pinned hash matches, the only difference was the
+            # commit id, not the methodology/scope; if it still differs, it is real protocol drift.
+            repinned = replace(rebuilt, code_commit=str(m.get("code_commit", "")))
+            if repinned.layer1_methodology_hash != m.get("layer1_hash"):
+                raise SystemExit(f"{uid}: rebuilt layer1 hash {rebuilt.layer1_methodology_hash} (re-pinned "
+                                 f"{repinned.layer1_methodology_hash}) != methodologies.json {m.get('layer1_hash')} "
+                                 "— real methodology/scope drift; refuse import.")
     print(f"scope+reference assertions PASSED: residual_preprocess_scope={EXPECTED_SCOPE}, "
           f"reference book identical across {len(methods)} universes "
           f"(stable_hash={next(iter(stable_hashes))}, current_hash={next(iter(current_hashes))})")
