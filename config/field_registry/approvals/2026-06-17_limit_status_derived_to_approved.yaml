@@ -1,0 +1,52 @@
+# Field-registry approval evidence (2026-06-17) — derived limit_status field.
+#
+# Adds ONE derived, provider-materialized field: $limit_status — a tri-state limit-day flag
+# (+1.0 closed at/above up_limit, -1.0 at/below down_limit, 0.0 normal, NaN suspended/no-limit).
+# Computed in the provider build (PITBackend._materialize_derived_limit_status, shared pure
+# compute_limit_status) from RAW $close vs RAW $up_limit/$down_limit — all three same-day raw, so
+# the limit-day basis is correct by construction (NEVER an adjusted price vs a raw limit). Backfilled
+# into the live provider 2026-06-17 by scripts/backfill_limit_status.py (additive; future builds
+# maintain it via the wired materializer step).
+#
+# Purpose: a SINGLE certified source for limit-day exclusion across the CICC price-volume factor wave
+# (E1b up/down volatility 剔除涨跌停日, mmt_off_limit, and downstream batches) so no factor re-derives
+# the raw/adjusted limit basis inline (the most likely silent bug — flagged in the E1b GPT review B2).
+
+approval_id: 2026-06-17_limit_status_derived_to_approved
+date: 2026-06-17
+dataset_id: limit_status
+source_endpoint: derived(close, stk_limit.up_limit, stk_limit.down_limit)
+from_status: unregistered
+to_status: approved
+reviewer: henrydan111
+related_pr: report-rc-registration
+related_findings_id: null
+
+provider_build_id: indicators_fields_20260609
+calendar_policy_id: frozen_20260227_system_build
+
+fields:
+  - $limit_status
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Verification 2026-06-17 (scripts/backfill_limit_status.py + D.features spot-check): 5748 symbols
+# written, 0 misaligned, 0 out-of-{-1,0,1} values; limit-day rate 2.69% (up 250929 / down 133585 /
+# normal 13,886,547 — within the expected 1-5%, up>down as A-share history). Served through Qlib the
+# definition holds 100%: every +1 row has $close>=$up_limit, every -1 row $close<=$down_limit, and 0
+# normal rows sit at a limit. Derived from $up_limit/$down_limit (already approved 2026-06-02) + raw
+# $close. Same-day-CLOSE knowable (uses close, unlike $up_limit/$down_limit which are session-open
+# knowable) -> predictive factors MUST wrap in Ref(...,1).
+pit_contract:
+  availability_column: trade_date
+  knowable_at: close_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: derived_limit_status_from_close_vs_published_limits

@@ -37,9 +37,34 @@ from data_infra.provider_metadata import (
     ts_code_to_qlib,
     write_instruments_readme,
 )
-from data_infra.storage.qlib_bin_utils import get_bin_info, validate_stock_bins, write_qlib_bin
+from data_infra.storage.qlib_bin_utils import get_bin_info, read_qlib_bin, validate_stock_bins, write_qlib_bin
 
 logger = logging.getLogger(__name__)
+
+# Derived limit-day field: tri-state flag from RAW close vs RAW published limits (basis-safe — all
+# raw, same day). The half-fen tolerance separates an at-limit close from a 1-fen-below close
+# (A-share tick = 0.01) and is float32-robust. "Closed-at-limit" definition (handbook 涨跌停日).
+LIMIT_STATUS_TOL = 0.005
+LIMIT_STATUS_FIELD = "limit_status"
+
+
+def compute_limit_status(close, up_limit, down_limit, tol: float = LIMIT_STATUS_TOL) -> np.ndarray:
+    """Tri-state limit-day flag, float32: +1.0 closed at/above up_limit, -1.0 at/below down_limit,
+    0.0 normal trading day, NaN where any input is NaN (suspended / no published limit).
+
+    Basis contract: ``close``, ``up_limit``, ``down_limit`` are all RAW (unadjusted) same-day prices —
+    NEVER mix an adjusted price with a raw limit. Shared by the provider materializer and the backfill
+    script so the definition lives in exactly one place. PIT: the flag is same-day-close knowable (like
+    ``$close``); predictive factors apply their own ``Ref(...,1)`` lag."""
+    close = np.asarray(close, dtype=np.float64)
+    up = np.asarray(up_limit, dtype=np.float64)
+    dn = np.asarray(down_limit, dtype=np.float64)
+    status = np.full(close.shape, np.nan, dtype=np.float32)
+    valid = ~(np.isnan(close) | np.isnan(up) | np.isnan(dn))
+    status[valid] = 0.0
+    status[valid & (close >= up - tol)] = 1.0
+    status[valid & (close <= dn + tol)] = -1.0
+    return status
 
 SLOT_DEPTH_DEFAULT = 5
 CORE_METADATA_COLUMNS = {
@@ -2945,6 +2970,36 @@ class StagedQlibBackendBuilder:
         )
         return sorted(set(written)), parity_path
 
+    def _materialize_derived_limit_status(self, target_dirs: dict[str, str]) -> list[str]:
+        """Derive the tri-state ``limit_status`` field from each symbol's already-written,
+        calendar-aligned ``close`` / ``up_limit`` / ``down_limit`` bins (basis-safe: all raw). Runs
+        AFTER stk_limit + the kline are materialized (so the three bins exist + share close's
+        start_index/length — enforced by ``_write_feature_series`` + ``validate_stock_bins``). A symbol
+        missing any of the three bins (no published limit data) simply gets no ``limit_status`` → a
+        factor reads NaN there → that day is not excluded. Single source of the limit-day definition
+        (shared :func:`compute_limit_status`) so no factor re-derives the raw/adjusted basis inline."""
+        if self.field_filter and LIMIT_STATUS_FIELD not in self.field_filter:
+            return []
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize limit_status", unit="symbol", leave=False,
+        ):
+            paths = {k: os.path.join(feature_dir, f"{k}.day.bin") for k in ("close", "up_limit", "down_limit")}
+            if not all(os.path.exists(p) for p in paths.values()):
+                continue
+            si_c, close = read_qlib_bin(paths["close"])
+            si_u, up = read_qlib_bin(paths["up_limit"])
+            si_d, dn = read_qlib_bin(paths["down_limit"])
+            if not (si_c == si_u == si_d and len(close) == len(up) == len(dn)):
+                logger.warning("limit_status: %s bins misaligned (close=%d/%d up=%d/%d down=%d/%d) — skip",
+                               qlib_code, si_c, len(close), si_u, len(up), si_d, len(dn))
+                continue
+            status = compute_limit_status(close, up, dn)
+            write_qlib_bin(os.path.join(feature_dir, f"{LIMIT_STATUS_FIELD}.day.bin"), status, start_index=si_c)
+            written.append(LIMIT_STATUS_FIELD)
+        return sorted(set(written))
+
     def _materialize_daily_dataset(
         self,
         dataset_name: str,
@@ -3160,6 +3215,13 @@ class StagedQlibBackendBuilder:
         ):
             if dataset_name in active_datasets:
                 written[dataset_name] = self._materialize_daily_dataset(dataset_name, calendar, target_dirs)
+
+        # Derived field: limit_status from close vs up_limit/down_limit. Runs AFTER stk_limit (writes
+        # the limit bins) + the kline (writes close) so all three input bins exist + are close-aligned.
+        if "stk_limit" in active_datasets:
+            derived = self._materialize_derived_limit_status(target_dirs)
+            if derived:
+                written[LIMIT_STATUS_FIELD] = derived
 
         sidecars = {"reused_existing_provider_sidecars": scoped_update}
         if not scoped_update:
