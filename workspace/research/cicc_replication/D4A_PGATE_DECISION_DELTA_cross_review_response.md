@@ -37,4 +37,22 @@ no ceiling changes; no material style-rank moves).
 
 **0 ceiling decisions flipped · 0 consumed-residual (stable/style) flips · 0 material ranking moves ·
 GPT flip-rules triggered: NONE.** No matrix rerun, import rollback, or P-GATE rerun was required.
-Reviewed-commit for the fix: see the follow-up commit on `report-rc-registration`.
+Reviewed-commit for the fix: `a179b51` on `report-rc-registration`.
+
+## Final verdict (2026-06-17): APPROVE — arc CLOSED
+
+GPT 5.5 Pro on `a179b51`: **APPROVE — residual-control-scope arc CLOSED.** All findings accepted;
+Finding 1 resolved; structural + empirical decision proof accepted; D5 handling (non-persisted
+diagnostic), tie-swap classification, and the sub-universe scope boundary all accepted. Closed for
+landed D4a/D-COMP/P-GATE decisions: bug identified → scope fixed (broad-ESTU transform-then-mask) →
+matrix rebuilt → legacy contaminated rows quarantined → new matrix imported → stable/current/style
+decision-delta checked → P-GATE inputs byte-stable → persisted ceilings unchanged → selection ranking
+materially stable → sub-universe old residuals superseded. **No further action required for this arc.**
+
+### Non-blocking forward note (GPT)
+
+`resid_ic_vs_approved_current` is persisted **only as the `_signed` variant** in `unified_metrics_json`
+(no oriented variant). Keep it **out of any future decision/selection surface** unless an oriented
+variant or an explicit orientation assertion is created first. Non-blocking here because
+`approved_current` is diagnostic-only and the consumed/dashboard residual is `approved_stable` (which
+is oriented). Recorded as a standing constraint.
