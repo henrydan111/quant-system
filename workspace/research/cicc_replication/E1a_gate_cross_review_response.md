@@ -34,4 +34,20 @@
 4. Dry/temp run shows all 6 → `candidate_ceiling` after claim registration — **DONE** (TEST_A).
 5. Live writes exactly 6 claims/governance/linkage, no status promotions — **DONE** (TEST_A; resolve-but-label, `gate_cohort_factors` never calls `set_status`).
 
-Awaiting APPROVE to run the real `--live` adjudication against `data/factor_registry`.
+## Final verdict (GPT 5.5 Pro, 2026-06-17): APPROVE — GO for real `--live`
+
+GPT approved the production adjudication (P-GATE ceiling only; no status promotion, no sealed-OOS
+spend). **Executed + verified** (registry backed up to `data/factor_registry.backup_e1a_20260617_203834`
+first, per GPT's guardrail):
+
+```
+resolve 6/6 → all 6 candidate_ceiling (blocking=short_oos_power_floor_fail) → written=6 requested=6
+```
+
+Post-write verification on a fresh read of the live registry — every GPT checklist item GREEN:
+governance 10→16 (+6 E1a, all `candidate_ceiling`, E1a notes) · 6 claims under
+`cicc_e1a_momentum_reversal` (0 `cicc_d4a` pollution) · F11 linkage 6 · F3 cohort stamp 6 ·
+factor_master status all `draft` (**0 promotions** — resolve-but-label) · unresolved 0. The cap is the
+expected truth-observed/short-OOS path, NOT operator/coverage failure. **#34 + #38 closed.** The
+downstream `factor_lifecycle` IS gate (which would pass mmt_route_20d/_250d/discrete_20d and stop the
+other 3) remains a separate human-gated step — NOT run here.
