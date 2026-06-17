@@ -89,3 +89,25 @@ class TestOperatorCertStore:
                       spec_source="s", formula_text="f", reference_impl_hash="r",
                       vectorized_impl_hash="v", alignment_policy={})
         assert len(s.records()) == 1
+
+    def test_per_window_results_persisted_and_status_unaffected(self, tmp_path):
+        """GPT E1a-gate finding 2: a multi-window cert persists BOTH windows' full results in the
+        first-class per_window_results_json column (audit-complete), while status still resolves from
+        the flat test_results (the conservative/deepest window)."""
+        import json
+        s = OperatorCertStore(tmp_path)
+        pw = {"W20": {k: True for k in CERT_TEST_KINDS}, "W250": {k: True for k in CERT_TEST_KINDS}}
+        dec = s.certify(operator_id="multi", test_results={k: True for k in CERT_TEST_KINDS},
+                        spec_source="s", formula_text="f", reference_impl_hash="r",
+                        vectorized_impl_hash="v", alignment_policy={}, per_window_results=pw)
+        assert dec.status == "certified"
+        row = s.records()
+        rec = row[row["operator_id"] == "multi"].iloc[-1]
+        assert json.loads(rec["per_window_results_json"]) == pw    # both windows durably present
+        # a cert WITHOUT per-window payload defaults to "{}" (back-compat) and still certifies
+        s.certify(operator_id="single", test_results={k: True for k in CERT_TEST_KINDS},
+                  spec_source="s", formula_text="f", reference_impl_hash="r",
+                  vectorized_impl_hash="v", alignment_policy={})
+        r2 = s.records()
+        assert json.loads(r2[r2["operator_id"] == "single"].iloc[-1]["per_window_results_json"]) == {}
+        assert "per_window_results_json" in s.records().columns   # schema stable for old+new rows

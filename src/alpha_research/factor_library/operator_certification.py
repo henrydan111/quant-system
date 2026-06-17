@@ -48,7 +48,7 @@ CERT_TEST_KINDS = ("golden_panel", "property_based", "reference_vs_vectorized_ra
 CERT_COLUMNS = [
     "operator_id", "status", "spec_source", "formula_text",
     "reference_impl_hash", "vectorized_impl_hash", "alignment_policy_json",
-    "test_results_json", "failed_json", "certified_at", "notes",
+    "test_results_json", "per_window_results_json", "failed_json", "certified_at", "notes",
 ]
 
 
@@ -163,7 +163,9 @@ class OperatorCertStore:
 
     def records(self) -> pd.DataFrame:
         if self.path.exists():
-            return pd.read_parquet(self.path)
+            # reindex to the canonical schema so a parquet written before a column was added
+            # (e.g. per_window_results_json) reads back with that column as NaN rather than KeyError.
+            return pd.read_parquet(self.path).reindex(columns=CERT_COLUMNS)
         return pd.DataFrame(columns=CERT_COLUMNS)
 
     def status_of(self, operator_id: str) -> str:
@@ -190,9 +192,17 @@ class OperatorCertStore:
         vectorized_impl_hash: str,
         alignment_policy: dict,
         notes: str = "",
+        per_window_results: dict | None = None,
     ) -> OperatorCertDecision:
         """Resolve the status from the test results (callers cannot self-assign a status) and
-        idempotently upsert the cert row."""
+        idempotently upsert the cert row.
+
+        ``per_window_results`` (optional) is a structured per-window audit payload, e.g.
+        ``{"W20": {kind: bool, ...}, "W250": {...}}`` for an operator certified at multiple
+        windows. It is persisted as a first-class ``per_window_results_json`` column so the
+        durable record is audit-complete for EVERY window (not just the status-resolving one). It
+        does NOT affect ``status`` — the resolver still reads the flat ``test_results`` (callers
+        pass the conservative/deepest window there). GPT E1a-gate review, finding 2."""
         import json
 
         decision = resolve_operator_status(operator_id, test_results)
@@ -202,6 +212,7 @@ class OperatorCertStore:
             "reference_impl_hash": reference_impl_hash, "vectorized_impl_hash": vectorized_impl_hash,
             "alignment_policy_json": json.dumps(alignment_policy, ensure_ascii=False, sort_keys=True),
             "test_results_json": json.dumps(decision.test_results, ensure_ascii=False, sort_keys=True),
+            "per_window_results_json": json.dumps(per_window_results or {}, ensure_ascii=False, sort_keys=True),
             "failed_json": json.dumps(list(decision.failed), ensure_ascii=False),
             "certified_at": _utcnow(), "notes": notes,
         }

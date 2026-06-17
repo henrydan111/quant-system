@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import inspect
+import json
 import sys
 from pathlib import Path
 
@@ -267,18 +268,23 @@ def main() -> int:
             all_ok = False
             continue
         if args.live:
-            # operator is window-agnostic; persist once, noting BOTH windows passed
+            # operator is window-agnostic; persist once. The status resolves from the conservative
+            # W=250 row (test_results), but BOTH windows' full 4-test results are persisted in the
+            # first-class per_window_results_json column so the durable cert is audit-complete for
+            # W=20 too (GPT E1a-gate finding 2 — no longer buried in a notes string).
             _, last_results = per_window[W_GRID[-1]]
-            ref_last, vec_last = s["make"](W_GRID[-1])
+            pw = {f"W{w}": per_window[w][1] for w in W_GRID}
             store.certify(
                 operator_id=op_id, test_results=last_results, spec_source=s["spec"],
                 formula_text=s["formula"], reference_impl_hash=_hash_fn(s["make"]),
                 vectorized_impl_hash=_hash_fn(s["make"]),
-                alignment_policy={"window_closed": "right", "min_periods": "W (eval drops partial)",
+                alignment_policy={"window_closed": "right",
+                                  "min_periods": "qlib min_periods=1; is_start windows FULL (calendar starts 2008-01-02 = 490td pre-2010 runway → Qlib warms every window from the runway, verified byte-identical start=2008 vs start=2010 in verify_e1a_warmup_runway.py → no partial-window leak in the 2010-2020 IS eval)",
                                   "lag": 0, "adjustment_policy": "adjusted_prices",
                                   "certified_windows": list(W_GRID)},
-                notes=("E1a price-volume operator certified through the P-OP harness at "
-                       f"W in {list(W_GRID)} (no truth parity)"))
+                per_window_results=pw,
+                notes=(f"E1a price-volume operator certified through the P-OP harness at W in {list(W_GRID)} "
+                       "(no truth parity); per-window results in per_window_results_json"))
 
     composed_ok = _composed_ts_rank_check(panels)
     print(f"\ncomposed mmt_time_rank_20d = Mean(Rank(px,250),20)  ref==vec & bounded[0,1]: {composed_ok}")

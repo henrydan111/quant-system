@@ -6,7 +6,16 @@ claim / certified operators), and persist its ReplicationGovernanceRecord. Evide
 it does NOT promote anything to candidate (that is the human-gated orchestrator step). This
 is the generalized form of canary_cicc_profit.py for a batch (e.g. the D4a difference factors).
 
-Dry-run prints each resolved ceiling; --live registers the claims + persists the records.
+Two-phase + fail-closed for --live (GPT E1a-gate review, finding 3): PHASE 1 RESOLVES every
+requested factor read-only (registry row present + exactly one cohort-manifest match via
+`_cohort_ceiling`); if ANY requested factor is unresolved, --live REFUSES before any write (no
+silent 5-of-6 partial write). PHASE 2 registers the missing claims; PHASE 3 adjudicates (now
+claims present) + persists governance/stamp/linkage. Dry-run prints each resolved ceiling.
+
+`--hypothesis-id` is REQUIRED and stamped on every claim, and `--governance-notes` on every
+governance record (GPT finding 1): the cohort-wave identity must be explicit per run — NEVER
+reuse another wave's id (an earlier hard-coded `cicc_d4a` default would have polluted E1a's
+domain-claim history).
 """
 from __future__ import annotations
 
@@ -39,10 +48,19 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--factors", required=True, help="comma-separated catalog factor ids")
     ap.add_argument("--live", action="store_true", help="register claims + persist records")
+    ap.add_argument("--hypothesis-id", required=True,
+                    help="domain-claim hypothesis_id for THIS cohort wave (e.g. "
+                         "cicc_e1a_momentum_reversal). REQUIRED — never reuse another wave's id.")
+    ap.add_argument("--governance-notes", default="",
+                    help="note stamped on each governance record; default derived from --hypothesis-id")
+    ap.add_argument("--registry-dir", default="",
+                    help="registry dir to operate on (default: live data/factor_registry; point at a "
+                         "temp copy to dry-/live-exercise the fail-closed flow without touching production)")
     args = ap.parse_args()
     factors = [f.strip() for f in args.factors.split(",") if f.strip()]
+    gov_notes = args.governance_notes or f"{args.hypothesis_id} P-GATE ceiling adjudication via gate_cohort_factors"
 
-    reg = PROJECT_ROOT / "data" / "factor_registry"
+    reg = Path(args.registry_dir) if args.registry_dir else PROJECT_ROOT / "data" / "factor_registry"
     store = FactorRegistryStore(reg)
     claims = DomainClaimStore(reg)
     manifests = _load_cohort_manifests()
@@ -63,26 +81,60 @@ def main() -> int:
             st = st[st["replication_cohort_id"].astype("string").str.strip() != ""]
             linked_ids |= set(st["factor_id"].astype(str).tolist())
 
-    for fid in factors:
+    def _adjudicate(fid: str):
+        """Read-only: resolve fid through _cohort_ceiling. Returns (info|None, def_hash, reason)."""
         row = cur[cur["factor_id"] == fid]
         if not len(row):
-            print(f"{fid:14} NOT IN REGISTRY — skip"); continue
+            return None, "", "not_in_registry"
         def_hash = str(row.iloc[0]["definition_hash"])
-        existing = claims.claims()
-        have = (len(existing[(existing["factor_id"] == fid) & (existing["universe_id"] == UNIVERSE)
-                             & (existing["status"] != "rejected_claim")]) if len(existing) else 0)
-        if not have and args.live:
-            claims.register_claim(factor_id=fid, universe_id=UNIVERSE,
-                                  hypothesis_id="cicc_d4a", declared_domain_count=1)
-        info = _cohort_ceiling(fid, UNIVERSE, manifests=manifests, evidence_df=store.factor_evidence,
-                               claim_store=claims, current_definition_hash=def_hash,
-                               certified_operators=certified_ops, trade_calendar=oos_cal,
-                               is_cohort_linked=(fid in linked_ids),
-                               linked_definition_hash=linked_hashes.get(fid, ""))
+        try:
+            info = _cohort_ceiling(fid, UNIVERSE, manifests=manifests, evidence_df=store.factor_evidence,
+                                   claim_store=claims, current_definition_hash=def_hash,
+                                   certified_operators=certified_ops, trade_calendar=oos_cal,
+                                   is_cohort_linked=(fid in linked_ids),
+                                   linked_definition_hash=linked_hashes.get(fid, ""))
+        except Exception as e:   # F1: any adjudication error on a cohort factor = fail closed
+            return None, def_hash, f"adjudication_error:{type(e).__name__}:{e}"
         if info is None:
-            print(f"{fid:14} NOT a cohort factor (manifest link missing)"); continue
+            return None, def_hash, "not_a_cohort_factor_manifest_link_missing"
+        return info, def_hash, ""
+
+    # ── PHASE 1: resolve every requested factor read-only (fail-closed for --live) ──
+    resolved: dict[str, str] = {}   # fid -> def_hash
+    unresolved: list = []
+    for fid in factors:
+        info, def_hash, reason = _adjudicate(fid)
+        if reason:
+            unresolved.append((fid, reason))
+        else:
+            resolved[fid] = def_hash
+    print(f"resolve: {len(resolved)}/{len(factors)} requested factors resolved to exactly one cohort row")
+    for fid, reason in unresolved:
+        print(f"  UNRESOLVED {fid:22} {reason}")
+    if unresolved and args.live:
+        raise SystemExit(f"REFUSING --live: {len(unresolved)}/{len(factors)} requested factors unresolved "
+                         "— a partial write would leave the cohort half-adjudicated (fail-closed, GPT "
+                         "finding 3). Fix the factor ids / manifest links and re-run.")
+
+    # ── PHASE 2 (--live): register the missing univ_all claims for the resolved factors ──
+    if args.live:
+        for fid in resolved:
+            existing = claims.claims()
+            have = (len(existing[(existing["factor_id"] == fid) & (existing["universe_id"] == UNIVERSE)
+                                 & (existing["status"] != "rejected_claim")]) if len(existing) else 0)
+            if not have:
+                claims.register_claim(factor_id=fid, universe_id=UNIVERSE,
+                                      hypothesis_id=args.hypothesis_id, declared_domain_count=1)
+
+    # ── PHASE 3: adjudicate (claims now present) + persist governance / stamp / linkage ──
+    written = 0
+    for fid in resolved:
+        info, def_hash, reason = _adjudicate(fid)
+        if reason or info is None:   # a claim-registration regression would surface here
+            raise SystemExit(f"{fid}: resolved in phase 1 but re-adjudication failed ({reason}) — aborting "
+                             "before further writes (fail-closed).")
         dec = info["decision"]
-        print(f"{fid:14} ceiling={dec.status_ceiling:18} blocking={','.join(dec.blocking_reasons)}")
+        print(f"{fid:22} ceiling={dec.status_ceiling:18} blocking={','.join(dec.blocking_reasons)}")
         if args.live:
             gov.upsert(
                 cohort_id=info["cohort_id"], factor_id=fid,
@@ -93,7 +145,7 @@ def main() -> int:
                 truth_label_end=info["row"].truth_table_label_end,
                 oos_quarantine_start=info.get("oos_quarantine_start", ""),
                 oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
-                notes="D4a batch adjudication via gate_cohort_factors",
+                notes=gov_notes,
             )
             # F3 + F11: stamp the reverse link (idempotent) + append a `linked` ledger event only
             # for a NEW link (drift on an existing link already raised in _cohort_ceiling; no churn).
@@ -103,9 +155,16 @@ def main() -> int:
                 linkage.record_linkage(
                     cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
                     definition_hash=def_hash, event="linked", notes="gate_cohort_factors")
+            written += 1
+
     if args.live:
         store.save()   # persist the factor_master replication_cohort_id stamps
-        print("claims + governance records + linkage stamps persisted")
+        # GPT finding 3 checklist: exactly all requested factors written, none dropped.
+        if written != len(factors):
+            raise SystemExit(f"POST-WRITE MISMATCH: wrote {written} governance records but {len(factors)} "
+                             "factors were requested — investigate (some write silently skipped).")
+        print(f"claims + governance records + linkage stamps persisted: written={written} "
+              f"requested={len(factors)} hypothesis_id={args.hypothesis_id}")
     else:
         print("dry-run — re-run with --live to register claims + persist records")
     return 0
