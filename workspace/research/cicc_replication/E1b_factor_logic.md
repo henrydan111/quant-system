@@ -69,14 +69,17 @@ Certification (§10A, no truth parity): golden cases (hand-computed subset std, 
 (slow numpy subset-std) vs vectorized random panels, PIT (future-row perturbation invariance), and a
 **limit-basis test** (B2).
 
-### B2 — limit-day basis safety (most likely silent bug)
+### B2 — limit-day basis safety (most likely silent bug) — RESOLVED via a materialized field (2026-06-17)
 
 Limit prices `$up_limit`/`$down_limit` are RAW exchange prices; our returns/shadows use ADJUSTED OHLC
-(`raw × adj_factor`). **Never compare adjusted close to raw limit.** Decision = **Option A**: compute the
-limit-day flag on **raw** PIT-shifted prices — `limit_day(t) = Ref($close,1) >= Ref($up_limit,1) OR
-Ref($close,1) <= Ref($down_limit,1)` — while the return entering the std is the **adjusted** return.
-Flag-from-raw, return-from-adjusted (they are different quantities; the flag marks the event, the value
-is the adjusted return). A golden test pins a split-day where adjusted-vs-raw confusion would misflag.
+(`raw × adj_factor`). **Never compare adjusted close to raw limit.** Rather than each factor recomputing
+the flag inline (per-factor basis-bug risk), the basis is now centralized: **a materialized PIT-safe
+`$limit_status` field** (tri-state +1 close-at-up-limit / −1 close-at-down-limit / 0 normal / NaN,
+computed in the provider build from RAW `$close` vs RAW `$up_limit`/`$down_limit`; `compute_limit_status`
+in [pit_backend.py](../../../src/data_infra/pit_backend.py); approved 2026-06-17). `sign_conditional_std`
+consumes `Ref($limit_status, k)` and excludes any day where it is ≠ 0 — one certified basis-safe source
+for the whole price-volume wave, no inline re-derivation. (The return entering the std is still the
+adjusted return; the flag just marks the event.)
 
 ### B3 — registration count = **36** new (not ~33)
 
