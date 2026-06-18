@@ -1,0 +1,185 @@
+{
+  "run_id": "e1c_is_candidate_2010_2020",
+  "generated_at": "2026-06-18T21:06:23",
+  "live": true,
+  "evidence_class": "a_priori",
+  "mechanism": "matrix-reuse (resign pattern): 2010-2020 univ_all run_is_walk_forward(a_priori) from unified_eval_matrix, bit-identical to the gate; rows validated ESTU_STYLE_V1 native 2010-2020 (schema+layer1_hash+scope+window).",
+  "gate_authorization": "User authorized 'all passers, with cohort-redundancy caveat'. Writing formal_evidence_eligible + set_status(candidate) IS the human gate.",
+  "oos_status": "a_priori IS-selection on 2010-2020 only; 2021+ UNBURNED/sealed.",
+  "expected_direction_split": {
+    "positive_illiquidity_premium": 12,
+    "inverse_turnover_anomaly": 7
+  },
+  "cohort_redundancy_caveat": "chart-28 liquidity family — TWO correlated sub-families: illiquidity premium (amihud + shortcut, ICIR>0/positive) and turnover anomaly (turn + vstd, ICIR<0/inverse). Promoted resolve-but-label, NOT 19 independent discoveries; a downstream marginal-contribution selection picks ~2-4 orthogonal representatives.",
+  "hardening_guards": [
+    "assign_candidate_status(field_ok)",
+    "all-or-none attach",
+    "matrix-row identity (ESTU_STYLE_V1 native 2010-2020)",
+    "pre-status==draft",
+    "explicit-19-id membership (not bare liq_ prefix)",
+    "P-GATE ceiling preflight"
+  ],
+  "promoted": [
+    "liq_amihud_avg_120d",
+    "liq_amihud_avg_20d",
+    "liq_amihud_avg_60d",
+    "liq_amihud_std_120d",
+    "liq_amihud_std_20d",
+    "liq_amihud_std_60d",
+    "liq_shortcut_avg_120d",
+    "liq_shortcut_avg_20d",
+    "liq_shortcut_avg_60d",
+    "liq_shortcut_std_120d",
+    "liq_shortcut_std_20d",
+    "liq_shortcut_std_60d",
+    "liq_turn_avg_120d",
+    "liq_turn_std_120d",
+    "liq_turn_std_20d",
+    "liq_turn_std_60d",
+    "liq_vstd_120d",
+    "liq_vstd_20d",
+    "liq_vstd_60d"
+  ],
+  "blocked": [],
+  "verdicts": [
+    {
+      "factor": "liq_amihud_avg_120d",
+      "heldout_rank_icir": 0.3365,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_amihud_avg_20d",
+      "heldout_rank_icir": 0.5009,
+      "sign_consistency": 0.91,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_amihud_avg_60d",
+      "heldout_rank_icir": 0.4089,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_amihud_std_120d",
+      "heldout_rank_icir": 0.2651,
+      "sign_consistency": 0.73,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_amihud_std_20d",
+      "heldout_rank_icir": 0.4724,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_amihud_std_60d",
+      "heldout_rank_icir": 0.3559,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_avg_120d",
+      "heldout_rank_icir": 0.3764,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_avg_20d",
+      "heldout_rank_icir": 0.5284,
+      "sign_consistency": 1.0,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_avg_60d",
+      "heldout_rank_icir": 0.4474,
+      "sign_consistency": 1.0,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_std_120d",
+      "heldout_rank_icir": 0.3173,
+      "sign_consistency": 0.91,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_std_20d",
+      "heldout_rank_icir": 0.4395,
+      "sign_consistency": 0.91,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_shortcut_std_60d",
+      "heldout_rank_icir": 0.3799,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "liq_turn_avg_120d",
+      "heldout_rank_icir": -0.2802,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_turn_std_120d",
+      "heldout_rank_icir": -0.3317,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_turn_std_20d",
+      "heldout_rank_icir": -0.5705,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_turn_std_60d",
+      "heldout_rank_icir": -0.4235,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_vstd_120d",
+      "heldout_rank_icir": -0.4143,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_vstd_20d",
+      "heldout_rank_icir": -0.5569,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "liq_vstd_60d",
+      "heldout_rank_icir": -0.4768,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    }
+  ],
+  "recorder_result": {
+    "attached": [
+      "liq_amihud_avg_120d",
+      "liq_amihud_avg_20d",
+      "liq_amihud_avg_60d",
+      "liq_amihud_std_120d",
+      "liq_amihud_std_20d",
+      "liq_amihud_std_60d",
+      "liq_shortcut_avg_120d",
+      "liq_shortcut_avg_20d",
+      "liq_shortcut_avg_60d",
+      "liq_shortcut_std_120d",
+      "liq_shortcut_std_20d",
+      "liq_shortcut_std_60d",
+      "liq_turn_avg_120d",
+      "liq_turn_std_120d",
+      "liq_turn_std_20d",
+      "liq_turn_std_60d",
+      "liq_vstd_120d",
+      "liq_vstd_20d",
+      "liq_vstd_60d"
+    ],
+    "skipped_drift": [],
+    "skipped_unknown": []
+  }
+}
