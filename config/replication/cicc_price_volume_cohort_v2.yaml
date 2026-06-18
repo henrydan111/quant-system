@@ -40,7 +40,7 @@
 # formalization candidates; the genuinely-new constructions (new operators / new fields) are.
 
 source_cohort_id: cicc_price_volume_handbook_v1
-manifest_sha: "c8b7369b1e1c5cc2"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
+manifest_sha: "3e3eb0aa75dc7f2b"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
 handbook_label_window_end: "2022-07-01"   # handbook test end → drives §9.3 OOS quarantine (short window)
 
 denominators:
@@ -155,9 +155,15 @@ factor_rows:
   - {factor_name_original: liq_vstd_60d, handbook_id: F_liq_vstd_60d, chart_id: "28", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: liq_vstd_60d}
 
   # ===== 4. 量价相关性 (图表40) — 8, lead/lag corr (new corr-lag constructions) =====
-  - {factor_name_original: corr_price_turn,    handbook_id: F_corr_price_turn, chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(turn, close) sync/lead/lag = 3
-  - {factor_name_original: corr_ret_turn,      handbook_id: F_corr_ret_turn,  chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(turn, ret) sync/lead/lag = 3
-  - {factor_name_original: corr_ret_turnd,     handbook_id: F_corr_ret_turnd, chart_id: "40", replication_tier_planned: formula_equivalent_pending, required_operators: [lead_lag_corr], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}   # corr(Δturn, ret) sync/lag = 2
+  # E1d 量价相关性 (图表40): 8 factor-level rows (0 dedup). Inline Corr+Ref, NO custom operator (lead_lag_corr DROPPED). Single 20d window (handbook chart 40 is 1M only). lead_lag_semantics: _post = price/return POSTerior (t+1) => turnover LEADS; _prior = price/return PRIOR (t-1) => price/return LEADS (lead realized by shifting the LEADING series back, never a forward Ref). price_basis: adjusted_close LEVEL for corr_price_turn* (split-robust), adjusted DAILY_RET + raw $turnover_rate elsewhere.
+  - {factor_name_original: corr_price_turn_20d, handbook_id: F_corr_price_turn_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_price_turn_20d}
+  - {factor_name_original: corr_price_turn_post_20d, handbook_id: F_corr_price_turn_post_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_price_turn_post_20d}
+  - {factor_name_original: corr_price_turn_prior_20d, handbook_id: F_corr_price_turn_prior_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_price_turn_prior_20d}
+  - {factor_name_original: corr_ret_turn_20d, handbook_id: F_corr_ret_turn_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_ret_turn_20d}
+  - {factor_name_original: corr_ret_turn_post_20d, handbook_id: F_corr_ret_turn_post_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_ret_turn_post_20d}
+  - {factor_name_original: corr_ret_turn_prior_20d, handbook_id: F_corr_ret_turn_prior_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_ret_turn_prior_20d}
+  - {factor_name_original: corr_ret_turnd_20d, handbook_id: F_corr_ret_turnd_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_ret_turnd_20d}
+  - {factor_name_original: corr_ret_turnd_prior_20d, handbook_id: F_corr_ret_turnd_prior_20d, chart_id: "40", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: corr_ret_turnd_prior_20d}
 
   # ===== 5. 筹码分布 (图表52) — 10, cyq_perf (approved) =====
   - {factor_name_original: distribution_ret_avg,  handbook_id: F_dist_ret_avg,  chart_id: "52", replication_tier_planned: formula_equivalent_pending, required_fields: ["$cyq_perf__*"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
