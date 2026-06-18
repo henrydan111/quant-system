@@ -5,7 +5,7 @@
 > [CICC_价量因子定义.md](../../../Knowledge/AI量化增强/CICC_价量因子定义.md) §3. **No custom operator**
 > needed — all inline arithmetic (`Mean`/`Std`/`Abs`/division on existing approved fields).
 
-## Scope: 7 subtypes × 3 windows {20,60,120} = 21 → 18 new (3 exact dedups)
+## Scope: 7 subtypes × 3 windows {20,60,120} = 21 → 19 new (2 exact dedups; see GPT verdict below)
 
 Naming `liq_{type}_{avg|std}_{20,60,120}d`. Per-day quantity `Ref(...,1)`-wrapped (PIT), then `Mean`/`Std`.
 Fields: `$turnover_rate`, `$amount`, `$adj_factor`, `$close`, `$high`, `$low`, `$open` (all approved).
@@ -25,18 +25,50 @@ Fields: `$turnover_rate`, `$amount`, `$adj_factor`, `$close`, `$high`, `$low`, `
 - `liq_vstd_*` (Σamount/ret_std): distinct from `liq_vol_cv` (volume CV) → register.
 - `liq_amihud_std_*`, `liq_shortcut_{avg,std}_*` → all new.
 
-**18 new** = turn_avg(1: 120) + turn_std(3) + vstd(3) + amihud_avg(2: 60,120) + amihud_std(3) + shortcut_avg(3) + shortcut_std(3); **3 exact dedups** (turn_avg_20/60, amihud_avg_20).
+**19 new** (after the B3 guard-vs-dedup resolution: amihud_avg_20d is guarded → NEW): turn_avg(1: 120) + turn_std(3) + vstd(3) + amihud_avg(3: incl. guarded 20d) + amihud_std(3) + shortcut_avg(3) + shortcut_std(3); **2 exact dedups** (turn_avg_20/60 only).
 
-## Open questions for GPT
+## GPT verdict (2026-06-18): CHANGES REQUIRED → folded; APPROVE registration (no operator build)
 
-1. **Shortcut price basis**: the formula `2*(high−low) − |open−close|` is a *price-range* (not a ratio). Use **adjusted** OHLC (`raw × adj_factor`, split-robust + consistent with the project's cross-day convention), or **raw** to literally match the handbook K-line? (Recommend adjusted — a raw price-range / raw-amount ratio is split-distorted; the existing `liq_amihud` already mixes adjusted-return / raw-amount, and a range needs the adjusted basis to be comparable across splits. The Amihud/vstd use returns which are already adjusted ratios, so only the shortcut numerator faces this.)
-2. **vstd window semantics**: `Σamount(N) / Std(ret,N)` — window-level ratio (sum of amount over N ÷ return-std over N), NOT a per-day-then-aggregate. Confirm this matches 成交额/收益率std (a single ratio per date over the trailing window), with `avg/std` not applying (vstd is itself the metric; only one variant per window). The handbook lists `liq_vstd_{1M,3M,6M}` (3, no avg/std split) — so 3, not 6. ✓ already counted as 3.
-3. **Dedup calls**: confirm `liq_turn_avg_{20,60}`→`liq_turnover` skip + `liq_amihud_avg_20`→`liq_amihud_20d` skip (identical expressions), and `liq_turn_std`/`liq_vstd` register as distinct from `liq_vol_cv`.
-4. **Amihud `$amount` zero/NaN guard**: suspended days have amount=0/NaN → `Abs(ret)/amount` = inf/NaN. Guard with `If($amount>0, …, NaN)`? (The existing `liq_amihud_20d` does NOT guard — Mean skips NaN but inf would poison. Recommend adding an `$amount>0` guard for the new ones + note the existing is unguarded.)
-5. **Windows 20/60/120** (project monthly convention) — OK?
+GPT confirmed: no custom operator, 20/60/120, vstd is a single window ratio, `liq_turn_std`/`liq_vstd` ≠
+`liq_vol_cv`, adjusted-OHLC shortcut. Four blocking fixes (B1–B4) folded in below — the headline is that
+**guarding the Amihud denominator makes `liq_amihud_avg_20d` ≠ the unguarded `liq_amihud_20d`** → it's a
+NEW factor → **19 new, 2 dedups** (not 18/3).
 
-## Plan after GPT review
+### B1+B2 — denominator guards (all amount + the vstd return-std denominator)
 
-Define the 18 new factors (inline expressions, no operator) + dedup map → register draft → v2 manifest
-expand chart-28 (factor-level rows + catalog_factor_id, like E1b) → 7-domain matrix → P-GATE → IS-gate.
-resolve-but-label; no promotion here. (Lighter than E1b — no operator build/cert.)
+```
+amt   = Ref($amount, 1)
+ret   = ADJ_CLOSE_T1 / Ref(ADJ_CLOSE, 2) - 1
+amihud_day   = If(amt > 0, Abs(ret) / amt, NaN)
+shortcut_day = If(amt > 0, (2*(H-L) - Abs(O-C)) / amt, NaN)          # H/L/O/C = adjusted, PIT-shifted (B4)
+liq_vstd_N    = If(Std(ret, N) > 0, Sum(amt, N) / Std(ret, N), NaN)  # single window ratio (no avg/std split)
+```
+`If(cond, x, NaN)` is established inline arithmetic (used by 18 catalog factors) → still no operator.
+
+### B3 — guard-vs-dedup conflict resolved → 19 new, 2 dedups
+
+Guarded `liq_amihud_avg_20d` ≠ unguarded `liq_amihud_20d` → **register it (new, guarded)**, do NOT skip.
+Only the 2 turnover dedups remain (`liq_turn_avg_{20,60}` ≡ `liq_turnover_{20,60}d`, both `Mean(Ref($turnover_rate,1),N)`).
+
+### B4 — shortcut basis = adjusted OHLC (recorded)
+
+`H/L/O/C = Ref($high/$low/$open/$close × $adj_factor, 1)` (split-robust, project convention). Manifest note:
+`price_basis: adjusted_OHLC; replication_note: split-robust project convention; raw-K-line vendor basis not independently truth-parity-certified`.
+
+### Build set (19 new drafts, GPT-approved)
+
+```
+liq_turn_avg_120d                       (1; turn_avg_20/60 dedup to liq_turnover_{20,60}d)
+liq_turn_std_{20,60,120}d               (3)
+liq_vstd_{20,60,120}d                   (3; guarded)
+liq_amihud_avg_{20,60,120}d             (3; guarded — 20d NEW, not deduped)
+liq_amihud_std_{20,60,120}d             (3; guarded)
+liq_shortcut_avg_{20,60,120}d           (3; adjusted, guarded)
+liq_shortcut_std_{20,60,120}d           (3; adjusted, guarded)
+```
+
+## Plan (GPT-approved, B1–B4 folded)
+
+Define the 19 guarded inline factors (no operator) → register draft → v2 manifest expand chart-28
+(19 factor-level rows + catalog_factor_id + the adjusted-basis note) → 7-domain matrix → P-GATE →
+IS-gate. resolve-but-label; no promotion here.
