@@ -369,6 +369,18 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['liq_turnover_skew_20d'] = op.turnover_skew(20)
     catalog['liq_spread_proxy_20d'] = op.spread_proxy(20)
 
+    # CICC Wave E1c — liquidity手册 (图表28): 19 new (2 exact dedups: liq_turn_avg_{20,60} ==
+    # liq_turnover_{20,60}d). Guarded inline (GPT B1/B2: NaN not inf on a non-positive denom),
+    # adjusted-OHLC shortcut (B4). No custom operator. See E1c_factor_logic.md.
+    catalog['liq_turn_avg_120d'] = op.avg_turnover(120)            # 20/60 dedup to liq_turnover_{20,60}d
+    for w in (20, 60, 120):
+        catalog[f'liq_turn_std_{w}d'] = op.turnover_std(w)
+        catalog[f'liq_vstd_{w}d'] = op.liq_vstd(w)
+        catalog[f'liq_amihud_avg_{w}d'] = op.amihud_illiquidity_avg(w)   # guarded; 20d NEW (!= legacy liq_amihud_20d)
+        catalog[f'liq_amihud_std_{w}d'] = op.amihud_illiquidity_std(w)
+        catalog[f'liq_shortcut_avg_{w}d'] = op.shortcut_illiquidity_avg(w)
+        catalog[f'liq_shortcut_std_{w}d'] = op.shortcut_illiquidity_std(w)
+
     # ═══════════════════════════════════════════════════════════════
     # 9. TECHNICAL (技术指标) — 14 factors
     # ═══════════════════════════════════════════════════════════════

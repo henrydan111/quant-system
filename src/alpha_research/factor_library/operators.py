@@ -856,6 +856,58 @@ def volume_cv(window):
     return f"Std(Ref($vol, 1), {window}) / Mean(Ref($vol, 1), {window})"
 
 
+# ── E1c liquidity (CICC chart 28) builders — guarded inline (GPT factor-logic review B1/B2): a
+# non-positive denominator yields NaN (which the rolling Mean/Std skip), NEVER +/-inf. No custom
+# operator. All atoms PIT-shifted (Ref(...,1)). ─────────────────────────────────────────────
+_AMT_T1 = "Ref($amount, 1)"
+
+
+def _nan_if_nonpos(den_expr: str) -> str:
+    """Return ``den_expr`` when it is > 0, else NaN: ``den * (Gt(den,0)*1.0) / (Gt(den,0)*1.0)`` —
+    the ``*1.0`` casts the Qlib bool comparison to float; den<=0 (or NaN) -> 0/0 -> NaN. Dividing a
+    numerator by this is the GPT B1/B2 guard (no inf from amount=0 / return-std=0 windows)."""
+    g = f"(Gt({den_expr}, 0) * 1.0)"
+    return f"(({den_expr}) * {g} / {g})"
+
+
+def turnover_std(window):
+    """Std of turnover rate over N days (CICC liq_turn_std; distinct from volume_cv)."""
+    return f"Std(Ref($turnover_rate, 1), {window})"
+
+
+def amihud_illiquidity_avg(window):
+    """GUARDED Amihud illiquidity mean (|ret| / amount), NaN on amount<=0 (GPT B1). Distinct from the
+    legacy unguarded ``amihud_illiquidity``."""
+    return f"Mean(Abs({DAILY_RET}) / {_nan_if_nonpos(_AMT_T1)}, {window})"
+
+
+def amihud_illiquidity_std(window):
+    """GUARDED Amihud illiquidity std."""
+    return f"Std(Abs({DAILY_RET}) / {_nan_if_nonpos(_AMT_T1)}, {window})"
+
+
+def liq_vstd(window):
+    """Volume-volatility ratio: Sum(amount, N) / Std(ret, N) — a single window-level ratio (CICC
+    liq_vstd; no avg/std split), guarded against a zero return-std denominator (GPT B2)."""
+    return f"Sum({_AMT_T1}, {window}) / {_nan_if_nonpos(f'Std({DAILY_RET}, {window})')}"
+
+
+# shortcut illiquidity day = (CICC 日K线最短路径 = 2*(high-low) - |open-close|) / amount, on ADJUSTED
+# PIT-shifted OHLC (GPT B4: split-robust project convention; raw-K-line vendor basis not truth-certified)
+_SHORTCUT_DAY = (f"(2 * ({ADJ_HIGH_T1} - {ADJ_LOW_T1}) - Abs({ADJ_OPEN_T1} - {ADJ_CLOSE_T1})) "
+                 f"/ {_nan_if_nonpos(_AMT_T1)}")
+
+
+def shortcut_illiquidity_avg(window):
+    """GUARDED shortcut illiquidity mean (adjusted OHLC range / amount)."""
+    return f"Mean({_SHORTCUT_DAY}, {window})"
+
+
+def shortcut_illiquidity_std(window):
+    """GUARDED shortcut illiquidity std."""
+    return f"Std({_SHORTCUT_DAY}, {window})"
+
+
 def log_dollar_volume(window):
     """Log of average daily dollar volume.
 
