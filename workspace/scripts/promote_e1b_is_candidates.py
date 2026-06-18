@@ -56,6 +56,29 @@ COHORT_CAVEAT = ("chart-16 volatility family (sign-conditional vol / intraday ra
                  "Williams shadows x {avg,std} x {20,60,120}) — HIGHLY CORRELATED; promoted resolve-but-"
                  "label, NOT independent discoveries; a downstream marginal-contribution selection picks "
                  "~4-6 orthogonal representatives (cf. CICC chart-100's 4 *_std_6M picks).")
+# the ONE E1b factor that clears |ICIR| but fails sign-consistency (0.64 < 0.70) -> stays draft.
+EXPECTED_BLOCKED = {"vol_down_std_20d": "candidate-rule: sign_consistency < 0.70"}
+
+
+def _assert_pgate_ceilings(registry_dir: Path, factors: set) -> None:
+    """GPT IS-gate review finding 3 — P-GATE must precede the IS status change: every factor being
+    promoted must already carry a candidate_ceiling ReplicationGovernanceRecord (truth-observed
+    2022-07 short-OOS cap). Fail closed if any is missing / not candidate_ceiling."""
+    from src.alpha_research.factor_registry.replication_governance import ReplicationGovernanceStore
+    gov = ReplicationGovernanceStore(registry_dir).records()
+    missing, wrong = [], []
+    for fid in sorted(factors):
+        g = gov[gov["factor_id"] == fid] if len(gov) else gov
+        if not len(g):
+            missing.append(fid); continue
+        ceil = str(g.sort_values("updated_at").iloc[-1]["status_ceiling"])
+        if ceil != "candidate_ceiling":
+            wrong.append((fid, ceil))
+    if missing or wrong:
+        raise SystemExit(f"P-GATE preflight FAILED (finding 3): {len(missing)} factors have NO governance "
+                         f"record {missing[:5]}, {len(wrong)} not candidate_ceiling {wrong[:5]} — run the "
+                         "E1b P-GATE (gate_cohort_factors --live) BEFORE the IS-gate.")
+    print(f"P-GATE preflight PASSED: all {len(factors)} promoted factors carry a candidate_ceiling record")
 
 
 def _finite(x) -> bool:
@@ -124,6 +147,25 @@ def main() -> int:
                        "expected_direction": direction})
 
     expected = {v["factor"] for v in verdicts}
+
+    # GPT IS-gate review finding 2 — EXPECTED-FAMILY GUARD: the promotion set must equal the exact
+    # E1b family derived DETERMINISTICALLY from the catalog (independent of results.jsonl), and the
+    # sole candidate-rule blocker must be vol_down_std_20d. A stray vol_* factor or a missing E1b row
+    # would otherwise silently change the live promotion set.
+    from src.alpha_research.factor_library import get_factor_catalog
+    expected_e1b = frozenset(n for n in get_factor_catalog(include_new_data=True) if n.startswith(FACTOR_PREFIX))
+    rule_blocked = {fid for fid, why in blocked if "candidate-rule" in why}
+    if len(expected_e1b) != 36:
+        raise SystemExit(f"catalog has {len(expected_e1b)} vol_ factors, expected 36 — refuse (family drift)")
+    if set(rows) != expected_e1b:
+        raise SystemExit(f"matrix vol_ rows != catalog E1b family — stray={sorted(set(rows)-expected_e1b)} "
+                         f"missing={sorted(expected_e1b-set(rows))} — refuse (set integrity).")
+    if rule_blocked != set(EXPECTED_BLOCKED):
+        raise SystemExit(f"candidate-rule blockers {sorted(rule_blocked)} != expected {sorted(EXPECTED_BLOCKED)} "
+                         "— refuse (the IS-pass/fail boundary moved; re-review before promoting).")
+    if expected != (expected_e1b - set(EXPECTED_BLOCKED)):
+        raise SystemExit(f"passer set {sorted(expected)} != expected_e1b - blocked — refuse (set integrity).")
+    print(f"set-integrity guard PASSED: 36 E1b family, 35 pass, sole blocker={sorted(EXPECTED_BLOCKED)}")
     print(f"E1b candidate gate: {len(verdicts)} pass / {len(rows)} vol_ factors evaluated "
           f"({len(blocked)} blocked)")
     for r in sorted(report, key=lambda x: x["heldout_rank_icir"]):
@@ -147,6 +189,9 @@ def main() -> int:
     bad = {fid: st for fid, st in pre_status.items() if st != "draft"}
     if bad:
         raise SystemExit(f"expected ALL passers at 'draft' before promotion; got {bad}")
+
+    # finding 3: P-GATE ceilings must already exist for every promoted factor (ordering guard)
+    _assert_pgate_ceilings(registry_dir, expected)
 
     out = store.record_lifecycle_evidence(
         run_id=RUN_ID, verdicts=verdicts, evidence_class=EVIDENCE_CLASS, source_run_dir=str(PROV_DIR))
