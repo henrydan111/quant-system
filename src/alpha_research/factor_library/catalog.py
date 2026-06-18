@@ -381,6 +381,20 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
         catalog[f'liq_shortcut_avg_{w}d'] = op.shortcut_illiquidity_avg(w)
         catalog[f'liq_shortcut_std_{w}d'] = op.shortcut_illiquidity_std(w)
 
+    # CICC Wave E1d — 量价相关性手册 (图表40): 8 new (0 dedup). Inline Corr+Ref, NO custom operator
+    # (GPT factor-logic APPROVE 2026-06-18; manifest drops the pre-registered lead_lag_corr). Single 20d
+    # window (handbook chart 40 is 1M only). lead_lag_semantics — _post = price/return POSTerior (t+1) ⇒
+    # TURNOVER leads; _prior = price/return PRIOR (t-1) ⇒ PRICE/RETURN leads (lead realized by shifting
+    # the LEADING series back, never a forward Ref). See E1d_factor_logic.md.
+    catalog['corr_price_turn_20d'] = op.corr_price_turn(20)               # sync: corr(turnover, adj close level)
+    catalog['corr_price_turn_post_20d'] = op.corr_price_turn_post(20)     # turnover leads price
+    catalog['corr_price_turn_prior_20d'] = op.corr_price_turn_prior(20)   # price leads turnover
+    catalog['corr_ret_turn_20d'] = op.corr_ret_turn(20)                   # sync: corr(turnover, ret)
+    catalog['corr_ret_turn_post_20d'] = op.corr_ret_turn_post(20)         # turnover leads return
+    catalog['corr_ret_turn_prior_20d'] = op.corr_ret_turn_prior(20)       # return leads turnover
+    catalog['corr_ret_turnd_20d'] = op.corr_ret_turnd(20)                 # sync: corr(Δturnover, ret)
+    catalog['corr_ret_turnd_prior_20d'] = op.corr_ret_turnd_prior(20)     # return leads Δturnover
+
     # ═══════════════════════════════════════════════════════════════
     # 9. TECHNICAL (技术指标) — 14 factors
     # ═══════════════════════════════════════════════════════════════

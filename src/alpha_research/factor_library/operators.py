@@ -908,6 +908,57 @@ def shortcut_illiquidity_std(window):
     return f"Std({_SHORTCUT_DAY}, {window})"
 
 
+# ── E1d price-volume correlation (CICC chart 40) builders — inline Corr+Ref, NO custom operator
+# (GPT factor-logic review APPROVE 2026-06-18). lead/lag is realized by shifting the LEADING series
+# further BACK, never a forward Ref(...,-1) → PIT-safe by construction (latest pair strictly < T).
+# lead_lag_semantics: _post = price/return is POSTerior (t+1) so turnover LEADS; _prior = price/return
+# is PRIOR (t-1) so price/return LEADS. Adjusted close LEVEL for the price-corr family (split-robust);
+# adjusted DAILY_RET + raw $turnover_rate elsewhere. All atoms PIT-shifted (Ref(...,1)). ──────────────
+_TURN_T1 = "Ref($turnover_rate, 1)"                       # turnover at T-1
+_TURND_T1 = f"({_TURN_T1} - Ref($turnover_rate, 2))"      # Δturnover = turn[T-1] - turn[T-2]
+
+
+def corr_price_turn(window):
+    """corr(turnover, adjusted close LEVEL) over N — 量价同步 (sync)."""
+    return f"Corr({_TURN_T1}, {ADJ_CLOSE_T1}, {window})"
+
+
+def corr_price_turn_post(window):
+    """量能领先 (turnover LEADS price): corr(turnover_t, close_{t+1}); shift the LEADER (turnover) back 1."""
+    return f"Corr(Ref({_TURN_T1}, 1), {ADJ_CLOSE_T1}, {window})"
+
+
+def corr_price_turn_prior(window):
+    """价格领先 (price LEADS turnover): corr(turnover_t, close_{t-1}); shift the counterpart (close) back 1."""
+    return f"Corr({_TURN_T1}, Ref({ADJ_CLOSE_T1}, 1), {window})"
+
+
+def corr_ret_turn(window):
+    """corr(turnover, adjusted return) over N — 量价同步 (sync)."""
+    return f"Corr({_TURN_T1}, {DAILY_RET}, {window})"
+
+
+def corr_ret_turn_post(window):
+    """量能领先 (turnover LEADS return): corr(turnover_t, ret_{t+1}); shift turnover back 1."""
+    return f"Corr(Ref({_TURN_T1}, 1), {DAILY_RET}, {window})"
+
+
+def corr_ret_turn_prior(window):
+    """价格领先 (return LEADS turnover): corr(turnover_t, ret_{t-1}); shift return back 1."""
+    return f"Corr({_TURN_T1}, Ref({DAILY_RET}, 1), {window})"
+
+
+def corr_ret_turnd(window):
+    """corr(Δturnover, adjusted return) over N — 量价同步 (sync). Distinct from the unwired price_vol_corr
+    (raw-volume RATIO change, not turnover DIFFERENCE)."""
+    return f"Corr({_TURND_T1}, {DAILY_RET}, {window})"
+
+
+def corr_ret_turnd_prior(window):
+    """价格领先 (return LEADS Δturnover): corr(Δturnover_t, ret_{t-1}); shift return back 1."""
+    return f"Corr({_TURND_T1}, Ref({DAILY_RET}, 1), {window})"
+
+
 def log_dollar_volume(window):
     """Log of average daily dollar volume.
 

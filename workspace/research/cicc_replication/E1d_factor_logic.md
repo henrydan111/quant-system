@@ -90,8 +90,25 @@ certification.)
   basis. `corr_ret_turn*`/`corr_ret_turnd*` use the adjusted `DAILY_RET`. `$turnover_rate` is the raw
   normalized ratio; `turnd` is its first difference.
 
-## Plan (pending GPT APPROVE)
+## GPT verdict (2026-06-18): **APPROVE for draft registration** — no operator build; 1 non-blocking test req
 
-Define 8 inline factors (no operator) → register draft → v2 manifest expand chart-40 (8 factor-level rows +
-`catalog_factor_id`, drop `lead_lag_corr`) → 7-domain matrix → import → P-GATE → IS-gate. resolve-but-label;
-no promotion here. a_priori; 2021+ sealed.
+GPT confirmed all 6 points: (1) lead/lag PIT-safe and **directionally correct** in both directions (shift
+the leader back for `post`, the counterpart back for `prior`; no forward `Ref`, latest pair `< T`); (2) drop
+`lead_lag_corr` — pure `Corr`+`Ref`, no certified operator; (3) adjusted close level + adjusted return + raw
+turnover correct; (4) **8 new / 0 dedup** confirmed (`price_vol_corr` unwired + raw-volume-ratio ≠ turnover
+diff); (5) keep `_post`/`_prior` for handbook fidelity **+ add explicit `lead_lag_semantics` mapping** (don't
+rename to `_vlead`/`_plead`); (6) **20d only** — do NOT add 60/120 (those would be exploratory, not faithful
+chart-40 replication).
+
+**Non-blocking requirement (before matrix/P-GATE, NOT before draft registration):** a lightweight
+**golden-value lead/lag direction test** (expression/golden, NOT `OperatorCertification`): toy panel
+`turnover=[1,2,3,…]`, `close=ret=turnover shifted +1`; assert the `post` expression peaks when turnover
+leads, `prior` peaks when price/return leads, and **no expression uses `Ref(…,−1)`**. Plus the standard
+guards: PIT lint (existing stack), warmup/runway discipline (as E1a/E1b), manifest drops `lead_lag_corr`.
+
+## Plan (GPT-approved)
+
+Define 8 inline factors (no operator) **with `lead_lag_semantics` catalog comments** → register draft →
+**golden lead/lag direction test** → v2 manifest expand chart-40 (8 factor-level rows + `catalog_factor_id`,
+drop `lead_lag_corr`) → 7-domain matrix → import → P-GATE → IS-gate. resolve-but-label; no promotion here.
+a_priori; 2021+ sealed.
