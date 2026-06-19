@@ -1,0 +1,86 @@
+{
+  "run_id": "e1f_is_candidate_2010_2020",
+  "generated_at": "2026-06-20T01:14:51",
+  "live": true,
+  "evidence_class": "a_priori",
+  "mechanism": "matrix-reuse (resign pattern): 2010-2020 univ_all run_is_walk_forward(a_priori) from unified_eval_matrix, bit-identical to the gate; rows validated ESTU_STYLE_V1.",
+  "selectivity": "3 of 9 pass the univ_all rule — SELECTIVE (unlike E1c/E1d all-pass); signal in order-size decomposition (large +, extra-large −), totals degenerate.",
+  "gate_authorization": "User authorized 'all passers, with cohort-redundancy caveat'. Writing formal_evidence_eligible + set_status(candidate) IS the human gate.",
+  "oos_status": "a_priori IS-selection on 2010-2020 only; 2021+ UNBURNED/sealed.",
+  "expected_direction_split": {
+    "positive_large_order_accumulation": 2,
+    "inverse_xl_distribution": 1
+  },
+  "cohort_redundancy_caveat": "chart-64 capital-flow active-family — the 3 passers are a correlated LARGE-order net-buy pair (flow_act_buy_prop_l + flow_act_buy_shift_dist_l, both positive = institutional accumulation) + the EXTRA-large displacement (flow_act_buy_shift_dist_xl, inverse = distribution). Promoted resolve-but-label, NOT 3 independent discoveries; a downstream marginal-contribution selection picks ~2 (one large-order representative + the xl).",
+  "cross_wave_redundancy_caveat": "E1f active-net-flow factors are conceptually related to the existing flow_* family (mean-of-ratios net_pct) and to E1c liquidity/turnover; the prop ratio-of-sums is a DISTINCT estimator (GPT-confirmed), but downstream marginal-contribution + residual-vs-book selection must decide independence before counting as new discoveries.",
+  "deferred": "the 9 'buy' family (buy_shift_dist = affine alias of act_buy_shift_dist, Pearson 1.0; total-buy needs passive flow) + the 10 open/close factors (no intraday split). The 6 blocked active factors stay draft (marginal IS; resolve-but-label).",
+  "hardening_guards": [
+    "assign_candidate_status(field_ok)",
+    "all-or-none attach",
+    "matrix-row identity (ESTU_STYLE_V1 native 2010-2020)",
+    "pre-status==draft",
+    "bare-flow_act_buy_ membership (uniquely E1f)",
+    "P-GATE ceiling preflight",
+    "set-integrity (6 EXPECTED_BLOCKED)"
+  ],
+  "promoted": [
+    "flow_act_buy_prop_l_20d",
+    "flow_act_buy_shift_dist_l_20d",
+    "flow_act_buy_shift_dist_xl_20d"
+  ],
+  "blocked": [
+    [
+      "flow_act_buy_prop_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=+0.070, sign-consistency=0.55)"
+    ],
+    [
+      "flow_act_buy_prop_m_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=+0.157, sign-consistency=0.64)"
+    ],
+    [
+      "flow_act_buy_prop_s_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.015, sign-consistency=0.64)"
+    ],
+    [
+      "flow_act_buy_shift_dist_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=+0.070, sign-consistency=0.64)"
+    ],
+    [
+      "flow_act_buy_shift_dist_m_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=+0.164, sign-consistency=0.64)"
+    ],
+    [
+      "flow_act_buy_shift_dist_s_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.090, sign-consistency=0.73)"
+    ]
+  ],
+  "verdicts": [
+    {
+      "factor": "flow_act_buy_prop_l_20d",
+      "heldout_rank_icir": 0.2258,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "flow_act_buy_shift_dist_l_20d",
+      "heldout_rank_icir": 0.1242,
+      "sign_consistency": 0.82,
+      "expected_direction": "positive"
+    },
+    {
+      "factor": "flow_act_buy_shift_dist_xl_20d",
+      "heldout_rank_icir": -0.4924,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    }
+  ],
+  "recorder_result": {
+    "attached": [
+      "flow_act_buy_prop_l_20d",
+      "flow_act_buy_shift_dist_l_20d",
+      "flow_act_buy_shift_dist_xl_20d"
+    ],
+    "skipped_drift": [],
+    "skipped_unknown": []
+  }
+}

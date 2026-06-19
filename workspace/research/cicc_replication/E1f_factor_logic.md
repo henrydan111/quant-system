@@ -5,7 +5,11 @@
 > [CICC_价量因子定义.md](../../../Knowledge/AI量化增强/CICC_价量因子定义.md) §6 (资金流因子, 32). Data:
 > Tushare `moneyflow` (approved). **Claim: NO custom operator** — all inline `Sum`/`Ref`/division.
 
-## Scope: 32 handbook factors → 18 data-ready (大小单) + 10 DEFERRED (开盘/尾盘, proxy) + 4 reconciliation
+## Scope: 32 handbook factors → 9 FAITHFUL registered (大小单 active-net, path A) + the rest DEFERRED
+
+> ⚠ The "18" in the original draft below was REDUCED to **9 faithful active-net factors (path A)** by the GPT
+> factor-logic review — the 9 "buy" factors are affine aliases / unbuildable-total-buy proxies. See the
+> **GPT verdict** section. (Of the 9 registered, the IS-gate later promoted only 3 — E1f is selective.)
 
 The handbook splits chart 64 into two sub-families:
 1. **大小单资金流向 (large/small-order flow)** — replicable from `moneyflow`'s order-size components. **THIS WAVE.**
@@ -14,7 +18,8 @@ The handbook splits chart 64 into two sub-families:
    Faithful replication needs an intraday/tick moneyflow source — a separate ingestion (cf. E1e/cyq_chips).
    NOT registered here; recorded as a known gap.
 
-(Handbook lists ~28 named + 4 window/variant; this spec registers the **18 faithful 大小单** factors below.)
+(Handbook lists ~28 named + 4 window/variant. This draft first proposed 18 大小单 factors; GPT review reduced
+to the **9 faithful active-net 大小单** factors — see the GPT verdict section.)
 
 ## Data (all PIT-lag-1 — `moneyflow` is a same-day OUTCOME, trade_date-anchored, knowable at close T)
 
