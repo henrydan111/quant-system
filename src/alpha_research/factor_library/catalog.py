@@ -479,6 +479,19 @@ def _add_capital_flow_factors(catalog):
         "Mean(Ref($buy_lg_amount, 1), 5) / Mean(Ref($amount, 1), 5)"
     )
 
+    # CICC Wave E1f — 资金流手册 (图表64): 9 FAITHFUL active-family factors (path A; GPT factor-logic
+    # CHANGES REQUIRED→APPROVE 2026-06-19). prop = ratio-of-sums (distinct from the mean-of-ratios
+    # flow_*_net_pct above); shift_dist = 位移路程比 (net/gross ∈[−1,1]). Guarded, no operator, all
+    # Ref(...,1) (moneyflow same-day outcome). DEFERRED: the "总买入含被动" buy family (buy_shift_dist =
+    # affine alias of act_buy_shift_dist; total-buy needs passive flow, unavailable) + the 开盘/尾盘 family
+    # (no intraday split in daily moneyflow). See E1f_factor_logic.md.
+    catalog['flow_act_buy_prop_20d'] = op.flow_act_buy_prop('total', 20)
+    for _tag, _sz in (('l', 'lg'), ('m', 'md'), ('s', 'sm')):
+        catalog[f'flow_act_buy_prop_{_tag}_20d'] = op.flow_act_buy_prop(_sz, 20)
+    catalog['flow_act_buy_shift_dist_20d'] = op.flow_act_buy_shift_dist('total', 20)
+    for _tag, _sz in (('xl', 'elg'), ('l', 'lg'), ('m', 'md'), ('s', 'sm')):
+        catalog[f'flow_act_buy_shift_dist_{_tag}_20d'] = op.flow_act_buy_shift_dist(_sz, 20)
+
 
 def _add_northbound_factors(catalog):
     """Category 12: Northbound Funds (北向资金) — requires hk_hold data."""

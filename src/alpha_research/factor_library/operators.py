@@ -959,6 +959,44 @@ def corr_ret_turnd_prior(window):
     return f"Corr({_TURND_T1}, Ref({DAILY_RET}, 1), {window})"
 
 
+# ── E1f capital flow (CICC chart 64) — 大小单 ACTIVE-NET family. Inline Sum/Ref, guarded (NaN not inf via
+# _nan_if_nonpos). moneyflow is a same-day OUTCOME → every field Ref(...,1). Sizes sm/md/lg/elg = handbook
+# s/m/l/xl. act_buy = NET active inflow (buy − sell); prop = Sum(net,N)/Sum(turnover,N) (ratio-of-sums,
+# faithful to "Σ净买入/Σ成交额", distinct from the existing mean-of-ratios flow_*_net_pct); shift_dist
+# (位移路程比) = Sum(net,N)/Sum(gross,N) ∈ [−1,1] (net displacement / gross path, self-contained units).
+# The handbook "总买入含被动" (buy) family is DEFERRED (GPT factor-logic review 2026-06-19): moneyflow has
+# only ACTIVE buy/sell, so "total incl. passive" is unbuildable, and buy_shift_dist = Sum(buy)/Sum(buy+sell)
+# = 0.5*(1 + act_buy_shift_dist) is a RANK-IDENTICAL affine alias. The 开盘/尾盘 family is also deferred
+# (no intraday split in daily moneyflow). Use the buy/sell COMPONENTS, never the opaque $net_mf_amount. ──
+_MF_SIZES = ("sm", "md", "lg", "elg")
+
+
+def _mf_net(scope: str) -> str:
+    """Net active inflow expr (Ref-lagged) for an order size, or 'total' across all four sizes."""
+    if scope == "total":
+        return "(" + " + ".join(f"Ref($buy_{s}_amount, 1) - Ref($sell_{s}_amount, 1)" for s in _MF_SIZES) + ")"
+    return f"(Ref($buy_{scope}_amount, 1) - Ref($sell_{scope}_amount, 1))"
+
+
+def _mf_gross(scope: str) -> str:
+    """Gross activity expr (Ref-lagged) for an order size, or 'total' across all four sizes."""
+    if scope == "total":
+        return "(" + " + ".join(f"Ref($buy_{s}_amount, 1) + Ref($sell_{s}_amount, 1)" for s in _MF_SIZES) + ")"
+    return f"(Ref($buy_{scope}_amount, 1) + Ref($sell_{scope}_amount, 1))"
+
+
+def flow_act_buy_prop(scope, window):
+    """Net active-buy proportion = Sum(net, N) / Sum(turnover, N), guarded NaN-not-inf. scope ∈
+    {total, sm, md, lg, elg}. ⚠ moneyflow amounts are 万元, $amount the provider turnover unit — a
+    constant scale → rank-invariant (IC/RankIC unaffected; absolute level is unit-scaled)."""
+    return f"Sum({_mf_net(scope)}, {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}"
+
+
+def flow_act_buy_shift_dist(scope, window):
+    """位移路程比 = Sum(net, N) / Sum(gross, N) ∈ [−1,1], guarded NaN-not-inf. scope ∈ {total, sm, md, lg, elg}."""
+    return f"Sum({_mf_net(scope)}, {window}) / {_nan_if_nonpos(f'Sum({_mf_gross(scope)}, {window})')}"
+
+
 def log_dollar_volume(window):
     """Log of average daily dollar volume.
 

@@ -39,22 +39,31 @@ chart-64 `required_fields` listing `$net_mf_amount` is corrected to the componen
   DIRECTIONAL the flow was (∈ [−1, 1]). Self-contained units (both legs `moneyflow` 万元) → clean. Inline
   `Sum/Sum`, **no `shift_distance_ratio` operator** (drop it from the manifest, as E1c/E1d dropped theirs).
 
-## The 18 factors (act_buy = NET; buy = GROSS-BUY — see GPT question Q1)
+## GPT verdict (2026-06-19): CHANGES REQUIRED → **path A APPROVED** (9 faithful; buy family DEFERRED)
+
+GPT approved the active-net construction, the gross `shift_dist` denominator, the prop ratio-of-sums (distinct
+from the existing mean-of-ratios), the open/close defer, and no-operator — but **blocked the 9 "buy" factors**:
+- `moneyflow` has only ACTIVE buy/sell, so the handbook's "总买入含被动" (total incl. passive) is **unbuildable**.
+- **`buy_shift_dist` is a rank-identical affine ALIAS of `act_buy_shift_dist`**: with `B=Σbuy, S=Σsell`,
+  `act = (B−S)/(B+S)` and `buy = B/(B+S) = 0.5·(1+act)`. **Empirically confirmed** (real data, 5 names ×
+  2019-2020): Pearson **1.000000**, residual `|buy − 0.5(1+act)|` = 6e-8 → exact affine. (Spearman read 0.32,
+  a float-precision artifact: the TOTAL `act_buy_shift_dist` is ≈0/near-constant on liquid names, so the 6e-8
+  residual scrambles ranks within the tied cluster — Pearson is the correct diagnostic; the per-SIZE forms have
+  real spread.) → the 5 `buy_shift_dist_*` are NOT new signals.
+
+User chose **path A** (faithful-only; consistent with the E1e defer-not-proxy decision; the 4 distinct-but-proxy
+`flow_buy_prop_*` were also deferred). The **9 faithful active-family factors registered**:
 
 ```
-# 主动(净) family — act_buy = net active inflow (buy − sell)
-flow_act_buy_prop_20d              = Sum(total_net, 20)  / Sum(Ref($amount,1), 20)
-flow_act_buy_prop_{l,m,s}_20d      = Sum(net_{lg,md,sm}, 20) / Sum(Ref($amount,1), 20)      # 3
-flow_act_buy_shift_dist_20d        = Sum(total_net, 20)  / Sum(total_gross, 20)
-flow_act_buy_shift_dist_{xl,l,m,s}_20d = Sum(net_{elg,lg,md,sm},20) / Sum(gross_{elg,lg,md,sm},20)  # 4
-# 总(含被动) family — buy = gross active-buy amount (the "含被动" nuance is NOT separable in moneyflow; Q1)
-flow_buy_prop_20d                  = Sum(total_buy, 20)  / Sum(Ref($amount,1), 20)
-flow_buy_prop_{l,m,s}_20d          = Sum(buy_{lg,md,sm}, 20) / Sum(Ref($amount,1), 20)      # 3
-flow_buy_shift_dist_20d            = Sum(total_buy, 20)  / Sum(total_gross, 20)
-flow_buy_shift_dist_{xl,l,m,s}_20d = Sum(buy_{elg,lg,md,sm},20) / Sum(gross_{elg,lg,md,sm},20)  # 4
+flow_act_buy_prop_20d                  = Sum(total_net, 20) / guard(Sum(Ref($amount,1), 20))
+flow_act_buy_prop_{l,m,s}_20d          = Sum(net_{lg,md,sm}, 20) / guard(Sum(Ref($amount,1), 20))   # 3
+flow_act_buy_shift_dist_20d            = Sum(total_net, 20) / guard(Sum(total_gross, 20))
+flow_act_buy_shift_dist_{xl,l,m,s}_20d = Sum(net_{elg,lg,md,sm},20) / guard(Sum(gross_{elg,lg,md,sm},20))  # 4
 ```
-= 1+3+1+4 (act_buy) + 1+3+1+4 (buy) = **18**. All guarded against a zero denominator (NaN, not inf) via the
-`_nan_if_nonpos` idiom (a stock with 0 turnover/flow over 20d → NaN, dropped by the eval).
+= 1+3 (prop) + 1+4 (shift_dist) = **9**. `guard(x)` = `_nan_if_nonpos` (NaN-not-inf on a non-positive 20d
+denominator). **DEFERRED:** the 9 "buy" factors (5 affine aliases + 4 active-buy proxies of the unbuildable
+total-buy) and the 10 open/close factors (no intraday split). Real-data spot-check: 9 factors inf=0,
+`shift_dist`∈[−1,1], `prop` sane, nan%=0; per-size `shift_dist` carries real spread (e.g. `_s` ∈ [−0.85, 0.29]).
 
 ## Dedup vs the 8 existing `flow_*` catalog factors
 
@@ -85,10 +94,10 @@ mean-of-ratios `flow_*_net_pct`); 0 exact dedup** (pending GPT Q3 on the prop ne
   intraday data) rather than registering a daily proxy.
 - **Q5 (no operator).** Confirm `shift_distance_ratio` is dropped (inline `Sum/Sum`).
 
-## Plan (pending GPT APPROVE)
+## Plan (GPT-approved path A)
 
-Define 18 guarded inline factors (no operator) → register draft → v2 manifest expand chart-64 (18 factor-
-level rows + `catalog_factor_id`, drop `shift_distance_ratio`, correct `required_fields` to components, keep
-the 2 open/close rows marked `proxy_approx`/deferred) → 7-domain matrix → import → P-GATE → IS-gate.
-resolve-but-label; no promotion here. a_priori; 2021+ sealed. `moneyflow` coverage from 2014 (2008 partial)
-→ near-full 2010-2020 IS window.
+Define **9** guarded inline factors (no operator) → register draft → v2 manifest expand chart-64 (9 factor-
+level rows + `catalog_factor_id`, drop `shift_distance_ratio`, correct `required_fields` to the buy/sell
+components, keep the open/close rows `proxy_approx`/deferred + a note that the "buy" family is deferred as
+affine-alias/proxy) → 7-domain matrix → import → P-GATE → IS-gate. resolve-but-label; no promotion here.
+a_priori; 2021+ sealed. `moneyflow` coverage from 2014 (2008 partial) → near-full 2010-2020 IS window.
