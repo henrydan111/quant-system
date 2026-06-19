@@ -68,6 +68,12 @@ COHORT_CAVEAT = ("chart-40 price-volume correlation family — ONE correlated fa
                  "Promoted resolve-but-label, NOT 8 independent discoveries; a downstream marginal-"
                  "contribution selection picks ~2-3 orthogonal representatives (the lead/lag asymmetry "
                  "isolating turnover-leads-return as the lone positive-ICIR factor is the most distinct).")
+# GPT IS-gate review (2026-06-19): durable cross-wave redundancy caveat — non-blocking, text-only.
+CROSS_WAVE_CAVEAT = ("E1d price-volume-correlation factors may overlap with E1c liquidity/turnover factors "
+                     "(turn_std, vstd, amihud, shortcut) and existing reversal/liquidity controls; the "
+                     "universe-invariant strength may load on broad liquidity/turnover/size/attention "
+                     "exposure. They must clear downstream marginal-contribution + residual-vs-book "
+                     "selection before being counted as independent discoveries or portfolio components.")
 # E1d: ALL 8 clear the candidate rule on univ_all (verified vs matrix) -> NO expected blocker.
 EXPECTED_BLOCKED: dict = {}
 
@@ -252,6 +258,10 @@ def main() -> int:
         "expected_direction_split": {"positive_turnover_leads_return": n_pos, "inverse_price_volume_comovement": n_inv},
         "universe_invariance": "sign pattern verified consistent across all 7 matrix universes (univ_all + 6 sub).",
         "cohort_redundancy_caveat": COHORT_CAVEAT,
+        "cross_wave_redundancy_caveat": CROSS_WAVE_CAVEAT,
+        "high_icir_caveat": ("heldout ICIR up to -0.78 exceeds E1b/E1c; strong but economically plausible "
+                             "(量价背离/exhaustion); IS-only, no OOS spend; NOT deployable/independent."),
+        "gpt_isgate_verdict": "APPROVE/GO 2026-06-19 (narrowly scoped: candidate != approved/independent/deployable).",
         "hardening_guards": ["assign_candidate_status(field_ok)", "all-or-none attach",
                              "matrix-row identity (ESTU_STYLE_V1 native 2010-2020)", "pre-status==draft",
                              "bare-corr_ membership (uniquely E1d)", "P-GATE ceiling preflight"],
