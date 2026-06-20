@@ -514,6 +514,17 @@ def _add_northbound_factors(catalog):
         "If(Ref($ratio, 1) > 0, Ref($ratio, 1) - Ref($ratio, 61), np.nan)"
     )
 
+    # CICC Wave E1g — 北向资金手册 (图表76): 4 faithful per-instrument factors (GPT factor-logic
+    # CHANGES REQUIRED→path-C APPROVE 2026-06-20). All masked to the northbound-held sub-universe
+    # (If(ratio>0)); inline, no operator. north_hold_prop / prefer-family DEFERRED (dedup / cross-
+    # sectional rank-alias + not Qlib-expressible). VWAP holding-VALUE uses $north_hold_vol (faithful,
+    # registered 2026-06-20), NOT a ratio×VWAP proxy. CAVEATS: $ratio is issued-share % (doc 188, not
+    # CICC's free-float); OOS spent_same_family (arXiv D4 sign-flip); short IS 2017-2020. See E1g_factor_logic.md.
+    catalog['north_hold_prop_st_chg_20d'] = op.north_hold_prop_st_chg(20)   # ratio − mean(ratio,20)
+    catalog['north_inflow_shift_dist_20d'] = op.north_inflow_shift_dist(20)  # 位移路程比 ∈[−1,1]
+    catalog['north_excess_hold_st_20d'] = op.north_excess_hold_st(20)        # HV/mean(HV,20) − ret20
+    catalog['north_trade_prop_20d'] = op.north_trade_prop(20)                # (HV/mean(HV,20)) / Σamount
+
 
 def _add_margin_factors(catalog):
     """Category 13: Margin Trading (融资融券) — requires margin_detail data."""

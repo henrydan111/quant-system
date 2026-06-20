@@ -3,8 +3,24 @@
 > Pre-registration factor logic for the E1g tranche, to be GPT-reviewed BEFORE registration (mirrors
 > the E1a–E1f logic reviews). Source: handbook chart 76 in
 > [CICC_价量因子定义.md](../../../Knowledge/AI量化增强/CICC_价量因子定义.md) §7 (北向资金流因子, 9-10). Data:
-> Tushare `hk_hold` (approved) — serves ONLY `$ratio` (holding % of free float, 2017-2025). **Claim: NO
-> custom operator** — all inline `Sum`/`Mean`/`Delta`/`Abs`/`Ref`/division/`If`.
+> Tushare `hk_hold` (approved) — `$ratio` (holding % of **ISSUED** shares per doc 188) + `$north_hold_vol`
+> (holding shares, registered approved 2026-06-20). **NO custom operator** — all inline.
+
+## GPT verdict (2026-06-20): CHANGES REQUIRED → **Plan C APPROVED** (4 faithful, with `$north_hold_vol`)
+
+GPT approved the direction (defer unsupported, inline, mask, spent-OOS resolve-but-label) but blocked the
+original ratio-only "4 faithful" claim on two points, both folded in:
+- **VWAP proxy not faithful from `$ratio` alone** — `ratio×VWAP` assumes the share-base cancels, but hk_hold
+  also exposes `vol` (holding shares). → adopted **Plan C**: registered `$north_hold_vol` (already
+  materialized via `NORTHBOUND_RENAMES`; registry flip, no rebuild) and the two value-based factors now use
+  **`hv = $north_hold_vol × VWAP`** (faithful holding-VALUE, no share-base assumption). Also: doc 188 says
+  `$ratio` is **% of issued shares** (not free-float) → the ratio-only factors are faithful to the issued-
+  share field, close to but not exact to CICC's `流通股本` (recorded on the manifest rows + data_dictionary).
+- **Prefer-family defer rationale corrected** — the *level* `north_hold_prefer` IS a cross-sectional rank-
+  alias of `north_hold_pct`, but `prefer_st_chg`/`prefer_lt_chg` are NOT aliases (the cs-mean varies over
+  time); they're deferred because they need a **cross-sectional materialization path** Qlib per-instrument
+  expressions can't express — NOT because they're aliases. (Q2: mean baseline confirmed; Q4: keep explicit
+  `If(r>0)` mask; Q5: spent-OOS/short-window framing confirmed; Q6: no operator confirmed.)
 
 ## Three load-bearing caveats (E1g is qualitatively different from E1a–E1f)
 

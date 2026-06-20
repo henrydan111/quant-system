@@ -997,6 +997,49 @@ def flow_act_buy_shift_dist(scope, window):
     return f"Sum({_mf_net(scope)}, {window}) / {_nan_if_nonpos(f'Sum({_mf_gross(scope)}, {window})')}"
 
 
+# ── E1g northbound (CICC chart 76) builders — inline, guarded, MASKED to the northbound-held sub-universe
+# (If(Ref($ratio,1)>0, …, np.nan) — the arXiv-D4 cov pattern; ~35% of names are non-Connect, ratio=0). hk_hold
+# serves $ratio (% of ISSUED shares per doc 188 — close to but NOT exact to CICC's 流通股本) + $north_hold_vol
+# (holding shares). VWAP-based holding-VALUE uses $north_hold_vol (NOT a ratio×VWAP proxy — GPT factor-logic
+# review 2026-06-20: the share-base must not be assumed to cancel). Same-day fact → Ref(...,1). north family
+# OOS spent_same_family (arXiv D4); short IS window (hk_hold 2017+). The 持仓偏好 prefer family is DEFERRED:
+# level = cross-sectional rank-alias of north_hold_pct; st/lt change need a cross-sectional materialization
+# path (Qlib per-instrument expressions can't compute cs_mean). ───────────────────────────────────────────
+_NB_R = "Ref($ratio, 1)"                                            # northbound holding % at T-1
+_NB_VWAP = f"(Ref($amount, 1) / {_nan_if_nonpos('Ref($vol, 1)')})"  # VWAP at T-1 (turnover / volume)
+_NB_HV = f"(Ref($north_hold_vol, 1) * {_NB_VWAP})"                  # holding VALUE = shares × VWAP (faithful)
+
+
+def _nb_mask(expr: str) -> str:
+    """Mask to the northbound-held sub-universe: NaN where ratio<=0 (non-Connect / non-held)."""
+    return f"If({_NB_R} > 0, {expr}, np.nan)"
+
+
+def north_hold_prop_st_chg(window):
+    """ratio − Mean(ratio, N): short-term northbound-holding deviation (mean-deviation; distinct from the
+    point-to-point north_hold_change). Faithful to the issued-share ratio field."""
+    return _nb_mask(f"{_NB_R} - Mean({_NB_R}, {window})")
+
+
+def north_inflow_shift_dist(window):
+    """位移路程比 = Sum(Δratio, N) / Sum(|Δratio|, N) ∈ [−1,1] (net northbound flow / gross path), guarded."""
+    d = f"Delta({_NB_R}, 1)"
+    return _nb_mask(f"Sum({d}, {window}) / {_nan_if_nonpos(f'Sum(Abs({d}), {window})')}")
+
+
+def north_excess_hold_st(window):
+    """Excess holding-VALUE = HV_t / Mean(HV, N) − ret_N (current vs recent holding value, minus N-day return);
+    HV = $north_hold_vol × VWAP (faithful, no share-base assumption)."""
+    ret = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {window + 1}) - 1)"
+    return _nb_mask(f"{_NB_HV} / {_nan_if_nonpos(f'Mean({_NB_HV}, {window})')} - {ret}")
+
+
+def north_trade_prop(window):
+    """Holding-VALUE turnover = (HV_t / Mean(HV, N)) / Sum(amount, N) (current/recent holding value per turnover)."""
+    excess = f"{_NB_HV} / {_nan_if_nonpos(f'Mean({_NB_HV}, {window})')}"
+    return _nb_mask(f"({excess}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
 def log_dollar_volume(window):
     """Log of average daily dollar volume.
 

@@ -714,9 +714,11 @@ Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 | `ts_code` | TS Stock Code | TS代码 |
 | `trade_date` | Trade Date | 交易日期 |
 | `name` | Stock Name | 股票名称 |
-| `vol` | Holding Volume (shares) | 持股数量(股) |
-| `ratio` | Holding % of Free Float | 持股占比(%) |
+| `vol` | Holding Volume (shares) → provider `$north_hold_vol` | 持股数量(股) |
+| `ratio` | Holding % of **Issued** Shares (doc 188; NOT free-float) → provider `$ratio` | 持股占比(%，占已发行股份) |
 | `exchange` | Exchange (SH/SZ) | 交易所 |
+
+> **Provider fields (2026-06-20):** `$ratio` (issued-share %, approved 2026-06-05) + `$north_hold_vol` (holding shares, approved 2026-06-20 — raw `vol` renamed via `NORTHBOUND_RENAMES` to avoid the kline `$vol` collision; bin already materialized, registry flip only). ⚠ `$ratio` is **% of ISSUED shares** per Tushare doc 188 (the earlier "Free Float" label was wrong) — close to but not exact to CICC chart-76's `持仓量/流通股本` wording. Daily northbound disclosure **stopped 2024-08-20** (doc 188: switched to quarterly) → daily series effectively 2017..2024-08; PIT: end-of-day fact → `Ref(...,1)`.
 
 ### margin_detail (融资融券交易明细)
 Storage: `data/market/margin/YYYY/margin_YYYYMMDD.parquet`

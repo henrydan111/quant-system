@@ -273,9 +273,10 @@ datasets:
 
   hk_hold:
     status: approved
-    reason: "Northbound foreign-holding ratio ($ratio, hk_hold endpoint). Promoted quarantine->approved 2026-06-05 (approvals/2026-06-05_hk_hold_quarantine_to_approved.yaml). The raw mixes northbound A-share rows (exchange=SH/SZ, the wanted data) with southbound HK rows (exchange=HK); the staged backend filters to A-share ts_codes so the served $ratio is A-share-only (the earlier .HK 'contamination' flag was a mis-read of legitimate southbound rows). Served $ratio clean + parity-verified 2017-2025. COVERAGE CAVEAT: the 2026 tail (Jan-Feb) has no SH/SZ northbound rows — likely a genuine northbound-disclosure cutoff (~end-2025); negligible for research. PIT: end-of-day fact -> wrap $ratio in Ref(...,1)."
+    reason: "Northbound foreign-holding ratio ($ratio) + holding volume ($north_hold_vol), hk_hold endpoint. $ratio promoted quarantine->approved 2026-06-05 (approvals/2026-06-05_hk_hold_quarantine_to_approved.yaml). The raw mixes northbound A-share rows (exchange=SH/SZ, the wanted data) with southbound HK rows (exchange=HK); the staged backend filters to A-share ts_codes so the served fields are A-share-only (the earlier .HK 'contamination' flag was a mis-read of legitimate southbound rows). Served clean + parity-verified 2017-2025. PIT: end-of-day fact -> wrap fields in Ref(...,1). 2026-06-20: $north_hold_vol (持股数量/holding shares; raw `vol` renamed via NORTHBOUND_RENAMES so it does not shadow kline $vol; bin already materialized) registered approved (approvals/2026-06-20_north_hold_vol_to_approved.yaml) for the CICC E1g VWAP-based holding-VALUE factors. CORRECTION (doc 188): $ratio is % of ISSUED shares (占已发行股份百分比), NOT free-float — close to but not exact to CICC's 流通股本 wording. Daily northbound stopped 2024-08-20 (quarterly after); daily series effectively 2017..2024-08."
     fields:
       - $ratio
+      - $north_hold_vol
 
   margin_detail:
     status: approved
