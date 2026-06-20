@@ -1,0 +1,248 @@
+{
+  "set_id": "EWaveSelectedSet_v2",
+  "method": "Option 1: |heldout_rank_icir| strength x (1 - max month-end Spearman exposure corr to selected set + redundancy references); family-capped; marginal floor. style_resid_ic is annotation-only (NOT a gate).",
+  "basis_correction_vs_v1": "v1 selected by raw heldout ICIR mislabeled as style_resid_ic and pruned NO redundancy (saturated every cap). v2 uses the real exposure correlation to prune, and style-aware caps (vol<=1).",
+  "inputs": "univ_all 2010-2020 matrix heldout_rank_icir (input A) + month-end Spearman exposure corr (input B, computed here)",
+  "oos_touched": false,
+  "pool_size": 68,
+  "references_used_for_redundancy": [
+    "rev_up_down_ratio_20d"
+  ],
+  "primary": {
+    "tag": "style_aware",
+    "floor": 0.1,
+    "caps": {
+      "corr": 2,
+      "flow": 2,
+      "liq": 2,
+      "vol": 1,
+      "mmt": 1
+    },
+    "selected": [
+      {
+        "factor": "corr_ret_turnd_20d",
+        "family": "corr",
+        "heldout_icir": -0.782,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.661,
+        "maxcorr_to_set": 0.16,
+        "closest_to": "rev_up_down_ratio_20d",
+        "style_resid_ic": -0.036,
+        "expected_direction": "inverse"
+      },
+      {
+        "factor": "liq_vstd_20d",
+        "family": "liq",
+        "heldout_icir": -0.557,
+        "sign_consistency": 0.91,
+        "marginal_score": 0.53,
+        "maxcorr_to_set": 0.05,
+        "closest_to": "corr_ret_turnd_20d",
+        "style_resid_ic": 0.023,
+        "expected_direction": "inverse"
+      },
+      {
+        "factor": "vol_w_downshadow_std_60d",
+        "family": "vol",
+        "heldout_icir": -0.531,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.452,
+        "maxcorr_to_set": 0.15,
+        "closest_to": "corr_ret_turnd_20d",
+        "style_resid_ic": -0.03,
+        "expected_direction": "inverse"
+      },
+      {
+        "factor": "corr_price_turn_post_20d",
+        "family": "corr",
+        "heldout_icir": -0.517,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.41,
+        "maxcorr_to_set": 0.21,
+        "closest_to": "corr_ret_turnd_20d",
+        "style_resid_ic": -0.026,
+        "expected_direction": "inverse"
+      },
+      {
+        "factor": "flow_act_buy_shift_dist_xl_20d",
+        "family": "flow",
+        "heldout_icir": -0.492,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.345,
+        "maxcorr_to_set": 0.3,
+        "closest_to": "corr_ret_turnd_20d",
+        "style_resid_ic": -0.003,
+        "expected_direction": "inverse"
+      },
+      {
+        "factor": "liq_shortcut_avg_20d",
+        "family": "liq",
+        "heldout_icir": 0.528,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.271,
+        "maxcorr_to_set": 0.49,
+        "closest_to": "liq_vstd_20d",
+        "style_resid_ic": -0.004,
+        "expected_direction": "positive"
+      },
+      {
+        "factor": "flow_act_buy_prop_l_20d",
+        "family": "flow",
+        "heldout_icir": 0.226,
+        "sign_consistency": 0.82,
+        "marginal_score": 0.168,
+        "maxcorr_to_set": 0.26,
+        "closest_to": "rev_up_down_ratio_20d",
+        "style_resid_ic": 0.033,
+        "expected_direction": "positive"
+      },
+      {
+        "factor": "mmt_route_20d",
+        "family": "mmt",
+        "heldout_icir": -0.354,
+        "sign_consistency": 1.0,
+        "marginal_score": 0.157,
+        "maxcorr_to_set": 0.56,
+        "closest_to": "rev_up_down_ratio_20d",
+        "style_resid_ic": 0.007,
+        "expected_direction": "inverse"
+      }
+    ],
+    "trace": [
+      "PICK corr_ret_turnd_20d                 fam=corr  |icir|=0.782 maxcorr=0.16(vs rev_up_down_ratio_20d) marginal=0.661",
+      "PICK liq_vstd_20d                       fam=liq   |icir|=0.557 maxcorr=0.05(vs corr_ret_turnd_20d) marginal=0.530",
+      "PICK vol_w_downshadow_std_60d           fam=vol   |icir|=0.531 maxcorr=0.15(vs corr_ret_turnd_20d) marginal=0.452",
+      "PICK corr_price_turn_post_20d           fam=corr  |icir|=0.517 maxcorr=0.21(vs corr_ret_turnd_20d) marginal=0.410",
+      "PICK flow_act_buy_shift_dist_xl_20d     fam=flow  |icir|=0.492 maxcorr=0.30(vs corr_ret_turnd_20d) marginal=0.345",
+      "PICK liq_shortcut_avg_20d               fam=liq   |icir|=0.528 maxcorr=0.49(vs liq_vstd_20d) marginal=0.271",
+      "PICK flow_act_buy_prop_l_20d            fam=flow  |icir|=0.226 maxcorr=0.26(vs rev_up_down_ratio_20d) marginal=0.168",
+      "PICK mmt_route_20d                      fam=mmt   |icir|=0.354 maxcorr=0.56(vs rev_up_down_ratio_20d) marginal=0.157",
+      "STOP: all family caps reached"
+    ]
+  },
+  "all_runs": {
+    "style_aware__floor0.08": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 1,
+        "mmt": 1
+      },
+      "floor": 0.08,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    },
+    "style_aware__floor0.1": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 1,
+        "mmt": 1
+      },
+      "floor": 0.1,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    },
+    "style_aware__floor0.12": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 1,
+        "mmt": 1
+      },
+      "floor": 0.12,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    },
+    "v1_equal__floor0.08": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 2,
+        "mmt": 1
+      },
+      "floor": 0.08,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "vol_upshadow_std_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    },
+    "v1_equal__floor0.1": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 2,
+        "mmt": 1
+      },
+      "floor": 0.1,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "vol_upshadow_std_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    },
+    "v1_equal__floor0.12": {
+      "caps": {
+        "corr": 2,
+        "flow": 2,
+        "liq": 2,
+        "vol": 2,
+        "mmt": 1
+      },
+      "floor": 0.12,
+      "selected": [
+        "corr_ret_turnd_20d",
+        "liq_vstd_20d",
+        "vol_w_downshadow_std_60d",
+        "corr_price_turn_post_20d",
+        "flow_act_buy_shift_dist_xl_20d",
+        "liq_shortcut_avg_20d",
+        "vol_upshadow_std_20d",
+        "flow_act_buy_prop_l_20d",
+        "mmt_route_20d"
+      ]
+    }
+  }
+}
