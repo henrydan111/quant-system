@@ -69,3 +69,25 @@ then (SEPARATE deliberate step, not in this protocol):
 Build the **family map + factor-factor exposure correlation** over the 2010-2020 IS panel (compute the 69
 candidates, Spearman exposure corr, cluster within/across families), then run the greedy marginal-
 style-residual-IC selection under the family caps → `EWaveSelectedSet_v1` (frozen, pre-OOS).
+
+## RESULT: EWaveSelectedSet_v1 (2026-06-20) — 69 → 9 frozen representatives
+
+Greedy marginal selection complete (IS-only, no 2021+). Family map: within-family redundancy high (vol mean
+|corr| 0.75, liq 0.41, flow 0.50); cross-family low (all ≤0.26 → 5 orthogonal families). The 9 reps:
+
+| family | factor | style_resid_ic | dir |
+|---|---|---|---|
+| corr | corr_ret_turnd_20d | −0.782 | inverse |
+| vol | vol_highlow_std_20d | −0.570 | inverse |
+| liq | liq_vstd_20d | −0.557 | inverse |
+| liq | liq_shortcut_avg_20d | +0.528 | positive |
+| corr | corr_price_turn_post_20d | −0.517 | inverse |
+| vol | vol_up_std_20d | −0.498 | inverse |
+| flow | flow_act_buy_shift_dist_xl_20d | −0.492 | inverse |
+| mom | mmt_route_20d | −0.354 | inverse |
+| flow | flow_act_buy_prop_l_20d | +0.226 | positive |
+
+7 inverse (low-vol / illiquidity-turnover / 量价背离 / reversal / xl-distribution) + 2 positive (illiquidity-
+shortcut premium, large-order accumulation). Provenance: `EWaveSelectedSet_v1.json`. **NEXT (separate
+deliberate step — single sealed-OOS spend):** build the `FrozenSelectionSet` over these 9 → ONE 2021+ sealed
+OOS → deployment gate. The OOS is single-shot/permanently-spent — do NOT run it without an explicit decision.
