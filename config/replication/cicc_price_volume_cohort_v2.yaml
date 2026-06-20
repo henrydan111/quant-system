@@ -40,7 +40,7 @@
 # formalization candidates; the genuinely-new constructions (new operators / new fields) are.
 
 source_cohort_id: cicc_price_volume_handbook_v1
-manifest_sha: "66899b2f7283f1d5"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
+manifest_sha: "147ca1c9e8a32991"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
 handbook_label_window_end: "2022-07-01"   # handbook test end → drives §9.3 OOS quarantine (short window)
 
 denominators:
@@ -185,9 +185,11 @@ factor_rows:
   - {factor_name_original: flow_act_buy_shift_dist_xl_20d, handbook_id: F_flow_act_buy_shift_dist_xl_20d, chart_id: "64", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: flow_act_buy_shift_dist_xl_20d}
 
   # ===== 7. 北向资金 (图表76) — 9, hk_hold (approved). OOS ALREADY SPENT same family (E1g, north_* 2021-2026 + 2024-08 institutional break). =====
-  - {factor_name_original: north_hold_prop,       handbook_id: F_north_hold_prop, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
-  - {factor_name_original: north_hold_prefer,     handbook_id: F_north_hold_prefer, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
-  - {factor_name_original: north_inflow_shift_dist, handbook_id: F_north_inflow_shift_dist, chart_id: "76", replication_tier_planned: formula_equivalent_pending, required_operators: [shift_distance_ratio], required_fields: ["$ratio"], truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all}
+  # E1g 北向资金 (图表76): 4 faithful factor-level rows. Inline, NO custom operator (shift_distance_ratio DROPPED here; still used by chart-88). VWAP holding-VALUE uses $north_hold_vol (registered 2026-06-20), NOT a ratio*VWAP proxy. All masked to the held sub-universe (If($ratio>0)). DEFERRED: north_hold_prop (dedup -> existing north_hold_pct); the 持仓偏好 prefer family (level = cross-sectional rank-alias of north_hold_pct; st/lt change need cross-sectional materialization, not Qlib-per-instrument-expressible). CAVEATS: $ratio is % of ISSUED shares (doc 188, not CICC 流通股本); oos_eligibility spent_same_family (arXiv D4 sign-flip) -> candidate/resolve-but-label only; short IS window (hk_hold 2017-2020).
+  - {factor_name_original: north_hold_prop_st_chg_20d, handbook_id: F_north_hold_prop_st_chg_20d, chart_id: "76", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all, catalog_factor_id: north_hold_prop_st_chg_20d}
+  - {factor_name_original: north_inflow_shift_dist_20d, handbook_id: F_north_inflow_shift_dist_20d, chart_id: "76", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all, catalog_factor_id: north_inflow_shift_dist_20d}
+  - {factor_name_original: north_excess_hold_st_20d, handbook_id: F_north_excess_hold_st_20d, chart_id: "76", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all, catalog_factor_id: north_excess_hold_st_20d}
+  - {factor_name_original: north_trade_prop_20d, handbook_id: F_north_trade_prop_20d, chart_id: "76", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all, catalog_factor_id: north_trade_prop_20d}
 
   # ===== 8. 融资融券 (图表88) — 12. 融资侧 approved; 融券侧 not_replicable (rqye/rqchl quarantine). =====
   - {factor_name_original: margin_buy_money_prop,    handbook_id: F_margin_buy_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzmre"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
