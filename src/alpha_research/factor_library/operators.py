@@ -1040,6 +1040,54 @@ def north_trade_prop(window):
     return _nb_mask(f"({excess}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
 
 
+# ── E1h margin (CICC chart 88) builders — inline, guarded, MASKED to the margin-eligible sub-universe
+# (GPT factor-logic review 2026-06-20: unmasked zeros would inject a −ret20 reversal artifact into non-
+# eligible names). Eligibility proxy = ANY margin activity (sum of the 4 non-negative approved fields > 0;
+# broader than rzye>0, doesn't drop eligible-but-zero-balance names). margin_detail is T-disclosed-AFTER-
+# close → every field Ref(...,1). Approved fields: $rzye 融资余额 / $rqye 融券余额 / $rzmre 融资买入额 /
+# $rqmcl 融券卖出量; $rzche/$rqchl (repayment) QUARANTINED → net_margin_*_shift_dist blocked. ⚠ UNIT NOTE:
+# $rzmre/$rqmcl/$amount are in mixed units (元 vs 千元 vs shares) — the prop ratios are RANK-correct (the
+# unit factors are stock-invariant constants that cancel cross-sectionally) but absolute values are NOT true
+# proportions → formula_equivalent_pending, not exact-certified. ──────────────────────────────────────────
+_MARGIN_ELIGIBLE = "(Ref($rzye, 1) + Ref($rzmre, 1) + Ref($rqye, 1) + Ref($rqmcl, 1))"
+_MARGIN_VWAP = f"(Ref($amount, 1) / {_nan_if_nonpos('Ref($vol, 1)')})"
+
+
+def _margin_mask(expr: str) -> str:
+    """Mask to the margin-eligible sub-universe: NaN where no margin activity (all 4 approved fields 0)."""
+    return f"If({_MARGIN_ELIGIBLE} > 0, {expr}, np.nan)"
+
+
+def _margin_ret(window: str) -> str:
+    return f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {int(window) + 1}) - 1)"
+
+
+def margin_buy_money_prop(window):
+    """融资买入占比 = Sum(融资买入额, N) / Sum(成交额, N), masked + guarded."""
+    return _margin_mask(f"Sum(Ref($rzmre, 1), {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
+def margin_money_bal_growth(window):
+    """融资增量增长率 = 融资余额 / (融资余额[t−N] + 1) − ret_N (handbook +1 denominator guard), masked."""
+    return _margin_mask(f"Ref($rzye, 1) / (Ref($rzye, {int(window) + 1}) + 1) - {_margin_ret(window)}")
+
+
+def margin_sell_sec_prop(window):
+    """融券卖出占比 = Sum(融券卖出量·VWAP, N) / Sum(成交额, N) (rqmcl is VOLUME → ×VWAP = value), masked."""
+    sv = f"(Ref($rqmcl, 1) * {_MARGIN_VWAP})"
+    return _margin_mask(f"Sum({sv}, {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
+def margin_sec_bal_prop():
+    """融券余额占比 = 融券余额 / 流通市值 (point ratio, no window), masked + guarded."""
+    return _margin_mask(f"Ref($rqye, 1) / {_nan_if_nonpos('Ref($circ_mv, 1)')}")
+
+
+def margin_sec_bal_growth(window):
+    """融券增量增长率 = 融券余额 / (融券余额[t−N] + 1) − ret_N (handbook +1 guard), masked."""
+    return _margin_mask(f"Ref($rqye, 1) / (Ref($rqye, {int(window) + 1}) + 1) - {_margin_ret(window)}")
+
+
 def log_dollar_volume(window):
     """Log of average daily dollar volume.
 

@@ -40,7 +40,7 @@
 # formalization candidates; the genuinely-new constructions (new operators / new fields) are.
 
 source_cohort_id: cicc_price_volume_handbook_v1
-manifest_sha: "147ca1c9e8a32991"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
+manifest_sha: "0af9767fd5b45ff9"          # v2 (was 01dbe38b9281a968); load_cohort_manifest raises on mismatch (excl. catalog_factor_id)
 handbook_label_window_end: "2022-07-01"   # handbook test end → drives §9.3 OOS quarantine (short window)
 
 denominators:
@@ -192,10 +192,12 @@ factor_rows:
   - {factor_name_original: north_trade_prop_20d, handbook_id: F_north_trade_prop_20d, chart_id: "76", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: spent_same_family, primary_claim_universe: univ_all, catalog_factor_id: north_trade_prop_20d}
 
   # ===== 8. 融资融券 (图表88) — 12. 融资侧 approved; 融券侧 not_replicable (rqye/rqchl quarantine). =====
-  - {factor_name_original: margin_buy_money_prop,    handbook_id: F_margin_buy_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzmre"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
-  - {factor_name_original: margin_money_bal_prop,    handbook_id: F_margin_bal_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzye"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
-  - {factor_name_original: margin_money_bal_growth,  handbook_id: F_margin_bal_growth, chart_id: "88", replication_tier_planned: formula_equivalent_pending, required_fields: ["$rzye"], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}
-  - {factor_name_original: margin_sell_sec_prop,     handbook_id: F_margin_sell_sec, chart_id: "88", replication_tier_planned: not_replicable, exclusion_reason: "rqye/rqchl 融券 fields quarantine (margin_detail_repayment) — same blocker as margin_net_buy_20d", truth_table_label_end: "2022-07-01", oos_eligibility: pending, primary_claim_universe: univ_all}
+  # E1h 融资融券 (图表88): 5 faithful factor-level rows. STALE-EXCLUSION FIX — the 融券 side is now replicable ($rzye/$rqye/$rzmre/$rqmcl approved 2026-06-04; only repayment $rzche/$rqchl quarantined). All MASKED to the margin-eligible sub-universe. Inline, NO operator. formula_equivalent_pending (unit-mixed 元/千元/shares → rank-valid, not a true proportion). DEDUP: margin_money_bal_prop≡existing margin_balance_pct. DEFERRED: margin_sec_avg (ambiguous handbook formula, avg vs ratio-of-sums). BLOCKED: net_margin_buy/sell_shift_dist (need quarantined repayment $rzche/$rqchl).
+  - {factor_name_original: margin_buy_money_prop_20d, handbook_id: F_margin_buy_money_prop_20d, chart_id: "88", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: margin_buy_money_prop_20d}
+  - {factor_name_original: margin_money_bal_growth_20d, handbook_id: F_margin_money_bal_growth_20d, chart_id: "88", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: margin_money_bal_growth_20d}
+  - {factor_name_original: margin_sell_sec_prop_20d, handbook_id: F_margin_sell_sec_prop_20d, chart_id: "88", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: margin_sell_sec_prop_20d}
+  - {factor_name_original: margin_sec_bal_prop, handbook_id: F_margin_sec_bal_prop, chart_id: "88", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: margin_sec_bal_prop}
+  - {factor_name_original: margin_sec_bal_growth_20d, handbook_id: F_margin_sec_bal_growth_20d, chart_id: "88", replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all, catalog_factor_id: margin_sec_bal_growth_20d}
 
   # ===== 9. 价量复合 (图表100) — Layer-2 reference recipe (formula_equivalent_pending; built via add_composites once components registered) =====
   - {factor_name_original: comp_cicc_price_volume, handbook_id: C_PV, chart_id: "100", replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-07-01", oos_eligibility: short_window, primary_claim_universe: univ_all}

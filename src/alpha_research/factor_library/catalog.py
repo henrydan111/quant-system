@@ -532,6 +532,19 @@ def _add_margin_factors(catalog):
     catalog['margin_net_buy_20d'] = "Mean(Ref(($rzmre - $rzche), 1), 20)"
     catalog['margin_sl_balance_change'] = "Delta(Ref($rqye, 1), 20)"
 
+    # CICC Wave E1h — 融资融券手册 (图表88): 5 faithful factors (GPT factor-logic CHANGES REQUIRED→
+    # APPROVE 2026-06-20). All masked to the margin-eligible sub-universe (any of the 4 approved fields
+    # >0) — unmasked zeros would inject a −ret20 reversal artifact. 融券 side NOW replicable ($rqye/$rqmcl
+    # approved 2026-06-04; only repayment $rzche/$rqchl quarantined → net_margin_*_shift_dist blocked).
+    # Dedup: margin_money_bal_prop≡margin_balance_pct above; margin_sec_avg deferred (ambiguous handbook
+    # formula — avg vs ratio-of-sums; NOT claimed as dedup). Unit-mixed → rank-valid, formula_equivalent_
+    # pending. Inline, no operator, Ref(...,1) (margin T-disclosed-after-close). See E1h_factor_logic.md.
+    catalog['margin_buy_money_prop_20d'] = op.margin_buy_money_prop(20)     # 融资买入占比
+    catalog['margin_money_bal_growth_20d'] = op.margin_money_bal_growth(20) # 融资增量增长率
+    catalog['margin_sell_sec_prop_20d'] = op.margin_sell_sec_prop(20)       # 融券卖出占比 (vol×VWAP)
+    catalog['margin_sec_bal_prop'] = op.margin_sec_bal_prop()               # 融券余额占比 (point ratio)
+    catalog['margin_sec_bal_growth_20d'] = op.margin_sec_bal_growth(20)     # 融券增量增长率
+
 
 def _report_rc_eps_diffusion(window, min_n=3, min_active=2):
     """report_rc analyst EPS-revision breadth (eps_diffusion): net % of analysts RAISING

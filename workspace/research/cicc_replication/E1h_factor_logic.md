@@ -5,6 +5,24 @@
 > [CICC_价量因子定义.md](../../../Knowledge/AI量化增强/CICC_价量因子定义.md) §8 (融资融券因子, ~12). Data:
 > Tushare `margin_detail`. **NO custom operator** — inline `Sum`/`Ref`/`Delta`/division.
 
+## GPT verdict (2026-06-20): CHANGES REQUIRED → folded → **APPROVE for draft registration**
+
+GPT approved the direction (融资 + the now-unblocked 融券 balance/sell side; repayment shift_dist blocked;
+`rqmcl×VWAP` value basis; no operator) but required 5 folds, all done:
+1. **Margin-eligible MASK** (load-bearing) — unmasked zeros would inject a `−ret20` reversal artifact into
+   non-eligible names. Folded: every factor wrapped `If((Ref($rzye,1)+Ref($rzmre,1)+Ref($rqye,1)+Ref($rqmcl,1))
+   > 0, …, np.nan)` — the broad "any margin activity" eligibility proxy (doesn't drop eligible-but-zero-balance
+   names). coverage_tier is left for the P-GATE to determine mechanically (no unmasking to dodge a `sub` cap —
+   the E1g precedent stands).
+2. **Growth `+1` guard** kept faithful, now inside the mask.
+3. **`$rqmcl` unit check** done: `$rzmre/$amount ≈ 85` (not a proportion) → mixed units (元 vs 千元 vs shares);
+   the prop ratios are **RANK-correct** (stock-invariant unit constants cancel cross-sectionally) but absolute
+   values are NOT true proportions → **`formula_equivalent_pending`, not exact-certified**.
+4. **Manifest correction** — the stale chart-88 融券 exclusion fixed (only repayment blocked).
+5. **`margin_sec_avg` dedup REFRAMED** — the handbook formula is ambiguous (avg vs ratio-of-sums); per GPT
+   "do not dedup if mean-of-ratios" → it is **NOT claimed as a dedup and NOT registered** (deferred pending the
+   exact handbook definition). Only `margin_money_bal_prop`≡`margin_balance_pct` is an exact dedup.
+
 ## KEY FINDING: the frozen manifest's chart-88 exclusions are STALE
 
 The manifest marks `margin_sell_sec_prop` `not_replicable` citing "rqye/rqchl 融券 quarantine". But the
