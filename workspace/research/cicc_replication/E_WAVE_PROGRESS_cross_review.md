@@ -87,3 +87,24 @@ turnover). **No marginal-contribution selection has been run** — the 69 are an
 A candid program-level assessment: is the E-wave replication on sound footing, is the 69-candidate pool
 being handled with the right discipline, and what is the correct next step toward a deployable result (vs
 continuing to add more correlated candidate families)?
+
+## GPT verdict (2026-06-20): **qualified APPROVE — stop expanding, pivot to family-aware selection**
+
+- **Methodology sound** (no structural leak; "much steadier than batch-promoting from formulas"). **Governance
+  is the strongest part** — the E1g `evidence_only` non-promotion was "correct and important" (stopped a
+  +0.69-IS factor whose family already reversed OOS). **Data-availability deferrals were right** — don't rush
+  `cyq_chips`.
+- **Core directive:** the 69 candidates are **~5 correlated families, NOT 69 discoveries**; the biggest risk
+  is the *narrative*. Register-all was the right discipline, but it must now enter **family-aware
+  marginal-contribution selection** → **~4-9 frozen reps** (caps: vol ≤2, liquidity ≤2, correlation ≤2,
+  flow ≤2, reversal ≤1) → **ONE sealed OOS** on the frozen set (NOT 69 individual OOS = "an OOS lottery") →
+  deployment gate. 6 deliverables: PoolManifest → FamilyMap → SelectionProtocol → SelectedSet →
+  FrozenSelectionSet → (OOS pass) deployment gate.
+- **Reporting guards:** "69 variants across ~5 families, 0 deployable" (never "69 discoveries");
+  `formula_equivalent_pending` ≠ exact-certified; 7-domain evidence stays evidence, not per-universe approval.
+- Answers: Q1 sound-with-caveat · Q2 register-all right, now select · Q3 governance strong, E1g correct ·
+  Q4 data calls correct · Q5 select→one-sealed-OOS→deployment-gate · Q6 no blocking flaw, guard the narrative.
+
+**User decision (2026-06-20):** finish the replication FIRST (E1h margin chart-88 + chart-100 composite),
+THEN run the selection over the complete pool. The selection is REQUIRED before any E-wave OOS/deployment.
+See memory `project_e_wave_selection_mandate`.
