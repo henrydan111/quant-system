@@ -37,6 +37,7 @@ from src.alpha_research.factor_eval_skill.identity import (
     assert_identity_chain,
 )
 from src.alpha_research.factor_eval_skill.marginal import select_marginal
+from src.alpha_research.factor_eval_skill.multiplicity import oos_window_multiplicity
 from src.alpha_research.factor_eval_skill.sealed_oos import DIR_MAP
 from src.alpha_research.factor_eval_skill.stage3_reader import (
     MatrixResults,
@@ -46,6 +47,7 @@ from src.alpha_research.factor_eval_skill.stage3_reader import (
 from src.alpha_research.factor_eval_skill.stores import (
     FactorProvenanceStore,
     FrozenSelectionEnvelopeStore,
+    OosWindowLedgerStore,
     RoleDeclarationStore,
     Stage3QualityRecordStore,
 )
@@ -230,7 +232,9 @@ def cmd_characterize(
         identity, factor_class=factor_class, replication_tier=replication_tier,
         claim_class=claim_class, oos_eligibility=oos_eligibility,
     )
-    matrix = MatrixResults.from_jsonl(matrix_path, strict=True)
+    # strict, but SCOPED to this factor — another factor's legitimately-incomplete rows
+    # (e.g. northbound on microcap) must not block characterizing this one.
+    matrix = MatrixResults.from_jsonl(matrix_path, strict=True, strict_factor=reg["factor_id"])
     record = stage3_caps(
         matrix, factor_id=reg["factor_id"], definition_hash=reg["definition_hash"],
         tud=tud, role=reg["role"], governance=governance,
@@ -348,13 +352,24 @@ def cmd_seal(
     assert_identity_chain(_tud_from_args(tud_a["args"]), _rebuild_selected_set(sel), envelope)
     FrozenSelectionEnvelopeStore(ctx.store_root).record_envelope(envelope)
 
+    oos_window_id = f"{oos_start}..{oos_end}"
+    ledger = OosWindowLedgerStore(ctx.store_root)
+    factor_ids = [m["factor_id"] for m in sel["members"]]
     base = {"mode": mode, "frozen_set_hash": fs.frozen_set_hash, "envelope_hash": envelope.envelope_hash,
-            "tud_hash": tud_a["tud_hash"], "n_quantiles": n_quantiles, "horizon": horizon,
+            "tud_hash": tud_a["tud_hash"], "oos_window_id": oos_window_id, "n_quantiles": n_quantiles,
+            "horizon": horizon,
             "held_sides": [{"factor_id": s.factor_id, "side": s.expected_direction} for s in selected]}
     if mode == "show":
-        return ctx._write(A_SEAL, {**base, "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
+        # D6 preview: disclose the system-level multiplicity this spend WOULD add to (no record).
+        report = oos_window_multiplicity(ledger, oos_window_id, pending_self=True)
+        return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(),
+                                   "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
 
-    # dryrun / live: run the (slow) sealed OOS. Caller supplies qlib_dir + a seal_root.
+    # dryrun / live: record the window-tagged spend (D6 seal-layer count), then run the (slow)
+    # sealed OOS. record_spend is idempotent on (window, frozen_set_hash).
+    ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
+                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode=mode)
+    report = oos_window_multiplicity(ledger, oos_window_id, pending_self=False)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
     seal_root = str(ctx.run_dir / ("seals_dry" if mode == "dryrun" else "seals_live"))
@@ -364,8 +379,8 @@ def cmd_seal(
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
     )
     verdict = result["verdict"]
-    return ctx._write(A_SEAL, {**base, "n_pass": verdict.n_pass, "n_total": verdict.n_total,
-                               "results": list(verdict.results)})
+    return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(), "n_pass": verdict.n_pass,
+                               "n_total": verdict.n_total, "results": list(verdict.results)})
 
 
 # ------------------------------------------------------------------------- strategy-build

@@ -83,21 +83,25 @@ class MatrixResults:
     ``strict=True`` fails the load on malformed evidence (GPT cross-review 2026-06-21) — the
     Stage-3 reader must not silently trust duplicate / errored / incomplete rows: duplicate
     factor×universe, a row carrying an ``error``, a blank/unknown ``universe_id``, a missing
-    ``layer1_methodology_hash``, or a missing core metric. Default ``strict=False`` preserves
-    the lenient loader for ad-hoc inspection."""
+    ``layer1_methodology_hash``, or a missing core metric. ``strict_factor`` SCOPES the strict
+    check to one factor-under-eval (other factors' legitimately-incomplete rows — e.g.
+    northbound on microcap — load lenient); ``strict`` with no ``strict_factor`` validates the
+    whole file. Default ``strict=False`` preserves the lenient loader for ad-hoc inspection."""
 
-    def __init__(self, rows: list[Mapping[str, Any]], *, strict: bool = False) -> None:
+    def __init__(self, rows: list[Mapping[str, Any]], *, strict: bool = False,
+                 strict_factor: str | None = None) -> None:
         self._by_factor: dict[str, dict[str, dict]] = defaultdict(dict)
         errors: list[str] = []
         for i, row in enumerate(rows):
             factor = row.get(_K_FACTOR)
             universe = row.get(_K_UNIVERSE)
+            in_scope = strict and (strict_factor is None or str(factor or "") == str(strict_factor))
             if not factor or not universe:
-                if strict:
+                if in_scope:
                     errors.append(f"row {i}: blank factor/universe_id")
                 continue
             factor, universe = str(factor), str(universe)
-            if strict:
+            if in_scope:
                 if universe not in ALL_UNIVERSES:
                     errors.append(f"row {i} ({factor}): unknown universe_id {universe!r}")
                 if universe in self._by_factor.get(factor, {}):
@@ -115,9 +119,10 @@ class MatrixResults:
             raise ValueError(f"MatrixResults strict validation failed ({len(errors)} issue(s)):\n  {shown}")
 
     @classmethod
-    def from_jsonl(cls, path: str | Path, *, strict: bool = False) -> "MatrixResults":
+    def from_jsonl(cls, path: str | Path, *, strict: bool = False,
+                   strict_factor: str | None = None) -> "MatrixResults":
         rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
-        return cls(rows, strict=strict)
+        return cls(rows, strict=strict, strict_factor=strict_factor)
 
     def universe_rows(self, factor_id: str) -> dict[str, dict]:
         return dict(self._by_factor.get(str(factor_id), {}))

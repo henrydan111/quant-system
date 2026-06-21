@@ -78,6 +78,8 @@ def test_full_pipeline_native_factor(tmp_path):
     seal = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27")
     assert seal["frozen_set_hash"] and seal["envelope_hash"]
     assert seal["held_sides"][0]["side"] == "long"  # positive factor -> held long
+    # D6: seal --show discloses the system-level multiplicity this spend would add to
+    assert seal["multiplicity"]["n_spent"] == 1 and seal["multiplicity"]["action"] == "disclose"
     # the envelope was persisted via the conflict-guarded store
     env = FrozenSelectionEnvelopeStore(ctx.store_root).get_envelope(seal["frozen_set_hash"])
     assert env is not None and env["envelope_hash"] == seal["envelope_hash"]

@@ -56,6 +56,13 @@ from src.alpha_research.factor_eval_skill.stage3_reader import (
     Stage3QualityRecord,
     stage3_caps,
 )
+from src.alpha_research.factor_eval_skill.multiplicity import (
+    ACTION_ACKNOWLEDGE,
+    ACTION_DISCLOSE,
+    ACTION_REQUIRE,
+    MultiplicityReport,
+    oos_window_multiplicity,
+)
 from src.alpha_research.factor_eval_skill.stores import (
     EVIDENCE_TIERS,
     ROLES,
@@ -63,6 +70,7 @@ from src.alpha_research.factor_eval_skill.stores import (
     FilterCharacterizationStore,
     FilterDeploymentGateStore,
     FrozenSelectionEnvelopeStore,
+    OosWindowLedgerStore,
     RoleDeclarationStore,
     Stage3QualityRecordStore,
 )
@@ -88,8 +96,15 @@ __all__ = [
     "FilterCharacterizationStore",
     "FilterDeploymentGateStore",
     "FrozenSelectionEnvelopeStore",
+    "OosWindowLedgerStore",
     "EVIDENCE_TIERS",
     "ROLES",
+    # D6 OOS-window multiplicity
+    "oos_window_multiplicity",
+    "MultiplicityReport",
+    "ACTION_DISCLOSE",
+    "ACTION_ACKNOWLEDGE",
+    "ACTION_REQUIRE",
     # D5 Stage-3 reader
     "MatrixResults",
     "Stage3GovernanceInputs",

@@ -225,3 +225,14 @@ def test_strict_loader_rejects_malformed_rows():
         MatrixResults([no_eff], strict=True)
     # lenient mode tolerates them
     MatrixResults([_row("f", "univ_all", 0.3), _row("f", "univ_all", 0.4)], strict=False)
+
+
+def test_strict_factor_scopes_validation_to_one_factor():
+    good = _row("good", "univ_all", 0.3)
+    bad = _row("other", "univ_microcap", 0.3)
+    bad.pop("heldout_rank_icir")  # an UNRELATED factor's legitimately-incomplete row
+    # scoped to "good" -> tolerates "other"'s incomplete row
+    MatrixResults([good, bad], strict=True, strict_factor="good")
+    # scoped to "other" -> raises on its own incomplete row
+    with pytest.raises(ValueError, match="heldout_rank_icir"):
+        MatrixResults([good, bad], strict=True, strict_factor="other")

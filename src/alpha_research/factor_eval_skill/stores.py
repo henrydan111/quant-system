@@ -23,7 +23,7 @@ provenance is its own store (NOT a fake ``Hypothesis``); the envelope is append-
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from src.alpha_research.factor_eval_skill._hashing import (
     canonical_json,
@@ -374,3 +374,57 @@ class FrozenSelectionEnvelopeStore(AppendOnlyStore):
 
     def get_envelope(self, frozen_set_hash: str) -> dict[str, Any] | None:
         return self.latest(frozen_set_hash=str(frozen_set_hash))
+
+
+class OosWindowLedgerStore(AppendOnlyStore):
+    """D6 seal-layer count: append-only record of which FROZEN SETS spent which OOS WINDOW
+    (the `HoldoutSealStore` event log does NOT record the window). One row per
+    (oos_window_id, frozen_set_hash) — idempotent (a frozen set spends a window once). The
+    report/approval layer (:mod:`multiplicity`) reads this to compute the system-level
+    cross-factor multiplicity; this store NEVER changes any OOS metric or per-set bar."""
+
+    FILENAME = "oos_window_ledger.parquet"
+    COLUMNS = (
+        "record_id",
+        "recorded_at",
+        "oos_window_id",
+        "frozen_set_hash",
+        "evidence_tier",
+        "factor_ids",
+        "seal_mode",
+    )
+    SCHEMA = {column: "string" for column in COLUMNS}
+    KEY_FIELDS = ("oos_window_id", "frozen_set_hash")
+
+    def record_spend(
+        self, *, oos_window_id: str, frozen_set_hash: str, evidence_tier: str = "",
+        factor_ids: Sequence[str] = (), seal_mode: str = "live",
+    ) -> dict[str, Any]:
+        """Record one window-tagged spend. Idempotent on (oos_window_id, frozen_set_hash) —
+        a frozen set spending the same window again returns the existing row."""
+        existing = self.latest(oos_window_id=str(oos_window_id), frozen_set_hash=str(frozen_set_hash))
+        if existing is not None:
+            return existing
+        return self.record(
+            oos_window_id=str(oos_window_id),
+            frozen_set_hash=str(frozen_set_hash),
+            evidence_tier=normalize_enum(evidence_tier) if evidence_tier else "",
+            factor_ids=canonical_json(sorted(str(f) for f in factor_ids)),
+            seal_mode=normalize_enum(seal_mode),
+        )
+
+    def distinct_frozen_sets(self, oos_window_id: str) -> list[str]:
+        frame = self._load()
+        frame = frame[frame["oos_window_id"].astype("string") == str(oos_window_id)]
+        return sorted(frame["frozen_set_hash"].astype("string").dropna().unique().tolist())
+
+    def tier_counts(self, oos_window_id: str) -> dict[str, int]:
+        """Distinct-frozen-set counts by evidence_tier for the window."""
+        frame = self._load()
+        frame = frame[frame["oos_window_id"].astype("string") == str(oos_window_id)]
+        frame = frame.drop_duplicates(subset=["frozen_set_hash"])
+        counts: dict[str, int] = {}
+        for tier in frame["evidence_tier"].astype("string").fillna(""):
+            key = tier or "unspecified"
+            counts[key] = counts.get(key, 0) + 1
+        return counts
