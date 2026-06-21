@@ -166,6 +166,33 @@ def test_deploy_requires_seal_artifact(tmp_path):
                    construction={}, pre_declared_bar={})
 
 
+# ----- self-review fixes (2026-06-21) -----
+
+def test_select_multi_factor_requires_corr(tmp_path):
+    ctx = _ctx(tmp_path)
+    _register(ctx)
+    cmd_declare_target(ctx, target_universe_id="univ_all", eligibility_policy="r", asof_policy="pit_lag_1")
+    # a 2-factor pool with NO precomputed correlation -> fail-closed (no no-redundancy selection)
+    with pytest.raises(FactorEvalError, match="exposure correlation"):
+        cmd_select(ctx, matrix_path=_matrix_file(tmp_path), pool={"tf": "x", "tf2": "y"},
+                   caps={"x": 1, "y": 1}, floor=0.10)
+
+
+def test_live_seal_requires_global_holdout_root(tmp_path):
+    matrix = _matrix_file(tmp_path)
+    ctx = _ctx(tmp_path)  # no holdout_seal_root configured
+    _register(ctx)
+    cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
+    cmd_characterize(ctx, matrix_path=matrix)
+    cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+    # a live seal without the global store is refused BEFORE any spend/backtest
+    with pytest.raises(FactorEvalError, match="holdout_seal_root"):
+        cmd_seal(ctx, mode="live", oos_start="2021-01-01", oos_end="2026-02-27")
+    # ... and no spend leaked into the ledger
+    from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
+    assert OosWindowLedgerStore(ctx.store_root).distinct_frozen_sets("2021-01-01..2026-02-27") == []
+
+
 # ----- forbidden-verb invariant (structural) -----
 
 def test_forbidden_verbs_are_structural():

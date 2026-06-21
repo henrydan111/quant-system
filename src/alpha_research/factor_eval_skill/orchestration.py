@@ -113,14 +113,19 @@ class FactorEvalContext:
     run_dir: Path
     store_root: Path
     resolve_factor: Callable[[str], FactorIdentity]
+    # the GLOBAL cross-run holdout-seal store (data/holdout_seals). REQUIRED for a live seal —
+    # a run-local seal would not enforce the single-shot OOS budget across runs.
+    holdout_seal_root: Path | None = None
 
     @classmethod
     def create(cls, *, run_dir: str | Path, store_root: str | Path, registry_root: str | Path,
-               resolve_factor: Callable[[str], FactorIdentity] | None = None) -> "FactorEvalContext":
+               resolve_factor: Callable[[str], FactorIdentity] | None = None,
+               holdout_seal_root: str | Path | None = None) -> "FactorEvalContext":
         run_dir = Path(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         return cls(run_dir=run_dir, store_root=Path(store_root),
-                   resolve_factor=resolve_factor or _default_resolver(registry_root))
+                   resolve_factor=resolve_factor or _default_resolver(registry_root),
+                   holdout_seal_root=Path(holdout_seal_root) if holdout_seal_root else None)
 
     def _write(self, name: str, payload: Mapping[str, Any]) -> dict:
         (self.run_dir / name).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
@@ -139,6 +144,16 @@ class FactorEvalContext:
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _seal_store(ctx: "FactorEvalContext"):
+    """The global HoldoutSealStore (authoritative cross-tool spend record) if configured, else
+    None. Folded into the OOS-window multiplicity denominator so the FDR count includes the
+    historical seals (E-wave / GP / arXiv / eps_diffusion), not just skill-driven spends."""
+    if not ctx.holdout_seal_root:
+        return None
+    from src.research_orchestrator.holdout_seal import HoldoutSealStore
+    return HoldoutSealStore(ctx.holdout_seal_root)
 
 
 def _tud_from_args(args: Mapping[str, Any]) -> TargetUniverseDeclaration:
@@ -271,7 +286,7 @@ def cmd_gate(ctx: FactorEvalContext) -> dict:
 def cmd_select(
     ctx: FactorEvalContext, *, matrix_path: str | Path, pool: Mapping[str, str],
     caps: Mapping[str, int], floor: float, references: Sequence[str] = (), n: int | None = None,
-    selection_code_hash: str = "",
+    selection_code_hash: str = "", corr_path: str | Path | None = None,
 ) -> dict:
     reg = ctx._require(A_REGISTER, "select")
     tud_a = ctx._require(A_TUD, "select")
@@ -284,7 +299,17 @@ def cmd_select(
             metrics[str(row["factor"])] = row
     import pandas as pd
     corr_names = list(pool) + [r for r in references if r not in pool]
-    corr = pd.DataFrame(0.0, index=corr_names, columns=corr_names)  # single/diagonal pool -> no redundancy
+    # A multi-factor pool MUST carry a precomputed exposure correlation — without it the greedy
+    # would do NO redundancy pruning (the v1 defect). Fail-closed (self-review 2026-06-21).
+    if corr_path is not None:
+        corr = pd.read_parquet(corr_path).reindex(index=corr_names, columns=corr_names)
+    elif len(pool) <= 1:
+        corr = pd.DataFrame(0.0, index=corr_names, columns=corr_names)  # singleton: no redundancy possible
+    else:
+        raise FactorEvalError(
+            f"multi-factor selection ({len(pool)} factors) requires a precomputed exposure correlation "
+            "(corr_path); refusing no-redundancy selection (the v1 marginal-vs-ICIR defect)"
+        )
     selection = select_marginal(pool=pool, metrics=metrics, corr=corr, caps=caps,
                                 floor=floor, references=references)
     versions, def_hashes = {}, {}
@@ -361,18 +386,26 @@ def cmd_seal(
             "held_sides": [{"factor_id": s.factor_id, "side": s.expected_direction} for s in selected]}
     if mode == "show":
         # D6 preview: disclose the system-level multiplicity this spend WOULD add to (no record).
-        report = oos_window_multiplicity(ledger, oos_window_id, pending_self=True)
+        report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=True)
         return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(),
                                    "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
 
-    # dryrun / live: record the window-tagged spend (D6 seal-layer count), then run the (slow)
-    # sealed OOS. record_spend is idempotent on (window, frozen_set_hash).
+    # dryrun / live: resolve the seal root FIRST (fail-closed on a live seal without the global
+    # store, BEFORE recording any spend), then record the window-tagged spend + run the slow OOS.
+    if mode == "live":
+        if not ctx.holdout_seal_root:
+            raise FactorEvalError(
+                "live seal requires a global holdout_seal_root (the cross-run single-shot store) — "
+                "refusing a run-local live seal that would not enforce the OOS budget across runs"
+            )
+        seal_root = str(ctx.holdout_seal_root)
+    else:  # dryrun: a run-local temp seal (no global spend)
+        seal_root = str(ctx.run_dir / "seals_dry")
     ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
                         evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode=mode)
-    report = oos_window_multiplicity(ledger, oos_window_id, pending_self=False)
+    report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
-    seal_root = str(ctx.run_dir / ("seals_dry" if mode == "dryrun" else "seals_live"))
     result = run_sealed_oos(
         frozen_set=fs, factor_exprs=exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
         seal_root=seal_root, run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,

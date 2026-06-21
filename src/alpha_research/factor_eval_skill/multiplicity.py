@@ -32,18 +32,21 @@ class MultiplicityReport:
     """The system-level OOS-window multiplicity context stamped on a sealed-OOS report."""
 
     oos_window_id: str
-    n_spent: int                 # distinct frozen sets that have spent this window
-    by_tier: dict                # distinct-set counts by evidence_tier
+    n_spent: int                 # the action-driving count = max(window-tagged, system-recorded) (+ pending self)
+    by_tier: dict                # distinct-set counts by evidence_tier (from the window-tagged ledger)
     action: str
     warn_threshold: int
     hard_threshold: int
     note: str
+    n_window_tagged: int = 0      # distinct frozen sets the SKILL ledger recorded for this window
+    n_system_recorded: int = 0    # distinct seal_keys in the global HoldoutSealStore (cross-tool, all windows)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "oos_window_id": self.oos_window_id, "n_spent": self.n_spent, "by_tier": dict(self.by_tier),
             "action": self.action, "warn_threshold": self.warn_threshold,
-            "hard_threshold": self.hard_threshold, "note": self.note,
+            "hard_threshold": self.hard_threshold, "n_window_tagged": self.n_window_tagged,
+            "n_system_recorded": self.n_system_recorded, "note": self.note,
         }
 
 
@@ -59,24 +62,34 @@ def oos_window_multiplicity(
     ledger,
     oos_window_id: str,
     *,
+    seal_store=None,
     warn_threshold: int = DEFAULT_WARN_THRESHOLD,
     hard_threshold: int = DEFAULT_HARD_THRESHOLD,
     pending_self: bool = False,
 ) -> MultiplicityReport:
-    """Compute the multiplicity context for ``oos_window_id`` from the ledger.
+    """Compute the multiplicity context for ``oos_window_id``.
 
-    ``pending_self=True`` previews the context as if THIS (not-yet-recorded) seal were added
-    — used by ``seal --mode show`` to disclose "you would be the (n+1)th frozen set to spend
-    this window" before the spend.
+    The action-driving ``n_spent`` is ``max(window-tagged, system-recorded)`` so the FDR
+    denominator includes the HISTORICAL seals (E-wave / GP / arXiv / eps_diffusion) already in
+    the global ``HoldoutSealStore`` — not just skill-driven spends (self-review 2026-06-21: the
+    skill ledger alone reset the denominator to zero). ``seal_store`` (a ``HoldoutSealStore``)
+    contributes its distinct ``seal_key`` count. ``pending_self=True`` previews the context as if
+    THIS not-yet-recorded seal were added (used by ``seal --mode show``).
     """
-    distinct = ledger.distinct_frozen_sets(oos_window_id)
-    n = len(distinct) + (1 if pending_self else 0)
+    n_window = len(ledger.distinct_frozen_sets(oos_window_id))
+    n_system = 0
+    if seal_store is not None:
+        events = seal_store.list_events()
+        if not events.empty and "seal_key" in events.columns:
+            n_system = int(events["seal_key"].dropna().astype("string").nunique())
+    n = max(n_window, n_system) + (1 if pending_self else 0)
     by_tier = ledger.tier_counts(oos_window_id)
     action = _action_for(n, warn_threshold, hard_threshold)
     nth = "would be the" if pending_self else "is the"
     note = (
         f"this {nth} {n}{_ordinal_suffix(n)} distinct frozen set to spend OOS window "
-        f"{oos_window_id} (warn>={warn_threshold}, hard>={hard_threshold}). "
+        f"{oos_window_id} (window-tagged={n_window}, system-recorded seal_keys={n_system}; "
+        f"warn>={warn_threshold}, hard>={hard_threshold}). "
         + {
             ACTION_DISCLOSE: "Disclosure only; per-set bar unchanged.",
             ACTION_ACKNOWLEDGE: "Reviewer acknowledgement required before an approved_signal claim.",
@@ -84,7 +97,8 @@ def oos_window_multiplicity(
                             "or an explicit SystemOOSMultiplicityOverride.",
         }[action]
     )
-    return MultiplicityReport(str(oos_window_id), n, by_tier, action, warn_threshold, hard_threshold, note)
+    return MultiplicityReport(str(oos_window_id), n, by_tier, action, warn_threshold, hard_threshold,
+                              note, n_window_tagged=n_window, n_system_recorded=n_system)
 
 
 def _ordinal_suffix(n: int) -> str:

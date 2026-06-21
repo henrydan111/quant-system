@@ -32,6 +32,7 @@ from src.alpha_research.factor_eval_skill.orchestration import (  # noqa: E402
 
 DEFAULT_STORE = ROOT / "data" / "factor_eval_skill"
 DEFAULT_REGISTRY = ROOT / "data" / "factor_registry"
+DEFAULT_HOLDOUT = ROOT / "data" / "holdout_seals"
 
 
 def _json(text: str) -> dict:
@@ -43,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--store-root", default=str(DEFAULT_STORE))
     ap.add_argument("--registry-root", default=str(DEFAULT_REGISTRY))
+    ap.add_argument("--holdout-seal-root", default=str(DEFAULT_HOLDOUT),
+                    help="global cross-run holdout-seal store (used by seal --mode live)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("register")
@@ -77,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--floor", type=float, default=0.10)
     se.add_argument("--references", default="[]")
     se.add_argument("--n", type=int, default=None)
+    se.add_argument("--corr", default=None, help="precomputed exposure-correlation parquet (required for multi-factor pools)")
 
     sl = sub.add_parser("seal")
     sl.add_argument("--mode", choices=["show", "dryrun", "live"], default="show")
@@ -91,7 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ctx = FactorEvalContext.create(run_dir=args.run_dir, store_root=args.store_root,
-                                   registry_root=args.registry_root)
+                                   registry_root=args.registry_root,
+                                   holdout_seal_root=args.holdout_seal_root)
     try:
         if args.cmd == "register":
             out = cmd_register(ctx, factor_id=args.factor_id, mode=args.mode, evidence_tier=args.evidence_tier,
@@ -110,7 +115,8 @@ def main(argv: list[str] | None = None) -> int:
             out = cmd_gate(ctx)
         elif args.cmd == "select":
             out = cmd_select(ctx, matrix_path=args.matrix, pool=_json(args.pool), caps=_json(args.caps),
-                             floor=args.floor, references=json.loads(args.references), n=args.n)
+                             floor=args.floor, references=json.loads(args.references), n=args.n,
+                             corr_path=args.corr)
         elif args.cmd == "seal":
             out = cmd_seal(ctx, mode=args.mode, oos_start=args.oos_start, oos_end=args.oos_end,
                            qlib_dir=args.qlib_dir, horizon=args.horizon, n_quantiles=args.n_quantiles)

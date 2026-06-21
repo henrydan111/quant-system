@@ -56,3 +56,21 @@ def test_multiplicity_window_isolation(tmp_path):
     led.record_spend(oos_window_id=W, frozen_set_hash="h1")
     led.record_spend(oos_window_id="2015-01-01..2020-12-31", frozen_set_hash="h2")
     assert oos_window_multiplicity(led, W).n_spent == 1
+
+
+def test_multiplicity_folds_in_historical_seal_store(tmp_path):
+    # the FDR denominator must include the historical seals already in HoldoutSealStore,
+    # not just skill-driven spends (self-review 2026-06-21)
+    from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+    led = OosWindowLedgerStore(tmp_path / "led")
+    led.record_spend(oos_window_id=W, frozen_set_hash="skill1")
+    seal = HoldoutSealStore(tmp_path / "seals")
+    for k in ("hist1", "hist2", "hist3"):
+        seal.claim_holdout_access(design_hash="d", seal_key=k, hypothesis_id="h",
+                                  structural_family="f", profile_id="p",
+                                  run_dir=str(tmp_path / k), step_id="s")
+    r = oos_window_multiplicity(led, W, seal_store=seal, warn_threshold=5, hard_threshold=10)
+    assert r.n_window_tagged == 1
+    assert r.n_system_recorded == 3
+    assert r.n_spent == 3  # max(window-tagged, system-recorded)
