@@ -55,30 +55,16 @@ print(f"panel: {len(fdf)} rows, {fdf.index.get_level_values(0).nunique()} dates"
 
 
 def composite_ranked(d):
-    """Direction-aligned equal-weight z-score composite within the liquid top-300; high = long."""
+    """Direction-aligned equal-weight z-score composite within the liquid top-300; high = long.
+    Thin caller of the extracted library (factor_eval_skill.deployment.direction_aligned_composite);
+    locked by tests/alpha_research/test_factor_eval_skill_d3.py composite tests."""
+    from src.alpha_research.factor_eval_skill.deployment import direction_aligned_composite
     try:
         day = fdf.xs(d, level=0)
     except KeyError:
         return None
-    liq = day["amt20"].dropna().sort_values(ascending=False).head(LIQ_TOPN).index
-    sub = day.loc[liq]
-    sub = sub[sub["close"].notna() & (sub["amount"].fillna(0) > 0)]   # tradeable on rebal day
-    st = ru.st_codes_on(d)
-    if st:
-        sub = sub[~sub.index.map(lambda c: str(c).upper() in st)]
-    if len(sub) < 50:
-        return None
-    zs = []
-    for fid, sign in SIX:
-        col = sub[fid].astype(float)
-        sd = col.std()
-        if sd and np.isfinite(sd) and sd > 0:
-            zs.append(sign * (col - col.mean()) / sd)
-    if not zs:
-        return None
-    Z = pd.concat(zs, axis=1)
-    comp = Z.mean(axis=1).where(Z.notna().sum(axis=1) >= MIN_FACTORS)   # need >=3 factors present
-    return comp.dropna().sort_values(ascending=False)                   # high composite = long
+    return direction_aligned_composite(
+        day, SIX, liq_topn=LIQ_TOPN, min_factors=MIN_FACTORS, min_names=50, st_codes=ru.st_codes_on(d))
 
 
 def ranked_schedule(topk):

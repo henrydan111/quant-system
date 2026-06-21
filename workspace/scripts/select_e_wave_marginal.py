@@ -201,51 +201,12 @@ def family_corr_summary(corr, pool):
 
 
 def greedy(pool, A, corr, caps, floor):
-    icir = {f: A[f]["heldout_rank_icir"] for f in pool if f in A}
-    sign = {f: A[f]["sign_consistency"] for f in pool if f in A}
-    resid = {f: A[f].get("resid_ic_vs_style_controls_v1_signed") for f in A}
-
-    def rho(f, g):
-        if f in corr.index and g in corr.columns:
-            v = corr.loc[f, g]
-            return 0.0 if pd.isna(v) else abs(v)
-        return 0.0
-
-    S, fams, trace = [], Counter(), []
-    selectable = [f for f in pool if f in icir]
-    while True:
-        best, best_score, best_info = None, -1.0, None
-        for f in selectable:
-            if f in [s["factor"] for s in S]:
-                continue
-            if fams[pool[f]] >= caps.get(pool[f], 99):
-                continue
-            q = abs(icir[f])
-            basis = [s["factor"] for s in S] + REFERENCES
-            mc, who = 0.0, None
-            for g in basis:
-                r = rho(f, g)
-                if r > mc:
-                    mc, who = r, g
-            score = q * (1 - mc)
-            if score > best_score:
-                best, best_score, best_info = f, score, (q, mc, who)
-        if best is None:
-            trace.append("STOP: all family caps reached")
-            break
-        q, mc, who = best_info
-        if S and best_score < floor:
-            trace.append(f"STOP: next-best {best} marginal={best_score:.3f} < floor {floor} "
-                         f"(|icir|={q:.3f}, maxcorr={mc:.2f} vs {who})")
-            break
-        S.append({"factor": best, "family": pool[best], "heldout_icir": round(icir[best], 3),
-                  "sign_consistency": round(sign[best], 2), "marginal_score": round(best_score, 3),
-                  "maxcorr_to_set": round(mc, 2), "closest_to": who,
-                  "style_resid_ic": (None if resid.get(best) is None else round(resid[best], 3)),
-                  "expected_direction": _expected_direction(icir[best])})
-        fams[pool[best]] += 1
-        trace.append(f"PICK {best:34} fam={pool[best]:5} |icir|={q:.3f} maxcorr={mc:.2f}(vs {who}) marginal={best_score:.3f}")
-    return S, trace
+    """Thin caller of the extracted library greedy (factor_eval_skill.marginal.select_marginal).
+    The E-wave constants are passed as params; behavior is locked bit-for-bit by
+    tests/alpha_research/test_factor_eval_skill_d3.py::test_marginal_reproduces_ewave_6core_regression."""
+    from src.alpha_research.factor_eval_skill.marginal import select_marginal
+    sel = select_marginal(pool=pool, metrics=A, corr=corr, caps=caps, floor=floor, references=REFERENCES)
+    return list(sel.selected), list(sel.trace)
 
 
 def main():

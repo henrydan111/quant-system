@@ -26,6 +26,25 @@ from src.alpha_research.factor_eval_skill.identity import (
     TargetUniverseDeclaration,
     assert_identity_chain,
 )
+from src.alpha_research.factor_eval_skill.deployment import (
+    DeploymentMetrics,
+    build_ranked_schedule,
+    direction_aligned_composite,
+    run_deployment,
+)
+from src.alpha_research.factor_eval_skill.marginal import (
+    MarginalSelection,
+    select_marginal,
+)
+from src.alpha_research.factor_eval_skill.sealed_oos import (
+    DEFAULT_LS_SHARPE_FLOOR,
+    DEFAULT_N_QUANTILES,
+    DIR_MAP,
+    SealedOosVerdict,
+    direction_aligned_pass,
+    evaluate_sealed_oos_bar,
+    run_sealed_oos,
+)
 from src.alpha_research.factor_eval_skill.stage3_reader import (
     ALL_UNIVERSES,
     CORE_UNIVERSES,
@@ -77,4 +96,18 @@ __all__ = [
     "LIQUID_UNIVERSE",
     "MICROCAP_UNIVERSE",
     "ALL_UNIVERSES",
+    # D3 extracted library (marginal / sealed-OOS / deployment)
+    "select_marginal",
+    "MarginalSelection",
+    "direction_aligned_pass",
+    "evaluate_sealed_oos_bar",
+    "run_sealed_oos",
+    "SealedOosVerdict",
+    "DIR_MAP",
+    "DEFAULT_LS_SHARPE_FLOOR",
+    "DEFAULT_N_QUANTILES",
+    "direction_aligned_composite",
+    "build_ranked_schedule",
+    "run_deployment",
+    "DeploymentMetrics",
 ]

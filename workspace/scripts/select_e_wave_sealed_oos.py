@@ -66,15 +66,9 @@ SELECTION_RULE = (
 )
 
 
-def _dir_aligned_pass(side: str, ricir, ls) -> tuple[bool, float, float]:
-    """Direction-aware bar: sign-align rank_icir + ls_sharpe by the held side, then require
-    aligned rank_icir>0 AND aligned ls_sharpe>1.0 (the GP/eps_diffusion/arXiv bar)."""
-    import math
-    s = 1.0 if side == "long" else -1.0
-    da_ri = s * ricir if ricir is not None and not math.isnan(ricir) else float("nan")
-    da_ls = s * ls if ls is not None and not math.isnan(ls) else float("nan")
-    ok = (not math.isnan(da_ri) and da_ri > 0) and (not math.isnan(da_ls) and da_ls > 1.0)
-    return ok, da_ri, da_ls
+# The direction-aware bar is the extracted library function (factor_eval_skill.sealed_oos);
+# locked by tests/alpha_research/test_factor_eval_skill_d3.py::test_sealed_oos_bar_reproduces_ewave_6of6_regression.
+from src.alpha_research.factor_eval_skill.sealed_oos import direction_aligned_pass as _dir_aligned_pass  # noqa: E402
 
 
 def main() -> int:
