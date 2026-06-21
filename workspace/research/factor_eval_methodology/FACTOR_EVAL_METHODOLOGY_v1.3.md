@@ -131,6 +131,12 @@ The old C1 `target_universe_pass = NOT liquid_fail ∧ NOT sign_flip_across_core
 coverage_sub` **over-blocks**: it fails a factor that sign-flips in CSI300 even when it is strong and
 stable in the **declared** small-cap target. That contradicts dual-scope. Replace with:
 
+> **Layer-separation amendment (2026-06-21):** `liquid_fail` (and `illiquidity_bound`) are **removed
+> from factor evaluation entirely** — they were deployment/tradability judgments, which belong to the
+> Stage-8 strategy-build deployment gate, not to Stage 3. `target_universe_pass` below depends ONLY on
+> the factor signal on the **declared** target (IC / sign / coverage), never on a hardcoded liquid-universe
+> verdict. Factor evaluation characterizes the signal; the deployment gate measures tradability.
+
 ```yaml
 # evaluated ON THE DECLARED TARGET UNIVERSE (not a fixed core set)
 target_universe_pass:                       # hard cap for deployment-bound RANKING selection
@@ -229,11 +235,13 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 
 ## §7 — End-to-end (assembled, both cases)
 
-- **E-wave 6-core.** Stage 2 matrix + Stage 3 (role-aware) flags illiquidity_bound/sign-divergence →
-  Stage 6 excludes liquid-failing reps **for a liquid target**; Stage 7 seal on the **declared** target;
-  Stage 8 frozen plan (not a naive composite). **Note §3.3:** on a *small-cap* target the same factors
-  are NOT over-blocked by CSI300 divergence — the E-wave "failed on liquid_top300" verdict is
-  scope-specific, not universal.
+- **E-wave 6-core.** Stage 2 matrix + Stage 3 (role-aware, **signal-only**) flags sign-divergence +
+  emits the per-universe IC profile (NO liquid/illiquidity deployment verdict). Stage 6 **selecting on
+  the declared liquid target** naturally down-weights liquid-weak reps (their IC on the liquid target is
+  weak — no Stage-3 deployment flag needed); Stage 7 seal on the **declared** target; **Stage 8** (the
+  strategy-build deployment gate) is where "fails on liquid_top300" is actually measured — via the
+  event-driven backtest, not a factor-eval flag. **Note §3.3:** on a *small-cap* target the same factors
+  are NOT over-blocked by CSI300 divergence — scope-specific, not universal.
 - **果仁 small-cap strategy.** ADV/listing/ST/suspension → `universe_definition` in TUD (§2.2). 退市/
   违规/解禁 → `risk_exclusion` (FC2 + FC7 PIT proof). 负债率/乖离率 → `soft_factor_tail` (FC3 pre-reg).
   9 rankers → marginal IC vs each other on the declared small-cap universe (§4), with §6.2 interaction
@@ -334,8 +342,10 @@ code (then call). The 9 audit ambiguities are resolved inline (⊕). (Detail: `F
   `build` the limit-hit proxy (genuine gap).
 - **Stage 3 caps** — `call` the lattice `factor_registry/replication_governance.py:resolve_replication_ceiling`
   (`coverage_sub` ≡ `coverage_tier=='sub'` → `availability_floor_fail`); map `status_effect` onto
-  `STATUS_CEILINGS` (no parallel universe). `build` the cross-universe flags
-  (`sign_flip_across_core_universes` / `liquid_fail` / `illiquidity_bound`) over the 7 rows.
+  `STATUS_CEILINGS` (no parallel universe). `build` the cross-universe FACTOR-SIGNAL flag
+  (`sign_flip_across_core_universes`) + the per-universe IC profile over the 7 rows. **NO deployment
+  judgments**: `liquid_fail` / `illiquidity_bound` were REMOVED (2026-06-21) — deployability is the
+  Stage-8 strategy-build gate's job, never factor evaluation's.
 - **Stage 4 marginal** — `build` (parameterize `select_e_wave_marginal.py`'s greedy); `book_marginality`
   = `call` the matrix `resid_ic_vs_approved_stable_*` (read, don't recompute); primitive
   `ic_analysis.py:compute_marginal_ic`.

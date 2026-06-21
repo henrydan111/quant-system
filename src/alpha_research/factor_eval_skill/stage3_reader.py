@@ -13,12 +13,19 @@ This module REUSES the engines — it does NOT re-implement the gate or the ceil
   * ``target_universe_pass`` (ranking) is produced by calling ``assign_candidate_status``
     (the exact IS bar |rank_icir|≥0.10 ∧ sign_consistency≥0.70) on the target row.
 
-The ONLY new logic is the cross-universe flags
-(``sign_flip_across_core_universes`` / ``liquid_fail`` / ``illiquidity_bound``). They are
-DIAGNOSTIC quality flags surfaced for the human + select stage — the v1.3 §5 rule holds:
-cross-universe divergence does NOT auto-cap unless it is a fail ON the declared target
-(captured by ``target_universe_pass``), so a small-cap-target factor is never re-blocked
-merely for flipping in CSI300.
+The ONLY new logic is the cross-universe FACTOR-SIGNAL diagnostic
+``sign_flip_across_core_universes`` (+ ``coverage_sub`` / ``field_ineligible_on_target``),
+surfaced for the human + select stage. It does NOT auto-cap (v1.3 §5): cross-universe sign
+divergence is diagnostic unless it is a fail ON the declared target (captured by
+``target_universe_pass``), so a small-cap-target factor is never re-blocked merely for flipping
+in CSI300.
+
+LAYER SEPARATION (2026-06-21): factor evaluation characterizes the SIGNAL only — it does NOT
+emit deployment/tradability judgments. The old ``liquid_fail`` / ``illiquidity_bound`` flags
+(how a factor fares on a liquid investable universe / whether its edge is microcap-concentrated)
+were DEPLOYMENT verdicts and were removed from here; deployability is a STRATEGY property assessed
+by the strategy-build deployment gate (Stage 8), which directly measures it via the event-driven
+backtest on the declared investable universe.
 """
 from __future__ import annotations
 
@@ -30,21 +37,18 @@ from typing import Any, Mapping
 
 from src.alpha_research.factor_eval_skill.identity import TargetUniverseDeclaration
 from src.alpha_research.factor_eval_skill.stores import ROLES, Stage3QualityRecordStore
-from src.alpha_research.factor_lifecycle.status_rules import (
-    CAND_HELDOUT_ICIR_MIN,
-    CAND_SIGN_CONSISTENCY_MIN,
-    assign_candidate_status,
-)
+from src.alpha_research.factor_lifecycle.status_rules import assign_candidate_status
 from src.alpha_research.factor_registry.replication_governance import (
     resolve_replication_ceiling,
 )
 
 # The broad-market cap-benchmark universes used for the sign-flip DIAGNOSIS (not a cap).
-# NOTE (GPT cross-review): this is deliberately the four cap-index benchmarks — univ_growth /
-# univ_liquid_top300 / univ_microcap are EXCLUDED here because their divergence is covered by
-# dedicated flags (liquid_fail, illiquidity_bound) or is a style signal, not a market-segment
-# reversal. The flag name says "core" (these four), not "all", to avoid overclaiming.
+# Deliberately the four cap-index benchmarks (a factor-signal robustness check). univ_growth /
+# univ_liquid_top300 / univ_microcap are NOT singled out here — privileging the liquid/microcap
+# universes would re-introduce a deployment judgment, which belongs to the strategy-build layer.
 CORE_UNIVERSES = ("univ_all", "univ_csi300", "univ_csi500", "univ_csi1000")
+# Universe-name constants (a caller MAY declare any of these as a target). They are NOT special-cased
+# in factor evaluation — liquid/microcap deployment assessment lives in the strategy-build layer.
 LIQUID_UNIVERSE = "univ_liquid_top300"
 MICROCAP_UNIVERSE = "univ_microcap"
 ALL_UNIVERSES = (
@@ -204,39 +208,24 @@ def _universe_profile(urows: Mapping[str, dict]) -> dict:
 
 
 def _cross_universe_flags(urows: Mapping[str, dict], target_row: Mapping[str, Any] | None) -> dict:
-    """The NEW cross-universe diagnostics (not a cap by themselves)."""
-    # sign flip across the broad-market core universes (determinate signs only)
+    """Cross-universe FACTOR-SIGNAL diagnostics (not a cap by themselves).
+
+    These characterize the SIGNAL only — its cross-sectional sign stability across the broad
+    cap-benchmark universes + its availability on the declared target. Deployment/tradability
+    judgments (how it fares on a liquid investable universe, whether the edge is concentrated in
+    microcaps) are DELIBERATELY NOT here: the methodology separates the layers — deployability is a
+    STRATEGY property assessed by the strategy-build deployment gate (Stage 8), never by factor
+    evaluation (removed 2026-06-21 per the layer-separation mandate)."""
+    # sign flip across the broad-market cap-benchmark universes (determinate signs only)
     core_signs = [_orientation(urows.get(u)) for u in CORE_UNIVERSES if urows.get(u) is not None]
     determinate = {s for s in core_signs if s != 0}
     sign_flip = len(determinate) > 1
-
-    primary_sign = _orientation(urows.get("univ_all"))
-    liquid = urows.get(LIQUID_UNIVERSE)
-    micro = urows.get(MICROCAP_UNIVERSE)
-
-    # liquid_fail: not evaluated on liquid, OR weak on liquid, OR sign disagrees with primary
-    if liquid is None:
-        liquid_fail = True
-    else:
-        liquid_weak = abs(_f(liquid.get(_K_ICIR))) < CAND_HELDOUT_ICIR_MIN
-        liquid_sign = _orientation(liquid)
-        liquid_flipped = primary_sign != 0 and liquid_sign != 0 and liquid_sign != primary_sign
-        liquid_fail = bool(liquid_weak or liquid_flipped)
-
-    # illiquidity_bound (the E-wave failure mode): strong on microcap, weak on liquid
-    illiquidity_bound = False
-    if micro is not None and liquid is not None:
-        micro_strong = abs(_f(micro.get(_K_ICIR))) >= CAND_HELDOUT_ICIR_MIN
-        liquid_weak = abs(_f(liquid.get(_K_ICIR))) < CAND_HELDOUT_ICIR_MIN
-        illiquidity_bound = bool(micro_strong and liquid_weak)
 
     coverage_sub = bool(target_row is not None and str(target_row.get(_K_COV_TIER, "")) == "sub")
     field_ineligible_on_target = bool(target_row is not None and not target_row.get(_K_FIELD_OK, False))
 
     return {
         "sign_flip_across_core_universes": sign_flip,
-        "liquid_fail": liquid_fail,
-        "illiquidity_bound": illiquidity_bound,
         "coverage_sub": coverage_sub,
         "field_ineligible_on_target": field_ineligible_on_target,
     }

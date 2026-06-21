@@ -4,7 +4,7 @@ Covers: status_effect via resolve_replication_ceiling (clean -> eligible_for_oos
 coverage -> evidence_only; missing target -> fail-closed); the explicit native/cohort
 governance contract (a cohort tier caps where native would not; the cohort factory is
 fail-closed); target_universe_pass via assign_candidate_status; the NEW cross-universe
-flags (illiquidity_bound = the E-wave failure mode; sign-flip is diagnostic, not a block
+flags (factor-signal only — NO deployment judgments; sign-flip is diagnostic, not a block
 for a small-cap target); the role split; persist round-trip; and the strict matrix loader.
 """
 from __future__ import annotations
@@ -101,18 +101,23 @@ def test_stage3_caps_requires_governance():
         stage3_caps(MatrixResults(rows), factor_id="f", definition_hash="d", tud=_tud("univ_all"), role="ranking")
 
 
-# ----- cross-universe flags (the NEW logic) -----
+# ----- cross-universe flags (factor-SIGNAL only; NO deployment judgments) -----
 
-def test_illiquidity_bound_is_the_ewave_failure_mode():
+def test_factor_eval_emits_no_deployment_judgments():
+    # layer separation: a microcap-strong / liquid-weak factor is the E-wave deployment failure
+    # pattern, but factor evaluation must NOT pre-judge it — no liquid_fail / illiquidity_bound here
+    # (deployability is the strategy-build gate's job). The factor-signal verdict on the DECLARED
+    # target (target_universe_pass) still works.
     rows = [
         _row("f", "univ_all", 0.40),
         _row("f", "univ_microcap", 0.40),
         _row("f", "univ_liquid_top300", 0.05),  # below the 0.10 IS bar
     ]
     rec = _caps(rows, "univ_liquid_top300", "ranking")
-    assert rec.quality_flags["illiquidity_bound"] is True
-    assert rec.quality_flags["liquid_fail"] is True
-    assert rec.target_universe_pass is False  # weak on the declared liquid target
+    assert "liquid_fail" not in rec.quality_flags
+    assert "illiquidity_bound" not in rec.quality_flags
+    assert set(rec.quality_flags) == {"sign_flip_across_core_universes", "coverage_sub", "field_ineligible_on_target"}
+    assert rec.target_universe_pass is False  # the signal IS weak on the declared target (factor-eval, not deployment)
 
 
 def test_sign_flip_is_diagnostic_not_a_block_for_smallcap_target():
