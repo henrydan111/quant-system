@@ -310,6 +310,86 @@ not a parallel status universe**, and **not redundant** with multiplicity disclo
 
 ---
 
+## §10 — Execution binding (exact machinery per step; resolves the adaptation-audit ambiguities)
+
+A runnable skill binds each step to a NAMED tool. `call` = existing, reuse verbatim. `build` = Part-G new
+code (then call). The 9 audit ambiguities are resolved inline (⊕). (Detail: `FACTOR_EVAL_SYSTEM_ADAPTATION_AUDIT.md`.)
+
+- **Stage 0 register** — `build` a `Stage0EvidenceProvenance` store. ⊕#7 **no existing home**:
+  `hypothesis_cli`/`Hypothesis` is a strategy+OOS object (mandatory universe + sealed window) — do NOT
+  overload it. The factor *spec* goes in the catalog (Stage 1); the pre-reg record (rationale /
+  expected_direction / role / evidence_tier / cohort) is the new store.
+- **Stage 1 define→draft** — `call`: edit `factor_library/catalog.py:get_factor_catalog` (use `ADJ_*_T1`)
+  → `factor_library/selection.py:sync_catalog_to_registry()` writes status `draft`; hash via
+  `current_catalog_definition_hashes()`. ⊕#2 **PIT = TWO checks**: `pytest
+  tests/alpha_research/test_factor_library_pit_safety.py` (Ref-wrapping) **AND** `python
+  scripts/lint_no_unsafe_pit_dates.py` (ledger/date). Field eligibility: `FieldStatusRegistry.validate_expression`
+  vs `config/field_registry/field_status.yaml`. ⊕#3 **PIT anchor for statement fundamentals is NOT in
+  `data_dictionary.md`** → use CLAUDE.md §3.2 / `pit_backend.py` (`max(ann_date,f_ann_date)+shift(1)`).
+- **Stage 2 matrix** — `call`: `venv/Scripts/python.exe workspace/scripts/unified_eval_universe_matrix.py
+  [--factors <ids>]` → `workspace/outputs/unified_eval_matrix/results.jsonl` (7 universes;
+  `resid_ic_vs_style_controls_v1_*`, `resid_ic_vs_approved_stable_*`, `decay_icir_*`, `turnover_ann`).
+  ⊕#8 turnover-normalized IC = `|heldout_rank_icir|/turnover_ann`; cost-drag = `turnover_ann × 25bps`
+  (eval cost default) — **derive (not emitted)**; `long_leg_excess_ann_*` are NET, CSI300/500-only.
+  `build` the limit-hit proxy (genuine gap).
+- **Stage 3 caps** — `call` the lattice `factor_registry/replication_governance.py:resolve_replication_ceiling`
+  (`coverage_sub` ≡ `coverage_tier=='sub'` → `availability_floor_fail`); map `status_effect` onto
+  `STATUS_CEILINGS` (no parallel universe). `build` the cross-universe flags
+  (`sign_flip_across_core_universes` / `liquid_fail` / `illiquidity_bound`) over the 7 rows.
+- **Stage 4 marginal** — `build` (parameterize `select_e_wave_marginal.py`'s greedy); `book_marginality`
+  = `call` the matrix `resid_ic_vs_approved_stable_*` (read, don't recompute); primitive
+  `ic_analysis.py:compute_marginal_ic`.
+- **Stage 5 gate** — `call` rule `factor_lifecycle/status_rules.py:assign_candidate_status`
+  (|icir|≥0.10 ∧ sign≥0.70). ⊕#1 **PATH RULE:** factor with a matrix run → generalized matrix-reuse
+  promote (`build`, parameterized — NEVER clone `promote_e1x`); no matrix → orchestrator
+  (`research_orchestrator_cli.py run` + `phase6_setup_request.py` + `phase6_drive_gates.py`).
+  `set_status('candidate')` ungated; human gate publishes.
+- **Stage 6 select** — `build` the `SelectedSet` schema + `target_universe_declaration_hash` (only
+  `FrozenSelectionSet` exists); `build` `interaction_check`.
+- **Stage 7 seal** — `call`: `FrozenSelectionSet` → `holdout_seal.py:HoldoutSealStore.claim_holdout_access(seal_key=frozen_set_hash)`
+  → `promotion_evidence.py:reproduce_sealed_oos(...)` → `produce_promotion_evidence(...)` →
+  `set_status('approved', promotion_evidence=, current_git_sha=)`. ⊕#4 **pin `n_quantiles=10`** (decile)
+  for ALL post-2026-06-11 eval (the arXiv driver's 5 mis-scores LS-Sharpe). ⊕#5 **OOS spend ≠
+  auto-promote**: the run spends+records the verdict; `set_status('approved')` is a SEPARATE authorized
+  step. ⊕#6 the bar (sign-aligned `rank_icir>0 ∧ ls_sharpe>1.0`) is a single contract constant, not a
+  per-driver literal. ⊕#9 the OOS leg runs `stage='oos_test'` + a seal-claimed `ResearchAccessContext`
+  (installed by `reproduce_sealed_oos`), NEVER `compute_factors`' default `CacheContext`.
+- **Stage 8 deploy** — `call` `EventDrivenBacktester` + `CostConfig.realistic_china()` +
+  `RankedFallbackStrategy` + `long_only_50cagr/research_utils.py`; `build` the `DeploymentFrozenPlan`
+  assembler + `CapacityContract_v1` + `FilterDeploymentGate_v1` A/B.
+- **qlib compute (all stages)** — `call` `operators.py:compute_factors(catalog, start, end, …, stage=)`
+  (→ `qlib_windowed_features`); NEVER bare `D.features` (`lint_no_bare_qlib_features.py`). `stage='oos_test'` for OOS.
+- **provider pre-flight (formal/OOS)** — `call` `provider_manifest.py:load_provider_manifest` +
+  `validate_provider_manifest_against_qlib`: namespacing `enforced`, calendar_end == `2026-02-27`,
+  run_mode ∈ policy `allowed_modes`.
+
+## §11 — Future-applicability self-review (works for NEW factors, not just past)
+
+The CORE (matrix, IS-gate rule, seal spine, backtester, qlib compute, provider gates) is **generic** — it
+scores/gates/seals ANY catalog factor → future-applicable. Four forward-looking constraints the skill MUST honour:
+
+1. **Build Part-G GENERIC; prove on a NON-E-wave factor.** The existing wrappers (`promote_e1*`,
+   `select_e_wave_*`, `eval_e_wave_*`) are hard-bound to the CICC cohort (prefix / pool-size / caps /
+   refs). The Part-G generalization MUST be parameterized (factor-set-agnostic, universe-declared) and its
+   **acceptance test MUST run a non-E-wave factor end-to-end** — else it reincarnates the clone-per-cohort
+   anti-pattern under a new name.
+2. **New-data factors need the data-infra pipeline FIRST.** factor-eval ASSUMES the `$fields` exist
+   (ingest → PIT ledger → provider → field registry → data dictionary, CLAUDE.md §6). A future factor on a
+   NEW field is blocked at Stage 1 until data-infra lands it. **Boundary: factor-eval is not a data-ingestion skill.**
+3. **The frozen OOS window (2021-01-01..2026-02-27) is SHARED + bounded.** Per-factor single-shot is preserved
+   (each seal keyed by its own `frozen_set_hash` → safe per factor). BUT (a) a genuinely-forward OOS for a
+   factor proposed *later* requires **advancing the provider/calendar** (a data update) — until then every
+   factor's "OOS" is the same fixed historical window; (b) **cross-factor multiplicity accumulates on that one
+   window** — every distinct frozen set that spends 2021-2026 raises the SYSTEM-level false-discovery rate,
+   which the per-set seal does NOT adjust for. The seal store HAS the spend count; the skill SHOULD surface a
+   system-level FDR/denominator disclosure (how many frozen sets have spent this window), tied to
+   `evidence_tier` / `multiplicity_scope_id`. **This is the sharpest forward-looking gap.**
+4. **`evidence_tier` is the forward-looking honesty hook.** As the same IS/OOS windows get re-used across
+   future factors, the tier (theory_a_priori vs a_priori_is_informed) + the cross-factor spend count keep a
+   future factor's evidence from being over-claimed. Wire them, or future evaluations silently inflate confidence.
+
+---
+
 *Round-5 residual fixes applied in-place: §8 reordered (declare_target before characterize; interaction_check moved to the pre-seal `select` step), §3.3 added `growth` to the cross-universe divergence domains, §2.2 wording aligned to §2.3. Architecture unchanged — GPT confirmed the core model coherent.*
 
 *v1.3 is the single source of truth. The 4 prior docs + 2 responses are the design history. If GPT's
