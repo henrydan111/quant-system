@@ -71,15 +71,32 @@ position count:
 | capacity | lower | higher (scalable) |
 | this system | VQ10 large-cap value top-10 (deployed) | the breadth-harvesting machine (to build) |
 
-**The factor-eligibility rule is keyed off the actual per-component weight `w`, NOT a status label and NOT a
-book "type" tag.** Pick a load-bearing threshold `w*` (default e.g. 0.05 of book weight/risk):
+**The factor-eligibility rule is keyed off a component's actual LOAD on the book — `component_load`, NOT a
+status label, NOT a book "type" tag, and NOT nominal blend weight alone** (GPT review amendment B: nominal
+weight is gameable — split one unapproved idea into ten correlated 1% variants and you slip under a 5% gate):
+```
+component_load_j = max( |raw_blend_weight_j|,
+                        ex_ante_marginal_risk_contribution_j,   # via Σ (PR1)
+                        marginal_IR_or_alpha_contribution_j,
+                        aggregate_family_contribution_j )        # the anti-stuffing term
+```
+Load-bearing threshold `w*` is a governance PRIOR (default 0.05; require a sensitivity report at
+`w* = 0.02 / 0.05 / 0.10` before finalizing):
 
-- **Component with `w ≥ w*` (load-bearing):** must be `approved`, or `candidate` with
+- **`component_load ≥ w*` (load-bearing):** must be `approved`, or `candidate` with
   `allow_candidate_components=True`. **`draft` is REFUSED** — a load-bearing component must carry a validated
   solo signal.
-- **Component with `w < w*` (non-load-bearing):** its solo status is recorded as **provenance**, not a hard
-  gate. Admissible down to a **noise floor** (a minimal solo-IC floor to exclude pure noise), because its trust
-  comes from the **book's** sealed OOS, not its own. A `draft` at ~1/200 weight is acceptable here.
+- **`component_load < w*` (non-load-bearing):** solo status is **provenance**, not a hard gate — validated via
+  the **book's** sealed OOS. The noise floor is NOT "any tiny-weight draft" (amendment C). A sub-`w*` component
+  is admissible only if ALL hold: (a) sign is pre-declared / inherited from a documented economic prior; (b) IS
+  marginal IC/return contribution ≥ 0 after costs; (c) sign consistency clears a low walk-forward floor; (d) it
+  is not a near-duplicate of another admitted draft component (no cluster-stuffing); (e) it passes
+  liquidity / missing-data / PIT sanity; (f) **total draft + unapproved risk budget ≤ 25–35%** for
+  first-generation diversified books (relax later once PR5 is mature).
+
+**Gating (amendment A):** until PR5 (selection-search deflation) is live, a sealed diversified book may **NOT
+admit any draft / sub-`w*` component** — PR3 records the eligibility but **refuses the seal**. This stops the
+diversified path from being a temporary backdoor before the multiplicity control exists.
 
 Equivalently: a concentrated book requires *every component individually validated*; a diversified book is
 *validated as a whole*, and weak/draft components ride on the ensemble's OOS. This is what dissolves the
@@ -99,11 +116,20 @@ factors):**
    validated.
 5. Breadth comes from **a-priori economic diversity** (handbooks, papers, alt-data — pre-registered,
    low-multiplicity), NOT from mining the draft pool.
+6. The full component list + weights + transforms + family IDs + the **selection algorithm** are FROZEN before
+   the sealed OOS (amendment: no post-OOS recipe edit without a new frozen strategy hash + a new OOS spend).
 
-*Enforced at:* PR3 (the `StrategyCandidate` records each component's `weight` + `status` + the resolved
-archetype, and the load-bearing check); PR5 (the selection-search deflation).
+*Enforced at:* PR3 (the `StrategyCandidate` records each component's `component_load` + `status` + family ID +
+the resolved archetype, runs the load-bearing check, and — until PR5 is live — refuses a sealed diversified
+book containing draft/sub-`w*` components); PR5 (the selection-search deflation).
 
 ## §2 — The build plan (dependency-ordered)
+
+> **GPT design-review R1 folded (2026-06-22): "go for PR1 after amendments A–G."** A — diversified draft/sub-`w*`
+> admission GATED on PR5; B — `w*` keys off `component_load` (incl. family-contribution anti-stuffing); C —
+> noise-floor spec; D — capacity SCHEMA is a PR3 dependency; E — weighted event-driven seam on PR2's critical
+> path; F — formal optimizer fails closed; G — PR1 audit harness. Core ordering (risk model → optimizer →
+> strategy object) confirmed correct + grounded in the pinned code.
 
 ### Critical path (sequential — each unblocks the next)
 
@@ -123,19 +149,34 @@ fails closed. **Do not start with a full Barra clone.** Minimum v1:
 | Idiosyncratic | diagonal residual variance with a floor |
 | Output | **full stock covariance Σ**, not a scalar |
 
-**A-share specifics (the detail a top firm checks):** the return inputs are **censored** — limit-up/down days
-and suspension gaps bias a naive EWMA covariance. Drop/winsorize limit-locked returns, align on the trading
-calendar (not business days), and handle suspension NaN gaps explicitly. PIT-safe (all rolling windows lag-1).
+**A-share specifics — censored returns (refined per GPT review):** limit-up/down days + suspension gaps bias a
+naive EWMA covariance. Do NOT simply drop limit-locked returns (that understates crash/rebound risk) — **flag +
+winsorize** them; never treat stale suspended prices as true low-vol returns; align on the **trading calendar**
+(not business days). In the **risk overlay**: add an idio-vol uplift for names with recent suspensions, limit
+locks, ST risk, or stale prices; stress-test with carried-forward / delayed-realization returns.
 
 Interface:
 ```
 fit(date, universe, returns, exposures)
 predict_covariance(date, universe) -> Σ
 predict_risk_attribution(weights) -> {factor_risk, idio_risk, active_exposures}
-validate(date_range) -> {ex_ante_vol_vs_realized, PSD_ok, nan_audit}
+validate(date_range) -> {ex_ante_vol_vs_realized, PSD_ok, condition_number, nan_audit}
 ```
-**Definition of done:** Σ is PSD; ex-ante vol tracks realized vol within tolerance on a holdout window; no
-lookahead; replaces the dormant symbols (remove them from `KNOWN_DORMANT` once live).
+**Validation & audit harness (amendment G — do NOT skip):**
+1. **Return-input audit** + the censoring policy above; **total-return consistency** with the event-driven
+   convention (PIT-safe, all rolling windows lag-1).
+2. **PIT exposure audit** — industry / free-float mcap / ADV / style / index-beta inputs must clear
+   field-status + PIT eligibility (route through the same governance as factors).
+3. **Robust cross-sectional regression** for factor returns (WLS / robust; cap single-name influence).
+4. **Conditioning diagnostics** — PSD is not enough: track condition number, eigenvalue clipping, covariance
+   forecast stability.
+5. **Horizon calibration** — the covariance horizon must match the rebalance / holding period, not just daily
+   close-to-close variance.
+6. **`risk_model_hash` payload** — config + training window + universe + exposure schema + preprocessing policy
+   hash into PR3's `risk_model_hash`.
+
+**Definition of done:** Σ is PSD + well-conditioned; ex-ante vol tracks realized vol within tolerance on a
+holdout window; the audit harness (1–6) passes; no lookahead; replaces the dormant symbols.
 
 #### PR2 — Optimizer integration (consumes PR1)
 Wire the existing cvxpy optimizer into book construction; replace `rank → top-K → equal weight`:
@@ -150,11 +191,25 @@ s.t.       gross exposure ≤ 1.0            (DEFAULT, §7.11)
            ADV participation bounds
            exclude ST / suspended / limit-up-buy / limit-down-sell infeasible names
 ```
-Make `risk.max_leverage` legacy/deprecated in the formal optimizer config (default gross ≤ 1×). **First target:
-the existing strongest book** — reproduce VQ10 (the +20.7% value rule) through the optimizer and ask: *can
-constraints cut drawdown + turnover without killing CAGR?* Benchmark optimizer vs top-K head-to-head through
-the event-driven engine. **Definition of done:** an optimizer-built book ≥ the top-K book on net Sharpe at
-equal-or-lower turnover, event-driven validated.
+Make `risk.max_leverage` legacy/deprecated in the formal optimizer config (default gross ≤ 1×).
+
+**Three amendments (GPT review):**
+- **(E) Weighted event-driven seam.** The current `run_deployment` builds a ranked top-K schedule and runs
+  `RankedFallbackStrategy` — it cannot honestly validate optimized WEIGHTS. Add a `WeightedTargetStrategy` /
+  `date → {symbol: target_weight}` schedule path in the event-driven engine. Without it, PR2 optimizes in
+  pandas but can't event-driven-validate. **This is on PR2's critical path, not optional.**
+- **(F) Fail-closed in formal mode.** The existing optimizer falls back to equal weights when all solvers fail.
+  That is fine for exploratory scripts but **dangerous for a sealed strategy** — the hash says "optimizer-built"
+  while the executed weights are fallback. In formal mode, a failed/infeasible optimization must **fail closed**
+  (or hash the fallback decision into the strategy artifact so it is auditable).
+- **(alpha calibration)** The optimizer needs `α` in **expected-return units over the holding horizon**, not raw
+  z-scores. Define a monotonic rank-to-return mapping estimated **inside IS / walk-forward only**, with shrinkage.
+
+**First target (fail-fast):** reproduce VQ10 (the +20.7% value rule) through the optimizer vs top-K head-to-head
+on the event-driven engine. **Definition of done — Pareto non-inferiority (softened per GPT):** the
+optimizer-built book is non-inferior — equal-or-higher net Sharpe at equal/lower turnover, OR materially lower
+drawdown / concentration / tracking-error at acceptable CAGR degradation — event-driven validated. (A
+constrained optimizer may rationally trade a little Sharpe for less drawdown/liquidity risk.)
 
 #### PR3 — StrategyCandidate lifecycle (consumes PR1 + PR2)
 Extend the factor-eval skill's strategy-build seam into a first-class object + lifecycle mirroring the factor
@@ -176,15 +231,25 @@ Required hash-bound artifacts on every `StrategyCandidate` (extends `DeploymentF
 | kill_criteria | failure observable before capital loss |
 | component_eligibility (§1.1) | per-component `{factor_id, weight, status}` + resolved archetype + load-bearing check |
 
-**Factor-eligibility enforcement (§1.1):** `factor_set_hash` resolves to a list of `{factor_id, weight,
-status}`. At seal time, run the load-bearing check — any component with `weight ≥ w*` must be `approved` or
-(opt-in) `candidate`; `draft`/sub-w* components ride on the book's OOS down to a noise floor. Refuse a sealed
-book whose load-bearing components include a `draft`.
+**Factor-eligibility enforcement (§1.1):** `factor_set_hash` resolves to `{factor_id, component_load, status,
+family_id}`. At seal time, run the load-bearing check — any component with `component_load ≥ w*` must be
+`approved` or (opt-in) `candidate`; sub-`w*` components ride on the book's OOS down to the noise floor. **Refuse
+a sealed book whose load-bearing components include a `draft`, AND — until PR5 is live (amendment A) — refuse any
+sealed diversified book that admits a draft/sub-`w*` component at all.**
+
+**Capacity-schema dependency (amendment D):** PR3 defines the `capacity_report` artifact SCHEMA. The first
+*internal* `StrategyCandidate` may carry `capacity_report.status = "pending_pr4"`, but **no `approved_live` (or
+any "would trade" claim) may omit a completed PR4 capacity report.**
+
+**Build the minimal object first (amendment — no over-engineering):** `StrategyCandidate v0` = the immutable
+hash-bound record (the artifacts above + sealed-OOS reference + registry record). `paper_trading → live_small →
+approved_live / terminal` exist as enum states, but the FIRST PR3 must NOT require a live-monitoring subsystem
+(that is the standing "live decay monitoring" concern, later).
 
 Publish into the (currently empty) `data/strategy_registry/`. **Reuse the seal pattern:** a strategy is sealed
 too — key `HoldoutSealStore` on a strategy-level frozen hash so a book's OOS is single-shot, exactly like a
-factor's. **Definition of done:** one `StrategyCandidate` (the VQ10 book) published end-to-end with all hashes
-+ a capacity report + kill criteria + the component-eligibility check, sealed.
+factor's. **Definition of done:** one `StrategyCandidate v0` (the VQ10 book) published end-to-end with all
+hashes + a capacity report (or `pending_pr4`) + kill criteria + the component-eligibility check, sealed.
 
 ### Parallel tracks (proceed alongside the critical path)
 
@@ -215,6 +280,20 @@ candidate if:  marginal IC contribution > floor
 **Not punitive at the single-factor level** — for diversified books the criterion is marginal contribution to
 ensemble IR, consistent with the project's own marginal-orthogonal selection philosophy.
 
+**Scope correction (GPT review):** PR5 must count the **strategy-RECIPE search**, not just the factor-catalog
+search — `effective_n_trials` must absorb {factor subset · weights · family caps · universe · horizon ·
+rebalance · cost model · risk aversion · turnover penalty · capacity screen · neutralization}. Rule:
+```
+a-priori composition   → n_eff = # pre-declared economic clusters / recipe variants  (low tax)
+data-mined composition → n_eff includes the subset + weight + universe/horizon/config search  (high tax)
+optimizer weight-learning → must happen INSIDE IS / walk-forward only
+recipe changed after seeing OOS → new frozen strategy hash + new OOS spend (multiplicity++)
+```
+**Build, don't just call:** the existing `factor_eval_skill/multiplicity.py` is an OOS-window spend *counter +
+action emitter* — it does NOT compute discovery effective-trials. PR5 EXTENDS the pattern; it is not a one-line
+reuse. `statistical_tests.py` PSR/DSR exist but the DSR is a lightweight `sqrt(2·log(n_trials))` approximation
+(a starting helper, not the full framework); **PBO/CSCV does not exist — PR5 implements it NEW.**
+
 #### PR6 — Futures-hedged research (proxy first; sequence AFTER PR2)
 Three research modes — long-only active / beta-hedged long / **natural-1× market-neutral**. Start with
 **index-return proxy hedging, clearly labeled proxy**. The real IF/IC/IM accounting (contract mapping, roll
@@ -243,11 +322,11 @@ a return-predicting GBM.
 
 | PR | Depends on | Unblocks | Effort | Delivers |
 |---|---|---|---|---|
-| PR1 risk model v1 | — | PR2, PR6 | M | a calibrated daily Σ + risk attribution |
-| PR2 optimizer | PR1 | PR3 | M | optimizer-built book ≥ top-K, event-driven validated |
-| PR3 StrategyCandidate lifecycle | PR2 | the registry | M | first sealed strategy object in `strategy_registry` |
-| PR4 capacity curve | event engine | PR3 stamp | S | capacity report artifact |
-| PR5 discovery multiplicity | testing ledger | promotion bar | S–M | effective-trials-adjusted screening |
+| PR1 risk model v1 | — | PR2, PR6 | M | calibrated daily Σ + risk attribution + the audit harness (G) |
+| PR2 optimizer **+ weighted-exec seam (E)** | PR1 | PR3 | M | optimizer book Pareto-non-inferior to top-K, event-driven validated; fail-closed (F) |
+| PR3 StrategyCandidate v0 | PR2 **+ PR4-schema** | the registry | M | first sealed strategy object; **diversified-draft path GATED on PR5 (A)** |
+| PR4 capacity curve | event engine | PR3 schema → `approved_live` | S | capacity report (schema lives in PR3, curve here; required before `approved_live`) |
+| PR5 discovery multiplicity | testing ledger | **the diversified-book path** | S–M | effective-trials over the RECIPE search; unblocks diversified draft/sub-`w*` admission |
 | PR6 futures proxy → real | PR2 | the MN lane | L (real) | beta-hedged / natural-1× book |
 
 **North-star milestone (the missing bridge):**
@@ -264,6 +343,10 @@ a return-predicting GBM.
 - Do not make new raw data research-usable before full PIT promotion (normalize → PIT ledger → Qlib →
   field_status → provider manifest). Add a second PIT vendor / cross-source reconciliation for fragile,
   high-value datasets (the JoinQuant-vs-report_rc cross-check is the template).
+- Do not let the formal optimizer silently fall back to equal weights (F) — fail closed or hash the fallback.
+- Do not gate `component_load` on nominal weight alone (B) — include marginal-risk + family-contribution.
+- Do not admit a draft/sub-`w*` component into a sealed diversified book until PR5 deflation is live (A).
+- Do not edit a sealed book's recipe after seeing its OOS — new frozen hash + new spend, always.
 
 ---
 
