@@ -126,3 +126,37 @@ for the superstructure).
 3. **Honesty:** until Layer 2 lands, the skill is an *assisted, governed orchestration of the existing core*,
    not a fully-automated pipeline. That is still a large improvement over today's clone-and-edit, and it
    reuses every certified primitive.
+
+---
+
+## §5 — Independent GPT 5.5 Pro cross-check (converges ~95%)
+
+A second inspection was run **independently** — GPT inspected the public repo code directly with NO
+access to §1–§4 — and reached the **same verdict and substance**, which de-risks the conclusion:
+
+- **Same verdict:** "not turn-key; do NOT reinvent the engine; build a thin orchestration/contracts
+  layer around existing machinery." GPT estimates the existing code = **~70% of the engine substrate**.
+- **Same reuse core:** catalog, PIT linters, field registry, 7-universe matrix + reference-invariant
+  residuals, P-GATE ceiling lattice, IS candidate gate, `FrozenSelectionSet`, `HoldoutSealStore`,
+  event-driven backtester, provider-manifest checks.
+- **Same gaps:** TUD, SelectedSet, DeploymentFrozenPlan, evidence_tier/Stage0EvidenceProvenance, generic
+  Stage-3 caps, RoleDeclaration, Filter{Characterization,DeploymentGate}, generalized marginal tool,
+  role-aware display, RevalidationCadence; `FrozenSelectionSet` lacks `target_universe_declaration_hash`.
+- **Same collision traps:** don't rebuild catalog / PIT linter / seal / backtester; CohortManifest ≠
+  CohortHypothesis; bare status enum ≠ role-scoped status.
+- **Same ambiguities:** no single skill entrypoint; Stage-0 object choice; universe-identity unification;
+  filter handling; Stage-3 general-vs-CICC; Stage-8 storage.
+
+**Complementary catches (no contradictions):**
+- *This audit additionally flagged* (data-layer/operational — GPT couldn't fetch `data/`/`workspace/outputs/`):
+  the **`n_quantiles` 5-vs-10 silent mis-scoring**, the **two distinct PIT checks**, the **PIT anchor
+  missing from the data dictionary**, the **sealed-OOS-context vs `compute_factors`-default-cache
+  invariant**, the **limit-hit Stage-2 gap**, the `coverage_sub`↔`coverage_tier` mapping, the 3
+  disagreeing direction encodings.
+- *GPT additionally emphasized*: an explicit **two-CLI entrypoint** (factor-eval:
+  `register/declare_target/characterize/gate/select/seal`; strategy-build: `deploy`), and the existing
+  registry field **`approval_validity` {valid, requires_revalidation, stale}** as the reuse hook for the
+  RevalidationCadence runner.
+
+**Net:** two independent audits agree → the build plan (§4 + GPT's matching "minimum build" list) is the
+cross-checked, reliable basis for codification.
