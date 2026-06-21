@@ -30,6 +30,7 @@ from typing import Any, Callable, Mapping, Sequence
 from src.alpha_research.factor_eval_skill._hashing import payload_hash
 from src.alpha_research.factor_eval_skill.identity import (
     DeploymentFrozenPlan,
+    EvalProtocolSpec,
     FrozenSelectionEnvelope,
     SelectedRepresentative,
     SelectedSet,
@@ -37,7 +38,11 @@ from src.alpha_research.factor_eval_skill.identity import (
     assert_identity_chain,
 )
 from src.alpha_research.factor_eval_skill.marginal import select_marginal
-from src.alpha_research.factor_eval_skill.multiplicity import oos_window_multiplicity
+from src.alpha_research.factor_eval_skill.multiplicity import (
+    ACTION_ACKNOWLEDGE,
+    ACTION_REQUIRE,
+    oos_window_multiplicity,
+)
 from src.alpha_research.factor_eval_skill.sealed_oos import DIR_MAP
 from src.alpha_research.factor_eval_skill.stage3_reader import (
     MatrixResults,
@@ -46,6 +51,7 @@ from src.alpha_research.factor_eval_skill.stage3_reader import (
 )
 from src.alpha_research.factor_eval_skill.stores import (
     FactorProvenanceStore,
+    FrozenSealAliasStore,
     FrozenSelectionEnvelopeStore,
     OosWindowLedgerStore,
     RoleDeclarationStore,
@@ -283,43 +289,97 @@ def cmd_gate(ctx: FactorEvalContext) -> dict:
     })
 
 
+def _record_eligible(rec: Mapping[str, Any]) -> bool:
+    ceiling_ok = STATUS_CEILINGS.index(rec["status_effect"]) >= CANDIDATE_CEILING_RANK
+    if rec.get("role") == "filter":
+        return ceiling_ok
+    return ceiling_ok and str(rec.get("target_universe_pass")) == "True"
+
+
+def _assert_pool_eligible(ctx: FactorEvalContext, pool: Mapping[str, str], reg: Mapping[str, Any],
+                          tud_a: Mapping[str, Any]) -> None:
+    """Fail-closed (GPT re-review): never select a factor that has not passed its gate. The
+    registered factor uses gate.json; every OTHER pool factor must have an eligible
+    Stage3QualityRecord on the DECLARED target."""
+    gate = ctx._read(A_GATE)
+    if gate is None:
+        raise FactorEvalError("select requires the gate decision — run `gate` first")
+    reg_fid = reg["factor_id"]
+    if reg_fid in pool and not gate.get("candidate_eligible", False):
+        raise FactorEvalError(f"{reg_fid} is not candidate_eligible (gate: {gate.get('reason')}) — refusing to select it")
+    store = Stage3QualityRecordStore(ctx.store_root)
+    ineligible = []
+    for fid in pool:
+        if fid == reg_fid:
+            continue
+        ident = ctx.resolve_factor(fid)
+        rec = store.latest(factor_id=fid, definition_hash=ident.definition_hash,
+                           target_universe_declaration_hash=tud_a["tud_hash"])
+        if rec is None or not _record_eligible(rec):
+            ineligible.append(fid)
+    if ineligible:
+        raise FactorEvalError(
+            f"pool factors not characterized+eligible on the declared target: {ineligible} — "
+            "characterize + gate each pool factor before selecting"
+        )
+
+
 def cmd_select(
     ctx: FactorEvalContext, *, matrix_path: str | Path, pool: Mapping[str, str],
     caps: Mapping[str, int], floor: float, references: Sequence[str] = (), n: int | None = None,
     selection_code_hash: str = "", corr_path: str | Path | None = None,
+    selection_universe: str | None = None, require_eligibility: bool = True,
 ) -> dict:
     reg = ctx._require(A_REGISTER, "select")
     tud_a = ctx._require(A_TUD, "select")
+    # The selection basis universe = the declared TARGET by default (NOT hardcoded univ_all) — v1.3
+    # target-universe discipline (GPT re-review: selecting on univ_all under a liquid target recreates
+    # the E-wave failure). An explicit selection_universe is allowed (and folded into identity).
+    sel_universe = selection_universe or tud_a["target_universe_id"]
+
+    if require_eligibility:
+        _assert_pool_eligible(ctx, pool, reg, tud_a)
+
+    # A multi-factor pool MUST carry a precomputed exposure correlation — without it the greedy
+    # would do NO redundancy pruning (the v1 defect). Fail-closed early (self-review 2026-06-21).
+    if len(pool) > 1 and corr_path is None:
+        raise FactorEvalError(
+            f"multi-factor selection ({len(pool)} factors) requires a precomputed exposure correlation "
+            "(corr_path); refusing no-redundancy selection (the v1 marginal-vs-ICIR defect)"
+        )
+
     metrics = {}
     for line in Path(matrix_path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         row = json.loads(line)
-        if (row.get("universe_id") or "") == "univ_all" and row.get("factor") in pool:
+        if (row.get("universe_id") or "") == sel_universe and row.get("factor") in pool:
             metrics[str(row["factor"])] = row
+    missing = [f for f in pool if f not in metrics]
+    if missing:
+        raise FactorEvalError(f"no '{sel_universe}' matrix rows for pool factors {missing}")
+
     import pandas as pd
     corr_names = list(pool) + [r for r in references if r not in pool]
-    # A multi-factor pool MUST carry a precomputed exposure correlation — without it the greedy
-    # would do NO redundancy pruning (the v1 defect). Fail-closed (self-review 2026-06-21).
     if corr_path is not None:
         corr = pd.read_parquet(corr_path).reindex(index=corr_names, columns=corr_names)
-    elif len(pool) <= 1:
-        corr = pd.DataFrame(0.0, index=corr_names, columns=corr_names)  # singleton: no redundancy possible
-    else:
-        raise FactorEvalError(
-            f"multi-factor selection ({len(pool)} factors) requires a precomputed exposure correlation "
-            "(corr_path); refusing no-redundancy selection (the v1 marginal-vs-ICIR defect)"
-        )
+    else:  # singleton pool: no redundancy possible
+        corr = pd.DataFrame(0.0, index=corr_names, columns=corr_names)
     selection = select_marginal(pool=pool, metrics=metrics, corr=corr, caps=caps,
                                 floor=floor, references=references)
-    versions, def_hashes = {}, {}
-    for fid in selection.factor_ids:
+
+    # Canonical candidate_pool_hash over EVERY pool factor's identity (GPT re-review: a factor-ID-only
+    # hash misses a non-selected factor's definition change that could have altered selection).
+    versions, def_hashes, pool_identity = {}, {}, []
+    for fid in sorted(pool):
         ident = ctx.resolve_factor(fid)
         versions[fid], def_hashes[fid] = ident.version, ident.definition_hash
-    pool_hash = payload_hash(sorted(pool))
+        pool_identity.append([fid, ident.version, ident.definition_hash, str(pool[fid])])
+    pool_hash = payload_hash({"selection_universe": sel_universe, "pool": pool_identity})
+
     sset = selection.to_selected_set(
         tud_hash=tud_a["tud_hash"], pool_hash=pool_hash,
-        selection_code_hash=selection_code_hash or "select_marginal_v1",
+        selection_code_hash=selection_code_hash or f"select_marginal_v1@{sel_universe}",
         versions=versions, definition_hashes=def_hashes, n=n,
     )
     members = [{"factor_id": r.factor_id, "version": r.version, "definition_hash": r.definition_hash,
@@ -327,7 +387,7 @@ def cmd_select(
     return ctx._write(A_SELECTED, {
         "selected_set_hash": sset.selected_set_hash, "tud_hash": sset.tud_hash,
         "pool_hash": pool_hash, "selection_code_hash": sset.selection_code_hash,
-        "members": members, "trace": list(selection.trace),
+        "selection_universe": sel_universe, "members": members, "trace": list(selection.trace),
     })
 
 
@@ -340,14 +400,50 @@ def _rebuild_selected_set(sel: Mapping[str, Any]) -> SelectedSet:
                        selection_code_hash=sel["selection_code_hash"])
 
 
+def _enforce_multiplicity_action(report, *, ack: bool, override: bool) -> None:
+    """Before OOS access, the multiplicity action is ENFORCED (not just stamped) — GPT re-review."""
+    if report.action == ACTION_ACKNOWLEDGE and not (ack or override):
+        raise FactorEvalError(
+            f"OOS-window multiplicity requires reviewer acknowledgement (n_spent={report.n_spent}): "
+            f"pass multiplicity_ack=True. {report.note}"
+        )
+    if report.action == ACTION_REQUIRE and not override:
+        raise FactorEvalError(
+            f"OOS-window multiplicity requires adjusted-FDR context or an explicit override "
+            f"(n_spent={report.n_spent}): pass multiplicity_override=True. {report.note}"
+        )
+
+
+def _assert_not_already_spent(ctx: FactorEvalContext, frozen_set_hash: str) -> None:
+    """Live preflight: refuse if this canonical hash OR any registered legacy alias is already a spent
+    seal_key (GPT re-review: the holdout store self-checks only the exact key)."""
+    seal_store = _seal_store(ctx)
+    if seal_store is None:
+        return
+    events = seal_store.list_events()
+    spent = set(events["seal_key"].dropna().astype("string")) if not events.empty else set()
+    candidates = {frozen_set_hash} | set(FrozenSealAliasStore(ctx.store_root).aliases_for(frozen_set_hash))
+    hit = candidates & spent
+    if hit:
+        raise FactorEvalError(
+            f"OOS already spent for frozen_set_hash {frozen_set_hash} (matched {sorted(hit)}) — "
+            "single-shot; refusing a re-spend of the same economic test"
+        )
+
+
 def cmd_seal(
     ctx: FactorEvalContext, *, mode: str = "show", oos_start: str = "", oos_end: str = "",
     qlib_dir: str = "", horizon: int = 20, n_quantiles: int = 10,
     metric: str = "rank_icir", neutralization: str = "none", rebalance: str = "20d",
-    created_by: str = "factor-eval",
+    portfolio_side: str = "long_short", created_by: str = "factor-eval",
+    multiplicity_ack: bool = False, multiplicity_override: bool = False,
 ) -> dict:
-    if mode not in ("show", "dryrun", "live"):
-        raise FactorEvalError(f"seal mode must be show/dryrun/live, got {mode!r}")
+    # dryrun REMOVED (GPT re-review): it ran the real OOS reproduction under a run-local seal — an
+    # OOS-leak path. show = identity/multiplicity preview (no OOS); live = the ONLY OOS-access mode.
+    if mode not in ("show", "live"):
+        raise FactorEvalError(
+            f"seal mode must be show/live, got {mode!r} (dryrun removed: it leaked OOS via a run-local seal)"
+        )
     reg = ctx._require(A_REGISTER, "seal")
     tud_a = ctx._require(A_TUD, "seal")
     sel = ctx._require(A_SELECTED, "seal")
@@ -361,12 +457,16 @@ def cmd_seal(
         SelectedFactor(m["factor_id"], int(m["version"]), m["definition_hash"], DIR_MAP[m["expected_direction"]])
         for m in sel["members"]
     )
-    eval_protocol = {"horizon": horizon, "n_quantiles": n_quantiles,
-                     "oos_window": f"{oos_start}..{oos_end}", "metric": metric}
+    # CANONICAL eval-protocol identity (GPT re-review #3.1): the full protocol, not a thin dict.
+    spec = EvalProtocolSpec(
+        horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}", metric=metric,
+        universe_filter_policy=sel.get("selection_universe", tud_a["target_universe_id"]),
+        portfolio_construction=f"decile_{portfolio_side}", neutralization=neutralization, rebalance=rebalance,
+    )
     fs = FrozenSelectionSet(
         selected=selected, candidate_pool_hash=sel["pool_hash"],
-        selection_rule_hash=sel["selection_code_hash"], eval_protocol_hash=payload_hash(eval_protocol),
-        metric=metric, portfolio_side="long_short", universe=tud_a["target_universe_id"],
+        selection_rule_hash=sel["selection_code_hash"], eval_protocol_hash=spec.protocol_hash,
+        metric=metric, portfolio_side=portfolio_side, universe=tud_a["target_universe_id"],
         time_split_window=f"{oos_start}..{oos_end}", rebalance=rebalance, neutralization=neutralization,
     )
     envelope = FrozenSelectionEnvelope(
@@ -381,29 +481,28 @@ def cmd_seal(
     ledger = OosWindowLedgerStore(ctx.store_root)
     factor_ids = [m["factor_id"] for m in sel["members"]]
     base = {"mode": mode, "frozen_set_hash": fs.frozen_set_hash, "envelope_hash": envelope.envelope_hash,
-            "tud_hash": tud_a["tud_hash"], "oos_window_id": oos_window_id, "n_quantiles": n_quantiles,
-            "horizon": horizon,
+            "tud_hash": tud_a["tud_hash"], "eval_protocol_hash": spec.protocol_hash,
+            "portfolio_side": portfolio_side, "oos_window_id": oos_window_id, "n_quantiles": n_quantiles,
+            "horizon": horizon, "selection_universe": sel.get("selection_universe", tud_a["target_universe_id"]),
             "held_sides": [{"factor_id": s.factor_id, "side": s.expected_direction} for s in selected]}
+
+    # multiplicity computed with pending_self=True (this would-be spend counted) BEFORE OOS access (#8).
+    report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=True)
     if mode == "show":
-        # D6 preview: disclose the system-level multiplicity this spend WOULD add to (no record).
-        report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=True)
         return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(),
                                    "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
 
-    # dryrun / live: resolve the seal root FIRST (fail-closed on a live seal without the global
-    # store, BEFORE recording any spend), then record the window-tagged spend + run the slow OOS.
-    if mode == "live":
-        if not ctx.holdout_seal_root:
-            raise FactorEvalError(
-                "live seal requires a global holdout_seal_root (the cross-run single-shot store) — "
-                "refusing a run-local live seal that would not enforce the OOS budget across runs"
-            )
-        seal_root = str(ctx.holdout_seal_root)
-    else:  # dryrun: a run-local temp seal (no global spend)
-        seal_root = str(ctx.run_dir / "seals_dry")
+    # ---- live: the ONLY OOS-access mode ----
+    if not ctx.holdout_seal_root:
+        raise FactorEvalError(
+            "live seal requires a global holdout_seal_root (the cross-run single-shot store) — "
+            "refusing a run-local live seal that would not enforce the OOS budget across runs"
+        )
+    _enforce_multiplicity_action(report, ack=multiplicity_ack, override=multiplicity_override)  # (#7)
+    _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
+    seal_root = str(ctx.holdout_seal_root)
     ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
-                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode=mode)
-    report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
+                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode="live")
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
     result = run_sealed_oos(
@@ -412,7 +511,9 @@ def cmd_seal(
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
     )
     verdict = result["verdict"]
-    return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(), "n_pass": verdict.n_pass,
+    # final report AFTER the spend is recorded (pending_self=False)
+    final_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
+    return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(), "n_pass": verdict.n_pass,
                                "n_total": verdict.n_total, "results": list(verdict.results)})
 
 

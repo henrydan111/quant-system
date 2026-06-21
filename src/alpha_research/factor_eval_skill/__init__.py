@@ -19,6 +19,7 @@ from src.alpha_research.factor_eval_skill._hashing import (
 )
 from src.alpha_research.factor_eval_skill.identity import (
     DeploymentFrozenPlan,
+    EvalProtocolSpec,
     FrozenSelectionEnvelope,
     IdentityChainError,
     SelectedRepresentative,
@@ -69,6 +70,7 @@ from src.alpha_research.factor_eval_skill.stores import (
     FactorProvenanceStore,
     FilterCharacterizationStore,
     FilterDeploymentGateStore,
+    FrozenSealAliasStore,
     FrozenSelectionEnvelopeStore,
     OosWindowLedgerStore,
     RoleDeclarationStore,
@@ -87,6 +89,7 @@ __all__ = [
     "SelectedSet",
     "FrozenSelectionEnvelope",
     "DeploymentFrozenPlan",
+    "EvalProtocolSpec",
     "assert_identity_chain",
     "IdentityChainError",
     # D1 stores
@@ -96,6 +99,7 @@ __all__ = [
     "FilterCharacterizationStore",
     "FilterDeploymentGateStore",
     "FrozenSelectionEnvelopeStore",
+    "FrozenSealAliasStore",
     "OosWindowLedgerStore",
     "EVIDENCE_TIERS",
     "ROLES",

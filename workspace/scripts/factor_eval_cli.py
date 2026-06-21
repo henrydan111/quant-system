@@ -81,14 +81,20 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--references", default="[]")
     se.add_argument("--n", type=int, default=None)
     se.add_argument("--corr", default=None, help="precomputed exposure-correlation parquet (required for multi-factor pools)")
+    se.add_argument("--selection-universe", default=None, help="selection basis universe (default: the declared target)")
 
     sl = sub.add_parser("seal")
-    sl.add_argument("--mode", choices=["show", "dryrun", "live"], default="show")
+    sl.add_argument("--mode", choices=["show", "live"], default="show",
+                    help="show = identity/multiplicity preview (no OOS); live = the only OOS-access mode")
     sl.add_argument("--oos-start", default="")
     sl.add_argument("--oos-end", default="")
     sl.add_argument("--qlib-dir", default=str(ROOT / "data" / "qlib_data"))
     sl.add_argument("--horizon", type=int, default=20)
     sl.add_argument("--n-quantiles", type=int, default=10)
+    sl.add_argument("--portfolio-side", default="long_short",
+                    choices=["long_short", "long_only", "short_only", "market_neutral"])
+    sl.add_argument("--multiplicity-ack", action="store_true", help="acknowledge the OOS-window multiplicity (warn band)")
+    sl.add_argument("--multiplicity-override", action="store_true", help="override the OOS-window multiplicity hard band")
     return ap
 
 
@@ -116,10 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "select":
             out = cmd_select(ctx, matrix_path=args.matrix, pool=_json(args.pool), caps=_json(args.caps),
                              floor=args.floor, references=json.loads(args.references), n=args.n,
-                             corr_path=args.corr)
+                             corr_path=args.corr, selection_universe=args.selection_universe)
         elif args.cmd == "seal":
             out = cmd_seal(ctx, mode=args.mode, oos_start=args.oos_start, oos_end=args.oos_end,
-                           qlib_dir=args.qlib_dir, horizon=args.horizon, n_quantiles=args.n_quantiles)
+                           qlib_dir=args.qlib_dir, horizon=args.horizon, n_quantiles=args.n_quantiles,
+                           portfolio_side=args.portfolio_side, multiplicity_ack=args.multiplicity_ack,
+                           multiplicity_override=args.multiplicity_override)
         else:  # pragma: no cover
             raise FactorEvalError(f"unknown command {args.cmd}")
         print(json.dumps(out, indent=2, default=str))

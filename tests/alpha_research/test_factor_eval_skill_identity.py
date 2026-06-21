@@ -12,6 +12,7 @@ import pytest
 
 from src.alpha_research.factor_eval_skill.identity import (
     DeploymentFrozenPlan,
+    EvalProtocolSpec,
     FrozenSelectionEnvelope,
     IdentityChainError,
     SelectedRepresentative,
@@ -19,6 +20,23 @@ from src.alpha_research.factor_eval_skill.identity import (
     TargetUniverseDeclaration,
     assert_identity_chain,
 )
+
+
+def _spec(**over):
+    base = dict(horizon=20, n_quantiles=10, oos_window="2021..2026", metric="rank_icir",
+                universe_filter_policy="univ_liquid_top300", portfolio_construction="decile_long_short")
+    base.update(over)
+    return EvalProtocolSpec(**base)
+
+
+def test_eval_protocol_spec_canonical_and_full():
+    # cosmetic case/whitespace normalized
+    assert _spec().protocol_hash == _spec(metric="Rank_ICIR ", universe_filter_policy="Univ_Liquid_Top300").protocol_hash
+    # full-protocol fields are identity-bearing (a thin {horizon,nq,window,metric} hash would miss these)
+    assert _spec(winsorization="1pct").protocol_hash != _spec().protocol_hash
+    assert _spec(neutralization="size_industry").protocol_hash != _spec().protocol_hash
+    assert _spec(universe_filter_policy="univ_all").protocol_hash != _spec().protocol_hash
+    assert _spec(portfolio_construction="decile_long_only").protocol_hash != _spec().protocol_hash
 from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
 from src.research_orchestrator.holdout_seal import HoldoutSealStore
 

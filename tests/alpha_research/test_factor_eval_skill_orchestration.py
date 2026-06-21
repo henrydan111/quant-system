@@ -137,6 +137,7 @@ def test_seal_rejects_tud_mismatch(tmp_path):
     _register(ctx)
     cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="liq", asof_policy="pit_lag_1")
     cmd_characterize(ctx, matrix_path=matrix)
+    cmd_gate(ctx)  # select now requires a candidate-eligible gate decision
     cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
     corrupt = ctx._read("selected_set.json")
     corrupt["tud_hash"] = "WRONG"
@@ -151,6 +152,7 @@ def test_deploy_show_builds_plan_and_chains(tmp_path):
     _register(ctx)
     cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="liq", asof_policy="pit_lag_1")
     cmd_characterize(ctx, matrix_path=matrix)
+    cmd_gate(ctx)  # select now requires a candidate-eligible gate decision
     cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
     seal = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27")
     out = cmd_deploy(ctx, mode="show", deployment_universe="univ_liquid_top300", portfolio_side="long_only",
@@ -172,10 +174,11 @@ def test_select_multi_factor_requires_corr(tmp_path):
     ctx = _ctx(tmp_path)
     _register(ctx)
     cmd_declare_target(ctx, target_universe_id="univ_all", eligibility_policy="r", asof_policy="pit_lag_1")
-    # a 2-factor pool with NO precomputed correlation -> fail-closed (no no-redundancy selection)
+    # a 2-factor pool with NO precomputed correlation -> fail-closed (no no-redundancy selection).
+    # require_eligibility=False isolates the corr guard (eligibility is exercised separately).
     with pytest.raises(FactorEvalError, match="exposure correlation"):
         cmd_select(ctx, matrix_path=_matrix_file(tmp_path), pool={"tf": "x", "tf2": "y"},
-                   caps={"x": 1, "y": 1}, floor=0.10)
+                   caps={"x": 1, "y": 1}, floor=0.10, require_eligibility=False)
 
 
 def test_live_seal_requires_global_holdout_root(tmp_path):
@@ -184,6 +187,7 @@ def test_live_seal_requires_global_holdout_root(tmp_path):
     _register(ctx)
     cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
     cmd_characterize(ctx, matrix_path=matrix)
+    cmd_gate(ctx)  # select now requires a candidate-eligible gate decision
     cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
     # a live seal without the global store is refused BEFORE any spend/backtest
     with pytest.raises(FactorEvalError, match="holdout_seal_root"):
@@ -191,6 +195,84 @@ def test_live_seal_requires_global_holdout_root(tmp_path):
     # ... and no spend leaked into the ledger
     from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
     assert OosWindowLedgerStore(ctx.store_root).distinct_frozen_sets("2021-01-01..2026-02-27") == []
+
+
+# ----- GPT re-review hardening (2026-06-21) -----
+
+def _full_pipeline_to_select(ctx, tmp_path, target="univ_liquid_top300"):
+    matrix = _matrix_file(tmp_path)
+    _register(ctx)
+    cmd_declare_target(ctx, target_universe_id=target, eligibility_policy="l", asof_policy="pit_lag_1")
+    cmd_characterize(ctx, matrix_path=matrix)
+    cmd_gate(ctx)
+    cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+    return matrix
+
+
+def test_seal_dryrun_mode_removed(tmp_path):
+    # dryrun was an OOS-leak path (run-local seal + real OOS) -> removed
+    with pytest.raises(FactorEvalError, match="dryrun removed"):
+        cmd_seal(_ctx(tmp_path), mode="dryrun")
+
+
+def test_portfolio_side_is_identity_bearing(tmp_path):
+    ctx = _ctx(tmp_path)
+    _full_pipeline_to_select(ctx, tmp_path)
+    ls = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27", portfolio_side="long_short")
+    lo = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27", portfolio_side="long_only")
+    assert ls["frozen_set_hash"] != lo["frozen_set_hash"]  # portfolio_side moves the hash
+    assert lo["portfolio_side"] == "long_only"
+
+
+def test_select_uses_declared_target_universe_not_univ_all(tmp_path):
+    ctx = _ctx(tmp_path)
+    _matrix_file(tmp_path)
+    _register(ctx)
+    cmd_declare_target(ctx, target_universe_id="univ_csi300", eligibility_policy="l", asof_policy="pit_lag_1")
+    cmd_characterize(ctx, matrix_path=tmp_path / "results.jsonl")
+    cmd_gate(ctx)
+    sel = cmd_select(ctx, matrix_path=tmp_path / "results.jsonl", pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+    assert sel["selection_universe"] == "univ_csi300"  # the declared target, not a hardcoded univ_all
+
+
+def test_select_refuses_un_eligible_factor(tmp_path):
+    # a weak factor that fails its gate cannot be selected (fail-closed)
+    weak = tmp_path / "weak.jsonl"
+    weak.write_text("\n".join(json.dumps(_row("tf", u, 0.02)) for u in ALL_UNIVERSES), encoding="utf-8")
+    ctx = _ctx(tmp_path)
+    _register(ctx)
+    cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
+    cmd_characterize(ctx, matrix_path=weak)
+    assert cmd_gate(ctx)["candidate_eligible"] is False
+    with pytest.raises(FactorEvalError, match="not candidate_eligible"):
+        cmd_select(ctx, matrix_path=weak, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+
+
+def test_pool_hash_includes_full_factor_identity(tmp_path):
+    def pool_hash_for(suffix, defhash):
+        ctx = _ctx(tmp_path / suffix,
+                   resolver=lambda fid, _d=defhash: FactorIdentity(fid, _d, 2, "", "$close"))
+        _register(ctx)
+        cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
+        cmd_characterize(ctx, matrix_path=_matrix_file(tmp_path))
+        cmd_gate(ctx)
+        return cmd_select(ctx, matrix_path=_matrix_file(tmp_path), pool={"tf": "x"}, caps={"x": 1}, floor=0.10)["pool_hash"]
+    # a changed factor definition_hash -> a different candidate_pool_hash (not factor-ID-only)
+    assert pool_hash_for("a", "def_tf_A") != pool_hash_for("b", "def_tf_B")
+
+
+def test_seal_live_enforces_multiplicity_acknowledge(tmp_path):
+    from src.research_orchestrator.holdout_seal import HoldoutSealStore
+    ctx = _ctx(tmp_path)
+    ctx.holdout_seal_root = tmp_path / "holdout"   # configure the global seal store
+    hs = HoldoutSealStore(ctx.holdout_seal_root)
+    for i in range(5):  # 5 historical seals + this pending = 6 -> warn band (warn=5)
+        hs.claim_holdout_access(design_hash="d", seal_key=f"h{i}", hypothesis_id="x",
+                                structural_family="f", profile_id="p", run_dir=str(tmp_path / f"r{i}"), step_id="s")
+    _full_pipeline_to_select(ctx, tmp_path)
+    # live hits the acknowledge band -> refused BEFORE any OOS backtest (no ack passed)
+    with pytest.raises(FactorEvalError, match="acknowledgement"):
+        cmd_seal(ctx, mode="live", oos_start="2021-01-01", oos_end="2026-02-27")
 
 
 # ----- forbidden-verb invariant (structural) -----

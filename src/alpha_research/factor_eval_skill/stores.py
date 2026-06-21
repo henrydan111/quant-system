@@ -376,6 +376,28 @@ class FrozenSelectionEnvelopeStore(AppendOnlyStore):
         return self.latest(frozen_set_hash=str(frozen_set_hash))
 
 
+class FrozenSealAliasStore(AppendOnlyStore):
+    """Maps a canonical ``frozen_set_hash`` to a legacy / other-tool ``frozen_set_hash`` for the SAME
+    economic selection+protocol (GPT re-review 2026-06-21). A live-seal preflight checks the canonical
+    hash AND its aliases against the spent seal_keys, so the SAME economic OOS test cannot be re-spent
+    under a different hash just because a pre-v1.3 tool serialized the protocol differently. Empty by
+    default; populated manually when a known equivalence is migrated."""
+
+    FILENAME = "frozen_seal_alias.parquet"
+    COLUMNS = ("record_id", "recorded_at", "canonical_frozen_set_hash", "legacy_frozen_set_hash", "reason")
+    SCHEMA = {column: "string" for column in COLUMNS}
+    KEY_FIELDS = ("canonical_frozen_set_hash", "legacy_frozen_set_hash")
+
+    def record_alias(self, *, canonical: str, legacy: str, reason: str = "") -> dict[str, Any]:
+        return self.record(canonical_frozen_set_hash=str(canonical),
+                           legacy_frozen_set_hash=str(legacy), reason=str(reason))
+
+    def aliases_for(self, canonical_frozen_set_hash: str) -> list[str]:
+        frame = self._load()
+        frame = frame[frame["canonical_frozen_set_hash"].astype("string") == str(canonical_frozen_set_hash)]
+        return sorted(frame["legacy_frozen_set_hash"].astype("string").dropna().unique().tolist())
+
+
 class OosWindowLedgerStore(AppendOnlyStore):
     """D6 seal-layer count: append-only record of which FROZEN SETS spent which OOS WINDOW
     (the `HoldoutSealStore` event log does NOT record the window). One row per

@@ -214,6 +214,59 @@ class DeploymentFrozenPlan:
         return payload_hash(self._payload())
 
 
+@dataclass(frozen=True)
+class EvalProtocolSpec:
+    """Canonical evaluation-protocol identity for a sealed OOS test (GPT re-review 2026-06-21).
+
+    ``FrozenSelectionSet.frozen_set_hash`` includes ``eval_protocol_hash``; the FrozenSelectionSet
+    docstring declares the protocol identity-bearing across preprocessing / winsor / rank / horizon
+    / label / quantile / cost-slippage / missing-data / tie-break / universe-filter. A THIN protocol
+    hash (just horizon/n_quantiles/window/metric) would let the SAME economic OOS test be re-sealed
+    under a different hash by a tool that varies one of these strings — defeating the one-shot seal.
+    This captures the full set so ``protocol_hash`` is canonical across tools. Fields default to the
+    actual ``reproduce_sealed_oos`` registration-metric methodology; change a default only when the
+    engine's methodology changes (which SHOULD change the hash)."""
+
+    horizon: int
+    n_quantiles: int
+    oos_window: str
+    metric: str
+    universe_filter_policy: str          # the selection/target universe the test is bound to
+    portfolio_construction: str          # registration-metric book (e.g. decile_long_short)
+    label_definition: str = "forward_return"
+    rank_transform: str = "cs_rank"
+    winsorization: str = "none"
+    missing_data_policy: str = "drop"
+    tie_break_policy: str = "average"
+    neutralization: str = "none"
+    rebalance: str = "20d"
+    cost_slippage_for_registration: str = "gross"
+    schema_version: int = SCHEMA_VERSION
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": int(self.schema_version),
+            "horizon": int(self.horizon),
+            "n_quantiles": int(self.n_quantiles),
+            "oos_window": str(self.oos_window),
+            "metric": normalize_enum(self.metric),
+            "universe_filter_policy": normalize_enum(self.universe_filter_policy),
+            "portfolio_construction": normalize_enum(self.portfolio_construction),
+            "label_definition": normalize_enum(self.label_definition),
+            "rank_transform": normalize_enum(self.rank_transform),
+            "winsorization": normalize_enum(self.winsorization),
+            "missing_data_policy": normalize_enum(self.missing_data_policy),
+            "tie_break_policy": normalize_enum(self.tie_break_policy),
+            "neutralization": normalize_enum(self.neutralization),
+            "rebalance": normalize_enum(self.rebalance),
+            "cost_slippage_for_registration": normalize_enum(self.cost_slippage_for_registration),
+        }
+
+    @property
+    def protocol_hash(self) -> str:
+        return payload_hash(self._payload())
+
+
 def assert_identity_chain(
     tud: TargetUniverseDeclaration,
     selected_set: SelectedSet,
