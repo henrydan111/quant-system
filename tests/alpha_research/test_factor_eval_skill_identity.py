@@ -84,6 +84,17 @@ def test_envelope_hash_is_not_the_seal_key():
     assert env.envelope_hash != env.frozen_set_hash  # envelope integrity hash is separate
 
 
+def test_envelope_hash_is_deterministic_over_binding():
+    # same identity binding, DIFFERENT created_at/created_by -> SAME envelope_hash
+    # (the timestamp is provenance, not identity — so a rebuilt envelope keeps its hash)
+    a = FrozenSelectionEnvelope("fsh", "tud", "sset", created_at="2026-06-21 00:00:00", created_by="x")
+    b = FrozenSelectionEnvelope("fsh", "tud", "sset", created_at="2030-01-01 12:00:00", created_by="y")
+    assert a.envelope_hash == b.envelope_hash
+    # a changed binding DOES move the hash
+    c = FrozenSelectionEnvelope("fsh", "tud_DIFFERENT", "sset", created_at="2026-06-21 00:00:00", created_by="x")
+    assert c.envelope_hash != a.envelope_hash
+
+
 # ----- assert_identity_chain -----
 
 def test_identity_chain_consistent_passes():

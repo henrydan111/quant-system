@@ -108,6 +108,20 @@ def test_direction_aligned_pass_floor_and_nan():
     assert direction_aligned_pass("short", -0.3, float("nan"))[0] is False
 
 
+def test_sides_from_frozen_set_derives_held_side():
+    from src.alpha_research.factor_eval_skill.sealed_oos import sides_from_frozen_set
+    from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
+
+    fs = FrozenSelectionSet(
+        selected=(SelectedFactor("a", 1, "da", "short"), SelectedFactor("b", 1, "db", "long")),
+        candidate_pool_hash="p", selection_rule_hash="r", eval_protocol_hash="e",
+        metric="rank_icir", portfolio_side="long_short", universe="u",
+        time_split_window="w", rebalance="20d", neutralization="none",
+    )
+    # held side comes straight from the sealed set's expected_direction -> no separate sides arg
+    assert sides_from_frozen_set(fs) == {"a": "short", "b": "long"}
+
+
 @pytest.mark.skipif(not EWAVE_OOS.exists(), reason="E-wave recorded sealed-OOS verdict absent")
 def test_sealed_oos_bar_reproduces_ewave_6of6_regression():
     """Replay the recorded per-factor OOS numbers through the bar -> the recorded 6/6."""

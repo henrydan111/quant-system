@@ -41,6 +41,14 @@ def direction_aligned_pass(
     return ok, da_ri, da_ls
 
 
+def sides_from_frozen_set(frozen_set) -> dict[str, str]:
+    """Derive ``{factor_id: held_side}`` from a FrozenSelectionSet — its
+    ``SelectedFactor.expected_direction`` IS the held side ("long"/"short"). Using this
+    instead of a separate ``sides`` arg removes the risk of a sides map that disagrees with
+    the sealed set (self-review 2026-06-21)."""
+    return {sf.factor_id: str(sf.expected_direction) for sf in frozen_set.selected}
+
+
 @dataclass(frozen=True)
 class SealedOosVerdict:
     results: tuple[dict, ...]
@@ -81,7 +89,6 @@ def run_sealed_oos(
     *,
     frozen_set,
     factor_exprs: Mapping[str, str],
-    sides: Mapping[str, str],
     oos_start: str,
     oos_end: str,
     qlib_dir: str,
@@ -89,16 +96,20 @@ def run_sealed_oos(
     run_dir: str,
     design_hash: str,
     hypothesis_id: str,
+    sides: Mapping[str, str] | None = None,
     horizon: int = DEFAULT_HORIZON,
     n_quantiles: int = DEFAULT_N_QUANTILES,
     claim_seal: bool = True,
     ls_floor: float = DEFAULT_LS_SHARPE_FLOOR,
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
-    apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. The seal
-    spend is governed by ``claim_seal`` + ``seal_root`` (the caller decides dryrun vs live)."""
+    apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. ``sides``
+    defaults to the held sides DERIVED from ``frozen_set`` (no divergence); the seal spend is
+    governed by ``claim_seal`` + ``seal_root`` (the caller decides dryrun vs live)."""
     from src.research_orchestrator import promotion_evidence as pe
 
+    if sides is None:
+        sides = sides_from_frozen_set(frozen_set)
     reproduction = pe.reproduce_sealed_oos(
         frozen_set=frozen_set, factor_exprs=dict(factor_exprs), oos_start=oos_start,
         oos_end=oos_end, qlib_dir=qlib_dir, seal_root=seal_root, run_dir=run_dir,

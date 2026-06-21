@@ -140,6 +140,11 @@ class FrozenSelectionEnvelope:
     schema_version: int = SCHEMA_VERSION
 
     def _payload(self) -> dict[str, Any]:
+        # The hashed payload is the IDENTITY BINDING only. created_at / created_by are
+        # provenance (recorded as store columns), NOT in the hash — so envelope_hash is a
+        # DETERMINISTIC function of the binding and survives re-creation. A DeploymentFrozenPlan
+        # references envelope_hash, so a timestamp in the hash would break the chain whenever the
+        # envelope is rebuilt rather than reloaded (self-review 2026-06-21).
         return {
             "schema_version": int(self.schema_version),
             "frozen_set_hash": str(self.frozen_set_hash),
@@ -154,12 +159,13 @@ class FrozenSelectionEnvelope:
             "frozen_selection_set_schema_version": int(self.frozen_selection_set_schema_version),
             "legacy_mode": bool(self.legacy_mode),
             "legacy_reason": (None if self.legacy_reason is None else str(self.legacy_reason)),
-            "created_at": str(self.created_at),
-            "created_by": str(self.created_by),
         }
 
     @property
     def envelope_hash(self) -> str:
+        """Deterministic sha256 over the identity binding (NOT created_at/by, NOT the
+        HoldoutSealStore seal key). Reproducible: rebuilding the envelope for the same
+        binding yields the same hash, so a plan's envelope_hash reference is stable."""
         return payload_hash(self._payload())
 
 

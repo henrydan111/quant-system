@@ -44,6 +44,7 @@ from src.alpha_research.factor_eval_skill.sealed_oos import (
     direction_aligned_pass,
     evaluate_sealed_oos_bar,
     run_sealed_oos,
+    sides_from_frozen_set,
 )
 from src.alpha_research.factor_eval_skill.stage3_reader import (
     ALL_UNIVERSES,
@@ -102,6 +103,7 @@ __all__ = [
     "direction_aligned_pass",
     "evaluate_sealed_oos_bar",
     "run_sealed_oos",
+    "sides_from_frozen_set",
     "SealedOosVerdict",
     "DIR_MAP",
     "DEFAULT_LS_SHARPE_FLOOR",
