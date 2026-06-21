@@ -286,41 +286,71 @@ def cmd_gate(ctx: FactorEvalContext) -> dict:
     return ctx._write(A_GATE, {
         "factor_id": ch["factor_id"], "role": role, "candidate_eligible": eligible,
         "status_effect": ch["status_effect"], "reason": reason,
+        "layer1_methodology_hash": ch.get("layer1_methodology_hash", ""),
     })
 
 
-def _record_eligible(rec: Mapping[str, Any]) -> bool:
+# A factor is selected as a RANKING component; only ranking/both Stage-3 evidence may qualify it
+# (a filter-role record must NOT satisfy ranking eligibility — GPT re-verify 2026-06-21).
+ALLOWED_SELECTION_ROLES = ("ranking", "both")
+
+
+def _ranking_record_eligible(rec: Mapping[str, Any]) -> bool:
     ceiling_ok = STATUS_CEILINGS.index(rec["status_effect"]) >= CANDIDATE_CEILING_RANK
-    if rec.get("role") == "filter":
-        return ceiling_ok
     return ceiling_ok and str(rec.get("target_universe_pass")) == "True"
 
 
+def _eligible_ranking_record(store: Stage3QualityRecordStore, *, factor_id: str, definition_hash: str,
+                             layer1_hash: str, tud_hash: str):
+    """The latest ELIGIBLE ranking/both Stage-3 record for this factor on this target+methodology — the
+    lookup includes role + layer1_methodology_hash (both part of the record key) so a filter record or a
+    stale-methodology record cannot shadow it (GPT re-verify 2026-06-21)."""
+    for role in ALLOWED_SELECTION_ROLES:
+        rec = store.latest(factor_id=factor_id, definition_hash=definition_hash,
+                           layer1_methodology_hash=layer1_hash,
+                           target_universe_declaration_hash=tud_hash, role=role)
+        if rec is not None and _ranking_record_eligible(rec):
+            return rec
+    return None
+
+
 def _assert_pool_eligible(ctx: FactorEvalContext, pool: Mapping[str, str], reg: Mapping[str, Any],
-                          tud_a: Mapping[str, Any]) -> None:
-    """Fail-closed (GPT re-review): never select a factor that has not passed its gate. The
-    registered factor uses gate.json; every OTHER pool factor must have an eligible
-    Stage3QualityRecord on the DECLARED target."""
+                          tud_a: Mapping[str, Any], metrics: Mapping[str, Mapping[str, Any]]) -> None:
+    """Fail-closed (GPT re-review + re-verify): never select a factor whose ranking eligibility is not
+    backed by a ranking/both Stage-3 record matching BOTH the declared target AND the selection-universe
+    row's Layer-1 methodology. The registered factor uses gate.json (whose Layer-1 methodology must equal
+    the selection row's); every other pool factor must have a matching eligible record."""
     gate = ctx._read(A_GATE)
     if gate is None:
         raise FactorEvalError("select requires the gate decision — run `gate` first")
     reg_fid = reg["factor_id"]
-    if reg_fid in pool and not gate.get("candidate_eligible", False):
-        raise FactorEvalError(f"{reg_fid} is not candidate_eligible (gate: {gate.get('reason')}) — refusing to select it")
+    tud_hash = tud_a["tud_hash"]
     store = Stage3QualityRecordStore(ctx.store_root)
+
+    if reg_fid in pool:
+        sel_l1 = str(metrics[reg_fid].get("layer1_methodology_hash", ""))
+        if not gate.get("candidate_eligible", False):
+            raise FactorEvalError(f"{reg_fid} is not candidate_eligible (gate: {gate.get('reason')}) — refusing to select it")
+        if str(gate.get("role")) not in ALLOWED_SELECTION_ROLES:
+            raise FactorEvalError(f"{reg_fid} gate role {gate.get('role')!r} is not a ranking selection role")
+        if str(gate.get("layer1_methodology_hash", "")) != sel_l1:
+            raise FactorEvalError(
+                f"{reg_fid} gate Layer-1 methodology != the selection-universe row methodology (stale/mismatched evidence)"
+            )
+
     ineligible = []
     for fid in pool:
         if fid == reg_fid:
             continue
         ident = ctx.resolve_factor(fid)
-        rec = store.latest(factor_id=fid, definition_hash=ident.definition_hash,
-                           target_universe_declaration_hash=tud_a["tud_hash"])
-        if rec is None or not _record_eligible(rec):
+        sel_l1 = str(metrics[fid].get("layer1_methodology_hash", ""))
+        if _eligible_ranking_record(store, factor_id=fid, definition_hash=ident.definition_hash,
+                                    layer1_hash=sel_l1, tud_hash=tud_hash) is None:
             ineligible.append(fid)
     if ineligible:
         raise FactorEvalError(
-            f"pool factors not characterized+eligible on the declared target: {ineligible} — "
-            "characterize + gate each pool factor before selecting"
+            f"pool factors lack an eligible ranking/both Stage-3 record (matching the target + selection "
+            f"Layer-1 methodology): {ineligible} — characterize + gate each pool factor on the target first"
         )
 
 
@@ -336,9 +366,6 @@ def cmd_select(
     # target-universe discipline (GPT re-review: selecting on univ_all under a liquid target recreates
     # the E-wave failure). An explicit selection_universe is allowed (and folded into identity).
     sel_universe = selection_universe or tud_a["target_universe_id"]
-
-    if require_eligibility:
-        _assert_pool_eligible(ctx, pool, reg, tud_a)
 
     # A multi-factor pool MUST carry a precomputed exposure correlation — without it the greedy
     # would do NO redundancy pruning (the v1 defect). Fail-closed early (self-review 2026-06-21).
@@ -358,6 +385,11 @@ def cmd_select(
     missing = [f for f in pool if f not in metrics]
     if missing:
         raise FactorEvalError(f"no '{sel_universe}' matrix rows for pool factors {missing}")
+
+    # Eligibility AFTER the selection-universe rows load, so the check can match each factor's
+    # Layer-1 methodology + role to the actual selection row (GPT re-verify 2026-06-21).
+    if require_eligibility:
+        _assert_pool_eligible(ctx, pool, reg, tud_a, metrics)
 
     import pandas as pd
     corr_names = list(pool) + [r for r in references if r not in pool]
@@ -501,8 +533,6 @@ def cmd_seal(
     _enforce_multiplicity_action(report, ack=multiplicity_ack, override=multiplicity_override)  # (#7)
     _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
     seal_root = str(ctx.holdout_seal_root)
-    ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
-                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode="live")
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
     result = run_sealed_oos(
@@ -511,6 +541,10 @@ def cmd_seal(
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
     )
     verdict = result["verdict"]
+    # record the window-tag ledger AFTER the global claim succeeds, so a pre-claim failure does
+    # NOT overcount a failed attempt (GPT re-verify operational note).
+    ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
+                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode="live")
     # final report AFTER the spend is recorded (pending_self=False)
     final_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(), "n_pass": verdict.n_pass,

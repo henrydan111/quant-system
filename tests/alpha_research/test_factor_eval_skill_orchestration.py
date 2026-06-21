@@ -261,6 +261,61 @@ def test_pool_hash_includes_full_factor_identity(tmp_path):
     assert pool_hash_for("a", "def_tf_A") != pool_hash_for("b", "def_tf_B")
 
 
+def test_pool_eligibility_requires_ranking_role_and_matching_methodology(tmp_path):
+    # GPT re-verify: a filter-role or stale-Layer-1-methodology Stage-3 record must NOT satisfy
+    # ranking eligibility for a selected ranking set.
+    import numpy as np
+    import pandas as pd
+    from src.alpha_research.factor_eval_skill.stores import Stage3QualityRecordStore
+
+    rows = []
+    for fac in ("A", "B"):
+        for u in ALL_UNIVERSES:
+            r = _row(fac, u, 0.45)
+            r["layer1_methodology_hash"] = "L1"
+            rows.append(r)
+    matrix = tmp_path / "m.jsonl"
+    matrix.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    ctx = _ctx(tmp_path)  # fake resolver -> def_<fid>, version 2, native
+    cmd_register(ctx, factor_id="A", mode="deployment_bound", evidence_tier="theory_a_priori",
+                 direction_source="theory", role="ranking", role_direction="long")
+    cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
+    cmd_characterize(ctx, matrix_path=matrix)
+    cmd_gate(ctx)
+    tud_hash = ctx._read("tud.json")["tud_hash"]
+    store = Stage3QualityRecordStore(ctx.store_root)
+    corr = tmp_path / "corr.parquet"
+    pd.DataFrame(np.eye(2), index=["A", "B"], columns=["A", "B"]).to_parquet(corr)
+
+    # (i) B has ONLY a FILTER record on the target -> must not qualify B for ranking selection
+    store.record_quality(factor_id="B", definition_hash="def_B", layer1_methodology_hash="L1",
+                         target_universe_declaration_hash=tud_hash, role="filter", quality_flags={},
+                         universe_profile={}, target_universe_pass=None, cross_universe_sign_divergence=False,
+                         status_effect="eligible_for_oos")
+    with pytest.raises(FactorEvalError, match="eligible ranking/both"):
+        cmd_select(ctx, matrix_path=matrix, pool={"A": "x", "B": "y"}, caps={"x": 1, "y": 1},
+                   floor=0.10, corr_path=str(corr))
+
+    # (ii) B now also has a RANKING record but under a STALE methodology -> still ineligible
+    store.record_quality(factor_id="B", definition_hash="def_B", layer1_methodology_hash="STALE",
+                         target_universe_declaration_hash=tud_hash, role="ranking", quality_flags={},
+                         universe_profile={}, target_universe_pass=True, cross_universe_sign_divergence=False,
+                         status_effect="eligible_for_oos")
+    with pytest.raises(FactorEvalError, match="eligible ranking/both"):
+        cmd_select(ctx, matrix_path=matrix, pool={"A": "x", "B": "y"}, caps={"x": 1, "y": 1},
+                   floor=0.10, corr_path=str(corr))
+
+    # (iii) B with a matching-methodology RANKING record -> now selectable
+    store.record_quality(factor_id="B", definition_hash="def_B", layer1_methodology_hash="L1",
+                         target_universe_declaration_hash=tud_hash, role="ranking", quality_flags={},
+                         universe_profile={}, target_universe_pass=True, cross_universe_sign_divergence=False,
+                         status_effect="eligible_for_oos")
+    sel = cmd_select(ctx, matrix_path=matrix, pool={"A": "x", "B": "y"}, caps={"x": 1, "y": 1},
+                     floor=0.10, corr_path=str(corr))
+    assert set(m["factor_id"] for m in sel["members"]) <= {"A", "B"}
+
+
 def test_seal_live_enforces_multiplicity_acknowledge(tmp_path):
     from src.research_orchestrator.holdout_seal import HoldoutSealStore
     ctx = _ctx(tmp_path)
