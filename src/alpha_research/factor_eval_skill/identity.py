@@ -25,9 +25,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from src.alpha_research.factor_eval_skill._hashing import (
+    frozen_mapping,
     normalize_enum,
-    normalize_mapping,
     payload_hash,
+    to_jsonable,
 )
 
 SCHEMA_VERSION = 1
@@ -54,11 +55,18 @@ class TargetUniverseDeclaration:
     asof_policy: str
     schema_version: int = SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        # deep-freeze the mapping at construction so it cannot be mutated later (which would
+        # silently change tud_hash) and is severed from the caller's dict.
+        object.__setattr__(
+            self, "universe_definition_filters", frozen_mapping(self.universe_definition_filters)
+        )
+
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": int(self.schema_version),
             "target_universe_id": normalize_enum(self.target_universe_id),
-            "universe_definition_filters": normalize_mapping(self.universe_definition_filters),
+            "universe_definition_filters": to_jsonable(self.universe_definition_filters),
             "eligibility_policy": normalize_enum(self.eligibility_policy),
             "asof_policy": normalize_enum(self.asof_policy),
         }
@@ -185,6 +193,10 @@ class DeploymentFrozenPlan:
     pre_declared_bar: Mapping[str, Any]
     schema_version: int = SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "construction", frozen_mapping(self.construction))
+        object.__setattr__(self, "pre_declared_bar", frozen_mapping(self.pre_declared_bar))
+
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": int(self.schema_version),
@@ -193,8 +205,8 @@ class DeploymentFrozenPlan:
             "target_universe_declaration_hash": str(self.target_universe_declaration_hash),
             "deployment_universe": normalize_enum(self.deployment_universe),
             "portfolio_side": normalize_enum(self.portfolio_side),
-            "construction": normalize_mapping(self.construction),
-            "pre_declared_bar": normalize_mapping(self.pre_declared_bar),
+            "construction": to_jsonable(self.construction),
+            "pre_declared_bar": to_jsonable(self.pre_declared_bar),
         }
 
     @property

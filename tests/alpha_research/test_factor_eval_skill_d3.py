@@ -108,6 +108,28 @@ def test_direction_aligned_pass_floor_and_nan():
     assert direction_aligned_pass("short", -0.3, float("nan"))[0] is False
 
 
+def test_direction_aligned_pass_rejects_factor_level_side():
+    # a factor-level direction ("positive"/"inverse") is a caller error, NOT silently "short"
+    with pytest.raises(ValueError, match="held side"):
+        direction_aligned_pass("positive", 0.3, 3.0)
+    with pytest.raises(ValueError, match="held side"):
+        direction_aligned_pass("inverse", -0.3, -3.0)
+
+
+def test_sides_from_frozen_set_rejects_factor_level_direction():
+    from src.alpha_research.factor_eval_skill.sealed_oos import sides_from_frozen_set
+    from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
+
+    fs = FrozenSelectionSet(
+        selected=(SelectedFactor("a", 1, "da", "inverse"),),  # factor-level dir, not a held side
+        candidate_pool_hash="p", selection_rule_hash="r", eval_protocol_hash="e",
+        metric="rank_icir", portfolio_side="long_short", universe="u",
+        time_split_window="w", rebalance="20d", neutralization="none",
+    )
+    with pytest.raises(ValueError, match="non-held-side"):
+        sides_from_frozen_set(fs)
+
+
 def test_sides_from_frozen_set_derives_held_side():
     from src.alpha_research.factor_eval_skill.sealed_oos import sides_from_frozen_set
     from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor

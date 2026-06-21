@@ -26,6 +26,7 @@ DEFAULT_N_QUANTILES = 10  # decile (post-2026-06-11 unified 10-group standard)
 DEFAULT_HORIZON = 20
 # FrozenSelectionSet side convention: an inverse factor is HELD short, a positive one long.
 DIR_MAP = {"inverse": "short", "positive": "long"}
+VALID_SIDES = frozenset({"long", "short"})
 
 
 def direction_aligned_pass(
@@ -33,7 +34,13 @@ def direction_aligned_pass(
 ) -> tuple[bool, float, float]:
     """Direction-aware bar (verbatim from the E-wave script ``_dir_aligned_pass``): sign-align
     rank_icir + ls_sharpe by the held side, then require aligned rank_icir>0 AND aligned
-    ls_sharpe>``ls_floor``. Returns ``(ok, aligned_rank_icir, aligned_ls_sharpe)``."""
+    ls_sharpe>``ls_floor``. Returns ``(ok, aligned_rank_icir, aligned_ls_sharpe)``.
+
+    Fail-closed on the side (GPT cross-review 2026-06-21): only ``long``/``short`` are valid —
+    a factor-level value like ``positive``/``inverse`` is a caller error, NOT silently 'short'."""
+    side = str(side).strip().lower()
+    if side not in VALID_SIDES:
+        raise ValueError(f"held side must be one of {sorted(VALID_SIDES)}, got {side!r}")
     s = 1.0 if side == "long" else -1.0
     da_ri = s * rank_icir if rank_icir is not None and not math.isnan(rank_icir) else float("nan")
     da_ls = s * ls_sharpe if ls_sharpe is not None and not math.isnan(ls_sharpe) else float("nan")
@@ -45,8 +52,15 @@ def sides_from_frozen_set(frozen_set) -> dict[str, str]:
     """Derive ``{factor_id: held_side}`` from a FrozenSelectionSet — its
     ``SelectedFactor.expected_direction`` IS the held side ("long"/"short"). Using this
     instead of a separate ``sides`` arg removes the risk of a sides map that disagrees with
-    the sealed set (self-review 2026-06-21)."""
-    return {sf.factor_id: str(sf.expected_direction) for sf in frozen_set.selected}
+    the sealed set (self-review 2026-06-21).
+
+    Fail-closed: if a SelectedFactor carries a factor-level direction ("positive"/"inverse")
+    instead of a held side, raise — the seal builder must convert via DIR_MAP first (GPT review)."""
+    sides = {sf.factor_id: str(sf.expected_direction).strip().lower() for sf in frozen_set.selected}
+    bad = {f: s for f, s in sides.items() if s not in VALID_SIDES}
+    if bad:
+        raise ValueError(f"FrozenSelectionSet has non-held-side directions {bad} (expected long/short)")
+    return sides
 
 
 @dataclass(frozen=True)

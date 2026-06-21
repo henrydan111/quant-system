@@ -46,7 +46,18 @@ is simply absent won't be flagged; add a row whenever you add one.
 | Replication / availability status-ceiling (P-GATE) | `resolve_replication_ceiling` — `src/alpha_research/factor_registry/replication_governance.py` (`STATUS_CEILINGS` + cap reasons; `coverage_tier=='sub'` → `availability_floor_fail`) | Build a parallel status-ceiling / `status_effect` universe |
 | Freeze a selected set + claim the single-shot OOS seal | `FrozenSelectionSet` (`frozen_set_hash`) — `src/research_orchestrator/frozen_selection_set.py` ; `HoldoutSealStore.claim_holdout_access(seal_key=frozen_set_hash)` — `src/research_orchestrator/holdout_seal.py` | Re-roll a seal ledger; key OOS budget by a mutable `design_hash` |
 | Run / reproduce a sealed OOS (factor-level) | `reproduce_sealed_oos` (+ `produce_promotion_evidence`) — `src/research_orchestrator/promotion_evidence.py` (`n_quantiles=10`; sign-aligned `rank_icir>0 ∧ ls_sharpe>1.0`) | Hand-roll the OOS leg, a wrong-`n_quantiles` / wrong-horizon LS-Sharpe, or a bare-`D.features` OOS read |
-| Marginal / redundancy of a factor vs the book | `compute_marginal_ic` — `src/alpha_research/factor_eval/ic_analysis.py` ; book-marginality = the matrix `resid_ic_vs_approved_stable_*` fields | Recompute residual-vs-book; re-derive the exposure-corr greedy (generic tool is Part-G; the E-wave `select_e_wave_marginal.py` is cohort-bound — do not clone) |
+| Marginal / redundancy of a factor vs the book | `compute_marginal_ic` — `src/alpha_research/factor_eval/ic_analysis.py` ; book-marginality = the matrix `resid_ic_vs_approved_stable_*` fields | Recompute residual-vs-book; re-derive the exposure-corr greedy — use `factor_eval_skill.marginal.select_marginal` (the E-wave `select_e_wave_marginal.py` is now a thin caller of it) |
+
+### Factor-eval skill (Part-G contracts/orchestration — `src/alpha_research/factor_eval_skill/`)
+
+Thin contracts/orchestration layer for the factor-evaluation methodology (v1.3). Reuses every engine in the tables above verbatim; build the methodology workflow here, not in a new cohort script. (CLIs land at Part-G D4.)
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| Identity objects + the seal identity chain | `TargetUniverseDeclaration` / `SelectedSet` / `FrozenSelectionEnvelope` / `DeploymentFrozenPlan` + `assert_identity_chain` — `src/alpha_research/factor_eval_skill/identity.py` (the envelope WRAPS `frozen_set_hash`, never re-hashes it; deterministic `envelope_hash`) | Add `tud_hash` to the `FrozenSelectionSet` payload (orphans the spent seal); skip `assert_identity_chain` in select/seal/deploy |
+| Per-factor provenance / role / Stage-3 / filter sidecars | `FactorProvenanceStore` / `RoleDeclarationStore` / `Stage3QualityRecordStore` / `FilterCharacterizationStore` / `FilterDeploymentGateStore` / `FrozenSelectionEnvelopeStore` — `src/alpha_research/factor_eval_skill/stores.py` (append-only, file-locked) | Add columns to `factor_master`; store target-scoped quality flags per-factor (they are per factor×target×methodology) |
+| Stage-3 machine-binding caps (target+role-aware) | `stage3_caps(... governance=Stage3GovernanceInputs.native()/.cohort(...))` — `src/alpha_research/factor_eval_skill/stage3_reader.py` (calls `resolve_replication_ceiling` + `assign_candidate_status`; `MatrixResults.from_jsonl(strict=True)`) | Pass permissive governance defaults for a cohort factor (use `.cohort(...)`); re-implement the ceiling or the IS bar |
+| Generic marginal selection / sealed-OOS bar / deployment composite | `select_marginal` / `direction_aligned_pass`+`run_sealed_oos` / `direction_aligned_composite`+`run_deployment` — `src/alpha_research/factor_eval_skill/marginal.py`, `sealed_oos.py`, `deployment.py` | Clone a cohort eval script; treat a non-`long`/`short` value as a held side |
 
 ### Backtesting & execution
 

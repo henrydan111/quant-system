@@ -39,7 +39,11 @@ from src.alpha_research.factor_registry.replication_governance import (
     resolve_replication_ceiling,
 )
 
-# The broad-market core universes used for sign-flip DIAGNOSIS (not for capping).
+# The broad-market cap-benchmark universes used for the sign-flip DIAGNOSIS (not a cap).
+# NOTE (GPT cross-review): this is deliberately the four cap-index benchmarks — univ_growth /
+# univ_liquid_top300 / univ_microcap are EXCLUDED here because their divergence is covered by
+# dedicated flags (liquid_fail, illiquidity_bound) or is a style signal, not a market-segment
+# reversal. The flag name says "core" (these four), not "all", to avoid overclaiming.
 CORE_UNIVERSES = ("univ_all", "univ_csi300", "univ_csi500", "univ_csi1000")
 LIQUID_UNIVERSE = "univ_liquid_top300"
 MICROCAP_UNIVERSE = "univ_microcap"
@@ -67,24 +71,51 @@ _K_COV_TIER = "coverage_tier"
 _K_EFF_DAYS = "effective_ic_days"
 _K_FIELD_OK = "field_eligible"
 _K_L1_HASH = "layer1_methodology_hash"
+# core metrics a row must carry to be trusted in strict mode.
+_CORE_METRIC_KEYS = (_K_ICIR, _K_SIGN, _K_COV_TIER)
 
 
 class MatrixResults:
-    """Index of a unified-eval ``results.jsonl`` by ``(factor, universe_id)``."""
+    """Index of a unified-eval ``results.jsonl`` by ``(factor, universe_id)``.
 
-    def __init__(self, rows: list[Mapping[str, Any]]) -> None:
+    ``strict=True`` fails the load on malformed evidence (GPT cross-review 2026-06-21) — the
+    Stage-3 reader must not silently trust duplicate / errored / incomplete rows: duplicate
+    factor×universe, a row carrying an ``error``, a blank/unknown ``universe_id``, a missing
+    ``layer1_methodology_hash``, or a missing core metric. Default ``strict=False`` preserves
+    the lenient loader for ad-hoc inspection."""
+
+    def __init__(self, rows: list[Mapping[str, Any]], *, strict: bool = False) -> None:
         self._by_factor: dict[str, dict[str, dict]] = defaultdict(dict)
-        for row in rows:
+        errors: list[str] = []
+        for i, row in enumerate(rows):
             factor = row.get(_K_FACTOR)
             universe = row.get(_K_UNIVERSE)
-            if factor is None or universe is None:
+            if not factor or not universe:
+                if strict:
+                    errors.append(f"row {i}: blank factor/universe_id")
                 continue
-            self._by_factor[str(factor)][str(universe)] = dict(row)
+            factor, universe = str(factor), str(universe)
+            if strict:
+                if universe not in ALL_UNIVERSES:
+                    errors.append(f"row {i} ({factor}): unknown universe_id {universe!r}")
+                if universe in self._by_factor.get(factor, {}):
+                    errors.append(f"row {i}: duplicate {factor} x {universe}")
+                if row.get("error"):
+                    errors.append(f"row {i} ({factor} x {universe}): carries error={row['error']!r}")
+                if not str(row.get(_K_L1_HASH, "")).strip():
+                    errors.append(f"row {i} ({factor} x {universe}): missing layer1_methodology_hash")
+                for key in _CORE_METRIC_KEYS:
+                    if row.get(key) is None:
+                        errors.append(f"row {i} ({factor} x {universe}): missing {key}")
+            self._by_factor[factor][universe] = dict(row)
+        if strict and errors:
+            shown = "\n  ".join(errors[:20])
+            raise ValueError(f"MatrixResults strict validation failed ({len(errors)} issue(s)):\n  {shown}")
 
     @classmethod
-    def from_jsonl(cls, path: str | Path) -> "MatrixResults":
+    def from_jsonl(cls, path: str | Path, *, strict: bool = False) -> "MatrixResults":
         rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
-        return cls(rows)
+        return cls(rows, strict=strict)
 
     def universe_rows(self, factor_id: str) -> dict[str, dict]:
         return dict(self._by_factor.get(str(factor_id), {}))
@@ -204,6 +235,49 @@ def _cross_universe_flags(urows: Mapping[str, dict], target_row: Mapping[str, An
     }
 
 
+@dataclass(frozen=True)
+class Stage3GovernanceInputs:
+    """Explicit P-GATE governance inputs — the caller MUST declare native vs cohort so a
+    cohort factor can never be silently under-capped by permissive defaults (GPT cross-review
+    2026-06-21). Use :meth:`native` for a base catalog factor (no replication concern) or
+    :meth:`cohort` for a CICC-cohort factor (manifest-resolved values REQUIRED)."""
+
+    factor_class: str  # "native" | "cohort"
+    replication_tier: str
+    claim_class: str
+    oos_eligibility: str
+    require_claim: bool
+    max_stat_calibrated: bool = False
+    denominator_frozen: bool = True
+    has_uncertified_operator: bool = False
+    truth_observed: bool = False
+    power_floor_pass: bool = False
+
+    @classmethod
+    def native(cls) -> "Stage3GovernanceInputs":
+        """A base catalog factor: no replication concern, no domain-claim requirement."""
+        return cls(
+            factor_class="native", replication_tier="exact_certified",
+            claim_class="clean_singleton_primary", oos_eligibility="pending", require_claim=False,
+        )
+
+    @classmethod
+    def cohort(
+        cls, *, replication_tier: str, claim_class: str, oos_eligibility: str,
+        require_claim: bool = True, **kwargs: Any,
+    ) -> "Stage3GovernanceInputs":
+        """A CICC-cohort factor: the manifest-resolved tier + OOS eligibility + claim are
+        REQUIRED. Fail-closed if any are blank."""
+        if not str(replication_tier).strip() or not str(oos_eligibility).strip():
+            raise ValueError("cohort governance requires manifest-resolved replication_tier + oos_eligibility")
+        if require_claim and not str(claim_class).strip():
+            raise ValueError("cohort governance requires a resolved FactorDomainClaim (claim_class)")
+        return cls(
+            factor_class="cohort", replication_tier=replication_tier, claim_class=claim_class,
+            oos_eligibility=oos_eligibility, require_claim=require_claim, **kwargs,
+        )
+
+
 def stage3_caps(
     matrix: MatrixResults,
     *,
@@ -211,20 +285,18 @@ def stage3_caps(
     definition_hash: str,
     tud: TargetUniverseDeclaration,
     role: str,
-    replication_tier: str = "exact_certified",
-    claim_class: str = "clean_singleton_primary",
-    oos_eligibility: str = "pending",
-    require_claim: bool = False,
+    governance: Stage3GovernanceInputs,
     ceiling_overrides: Mapping[str, Any] | None = None,
 ) -> Stage3QualityRecord:
     """Read the 7-universe matrix for ``factor_id`` and emit target+role-aware caps.
 
-    ``tud`` supplies BOTH the declared ``target_universe_id`` (which row is the target)
-    and the ``tud_hash`` (the store scope key) — the concrete realization of the design's
-    ``stage3_caps(... tud_hash ...)`` signature. ``layer1_methodology_hash`` is DERIVED
-    from the matrix rows (the matrix is authoritative for the Layer-1 methodology), not
-    passed in. ``status_effect`` is the ``resolve_replication_ceiling`` ceiling on the
-    target row; ``target_universe_pass`` is ``assign_candidate_status`` on the target row.
+    ``tud`` supplies BOTH the declared ``target_universe_id`` (which row is the target) and
+    the ``tud_hash`` (the store scope key). ``governance`` (``Stage3GovernanceInputs.native()``
+    or ``.cohort(...)``) supplies the P-GATE inputs EXPLICITLY — a cohort factor cannot be
+    under-capped by a forgotten manifest value. ``layer1_methodology_hash`` is DERIVED from the
+    matrix rows (authoritative for the Layer-1 methodology). ``status_effect`` is the
+    ``resolve_replication_ceiling`` ceiling on the target row; ``target_universe_pass`` is
+    ``assign_candidate_status`` on the target row.
     """
     role_norm = str(role).strip().lower()
     if role_norm not in ROLES:
@@ -251,13 +323,18 @@ def stage3_caps(
     effective_ic_days = target_row.get(_K_EFF_DAYS) if target_row is not None else None
     overrides = dict(ceiling_overrides or {})
     decision = resolve_replication_ceiling(
-        replication_tier=replication_tier,
-        claim_class=claim_class,
+        replication_tier=governance.replication_tier,
+        claim_class=governance.claim_class,
         coverage_tier=coverage_tier,
         effective_ic_days=effective_ic_days,
-        oos_eligibility=oos_eligibility,
+        oos_eligibility=governance.oos_eligibility,
         coverage_observed=coverage_observed,
-        require_claim=require_claim,
+        require_claim=governance.require_claim,
+        max_stat_calibrated=governance.max_stat_calibrated,
+        denominator_frozen=governance.denominator_frozen,
+        has_uncertified_operator=governance.has_uncertified_operator,
+        truth_observed=governance.truth_observed,
+        power_floor_pass=governance.power_floor_pass,
         **overrides,
     )
     status_effect = decision.status_ceiling

@@ -77,7 +77,7 @@ class FactorProvenanceStore(AppendOnlyStore):
         direction_source: str,
         multiplicity_scope_id: str,
         may_cite_is_as_confirmation: bool | None = None,
-        fresh_oos_eligible: bool = False,
+        fresh_oos_eligible: bool | None = None,
         prior_contradicted_by_is: bool = False,
         rationale: str = "",
         committed_by: str = "factor-eval",
@@ -94,6 +94,16 @@ class FactorProvenanceStore(AppendOnlyStore):
             raise ValueError(
                 "a_priori_is_informed cannot set may_cite_is_as_confirmation=True (IS-spent rule)"
             )
+        # fresh-OOS eligibility derives from tier: only oos_informed has SPENT its OOS window
+        # (GPT cross-review 2026-06-21 — was hardcoded False for every tier).
+        if fresh_oos_eligible is None:
+            fresh_oos_eligible = tier != "oos_informed"
+        if tier == "oos_informed" and fresh_oos_eligible:
+            raise ValueError("oos_informed cannot set fresh_oos_eligible=True (OOS already spent)")
+        # the IS-informed / OOS-informed tiers MUST carry the multiplicity scope they are meant
+        # to link into — a blank scope would let the tier bypass the multiplicity denominator.
+        if tier in ("a_priori_is_informed", "oos_informed") and not str(multiplicity_scope_id).strip():
+            raise ValueError(f"{tier} requires a non-blank multiplicity_scope_id")
         return self.record(
             factor_id=str(factor_id),
             definition_hash=str(definition_hash),
@@ -184,11 +194,14 @@ class Stage3QualityRecordStore(AppendOnlyStore):
         "status_effect",
     )
     SCHEMA = {column: "string" for column in COLUMNS}
+    # role is part of the key: a factor can be ranking in one context and filter in another,
+    # so a filter record must not shadow a ranking record on latest() (GPT cross-review).
     KEY_FIELDS = (
         "factor_id",
         "definition_hash",
         "layer1_methodology_hash",
         "target_universe_declaration_hash",
+        "role",
     )
 
     def record_quality(
@@ -334,6 +347,18 @@ class FrozenSelectionEnvelopeStore(AppendOnlyStore):
     KEY_FIELDS = ("frozen_set_hash",)
 
     def record_envelope(self, envelope: FrozenSelectionEnvelope) -> dict[str, Any]:
+        # Enforce immutability at the persistence boundary: a frozen_set_hash binds to exactly
+        # one envelope. Re-recording the SAME binding is idempotent; a DIFFERENT binding for the
+        # same frozen_set_hash is fail-closed (else "latest wins" would make the binding mutable —
+        # GPT cross-review 2026-06-21).
+        existing = self.get_envelope(envelope.frozen_set_hash)
+        if existing is not None:
+            if str(existing["envelope_hash"]) == envelope.envelope_hash:
+                return existing
+            raise ValueError(
+                f"conflicting FrozenSelectionEnvelope for frozen_set_hash={envelope.frozen_set_hash}: "
+                f"existing envelope_hash={existing['envelope_hash']} != new {envelope.envelope_hash}"
+            )
         return self.record(
             frozen_set_hash=str(envelope.frozen_set_hash),
             envelope_hash=envelope.envelope_hash,

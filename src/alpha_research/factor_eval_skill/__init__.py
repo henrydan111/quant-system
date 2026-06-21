@@ -52,6 +52,7 @@ from src.alpha_research.factor_eval_skill.stage3_reader import (
     LIQUID_UNIVERSE,
     MICROCAP_UNIVERSE,
     MatrixResults,
+    Stage3GovernanceInputs,
     Stage3QualityRecord,
     stage3_caps,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "ROLES",
     # D5 Stage-3 reader
     "MatrixResults",
+    "Stage3GovernanceInputs",
     "Stage3QualityRecord",
     "stage3_caps",
     "CORE_UNIVERSES",

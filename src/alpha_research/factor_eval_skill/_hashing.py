@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import MappingProxyType
 from typing import Any, Mapping
 
 
@@ -54,3 +55,35 @@ def normalize_mapping(mapping: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized = dict(mapping)
     canonical_json(normalized)  # raises TypeError/ValueError if not JSON-native or NaN/inf
     return normalized
+
+
+def deep_freeze(obj: Any) -> Any:
+    """Recursively convert a JSON-native structure into an immutable one (Mapping ->
+    MappingProxyType, list/tuple -> tuple). Identity dataclasses freeze their Mapping fields
+    with this at construction so a later in-place mutation CANNOT silently change the object's
+    hash (GPT cross-review 2026-06-21: a frozen dataclass does NOT deep-freeze its dicts)."""
+    if isinstance(obj, Mapping):
+        return MappingProxyType({str(k): deep_freeze(v) for k, v in obj.items()})
+    if isinstance(obj, (list, tuple)):
+        return tuple(deep_freeze(v) for v in obj)
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    raise TypeError(f"non-JSON-native value in identity payload: {type(obj).__name__}")
+
+
+def to_jsonable(obj: Any) -> Any:
+    """Recursively convert a :func:`deep_freeze`-d structure back to JSON-native dict/list
+    (the form :func:`canonical_json` serializes)."""
+    if isinstance(obj, Mapping):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(v) for v in obj]
+    return obj
+
+
+def frozen_mapping(value: Mapping[str, Any] | None) -> MappingProxyType:
+    """Deep-freeze a mapping (``{}`` for ``None``) AND validate it is JSON-native + finite —
+    fail-closed at construction, not at hash time. The return is read-only (mutation raises)."""
+    frozen = deep_freeze(dict(value) if value is not None else {})
+    canonical_json(to_jsonable(frozen))  # raises on non-native / NaN / inf
+    return frozen

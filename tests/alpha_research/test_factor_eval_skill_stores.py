@@ -64,6 +64,31 @@ def test_provenance_rejects_bad_evidence_tier(tmp_path):
         )
 
 
+def test_provenance_fresh_oos_eligible_derives_from_tier(tmp_path):
+    store = FactorProvenanceStore(tmp_path)
+    # a non-spent tier is fresh-OOS eligible by default
+    r1 = store.record_provenance(factor_id="a", definition_hash="d", evidence_tier="theory_a_priori",
+                                 direction_source="theory", multiplicity_scope_id="m")
+    assert r1["fresh_oos_eligible"] == "True"
+    # oos_informed has SPENT its OOS -> not fresh; and cannot be forced True
+    r2 = store.record_provenance(factor_id="b", definition_hash="d", evidence_tier="oos_informed",
+                                 direction_source="oos", multiplicity_scope_id="m")
+    assert r2["fresh_oos_eligible"] == "False"
+    with pytest.raises(ValueError, match="OOS already spent"):
+        store.record_provenance(factor_id="b", definition_hash="d", evidence_tier="oos_informed",
+                                direction_source="oos", multiplicity_scope_id="m", fresh_oos_eligible=True)
+
+
+def test_provenance_requires_multiplicity_scope_for_informed_tiers(tmp_path):
+    store = FactorProvenanceStore(tmp_path)
+    with pytest.raises(ValueError, match="multiplicity_scope_id"):
+        store.record_provenance(factor_id="a", definition_hash="d", evidence_tier="a_priori_is_informed",
+                                direction_source="is_observed", multiplicity_scope_id="   ")
+    # a theory-tier factor does NOT require a multiplicity scope
+    store.record_provenance(factor_id="b", definition_hash="d", evidence_tier="theory_a_priori",
+                            direction_source="theory", multiplicity_scope_id="")
+
+
 # ----- RoleDeclarationStore -----
 
 def test_role_context_hash_distinguishes_contexts(tmp_path):
@@ -181,6 +206,23 @@ def test_envelope_store_roundtrip(tmp_path):
     assert got["envelope_hash"] == env.envelope_hash
     assert got["legacy_mode"] == "False"
     assert json.loads(got["envelope_json"])["frozen_set_hash"] == "fsh"
+
+
+def test_envelope_store_rejects_conflicting_binding(tmp_path):
+    store = FrozenSelectionEnvelopeStore(tmp_path)
+    e1 = FrozenSelectionEnvelope("fsh", "tud_A", "sset_A", created_at="t", created_by="x")
+    store.record_envelope(e1)
+    # SAME binding, different created_at -> idempotent (envelope_hash excludes the timestamp)
+    again = store.record_envelope(
+        FrozenSelectionEnvelope("fsh", "tud_A", "sset_A", created_at="LATER", created_by="y")
+    )
+    assert again["envelope_hash"] == e1.envelope_hash
+    assert len(store.list_all()) == 1
+    # DIFFERENT binding for the same frozen_set_hash -> fail-closed (immutable at the boundary)
+    with pytest.raises(ValueError, match="conflicting"):
+        store.record_envelope(
+            FrozenSelectionEnvelope("fsh", "tud_DIFFERENT", "sset_A", created_at="t", created_by="x")
+        )
 
 
 def test_envelope_store_legacy_row(tmp_path):

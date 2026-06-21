@@ -66,6 +66,17 @@ def test_tud_hash_deterministic_and_cosmetically_stable():
     assert c.tud_hash != a.tud_hash  # a structural field change DOES move the hash
 
 
+def test_tud_mapping_is_frozen_at_construction():
+    src = {"adv_min": 300, "screens": {"st": True}}
+    tud = TargetUniverseDeclaration("u", src, "p", "a")
+    h1 = tud.tud_hash
+    src["adv_min"] = 999            # mutating the ORIGINAL dict must NOT affect the hash (severed copy)
+    src["screens"]["st"] = False    # nested mutation too
+    assert tud.tud_hash == h1
+    with pytest.raises(TypeError):  # the stored mapping is read-only
+        tud.universe_definition_filters["adv_min"] = 1
+
+
 def test_selected_set_hash_order_independent_and_direction_sensitive():
     tud_hash = "tud_x"
     r1 = SelectedRepresentative("a", 1, "da", "long")
