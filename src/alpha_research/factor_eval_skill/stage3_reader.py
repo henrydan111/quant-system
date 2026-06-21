@@ -71,8 +71,10 @@ _K_COV_TIER = "coverage_tier"
 _K_EFF_DAYS = "effective_ic_days"
 _K_FIELD_OK = "field_eligible"
 _K_L1_HASH = "layer1_methodology_hash"
-# core metrics a row must carry to be trusted in strict mode.
-_CORE_METRIC_KEYS = (_K_ICIR, _K_SIGN, _K_COV_TIER)
+# Core metrics a row must carry to be trusted in strict mode. effective_ic_days is included
+# (GPT re-verify 2026-06-21): the P-GATE temporal-depth cap only fires when effective_ic_days
+# is NOT None, so a row missing it would silently dodge the availability floor.
+_CORE_METRIC_KEYS = (_K_ICIR, _K_SIGN, _K_COV_TIER, _K_EFF_DAYS)
 
 
 class MatrixResults:

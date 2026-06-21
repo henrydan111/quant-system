@@ -218,5 +218,10 @@ def test_strict_loader_rejects_malformed_rows():
     # unknown universe
     with pytest.raises(ValueError, match="unknown universe_id"):
         MatrixResults([_row("f", "univ_bogus", 0.3)], strict=True)
+    # missing effective_ic_days (load-bearing: the temporal-depth cap only fires when present)
+    no_eff = _row("f", "univ_all", 0.3)
+    no_eff.pop("effective_ic_days")
+    with pytest.raises(ValueError, match="effective_ic_days"):
+        MatrixResults([no_eff], strict=True)
     # lenient mode tolerates them
     MatrixResults([_row("f", "univ_all", 0.3), _row("f", "univ_all", 0.4)], strict=False)
