@@ -55,6 +55,54 @@ signals already trusted.
   - `src/alpha_research/factor_eval_skill/multiplicity.py` — the D6 OOS-window multiplicity pattern (extend it
     to discovery).
 
+### §1.1 — Concentrated vs diversified books, and the factor-eligibility rule
+
+Two coherent book archetypes (a SPECTRUM, not a binary) — they differ on many co-varying dimensions, not just
+position count:
+
+| | **Concentrated book** | **Diversified book** |
+|---|---|---|
+| factors / per-factor weight | few; each **load-bearing** | many; each small, none dominant |
+| positions / per-name weight | few (e.g. top-10), ~10% | many (100–300+), ~0.3–1% |
+| return source | **conviction** — each signal individually strong | **breadth** — LLN over many weak independent bets |
+| Fundamental Law term | IR via **IC** | IR via **√breadth** |
+| risk shape | high idiosyncratic, lumpy P&L, larger MDD | averaged-out, smooth P&L, smaller MDD |
+| Sharpe vs CAGR | higher CAGR / lower Sharpe | higher Sharpe / lower per-name upside |
+| capacity | lower | higher (scalable) |
+| this system | VQ10 large-cap value top-10 (deployed) | the breadth-harvesting machine (to build) |
+
+**The factor-eligibility rule is keyed off the actual per-component weight `w`, NOT a status label and NOT a
+book "type" tag.** Pick a load-bearing threshold `w*` (default e.g. 0.05 of book weight/risk):
+
+- **Component with `w ≥ w*` (load-bearing):** must be `approved`, or `candidate` with
+  `allow_candidate_components=True`. **`draft` is REFUSED** — a load-bearing component must carry a validated
+  solo signal.
+- **Component with `w < w*` (non-load-bearing):** its solo status is recorded as **provenance**, not a hard
+  gate. Admissible down to a **noise floor** (a minimal solo-IC floor to exclude pure noise), because its trust
+  comes from the **book's** sealed OOS, not its own. A `draft` at ~1/200 weight is acceptable here.
+
+Equivalently: a concentrated book requires *every component individually validated*; a diversified book is
+*validated as a whole*, and weak/draft components ride on the ensemble's OOS. This is what dissolves the
+breadth↔draft tension — breadth = the diversified path, NOT loosening the draft gate.
+
+**Invariants that hold regardless of archetype (so the diversified path is not a backdoor for unvalidated
+factors):**
+1. The book itself spends **ONE** sealed OOS (`HoldoutSealStore` keyed by the book's frozen hash); D6
+   multiplicity counts it.
+2. Component **selection** (which factors + weights) is done on **IS**, and the selection search is **deflated
+   by effective trials** (PR5). A diversified book that data-mines its subset from the full catalog pays a heavy
+   multiplicity tax → prefer **a-priori-structured composition** (≈ one representative per economic cluster),
+   which collapses the search space.
+3. A `candidate` included in any sealed book **spends its OOS in the book context** (no separate "fresh" OOS
+   afterward).
+4. A `draft` admitted to a diversified book does **NOT** become individually `approved` — only the *book* is
+   validated.
+5. Breadth comes from **a-priori economic diversity** (handbooks, papers, alt-data — pre-registered,
+   low-multiplicity), NOT from mining the draft pool.
+
+*Enforced at:* PR3 (the `StrategyCandidate` records each component's `weight` + `status` + the resolved
+archetype, and the load-bearing check); PR5 (the selection-search deflation).
+
 ## §2 — The build plan (dependency-ordered)
 
 ### Critical path (sequential — each unblocks the next)
@@ -126,11 +174,17 @@ Required hash-bound artifacts on every `StrategyCandidate` (extends `DeploymentF
 | provider / calendar manifest | no stale-provider reuse |
 | capacity_report (PR4) | "tradable at what AUM?" |
 | kill_criteria | failure observable before capital loss |
+| component_eligibility (§1.1) | per-component `{factor_id, weight, status}` + resolved archetype + load-bearing check |
+
+**Factor-eligibility enforcement (§1.1):** `factor_set_hash` resolves to a list of `{factor_id, weight,
+status}`. At seal time, run the load-bearing check — any component with `weight ≥ w*` must be `approved` or
+(opt-in) `candidate`; `draft`/sub-w* components ride on the book's OOS down to a noise floor. Refuse a sealed
+book whose load-bearing components include a `draft`.
 
 Publish into the (currently empty) `data/strategy_registry/`. **Reuse the seal pattern:** a strategy is sealed
 too — key `HoldoutSealStore` on a strategy-level frozen hash so a book's OOS is single-shot, exactly like a
 factor's. **Definition of done:** one `StrategyCandidate` (the VQ10 book) published end-to-end with all hashes
-+ a capacity report + kill criteria, sealed.
++ a capacity report + kill criteria + the component-eligibility check, sealed.
 
 ### Parallel tracks (proceed alongside the critical path)
 
