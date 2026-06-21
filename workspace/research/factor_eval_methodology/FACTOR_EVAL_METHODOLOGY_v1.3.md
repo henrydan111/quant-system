@@ -91,8 +91,8 @@ sealed selection without generating a new TUD + new seal.
 
 `filter_role_subtype ∈ {universe_definition, tradability, risk_exclusion, soft_factor_tail}`.
 **`universe_definition`** (ADV floor / listing-age / board / ST / suspension) is part of `TUD`
-(hashed into `target_universe_declaration_hash`), **excluded from FilterEvaluation**, and **frozen at
-Stage 6**. Changing it after results = a new TUD = a new seal. Only the other three subtypes go through
+(hashed into `target_universe_declaration_hash`), **excluded from FilterEvaluation**, and — for deployment-bound runs — **declared in the TUD before
+Stage 2/3 interpretation (§2.3), then carried unchanged into Stage 6/7/8**. Changing it after results = a new TUD = a new seal. Only the other three subtypes go through
 FilterEvaluation (§4 FC2).
 
 ### §2.3 Declaration timing — before Stage 2/3 interpretation (must-fix #3)
@@ -138,9 +138,9 @@ target_universe_pass:                       # hard cap for deployment-bound RANK
     - abs_icir_on_target        >= 0.10      # = CAND_HELDOUT_ICIR_MIN
     - sign_consistency_on_target>= 0.70
     - sign_matches_declared_direction_on_target
-    - coverage_ok_on_target     (>= 0.50)
+    - coverage_ok_on_target     (>= 0.50)   # default; versioned + overridable per target-universe contract
 cross_universe_sign_divergence:             # DIAGNOSTIC, not a hard block
-  computed_over: [univ_all, liquid_top300, csi300, csi500, csi1000, microcap]
+  computed_over: [univ_all, liquid_top300, csi300, csi500, csi1000, microcap, growth]   # all 7 Stage-2 domains
   effect: scope_warning (record on the factor)
   hard_block_ONLY_if:
     - a divergent universe is REQUIRED by the TUD, OR
@@ -238,19 +238,29 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 
 ```
 register      : Stage 0-1  + CohortHypothesis + RoleDeclaration + PIT proof
-characterize  : Stage 2-4  (matrix / role-aware caps / marginal — 3 outputs)
-declare       : TargetUniverseDeclaration builder+checker → target_universe_declaration_hash   [#3/#5 step]
+declare_target : TargetUniverseDeclaration builder+checker → target_universe_declaration_hash
+                 (deployment-bound: REQUIRED before characterize interpretation — §2.3)
+characterize   : Stage 2-4  (matrix / role-aware caps / marginal — 3 outputs)
 gate          : Stage 5    role-aware cap resolver (ranking target caps | FilterGate | both)    [#5 step]
-select+seal   : Stage 6-7  SelectedSet (hash-bound) → FrozenSelectionSet → sealed OOS
+select         : Stage 6    SelectedSet (hash-bound) + §6.2 interaction_check (IS-only, PRE-seal)
+seal           : Stage 7    FrozenSelectionSet → sealed OOS
 deploy        : Stage 8    StrategyContext/DeploymentFrozenPlan assembler (binds rankers+filters+
                            universe-def filters+trade model+capacity+pass/fail+seal refs)        [assembler step]
-maintain      : §6 RevalidationCadence + interaction check
+maintain       : §6.1 RevalidationCadence ONLY  (interaction_check is PRE-seal, in `select`, NOT maintenance)
+
+skill_mode:
+  deployment_bound     : register → declare_target → characterize → gate → select(+interaction) → seal → deploy → maintain
+                         declare_target REQUIRED before characterize interpretation (§2.3); §2.1 equality chain enforced before select/seal/deploy.
+  exploratory_research : register → characterize → optional declare_target. A target declared AFTER characterize =
+                         post_hoc_target_choice → NO clean deployment-bound FrozenSelectionSet without a signed TargetUniverseOverride (§4 C2).
 ```
 The 4 first-class new steps GPT named (TUD builder, RoleDeclaration resolver, role-aware cap resolver,
 DeploymentFrozenPlan assembler) are explicit above. Part-G new code: the Stage-3 machine-binding reader
 + the generalized marginal-contribution tool + these 4 steps.
 
 ---
+
+*Round-5 residual fixes applied in-place: §8 reordered (declare_target before characterize; interaction_check moved to the pre-seal `select` step), §3.3 added `growth` to the cross-universe divergence domains, §2.2 wording aligned to §2.3. Architecture unchanged — GPT confirmed the core model coherent.*
 
 *v1.3 is the single source of truth. The 4 prior docs + 2 responses are the design history. If GPT's
 final confirmation is "coherent + skill-ready," codify §8 as the `factor-eval` skill.*
