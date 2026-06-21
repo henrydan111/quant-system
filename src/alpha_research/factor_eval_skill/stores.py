@@ -201,13 +201,15 @@ class Stage3QualityRecordStore(AppendOnlyStore):
         role: str,
         quality_flags: Mapping[str, Any],
         universe_profile: Mapping[str, Any],
-        target_universe_pass: bool,
+        target_universe_pass: bool | None,
         cross_universe_sign_divergence: bool,
         status_effect: str,
     ) -> dict[str, Any]:
         role_norm = normalize_enum(role)
         if role_norm not in ROLES:
             raise ValueError(f"role must be one of {ROLES}, got {role!r}")
+        # A filter role has no IC pass/fail — persist None as "na", not "False".
+        pass_str = "na" if target_universe_pass is None else _b(target_universe_pass)
         return self.record(
             factor_id=str(factor_id),
             definition_hash=str(definition_hash),
@@ -216,7 +218,7 @@ class Stage3QualityRecordStore(AppendOnlyStore):
             role=role_norm,
             quality_flags_json=canonical_json(normalize_mapping(quality_flags)),
             universe_profile_json=canonical_json(normalize_mapping(universe_profile)),
-            target_universe_pass=_b(target_universe_pass),
+            target_universe_pass=pass_str,
             cross_universe_sign_divergence=_b(cross_universe_sign_divergence),
             status_effect=normalize_enum(status_effect),
         )

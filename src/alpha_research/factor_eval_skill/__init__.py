@@ -26,6 +26,15 @@ from src.alpha_research.factor_eval_skill.identity import (
     TargetUniverseDeclaration,
     assert_identity_chain,
 )
+from src.alpha_research.factor_eval_skill.stage3_reader import (
+    ALL_UNIVERSES,
+    CORE_UNIVERSES,
+    LIQUID_UNIVERSE,
+    MICROCAP_UNIVERSE,
+    MatrixResults,
+    Stage3QualityRecord,
+    stage3_caps,
+)
 from src.alpha_research.factor_eval_skill.stores import (
     EVIDENCE_TIERS,
     ROLES,
@@ -60,4 +69,12 @@ __all__ = [
     "FrozenSelectionEnvelopeStore",
     "EVIDENCE_TIERS",
     "ROLES",
+    # D5 Stage-3 reader
+    "MatrixResults",
+    "Stage3QualityRecord",
+    "stage3_caps",
+    "CORE_UNIVERSES",
+    "LIQUID_UNIVERSE",
+    "MICROCAP_UNIVERSE",
+    "ALL_UNIVERSES",
 ]
