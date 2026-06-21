@@ -259,7 +259,7 @@ register      : Stage 0-1  + CohortHypothesis + RoleDeclaration + PIT proof
 declare_target : TargetUniverseDeclaration builder+checker → target_universe_declaration_hash
                  (deployment-bound: REQUIRED before characterize interpretation — §2.3)
 characterize   : Stage 2-4  (matrix / role-aware caps / marginal — 3 outputs)
-gate          : Stage 5    role-aware cap resolver (ranking target caps | FilterGate | both)    [#5 step]
+gate          : Stage 5    role-aware cap resolver (ranking target caps | FilterCharacterization_v1 | both)
 select         : Stage 6    SelectedSet (hash-bound) + §6.2 interaction_check (IS-only, PRE-seal)
 seal           : Stage 7    FrozenSelectionSet → sealed OOS
 # ══ strategy-build skill (Stage 8, strategy-specific; consumes the factor library) ══
