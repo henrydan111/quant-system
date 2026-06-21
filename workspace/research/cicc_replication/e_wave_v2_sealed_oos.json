@@ -1,0 +1,115 @@
+{
+  "set_id": "EWaveSelectedSet_v2",
+  "frozen_set_hash": "316b17bc9ad426c7683abab1ca5298cef6f7cad71e7ad152471ed499c89672f2",
+  "evidence_class": "single_shot_sealed_oos",
+  "selection_class": "a_priori_is_only",
+  "oos_window": "2021-01-01..2026-02-27",
+  "horizon": 20,
+  "n_quantiles": 10,
+  "provider_build_id": "indicators_fields_20260609",
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "git_sha": "6aec58318c51536f2fa38f5235c6c515b56feca1",
+  "bar": "sign_aligned_rank_icir>0 AND aligned_ls_sharpe>1.0",
+  "results": [
+    {
+      "factor": "corr_ret_turnd_20d",
+      "side": "short",
+      "oos_rank_icir": -0.6128341121758153,
+      "oos_ls_sharpe": -3.7609197826626377,
+      "aligned_rank_icir": 0.6128341121758153,
+      "aligned_ls_sharpe": 3.7609197826626377,
+      "pass": true
+    },
+    {
+      "factor": "liq_vstd_20d",
+      "side": "short",
+      "oos_rank_icir": -0.6118576444580018,
+      "oos_ls_sharpe": -4.029080305022601,
+      "aligned_rank_icir": 0.6118576444580018,
+      "aligned_ls_sharpe": 4.029080305022601,
+      "pass": true
+    },
+    {
+      "factor": "vol_w_downshadow_std_60d",
+      "side": "short",
+      "oos_rank_icir": -0.5163069807699396,
+      "oos_ls_sharpe": -1.573332948728494,
+      "aligned_rank_icir": 0.5163069807699396,
+      "aligned_ls_sharpe": 1.573332948728494,
+      "pass": true
+    },
+    {
+      "factor": "corr_price_turn_post_20d",
+      "side": "short",
+      "oos_rank_icir": -0.47123603217564664,
+      "oos_ls_sharpe": -2.7852426151931167,
+      "aligned_rank_icir": 0.47123603217564664,
+      "aligned_ls_sharpe": 2.7852426151931167,
+      "pass": true
+    },
+    {
+      "factor": "flow_act_buy_shift_dist_xl_20d",
+      "side": "short",
+      "oos_rank_icir": -0.9631314750037794,
+      "oos_ls_sharpe": -5.9284257063827335,
+      "aligned_rank_icir": 0.9631314750037794,
+      "aligned_ls_sharpe": 5.9284257063827335,
+      "pass": true
+    },
+    {
+      "factor": "liq_shortcut_avg_20d",
+      "side": "long",
+      "oos_rank_icir": 0.5116593239593827,
+      "oos_ls_sharpe": 3.0681673996495564,
+      "aligned_rank_icir": 0.5116593239593827,
+      "aligned_ls_sharpe": 3.0681673996495564,
+      "pass": true
+    }
+  ],
+  "n_pass": 6,
+  "promotion": "DEFERRED — separate downstream decision; reuse this reproduction (seal already spent).",
+  "reproduction": {
+    "source": "qlib_windowed_features",
+    "provider_build_id": "indicators_fields_20260609",
+    "calendar_policy_id": "frozen_20260227_system_build",
+    "frozen_set_hash": "316b17bc9ad426c7683abab1ca5298cef6f7cad71e7ad152471ed499c89672f2",
+    "oos_window": "2021-01-01..2026-02-27",
+    "horizon": 20,
+    "rank_icir_horizon": 20,
+    "ls_sharpe_horizon": 5,
+    "metric_note": "Approval bar reproduced exactly as the Round-6 screening defined it: rank_icir at 20d + run_batch_screening's primary-horizon ls_sharpe from horizons=(5, 10, 20) (i.e. 5d long-short Sharpe). This is the registration metric, not a horizon-consistent tradability metric; strategy-level deployment validation is a separate gate.",
+    "max_label_realization_date": "2026-02-27 00:00:00",
+    "per_factor": {
+      "corr_ret_turnd_20d": {
+        "oos_rank_icir": -0.6128341121758153,
+        "oos_ls_sharpe": -3.7609197826626377,
+        "ls_sharpe_horizon": 5
+      },
+      "liq_vstd_20d": {
+        "oos_rank_icir": -0.6118576444580018,
+        "oos_ls_sharpe": -4.029080305022601,
+        "ls_sharpe_horizon": 5
+      },
+      "vol_w_downshadow_std_60d": {
+        "oos_rank_icir": -0.5163069807699396,
+        "oos_ls_sharpe": -1.573332948728494,
+        "ls_sharpe_horizon": 5
+      },
+      "corr_price_turn_post_20d": {
+        "oos_rank_icir": -0.47123603217564664,
+        "oos_ls_sharpe": -2.7852426151931167,
+        "ls_sharpe_horizon": 5
+      },
+      "flow_act_buy_shift_dist_xl_20d": {
+        "oos_rank_icir": -0.9631314750037794,
+        "oos_ls_sharpe": -5.9284257063827335,
+        "ls_sharpe_horizon": 5
+      },
+      "liq_shortcut_avg_20d": {
+        "oos_rank_icir": 0.5116593239593827,
+        "oos_ls_sharpe": 3.0681673996495564,
+        "ls_sharpe_horizon": 5
+      }
+    }
+  }
+}
