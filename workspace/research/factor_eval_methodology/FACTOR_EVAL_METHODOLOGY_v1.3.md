@@ -120,10 +120,10 @@ filters walk 2–3 → 8; `both` walks both, as **one frozen design** (FC3).
 | **2** matrix | draft → per-(factor,universe) IC + cost diagnostics | 7-universe IC + turnover/decay/cost-drag/limit-hit proxies |
 | **3** caps | matrix → `quality_flags` + `status_effect` (machine-binding) | **role-aware caps §3.3**; Stage 5/6/7 MUST obey |
 | **4** marginal | factor + book → `cohort_redundancy` + `book_marginality` (separate) | selection score = raw direction-aligned IS quality × redundancy penalty (NOT style residual) |
-| **5** gate | draft → `candidate` | ranking: `\|icir\|≥0.10 ∧ sign≥0.70` on the **declared target**; filter: `FilterGate_v1` (§4) |
+| **5** gate | draft → `candidate` / `filter_candidate` | ranking: `\|icir\|≥0.10 ∧ sign≥0.70` on the **declared target**; **filter: `FilterCharacterization_v1` → `filter_candidate` (NO strategy A/B claim — pass/fail is Stage 8)** |
 | **6** select | pool → `SelectedSet` (hash-bound, IS-only) | family caps; Stage-3 caps as hard input; TUD frozen (§2.3) |
 | **7** OOS | FrozenSelectionSet → `approved[scope]` | ranking only; seal keyed by `frozen_set_hash` on the **target universe**; multiplicity disclosed (FC6/C7) |
-| **8** deploy | DeploymentFrozenPlan → deployability **metadata** | filters validated here (A/B inside the one-shot plan, FC1); CapacityContract pass/fail (FC5) |
+| **8** deploy | DeploymentFrozenPlan → deployability **metadata** | **filter pass/fail via `FilterDeploymentGate_v1`** (A/B inside the one-shot plan, FC1); CapacityContract pass/fail (FC5) |
 
 ### §3.3 Role-aware cap resolver (must-fix #5 — the biggest fix; AMENDS C1)
 
@@ -148,7 +148,9 @@ cross_universe_sign_divergence:             # DIAGNOSTIC, not a hard block
 
 role routing:
   ranking : obeys target_universe_pass (hard) + cross_universe_sign_divergence (warning)
-  filter  : C1/IC caps DO NOT APPLY → obeys FilterGate_v1 (FC2) + FC4/FC7/FC8
+  filter  : C1/IC caps DO NOT APPLY. factor-eval emits `filter_candidate` via FilterCharacterization_v1
+            (PIT / tail / coverage / baseline — NO A/B claim); strategy-build runs FilterDeploymentGate_v1
+            (the A/B pass/fail) inside the DeploymentFrozenPlan. + FC4/FC7/FC8
   both    : ranking component obeys target_universe_pass; filter component obeys FC2;
             the StrategyContext includes ONLY the role-components that pass.
 ```
@@ -161,9 +163,15 @@ unless the strategy actually claims CSI300. Cross-universe divergence becomes a 
 
 **Identity & scope:** C2 `TargetUniverseOverride` (signed/audited; cannot override a sign-flip on the
 target) · C3 `TargetUniverseDeclaration` (now §2; timing per §2.3) · the §2.1 equality chain.
-**Stage gates:** C1 `Stage3Thresholds_v1` **as amended by §3.3** (role-aware) · `FilterGate_v1` (FC2:
-mechanism-specific — `risk_exclusion` requires `d_mdd≤0` unless waived; `tradability` = execution
-feasibility; `soft_factor_tail` = tail-underperform + role discipline; all `d_net_sharpe≥min`).
+**Stage gates:** C1 `Stage3Thresholds_v1` **as amended by §3.3** (role-aware). **Filters are split into
+two contracts across the skill boundary (R1) — the old single `FilterGate_v1`/FC2 is superseded:**
+- `FilterCharacterization_v1` (**factor-eval**, Stage 2–5): mechanism subtype + PIT proof + excluded-tail
+  return + coverage + threshold + simple-baseline → emits **`filter_candidate`**. **No strategy A/B claim;
+  a filter cannot "pass" outside a StrategyContext.**
+- `FilterDeploymentGate_v1` (**strategy-build**, Stage 8): the with/without A/B in the frozen plan —
+  `risk_exclusion` requires `d_mdd≤0` unless waived; `tradability` = execution feasibility; `soft_factor_tail`
+  = tail-underperform + role discipline; all `d_net_sharpe≥min`; joint-filter-set + capacity + baseline-delta
+  → **`deployment_component` pass/fail**.
 **Selection/seal:** C4 `SelectedSet` · `FrozenSelectionSet` (seal) · FC1 (filters consume the one-shot
 `DeploymentFrozenPlan` seal — NOT free/repeatable/tunable on OOS) · C7+FC6 multiplicity disclosure
 (ranking pool denominator; filter joint-set-only OOS).
@@ -239,7 +247,9 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 **`factor-eval` skill = Stages 0–7** (register → seal): strategy-agnostic factor certification +
 characterization → produces the factor library. **`strategy-build` skill = Stage 8**: strategy-specific
 construction/optimization + the deployment gate → consumes the library. **Seam:** the
-`TargetUniverseDeclaration` (declared before deployment-bound factor work) + the factor-library hand-off.
+`TargetUniverseDeclaration` (declared before deployment-bound factor work) + the factor-library hand-off
+(`strategy-build` receives `{target_universe_declaration_hash, frozen_set_hash, selected_set_hash, approved_signal_refs}` +
+`filter_candidate`s + the library, and **refuses to run on any hash mismatch — §2.1 equality chain**).
 `maintain` (§6.1) is a standing cross-cutting process, not a step of either skill. Filters get cheap
 tail-characterization in `factor-eval` (Stage 2–3) but their pass/fail A/B is in `strategy-build` (Stage 8).
 
@@ -272,8 +282,17 @@ DeploymentFrozenPlan assembler) are explicit above. Part-G new code: the Stage-3
 ## §9 — Evidence provenance tiers (minimal load-bearing; full spec in the provenance patch)
 
 Every Stage-0 pre-reg carries `evidence_tier ∈ {theory_a_priori, a_priori_is_informed, oos_informed}`
-(GPT-approved minimal form; full schema `Stage0EvidenceProvenance_v1` in
-[FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md](FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md)).
+(GPT-approved minimal form; v1.3 self-contained — schema inlined; the patch
+[FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md](FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md) is the rationale).
+```yaml
+Stage0EvidenceProvenance_v1:
+  evidence_tier: theory_a_priori | a_priori_is_informed | oos_informed
+  direction_source: external_theory | literature | mechanism | IS_aggregate | OOS_observed | mixed
+  is_seen_before_direction: bool ; oos_seen_before_claim: bool ; prior_contradicted_by_is: bool
+  may_cite_is_as_confirmation:  # derived: theory_a_priori -> true ; else -> false
+  fresh_oos_eligible:           # derived: oos_informed -> false ; else -> true
+  multiplicity_scope_id:        # required if evidence_tier != theory_a_priori OR cohort/family expansion
+```
 
 **Core rule:** for `a_priori_is_informed`, IS may GENERATE the hypothesis/direction but may NOT be cited
 as confirming evidence ("OOS-clean, IS-spent"). **The IS candidate bar is UNCHANGED by tier** — only what
