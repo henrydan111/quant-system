@@ -8,7 +8,12 @@
 > redundancy penalty**, never generic style residual by default; (2) a hard **dual-scope regime**
 > (§A4); (3) Stage 3 emits **machine-binding caps** that Stage 5/6/7 must read; (4) `DeploymentFrozenPlan`
 > before any deployment run; (5) cost/turnover diagnostics + cohort pre-registration moved early.
-> **Status:** proposal pending final sign-off; nothing changes code until approved.
+> **Status: GPT 5.5 Pro round-2 = APPROVE WITH CONDITIONS** (architecture signed off as governing).
+> The 6 implementation contracts that gate live use are closed in
+> [FACTOR_EVAL_CONTRACTS_v1.md](FACTOR_EVAL_CONTRACTS_v1.md) (Stage-3 thresholds, target-universe
+> override + declaration, `SelectedSet`, `DeploymentFrozenPlan` pass/fail bar, display invariant,
+> multiplicity disclosure). **v1.1 + contracts = the sign-off-ready standing methodology.** Nothing
+> changes code until the Part-G build list is implemented.
 
 ---
 
