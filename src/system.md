@@ -37,6 +37,17 @@ is simply absent won't be flagged; add a row whenever you add one.
 | Status-filtered factor selection (sandbox only) | `selection.get_factors` / `get_factor_selection` — `src/alpha_research/factor_library/selection.py` (raises at formal stages) | Use these as a formal gate — formal resolves through the orchestrator allow-set |
 | Standard factor evaluation / batch screening | `src/alpha_research/factor_eval/` ; `run_batch_screening(engine="batch", horizons=...)` — `src/alpha_research/factor_eval/batch_screening.py` | Reimplement IC/quantile math; hand-roll a screening loop or a wrong-horizon LS-Sharpe |
 
+### Factor lifecycle, selection & sealed OOS
+
+| I need to… | Call this | Never do this |
+|---|---|---|
+| 7-universe in-sample evaluation matrix | `workspace/scripts/unified_eval_universe_matrix.py` (engine `_evaluate_batch` in `unified_eval_full_run.py`; metrics in `src/alpha_research/factor_eval/unified_eval.py`) → `results.jsonl` | Hand-roll a per-universe IC loop or a second matrix; re-derive `STYLE_CONTROLS_V1` / the residual-vs-controls pipeline |
+| Grade a `draft` → `candidate` (IS-only) | `assign_candidate_status` + `run_is_walk_forward` — `src/alpha_research/factor_lifecycle/` (`|rank_icir|≥0.10 ∧ sign≥0.70`, `is_end`-bounded) | Re-implement the thresholds or the IS-only walk-forward; emit any `oos_*` field in the IS gate |
+| Replication / availability status-ceiling (P-GATE) | `resolve_replication_ceiling` — `src/alpha_research/factor_registry/replication_governance.py` (`STATUS_CEILINGS` + cap reasons; `coverage_tier=='sub'` → `availability_floor_fail`) | Build a parallel status-ceiling / `status_effect` universe |
+| Freeze a selected set + claim the single-shot OOS seal | `FrozenSelectionSet` (`frozen_set_hash`) — `src/research_orchestrator/frozen_selection_set.py` ; `HoldoutSealStore.claim_holdout_access(seal_key=frozen_set_hash)` — `src/research_orchestrator/holdout_seal.py` | Re-roll a seal ledger; key OOS budget by a mutable `design_hash` |
+| Run / reproduce a sealed OOS (factor-level) | `reproduce_sealed_oos` (+ `produce_promotion_evidence`) — `src/research_orchestrator/promotion_evidence.py` (`n_quantiles=10`; sign-aligned `rank_icir>0 ∧ ls_sharpe>1.0`) | Hand-roll the OOS leg, a wrong-`n_quantiles` / wrong-horizon LS-Sharpe, or a bare-`D.features` OOS read |
+| Marginal / redundancy of a factor vs the book | `compute_marginal_ic` — `src/alpha_research/factor_eval/ic_analysis.py` ; book-marginality = the matrix `resid_ic_vs_approved_stable_*` fields | Recompute residual-vs-book; re-derive the exposure-corr greedy (generic tool is Part-G; the E-wave `select_e_wave_marginal.py` is cohort-bound — do not clone) |
+
 ### Backtesting & execution
 
 | I need to… | Call this | Never do this |
