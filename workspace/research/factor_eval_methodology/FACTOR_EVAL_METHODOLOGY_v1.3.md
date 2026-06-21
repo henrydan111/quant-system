@@ -115,7 +115,7 @@ filters walk 2–3 → 8; `both` walks both, as **one frozen design** (FC3).
 
 | Stage | Inputs → Outputs | Operative rule |
 |---|---|---|
-| **0** pre-reg | idea → factor spec + `CohortHypothesis` + `RoleDeclaration` (FC3) | a-priori rationale, expected direction, role+threshold frozen before Stage 6 |
+| **0** pre-reg | idea → factor spec + `CohortHypothesis` + `RoleDeclaration` + **`evidence_tier`** (§9) | rationale, expected direction, role+threshold frozen before Stage 6; `evidence_tier ∈ {theory_a_priori, a_priori_is_informed, oos_informed}` |
 | **1** define/PIT | spec → `draft` + `definition_hash` | every `$field` in `Ref(...)`; forward-looking filters carry PIT proof (FC7) |
 | **2** matrix | draft → per-(factor,universe) IC + cost diagnostics | 7-universe IC + turnover/decay/cost-drag/limit-hit proxies |
 | **3** caps | matrix → `quality_flags` + `status_effect` (machine-binding) | **role-aware caps §3.3**; Stage 5/6/7 MUST obey |
@@ -234,9 +234,17 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 
 ---
 
-## §8 — Skill steps (runnable decomposition)
+## §8 — Skill decomposition: TWO skills (split at the factor↔strategy boundary)
+
+**`factor-eval` skill = Stages 0–7** (register → seal): strategy-agnostic factor certification +
+characterization → produces the factor library. **`strategy-build` skill = Stage 8**: strategy-specific
+construction/optimization + the deployment gate → consumes the library. **Seam:** the
+`TargetUniverseDeclaration` (declared before deployment-bound factor work) + the factor-library hand-off.
+`maintain` (§6.1) is a standing cross-cutting process, not a step of either skill. Filters get cheap
+tail-characterization in `factor-eval` (Stage 2–3) but their pass/fail A/B is in `strategy-build` (Stage 8).
 
 ```
+# ══ factor-eval skill (Stages 0–7, strategy-agnostic) ══
 register      : Stage 0-1  + CohortHypothesis + RoleDeclaration + PIT proof
 declare_target : TargetUniverseDeclaration builder+checker → target_universe_declaration_hash
                  (deployment-bound: REQUIRED before characterize interpretation — §2.3)
@@ -244,6 +252,7 @@ characterize   : Stage 2-4  (matrix / role-aware caps / marginal — 3 outputs)
 gate          : Stage 5    role-aware cap resolver (ranking target caps | FilterGate | both)    [#5 step]
 select         : Stage 6    SelectedSet (hash-bound) + §6.2 interaction_check (IS-only, PRE-seal)
 seal           : Stage 7    FrozenSelectionSet → sealed OOS
+# ══ strategy-build skill (Stage 8, strategy-specific; consumes the factor library) ══
 deploy        : Stage 8    StrategyContext/DeploymentFrozenPlan assembler (binds rankers+filters+
                            universe-def filters+trade model+capacity+pass/fail+seal refs)        [assembler step]
 maintain       : §6.1 RevalidationCadence ONLY  (interaction_check is PRE-seal, in `select`, NOT maintenance)
@@ -257,6 +266,28 @@ skill_mode:
 The 4 first-class new steps GPT named (TUD builder, RoleDeclaration resolver, role-aware cap resolver,
 DeploymentFrozenPlan assembler) are explicit above. Part-G new code: the Stage-3 machine-binding reader
 + the generalized marginal-contribution tool + these 4 steps.
+
+---
+
+## §9 — Evidence provenance tiers (minimal load-bearing; full spec in the provenance patch)
+
+Every Stage-0 pre-reg carries `evidence_tier ∈ {theory_a_priori, a_priori_is_informed, oos_informed}`
+(GPT-approved minimal form; full schema `Stage0EvidenceProvenance_v1` in
+[FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md](FACTOR_EVAL_STAGE0_EVIDENCE_PROVENANCE_v1.md)).
+
+**Core rule:** for `a_priori_is_informed`, IS may GENERATE the hypothesis/direction but may NOT be cited
+as confirming evidence ("OOS-clean, IS-spent"). **The IS candidate bar is UNCHANGED by tier** — only what
+an IS pass is allowed to MEAN changes.
+
+**4 hard wiring points (a runnable skill must read all four, else the tier is inert):**
+1. **reports** read `may_cite_is_as_confirmation` → forbid "IS confirmed the prior" wording for `a_priori_is_informed`.
+2. **Stage 6/7 OOS report** reads `multiplicity_scope_id` → discloses the screened-pool denominator; labels the OOS "first independent confirmation" for `a_priori_is_informed`; FDR/max-stat at the selected-set/family level.
+3. **deployment / revalidation (§6.1)** read `evidence_tier` → tighter monitoring + faster post-approval downgrade for `a_priori_is_informed` (not a fake-precision sizing formula).
+4. **seal logic** reads `fresh_oos_eligible` → `oos_informed` makes no fresh-OOS approval claim.
+
+Sign-flip vs a committed prior → `prior_contradicted_by_is=true` + downgrade `theory_a_priori →
+a_priori_is_informed`, never a silent flip. It is a **field inside the provenance/multiplicity object,
+not a parallel status universe**, and **not redundant** with multiplicity disclosure (it triggers + classifies it).
 
 ---
 

@@ -44,6 +44,53 @@ the pass bar is fixed in all tiers; the OOS is single-shot in all tiers; the IS 
 leak-proof to direction-fitting (it re-derives direction per train-fold), so the tier is **not** about
 a mechanical leak — it is about **evidence accounting**.
 
+## GPT verdict (resolved): APPROVE — minimal load-bearing form (NOT inert metadata, NOT an IS-bar change)
+
+GPT 5.5 Pro analysis: the tier does **not** change mechanical validity (a fresh sealed OOS is real
+evidence in any tier) — it changes **evidentiary independence, reporting permissions, multiplicity
+accounting, and deployment/revalidation trust**. Keep it, but only in a small form with teeth.
+
+**The single load-bearing rule (most important):**
+> For `a_priori_is_informed` factors, IS may **generate** the hypothesis/direction but may **NOT** be
+> cited as confirming evidence for the same claim. Framing: **"OOS-clean, IS-spent"** — still testable
+> on OOS, but IS already spent its independence forming the direction.
+
+**Do NOT change the IS candidate bar by tier** — keep the fixed `|RankICIR|≥0.10 ∧ sign≥0.70`; change
+only *what an IS pass is allowed to MEAN*, not the bar. **Do NOT create a parallel status universe** —
+the tier is a field inside the provenance/multiplicity object.
+
+**Minimal schema (`Stage0EvidenceProvenance_v1`):**
+```yaml
+evidence_tier: theory_a_priori | a_priori_is_informed | oos_informed
+direction_source: external_theory | literature | mechanism | IS_aggregate | OOS_observed | mixed
+is_seen_before_direction: bool ; oos_seen_before_claim: bool ; prior_contradicted_by_is: bool
+may_cite_is_as_confirmation:   # derived
+  theory_a_priori -> true ; a_priori_is_informed -> false ; oos_informed -> false
+fresh_oos_eligible:            # derived
+  oos_informed -> false ; otherwise -> true
+multiplicity_scope_id: required_if evidence_tier != theory_a_priori OR cohort/family expansion
+```
+
+**The 4 downstream hard reads (this is what makes it load-bearing — wire all four or drop the tier):**
+1. **Reports** read `may_cite_is_as_confirmation` → forbid "IS confirmed the prior" language for
+   `a_priori_is_informed`.
+2. **Stage 6/7 OOS report** reads `multiplicity_scope_id` → discloses the screened-pool denominator;
+   labels the OOS "first independent confirmation" for `a_priori_is_informed`; FDR/max-stat at the
+   selected-set/family level.
+3. **Deployment / revalidation** read `evidence_tier` → tighter monitoring / faster downgrade leash for
+   `a_priori_is_informed` (NOT a fake-precision sizing formula).
+4. **Seal logic** reads `fresh_oos_eligible` → `oos_informed` cannot make a fresh-OOS approval claim.
+
+**Not redundant with multiplicity disclosure** — it is a *trigger + classifier* for it: a factor can be
+`theory_a_priori` + high multiplicity (40 literature variants) OR `a_priori_is_informed` + low recorded
+multiplicity (one IS-aggregate look), so the tier ≠ the count. Implement it **inside** the
+provenance/multiplicity object, not as an isolated label no rule reads.
+
+**Sign-flip:** `prior_contradicted_by_is=true` + downgrade `theory_a_priori → a_priori_is_informed`;
+never silently flip and stay `theory_a_priori`.
+
+*(My §2/§3 first-cut below is retained as the design rationale; the verdict above is the resolution.)*
+
 ## §2 — My first-cut analysis of the practical significance (for GPT to attack)
 
 The honest tension: the IS gate is leak-proof (train-fold) and the OOS is single-shot for *all* tiers,
