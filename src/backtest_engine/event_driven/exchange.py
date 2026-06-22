@@ -477,12 +477,15 @@ class Exchange:
 
         ``price_field`` selects WHICH price the gate tests against the limit.
         The execution path passes the actual fill column so the gate matches the
-        fill: an OPEN (09:35) fill passes ``'raw_open'`` → blocks only when the
-        stock is LOCKED-UP AT THE OPEN (一字 / 调仓时涨停), the only state in which
-        you truly cannot buy at 09:35. A name that opens BELOW the limit and merely
-        CLOSES limit-up was buyable at the open, so the default close-based gate
-        would wrongly block it (and would use end-of-day info to block an open
-        trade). Default ``'raw_close'`` preserves the legacy close-fill semantics.
+        fill: an OPEN fill passes ``'raw_open'`` → blocks when the daily OPEN is at
+        the limit (the daily-bar PROXY for a locked-at-open 一字 / 调仓时涨停). A
+        name that opens BELOW the limit and merely CLOSES limit-up was buyable at
+        the open, so the default close-based gate would wrongly block it (and would
+        use end-of-day info to block an open trade). Caveat: a name that opens AT
+        the limit but trades intraday (high>low) is not all-day-locked; blocking it
+        is the conservative choice under a daily-bar fill — exact 09:35/open-time
+        tradability needs minute or order-book data. Default ``'raw_close'``
+        preserves the legacy close-fill semantics.
 
         Uses Tushare's published ``up_limit`` when available, else the computed
         band (see :meth:`resolve_limit_prices`).
@@ -496,9 +499,11 @@ class Exchange:
         Returns:
             True if ``price_field`` is at the limit-up price.
         """
-        price = row.get(price_field, row.get('raw_close', row.get('close')))
+        price = row.get(price_field)
+        if price is None or pd.isna(price):           # NaN/absent fill field -> close fallback
+            price = row.get('raw_close', row.get('close'))
         limit_up, _ = self.resolve_limit_prices(row, code, date)
-        return abs(price - limit_up) < 0.005  # within half a fen
+        return bool(pd.notna(price) and abs(price - limit_up) < 0.005)  # within half a fen
 
     def is_limit_down(self, row: pd.Series, code: str,
                       date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
@@ -521,9 +526,11 @@ class Exchange:
         Returns:
             True if ``price_field`` is at the limit-down price.
         """
-        price = row.get(price_field, row.get('raw_close', row.get('close')))
+        price = row.get(price_field)
+        if price is None or pd.isna(price):           # NaN/absent fill field -> close fallback
+            price = row.get('raw_close', row.get('close'))
         _, limit_down = self.resolve_limit_prices(row, code, date)
-        return abs(price - limit_down) < 0.005
+        return bool(pd.notna(price) and abs(price - limit_down) < 0.005)
 
     def is_suspended(
         self,
@@ -607,17 +614,21 @@ class Exchange:
     # ─── Tradability ──────────────────────────────────────────────
 
     def can_buy(self, row: pd.Series, code: str,
-                date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+                date: pd.Timestamp, price_field: str = 'raw_close',
+                limit_gate: str = 'fill_price') -> bool:
         """Check if a stock can be bought.
 
         Cannot buy if:
         - Suspended (vol == 0)
-        - Limit-up at ``price_field`` (no sellers), UNLESS in IPO period
+        - Limit-up (no sellers), UNLESS in IPO period
 
-        ``price_field`` is forwarded to :meth:`is_limit_up`; the execution path
-        passes the fill column (e.g. ``'raw_open'`` for a 09:35 fill) so the gate
-        reflects buyability AT THE FILL, not at the close. Default ``'raw_close'``
-        preserves the legacy close-fill semantics.
+        ``limit_gate`` selects the limit-up test: ``'fill_price'`` (default) blocks
+        when ``price_field`` is at the limit (correct for open/close fills);
+        ``'all_day_lock'`` blocks only on a 一字 day (high==low==limit) — used for
+        the daily-AVERAGE fill mode. ``price_field`` is forwarded to
+        :meth:`is_limit_up`; the execution path passes the fill column (e.g.
+        ``'raw_open'`` for a 09:35 fill) so the gate reflects buyability AT THE
+        FILL, not at the close. Default ``'raw_close'`` preserves legacy semantics.
 
         Args:
             row: Daily data row.
@@ -630,35 +641,64 @@ class Exchange:
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_up(row, code, date, price_field=price_field):
-            if not self.is_ipo_period(code, date):
-                return False
+        locked = (self.is_all_day_limit_up(row, code, date) if limit_gate == 'all_day_lock'
+                  else self.is_limit_up(row, code, date, price_field=price_field))
+        if locked and not self.is_ipo_period(code, date):
+            return False
         return True
 
+    def is_all_day_limit_up(self, row: pd.Series, code: str, date: pd.Timestamp) -> bool:
+        """一字涨停: the bar never traded away from the upper limit
+        (high == low == up_limit) -> genuinely unbuyable ALL DAY. Used for the
+        daily-AVERAGE fill mode (jq_daily_avg), where the synthetic avg price is
+        not itself a tradability state (raw_avg < up_limit can still be locked,
+        and raw_avg == up_limit can have traded). GPT cross-review Major-1."""
+        up, _ = self.resolve_limit_prices(row, code, date)
+        low = row.get('raw_low', row.get('low'))
+        high = row.get('raw_high', row.get('high'))
+        if low is None or high is None or pd.isna(low) or pd.isna(high):
+            return False
+        return abs(low - up) < 0.005 and abs(high - up) < 0.005
+
+    def is_all_day_limit_down(self, row: pd.Series, code: str, date: pd.Timestamp) -> bool:
+        """一字跌停: high == low == down_limit -> unsellable all day (avg-fill gate)."""
+        _, down = self.resolve_limit_prices(row, code, date)
+        low = row.get('raw_low', row.get('low'))
+        high = row.get('raw_high', row.get('high'))
+        if low is None or high is None or pd.isna(low) or pd.isna(high):
+            return False
+        return abs(low - down) < 0.005 and abs(high - down) < 0.005
+
     def can_sell(self, row: pd.Series, code: str,
-                 date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+                 date: pd.Timestamp, price_field: str = 'raw_close',
+                 limit_gate: str = 'fill_price') -> bool:
         """Check if a stock can be sold.
 
         Cannot sell if:
         - Suspended (vol == 0)
-        - Limit-down at ``price_field`` (no buyers)
+        - Limit-down (no buyers)
 
-        ``price_field`` is forwarded to :meth:`is_limit_down`; the execution path
-        passes the fill column so an OPEN fill blocks a sell only when locked-down
-        at the open. Default ``'raw_close'`` preserves the legacy close-fill semantics.
+        ``limit_gate`` mirrors :meth:`can_buy`: ``'fill_price'`` blocks when
+        ``price_field`` is at the down-limit; ``'all_day_lock'`` blocks only on a
+        一字 down day. ``price_field`` is forwarded to :meth:`is_limit_down`; the
+        execution path passes the fill column so an OPEN fill blocks a sell only
+        when locked-down at the open. Default ``'raw_close'`` preserves legacy semantics.
 
         Args:
             row: Daily data row.
             code: Stock ts_code.
             date: Trading date.
             price_field: Fill column to test against the limit.
+            limit_gate: 'fill_price' (default) or 'all_day_lock'.
 
         Returns:
             True if stock is sellable.
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_down(row, code, date, price_field=price_field):
+        locked = (self.is_all_day_limit_down(row, code, date) if limit_gate == 'all_day_lock'
+                  else self.is_limit_down(row, code, date, price_field=price_field))
+        if locked:
             return False
         return True
 

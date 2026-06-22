@@ -130,24 +130,22 @@ class RankedFallbackStrategy(Strategy):
     day, it walks the ranked list from top, applies a buyability filter to
     each candidate, and takes the first ``topk`` that pass.
 
-    The buyability filter for NEW candidates (not already held) is:
+    The SCHEDULE-TIME buyability filter for NEW candidates (not already held) is
+    SUSPENSION-only (2026-06-22):
 
-      1. SUSPENDED today?  → skip
-      2. Locked at upper limit YESTERDAY?  → skip (predicted to open lim-up)
-      3. Locked at lower limit YESTERDAY?  → skip (predicted to open lim-down)
-      4. No prev-day data?  → skip
+      1. No prev-day data?  → skip
+      2. Did NOT trade in the previous session (suspended)?  → skip
+
+    Limit-up / limit-down buyability is deliberately NOT predicted from yesterday
+    — the ENGINE decides it at FILL time against the actual fill price
+    (``can_buy(price_field='raw_open')`` for an open fill: locked-at-open 一字 is
+    unbuyable, but a name that merely closes limit-up was buyable at the open).
+    The earlier yesterday-limit prediction wrongly skipped names that open
+    tradeable and caused bull-market adverse selection (果仁 sm_纯市值01 parity).
 
     Currently-held names that appear inside the top-``topk`` range of the
     ranked list are KEPT regardless of the filter (already in portfolio,
     no buy required, no need to predict buyability).
-
-    The filter is heuristic — it uses YESTERDAY's data to PREDICT TODAY's
-    open-time tradability. False positives (a stock locked yesterday that
-    opens normally today) cost a small bit of selection precision; false
-    negatives (a stock not locked yesterday but locks at open today) are
-    caught at fill time by the engine's own ``can_buy`` check. The intent
-    is to substitute as many slots as possible at SCHEDULE TIME so the
-    engine doesn't end up holding cash for failed fills.
 
     Args:
         ranked_schedule: ``{rebalance_date: [ts_code, ...]}`` in rank order

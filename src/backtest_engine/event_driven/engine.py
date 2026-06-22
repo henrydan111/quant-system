@@ -424,11 +424,16 @@ class BacktestEngine:
             # Delisting check
             self._handle_delistings(day_data, prev_day_data, date)
 
-            # Phase 1: Pre-market — strategy sees prev_day_data only
+            # Phase 1: Pre-market open-order decision. The strategy may see ONLY
+            # previous-day data — TODAY's OHLCV is withheld (empty frames) to
+            # enforce the no-lookahead contract structurally (a strategy reading
+            # context.day_data here would see same-day close/high/low = lookahead).
+            # The engine keeps the real `day_indexed` LOCAL for execution gating
+            # (_execute_orders below); on_bar (EOD) gets the full frame back.
             context = BacktestContext(
                 date=date,
-                day_data=day_data,
-                day_data_indexed=day_indexed,
+                day_data=day_data.iloc[0:0],
+                day_data_indexed=day_indexed.iloc[0:0],
                 prev_day_data=prev_day_data,
                 portfolio=self.portfolio,
                 exchange=self.exchange,
@@ -450,7 +455,9 @@ class BacktestEngine:
             if open_orders:
                 self._execute_orders(open_orders, day_indexed, date, open_fill_col)
 
-            # Phase 2: EOD bar — strategy sees full OHLCV
+            # Phase 2: EOD bar — strategy sees the FULL same-day OHLCV (knowable at close).
+            context.day_data = day_data
+            context.day_data_indexed = day_indexed
             context.phase = 'on_bar'
             close_orders = self.strategy.on_bar(context)
             if close_orders:
@@ -705,8 +712,11 @@ class BacktestEngine:
             orders: List of Order objects.
             day_indexed: Day data indexed by ts_code.
             date: Trading date.
-            fill_price: 'open' or 'close'.
+            fill_price: the fill column ('raw_open' / 'raw_close' / 'raw_avg').
         """
+        # For the daily-AVERAGE fill mode the fill price ('raw_avg') is not a
+        # tradability state, so gate on the all-day 一字 lock instead of the avg.
+        limit_gate = 'all_day_lock' if fill_price == 'raw_avg' else 'fill_price'
         sells = [o for o in orders if o.direction == 'sell']
         buys = [o for o in orders if o.direction == 'buy']
 
@@ -715,7 +725,7 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data (delisted?)')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_sell(row, order.code, date, price_field=fill_price):
+            if not self.exchange.can_sell(row, order.code, date, price_field=fill_price, limit_gate=limit_gate):
                 self._log_order(order, 'BLOCKED', 'not tradable for sell')
                 continue
             if not self.portfolio.can_sell(order.code):
@@ -768,7 +778,7 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_buy(row, order.code, date, price_field=fill_price):
+            if not self.exchange.can_buy(row, order.code, date, price_field=fill_price, limit_gate=limit_gate):
                 self._log_order(order, 'BLOCKED', 'not tradable for buy')
                 continue
 

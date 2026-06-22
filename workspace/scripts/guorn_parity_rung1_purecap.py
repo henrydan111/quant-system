@@ -47,6 +47,20 @@ OUT.mkdir(parents=True, exist_ok=True)
 PANEL = OUT / "mktcap_panel.parquet"
 FIELDS = ["$total_mv", "$circ_mv", "$amount", "$close"]
 
+
+def _load_listed_bounds() -> dict:
+    """{qlib_code -> (list_start, delist_end)} from the range-form all_stocks.txt
+    (the provider's survivorship-free universe with delist boundaries). Used to
+    DROP a name once it has delisted — the ffill below would otherwise reanimate
+    a delisted name for up to 60d (GPT cross-review Blocker-2)."""
+    p = ROOT / "data" / "qlib_data" / "instruments" / "all_stocks.txt"
+    df = pd.read_csv(p, sep="\t", header=None, names=["code", "start", "end"], dtype=str)
+    return {str(r.code).upper(): (pd.Timestamp(r.start), pd.Timestamp(r.end))
+            for r in df.itertuples(index=False)}
+
+
+LISTED_BOUNDS = _load_listed_bounds()
+
 # 果仁 yearly strategy returns (年度收益统计) for the diff
 GR_YEARLY = {2014: 1.4642, 2015: 6.8959, 2016: 0.4268, 2017: -0.0919, 2018: 0.0706,
              2019: 0.6408, 2020: 0.9514, 2021: 0.6078, 2022: 0.1820, 2023: 0.7866,
@@ -100,9 +114,15 @@ def build_schedule(panel: pd.DataFrame, rebal: pd.DatetimeIndex, topk: int,
     cmv = panel["circ_mv"].unstack(level=0).ffill()
     amt5 = panel["amount"].unstack(level=0).rolling(5, min_periods=1).mean()   # avg TRADING days
     hist = close_raw.notna().rolling(min_hist, min_periods=1).sum()            # listing-age (real trading days)
-    alive = close_raw.notna().rolling(60, min_periods=1).sum()                 # traded within 60d -> listed
     cal = close.index
     headroom = topk * headroom_mult
+
+    def _listed(code: str, day: pd.Timestamp) -> bool:
+        # EXPLICIT delist boundary (GPT Blocker-2): the ffill above would otherwise
+        # reanimate a delisted name. A name is tradable only on/before its delist end.
+        b = LISTED_BOUNDS.get(str(code).upper())
+        return b is not None and day <= b[1]
+
     sched: dict = {}
     members: dict = {}
     for d in rebal:
@@ -113,17 +133,17 @@ def build_schedule(panel: pd.DataFrame, rebal: pd.DatetimeIndex, topk: int,
             continue
         pday = cal[pos - 1]                       # prev trading day = PIT rank basis
         df = pd.DataFrame({"tmv": tmv.loc[pday], "cmv": cmv.loc[pday], "close": close.loc[pday],
-                           "amt5": amt5.loc[pday], "hist": hist.loc[pday],
-                           "alive": alive.loc[pday]}).dropna(subset=["tmv", "cmv"])
+                           "amt5": amt5.loc[pday], "hist": hist.loc[pday]}).dropna(subset=["tmv", "cmv"])
         st = ru.st_codes_on(d)
         # 果仁 sm_纯市值01 universe = 沪深主板 + 创业板 ONLY (holdings detail: 0 北证, 0 科创板).
         # board_of fixed 2026-06-22: 北证 920xxx -> "bse" (was mis-tagged "bshare"; excluded
-        # either way), AND 创业板 302xxx -> "chinext" (was "other" -> silently DROPPED; the
-        # allow-list below now correctly INCLUDES these ChiNext microcaps).
-        keep = df.index.map(lambda c: board_of(c) in ("main", "chinext") and c.upper() not in st)
+        # either way), AND 创业板 302xxx -> "chinext" (was "other" -> silently DROPPED).
+        # _listed(c, pday) drops names already delisted as of the rank day (Blocker-2).
+        keep = df.index.map(lambda c: board_of(c) in ("main", "chinext")
+                            and c.upper() not in st and _listed(c, pday))
         df = df[list(keep)]
         df = df[(df["amt5"] > amt_min_kcny) & (df["hist"] >= min_hist)
-                & (df["close"] > low_price_min) & (df["alive"] >= 1)]
+                & (df["close"] > low_price_min)]
         if df.empty:
             sched[d] = []
             continue
@@ -197,22 +217,37 @@ class ModelIIStrategy(Strategy):
         prev = context.prev_day_data
         if prev is not None and not prev.empty:
             prices = prev.set_index("ts_code")["close"].astype(float).to_dict()
+
+        def _px(code: str) -> float:
+            # NaN-safe (GPT Major-4): a suspended held name has a NaN prev close;
+            # prices.get(code, avg_cost) returns the NaN, not the fallback.
+            p = prices.get(code)
+            if p is None or not np.isfinite(p) or p <= 0:
+                p = held[code].avg_cost
+            return float(p) if (p is not None and np.isfinite(p) and p > 0) else 0.0
+
         total = context.portfolio.total_value(prices)
         if total <= 0:
             total = context.portfolio.cash
-        cur_w = ({c: (held[c].shares * prices.get(c, held[c].avg_cost)) / total for c in held}
-                 if total > 0 else {})
+        cur_w = ({c: held[c].shares * _px(c) / total for c in held} if total > 0 else {})
         # KEEP held names still inside the band (rank < sell_rank), at drifted weight capped at pos_max
         target = {c: min(cur_w.get(c, 0.0), self.pos_max)
                   for c in held if rank_of.get(c, BIG) < self.sell_rank}
-        # BUY new names rank <= buy_rank, not held, to fill up to target_n holdings
+        # BUY new names rank <= buy_rank, not held, to fill up to target_n holdings.
+        # Each new buy is equal-weight of the residual BUT capped at pos_max (GPT Major-3):
+        # with few buys + much freed cash, residual/len(buys) could otherwise exceed 15%.
         n_slots = max(0, self.target_n - len(target))
         buys = [c for c in ranked if rank_of[c] <= self.buy_rank and c not in held][:n_slots]
-        residual = max(0.0, 1.0 - sum(target.values()))
-        if buys and residual > 0:
-            w = residual / len(buys)
-            for c in buys:
+        residual = max(0.0, 1.0 - sum(v for v in target.values() if pd.notna(v)))
+        remaining = len(buys)
+        for c in buys:
+            if residual <= 0 or remaining <= 0:
+                break
+            w = min(self.pos_max, residual / remaining)
+            if w > 0:
                 target[c] = w
+                residual -= w
+            remaining -= 1
         return _emit_rebalance_orders(target, context)
 
 
@@ -276,9 +311,31 @@ def run(start: str, end: str, cadence: str, topk: int, model: str = "model2"):
         dtxt = f"{yearly[y]-g:+7.1%}" if g is not None else ""
         print(f"  {y}   {yearly[y]:+8.1%}  {gtxt}  {dtxt}")
     out = dict(local=m, local_yearly=yearly, guoren_headline=GR_HEADLINE, guoren_yearly=GR_YEARLY,
-               cadence=cadence, topk=topk, turnover_per_period=churn, start=start, end=end)
+               cadence=cadence, topk=topk, model=model, turnover_per_period=churn, start=start, end=end)
     (OUT / f"rung1_result_{cadence}.json").write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
-    print(f"\nsaved -> {OUT / f'rung1_result_{cadence}.json'}")
+    # GPT Major-5: a machine-readable NON-FORMAL stamp so these outputs can't be
+    # misread later as a formal / realistic-cost / sealed-OOS strategy validation.
+    meta = {
+        "artifact_type": "guorn_parity_reproduction",
+        "strategy": "sm_纯市值01",
+        "purpose": "validate local data/ranking/execution core against the 果仁 benchmark",
+        "formal_eligible": False,
+        "strategy_validation": False,
+        "sealed_oos_claim": False,
+        "oos_spend_status": "not_a_sealed_oos; full 果仁 benchmark window observed",
+        "cost_model": "果仁 parity: 0.2%/side, no stamp, no transfer fee, zero slippage",
+        "realistic_cost_claim": False,
+        "execution_profile": "guorn_optimistic_open_parity",
+        "known_irreducible_deltas": [
+            "果仁 proprietary 退市风险 atoms (年报公布逾期 / 重大事项违规处罚 / 严格预期ST) not locally available",
+            "果仁 09:35/open fill approximated by daily raw_open (no minute data)",
+        ],
+    }
+    (OUT / f"rung1_metadata_{cadence}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("\nNON-FORMAL PARITY ARTIFACT: validates shared data/ranking/execution mechanics only; "
+          "NOT deployable strategy alpha, NOT realistic-cost, NOT a sealed-OOS validation.")
+    print(f"saved -> {OUT / f'rung1_result_{cadence}.json'}  (+ rung1_metadata_{cadence}.json)")
 
 
 def main():
