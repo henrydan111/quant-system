@@ -162,7 +162,8 @@ workspace/scripts/sandbox_*.py
 # Claude Code / Codex local tooling cache (binaries, sessions)
 # =============================================================================
 .codex/
-.claude/
+.claude/*
+!.claude/skills/
 
 # =============================================================================
 # Backtest result archives (Chinese-named directories)
