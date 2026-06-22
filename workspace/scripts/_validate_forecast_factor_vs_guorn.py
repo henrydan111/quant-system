@@ -39,12 +39,18 @@ def _prev_qend(year, q):
 
 def main():
     fc = pd.read_parquet(ROOT / "data/pit_ledger/forecast/forecast.parquet",
-                         columns=["ts_code", "end_date", "effective_date", "net_profit_min", "net_profit_max"])
+                         columns=["ts_code", "end_date", "effective_date", "net_profit_min",
+                                  "net_profit_max", "disclosure_date", "ann_date", "first_ann_date"])
     inc = pd.read_parquet(ROOT / "data/pit_ledger/income/income.parquet",
                           columns=["ts_code", "end_date", "effective_date", "n_income"])
+    for c in ("end_date", "effective_date", "disclosure_date", "ann_date", "first_ann_date"):
+        if c in fc.columns:
+            fc[c] = pd.to_datetime(fc[c], errors="coerce")
     for c in ("end_date", "effective_date"):
-        fc[c] = pd.to_datetime(fc[c]); inc[c] = pd.to_datetime(inc[c])
-    fc = fc.dropna(subset=["end_date", "effective_date"]).sort_values("effective_date")
+        inc[c] = pd.to_datetime(inc[c])
+    # deterministic same-effective-date tie-break (GPT R1 Major-1), identical to the materializer
+    fc = fc.dropna(subset=["end_date", "effective_date"]).sort_values(
+        ["effective_date", "disclosure_date", "ann_date", "first_ann_date", "end_date"], kind="mergesort")
     inc = inc.dropna(subset=["end_date", "effective_date", "n_income"]).sort_values("effective_date")
     fc_by = {k: g for k, g in fc.groupby("ts_code")}
     inc_by = {k: g for k, g in inc.groupby("ts_code")}

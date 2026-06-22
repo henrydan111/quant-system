@@ -2778,10 +2778,14 @@ class StagedQlibBackendBuilder:
         98.5% sign-match (workspace/scripts/_validate_forecast_factor_vs_guorn.py).
 
         The factor is a STEP function — it can only change on a forecast or income event, so
-        it is recomputed as-of each such event and carried forward (carrying the last FINITE
-        value; NaN before the first computable one). The latest forecast carries with NO TTL
-        (matches 果仁's snapshot carry — a consuming factor should gate on recency). Writes
-        ``$forecast__np_q_yoy`` directly (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX), like
+        it is recomputed as-of each such event and the ``[event, next_event)`` range is filled
+        with THAT computation. It carries the CURRENT latest forecast's finite value forward
+        with NO TTL (matches 果仁's snapshot carry; a consuming factor should gate on recency) —
+        BUT if a newer latest forecast is visible and cannot yet be computed from visible income
+        inputs, the field is NaN until those inputs become visible (it does NOT carry the prior
+        forecast's value across a newer-forecast event — GPT R1 Blocker-1). NaN before the first
+        computable value. Same-effective-date forecasts are tie-broken deterministically (Major-1).
+        Writes ``$forecast__np_q_yoy`` directly (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX), like
         report_rc. Sub-universe coverage (only forecast-issuing stocks); register accordingly.
         """
         fc_path = self.ledger_path("forecast")
@@ -2791,18 +2795,31 @@ class StagedQlibBackendBuilder:
         fields = self._apply_field_filter(["forecast__np_q_yoy"])
         if not fields:
             return []
-        fc = pd.read_parquet(fc_path, columns=["qlib_code", "end_date", "effective_date",
-                                               "net_profit_min", "net_profit_max"])
+        # Read deterministic tie-break columns (GPT R1 Major-1): when two forecasts for a
+        # stock share an effective_date (e.g. a forecast + a same-window revision, or two
+        # disclosures mapping to the same next-open), raw row order must NOT decide which is
+        # "latest". Order by (effective_date, disclosure_date, ann_date, first_ann_date,
+        # end_date) so _factor_asof's "last row with effective_date<=e" is the most-recently
+        # disclosed / nearest-period forecast, reproducibly (mirrors report_rc's tie-break).
+        _fc_cols = ["qlib_code", "end_date", "effective_date", "net_profit_min", "net_profit_max"]
+        for _c in ("disclosure_date", "ann_date", "first_ann_date"):
+            _fc_cols.append(_c)
+        fc = pd.read_parquet(fc_path, columns=_fc_cols)
         inc = pd.read_parquet(inc_path, columns=["qlib_code", "end_date", "effective_date", "n_income"])
         target_codes = set(target_dirs)
         if target_codes:
             fc = fc[fc["qlib_code"].isin(target_codes)].copy()
             inc = inc[inc["qlib_code"].isin(target_codes)].copy()
+        for c in ("end_date", "effective_date", "disclosure_date", "ann_date", "first_ann_date"):
+            if c in fc.columns:
+                fc[c] = normalize_date_series(fc[c])
         for c in ("end_date", "effective_date"):
-            fc[c] = normalize_date_series(fc[c])
             inc[c] = normalize_date_series(inc[c])
         fc = fc.dropna(subset=["end_date", "effective_date"])
-        fc = fc[fc["net_profit_min"].notna() & fc["net_profit_max"].notna()].sort_values("effective_date")
+        fc = fc[fc["net_profit_min"].notna() & fc["net_profit_max"].notna()]
+        _sort_keys = [k for k in ("effective_date", "disclosure_date", "ann_date", "first_ann_date", "end_date")
+                      if k in fc.columns]
+        fc = fc.sort_values(_sort_keys, kind="mergesort")
         inc = inc.dropna(subset=["end_date", "effective_date", "n_income"]).sort_values("effective_date")
         if fc.empty:
             return []
@@ -2870,18 +2887,20 @@ class StagedQlibBackendBuilder:
             ev_days = sorted(d for d in ev_days if d <= calendar[-1])
             if not ev_days:
                 continue
+            # GPT R1 Blocker-1 fix: fill each event's [e, next_event) range with the factor
+            # computed FROM THE LATEST FORECAST VISIBLE AS-OF e — and NaN if that latest
+            # forecast is not yet computable (its required income inputs not visible). Do NOT
+            # carry a previous finite value across a newer-forecast event: that would publish a
+            # stale prior forecast-growth during the window where the newer forecast is active
+            # but incomputable, falsely appearing PIT-valid. The range-fill itself carries a
+            # computable value forward between events (the factor only changes at an event).
             arr = np.full(n_cal, np.nan, dtype=np.float32)
-            last = float("nan")
             for i, e in enumerate(ev_days):
                 v = _factor_asof(np.datetime64(e))
-                if np.isfinite(v):
-                    last = v
-                if not np.isfinite(last):
-                    continue
                 p0 = int(np.searchsorted(cal_arr, np.datetime64(e), side="left"))
                 p1 = int(np.searchsorted(cal_arr, np.datetime64(ev_days[i + 1]), side="left")) if i + 1 < len(ev_days) else n_cal
                 if p0 < n_cal:
-                    arr[max(p0, 0):p1] = last
+                    arr[max(p0, 0):p1] = v if np.isfinite(v) else np.nan
             if np.isfinite(arr).any():
                 self._write_feature_series(feature_dir, "forecast__np_q_yoy", arr)
                 written.append("forecast__np_q_yoy")
