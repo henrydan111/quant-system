@@ -28,6 +28,23 @@ class PreOpenLookaheadError(RuntimeError):
     """Raised when pre-open strategy code attempts to read same-day/future data."""
 
 
+def _coerce_guard_ts(label: str, value) -> pd.Timestamp:
+    """Coerce a date-bound argument to a FINITE Timestamp, refusing None/NaT/invalid.
+
+    GPT R4 Blocker: ``pd.Timestamp(None)`` is ``NaT`` and ``NaT > mx`` is False, so a
+    ``get_features(..., end_time=None)`` call would slip past the date bound and the
+    raw feeder's ``start:NaT`` slice could return same-day/future cached data."""
+    if value is None:
+        raise PreOpenLookaheadError(f"pre_open: {label} must be explicit; None/NaT is not allowed")
+    try:
+        ts = pd.Timestamp(value)
+    except Exception as exc:  # noqa: BLE001 - any bad value is a refusal
+        raise PreOpenLookaheadError(f"pre_open: invalid {label}={value!r}") from exc
+    if pd.isna(ts):
+        raise PreOpenLookaheadError(f"pre_open: {label} must be a finite timestamp; got {value!r}")
+    return ts
+
+
 class PhaseBoundFeeder:
     """Feeder view for the pre-open phase. ``get_features`` is allowed only when
     ``end_time <= max_datetime`` (the last visible / previous trading day); EVERY
@@ -51,12 +68,19 @@ class PhaseBoundFeeder:
 
     def get_features(self, instruments, fields, start_time, end_time, *args, **kwargs):
         mx = object.__getattribute__(self, "_max")
-        if mx is None or pd.Timestamp(end_time) > mx:
+        if mx is None or pd.isna(mx):
+            raise PreOpenLookaheadError("pre_open: no previous trading day is visible")
+        start_ts = _coerce_guard_ts("start_time", start_time)
+        end_ts = _coerce_guard_ts("end_time", end_time)
+        if start_ts > end_ts:
             raise PreOpenLookaheadError(
-                f"pre_open: cannot read features through {end_time} "
-                f"(max visible date = {None if mx is None else mx.date()})")
+                f"pre_open: start_time {start_ts.date()} > end_time {end_ts.date()}")
+        if end_ts > mx:
+            raise PreOpenLookaheadError(
+                f"pre_open: cannot read features through {end_ts.date()} "
+                f"(max visible date = {mx.date()})")
         inner = object.__getattribute__(self, "_inner")
-        return inner.get_features(instruments, fields, start_time, end_time, *args, **kwargs)
+        return inner.get_features(instruments, fields, start_ts, end_ts, *args, **kwargs)
 
 
 class StrategyExchangeView:

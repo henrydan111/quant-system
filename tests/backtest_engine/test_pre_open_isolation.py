@@ -58,6 +58,8 @@ class _LeakyFeeder(Strategy):
         probes = [
             lambda: f.get_features(["000001_SZ"], ["$close"],          # direct same-day read
                                    start_time=context.date, end_time=context.date),
+            lambda: f.get_features(["000001_SZ"], ["$close"],          # end_time=None bypass (GPT R4)
+                                   start_time="2024-01-01", end_time=None),
             lambda: f._inner,        # the wrapper's stored raw feeder (GPT R3 exploit)
             lambda: f.__dict__,      # introspection escape
             lambda: x._feeder,       # raw feeder via the exchange
@@ -140,6 +142,14 @@ class TestPreOpenGuardUnit(unittest.TestCase):
         self.assertTrue(self._blocked(lambda: f.get_day()))    # non-get_features access
         self.assertTrue(self._blocked(                          # future read
             lambda: f.get_features([], [], "2024-01-01", "2024-01-06")))
+        self.assertTrue(self._blocked(                          # end_time=None bypass (GPT R4)
+            lambda: f.get_features([], [], "2024-01-01", None)))
+        self.assertTrue(self._blocked(                          # end_time=NaT bypass
+            lambda: f.get_features([], [], "2024-01-01", pd.NaT)))
+        self.assertTrue(self._blocked(                          # start_time=None
+            lambda: f.get_features([], [], None, "2024-01-05")))
+        self.assertTrue(self._blocked(                          # start > end
+            lambda: f.get_features([], [], "2024-01-06", "2024-01-05")))
         self.assertEqual(                                       # end_time <= max -> ok
             f.get_features([], [], "2024-01-01", "2024-01-05"), "DATA")
 
