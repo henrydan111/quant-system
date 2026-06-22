@@ -21,11 +21,12 @@ execution equivalence):
 
 ON LIMIT-UP (rule #10 — a refuted cause is removed, not kept): an earlier hypothesis blamed
 the big-year gap on 果仁 buying limit-up-at-open names my fill-price gate refuses. DIRECT
-CHECK (entry_lock_diagnostic below; saved to rung2_entry_lock.json): only ~0.3% of 果仁's
-entries were limit-up-locked at the open (max 1.0% in 2015), so limit-up entry-blocking is
-NOT a material driver for the 中小板 universe (larger names, few 一字板; limit-up was rung-1's
-pure-microcap signature, not this rung). Any remaining gap is attributed only where
-decomposed; otherwise it is marked unresolved.
+CHECK — the committed/auditable source is entry_lock_diagnostic() below; run `--diag` to
+(re)generate rung2_entry_lock.json under workspace/outputs/guorn_parity/ (gitignored, not a
+tracked artifact). Result: only ~0.3% of 果仁's entries were limit-up-locked at the open
+(max 1.0% in 2015), so limit-up entry-blocking is NOT a material driver for the 中小板
+universe (larger names, few 一字板; limit-up was rung-1's pure-microcap signature, not this
+rung). Any remaining gap is attributed only where decomposed; otherwise it is left unresolved.
 
 Usage:
   python workspace/scripts/_replay_guorn_holdings.py          # the replay
@@ -137,9 +138,11 @@ def main():
 
 
 def entry_lock_diagnostic():
-    """GPT R2 Major-2: save the limit-up refutation as a reproducible artifact.
+    """GPT R2 Major-2 / R3 Minor: the reproducible limit-up refutation. THIS FUNCTION is the
+    committed/auditable source; it WRITES rung2_entry_lock.json under workspace/outputs/
+    guorn_parity/ (gitignored — regenerate with `--diag`, do not rely on a tracked JSON).
     For every 果仁 holding-segment ENTRY (开始日期), was the name limit-up-locked at the
-    open (open >= up_limit => unbuyable by the fill-price-aware gate)? -> rung2_entry_lock.json."""
+    open (open >= up_limit => unbuyable by the fill-price-aware gate)?"""
     import json
     h = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
     code6 = h["股票代码"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
