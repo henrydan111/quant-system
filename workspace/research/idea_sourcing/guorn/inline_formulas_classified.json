@@ -1,0 +1,1722 @@
+{
+  "n_unique": 85,
+  "rows": [
+    {
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV",
+      "count": 9,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_创业板sm_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "EV"
+      ],
+      "builtins": [],
+      "fields": [
+        "营业收入",
+        "单季度",
+        "营业成本"
+      ],
+      "len": 24
+    },
+    {
+      "expr": "营业收入(单季)/总市值",
+      "count": 7,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_创业板sm_v1",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "营业收入",
+        "单季",
+        "总市值"
+      ],
+      "len": 12
+    },
+    {
+      "expr": "营业收入(单季环比增长)-营业收入增长",
+      "count": 7,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_钢铁_均衡限估值@周期",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [
+        "营业收入增长"
+      ],
+      "fields": [
+        "营业收入",
+        "单季环比增长"
+      ],
+      "len": 19
+    },
+    {
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY",
+      "count": 6,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "COREPROFITQGr%PQ",
+        "COREPROFITTTMGr%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 35
+    },
+    {
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y",
+      "count": 6,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "COREPROFITTTMGr%PY",
+        "COREPROFITTTMGr%3Y"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 37
+    },
+    {
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)",
+      "count": 6,
+      "strategies": [
+        "comp_core_mom",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "成长_隔夜动量@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM",
+        "IF",
+        "LOG",
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "当日涨停标记",
+        "后复权开盘价",
+        "后复权收盘价"
+      ],
+      "len": 98
+    },
+    {
+      "expr": "营业收入增长-营业收入3年复合增长",
+      "count": 6,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [
+        "营业收入增长",
+        "营业收入3年复合增长"
+      ],
+      "fields": [],
+      "len": 17
+    },
+    {
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)",
+      "count": 5,
+      "strategies": [
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "成长_隔夜动量@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM",
+        "IF",
+        "LOG",
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "当日涨停标记",
+        "后复权开盘价",
+        "后复权收盘价"
+      ],
+      "len": 98
+    },
+    {
+      "expr": "(净利润-预期净利润Q)/ABS(预期净利润Q)",
+      "count": 4,
+      "strategies": [
+        "成长_净利润断层_v2",
+        "成长_新高@周期",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "ABS"
+      ],
+      "customs": [
+        "预期净利润Q"
+      ],
+      "builtins": [],
+      "fields": [
+        "净利润"
+      ],
+      "len": 24
+    },
+    {
+      "expr": "REF(股东数,4)/股东数-1",
+      "count": 4,
+      "strategies": [
+        "ST_大市值_v3",
+        "sm_BJ_成长均衡_v1",
+        "value_钢铁_均衡限估值@周期",
+        "成长_振幅动量高波@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "股东数"
+      ],
+      "len": 16
+    },
+    {
+      "expr": "业绩预告净利润QGr%PYQ_v1",
+      "count": 4,
+      "strategies": [
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "业绩预告净利润QGr%PYQ_v1"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 17
+    },
+    {
+      "expr": "%(评级机构数,REF(评级机构数,60))",
+      "count": 3,
+      "strategies": [
+        "成长_振幅动量高波@周期",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "评级机构数"
+      ],
+      "len": 22
+    },
+    {
+      "expr": "动量_风险调整(60)/动量_风险调整(250)",
+      "count": 3,
+      "strategies": [
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "动量_风险调整"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 24
+    },
+    {
+      "expr": "HAVG(销售毛利率Q-REFQ(销售毛利率Q,4),1)",
+      "count": 2,
+      "strategies": [
+        "Comp_Core_growth",
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG",
+        "REFQ"
+      ],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 29
+    },
+    {
+      "expr": "HNEUTRALIZE(SALESQGR%PY，LN(总市值))",
+      "count": 2,
+      "strategies": [
+        "Comp_Core_growth",
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HNEUTRALIZE",
+        "LN"
+      ],
+      "customs": [
+        "SALESQGR%PY"
+      ],
+      "builtins": [],
+      "fields": [
+        "总市值"
+      ],
+      "len": 32
+    },
+    {
+      "expr": "SUM(1月涨幅,36)-1月涨幅",
+      "count": 2,
+      "strategies": [
+        "MultiA_月度期望收益18",
+        "MultiA_行业指数月度期望收益"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM"
+      ],
+      "customs": [
+        "1月涨幅"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 17
+    },
+    {
+      "expr": "SUM(IF(1月涨幅>0,1,0),13)-IF(1月涨幅>0,1,0)",
+      "count": 2,
+      "strategies": [
+        "MultiA_月度期望收益18",
+        "MultiA_行业指数月度期望收益"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM",
+        "IF"
+      ],
+      "customs": [
+        "1月涨幅"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 37
+    },
+    {
+      "expr": "销售毛利率Q-REFQ(销售毛利率Q,4)",
+      "count": 2,
+      "strategies": [
+        "Comp_Core_growth",
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "REFQ"
+      ],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 21
+    },
+    {
+      "expr": "%(if(财报发布天数=1,后复权开盘价,ref(后复权开盘价,财报发布天数-1)),REF(后复权收盘价,财报发布天数))",
+      "count": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "if",
+        "ref",
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "财报发布天数",
+        "后复权开盘价",
+        "后复权收盘价"
+      ],
+      "len": 62
+    },
+    {
+      "expr": "%(预期净利润1年,REF(预期净利润1年,60))",
+      "count": 1,
+      "strategies": [
+        "成长_高波@周期"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "预期净利润1年"
+      ],
+      "len": 26
+    },
+    {
+      "expr": "%(预期盈利2年复合增长,ref(预期盈利2年复合增长,60))",
+      "count": 1,
+      "strategies": [
+        "成长_新高@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "ref"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "预期盈利2年复合增长"
+      ],
+      "len": 32
+    },
+    {
+      "expr": "(TTM(经营现金流量净额,0)-TTM(营业收入,0))/资产总计",
+      "count": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "经营现金流量净额",
+        "营业收入",
+        "资产总计"
+      ],
+      "len": 34
+    },
+    {
+      "expr": "(业绩预告净利润Q-预期净利润Q)/ABS(预期净利润Q)",
+      "count": 1,
+      "strategies": [
+        "成长_净利润断层_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "ABS"
+      ],
+      "customs": [
+        "业绩预告净利润Q",
+        "预期净利润Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 29
+    },
+    {
+      "expr": "(业绩预告净利润Q-预期净利润Q)/总市值",
+      "count": 1,
+      "strategies": [
+        "成长_净利润断层_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "业绩预告净利润Q",
+        "预期净利润Q"
+      ],
+      "builtins": [],
+      "fields": [
+        "总市值"
+      ],
+      "len": 21
+    },
+    {
+      "expr": "(业绩预告营业收入Q-预期营业收入Q)/ABS(预期营业收入Q)",
+      "count": 1,
+      "strategies": [
+        "成长_净利润断层_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "ABS"
+      ],
+      "customs": [
+        "业绩预告营业收入Q",
+        "预期营业收入Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 32
+    },
+    {
+      "expr": "(业绩预告营业收入Q-预期营业收入Q)/总市值",
+      "count": 1,
+      "strategies": [
+        "成长_净利润断层_v2"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "业绩预告营业收入Q",
+        "预期营业收入Q"
+      ],
+      "builtins": [],
+      "fields": [
+        "总市值"
+      ],
+      "len": 23
+    },
+    {
+      "expr": "(营业收入(单季)-refq(营业收入(单季),4))/总市值",
+      "count": 1,
+      "strategies": [
+        "sm_value"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "refq"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "营业收入",
+        "单季",
+        "总市值"
+      ],
+      "len": 31
+    },
+    {
+      "expr": "10年国债收益率-SMED(股息率TTM,STRG_价值红利100）",
+      "count": 1,
+      "strategies": [
+        "value_红利低波_央企_v1"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "SMED"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "10年国债收益率",
+        "股息率TTM",
+        "STRG_价值红利100"
+      ],
+      "len": 34
+    },
+    {
+      "expr": "20日波动率/250日波动率",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "20日波动率",
+        "250日波动率"
+      ],
+      "len": 14
+    },
+    {
+      "expr": "513500",
+      "count": 1,
+      "strategies": [
+        "index_标普500ETF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [],
+      "len": 6
+    },
+    {
+      "expr": "COREPROFITQGR%PY/GREATER(STDEVQ(COREPROFITQGR%PY,4),0.001)",
+      "count": 1,
+      "strategies": [
+        "成长_GARP医药"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "GREATER",
+        "STDEVQ"
+      ],
+      "customs": [
+        "COREPROFITQGR%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 58
+    },
+    {
+      "expr": "FCFTTM_重算GR%PY",
+      "count": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "FCFTTM_重算GR%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 14
+    },
+    {
+      "expr": "HAVG(CoreProfitQGr%PY,1)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_growth"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 24
+    },
+    {
+      "expr": "HAVG(OPCFNPDIFF%NP,1)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [
+        "OPCFNPDIFF%NP"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 21
+    },
+    {
+      "expr": "HAVG(ROETTMDiffPQ,1)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [
+        "ROETTMDiffPQ"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 20
+    },
+    {
+      "expr": "HAVG(SalesQGr%PY,1)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_growth"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [
+        "SalesQGr%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 19
+    },
+    {
+      "expr": "HAVG(中性ROE,1)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "中性ROE"
+      ],
+      "len": 13
+    },
+    {
+      "expr": "HAVG(预期盈利2年复合增长,1)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "预期盈利2年复合增长"
+      ],
+      "len": 18
+    },
+    {
+      "expr": "HAVG(预期盈利2年复合增长,2)",
+      "count": 1,
+      "strategies": [
+        "成长_新高@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "预期盈利2年复合增长"
+      ],
+      "len": 18
+    },
+    {
+      "expr": "HAVG(预期营收2年复合增长,1)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HAVG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "预期营收2年复合增长"
+      ],
+      "len": 18
+    },
+    {
+      "expr": "HNEUTRALIZE(CoreProfitQGr%PY，LN(总市值))",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_growth"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HNEUTRALIZE",
+        "LN"
+      ],
+      "customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "builtins": [],
+      "fields": [
+        "总市值"
+      ],
+      "len": 37
+    },
+    {
+      "expr": "HNeutralize(评级机构数,ln(总市值),0)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "HNeutralize",
+        "ln"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "评级机构数",
+        "总市值"
+      ],
+      "len": 28
+    },
+    {
+      "expr": "Hrank(评级机构数,1,0)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "Hrank"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "评级机构数"
+      ],
+      "len": 16
+    },
+    {
+      "expr": "IF(TICKER()=‘159920',1,0)",
+      "count": 1,
+      "strategies": [
+        "index_恒指ETF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "IF",
+        "TICKER"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [],
+      "len": 25
+    },
+    {
+      "expr": "IF(TICKER()=‘161126',1,0)",
+      "count": 1,
+      "strategies": [
+        "index_标普医疗保健LOF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "IF",
+        "TICKER"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [],
+      "len": 25
+    },
+    {
+      "expr": "IF(TICKER()=‘164824',1,0)",
+      "count": 1,
+      "strategies": [
+        "index_印度基金LOF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "IF",
+        "TICKER"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [],
+      "len": 25
+    },
+    {
+      "expr": "IF(TICKER()=‘513100',1,0)",
+      "count": 1,
+      "strategies": [
+        "index_纳指ETF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "IF",
+        "TICKER"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [],
+      "len": 25
+    },
+    {
+      "expr": "MA(加权PEXPB5年分位点,5)>MA(加权PEXPB5年分位点,120)",
+      "count": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "MA"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "加权PEXPB5年分位点"
+      ],
+      "len": 39
+    },
+    {
+      "expr": "MA(后复权收盘价,3)/MA(后复权收盘价,200)",
+      "count": 1,
+      "strategies": [
+        "MultiA非AInclEuHKMv1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "MA"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "后复权收盘价"
+      ],
+      "len": 27
+    },
+    {
+      "expr": "MA(涨停家数比例,60)",
+      "count": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "MA"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "涨停家数比例"
+      ],
+      "len": 13
+    },
+    {
+      "expr": "MA(跌停家数比例,60)",
+      "count": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "MA"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "跌停家数比例"
+      ],
+      "len": 13
+    },
+    {
+      "expr": "MA(跌停家数比例,60)-MA(跌停家数比例,250)",
+      "count": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "MA"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "跌停家数比例"
+      ],
+      "len": 28
+    },
+    {
+      "expr": "N日平均成交量(10)/250日平均成交量",
+      "count": 1,
+      "strategies": [
+        "成长_振幅动量高波@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "N日平均成交量",
+        "250日平均成交量"
+      ],
+      "len": 21
+    },
+    {
+      "expr": "REFQ(净资产收益率,0)-REFQ(净资产收益率,1)",
+      "count": 1,
+      "strategies": [
+        "sm_BJ_成长均衡_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "REFQ"
+      ],
+      "customs": [],
+      "builtins": [
+        "净资产收益率"
+      ],
+      "fields": [],
+      "len": 29
+    },
+    {
+      "expr": "Ref(股东数,4)/股东数-1",
+      "count": 1,
+      "strategies": [
+        "sm_BJ_纯市值_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "Ref"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "股东数"
+      ],
+      "len": 16
+    },
+    {
+      "expr": "STDEVM(N日换手率(1),N日换手率(5),N日换手率(10),N日换手率(20),N日换手率(60),N日换手率(120))",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "STDEVM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "N日换手率"
+      ],
+      "len": 66
+    },
+    {
+      "expr": "STDEVQ(ROECOREQ,12)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "STDEVQ"
+      ],
+      "customs": [
+        "ROECOREQ"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 19
+    },
+    {
+      "expr": "STDEVQ(SALESQGR%PY,12)",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "STDEVQ"
+      ],
+      "customs": [
+        "SALESQGR%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 22
+    },
+    {
+      "expr": "SUM((1+1日涨幅-历史贝塔*指数涨幅(899050)),20)",
+      "count": 1,
+      "strategies": [
+        "sm_BJ_成长均衡_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "1日涨幅",
+        "历史贝塔",
+        "指数涨幅"
+      ],
+      "len": 34
+    },
+    {
+      "expr": "SUM(1月涨幅,36)",
+      "count": 1,
+      "strategies": [
+        "comp_LrevSmom"
+      ],
+      "sections": [
+        "排名条件",
+        "筛选条件"
+      ],
+      "funcs": [
+        "SUM"
+      ],
+      "customs": [
+        "1月涨幅"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 12
+    },
+    {
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(1日涨幅+1)),250)-SUM(IF(当日涨停标记=1,0,LOG(1日涨幅+1)),20)",
+      "count": 1,
+      "strategies": [
+        "comp_core_mom"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM",
+        "IF",
+        "LOG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "当日涨停标记",
+        "1日涨幅"
+      ],
+      "len": 70
+    },
+    {
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)",
+      "count": 1,
+      "strategies": [
+        "comp_LrevSmom"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "SUM",
+        "IF",
+        "LOG",
+        "REF"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "当日涨停标记",
+        "后复权开盘价",
+        "后复权收盘价"
+      ],
+      "len": 49
+    },
+    {
+      "expr": "SUM(后复权收盘价/MAX(后复权收盘价，250)>0.9,5)",
+      "count": 1,
+      "strategies": [
+        "成长_新高@周期"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "SUM",
+        "MAX"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "后复权收盘价"
+      ],
+      "len": 33
+    },
+    {
+      "expr": "TTM(COREPROFITQ,4)*DIV%NETINC/总股本/收盘价",
+      "count": 1,
+      "strategies": [
+        "value_红利低波_重股息_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [
+        "COREPROFITQ",
+        "DIV%NETINC"
+      ],
+      "builtins": [],
+      "fields": [
+        "总股本",
+        "收盘价"
+      ],
+      "len": 37
+    },
+    {
+      "expr": "TTM(FCFQ_重算,4)",
+      "count": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [
+        "FCFQ_重算"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 14
+    },
+    {
+      "expr": "TTM(所得税费用,0)/总市值",
+      "count": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "所得税费用",
+        "总市值"
+      ],
+      "len": 16
+    },
+    {
+      "expr": "annual(经营现金流量净额,0)+annual(经营现金流量净额,1)+annual(经营现金流量净额,2)+annual(经营现金流量净额,3)+annual(经营现金流量净额,4)",
+      "count": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "annual"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "经营现金流量净额"
+      ],
+      "len": 94
+    },
+    {
+      "expr": "avgq(销售毛利率Q,4)/stdevq(销售毛利率Q,4)",
+      "count": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "avgq",
+        "stdevq"
+      ],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 31
+    },
+    {
+      "expr": "corr(后复权收盘价,当日成交量,20)",
+      "count": 1,
+      "strategies": [
+        "成长_新高@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "corr"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "后复权收盘价",
+        "当日成交量"
+      ],
+      "len": 21
+    },
+    {
+      "expr": "ma(SAVG(股息率TTM,STRG_价值红利100,0),20)",
+      "count": 1,
+      "strategies": [
+        "value_红利低波_央企_v1"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [
+        "ma",
+        "SAVG"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "股息率TTM",
+        "STRG_价值红利100"
+      ],
+      "len": 34
+    },
+    {
+      "expr": "stdevQ(CoreprofitQGr%PY,12)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "stdevQ"
+      ],
+      "customs": [
+        "CoreprofitQGr%PY"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 27
+    },
+    {
+      "expr": "stdevq(RoeCoreq,12)",
+      "count": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "stdevq"
+      ],
+      "customs": [
+        "RoeCoreq"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 19
+    },
+    {
+      "expr": "stdevq(销售毛利率Q,8)",
+      "count": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "stdevq"
+      ],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 16
+    },
+    {
+      "expr": "动量_风险调整(20)/动量_风险调整(120)",
+      "count": 1,
+      "strategies": [
+        "成长_化工_GARP@周期"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "动量_风险调整"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 24
+    },
+    {
+      "expr": "市净率",
+      "count": 1,
+      "strategies": [
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [
+        "市净率"
+      ],
+      "fields": [],
+      "len": 3
+    },
+    {
+      "expr": "总市值/(预期净利润1年*0.5+预期净利润第2年*0.5)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "总市值",
+        "预期净利润1年",
+        "预期净利润第2年"
+      ],
+      "len": 30
+    },
+    {
+      "expr": "研发费用(TTM)/总市值",
+      "count": 1,
+      "strategies": [
+        "成长_GARP医药"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "研发费用",
+        "总市值"
+      ],
+      "len": 13
+    },
+    {
+      "expr": "研发费用(单季度)/营业收入(TTM)",
+      "count": 1,
+      "strategies": [
+        "成长_GARP医药"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "研发费用",
+        "单季度",
+        "营业收入"
+      ],
+      "len": 19
+    },
+    {
+      "expr": "管理费用/营业利润",
+      "count": 1,
+      "strategies": [
+        "value_银行股"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "管理费用",
+        "营业利润"
+      ],
+      "len": 9
+    },
+    {
+      "expr": "经营现金流量净额(TTM)/营业收入(TTM)",
+      "count": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "TTM"
+      ],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "经营现金流量净额",
+        "营业收入"
+      ],
+      "len": 23
+    },
+    {
+      "expr": "股息率TTM-10年国债收益率",
+      "count": 1,
+      "strategies": [
+        "value_红利低波_v2"
+      ],
+      "sections": [
+        "筛选条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [],
+      "fields": [
+        "股息率TTM",
+        "10年国债收益率"
+      ],
+      "len": 15
+    },
+    {
+      "expr": "销售毛利率Q-refq(销售毛利率Q,4)",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [
+        "refq"
+      ],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [],
+      "fields": [],
+      "len": 21
+    },
+    {
+      "expr": "销售毛利率Q-销售毛利率",
+      "count": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [
+        "销售毛利率Q"
+      ],
+      "builtins": [
+        "销售毛利率"
+      ],
+      "fields": [],
+      "len": 12
+    },
+    {
+      "expr": "预期盈利2年复合增长-净利润3年复合增长",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [
+        "净利润3年复合增长"
+      ],
+      "fields": [
+        "预期盈利2年复合增长"
+      ],
+      "len": 20
+    },
+    {
+      "expr": "预期营收2年复合增长-营业收入3年复合增长",
+      "count": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "sections": [
+        "排名条件"
+      ],
+      "funcs": [],
+      "customs": [],
+      "builtins": [
+        "营业收入3年复合增长"
+      ],
+      "fields": [
+        "预期营收2年复合增长"
+      ],
+      "len": 21
+    }
+  ]
+}

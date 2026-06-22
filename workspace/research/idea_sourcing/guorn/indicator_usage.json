@@ -1,0 +1,3965 @@
+{
+  "n_strategies": 65,
+  "n_unique_named_tokens": 195,
+  "n_custom_matched": 99,
+  "n_unknown_builtin_or_other": 96,
+  "n_inline_formula_instances": 149,
+  "n_timing_formula_instances": 3,
+  "named_tokens": [
+    {
+      "token": "总市值",
+      "base": "总市值",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 29,
+      "n_strategies": 23,
+      "strategies": [
+        "Comp_FCF",
+        "ST_大市值_v3",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_BJ_成长均衡_v1",
+        "sm_BJ_纯市值_v1",
+        "sm_GARP_illiq",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_value",
+        "sm_双创研发强度_v1",
+        "sm_反转_v2",
+        "sm_微盘基准50",
+        "sm_成长AH_v1",
+        "sm_纯市值01",
+        "sm_重组题材",
+        "value_FCF_非金sm_v2",
+        "value_创业板sm_v1",
+        "value_红利低波_v2",
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "CoreProfitQGr%PY",
+      "base": "CoreProfitQGr%PY",
+      "class": "custom",
+      "matched_custom": "CoreProfitQGr%PY",
+      "count": 23,
+      "n_strategies": 22,
+      "strategies": [
+        "Comp_GARP",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_BJ_成长均衡_v1",
+        "sm_GARP_illiq",
+        "sm_反转_v2",
+        "sm_成长AH_v1",
+        "value_AH_低溢价GARP_v1",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_银行股",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_振幅动量高波@周期",
+        "成长_新高@周期",
+        "成长_机构预期@周期_v1",
+        "成长_高波@周期"
+      ],
+      "custom_expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "未来20日新增流通股占比",
+      "base": "未来20日新增流通股占比",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 23,
+      "n_strategies": 23,
+      "strategies": [
+        "comp_core_mom",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_GARP_illiq",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_value",
+        "sm_大制造GARP_v3",
+        "value_AH_低溢价GARP_v1",
+        "value_有色金属@周期",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_红利低波_重股息_v1",
+        "成长_GARP医药",
+        "成长_GARP白酒",
+        "成长_GARP食品饮料_v1",
+        "成长_净利润断层_v2",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "ROETTMDiffPQ",
+      "base": "ROETTMDiffPQ",
+      "class": "custom",
+      "matched_custom": "ROETTMDiffPQ",
+      "count": 20,
+      "n_strategies": 20,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_FCF",
+        "Comp_GARP",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_GARP_illiq",
+        "sm_双创研发强度_v1",
+        "value_FCF_非金sm_v2",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "成长_GARP医药",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_新高@周期",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "净资产收益率-RefQ(净资产收益率,1)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "上市天数",
+      "base": "上市天数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 19,
+      "n_strategies": 19,
+      "strategies": [
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_GARP_illiq",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_value",
+        "sm_反转_v2",
+        "sm_纯市值01",
+        "value_有色金属@周期",
+        "value_银行股",
+        "成长_GARP医药",
+        "成长_GARP食品饮料_v1",
+        "成长_净利润断层_v2",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "EpsExclXorQGr%PY",
+      "base": "EpsExclXorQGr%PY",
+      "class": "custom",
+      "matched_custom": "EpsExclXorQGr%PY",
+      "count": 18,
+      "n_strategies": 18,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_GARP_illiq",
+        "sm_反转_v2",
+        "sm_成长AH_v1",
+        "value_AH_低溢价GARP_v1",
+        "成长_GARP白酒",
+        "成长_GARP食品饮料_v1",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_新高@周期",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "(refq(EpsExclXorQ,0)-refq(EpsExclXorQ,4))/abs(refq(EpsExclXorQ,4))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "基础过滤_退市风险_v1(2)",
+      "base": "基础过滤_退市风险_v1",
+      "class": "custom",
+      "matched_custom": "基础过滤_退市风险_v1",
+      "count": 16,
+      "n_strategies": 16,
+      "strategies": [
+        "comp_core_mom",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_反转_v2",
+        "sm_微盘基准50",
+        "sm_重组题材",
+        "value_AH_低溢价GARP_v1",
+        "value_FCF_非金sm_v2",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_红利低波_重股息_v1",
+        "成长_GARP医药",
+        "成长_GARP白酒",
+        "成长_GARP食品饮料_v1",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_新高@周期"
+      ],
+      "custom_expr": "OR(收盘价<{0},sum(预期ST2021,30)>0,sum(果仁风险预警25版,30)>0,过去N日重大违规数量(30)>0)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "GrossProfit%AssetsQ",
+      "base": "GrossProfit%AssetsQ",
+      "class": "custom",
+      "matched_custom": "GrossProfit%AssetsQ",
+      "count": 15,
+      "n_strategies": 15,
+      "strategies": [
+        "Comp_Core_Quality",
+        "Comp_Core_value",
+        "Comp_GARP",
+        "ST_国企_振幅动量v1",
+        "sm_GARP_illiq",
+        "sm_value",
+        "value_AH_低溢价GARP_v1",
+        "value_创业板sm_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_新高@周期",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "(营业收入(单季度)- 营业成本(单季度))/资产总计(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "BP筹资市值比调整",
+      "base": "BP筹资市值比调整",
+      "class": "custom",
+      "matched_custom": "BP筹资市值比调整",
+      "count": 14,
+      "n_strategies": 14,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "sm_大制造GARP_v3",
+        "value_AH_低溢价GARP_v1",
+        "value_创业板sm_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "HNeutralize(hpercentrank(BP,1,0),hpercentrank(SumQ(筹资活动现金流入小计(单季),4)/总市值,1,0),0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "无",
+      "base": "无",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 14,
+      "n_strategies": 14,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "Comp_Core_low_turn",
+        "Comp_Core_value",
+        "Comp_GARP",
+        "MultiA_动量18",
+        "MultiA_指数动量缩量",
+        "MultiA_月度期望收益18",
+        "index_印度基金LOF",
+        "index_恒指ETF",
+        "index_标普500ETF",
+        "index_标普医疗保健LOF",
+        "index_纳指ETF",
+        "value_创业板sm_v1",
+        "value_地产链@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "5日平均成交额",
+      "base": "5日平均成交额",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 13,
+      "n_strategies": 13,
+      "strategies": [
+        "MultiA_风险平价_v1",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_value",
+        "sm_双创研发强度_v1",
+        "sm_反转_v2",
+        "sm_微盘基准50",
+        "sm_纯市值01"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "20日平均成交额",
+      "base": "20日平均成交额",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 11,
+      "n_strategies": 11,
+      "strategies": [
+        "MultiA_指数动量缩量",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_noc_纯市值正盈利_v4",
+        "sm_value",
+        "sm_双创研发强度_v1",
+        "sm_反转_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "过去N日重大违规数量(30)",
+      "base": "过去N日重大违规数量",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 11,
+      "n_strategies": 11,
+      "strategies": [
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_value",
+        "sm_双创研发强度_v1",
+        "sm_反转_v2",
+        "sm_微盘基准50",
+        "sm_纯市值01"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "业绩预告净利润QGr%PYQ_v1",
+      "base": "业绩预告净利润QGr%PYQ_v1",
+      "class": "custom",
+      "matched_custom": "业绩预告净利润QGr%PYQ_v1",
+      "count": 10,
+      "n_strategies": 10,
+      "strategies": [
+        "ST_大市值_v3",
+        "sm_GARP_illiq",
+        "sm_双创研发强度_v1",
+        "sm_大制造GARP_v3",
+        "成长_GARP白酒",
+        "成长_双创_GARP@周期_v2",
+        "成长_振幅动量高波@周期",
+        "成长_机构预期@周期_v1",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": "(业绩预告净利润Q_v1-refQ(净利润(单季),3))/abs(refQ(净利润(单季),3))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "基础过滤_退市风险_v1(3)",
+      "base": "基础过滤_退市风险_v1",
+      "class": "custom",
+      "matched_custom": "基础过滤_退市风险_v1",
+      "count": 10,
+      "n_strategies": 10,
+      "strategies": [
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_GARP_illiq",
+        "sm_value",
+        "sm_双创研发强度_v1",
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "OR(收盘价<{0},sum(预期ST2021,30)>0,sum(果仁风险预警25版,30)>0,过去N日重大违规数量(30)>0)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "EBITDAQ%EV",
+      "base": "EBITDAQ%EV",
+      "class": "custom",
+      "matched_custom": "EBITDAQ%EV",
+      "count": 9,
+      "n_strategies": 9,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_创业板sm_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "EBITDAQ/EV",
+      "custom_type": "公式"
+    },
+    {
+      "token": "业绩快报归母净利QGr%PY",
+      "base": "业绩快报归母净利QGr%PY",
+      "class": "custom",
+      "matched_custom": "业绩快报归母净利QGr%PY",
+      "count": 9,
+      "n_strategies": 9,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_01_成长_v1",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_GARP_illiq",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "(快报归属母公司净利润-accuQ(归属于母公司所有者的净利润(单季),0)-refQ(归属于母公司所有者的净利润(单季),3))/abs(refQ(归属于母公司所有者的净利润(单季),3))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "指标1指标2中性化(EPCOREPROFITQ,总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 8,
+      "n_strategies": 8,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "sm_大制造GARP_v3",
+        "value_创业板sm_v1",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标标准化后中性化MI(RNDQP)",
+      "base": "指标标准化后中性化MI",
+      "class": "custom",
+      "matched_custom": "指标标准化后中性化MI",
+      "count": 8,
+      "n_strategies": 8,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "sm_value",
+        "sm_大制造GARP_v3",
+        "value_创业板sm_v1",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "真实负债资产率",
+      "base": "真实负债资产率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 8,
+      "n_strategies": 8,
+      "strategies": [
+        "ST_国企_振幅动量v1",
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "value_AH_低溢价GARP_v1",
+        "value_红利低波_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "FCFQ%总市值",
+      "base": "FCFQ%总市值",
+      "class": "custom",
+      "matched_custom": "FCFQ%总市值",
+      "count": 7,
+      "n_strategies": 7,
+      "strategies": [
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_创业板sm_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期"
+      ],
+      "custom_expr": "FCFQ_重算/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "FCFQ_重算Gr%PYQ",
+      "base": "FCFQ_重算Gr%PYQ",
+      "class": "custom",
+      "matched_custom": "FCFQ_重算Gr%PYQ",
+      "count": 7,
+      "n_strategies": 7,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_FCF_非金sm_v2",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "(FCFQ_重算-refq(FCFQ_重算,4))/abs(refq(FCFQ_重算,4))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "所得税费用QGr%PY",
+      "base": "所得税费用QGr%PY",
+      "class": "custom",
+      "matched_custom": "所得税费用QGr%PY",
+      "count": 7,
+      "n_strategies": 7,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "value_AH_低溢价GARP_v1",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "(refQ(所得税费用(单季),0)-refQ(所得税费用(单季),4))/abs(refQ(所得税费用(单季),0))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "股价振幅%当日成交额10日",
+      "base": "股价振幅%当日成交额10日",
+      "class": "custom",
+      "matched_custom": "股价振幅%当日成交额10日",
+      "count": 7,
+      "n_strategies": 7,
+      "strategies": [
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02",
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": "MA(股价振幅/当日成交额,10)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "BP带壳",
+      "base": "BP带壳",
+      "class": "custom",
+      "matched_custom": "BP带壳",
+      "count": 6,
+      "n_strategies": 6,
+      "strategies": [
+        "Comp_Core_value",
+        "Comp_GARP",
+        "sm_value",
+        "sm_大制造GARP_v3",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "(归属母公司股东权益合计(单季)+壳价值)/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "OPCFNPDiff%NP",
+      "base": "OPCFNPDiff%NP",
+      "class": "custom",
+      "matched_custom": "OPCFNPDiff%NP",
+      "count": 6,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_Core_Quality",
+        "value_FCF_非金sm_v2",
+        "成长_GARP医药",
+        "成长_GARP食品饮料_v1",
+        "成长_新高@周期"
+      ],
+      "custom_expr": "(经营现金流量净额TTM-净利润TTM)/净利润TTM",
+      "custom_type": "公式"
+    },
+    {
+      "token": "SalesQGr%PY",
+      "base": "SalesQGr%PY",
+      "class": "custom",
+      "matched_custom": "SalesQGr%PY",
+      "count": 6,
+      "n_strategies": 6,
+      "strategies": [
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_GARP医药",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "(refQ(营业收入(单季),0)-refQ(营业收入(单季),4))/abs(refQ(营业收入(单季),0))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "波动率_季度指标(CoreprofitQGr%PY,12)",
+      "base": "波动率_季度指标",
+      "class": "custom",
+      "matched_custom": "波动率_季度指标",
+      "count": 6,
+      "n_strategies": 6,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_GARP白酒",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "StdevQ({0}, {1})\n[模板参数] 参数名: 指标,季度数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "流通市值",
+      "base": "流通市值",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 6,
+      "n_strategies": 6,
+      "strategies": [
+        "sm_BJ_成长均衡_v1",
+        "sm_BJ_纯市值_v1",
+        "sm_value",
+        "sm_微盘基准50",
+        "sm_成长AH_v1",
+        "sm_纯市值01"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "调入指数(10)",
+      "base": "调入指数",
+      "class": "custom",
+      "matched_custom": "调入指数",
+      "count": 6,
+      "n_strategies": 6,
+      "strategies": [
+        "sm_大制造GARP_v3",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_红利低波_重股息_v1",
+        "成长_GARP医药",
+        "成长_新高@周期"
+      ],
+      "custom_expr": "OR(AND(SUM(沪深300成分权重=0,{0})>0,沪深300成分权重>0),AND(SUM(中证500成分权重=0,{0})>0,中证500成分权重>0),AND(SUM(中证1000成分权重=0,{0})>0,中证1000成分权重>0))\n[模板参数] 参数名: N  默认值: 10,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "BP",
+      "base": "BP",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_FCF",
+        "value_FCF_非金sm_v2",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "ILLIQ(5)",
+      "base": "ILLIQ",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "sm_GARP_illiq",
+        "sm_value",
+        "sm_成长AH_v1",
+        "成长_GARP医药",
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "N日乖离率(120)",
+      "base": "N日乖离率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "sm_01_成长_v1",
+        "sm_01_成长动量",
+        "sm_01_成长动量_大盘择时",
+        "sm_01_成长动量_大盘择时01",
+        "sm_01_成长动量_大盘择时02"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "RnDQGR%PY",
+      "base": "RnDQGR%PY",
+      "class": "custom",
+      "matched_custom": "RnDQGR%PY",
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_Core_growth",
+        "Comp_GARP",
+        "sm_GARP_illiq",
+        "成长_化工_GARP@周期",
+        "成长_双创_GARP@周期_v2"
+      ],
+      "custom_expr": "(研发费用-refq(研发费用,4))/refq(研发费用,4)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "SharesAvgGr%PY",
+      "base": "SharesAvgGr%PY",
+      "class": "custom",
+      "matched_custom": "SharesAvgGr%PY",
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_红利低波_重股息_v1",
+        "成长_GARP白酒"
+      ],
+      "custom_expr": "AvgQ(总股本,4,0)/AvgQ(总股本,4,4)-1",
+      "custom_type": "公式"
+    },
+    {
+      "token": "业绩预告净利润QGr%PYQ",
+      "base": "业绩预告净利润QGr%PYQ",
+      "class": "custom",
+      "matched_custom": "业绩预告净利润QGr%PYQ",
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "ST_国企_振幅动量v1",
+        "value_AH_低溢价GARP_v1",
+        "成长_GARP医药",
+        "成长_净利润断层_v2",
+        "成长_新高@周期"
+      ],
+      "custom_expr": "(业绩预告净利润Q-refQ(净利润(单季),3))/abs(refQ(净利润(单季),3))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "评级调高家数",
+      "base": "评级调高家数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "sm_双创研发强度_v1",
+        "成长_机构预期@周期_v1",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期股息率",
+      "base": "预期股息率",
+      "class": "custom",
+      "matched_custom": "预期股息率",
+      "count": 5,
+      "n_strategies": 5,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_地产链@周期",
+        "value_有色金属@周期",
+        "value_红利低波_央企_v1",
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "custom_expr": "ifnull(预期净利润1年,TTM(净利润(单季),0))*Div%NetInc/总股本/收盘价",
+      "custom_type": "公式"
+    },
+    {
+      "token": "250日涨幅",
+      "base": "250日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 4,
+      "n_strategies": 4,
+      "strategies": [
+        "MultiA_风险平价_v1",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "DivGrPY%",
+      "base": "DivGrPY%",
+      "class": "custom",
+      "matched_custom": "DivGrPY%",
+      "count": 4,
+      "n_strategies": 4,
+      "strategies": [
+        "value_FCF_非金sm_v2",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "成长_GARP白酒"
+      ],
+      "custom_expr": "sumq(分红总金额,4,0)/sumq(分红总金额,4,4)-1",
+      "custom_type": "公式"
+    },
+    {
+      "token": "中性N日波动率(120)",
+      "base": "中性N日波动率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 4,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "历史贝塔",
+      "base": "历史贝塔",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 4,
+      "n_strategies": 4,
+      "strategies": [
+        "Comp_Core_low_vol",
+        "value_红利低波_v2",
+        "成长_新高@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "股息率TTM",
+      "base": "股息率TTM",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 4,
+      "n_strategies": 4,
+      "strategies": [
+        "value_FCF_非金sm_v2",
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1",
+        "value_银行股"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "评级机构数",
+      "base": "评级机构数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 4,
+      "n_strategies": 4,
+      "strategies": [
+        "ST_大市值_v3",
+        "sm_重组题材",
+        "成长_净利润断层_v2",
+        "成长_新高@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "20日涨幅",
+      "base": "20日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "MultiA_动量18",
+        "MultiA_动量宽基and行业31",
+        "MultiA_指数动量缩量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "CoreProfitQ",
+      "base": "CoreProfitQ",
+      "class": "custom",
+      "matched_custom": "CoreProfitQ",
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "ST_国企_振幅动量v1",
+        "ST_大市值_v3",
+        "sm_BJ_纯市值_v1"
+      ],
+      "custom_expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "RoeCoreQ",
+      "base": "RoeCoreQ",
+      "class": "custom",
+      "matched_custom": "RoeCoreQ",
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "Comp_Core_Quality",
+        "Comp_FCF",
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": "CoreProfitQ/归属母公司股东权益合计(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "中性EP",
+      "base": "中性EP",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "sm_BJ_成长均衡_v1",
+        "value_地产链@周期",
+        "value_有色金属@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日波动率(20)",
+      "base": "中性N日波动率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日波动率(5)",
+      "base": "中性N日波动率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "净利润增长",
+      "base": "净利润增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 2,
+      "strategies": [
+        "MultiA_行业指数动量",
+        "sm_BJ_成长均衡_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "基础过滤_流动性2(5000000)",
+      "base": "基础过滤_流动性2",
+      "class": "custom",
+      "matched_custom": "基础过滤_流动性2",
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "Comp_FCF",
+        "ST_国企_振幅动量v1",
+        "value_银行股"
+      ],
+      "custom_expr": "and(5日平均成交额>{0},当日跌停标记=0)\n[模板参数] 参数名: 成交额  默认值: 5000000,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "基础过滤_退市风险(2)",
+      "base": "基础过滤_退市风险",
+      "class": "custom",
+      "matched_custom": "基础过滤_退市风险",
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "Comp_FCF",
+        "sm_成长AH_v1",
+        "value_银行股"
+      ],
+      "custom_expr": "and(收盘价>{0},预期ST2021=0,交易类退市预警=0,国九条分红ST预警!=1,国九条财务退市预警!=1,国九条交易退市预警!=1,年报公布逾期!=1,重大事项违规处罚标记!=1)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "市盈率",
+      "base": "市盈率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "sm_BJ_纯市值_v1",
+        "sm_成长AH_v1",
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "行业N日涨幅(20)",
+      "base": "行业N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "成长_新高@周期",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "行业净利润增长",
+      "base": "行业净利润增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "成长_新高@周期",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "行业净利润环比增长",
+      "base": "行业净利润环比增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "成长_新高@周期",
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "贝塔N日(000001,250)",
+      "base": "贝塔N日",
+      "class": "custom",
+      "matched_custom": "贝塔N日",
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "Comp_Core_growth",
+        "sm_01_成长高贝塔@TMT_v1",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": "SlopeXY(1日涨幅,指数涨幅({0}),{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000001,-1,-1,250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "负债资产率",
+      "base": "负债资产率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "sm_反转_v2",
+        "sm_重组题材",
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "财报预约公布天数",
+      "base": "财报预约公布天数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 3,
+      "n_strategies": 3,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "sm_双创研发强度_v1",
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "10日融资偿还金额",
+      "base": "10日融资偿还金额",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "20日换手率",
+      "base": "20日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_low_turn",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "5日平均溢价率",
+      "base": "5日平均溢价率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "MultiA_动量宽基and行业31",
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "AssetTurnoverDiffPY",
+      "base": "AssetTurnoverDiffPY",
+      "class": "custom",
+      "matched_custom": "AssetTurnoverDiffPY",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "成长_隔夜动量@周期",
+        "成长_高波@周期"
+      ],
+      "custom_expr": "(Refq(总资产周转率,0)-Refq(总资产周转率,4))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "DivOP%",
+      "base": "DivOP%",
+      "class": "custom",
+      "matched_custom": "DivOP%",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "sumq(分红总金额,4)/TTM(营业利润,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "EP",
+      "base": "EP",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "value_地产链@周期",
+        "value_有色金属@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "EPCoreProfitQ",
+      "base": "EPCoreProfitQ",
+      "class": "custom",
+      "matched_custom": "EPCoreProfitQ",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "value_地产链@周期",
+        "value_有色金属@周期"
+      ],
+      "custom_expr": "CoreProfitQ/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "N日均成交金额(20)",
+      "base": "N日均成交金额",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_BJ_成长均衡_v1",
+        "sm_BJ_纯市值_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "RND%Assets",
+      "base": "RND%Assets",
+      "class": "custom",
+      "matched_custom": "RND%Assets",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Quality",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "YieldRfrDiff",
+      "base": "YieldRfrDiff",
+      "class": "custom",
+      "matched_custom": "YieldRfrDiff",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "股息率TTM-MA(10年国债收益率,60)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "交易天数",
+      "base": "交易天数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_双创研发强度_v1",
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "偏度_残差N日(000001,120)",
+      "base": "偏度_残差N日",
+      "class": "custom",
+      "matched_custom": "偏度_残差N日",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "comp_LrevSmom",
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": "Skewness(1日涨幅-指数涨幅({0})*历史贝塔,{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000300,-1,-1,60,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "年内累计涨幅",
+      "base": "年内累计涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "ST_国企_振幅动量v1",
+        "sm_BJ_成长均衡_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "扣非市盈率",
+      "base": "扣非市盈率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Quality",
+        "Comp_Core_growth"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "指标_偏度(1日涨幅,120)",
+      "base": "指标_偏度",
+      "class": "custom",
+      "matched_custom": "指标_偏度",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_反转_v2",
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": "Skewness({0},{1})\n[模板参数] 参数名: 指标,N  默认值: 1日涨幅,-1,-1,60,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "收盘价",
+      "base": "收盘价",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_BJ_成长均衡_v1",
+        "sm_BJ_纯市值_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "最近3年累计分红金额大于5000万",
+      "base": "最近3年累计分红金额大于5000万",
+      "class": "custom",
+      "matched_custom": "最近3年累计分红金额大于5000万",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "近三年分红之和>50000000",
+      "custom_type": "公式"
+    },
+    {
+      "token": "最近三个会计年度累计现金分红总额大于年均净利润的30%",
+      "base": "最近三个会计年度累计现金分红总额大于年均净利润的30%",
+      "class": "custom",
+      "matched_custom": "最近三个会计年度累计现金分红总额大于年均净利润的30%",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "近三年分红之和>0.3*三年净利润",
+      "custom_type": "公式"
+    },
+    {
+      "token": "期望收益月度(24)",
+      "base": "期望收益月度",
+      "class": "custom",
+      "matched_custom": "期望收益月度",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "MultiA_月度期望收益18",
+        "MultiA_行业指数月度期望收益"
+      ],
+      "custom_expr": "胜率月度({0})*赔率月度({0})-(1-胜率月度({0}))\n[模板参数] 参数名: N  默认值: 24,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "未来60日新增流通股数",
+      "base": "未来60日新增流通股数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "机构持股环比增长",
+      "base": "机构持股环比增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "波动率_日度指标(分红总金额,720)",
+      "base": "波动率_日度指标",
+      "class": "custom",
+      "matched_custom": "波动率_日度指标",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "Stdev({0}, {1})\n[模板参数] 参数名: 指标,日数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "申万行业指数标记",
+      "base": "申万行业指数标记",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "MultiA_行业指数动量",
+        "MultiA_行业指数月度期望收益"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "研发销售比率",
+      "base": "研发销售比率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_01_成长高贝塔@TMT_v1",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "管理层持股比例",
+      "base": "管理层持股比例",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "股东数60日变化率",
+      "base": "股东数60日变化率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "股息率",
+      "base": "股息率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "value_AH_低溢价GARP_v1",
+        "成长_GARP白酒"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "胜率月度(24)",
+      "base": "胜率月度",
+      "class": "custom",
+      "matched_custom": "胜率月度",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "MultiA_月度期望收益18",
+        "MultiA_行业指数月度期望收益"
+      ],
+      "custom_expr": "SUM(IF(1月涨幅>0,1,0),{0})/{0}\n[模板参数] 参数名: N  默认值: 24,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "近三年分红之和",
+      "base": "近三年分红之和",
+      "class": "custom",
+      "matched_custom": "近三年分红之和",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "value_红利低波_v2",
+        "value_红利低波_央企_v1"
+      ],
+      "custom_expr": "annual(分红总金额,0)+annual(分红总金额,1)+annual(分红总金额,2)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "连续N年分红(3)",
+      "base": "连续N年分红",
+      "class": "custom",
+      "matched_custom": "连续N年分红",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_div_vol",
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "连续三年分红",
+      "base": "连续三年分红",
+      "class": "custom",
+      "matched_custom": "连续三年分红",
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "value_FCF_非金sm_v2",
+        "value_银行股"
+      ],
+      "custom_expr": "And(annual(分红总金额,0)>0,and(annual(分红总金额,1)>0,annual(分红总金额,2)>0))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "预期盈利2年复合增长",
+      "base": "预期盈利2年复合增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "成长_新高@周期",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期盈利增长率",
+      "base": "预期盈利增长率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "Comp_Core_Sentiment",
+        "value_AH_低溢价GARP_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期营收2年复合增长",
+      "base": "预期营收2年复合增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 2,
+      "n_strategies": 2,
+      "strategies": [
+        "sm_01_成长高贝塔@TMT_v1",
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "高低振幅动量差(60,0.2)",
+      "base": "高低振幅动量差",
+      "class": "custom",
+      "matched_custom": "高低振幅动量差",
+      "count": 2,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": "SUM(IF(RANK(股价振幅,{0},0)>{0}*(1-{1}-0.02),LOG(1+1日涨幅),0),{0})- SUM(IF(RANK(股价振幅,{0},0)<{0}*({1}+0.02),LOG(1+1日涨幅),0),{0})\n[模板参数] 参数名: N,振幅阈值  默认值: 250,-1,-1,0.2,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "%(销售毛利率Q,refq(销售毛利率Q,4))",
+      "base": "%",
+      "class": "custom",
+      "matched_custom": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "%(预期ROE1年,ref(预期ROE1年,250))",
+      "base": "%",
+      "class": "custom",
+      "matched_custom": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "%(预期盈利增长率,REF(预期盈利增长率,250))",
+      "base": "%",
+      "class": "custom",
+      "matched_custom": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "120日换手率",
+      "base": "120日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "120日涨幅",
+      "base": "120日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "250日波动率",
+      "base": "250日波动率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "5日换手率",
+      "base": "5日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "60日波动率",
+      "base": "60日波动率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "60日涨幅",
+      "base": "60日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "AH股溢价率",
+      "base": "AH股溢价率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_AH_低溢价GARP_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "ATR%收盘价N日(20)",
+      "base": "ATR%收盘价N日",
+      "class": "custom",
+      "matched_custom": "ATR%收盘价N日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "BP带壳01",
+      "base": "BP带壳01",
+      "class": "custom",
+      "matched_custom": "BP带壳01",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": "(归属母公司股东权益合计(单季)+壳价值01)/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "CoreProfitQGr%PQ",
+      "base": "CoreProfitQGr%PQ",
+      "class": "custom",
+      "matched_custom": "CoreProfitQGr%PQ",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,1))/abs(refq(CoreProfitQ,1))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "Div%NetIncY2",
+      "base": "Div%NetIncY2",
+      "class": "custom",
+      "matched_custom": "Div%NetIncY2",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_红利低波_v2"
+      ],
+      "custom_expr": "ifnull((Annual(分红总金额,0)/Annual(净利润(单季),0)+Annual(分红总金额,1)/Annual(净利润(单季),1))/2,Annual(分红总金额,0)/Annual(净利润(单季),0))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "DivAGrPY%",
+      "base": "DivAGrPY%",
+      "class": "custom",
+      "matched_custom": "DivAGrPY%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "(annual(分红总金额,0)-annual(分红总金额,1))/annual(分红总金额,1)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "EPCoreProfitQ_v1",
+      "base": "EPCoreProfitQ_v1",
+      "class": "custom",
+      "matched_custom": "EPCoreProfitQ_v1",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "custom_expr": "IFNULL(业绩预告净利润Q,COREPROFITQ_v1)/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "EpsTTMGr%",
+      "base": "EpsTTMGr%",
+      "class": "custom",
+      "matched_custom": "EpsTTMGr%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_AH_低溢价GARP_v1"
+      ],
+      "custom_expr": "(ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1",
+      "custom_type": "公式"
+    },
+    {
+      "token": "FCFLMgn%TTM",
+      "base": "FCFLMgn%TTM",
+      "class": "custom",
+      "matched_custom": "FCFLMgn%TTM",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "TTM(企业自由现金流量,0)/TTM(营业收入,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "FCFLMgn%TTM_重算",
+      "base": "FCFLMgn%TTM_重算",
+      "class": "custom",
+      "matched_custom": "FCFLMgn%TTM_重算",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "custom_expr": "TTM(FCFQ_重算,0)/TTM(营业收入,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "FCFQ_重算",
+      "base": "FCFQ_重算",
+      "class": "custom",
+      "matched_custom": "FCFQ_重算",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "FCFTTM%总市值",
+      "base": "FCFTTM%总市值",
+      "class": "custom",
+      "matched_custom": "FCFTTM%总市值",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "TTM(FCFQ_重算,0)/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "NetFCFTTM",
+      "base": "NetFCFTTM",
+      "class": "custom",
+      "matched_custom": "NetFCFTTM",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "(TTM(FCFQ_重算,0)-分红总金额)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "NetFCFTTM%AstToQ",
+      "base": "NetFCFTTM%AstToQ",
+      "class": "custom",
+      "matched_custom": "NetFCFTTM%AstToQ",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "NetFCFTTM/资产总计(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "NetFCFTTM%总市值",
+      "base": "NetFCFTTM%总市值",
+      "class": "custom",
+      "matched_custom": "NetFCFTTM%总市值",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "NetFCFTTM/总市值",
+      "custom_type": "公式"
+    },
+    {
+      "token": "N日乖离率(60)",
+      "base": "N日乖离率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_01_成长高贝塔@TMT_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "N日涨幅(100)",
+      "base": "N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "N日涨幅(120)",
+      "base": "N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "N日涨幅(200)",
+      "base": "N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "ST_国企_振幅动量v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "N日涨幅(250)",
+      "base": "N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "ST_大市值_v3"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "OPCF%Assets",
+      "base": "OPCF%Assets",
+      "class": "custom",
+      "matched_custom": "OPCF%Assets",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "经营现金流量净额TTM/AvgQ(资产总计(单季),4,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "RSI(14)",
+      "base": "RSI",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "RnDTTM%营业收入TTM",
+      "base": "RnDTTM%营业收入TTM",
+      "class": "custom",
+      "matched_custom": "RnDTTM%营业收入TTM",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "custom_expr": "TTM(研发费用,0)/TTM(营业收入,0)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "RnDTTMGr%PY",
+      "base": "RnDTTMGr%PY",
+      "class": "custom",
+      "matched_custom": "RnDTTMGr%PY",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "RoeQ",
+      "base": "RoeQ",
+      "class": "custom",
+      "matched_custom": "RoeQ",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": "ifnull(扣非净利润(单季),净利润(单季))/资产总计(单季)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "WMA_(1日涨幅,当日成交额,120)",
+      "base": "WMA_",
+      "class": "custom",
+      "matched_custom": "WMA_",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_反转_v2"
+      ],
+      "custom_expr": "WMA({0},{1}, {2})\n[模板参数] 参数名: 指标,权重指标,N  默认值: 1日涨幅,-1,-1,当日成交额,-1,-1,20,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "sortinoN日(120)",
+      "base": "sortinoN日",
+      "class": "custom",
+      "matched_custom": "sortinoN日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "sortinoN日(250)",
+      "base": "sortinoN日",
+      "class": "custom",
+      "matched_custom": "sortinoN日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_风险平价_v1"
+      ],
+      "custom_expr": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "中性BP",
+      "base": "中性BP",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日换手率(120)",
+      "base": "中性N日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日换手率(20)",
+      "base": "中性N日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日换手率(5)",
+      "base": "中性N日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_turn"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性N日换手率(50)",
+      "base": "中性N日换手率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_红利低波_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性SP",
+      "base": "中性SP",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP医药"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "中性历史贝塔",
+      "base": "中性历史贝塔",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "净利润(单季)",
+      "base": "净利润",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_noc_纯市值正盈利_v4"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "净利润环比增长",
+      "base": "净利润环比增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "净资产收益率",
+      "base": "净资产收益率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "分析师评级分",
+      "base": "分析师评级分",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "协偏度_个股指数N日(000001,120)",
+      "base": "协偏度_个股指数N日",
+      "class": "custom",
+      "matched_custom": "协偏度_个股指数N日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "comp_LrevSmom"
+      ],
+      "custom_expr": "MA((1日涨幅 - MA(1日涨幅, {1})) * Square(指数涨幅({0}) - MA(指数涨幅({0}), {1})), {1}) / Stdev(1日涨幅, {1}) / Square(Stdev(指数涨幅({0}), {1}))\n[模板参数] 参数名: 基准指数,N  默认值: 000300,-1,-1,60,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "回报离散度相关度(000001,120)",
+      "base": "回报离散度相关度",
+      "class": "custom",
+      "matched_custom": "回报离散度相关度",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": "HNeutralize(Corr(ln(1+1日涨幅),HStdev(ln(1+1日涨幅-贝塔N日({0},{1})*指数涨幅({0})),0),{1}),ln(总市值),0)\n[模板参数] 参数名: 指数基准,N  默认值: 000001,-1,-1,250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "基础过滤_流动性(5000000)",
+      "base": "基础过滤_流动性",
+      "class": "custom",
+      "matched_custom": "基础过滤_流动性",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_成长AH_v1"
+      ],
+      "custom_expr": "and(5日平均成交额>{0},当日跌停标记=0,开盘涨停标记=0)\n[模板参数] 参数名: 成交额  默认值: 5000000,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "基金持股比例%PYQ",
+      "base": "基金持股比例%PYQ",
+      "class": "custom",
+      "matched_custom": "基金持股比例%PYQ",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": "(基金持股比例-refq(基金持股比例,4))/refq(基金持股比例,4)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "市净率B",
+      "base": "市净率B",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_银行股"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "市研率",
+      "base": "市研率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_AH_低溢价GARP_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "市销率",
+      "base": "市销率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_AH_低溢价GARP_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "应收账款周转率",
+      "base": "应收账款周转率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Quality"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "扣非净利润单季同比增长率Gr%PQ",
+      "base": "扣非净利润单季同比增长率Gr%PQ",
+      "class": "custom",
+      "matched_custom": "扣非净利润单季同比增长率Gr%PQ",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP医药"
+      ],
+      "custom_expr": "(扣非净利润(单季同比增长)-refq(扣非净利润(单季同比增长),1))/abs(refq(扣非净利润(单季同比增长),1))",
+      "custom_type": "公式"
+    },
+    {
+      "token": "指标1指标2中性化(EBITDAQ,EV,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(EPCOREPROFITQ_V1,总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_value"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(FCFQ_重算,总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(净资产收益率,总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_银行股"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度),总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度)-营业成本(单季度),总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度)-营业成本(单季度),资产总计,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(评级机构数,总市值,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标1指标2中性化(预期目标价,收盘价,0)",
+      "base": "指标1指标2中性化",
+      "class": "custom",
+      "matched_custom": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标小于截面均值x倍(市净率,0,1.5)",
+      "base": "指标小于截面均值x倍",
+      "class": "custom",
+      "matched_custom": "指标小于截面均值x倍",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "{0}<HAvg({0},{1})*{2}\n[模板参数] 参数名: 指标,范围,倍数  默认值: 扣非市盈率,-1,-1,0,-1,-1,1,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标小于截面均值x倍(扣非市盈率,0,1.5)",
+      "base": "指标小于截面均值x倍",
+      "class": "custom",
+      "matched_custom": "指标小于截面均值x倍",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "{0}<HAvg({0},{1})*{2}\n[模板参数] 参数名: 指标,范围,倍数  默认值: 扣非市盈率,-1,-1,0,-1,-1,1,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标标准化后中性化MI(FCFQ%总市值)",
+      "base": "指标标准化后中性化MI",
+      "class": "custom",
+      "matched_custom": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "custom_expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标标准化后中性化MI(FCFQ_重算Gr%PYQ)",
+      "base": "指标标准化后中性化MI",
+      "class": "custom",
+      "matched_custom": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "custom_expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "指标标准化后中性化MI(TTM(FCFQ_重算,0)/TTM(EBITDAQ,0))",
+      "base": "指标标准化后中性化MI",
+      "class": "custom",
+      "matched_custom": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_FCF"
+      ],
+      "custom_expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "机构持股比例",
+      "base": "机构持股比例",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_双创研发强度_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "果仁风险预警25版",
+      "base": "果仁风险预警25版",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_纯市值01"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "每股经营性现金流",
+      "base": "每股经营性现金流",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "波动率_季度指标(FCFTTM_重算GR%PY,12)",
+      "base": "波动率_季度指标",
+      "class": "custom",
+      "matched_custom": "波动率_季度指标",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": "StdevQ({0}, {1})\n[模板参数] 参数名: 指标,季度数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "波动率_残差(000001,20)",
+      "base": "波动率_残差",
+      "class": "custom",
+      "matched_custom": "波动率_残差",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_div_vol"
+      ],
+      "custom_expr": "STDEV((1+1日涨幅-历史贝塔*指数涨幅({0})),{1})\n[模板参数] 参数名: BenchIndex,N  默认值: 000001,-1,-1,20,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "波动率积_中性换手率250",
+      "base": "波动率积_中性换手率250",
+      "class": "custom",
+      "matched_custom": "波动率积_中性换手率250",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_红利低波_央企_v1"
+      ],
+      "custom_expr": "中性N日换手率(250)/stdev(中性N日换手率(250),250)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "溢价率",
+      "base": "溢价率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA非AInclEuHKMv1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "相对跳跃因子N日(250)",
+      "base": "相对跳跃因子N日",
+      "class": "custom",
+      "matched_custom": "相对跳跃因子N日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_low_vol"
+      ],
+      "custom_expr": "(Square(Stdev(IF(1日涨幅>0,1日涨幅,0),{0}))-Square(Stdev(IF(1日涨幅<0,1日涨幅,0),{0})))/Square(Stdev(1日涨幅,{0}))\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "经营现金流量净额(单季)",
+      "base": "经营现金流量净额",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_FCF_非金sm_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "股息率大于10年国债收益率plus(0.01)",
+      "base": "股息率大于10年国债收益率plus",
+      "class": "custom",
+      "matched_custom": "股息率大于10年国债收益率plus",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_银行股"
+      ],
+      "custom_expr": "股息率TTM>(10年国债收益率+{0})\n[模板参数] 参数名: 风险溢价  默认值: 0.01,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "股权质押比例",
+      "base": "股权质押比例",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "营业收入(单季)",
+      "base": "营业收入",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "ST_大市值_v3"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "营业收入增长",
+      "base": "营业收入增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_BJ_成长均衡_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "营业收入环比增长",
+      "base": "营业收入环比增长",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "MultiA_行业指数动量"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "行业N日涨幅(200)",
+      "base": "行业N日涨幅",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_重组题材"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "评级增持家数",
+      "base": "评级增持家数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "贝塔N日(000001,20)",
+      "base": "贝塔N日",
+      "class": "custom",
+      "matched_custom": "贝塔N日",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_振幅动量高波@周期"
+      ],
+      "custom_expr": "SlopeXY(1日涨幅,指数涨幅({0}),{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000001,-1,-1,250,-1,-1",
+      "custom_type": "模板"
+    },
+    {
+      "token": "财报发布天数",
+      "base": "财报发布天数",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_大制造GARP_v3"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "资产回报率",
+      "base": "资产回报率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_银行股"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "超速动比率",
+      "base": "超速动比率",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "sm_反转_v2"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "近期评级变化",
+      "base": "近期评级变化",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_机构预期@周期_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期BP1年",
+      "base": "预期BP1年",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期BP第2年",
+      "base": "预期BP第2年",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期DivAGrPY%",
+      "base": "预期DivAGrPY%",
+      "class": "custom",
+      "matched_custom": "预期DivAGrPY%",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_红利低波_重股息_v1"
+      ],
+      "custom_expr": "(ifnull(预期净利润1年,TTM(净利润(单季),0))*Div%NetInc-annual(分红总金额,1))/annual(分红总金额,1)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "预期EP第2年",
+      "base": "预期EP第2年",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "value_钢铁_均衡限估值@周期"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期PE",
+      "base": "预期PE",
+      "class": "custom",
+      "matched_custom": "预期PE",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": "ifnull(总市值/预期净利润1年,动态市盈率)",
+      "custom_type": "公式"
+    },
+    {
+      "token": "预期ROE1年",
+      "base": "预期ROE1年",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "成长_GARP食品饮料_v1"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "预期SP1年",
+      "base": "预期SP1年",
+      "class": "unknown",
+      "matched_custom": null,
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "Comp_Core_Sentiment"
+      ],
+      "custom_expr": null,
+      "custom_type": null
+    },
+    {
+      "token": "高低振幅动量差(250,0.2)",
+      "base": "高低振幅动量差",
+      "class": "custom",
+      "matched_custom": "高低振幅动量差",
+      "count": 1,
+      "n_strategies": 1,
+      "strategies": [
+        "ST_国企_振幅动量v1"
+      ],
+      "custom_expr": "SUM(IF(RANK(股价振幅,{0},0)>{0}*(1-{1}-0.02),LOG(1+1日涨幅),0),{0})- SUM(IF(RANK(股价振幅,{0},0)<{0}*({1}+0.02),LOG(1+1日涨幅),0),{0})\n[模板参数] 参数名: N,振幅阈值  默认值: 250,-1,-1,0.2,-1,-1",
+      "custom_type": "模板"
+    }
+  ],
+  "inline_formulas": [
+    {
+      "strategy": "sm_01_成长动量",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量",
+      "section": "排名条件",
+      "expr": "业绩预告净利润QGr%PYQ_v1"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时",
+      "section": "排名条件",
+      "expr": "业绩预告净利润QGr%PYQ_v1"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时01",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时01",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时01",
+      "section": "排名条件",
+      "expr": "业绩预告净利润QGr%PYQ_v1"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时02",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时02",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时02",
+      "section": "排名条件",
+      "expr": "业绩预告净利润QGr%PYQ_v1"
+    },
+    {
+      "strategy": "sm_大制造GARP_v3",
+      "section": "排名条件",
+      "expr": "%(if(财报发布天数=1,后复权开盘价,ref(后复权开盘价,财报发布天数-1)),REF(后复权收盘价,财报发布天数))"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "sm_GARP_illiq",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "sm_value",
+      "section": "排名条件",
+      "expr": "(营业收入(单季)-refq(营业收入(单季),4))/总市值"
+    },
+    {
+      "strategy": "sm_BJ_成长均衡_v1",
+      "section": "排名条件",
+      "expr": "REFQ(净资产收益率,0)-REFQ(净资产收益率,1)"
+    },
+    {
+      "strategy": "sm_BJ_成长均衡_v1",
+      "section": "排名条件",
+      "expr": "SUM((1+1日涨幅-历史贝塔*指数涨幅(899050)),20)"
+    },
+    {
+      "strategy": "sm_BJ_成长均衡_v1",
+      "section": "排名条件",
+      "expr": "REF(股东数,4)/股东数-1"
+    },
+    {
+      "strategy": "sm_BJ_纯市值_v1",
+      "section": "排名条件",
+      "expr": "Ref(股东数,4)/股东数-1"
+    },
+    {
+      "strategy": "value_红利低波_v2",
+      "section": "筛选条件",
+      "expr": "股息率TTM-10年国债收益率"
+    },
+    {
+      "strategy": "value_红利低波_央企_v1",
+      "section": "筛选条件",
+      "expr": "10年国债收益率-SMED(股息率TTM,STRG_价值红利100）"
+    },
+    {
+      "strategy": "value_红利低波_央企_v1",
+      "section": "筛选条件",
+      "expr": "ma(SAVG(股息率TTM,STRG_价值红利100,0),20)"
+    },
+    {
+      "strategy": "value_红利低波_重股息_v1",
+      "section": "排名条件",
+      "expr": "TTM(COREPROFITQ,4)*DIV%NETINC/总股本/收盘价"
+    },
+    {
+      "strategy": "value_创业板sm_v1",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "value_创业板sm_v1",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "value_有色金属@周期",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "value_有色金属@周期",
+      "section": "排名条件",
+      "expr": "动量_风险调整(60)/动量_风险调整(250)"
+    },
+    {
+      "strategy": "value_银行股",
+      "section": "排名条件",
+      "expr": "管理费用/营业利润"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "筛选条件",
+      "expr": "市净率"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "排名条件",
+      "expr": "销售毛利率Q-REFQ(销售毛利率Q,4)"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "排名条件",
+      "expr": "HNEUTRALIZE(SALESQGR%PY，LN(总市值))"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "排名条件",
+      "expr": "动量_风险调整(60)/动量_风险调整(250)"
+    },
+    {
+      "strategy": "value_钢铁_均衡限估值@周期",
+      "section": "排名条件",
+      "expr": "REF(股东数,4)/股东数-1"
+    },
+    {
+      "strategy": "value_地产链@周期",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "value_地产链@周期",
+      "section": "排名条件",
+      "expr": "动量_风险调整(60)/动量_风险调整(250)"
+    },
+    {
+      "strategy": "MultiA非AInclEuHKMv1",
+      "section": "排名条件",
+      "expr": "MA(后复权收盘价,3)/MA(后复权收盘价,200)"
+    },
+    {
+      "strategy": "MultiA_月度期望收益18",
+      "section": "排名条件",
+      "expr": "SUM(IF(1月涨幅>0,1,0),13)-IF(1月涨幅>0,1,0)"
+    },
+    {
+      "strategy": "MultiA_月度期望收益18",
+      "section": "排名条件",
+      "expr": "SUM(1月涨幅,36)-1月涨幅"
+    },
+    {
+      "strategy": "MultiA_行业指数动量",
+      "section": "筛选条件",
+      "expr": "MA(加权PEXPB5年分位点,5)>MA(加权PEXPB5年分位点,120)"
+    },
+    {
+      "strategy": "MultiA_行业指数动量",
+      "section": "筛选条件",
+      "expr": "MA(跌停家数比例,60)-MA(跌停家数比例,250)"
+    },
+    {
+      "strategy": "MultiA_行业指数动量",
+      "section": "排名条件",
+      "expr": "MA(跌停家数比例,60)"
+    },
+    {
+      "strategy": "MultiA_行业指数动量",
+      "section": "排名条件",
+      "expr": "MA(涨停家数比例,60)"
+    },
+    {
+      "strategy": "MultiA_行业指数月度期望收益",
+      "section": "排名条件",
+      "expr": "SUM(IF(1月涨幅>0,1,0),13)-IF(1月涨幅>0,1,0)"
+    },
+    {
+      "strategy": "MultiA_行业指数月度期望收益",
+      "section": "排名条件",
+      "expr": "SUM(1月涨幅,36)-1月涨幅"
+    },
+    {
+      "strategy": "index_标普500ETF",
+      "section": "筛选条件",
+      "expr": "513500"
+    },
+    {
+      "strategy": "index_印度基金LOF",
+      "section": "筛选条件",
+      "expr": "IF(TICKER()=‘164824',1,0)"
+    },
+    {
+      "strategy": "index_标普医疗保健LOF",
+      "section": "筛选条件",
+      "expr": "IF(TICKER()=‘161126',1,0)"
+    },
+    {
+      "strategy": "index_纳指ETF",
+      "section": "筛选条件",
+      "expr": "IF(TICKER()=‘513100',1,0)"
+    },
+    {
+      "strategy": "index_恒指ETF",
+      "section": "筛选条件",
+      "expr": "IF(TICKER()=‘159920',1,0)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "筛选条件",
+      "expr": "Hrank(评级机构数,1,0)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "筛选条件",
+      "expr": "总市值/(预期净利润1年*0.5+预期净利润第2年*0.5)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "预期营收2年复合增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "预期盈利2年复合增长-净利润3年复合增长"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "HAVG(预期盈利2年复合增长,1)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "HAVG(预期营收2年复合增长,1)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "销售毛利率Q-refq(销售毛利率Q,4)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "HAVG(销售毛利率Q-REFQ(销售毛利率Q,4),1)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "HAVG(ROETTMDiffPQ,1)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "stdevQ(CoreprofitQGr%PY,12)"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "20日波动率/250日波动率"
+    },
+    {
+      "strategy": "成长_机构预期@周期_v1",
+      "section": "排名条件",
+      "expr": "HNeutralize(评级机构数,ln(总市值),0)"
+    },
+    {
+      "strategy": "成长_净利润断层_v2",
+      "section": "排名条件",
+      "expr": "(净利润-预期净利润Q)/ABS(预期净利润Q)"
+    },
+    {
+      "strategy": "成长_净利润断层_v2",
+      "section": "排名条件",
+      "expr": "(业绩预告净利润Q-预期净利润Q)/总市值"
+    },
+    {
+      "strategy": "成长_净利润断层_v2",
+      "section": "排名条件",
+      "expr": "(业绩预告净利润Q-预期净利润Q)/ABS(预期净利润Q)"
+    },
+    {
+      "strategy": "成长_净利润断层_v2",
+      "section": "排名条件",
+      "expr": "(业绩预告营业收入Q-预期营业收入Q)/ABS(预期营业收入Q)"
+    },
+    {
+      "strategy": "成长_净利润断层_v2",
+      "section": "排名条件",
+      "expr": "(业绩预告营业收入Q-预期营业收入Q)/总市值"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "成长_双创_GARP@周期_v2",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "成长_隔夜动量@周期",
+      "section": "排名条件",
+      "expr": "%(评级机构数,REF(评级机构数,60))"
+    },
+    {
+      "strategy": "成长_隔夜动量@周期",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "成长_隔夜动量@周期",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "成长_隔夜动量@周期",
+      "section": "排名条件",
+      "expr": "(净利润-预期净利润Q)/ABS(预期净利润Q)"
+    },
+    {
+      "strategy": "成长_振幅动量高波@周期",
+      "section": "排名条件",
+      "expr": "N日平均成交量(10)/250日平均成交量"
+    },
+    {
+      "strategy": "成长_振幅动量高波@周期",
+      "section": "排名条件",
+      "expr": "REF(股东数,4)/股东数-1"
+    },
+    {
+      "strategy": "成长_振幅动量高波@周期",
+      "section": "排名条件",
+      "expr": "%(评级机构数,REF(评级机构数,60))"
+    },
+    {
+      "strategy": "成长_新高@周期",
+      "section": "筛选条件",
+      "expr": "SUM(后复权收盘价/MAX(后复权收盘价，250)>0.9,5)"
+    },
+    {
+      "strategy": "成长_新高@周期",
+      "section": "排名条件",
+      "expr": "%(预期盈利2年复合增长,ref(预期盈利2年复合增长,60))"
+    },
+    {
+      "strategy": "成长_新高@周期",
+      "section": "排名条件",
+      "expr": "(净利润-预期净利润Q)/ABS(预期净利润Q)"
+    },
+    {
+      "strategy": "成长_新高@周期",
+      "section": "排名条件",
+      "expr": "HAVG(预期盈利2年复合增长,2)"
+    },
+    {
+      "strategy": "成长_新高@周期",
+      "section": "排名条件",
+      "expr": "corr(后复权收盘价,当日成交量,20)"
+    },
+    {
+      "strategy": "成长_高波@周期",
+      "section": "筛选条件",
+      "expr": "%(预期净利润1年,REF(预期净利润1年,60))"
+    },
+    {
+      "strategy": "成长_高波@周期",
+      "section": "排名条件",
+      "expr": "%(评级机构数,REF(评级机构数,60))"
+    },
+    {
+      "strategy": "成长_高波@周期",
+      "section": "排名条件",
+      "expr": "(净利润-预期净利润Q)/ABS(预期净利润Q)"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "成长_化工_GARP@周期",
+      "section": "排名条件",
+      "expr": "动量_风险调整(20)/动量_风险调整(120)"
+    },
+    {
+      "strategy": "成长_GARP医药",
+      "section": "排名条件",
+      "expr": "COREPROFITQGR%PY/GREATER(STDEVQ(COREPROFITQGR%PY,4),0.001)"
+    },
+    {
+      "strategy": "成长_GARP医药",
+      "section": "排名条件",
+      "expr": "研发费用(TTM)/总市值"
+    },
+    {
+      "strategy": "成长_GARP医药",
+      "section": "排名条件",
+      "expr": "研发费用(单季度)/营业收入(TTM)"
+    },
+    {
+      "strategy": "成长_GARP食品饮料_v1",
+      "section": "排名条件",
+      "expr": "stdevq(销售毛利率Q,8)"
+    },
+    {
+      "strategy": "成长_GARP食品饮料_v1",
+      "section": "排名条件",
+      "expr": "avgq(销售毛利率Q,4)/stdevq(销售毛利率Q,4)"
+    },
+    {
+      "strategy": "成长_GARP食品饮料_v1",
+      "section": "排名条件",
+      "expr": "TTM(所得税费用,0)/总市值"
+    },
+    {
+      "strategy": "成长_GARP食品饮料_v1",
+      "section": "排名条件",
+      "expr": "经营现金流量净额(TTM)/营业收入(TTM)"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "成长_GARP白酒",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "ST_大市值_v3",
+      "section": "排名条件",
+      "expr": "REF(股东数,4)/股东数-1"
+    },
+    {
+      "strategy": "Comp_Core_value",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "Comp_Core_value",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HAVG(SalesQGr%PY,1)"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HAVG(CoreProfitQGr%PY,1)"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HNEUTRALIZE(SALESQGR%PY，LN(总市值))"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "销售毛利率Q-REFQ(销售毛利率Q,4)"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HAVG(销售毛利率Q-REFQ(销售毛利率Q,4),1)"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HNEUTRALIZE(SALESQGR%PY，LN(总市值))"
+    },
+    {
+      "strategy": "Comp_Core_growth",
+      "section": "排名条件",
+      "expr": "HNEUTRALIZE(CoreProfitQGr%PY，LN(总市值))"
+    },
+    {
+      "strategy": "Comp_Core_low_turn",
+      "section": "排名条件",
+      "expr": "STDEVM(N日换手率(1),N日换手率(5),N日换手率(10),N日换手率(20),N日换手率(60),N日换手率(120))"
+    },
+    {
+      "strategy": "Comp_Core_Quality",
+      "section": "排名条件",
+      "expr": "销售毛利率Q-销售毛利率"
+    },
+    {
+      "strategy": "Comp_Core_Quality",
+      "section": "排名条件",
+      "expr": "STDEVQ(ROECOREQ,12)"
+    },
+    {
+      "strategy": "Comp_Core_Quality",
+      "section": "排名条件",
+      "expr": "STDEVQ(SALESQGR%PY,12)"
+    },
+    {
+      "strategy": "Comp_Core_Quality",
+      "section": "排名条件",
+      "expr": "HAVG(OPCFNPDIFF%NP,1)"
+    },
+    {
+      "strategy": "Comp_Core_Quality",
+      "section": "排名条件",
+      "expr": "HAVG(中性ROE,1)"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "营业收入(单季环比增长)-营业收入增长"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "营业收入增长-营业收入3年复合增长"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "COREPROFITQGr%PQ-COREPROFITTTMGr%PY"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "COREPROFITTTMGr%PY-COREPROFITTTMGr%3Y"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "营业收入(单季)/总市值"
+    },
+    {
+      "strategy": "Comp_GARP",
+      "section": "排名条件",
+      "expr": "(营业收入(单季度)-营业成本(单季度))/EV"
+    },
+    {
+      "strategy": "Comp_FCF",
+      "section": "筛选条件",
+      "expr": "TTM(FCFQ_重算,4)"
+    },
+    {
+      "strategy": "Comp_FCF",
+      "section": "筛选条件",
+      "expr": "annual(经营现金流量净额,0)+annual(经营现金流量净额,1)+annual(经营现金流量净额,2)+annual(经营现金流量净额,3)+annual(经营现金流量净额,4)"
+    },
+    {
+      "strategy": "Comp_FCF",
+      "section": "筛选条件",
+      "expr": "(TTM(经营现金流量净额,0)-TTM(营业收入,0))/资产总计"
+    },
+    {
+      "strategy": "Comp_FCF",
+      "section": "排名条件",
+      "expr": "stdevq(RoeCoreq,12)"
+    },
+    {
+      "strategy": "Comp_FCF",
+      "section": "排名条件",
+      "expr": "FCFTTM_重算GR%PY"
+    },
+    {
+      "strategy": "comp_core_mom",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),250)-SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),20)"
+    },
+    {
+      "strategy": "comp_core_mom",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(1日涨幅+1)),250)-SUM(IF(当日涨停标记=1,0,LOG(1日涨幅+1)),20)"
+    },
+    {
+      "strategy": "comp_LrevSmom",
+      "section": "筛选条件",
+      "expr": "SUM(1月涨幅,36)"
+    },
+    {
+      "strategy": "comp_LrevSmom",
+      "section": "排名条件",
+      "expr": "SUM(IF(当日涨停标记=1,0,LOG(后复权开盘价/REF(后复权收盘价,1))),120)"
+    },
+    {
+      "strategy": "comp_LrevSmom",
+      "section": "排名条件",
+      "expr": "SUM(1月涨幅,36)"
+    }
+  ],
+  "timing_formulas": [
+    {
+      "strategy": "sm_01_成长动量_大盘择时",
+      "line": "自定义仓位公式：If(OR( ma(指数收盘(111001),5)>ma(指数收盘(111001), 200), Timing (ma(指数收盘(111001),5)/ma(指数收盘(111001), 200),0.85,0.95)), 1,0)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时01",
+      "line": "自定义仓位公式：If( OR( and( ma(指数收盘(111001),5)>ma(指数收盘(111001), 200), 1 - 指数收盘(111001)/Max(指数收盘(111001),60)<0.1), Timing (ma(指数收盘(111001),5)/ma(指数收盘(111001), 200),0.85,0.95)), 1,0)"
+    },
+    {
+      "strategy": "sm_01_成长动量_大盘择时02",
+      "line": "自定义仓位公式：If(Or( Timing(1 - 指数收盘(111001)/Max(指数收盘(111001),60), 0.08, 0.10), Timing(ma(指数收盘(111001),5)/ma(指数收盘(111001),200), 0.85, 0.95) ), 1, 0)"
+    }
+  ],
+  "sell_hold_conditions": [
+    {
+      "text": "调仓日交易时涨停",
+      "count": 34,
+      "kind": [
+        "hold"
+      ],
+      "n_strategies": 34
+    },
+    {
+      "text": "选股日停牌",
+      "count": 31,
+      "kind": [
+        "hold"
+      ],
+      "n_strategies": 31
+    },
+    {
+      "text": "排名名次大于等于20",
+      "count": 11,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 11
+    },
+    {
+      "text": "排名名次大于等于10",
+      "count": 10,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 10
+    },
+    {
+      "text": "买入后涨幅大于等于100%",
+      "count": 8,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 8
+    },
+    {
+      "text": "买入后跌幅大于等于18%",
+      "count": 7,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 7
+    },
+    {
+      "text": "买入后最高点跌幅大于等于18%",
+      "count": 7,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 7
+    },
+    {
+      "text": "排名名次大于等于25",
+      "count": 6,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 6
+    },
+    {
+      "text": "基础过滤_退市风险_v1(2)",
+      "count": 6,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 6
+    },
+    {
+      "text": "无",
+      "count": 5,
+      "kind": [
+        "hold"
+      ],
+      "n_strategies": 5
+    },
+    {
+      "text": "排名名次大于等于15",
+      "count": 4,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 4
+    },
+    {
+      "text": "排名名次大于等于8",
+      "count": 2,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 2
+    },
+    {
+      "text": "调仓前一日收盘涨停",
+      "count": 2,
+      "kind": [
+        "hold"
+      ],
+      "n_strategies": 2
+    },
+    {
+      "text": "20日涨幅>0.3",
+      "count": 2,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 2
+    },
+    {
+      "text": "持有天数小于等于30",
+      "count": 2,
+      "kind": [
+        "hold"
+      ],
+      "n_strategies": 2
+    },
+    {
+      "text": "排名名次大于等于30",
+      "count": 2,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 2
+    },
+    {
+      "text": "基础过滤_退市风险_v1(2)%",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "OR(收盘价<2,sum(预期ST2021,30)>0,sum(果仁风险预警25版,30)>0,过去N日重大违规数量(30)>0)",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "买入后跌幅大于等于16%",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "买入后最高点跌幅大于等于16%",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "排名名次大于等于80",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "排名名次大于等于9",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "OR(N日涨幅(100)<-0.01,RSRS_RAW(18)<0.6)undefined",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "排名名次大于等于5",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "N日涨幅(100)<-0.01",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "排名名次大于等于3",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "持有天数大于等于60",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "买入后涨幅大于等于70%",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    },
+    {
+      "text": "买入后涨幅大于等于120%",
+      "count": 1,
+      "kind": [
+        "sell"
+      ],
+      "n_strategies": 1
+    }
+  ]
+}
