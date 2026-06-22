@@ -2759,6 +2759,134 @@ class StagedQlibBackendBuilder:
                 written.append(field_name)
         return sorted(set(written))
 
+    def _materialize_forecast_growth(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """业绩预告 single-quarter net-profit YoY growth (果仁 业绩预告净利润QGr%PYQ_v1).
+
+        For each (code, day): the latest 业绩预告 (carried by effective_date) gives the
+        forecast cumulative net-profit MIDPOINT for period (fiscal-year FY, quarter Q). The
+        forecast's LAST single quarter = midpoint - actual_cumulative[FY, Q-1] visible as-of
+        the day (the full midpoint if Q==1). Growth = (single_q_forecast -
+        prior_year_same_single_quarter) / |prior_year_single_quarter|, where the prior-year
+        single quarter = income_cum[FY-1, Q] - income_cum[FY-1, Q-1]. All inputs PIT
+        (forecast + income effective_date = strict next-open after disclosure).
+
+        Validated vs 果仁 across 38,252 holdings: median rel-err 4.4e-05, 93% within 1%,
+        98.5% sign-match (workspace/scripts/_validate_forecast_factor_vs_guorn.py).
+
+        The factor is a STEP function — it can only change on a forecast or income event, so
+        it is recomputed as-of each such event and carried forward (carrying the last FINITE
+        value; NaN before the first computable one). The latest forecast carries with NO TTL
+        (matches 果仁's snapshot carry — a consuming factor should gate on recency). Writes
+        ``$forecast__np_q_yoy`` directly (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX), like
+        report_rc. Sub-universe coverage (only forecast-issuing stocks); register accordingly.
+        """
+        fc_path = self.ledger_path("forecast")
+        inc_path = self.ledger_path("income")
+        if not (os.path.exists(fc_path) and os.path.exists(inc_path)):
+            return []
+        fields = self._apply_field_filter(["forecast__np_q_yoy"])
+        if not fields:
+            return []
+        fc = pd.read_parquet(fc_path, columns=["qlib_code", "end_date", "effective_date",
+                                               "net_profit_min", "net_profit_max"])
+        inc = pd.read_parquet(inc_path, columns=["qlib_code", "end_date", "effective_date", "n_income"])
+        target_codes = set(target_dirs)
+        if target_codes:
+            fc = fc[fc["qlib_code"].isin(target_codes)].copy()
+            inc = inc[inc["qlib_code"].isin(target_codes)].copy()
+        for c in ("end_date", "effective_date"):
+            fc[c] = normalize_date_series(fc[c])
+            inc[c] = normalize_date_series(inc[c])
+        fc = fc.dropna(subset=["end_date", "effective_date"])
+        fc = fc[fc["net_profit_min"].notna() & fc["net_profit_max"].notna()].sort_values("effective_date")
+        inc = inc.dropna(subset=["end_date", "effective_date", "n_income"]).sort_values("effective_date")
+        if fc.empty:
+            return []
+        fc_by = {k: g for k, g in fc.groupby("qlib_code")}
+        inc_by = {k: g for k, g in inc.groupby("qlib_code")}
+        _QMONTH = {3: 1, 6: 2, 9: 3, 12: 4}
+        _QEND = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+        def _qend(year: int, q: int) -> pd.Timestamp:
+            m, d = _QEND[q]
+            return pd.Timestamp(year, m, d)
+
+        cal_arr = calendar.values.astype("datetime64[ns]")
+        n_cal = len(calendar)
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize forecast_growth", unit="symbol", leave=False,
+        ):
+            fcg = fc_by.get(qlib_code)
+            if fcg is None or fcg.empty:
+                continue
+            incg = inc_by.get(qlib_code)
+            inc_tab: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]] = {}
+            if incg is not None:
+                for end, gg in incg.groupby("end_date"):
+                    inc_tab[end] = (gg["effective_date"].values.astype("datetime64[ns]"),
+                                    gg["n_income"].values.astype("float64"))
+
+            def _inc_asof(end: pd.Timestamp, asof: np.datetime64) -> float:
+                tab = inc_tab.get(end)
+                if tab is None:
+                    return float("nan")
+                effs, vals = tab
+                pos = int(np.searchsorted(effs, asof, side="right")) - 1
+                return vals[pos] / 1e4 if pos >= 0 else float("nan")  # 元 -> 万元 (match forecast units)
+
+            fc_eff = fcg["effective_date"].values.astype("datetime64[ns]")
+            fc_end = fcg["end_date"].values
+            fc_mid = (fcg["net_profit_min"].values + fcg["net_profit_max"].values) / 2.0  # 万元
+
+            def _factor_asof(e: np.datetime64) -> float:
+                pos = int(np.searchsorted(fc_eff, e, side="right")) - 1
+                if pos < 0:
+                    return float("nan")
+                end = pd.Timestamp(fc_end[pos])
+                q = _QMONTH.get(end.month)
+                if q is None:
+                    return float("nan")
+                fy, mid = end.year, fc_mid[pos]
+                prior_cum = 0.0 if q == 1 else _inc_asof(_qend(fy, q - 1), e)
+                py_cum_q = _inc_asof(_qend(fy - 1, q), e)
+                py_cum_qm1 = 0.0 if q == 1 else _inc_asof(_qend(fy - 1, q - 1), e)
+                if not (np.isfinite(mid) and np.isfinite(prior_cum)
+                        and np.isfinite(py_cum_q) and np.isfinite(py_cum_qm1)):
+                    return float("nan")
+                py_single = py_cum_q - py_cum_qm1
+                if py_single == 0:
+                    return float("nan")
+                return (mid - prior_cum - py_single) / abs(py_single)
+
+            ev_days = set(pd.Timestamp(x) for x in fc_eff)
+            if incg is not None:
+                ev_days |= set(pd.Timestamp(x) for x in incg["effective_date"].values)
+            ev_days = sorted(d for d in ev_days if d <= calendar[-1])
+            if not ev_days:
+                continue
+            arr = np.full(n_cal, np.nan, dtype=np.float32)
+            last = float("nan")
+            for i, e in enumerate(ev_days):
+                v = _factor_asof(np.datetime64(e))
+                if np.isfinite(v):
+                    last = v
+                if not np.isfinite(last):
+                    continue
+                p0 = int(np.searchsorted(cal_arr, np.datetime64(e), side="left"))
+                p1 = int(np.searchsorted(cal_arr, np.datetime64(ev_days[i + 1]), side="left")) if i + 1 < len(ev_days) else n_cal
+                if p0 < n_cal:
+                    arr[max(p0, 0):p1] = last
+            if np.isfinite(arr).any():
+                self._write_feature_series(feature_dir, "forecast__np_q_yoy", arr)
+                written.append("forecast__np_q_yoy")
+        return sorted(set(written))
+
     def _materialize_snapshot_dataset(
         self,
         dataset_name: str,
@@ -3194,6 +3322,10 @@ class StagedQlibBackendBuilder:
             written["indicators"] = self._materialize_snapshot_dataset("indicators", calendar, target_dirs)
         if "forecast" in active_datasets and os.path.exists(self.ledger_path("forecast")):
             written["forecast"] = self._materialize_snapshot_dataset("forecast", calendar, target_dirs)
+            # Custom: the derived single-quarter forecast-growth factor (业绩预告净利润QGr%PYQ_v1),
+            # which joins the income cumulative — not expressible from the raw snapshot fields.
+            # Writes $forecast__np_q_yoy directly; 果仁-validated (median rel-err 4.4e-05).
+            written["forecast_growth"] = self._materialize_forecast_growth(calendar, target_dirs)
         if "holder_number" in active_datasets and os.path.exists(self.ledger_path("holder_number")):
             written["holder_number"] = self._materialize_snapshot_dataset("holder_number", calendar, target_dirs)
         if "stk_holdertrade" in active_datasets and os.path.exists(self.ledger_path("stk_holdertrade")):
