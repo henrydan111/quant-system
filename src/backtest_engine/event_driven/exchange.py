@@ -267,6 +267,19 @@ _MAIN_BOARD_REGISTRATION_DATE = pd.Timestamp('2023-04-10')
 _NO_LIMIT_UP_SENTINEL_FLOOR = 99999.0
 _NO_LIMIT_DOWN_SENTINEL_CEIL = 0.01
 
+# Board code classification — shared by get_limit_pct + is_true_no_limit_day so
+# the two can never drift (GPT cross-review 2026-06-22, Major-2). Main board =
+# 沪深主板 (incl. ex-中小板 002 and the newer SZ 003). BSE = 北交所: detected by
+# the .BJ suffix (robust across segments) with a numeric-prefix fallback for any
+# suffix-less code — 43 (legacy NEEQ), 83/87/88, and 92 (the new 920 segment).
+_MAIN_BOARD_PREFIXES = ('000', '001', '002', '003', '600', '601', '603', '605')
+_BSE_NUMERIC_PREFIXES = ('43', '83', '87', '88', '92')
+
+
+def _is_bse_code(code: str) -> bool:
+    """True for a 北交所 (Beijing Stock Exchange) ts_code — suffix-first."""
+    return code.endswith('.BJ') or code[:2] in _BSE_NUMERIC_PREFIXES
+
 
 class Exchange:
     """A-share exchange simulator.
@@ -397,8 +410,8 @@ class Exchange:
         - ST: ±5%
         - ChiNext (300/301): ±20% since 2020-08-24, else ±10%
         - STAR (688/689): ±20% since 2019-07-22, else ±10%
-        - BSE (83/87/43/92): ±30%
-        - Main board: ±10%
+        - BSE (北交所, .BJ / 43/83/87/88/92 incl. 920): ±30%
+        - Main board (沪深主板) + out-of-universe fallback: ±10%
 
         Args:
             code: Tushare ts_code (e.g., '300001.SZ').
@@ -415,9 +428,11 @@ class Exchange:
             return 0.20 if date >= _CHINEXT_REFORM_DATE else 0.10
         if prefix in ('688', '689'):  # STAR (科创板)
             return 0.20 if date >= _STAR_LAUNCH_DATE else 0.10
-        if code[:2] in ('83', '87', '43', '92'):  # BSE (北交所)
+        if _is_bse_code(code):  # BSE (北交所, incl. 920xxx)
             return 0.30
-        return 0.10  # Main board (主板) default
+        if prefix in _MAIN_BOARD_PREFIXES:  # Main board (主板)
+            return 0.10
+        return 0.10  # Conservative fallback for out-of-universe A/B/fund codes
 
     def compute_limit_prices(self, pre_close: float,
                              limit_pct: float) -> tuple[float, float]:
@@ -651,7 +666,8 @@ class Exchange:
         → up_limit 20.16 off a 14.0 issue price), so a buyer at the locked limit
         has no seller. (GPT cross-review 2026-06-22, Major-2.)
 
-        A day is genuinely no-limit only when one of the following holds:
+        For this engine, a day is confirmed no-limit only when one of the
+        following holds:
 
         1. **Published no-limit sentinel (primary, definitive).** On a real
            no-limit stock-day Tushare's ``stk_limit`` publishes an UNREACHABLE
@@ -671,11 +687,20 @@ class Exchange:
              - ChiNext (300/301) listed on/after 2020-08-24 → first 5 trading days
              - STAR (688/689) → first 5 trading days (registration-based since launch)
              - Main board listed on/after 2023-04-10 (全面注册制) → first 5 days
-             - BSE (83/87/43/92, incl. 920xxx) → listing day only
+             - BSE (北交所, .BJ suffix / 43/83/87/88/92, incl. 920xxx) → listing day only
 
            It returns False for the OLD main-board / pre-2020 ChiNext +44% / −36%
            first day (``list_date`` before the board's reform date): that cap is
-           a real published limit, not a no-limit window.
+           a real published limit, not a no-limit window. It also returns False
+           for any out-of-universe code (B-share / fund / unknown) that matches
+           no board — failing CLOSED rather than guessing a main-board IPO window.
+
+        Non-IPO no-limit events (e.g. relisting first day, delisting-arrangement
+        first day, and exchange-designated special cases) are recognized ONLY
+        through the published ``stk_limit`` sentinel (branch 1). Without that
+        sentinel / event metadata the regime fallback deliberately returns False
+        rather than guessing — so true no-limit days OUTSIDE an IPO window are
+        correct only when sentinel coverage is present.
 
         Args:
             code: Stock ts_code.
@@ -720,12 +745,16 @@ class Exchange:
         if prefix in ('688', '689'):
             # STAR has been registration-based since its 2019-07-22 launch.
             return trading_days_since <= 5
-        if code[:2] in ('83', '87', '43', '92'):
-            # BSE (北交所, incl. 920xxx via the '92' prefix): listing day only.
+        if _is_bse_code(code):
+            # BSE (北交所, incl. 920xxx): listing day only.
             return trading_days_since <= 1
-        # Main board: 5-day no-limit window ONLY for 全面注册制 listings;
-        # a pre-reform main-board first day was the old +44% cap.
-        return list_date >= _MAIN_BOARD_REGISTRATION_DATE and trading_days_since <= 5
+        if prefix in _MAIN_BOARD_PREFIXES:
+            # Main board: 5-day no-limit window ONLY for 全面注册制 listings;
+            # a pre-reform main-board first day was the old +44% cap.
+            return list_date >= _MAIN_BOARD_REGISTRATION_DATE and trading_days_since <= 5
+        # Out-of-universe (B-share / fund / unknown) — fail CLOSED: without a
+        # published sentinel we will not guess a no-limit window.
+        return False
 
     # ─── Tradability ──────────────────────────────────────────────
 
@@ -794,7 +823,10 @@ class Exchange:
 
         Cannot sell if:
         - Suspended (vol == 0)
-        - Limit-down (no buyers)
+        - Limit-down (no buyers), UNLESS the day is genuinely no-limit
+          (see :meth:`is_true_no_limit_day`; in a no-limit coverage hole the
+          computed fallback band is not an enforceable exchange limit, so a
+          sell must not be blocked — symmetric with :meth:`can_buy`)
 
         ``limit_gate`` mirrors :meth:`can_buy`: ``'fill_price'`` blocks when
         ``price_field`` is at the down-limit; ``'all_day_lock'`` blocks only on a
@@ -816,7 +848,7 @@ class Exchange:
             return False
         locked = (self.is_all_day_limit_down(row, code, date) if limit_gate == 'all_day_lock'
                   else self.is_limit_down(row, code, date, price_field=price_field))
-        if locked:
+        if locked and not self.is_true_no_limit_day(code, date, row):
             return False
         return True
 

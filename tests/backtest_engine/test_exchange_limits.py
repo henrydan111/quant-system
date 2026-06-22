@@ -77,6 +77,27 @@ class LimitPriceTests(unittest.TestCase):
             0.30,
         )
 
+    # ── R2 GPT Major-2: BSE detection hardened (.BJ suffix + 88/920 segments) ──
+    def test_bse_920_segment_limit_30pct(self):
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("920690.BJ", False, pd.Timestamp("2024-01-15")),
+            0.30,
+        )
+
+    def test_bse_88_segment_limit_30pct(self):
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("880001.BJ", False, pd.Timestamp("2024-01-15")),
+            0.30,
+        )
+
+    def test_b_share_conservative_10pct(self):
+        # B-share (200xxx) — genuinely ±10%; must NOT fall through to a 0.30 BSE
+        # band nor be mis-handled. Conservative main-board band is correct.
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("200625.SZ", False, pd.Timestamp("2024-01-15")),
+            0.10,
+        )
+
     def test_limit_price_rounding_half_up_boundary(self):
         """A pre_close that produces .xx5 midpoint should round up."""
         # pre_close=10.05, limit_pct=0.10
@@ -369,6 +390,7 @@ class IsTrueNoLimitDayTests(unittest.TestCase):
         "300100.SZ": "2019-05-10",  # ChiNext, PRE-reform — +44% first day
         "688981.SH": "2020-07-16",  # STAR — registration-based (no-limit 5d)
         "920690.BJ": "2023-09-01",  # BSE — listing day only
+        "200625.SZ": "2023-05-10",  # B-share — out-of-universe (fail-closed)
     }
 
     def setUp(self):
@@ -478,6 +500,55 @@ class IsTrueNoLimitDayTests(unittest.TestCase):
         ex = Exchange(slippage_model=NoSlippage())
         row = self._row(up_limit=1000000.0, down_limit=0.01)
         self.assertTrue(ex.is_true_no_limit_day("601001.SH", self.date, row))
+
+    # ── R2 GPT Major-1: can_sell shares the no-limit bypass (symmetry) ──
+    def test_post_2023_main_board_first5_no_limit_can_sell(self):
+        # Symmetric to the buy case: post-2023 main-board IPO day 3, stk_limit
+        # coverage hole, close at the computed −10% band → the fallback flags
+        # limit-DOWN, but the registration-regime bypass rescues the SELL (a
+        # synthetic band is not an enforceable "no buyers" condition on a true
+        # no-limit day).
+        date = _ipo_day("2023-05-10", 3)
+        row = self._row(raw_close=9.0, close=9.0)  # 10.0 × 0.90, no fields
+        self.assertTrue(self.ex.is_limit_down(row, "601001.SH", date))       # computed band fires
+        self.assertTrue(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertTrue(self.ex.can_sell(row, "601001.SH", date))
+
+    def test_post_2023_main_board_sell_blocked_after_window(self):
+        # Day 6 — window expired → a real −10% limit-down genuinely blocks a sell.
+        date = _ipo_day("2023-05-10", 6)
+        row = self._row(raw_close=9.0, close=9.0)
+        self.assertFalse(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertFalse(self.ex.can_sell(row, "601001.SH", date))
+
+    def test_old_main_board_first_day_minus36_cannot_sell(self):
+        # The −36% leg of the old +44%/−36% first-day rule is a REAL limit-down
+        # (no buyers) → a sell stays blocked even on the IPO first day.
+        date = pd.Timestamp("2014-07-31")
+        row = self._row(raw_close=8.96, close=8.96, raw_pre_close=14.0,
+                        pre_close=14.0, up_limit=20.16, down_limit=8.96)
+        self.assertTrue(self.ex.is_limit_down(row, "002728.SZ", date))
+        self.assertFalse(self.ex.is_true_no_limit_day("002728.SZ", date, row))
+        self.assertFalse(self.ex.can_sell(row, "002728.SZ", date))
+
+    # ── R2 GPT Major-2: out-of-universe codes fail CLOSED (no main-board guess) ──
+    def test_b_share_post_reg_date_fails_closed(self):
+        # A B-share listed after 2023-04-10 must NOT be treated as a post-注册制
+        # main-board IPO. Without a sentinel the regime branch returns False.
+        date = _ipo_day("2023-05-10", 3)
+        self.assertFalse(self.ex.is_true_no_limit_day("200625.SZ", date, self._row()))
+
+    def test_out_of_universe_sentinel_still_honored(self):
+        # If the exchange DOES publish a no-limit sentinel for an out-of-universe
+        # code, branch 1 still honors it (sentinel is definitive, board-agnostic).
+        date = _ipo_day("2023-05-10", 3)
+        row = self._row(up_limit=1000000.0, down_limit=0.01)
+        self.assertTrue(self.ex.is_true_no_limit_day("200625.SZ", date, row))
+
+    def test_bse_920_suffix_detected_via_dot_bj(self):
+        # 920xxx is caught by the .BJ suffix (not just the '92' numeric prefix).
+        d1 = pd.Timestamp("2023-09-01")
+        self.assertTrue(self.ex.is_true_no_limit_day("920690.BJ", d1, self._row()))
 
 
 if __name__ == "__main__":
