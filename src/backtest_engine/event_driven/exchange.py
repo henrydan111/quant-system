@@ -840,9 +840,10 @@ class Exchange:
         vol = row.get('vol', 0)
         if pd.isna(vol) or vol <= 0:
             return 0.0
+        # Fail closed: value the cap at the ACTUAL fill column, or 0 if it is
+        # missing/non-positive (no raw_open fallback — a close/avg fill with a
+        # missing fill price must not yield a positive cap; GPT R3 m1).
         price = row.get(price_field)
-        if price is None or pd.isna(price) or price <= 0:
-            price = row.get('raw_open', row.get('open'))
         if price is None or pd.isna(price) or price <= 0:
             return 0.0
         max_shares = vol * 100 * self.volume_limit  # vol in 手 -> shares
