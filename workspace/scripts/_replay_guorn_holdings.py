@@ -1,0 +1,124 @@
+"""Rung-2 GPT R1 Major-3 — the decisive falsification test (rule #10).
+
+Claim under test: "the rung-2 big-year divergence is SELECTION precision + irreducible
+果仁 screens, NOT a local engine/return/corporate-action/cost-path bug."
+
+Test: feed 果仁's ACTUAL held names (from 各阶段持仓详单 segments) into the LOCAL
+event-driven engine, equal-weight, 果仁's 0.3%/side cost, same period. Then:
+  - if the local replay return ~ 果仁's reported return -> the engine/return/CA/cost path
+    is SOUND; the rung-2 residual is selection (which names), as claimed.
+  - if it DIVERGES -> the residual is NOT merely selection; the local price/return/
+    corporate-action/execution path is still suspect.
+
+NOTE: the engine's fill-price-aware limit gate can still block a 果仁 name that was
+limit-UP at the open (the documented rung-1 optimism 果仁 has and we cannot). So a
+residual bull-year gap here is EXPECTED and is itself the limit-up signature, not an
+engine bug — read the CALM years for the engine-soundness verdict.
+"""
+from __future__ import annotations
+import sys
+from pathlib import Path
+import importlib.util
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "workspace" / "research" / "long_only_50cagr"))
+sys.stdout.reconfigure(encoding="utf-8")
+
+import research_utils as ru  # noqa: E402
+from src.backtest_engine.event_driven.strategy import Strategy  # noqa: E402
+
+spec = importlib.util.spec_from_file_location("r2", ROOT / "workspace" / "scripts" / "guorn_parity_rung2_posprofit.py")
+r2 = importlib.util.module_from_spec(spec); spec.loader.exec_module(r2)
+
+XLSX = ROOT / "Knowledge" / "果仁回测结果" / "16_sm_noc_纯市值正盈利_v4.xlsx"
+
+
+class FollowStrategy(Strategy):
+    """Hold exactly 果仁's prescribed names each day, EQUAL-WEIGHT within the band,
+    fully invested (w=1/n, n>=4 => each <= pos_max) — the cleanest 果仁-band-approximating,
+    fully-invested replay. This isolates the ENGINE: if it reproduces 果仁's per-year
+    return holding 果仁's exact names, the return/CA/cost path is sound.
+
+    (An UNBOUNDED-DRIFT variant — keep held names at drifted weight, only trade on set
+    changes — was tried and came back WORSE and wildly noisier: +45% CAGR with 2015
+    +720% and 12M idle cash, because it re-introduced the exact two bugs fixed in the
+    main rung-2 strategy: unbounded winner drift [no pos_max cap] + cash-leak [no
+    redeploy]. That it reproduced both failure modes CONFIRMS the main-strategy fix; the
+    bounded equal-weight version below is the right engine test.)"""
+    def __init__(self, schedule):
+        super().__init__()
+        self.schedule = {pd.Timestamp(d): tuple(c) for d, c in schedule.items()}
+
+    def initialize(self, context): return None
+    def on_bar(self, context): return []
+    def after_market_close(self, context): return None
+
+    def before_market_open(self, context):
+        from src.backtest_engine.event_driven.strategies import _emit_rebalance_orders
+        names = self.schedule.get(pd.Timestamp(context.date), ())
+        if not names:
+            return _emit_rebalance_orders({}, context)
+        w = 1.0 / len(names)
+        return _emit_rebalance_orders({c: w for c in names}, context)
+
+
+def build_guorn_schedule(start, end):
+    h = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
+    code6 = h["股票代码"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
+    code = (code6 + ".SZ").to_numpy()
+    s = pd.to_datetime(h["开始日期"]).to_numpy().astype("datetime64[D]")
+    e = pd.to_datetime(h["结束日期"]).to_numpy().astype("datetime64[D]")
+    cal = ru.trading_calendar()
+    cal = cal[(cal >= pd.Timestamp(start)) & (cal <= pd.Timestamp(end))]
+    sched = {}
+    for d in cal:
+        dd = np.datetime64(d, "D")
+        m = (s <= dd) & (e >= dd)
+        sched[d] = sorted(set(code[m].tolist()))
+    return sched
+
+
+def main():
+    from src.backtest_engine.event_driven import EventDrivenBacktester, CostConfig
+    from src.backtest_engine.event_driven.exchange import FixedSlippage
+    start, end = "2014-01-01", "2026-06-20"
+    sched = build_guorn_schedule(start, end)
+    nonempty = sum(1 for v in sched.values() if v)
+    nmean = np.mean([len(v) for v in sched.values() if v])
+    print(f"[replay] 果仁 held-set schedule: {nonempty} trading days, mean {nmean:.2f} names/day", flush=True)
+
+    strat = FollowStrategy(sched)
+    cost = CostConfig(buy_commission=0.003, sell_commission=0.003, stamp_tax=0.0,
+                      min_commission=0.0, transfer_fee=0.0)
+    bt = EventDrivenBacktester(data_dir=str(ROOT / "data"))
+    res = bt.run(strategy=strat, start_time=start, end_time=end, benchmark="000300.SH",
+                 account=1_000_000.0, exchange_config=cost, slippage=FixedSlippage(0.0),
+                 volume_limit=0.10,
+                 preload_fields=["$open", "$close", "$high", "$low", "$vol", "$amount", "$pre_close", "$adj_factor"])
+    rep = res.report.copy()
+    if "date" in rep.columns:
+        rep = rep.set_index(pd.to_datetime(rep["date"]))
+    net = rep["return"].astype(float)
+    net.to_frame("net").to_parquet(r2.OUT / "rung2_replay_net.parquet")
+    m = ru.goal_metrics(net)
+    yr = net.groupby(net.index.year).apply(lambda r: (1 + r).prod() - 1)
+    yearly = {int(y): float(v) for y, v in yr.items()}
+    for pc in ("n_positions", "cash"):
+        if pc in rep.columns:
+            print(f"[report] {pc}: mean={pd.to_numeric(rep[pc],errors='coerce').mean():.3f}", flush=True)
+    print("\n" + "=" * 78)
+    print(f"  REPLAY (果仁's exact names through LOCAL engine)  CAGR={m['cagr']:+.2%}  MDD={m['mdd']:+.2%}")
+    print(f"  果仁 reported                                     CAGR={r2.GR_HEADLINE['annual']:+.2%}")
+    print("  year    REPLAY     果仁     diff   (calm-year match => engine sound)")
+    for y in sorted(yearly):
+        g = r2.GR_YEARLY.get(y)
+        gt = f"{g:+7.1%}" if g is not None else "  n/a "
+        dt = f"{yearly[y]-g:+7.1%}" if g is not None else ""
+        print(f"  {y}  {yearly[y]:+8.1%}  {gt}  {dt}")
+
+
+if __name__ == "__main__":
+    main()

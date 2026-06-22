@@ -11,20 +11,33 @@ PIT field path (validated at the holding level, 96.1% within 0.1% across 14,736
 果仁 holdings — see _validate_pit_netprofit_vs_guorn.py): 果仁's plain 净利润(单季)
 = TOTAL single-quarter net profit = provider ``$n_income_sq_q0`` (NOT 归母). The
 ``_sq_q0`` single-quarter alias is a PROVIDER-materialized bin (read via D.features,
-the factor-library path) — NOT a raw pit_ledger column. We gate on the PREV trading
-day (= the Ref(...,1) PIT lag) so there is no same-day fundamental use.
+the factor-library path) — NOT a raw pit_ledger column. The fundamental gate reads it
+AS-OF THE REBALANCE DAY: PIT-safe because the provider anchors the alias on
+``effective_date > disclosure`` STRICTLY (§3.2), so as-of-d already excludes anything
+disclosed on d and only sees reports tradeable at d's open. This matches 果仁's 公告日
+selection (an over-conservative prev-day/Ref(,1) gate wrongly dropped 52/14,736
+果仁-held names — GPT R1 Major-1). Market data (rank/filters) still uses the prev day.
 
 果仁 TARGET (16_sm_noc_纯市值正盈利_v4.xlsx 收益统计/年度收益统计):
   annual 60.00% | Sharpe 1.71 (rf=4%) | MDD 35.49% | vol 32.82% | ~5.03 holds | turnover 1829%/yr | ~94% invested
   yearly: 2014+108 2015+515 2016+61 2017-9 2018-7 2019+40 2020+35 2021+69 2022+82 2023+53 2024+82 2025+39 2026-11
 
-果仁 RULES reproduced EXACTLY for parity (verified vs the xlsx 各阶段持仓详单):
+果仁 RULES reproduced for parity (the income gate + universe verified vs the xlsx 各阶段持仓详单;
+the DEFAULT --exits off run is the RUNG-2 ISOLATION BASELINE, NOT a full-recipe reproduction — see EXITS):
   universe : 中小板(旧) = codes 002xxx + 003xxx ONLY (ground-truth: 100% of held names), exclude ST, 过滤停牌=是
   filters  : 净利润(单季)>0 (PIT $n_income_sq_q0, prev-day); 5d & 20d avg amount > 0.05亿 (>5000千元);
              上市天数>20; 退市风险_v1(2) reproducible atoms = ST + 收盘价>=2
   ranking  : rank(总市值 asc) ONLY (smallest 总市值) — NOT +流通市值
-  model II : sell rank>=8 / hold 1..7; pos 14-26% (~5 holds); 备选 5; daily; 09:35~open
-  exits    : 买入后涨幅>=100% (take-profit), 跌幅>=18% (stop), 最高点跌幅>=18% (trailing); 距上次卖出>=10 (no-rebuy)
+  model II : sell rank>=8 / hold 1..7; pos 14-26% (~5 holds); 备选 5; daily; 09:35~open. The local sizing is an
+             EQUAL-WEIGHT-WITHIN-BAND APPROXIMATION of 果仁's 14-26% band (果仁 weight-level data not used to fit it).
+  exits    : 买入后涨幅>=100% (TP), 跌幅>=18% (stop), 最高点跌幅>=18% (trailing); 距上次卖出>=10 (no-rebuy).
+             --exits off is the BASELINE: 果仁's price-exits empirically ~never bind (15,233 segments:
+             frac(seg-ret<=-18%)=0.000, frac(>=+100%)=0.000) so the book is rank-rotation model-II. NOTE (GPT
+             R1 correction): the exits are NOT "PIT-incompatible" — the 09:35/open price IS knowable to the
+             ENGINE at fill time (like the fill-price-aware limit gate); they are only un-implementable inside
+             before_market_open (strategy pre-open). Faithful exits = execution-time conditional orders evaluated
+             by the engine against the fill price (future work), NOT strategy-side same-day reads. --exits on is a
+             pre-open APPROXIMATION (prev-close eval) that over-fires; do NOT read it as the faithful recipe.
   cost     : flat 0.3%/side (guorn cache-bug export caveat), NO slippage, NO stamp/过户费 ; total return
 
 IRREDUCIBLE deltas (documented, like rung-1's 退市风险 ceiling):
@@ -132,8 +145,11 @@ def build_schedule(panel: pd.DataFrame, profit: pd.DataFrame, rebal: pd.Datetime
     cal = close.index
 
     def _listed(code: str, day: pd.Timestamp) -> bool:
+        # GPT R1 Minor-2: bound BOTH ends — a name is tradable only between its list
+        # start and delist end (the hist>=20 + non-NaN-close filters already keep
+        # pre-list names out, but bound the lower end explicitly for hygiene).
         b = LISTED_BOUNDS.get(str(code).upper())
-        return b is not None and day <= b[1]
+        return b is not None and b[0] <= day <= b[1]
 
     sched: dict = {}
     members: dict = {}
@@ -144,7 +160,15 @@ def build_schedule(panel: pd.DataFrame, profit: pd.DataFrame, rebal: pd.Datetime
             sched[d] = []
             continue
         pday = cal[pos - 1]
-        prow = profit.loc[pday] if pday in profit.index else pd.Series(dtype=float)
+        # MARKET data (rank/filters) uses the PREV day — d's close is unknown at d's 09:35 open.
+        # FUNDAMENTAL gate (净利润) uses AS-OF THE REBALANCE DAY d (lag-0), which is PIT-safe AND
+        # faithful to 果仁: the provider's $n_income_sq_q0 is effective-date-anchored
+        # (effective_date > disclosure STRICTLY, §3.2), so as-of-d already EXCLUDES anything
+        # disclosed on d and only includes reports tradeable at d's open — the same info set as the
+        # pday close. Gating on pday instead (Ref,1) was over-conservative vs 果仁's 公告日 selection
+        # and wrongly dropped 52/14,736 果仁-held names whose report became effective ON d (GPT R1
+        # Major-1; rung2_pit_validation.json). Both lags are penny-exact on field identity.
+        prow = profit.loc[d] if d in profit.index else pd.Series(dtype=float)
         df = pd.DataFrame({
             "tmv": tmv.loc[pday], "rawclose": close_raw.loc[pday], "close": close.loc[pday],
             "amt5": amt5.loc[pday], "amt20": amt20.loc[pday], "hist": hist.loc[pday],
