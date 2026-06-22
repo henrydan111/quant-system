@@ -147,6 +147,39 @@ class ResolveLimitPricesTests(unittest.TestCase):
         self.assertFalse(self.ex.is_limit_up(row, self.code, self.date))
         self.assertFalse(self.ex.is_limit_down(row, self.code, self.date))
 
+    # ── 2026-06-22: fill-price-aware gate (open-fill tests open, not close) ──
+    def test_is_limit_up_fill_price_aware_open_below_close_at(self):
+        # Opened BELOW the limit (buyable at 09:35) but CLOSED limit-up. The
+        # default/close gate flags it; the OPEN gate does NOT — you could buy at
+        # the open. This is the bull-market parity fix (果仁 sm_纯市值01).
+        row = self._row(raw_close=13.48, close=13.48, raw_open=12.80, open=12.80,
+                        up_limit=13.48, down_limit=11.03)
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date))                          # default raw_close
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_close"))
+        self.assertFalse(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_open"))
+
+    def test_is_limit_up_locked_at_open(self):
+        # 一字: opened AT the limit (locked) → still un-buyable on the open gate.
+        row = self._row(raw_close=13.48, close=13.48, raw_open=13.48, open=13.48,
+                        up_limit=13.48, down_limit=11.03)
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_open"))
+
+    def test_can_buy_open_fill_allows_name_that_closes_limit_up(self):
+        # The core fix end-to-end: opens tradeable, closes limit-up → BUYABLE on an
+        # open fill, BLOCKED on a close fill.
+        row = self._row(raw_close=13.48, close=13.48, raw_open=12.80, open=12.80,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.can_buy(row, self.code, self.date, price_field="raw_open"))
+        self.assertFalse(self.ex.can_buy(row, self.code, self.date, price_field="raw_close"))
+
+    def test_can_sell_open_fill_allows_name_that_closes_limit_down(self):
+        # Symmetric: opens tradeable, closes limit-down → SELLABLE on an open fill,
+        # BLOCKED on a close fill.
+        row = self._row(raw_close=11.03, close=11.03, raw_open=11.80, open=11.80,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.can_sell(row, self.code, self.date, price_field="raw_open"))
+        self.assertFalse(self.ex.can_sell(row, self.code, self.date, price_field="raw_close"))
+
     # ── Fallback path: Tushare fields absent / NaN ────────────────────
     def test_fallback_when_fields_absent(self):
         # No up_limit/down_limit keys → compute from pre_close × band.

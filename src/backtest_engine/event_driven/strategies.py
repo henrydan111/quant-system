@@ -7,8 +7,10 @@ Two classes ship here:
     re-exported here for engine-layer parity).
   - ``RankedFallbackStrategy`` — JoinQuant-style ``filter_limitup`` substitution:
     takes an OVERSAMPLED ranked candidate list per rebalance date, walks the
-    list at decision time, skips primaries predicted unbuyable (locked at limit
-    yesterday OR suspended), picks the first ``topk`` that pass.
+    list at decision time, skips primaries that were SUSPENDED yesterday, picks
+    the first ``topk`` that pass. Limit-up buyability is decided by the ENGINE at
+    FILL time against the OPEN price (``can_buy(price_field='raw_open')``) — NOT
+    predicted from yesterday's close (see ``_is_buyable_for_new_entry``).
 
 The ``RankedFallbackStrategy`` was added 2026-05-20 after the JoinQuant G5_A2
 replication revealed that naive top-K fill (the ScheduledLongOnlyStrategy
@@ -19,6 +21,14 @@ to the next-ranked tradeable name. Per the run dir
 ``workspace/research/alpha_mining/p1_jq_g5a2_mimic_v3_survivor_run/`` analysis,
 this mechanism accounts for an estimated 1.5-2× cumulative-return gap in the
 2015 and 2022 microcap bull windows.
+
+2026-06-22 — the limit gate was made FILL-PRICE-AWARE (open fills test
+``raw_open`` vs the limit, not ``raw_close``) and the strategy's yesterday-based
+limit PREDICTION was removed: a name that opens tradeable but closes limit-up is
+now bought at the open, matching the live platforms (果仁/JoinQuant). The earlier
+``is_limit_up(prev)`` skip + close-based engine gate double-blocked these and
+caused the same bull-year adverse selection on the 果仁 sm_纯市值01 parity
+(2015 +307% vs 果仁 +690%).
 """
 
 from __future__ import annotations
@@ -174,13 +184,22 @@ class RankedFallbackStrategy(Strategy):
     # ── Heuristic buyability prediction ─────────────────────────────
 
     def _is_buyable_for_new_entry(self, code: str, context: BacktestContext) -> bool:
-        """True if we predict this code will be buyable AT OPEN TODAY.
+        """True if this code is a viable NEW entry to attempt at today's open.
 
-        Uses ONLY data available at before_market_open (prev_day_data + the
-        exchange's deterministic per-date lookups). Conservative — when in
-        doubt, returns False (skip the candidate; pick the next-ranked).
+        Decides only what is reliably knowable at before_market_open: skip a name
+        that was SUSPENDED (did not trade yesterday). The LIMIT-UP buyability
+        decision is deliberately NOT predicted here — it is made by the engine at
+        FILL time against the OPEN price (``can_buy(price_field='raw_open')``),
+        which blocks only names LOCKED-UP AT THE OPEN (一字 / 调仓时涨停).
+
+        Predicting from YESTERDAY's limit-up (the prior behavior) wrongly skipped
+        every name that CLOSES limit-up — including the many that OPEN tradeable —
+        causing large bull-market adverse selection. Verified 2026-06-22 on the 果仁
+        sm_纯市值01 parity: the close-based skip + close-based engine gate held only
+        the laggards (2015 +307% vs 果仁 +690%); the smallest microcaps that opened
+        buyable and ran to limit were systematically missed.
         """
-        # 0. No prev-day data at all → conservative skip
+        # No prev-day data → conservative skip (can't even confirm it traded).
         if context.prev_day_data is None or context.prev_day_data.empty:
             return False
         prev_match = context.prev_day_data[context.prev_day_data["ts_code"] == code]
@@ -188,37 +207,15 @@ class RankedFallbackStrategy(Strategy):
             return False
         prev = prev_match.iloc[0]
 
-        # 1. Suspended check. is_suspended consults the authoritative
-        # SuspensionLookup IF wired AND a (code, date) is provided. The
-        # legacy fallback path checks ``row.get('vol', 0)`` and treats vol==0
-        # / NaN as suspended — so we must pass yesterday's REAL row (not an
-        # empty synthetic one). If the SuspensionLookup is wired the row is
-        # ignored anyway; if not, yesterday's vol is the best signal we have
-        # (a stock that traded yesterday with vol > 0 is very likely tradeable
-        # today). Without this fix the synthetic-row path rejected every
-        # candidate as "suspended" (vol==NaN → True) — caught 2026-05-20
-        # by the empty-portfolio bug in mimic v4.
+        # Suspension: a stock that did NOT trade yesterday (vol==0/NaN) is very
+        # likely un-buyable today; skipping + substituting avoids wasting a slot.
+        # is_suspended prefers the authoritative SuspensionLookup when wired, else
+        # falls back to yesterday's vol. (The engine's can_buy re-checks suspension
+        # on TODAY's row at fill.)
         try:
             if context.exchange.is_suspended(prev, code=code, date=context.date):
                 return False
         except Exception:
-            pass
-        # Try to use the exchange's authoritative is_limit_up / is_limit_down which
-        # consult st_stocks, board policy, IPO period, and the round-half-up
-        # convention. Need the prev trading-day date to query is_st / get_limit_pct.
-        # We don't have prev_date directly on the context, so derive from prev row's
-        # 'trade_date' if present, otherwise approximate as context.date - 1d (the
-        # is_st / get_limit_pct lookups are stable over single-day boundaries).
-        prev_date = pd.Timestamp(
-            prev.get("trade_date", pd.Timestamp(context.date) - pd.Timedelta(days=1))
-        )
-        try:
-            if context.exchange.is_limit_up(prev, code, prev_date):
-                return False
-            if context.exchange.is_limit_down(prev, code, prev_date):
-                return False
-        except (KeyError, TypeError, ValueError):
-            # Missing columns or bad types — fall through to permissive default
             pass
 
         return True

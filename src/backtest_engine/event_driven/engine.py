@@ -715,7 +715,7 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data (delisted?)')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_sell(row, order.code, date):
+            if not self.exchange.can_sell(row, order.code, date, price_field=fill_price):
                 self._log_order(order, 'BLOCKED', 'not tradable for sell')
                 continue
             if not self.portfolio.can_sell(order.code):
@@ -768,7 +768,7 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_buy(row, order.code, date):
+            if not self.exchange.can_buy(row, order.code, date, price_field=fill_price):
                 self._log_order(order, 'BLOCKED', 'not tradable for buy')
                 continue
 

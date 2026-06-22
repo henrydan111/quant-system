@@ -470,46 +470,60 @@ class Exchange:
         return self.compute_limit_prices(pre_close, limit_pct)
 
     def is_limit_up(self, row: pd.Series, code: str,
-                    date: pd.Timestamp) -> bool:
-        """Check if a stock closed at limit-up.
+                    date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+        """Check if a stock is at limit-up at ``price_field`` (default raw_close).
 
         Cannot buy at limit-up (no sellers). Can still sell.
 
-        Uses Tushare's published ``up_limit`` when available, else the
-        computed band (see :meth:`resolve_limit_prices`).
+        ``price_field`` selects WHICH price the gate tests against the limit.
+        The execution path passes the actual fill column so the gate matches the
+        fill: an OPEN (09:35) fill passes ``'raw_open'`` → blocks only when the
+        stock is LOCKED-UP AT THE OPEN (一字 / 调仓时涨停), the only state in which
+        you truly cannot buy at 09:35. A name that opens BELOW the limit and merely
+        CLOSES limit-up was buyable at the open, so the default close-based gate
+        would wrongly block it (and would use end-of-day info to block an open
+        trade). Default ``'raw_close'`` preserves the legacy close-fill semantics.
+
+        Uses Tushare's published ``up_limit`` when available, else the computed
+        band (see :meth:`resolve_limit_prices`).
 
         Args:
-            row: Daily data row with 'close' (+ optional 'up_limit').
+            row: Daily data row with the fill price (+ optional 'up_limit').
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test (e.g. 'raw_open' / 'raw_close' / 'raw_avg').
 
         Returns:
-            True if close is at limit-up price.
+            True if ``price_field`` is at the limit-up price.
         """
-        close = row.get('raw_close', row['close'])
+        price = row.get(price_field, row.get('raw_close', row.get('close')))
         limit_up, _ = self.resolve_limit_prices(row, code, date)
-        return abs(close - limit_up) < 0.005  # within half a fen
+        return abs(price - limit_up) < 0.005  # within half a fen
 
     def is_limit_down(self, row: pd.Series, code: str,
-                      date: pd.Timestamp) -> bool:
-        """Check if a stock closed at limit-down.
+                      date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+        """Check if a stock is at limit-down at ``price_field`` (default raw_close).
 
-        Cannot sell at limit-down (no buyers). Can still buy.
+        Cannot sell at limit-down (no buyers). Can still buy. Symmetric to
+        :meth:`is_limit_up`: the execution path passes the fill column so an OPEN
+        fill blocks a SELL only when the stock is locked-DOWN at the open. Default
+        ``'raw_close'`` preserves the legacy close-fill semantics.
 
-        Uses Tushare's published ``down_limit`` when available, else the
-        computed band (see :meth:`resolve_limit_prices`).
+        Uses Tushare's published ``down_limit`` when available, else the computed
+        band (see :meth:`resolve_limit_prices`).
 
         Args:
-            row: Daily data row with 'close' (+ optional 'down_limit').
+            row: Daily data row with the fill price (+ optional 'down_limit').
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test (e.g. 'raw_open' / 'raw_close' / 'raw_avg').
 
         Returns:
-            True if close is at limit-down price.
+            True if ``price_field`` is at the limit-down price.
         """
-        close = row.get('raw_close', row['close'])
+        price = row.get(price_field, row.get('raw_close', row.get('close')))
         _, limit_down = self.resolve_limit_prices(row, code, date)
-        return abs(close - limit_down) < 0.005
+        return abs(price - limit_down) < 0.005
 
     def is_suspended(
         self,
@@ -593,47 +607,58 @@ class Exchange:
     # ─── Tradability ──────────────────────────────────────────────
 
     def can_buy(self, row: pd.Series, code: str,
-                date: pd.Timestamp) -> bool:
+                date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
         """Check if a stock can be bought.
 
         Cannot buy if:
         - Suspended (vol == 0)
-        - Limit-up (no sellers), UNLESS in IPO period
+        - Limit-up at ``price_field`` (no sellers), UNLESS in IPO period
+
+        ``price_field`` is forwarded to :meth:`is_limit_up`; the execution path
+        passes the fill column (e.g. ``'raw_open'`` for a 09:35 fill) so the gate
+        reflects buyability AT THE FILL, not at the close. Default ``'raw_close'``
+        preserves the legacy close-fill semantics.
 
         Args:
             row: Daily data row.
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test against the limit.
 
         Returns:
             True if stock is buyable.
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_up(row, code, date):
+        if self.is_limit_up(row, code, date, price_field=price_field):
             if not self.is_ipo_period(code, date):
                 return False
         return True
 
     def can_sell(self, row: pd.Series, code: str,
-                 date: pd.Timestamp) -> bool:
+                 date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
         """Check if a stock can be sold.
 
         Cannot sell if:
         - Suspended (vol == 0)
-        - Limit-down (no buyers)
+        - Limit-down at ``price_field`` (no buyers)
+
+        ``price_field`` is forwarded to :meth:`is_limit_down`; the execution path
+        passes the fill column so an OPEN fill blocks a sell only when locked-down
+        at the open. Default ``'raw_close'`` preserves the legacy close-fill semantics.
 
         Args:
             row: Daily data row.
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test against the limit.
 
         Returns:
             True if stock is sellable.
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_down(row, code, date):
+        if self.is_limit_down(row, code, date, price_field=price_field):
             return False
         return True
 
