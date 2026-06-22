@@ -102,7 +102,8 @@ def build_schedule(panel: pd.DataFrame, rebal: pd.DatetimeIndex, topk: int,
 
     Faithfulness fixes (2026-06-22, vs 果仁 sm_纯市值01):
       - 市值 forward-filled so a SUSPENDED held name keeps its last-known rank (果仁 carries it),
-        guarded by an `alive` mask (must have traded within 60d) so a DELISTED name does NOT leak.
+        then explicitly masked by `all_stocks.txt` listed-on-date delist bounds (`_listed(c, pday)`)
+        so a DELISTED name is NOT reanimated by the ffill (GPT R2: not the prior 60d-traded heuristic).
       - 5d-avg-amount averages over TRADING days only (skip suspended NaN), like 果仁.
       - best-effort 退市风险 atoms (reproducible subset of 果仁风险预警25版): exclude ST/退市
         (st_stocks), 上市天数<=20, and 低价/面值退市 (close <= low_price_min, default ¥1).

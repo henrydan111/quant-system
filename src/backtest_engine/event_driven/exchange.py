@@ -251,6 +251,21 @@ def _round_half_up_2dp(value: float) -> float:
 # Board reform dates
 _CHINEXT_REFORM_DATE = pd.Timestamp('2020-08-24')
 _STAR_LAUNCH_DATE = pd.Timestamp('2019-07-22')
+# 全面注册制 (comprehensive registration system) main-board reform: the first
+# batch of registration-based main-board IPOs listed 2023-04-10. A main-board
+# stock listed on/after this date has NO price limit for its first 5 trading
+# days (then ±10%). BEFORE it, a main-board IPO's first day was the old
+# +44% / −36% cap (an ASYMMETRIC but REAL, published limit) — NOT a no-limit day.
+_MAIN_BOARD_REGISTRATION_DATE = pd.Timestamp('2023-04-10')
+
+# stk_limit no-limit SENTINEL: on a genuine no-limit stock-day Tushare publishes
+# an UNREACHABLE band, NOT NaN — up_limit ≈ 1e6 (main/ChiNext/STAR first days)
+# or 99999.99 (BSE listing day), down_limit ≈ 0.01/0.00. The up-floor sits far
+# above the highest real A-share limit (~¥3k for 贵州茅台) and just below the
+# 99999.99 BSE sentinel, so it can never collide with a real limit price. See
+# resolve_limit_prices + workspace/scripts/diag_stk_limit_nolimit_days.py.
+_NO_LIMIT_UP_SENTINEL_FLOOR = 99999.0
+_NO_LIMIT_DOWN_SENTINEL_CEIL = 0.01
 
 
 class Exchange:
@@ -564,9 +579,19 @@ class Exchange:
         return False
 
     def is_ipo_period(self, code: str, date: pd.Timestamp) -> bool:
-        """Check if a stock is in its IPO no-limit period.
+        """Check if a stock is in its nominal IPO trading-day window.
 
-        IPO no-limit periods (no price limit on these days):
+        ⚠ NOT a no-limit-day predicate — DO NOT use it to bypass the limit
+        gate. This answers "is the stock inside its board's IPO window" from
+        board + days-since-listing ONLY; it does NOT know the listing-date
+        regime, so it treats a *pre-registration-reform* main-board / ChiNext
+        FIRST day (the old +44% / −36% cap, a REAL published limit) as if it
+        were in-window. Buying a name locked at that +44% limit has no seller.
+        Use :meth:`is_true_no_limit_day` for the buy-gate bypass (GPT
+        cross-review 2026-06-22, Major-2). Retained only as the nominal-window
+        helper / for diagnostics.
+
+        Nominal IPO windows (by board, days since listing):
         - Main Board (沪深主板): 1 day (listing day only)
         - ChiNext (创业板, 300/301): 5 days since 2020-08-24
         - STAR (科创板, 688/689): 5 days since launch
@@ -611,6 +636,97 @@ class Exchange:
         # Main board and BSE: 1 day (listing day only)
         return trading_days_since <= 1
 
+    def is_true_no_limit_day(self, code: str, date: pd.Timestamp,
+                             row: Optional[pd.Series] = None) -> bool:
+        """Return True iff this stock-day genuinely has NO price limit.
+
+        This is the buy-gate's no-limit predicate, and it REPLACES the old
+        ``is_ipo_period`` bypass in :meth:`can_buy`. ``is_ipo_period`` answered
+        "is this stock inside its nominal IPO trading-day window" from board +
+        days-since-listing ONLY — so it treated a *pre-registration-reform*
+        main-board (or pre-2020-reform ChiNext) FIRST day as no-limit and
+        wrongly let :meth:`can_buy` buy a name locked at its old +44% / −36%
+        first-day limit. That first-day cap is a REAL published limit (Tushare
+        carries it in ``up_limit`` / ``down_limit``; e.g. 002728.SZ 2014-07-31
+        → up_limit 20.16 off a 14.0 issue price), so a buyer at the locked limit
+        has no seller. (GPT cross-review 2026-06-22, Major-2.)
+
+        A day is genuinely no-limit only when one of the following holds:
+
+        1. **Published no-limit sentinel (primary, definitive).** On a real
+           no-limit stock-day Tushare's ``stk_limit`` publishes an UNREACHABLE
+           band — ``up_limit ≈ 1e6`` (main/ChiNext/STAR) or ``99999.99`` (BSE
+           listing day) and ``down_limit ≈ 0.01/0.00`` — NOT NaN. When the row
+           carries that sentinel the day is no-limit regardless of board/date.
+           (On such a row :meth:`is_limit_up` already returns False, so the buy
+           gate would not even block — but the predicate stands alone.)
+
+        2. **Confirmed board + listing-date regime (fallback for ``stk_limit``
+           coverage holes).** When the published field is absent/NaN the
+           computed band can FALSELY flag a no-limit IPO day that happens to sit
+           on the steady-state ±10/20% boundary as a limit. The regime check
+           rescues exactly the windows that are genuinely no-limit, keyed on the
+           LISTING-date regime (not the trade date):
+
+             - ChiNext (300/301) listed on/after 2020-08-24 → first 5 trading days
+             - STAR (688/689) → first 5 trading days (registration-based since launch)
+             - Main board listed on/after 2023-04-10 (全面注册制) → first 5 days
+             - BSE (83/87/43/92, incl. 920xxx) → listing day only
+
+           It returns False for the OLD main-board / pre-2020 ChiNext +44% / −36%
+           first day (``list_date`` before the board's reform date): that cap is
+           a real published limit, not a no-limit window.
+
+        Args:
+            code: Stock ts_code.
+            date: Trading date.
+            row: Daily data row (optional). When present, its ``up_limit`` /
+                ``down_limit`` are checked for the no-limit sentinel (branch 1).
+
+        Returns:
+            True iff the stock-day has no enforceable price limit.
+        """
+        # 1. Published no-limit sentinel — definitive when present.
+        if row is not None:
+            up = row.get('up_limit')
+            down = row.get('down_limit')
+            if (up is not None and down is not None
+                    and pd.notna(up) and pd.notna(down)
+                    and float(up) >= _NO_LIMIT_UP_SENTINEL_FLOOR
+                    and float(down) <= _NO_LIMIT_DOWN_SENTINEL_CEIL):
+                return True
+
+        # 2. Board + listing-date regime fallback (stk_limit coverage holes).
+        if self._feeder is None:
+            return False
+        sb = self._feeder.get_stock_basic()
+        stock = sb[sb['ts_code'] == code]
+        if stock.empty:
+            return False
+        list_date = stock.iloc[0]['list_date']
+        if pd.isna(list_date):
+            return False
+
+        # count_trading_days is INCLUSIVE on both ends → listing day == 1.
+        trading_days_since = self._feeder.count_trading_days(list_date, date)
+        if trading_days_since < 1:
+            return False  # date precedes listing — not an IPO no-limit day
+
+        prefix = code[:3]
+        if prefix in ('300', '301'):
+            # ChiNext: 5-day no-limit window ONLY for post-reform listings;
+            # a pre-reform ChiNext first day was the old +44% cap.
+            return list_date >= _CHINEXT_REFORM_DATE and trading_days_since <= 5
+        if prefix in ('688', '689'):
+            # STAR has been registration-based since its 2019-07-22 launch.
+            return trading_days_since <= 5
+        if code[:2] in ('83', '87', '43', '92'):
+            # BSE (北交所, incl. 920xxx via the '92' prefix): listing day only.
+            return trading_days_since <= 1
+        # Main board: 5-day no-limit window ONLY for 全面注册制 listings;
+        # a pre-reform main-board first day was the old +44% cap.
+        return list_date >= _MAIN_BOARD_REGISTRATION_DATE and trading_days_since <= 5
+
     # ─── Tradability ──────────────────────────────────────────────
 
     def can_buy(self, row: pd.Series, code: str,
@@ -620,7 +736,9 @@ class Exchange:
 
         Cannot buy if:
         - Suspended (vol == 0)
-        - Limit-up (no sellers), UNLESS in IPO period
+        - Limit-up (no sellers), UNLESS the day is genuinely no-limit
+          (see :meth:`is_true_no_limit_day` — a real no-limit IPO window or a
+          published no-limit sentinel; NOT the old main-board +44% first day)
 
         ``limit_gate`` selects the limit-up test: ``'fill_price'`` (default) blocks
         when ``price_field`` is at the limit (correct for open/close fills);
@@ -643,7 +761,7 @@ class Exchange:
             return False
         locked = (self.is_all_day_limit_up(row, code, date) if limit_gate == 'all_day_lock'
                   else self.is_limit_up(row, code, date, price_field=price_field))
-        if locked and not self.is_ipo_period(code, date):
+        if locked and not self.is_true_no_limit_day(code, date, row):
             return False
         return True
 
@@ -704,24 +822,31 @@ class Exchange:
 
     # ─── Volume Constraints ───────────────────────────────────────
 
-    def max_buyable_value(self, row: pd.Series) -> float:
+    def max_buyable_value(self, row: pd.Series, price_field: str = 'raw_open') -> float:
         """Maximum value that can be bought for a single stock.
 
-        Capped at volume_limit fraction of daily volume.
-        vol is in 手 (lots of 100 shares).
+        Capped at volume_limit fraction of daily volume, valued at the FILL price
+        (``price_field``) — the execution path passes the fill column so the cap is
+        consistent with the fill (close-fill -> raw_close, avg-fill -> raw_avg),
+        not always the open. vol is in 手 (lots of 100 shares). GPT R2 Major-1.
 
         Args:
-            row: Daily data row with 'vol' and 'open'.
+            row: Daily data row with 'vol' and the fill price.
+            price_field: fill column to value the cap at (default 'raw_open').
 
         Returns:
-            Maximum buy value in ¥.
+            Maximum buy value in ¥ (0 if vol or price is missing/non-positive).
         """
         vol = row.get('vol', 0)
         if pd.isna(vol) or vol <= 0:
             return 0.0
+        price = row.get(price_field)
+        if price is None or pd.isna(price) or price <= 0:
+            price = row.get('raw_open', row.get('open'))
+        if price is None or pd.isna(price) or price <= 0:
+            return 0.0
         max_shares = vol * 100 * self.volume_limit  # vol in 手 -> shares
-        price = row.get('raw_open', row.get('open', 0))
-        return max_shares * price
+        return float(max_shares * price)
 
     def max_sellable_shares(self, row: pd.Series) -> int:
         """Maximum shares that can be sold in one order.

@@ -22,6 +22,7 @@ from .exchange import Exchange
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
 from .constants import ENGINE_REQUIRED_FIELDS
+from .pre_open_guard import PhaseBoundFeeder, StrategyExchangeView
 
 logger = logging.getLogger(__name__)
 
@@ -389,8 +390,10 @@ class BacktestEngine:
               day_data_indexed=pd.DataFrame(),
               prev_day_data=prev_day_data,
               portfolio=self.portfolio,
-              exchange=self.exchange,
-              feeder=self.feeder,
+              # initialize may read only data <= the warmup (previous) day; the
+              # raw feeder/exchange are same-day side channels (GPT R2 Blocker-1).
+              exchange=StrategyExchangeView(self.exchange),
+              feeder=PhaseBoundFeeder(self.feeder, prev_date),
               total_days=total_days,
           )
           self.strategy.initialize(init_context)
@@ -425,19 +428,20 @@ class BacktestEngine:
             self._handle_delistings(day_data, prev_day_data, date)
 
             # Phase 1: Pre-market open-order decision. The strategy may see ONLY
-            # previous-day data — TODAY's OHLCV is withheld (empty frames) to
-            # enforce the no-lookahead contract structurally (a strategy reading
-            # context.day_data here would see same-day close/high/low = lookahead).
-            # The engine keeps the real `day_indexed` LOCAL for execution gating
-            # (_execute_orders below); on_bar (EOD) gets the full frame back.
+            # previous-day data. TODAY's OHLCV is withheld (empty frames) AND the
+            # feeder/exchange are phase-bound so the same-day side channels
+            # (context.feeder.get_features, context.exchange._feeder) cannot bypass
+            # the empty frames (GPT R2 Blocker-1). The engine keeps the real
+            # `day_indexed` LOCAL for execution gating; on_bar gets full access back.
+            last_visible = calendar[i - 1] if i > 0 else prev_date
             context = BacktestContext(
                 date=date,
                 day_data=day_data.iloc[0:0],
                 day_data_indexed=day_indexed.iloc[0:0],
                 prev_day_data=prev_day_data,
                 portfolio=self.portfolio,
-                exchange=self.exchange,
-                feeder=self.feeder,
+                exchange=StrategyExchangeView(self.exchange),
+                feeder=PhaseBoundFeeder(self.feeder, last_visible),
                 trading_day_index=i,
                 total_days=total_days,
                 phase='pre_open',
@@ -455,9 +459,12 @@ class BacktestEngine:
             if open_orders:
                 self._execute_orders(open_orders, day_indexed, date, open_fill_col)
 
-            # Phase 2: EOD bar — strategy sees the FULL same-day OHLCV (knowable at close).
+            # Phase 2: EOD bar — strategy sees the FULL same-day OHLCV + raw
+            # feeder/exchange (all knowable at close).
             context.day_data = day_data
             context.day_data_indexed = day_indexed
+            context.exchange = self.exchange
+            context.feeder = self.feeder
             context.phase = 'on_bar'
             close_orders = self.strategy.on_bar(context)
             if close_orders:
@@ -783,7 +790,7 @@ class BacktestEngine:
                 continue
 
             # Volume constraint
-            max_value = self.exchange.max_buyable_value(row)
+            max_value = self.exchange.max_buyable_value(row, price_field=fill_price)
             actual_value = min(order.target_value, max_value)
             if actual_value <= 0:
                 self._log_order(order, 'BLOCKED', 'zero buyable value')
