@@ -1,19 +1,35 @@
-"""Rung-2 GPT R1 Major-3 — the decisive falsification test (rule #10).
+"""Rung-2 GPT R1 Major-3 — falsification test for a broad engine/return/CA bug (rule #10).
 
-Claim under test: "the rung-2 big-year divergence is SELECTION precision + irreducible
-果仁 screens, NOT a local engine/return/corporate-action/cost-path bug."
+Claim under test: "the rung-2 big-year divergence is SELECTION precision + the execution-
+realism gap, NOT a local engine/return/corporate-action/cost-path bug."
 
 Test: feed 果仁's ACTUAL held names (from 各阶段持仓详单 segments) into the LOCAL
-event-driven engine, equal-weight, 果仁's 0.3%/side cost, same period. Then:
-  - if the local replay return ~ 果仁's reported return -> the engine/return/CA/cost path
-    is SOUND; the rung-2 residual is selection (which names), as claimed.
-  - if it DIVERGES -> the residual is NOT merely selection; the local price/return/
-    corporate-action/execution path is still suspect.
+event-driven engine, equal-weight (an APPROXIMATION of 果仁's 14-26% band — 果仁's true
+weight-level path is not observable), 果仁's 0.3%/side cost, same period.
 
-NOTE: the engine's fill-price-aware limit gate can still block a 果仁 name that was
-limit-UP at the open (the documented rung-1 optimism 果仁 has and we cannot). So a
-residual bull-year gap here is EXPECTED and is itself the limit-up signature, not an
-engine bug — read the CALM years for the engine-soundness verdict.
+RESULT (rung2_replay_net.parquet; this is a falsification test, NOT a proof of exact 果仁
+execution equivalence):
+  - It REFUTES a broad local return/corporate-action/price-path bug: the replay reproduces
+    果仁 in calm years (2017 -0.0% EXACT, 2021 -2.0, 2025 -1.2). A corrupt return/CA/cost
+    path could not produce -0.0% holding 果仁's exact names.
+  - It does NOT prove exact 果仁 execution equivalence: the replay undershoots 果仁 by ~11%
+    CAGR (+48.8 vs +60.0). That gap is the EXECUTION-REALISM difference (my equal-weight +
+    0.3% cost + realistic limit/suspension gates vs 果仁's band-drift weighting + optimistic
+    fills) and is weighting-sensitive — an unbounded-drift variant swung to +45% / 2015
+    +720% / 12M idle cash, RE-PRODUCING the leak + over-concentration bugs fixed in the main
+    strategy (which confirms those fixes). It is NOT fully decomposed and is left so.
+
+ON LIMIT-UP (rule #10 — a refuted cause is removed, not kept): an earlier hypothesis blamed
+the big-year gap on 果仁 buying limit-up-at-open names my fill-price gate refuses. DIRECT
+CHECK (entry_lock_diagnostic below; saved to rung2_entry_lock.json): only ~0.3% of 果仁's
+entries were limit-up-locked at the open (max 1.0% in 2015), so limit-up entry-blocking is
+NOT a material driver for the 中小板 universe (larger names, few 一字板; limit-up was rung-1's
+pure-microcap signature, not this rung). Any remaining gap is attributed only where
+decomposed; otherwise it is marked unresolved.
+
+Usage:
+  python workspace/scripts/_replay_guorn_holdings.py          # the replay
+  python workspace/scripts/_replay_guorn_holdings.py --diag    # the entry-lock diagnostic only
 """
 from __future__ import annotations
 import sys
@@ -112,7 +128,7 @@ def main():
     print("\n" + "=" * 78)
     print(f"  REPLAY (果仁's exact names through LOCAL engine)  CAGR={m['cagr']:+.2%}  MDD={m['mdd']:+.2%}")
     print(f"  果仁 reported                                     CAGR={r2.GR_HEADLINE['annual']:+.2%}")
-    print("  year    REPLAY     果仁     diff   (calm-year match => engine sound)")
+    print("  year    REPLAY     果仁     diff   (calm-year match => broad return/CA bug REFUTED)")
     for y in sorted(yearly):
         g = r2.GR_YEARLY.get(y)
         gt = f"{g:+7.1%}" if g is not None else "  n/a "
@@ -120,5 +136,47 @@ def main():
         print(f"  {y}  {yearly[y]:+8.1%}  {gt}  {dt}")
 
 
+def entry_lock_diagnostic():
+    """GPT R2 Major-2: save the limit-up refutation as a reproducible artifact.
+    For every 果仁 holding-segment ENTRY (开始日期), was the name limit-up-locked at the
+    open (open >= up_limit => unbuyable by the fill-price-aware gate)? -> rung2_entry_lock.json."""
+    import json
+    h = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
+    code6 = h["股票代码"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
+    h = h.assign(q=code6 + "_SZ", start=pd.to_datetime(h["开始日期"]))
+    import qlib
+    from qlib.config import REG_CN
+    from qlib.data import D
+    qlib.init(provider_uri=str(ROOT / "data" / "qlib_data"), region=REG_CN, kernels=1)
+    insts = sorted(h["q"].unique())
+    df = D.features(insts, ["$open", "$up_limit"], start_time="2014-01-01", end_time="2026-06-20", freq="day")
+    df.columns = ["open", "up"]
+    df["lock"] = (df["open"] >= df["up"] * 0.999) & (df["up"] > 0)
+    lock = df["lock"].unstack(level=0)
+    rows = []
+    for _, r in h.iterrows():
+        d, q = r["start"], r["q"]
+        if d in lock.index and q in lock.columns and pd.notna(lock.at[d, q]):
+            rows.append((d.year, bool(lock.at[d, q])))
+    e = pd.DataFrame(rows, columns=["yr", "locked"])
+    by_year = {int(y): {"n": int(len(s)), "locked_pct": float(s["locked"].mean())}
+               for y, s in e.groupby("yr")}
+    out = {"overall_locked_pct": float(e["locked"].mean()), "n_entries": int(len(e)),
+           "by_year": by_year,
+           "conclusion": "limit-up entry-blocking is NOT a material driver for the 中小板 "
+                         "universe (~0.3% of 果仁 entries locked-up at open); the rung-2 residual "
+                         "is selection precision x concentration + the execution-realism gap."}
+    p = r2.OUT / "rung2_entry_lock.json"
+    p.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[diag] overall limit-up-locked-at-open: {out['overall_locked_pct']:.1%} of {out['n_entries']} entries")
+    for y, s in by_year.items():
+        print(f"  {y}: {s['locked_pct']:.1%}  (n={s['n']})")
+    print(f"  saved -> {p}")
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--diag", action="store_true", help="run only the entry-lock diagnostic")
+    args = ap.parse_args()
+    entry_lock_diagnostic() if args.diag else main()

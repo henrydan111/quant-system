@@ -25,7 +25,7 @@ selection (an over-conservative prev-day/Ref(,1) gate wrongly dropped 52/14,736
 果仁 RULES reproduced for parity (the income gate + universe verified vs the xlsx 各阶段持仓详单;
 the DEFAULT --exits off run is the RUNG-2 ISOLATION BASELINE, NOT a full-recipe reproduction — see EXITS):
   universe : 中小板(旧) = codes 002xxx + 003xxx ONLY (ground-truth: 100% of held names), exclude ST, 过滤停牌=是
-  filters  : 净利润(单季)>0 (PIT $n_income_sq_q0, prev-day); 5d & 20d avg amount > 0.05亿 (>5000千元);
+  filters  : 净利润(单季)>0 (PIT $n_income_sq_q0, as-of rebalance day); 5d & 20d avg amount > 0.05亿 (>5000千元);
              上市天数>20; 退市风险_v1(2) reproducible atoms = ST + 收盘价>=2
   ranking  : rank(总市值 asc) ONLY (smallest 总市值) — NOT +流通市值
   model II : sell rank>=8 / hold 1..7; pos 14-26% (~5 holds); 备选 5; daily; 09:35~open. The local sizing is an
@@ -96,7 +96,10 @@ def _in_universe(qlib_code: str) -> bool:
 def build_gate_panel(start: str, end: str) -> pd.DataFrame:
     """Provider PIT single-quarter net profit (the factor-library path) for the
     中小板 universe, wide (datetime x qlib code). Cached. PIT-anchored on
-    effective_date by the backend builder; we gate on the prev day (Ref(.,1))."""
+    effective_date by the backend builder (effective_date > disclosure STRICTLY, §3.2);
+    the gate reads this AS-OF THE REBALANCE DAY — as-of-d already excludes anything
+    disclosed on d, so it is NOT a same-day raw read. Market-data ranks/filters use the
+    prev day (d's close is unknown at d's 09:35 open)."""
     import qlib
     from qlib.config import REG_CN
     from qlib.data import D
@@ -131,7 +134,10 @@ def build_schedule(panel: pd.DataFrame, profit: pd.DataFrame, rebal: pd.Datetime
     nn=16 faithfulness:
       - universe = 002/003 only (中小板旧, ground-truth), exclude ST, drop delisted (_listed).
       - 过滤停牌=是: a name SUSPENDED on the rank day (raw close NaN) is excluded from selection.
-      - 净利润(单季)>0 PIT gate via provider $n_income_sq_q0 on the prev day (NaN -> excluded).
+      - 净利润(单季)>0 PIT gate via provider $n_income_sq_q0 AS-OF THE REBALANCE DAY (NaN -> excluded);
+        PIT-safe via the provider's strict effective_date>disclosure anchor (NOT a same-day raw read),
+        and faithful to 果仁's 公告日 selection. Gating on the prev day (Ref,1) over-dropped 52/14,736
+        果仁-held names whose report became effective ON d (GPT R1 Major-1).
       - 5d AND 20d avg amount > 5000千元 (trading-day average); 上市天数>=20; 收盘价>=2 (退市风险_v1(2) atom).
       - rank = 总市值 ascending ONLY (weight irrelevant, single key)."""
     close_raw = panel["close"].unstack(level=0)
