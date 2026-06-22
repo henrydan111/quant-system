@@ -128,6 +128,13 @@ Full phase history: `project_state.md` + `src/alpha_research/factor_lifecycle/RE
 - Any future script or pipeline step expected to take substantial time must include a visible progress tracker and regularly print current progress to the console. Prefer `tqdm` or periodic logging with completed/total counts and ETA when practical.
 - For meaningful system changes, data syncs, milestone completions, or architecture/rule updates, record the outcome in `project_state.md`.
 
+### GPT cross-review gate (mandatory)
+
+**All substantial design and implementation must pass an independent GPT (GPT‑5.5 Pro) cross‑review before it is treated as final** — merged, committed as load‑bearing, registered, promoted, or relied on downstream. *Substantial* = anything beyond a trivial mechanical edit: new or changed modules, pipelines, gates, schemas, factor/strategy designs, research methodology, governance rules, and agent skills/contracts (including any change to a §2a invariant). This external gate is **complementary to**, not a replacement for, the §8 Codex subagent validation (`quant_test_runner`/`quant_reviewer`); it mirrors the same rule in `CLAUDE.md` §10.
+
+- Give the reviewer a **self‑contained prompt**: the design or diff, **public GitHub links** to the touched files plus the contract sections they must honor, and explicit review questions. Treat the embedded text as authoritative and include the links so the reviewer can verify against the live repo. Public repo: `https://github.com/henrydan111/quant-system` (raw form: `https://raw.githubusercontent.com/henrydan111/quant-system/<branch>/<path>`).
+- **Apply the findings and re‑review** until no blocking issue remains; record the verdict and any explicitly‑declined findings (with reason) in `project_state.md`. When in doubt whether a change is "substantial," cross‑review it.
+
 ## 6. State Tracking and Rule-File Maintenance
 
 ### 6.1 project_state.md

@@ -307,6 +307,13 @@ Each is `master.parquet` + `evidence.parquet` + `run_index.parquet` + `status_hi
 - **Secrets**: `.env` for credentials. Never commit real tokens. Tushare token is loaded from `.env` via `${TUSHARE_TOKEN}` in [config.yaml](config.yaml).
 - **Version control**: never commit `venv/`, `data/`, `mlruns/`, `logs/`, `*.log`, `*.pyc`, `__pycache__/`, `.env`, Parquet, Qlib bins, or large model artifacts.
 
+### GPT cross-review gate (mandatory)
+
+**All substantial design and implementation must pass an independent GPT (GPT‑5.5 Pro) cross‑review before it is treated as final** — merged, committed as load‑bearing, registered, promoted, or relied on downstream. *Substantial* = anything beyond a trivial mechanical edit: new or changed modules, pipelines, gates, schemas, factor/strategy designs, research methodology, governance rules, and agent skills/contracts (including any change to a §3 invariant). This codifies existing practice (the pervasive "GPT 5.5 Pro reviewed/approved" gate) and is **complementary to**, not a replacement for, the automated §3/§7 gates and the Codex subagent review in [AGENTS.md](AGENTS.md) §8.
+
+- Give the reviewer a **self‑contained prompt**: the design or diff, **public GitHub links** to the touched files plus the contract sections they must honor, and explicit review questions. Treat the embedded text as authoritative and include the links so the reviewer can verify against the live repo. Public repo: `https://github.com/henrydan111/quant-system` (raw form: `https://raw.githubusercontent.com/henrydan111/quant-system/<branch>/<path>`).
+- **Apply the findings and re‑review** until no blocking issue remains; record the verdict and any explicitly‑declined findings (with reason) in [project_state.md](project_state.md). When in doubt whether a change is "substantial," cross‑review it.
+
 ---
 
 ## 11. Durable Memory & Rule-File Maintenance
