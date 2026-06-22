@@ -93,10 +93,16 @@ def main():
         cov[int(yr)] = {"forecast_issuing_stocks": int(len(codes)), "computable_on_yearend": int(comp)}
     audit["coverage_by_year"] = cov
 
-    # 2. DUPLICATES: same (code, effective_date)
+    # 2. DUPLICATES: same (code, effective_date) + the all-tie-key payload-conflict count
+    # (GPT R2 m1: the residual deterministic-order edge case — rows tied on EVERY ordering key
+    # but with a differing forecast payload, where row order would still decide the "latest").
     dup = fc.groupby(["ts_code", "effective_date"]).size()
     audit["same_effdate_duplicate_rows"] = int((dup > 1).sum())
     audit["same_effdate_duplicate_pct"] = float((dup > 1).mean())
+    _tie = ["ts_code", "effective_date", "disclosure_date", "ann_date", "first_ann_date", "end_date"]
+    _conflict = sum(1 for _, gg in fc.groupby(_tie, dropna=False)
+                    if len(gg) > 1 and (gg["net_profit_min"].nunique() > 1 or gg["net_profit_max"].nunique() > 1))
+    audit["all_tiekey_payload_conflicts"] = int(_conflict)
 
     # 3. MISMATCH bucketing vs 果仁
     recs = []
@@ -124,6 +130,11 @@ def main():
         "sign_flip_rows": int((np.sign(have["local"]) != np.sign(have["guorn"])).sum()),
         "miss_with_tiny_denom(|py_single|<100万)": int((miss["py_single"].abs() < 100).sum()),
         "miss_by_year": {int(y): int(n) for y, n in miss.groupby(miss["date"].dt.year).size().items()},
+        "note": ("rule #10: the >1% bucket is CONSISTENT WITH small-denominator amplification + "
+                 "果仁's 万-rounded display + early-year data quality/restatements (it shrinks 417->84 "
+                 "over 2014->2024); it is NOT fully partitioned into mutually-exclusive proven categories. "
+                 "The PIT-serving claim rests on median rel-err ~4e-05 + 98%+ sign-match, not on a full "
+                 "decomposition of the residual."),
     }
 
     # 4. CANARIES (counts + one example each)
@@ -141,6 +152,31 @@ def main():
                 ex_a = {"ts": ts, "forecast_eff": str(eff.date()), "factor_at_eff": "NaN",
                         "factor_+120d": round(float(v1), 4)}
     audit["canary_forecast_before_income"] = {"n_in_4000_sample": canary_a, "example": ex_a}
+
+    # 4b. RESTATEMENT CANARY (GPT R2 M2): an income (ts, end_date) reported with >1 effective_date
+    # and a CHANGED value = a restatement. The as-of income lookup must return the OLD value the day
+    # BEFORE the restatement effective_date and the NEW value ON it (no lookahead; the restatement is
+    # not visible early). Confirms inc_cum / the factor respect restatement timing.
+    restate = (inc.groupby(["ts_code", "end_date"])
+               .agg(n_eff=("effective_date", "nunique"), n_val=("n_income", "nunique")))
+    restated = restate[(restate["n_eff"] > 1) & (restate["n_val"] > 1)]
+    ok = 0; ex_r = None
+    for (ts, end), _ in restated.head(200).iterrows():
+        sub = inc_by[ts]
+        sub = sub[sub["end_date"] == end].sort_values("effective_date")
+        if len(sub) < 2:
+            continue
+        v_old = sub["n_income"].iloc[0]; e_new = sub["effective_date"].iloc[-1]; v_new = sub["n_income"].iloc[-1]
+        before = inc_cum(ts, end, e_new - pd.Timedelta(days=1)) * 1e4
+        after = inc_cum(ts, end, e_new) * 1e4
+        if np.isfinite(before) and abs(before - v_old) < 1.0 and abs(after - v_new) < 1.0:
+            ok += 1
+            if ex_r is None:
+                ex_r = {"ts": ts, "end": str(end.date()), "old_万": round(v_old / 1e4, 1),
+                        "new_万": round(v_new / 1e4, 1), "restate_eff": str(e_new.date()),
+                        "asof_before_restate": "OLD", "asof_on_restate": "NEW"}
+    audit["canary_restatement"] = {"restated_quarters": int(len(restated)),
+                                   "asof_respects_restatement_ok_in_200": ok, "example": ex_r}
 
     OUT.joinpath("rung3_forecast_registration_audit.json").write_text(
         json.dumps(audit, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
