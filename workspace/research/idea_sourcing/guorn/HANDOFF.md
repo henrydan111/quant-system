@@ -56,6 +56,7 @@
 | bt_queue.json | 权威 65 名字顺序(= nn 顺序, 与 xlsx 前缀一致) |
 | **指标拆解与分析.md** | 因子分析层: 43 函数语义 + 内置指标定义 + 99 自定义因子按族拆解 + 对接本地系统建议 |
 | indicator_reference_auto.md | 每个自定义因子的**精确公式 + 依赖树 + 递归展开**(自动生成、与导出库逐字一致) |
+| **guorn_local_field_mapping.md / .json** | ★ **果仁 指标 → 本地 provider 字段映射 + 已验证 parity 状态 + 公式文档勘误 + 复用惯例**(果仁-parity 阶梯 rung 1-4 实测;含 signal-date=T-1、成交额/总市值 单位、ILLIQ=股价振幅非\|涨幅\|、BP=归母权益等更正)。**接入/复刻果仁因子前先读此表**(避免重蹈逆向工程) |
 | indicator_mapping.md | 194 命名指标 → 自定义/内置/内联 来源映射 |
 | 内联公式85条拆解.md | 85 条内联 `公式()` 逐条拆解 |
 | guorn_aichat_indicator_defs.md | 帮助文档未收录、经果仁AI助手确认的内置指标定义(中性化族/ILLIQ/朝阳永续预期/评级族等) |
