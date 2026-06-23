@@ -2774,8 +2774,11 @@ class StagedQlibBackendBuilder:
         single quarter = income_cum[FY-1, Q] - income_cum[FY-1, Q-1]. All inputs PIT
         (forecast + income effective_date = strict next-open after disclosure).
 
-        Validated vs 果仁 across 38,252 holdings: median rel-err 4.4e-05, 93% within 1%,
-        98.5% sign-match (workspace/scripts/_validate_forecast_factor_vs_guorn.py).
+        Validated vs 果仁 — raw-ledger: 38,252 holdings, median rel-err 4.4e-05, 93% within 1%
+        (_validate_forecast_factor_vs_guorn.py); full-market PROVIDER-READ at the EXACT decision
+        date (_provider_read_audit_forecast.py): 38,399 finite-served holdings match 果仁
+        (median rel-err 4.37e-05, 92.9% within 1%, 98.2% sign), plus a clean ~2.2% NaN coverage
+        gap where the latest forecast is not yet PIT-computable (NaN by design, NOT carried).
 
         The factor is a STEP function — it can only change on a forecast or income event, so
         it is recomputed as-of each such event and the ``[event, next_event)`` range is filled
