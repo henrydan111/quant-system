@@ -22,22 +22,30 @@
     {"guorn": "市盈率", "local_expr": "$pe_ttm", "lag": "T-1", "status": "validated", "parity": {"median_relerr": 0.009, "within_1pct": 0.54, "within_5pct": 0.921, "n": 19048}, "rung": 4, "note": "$pe_ttm NOT $pe static (13.8% off); residual = price signal-day"},
     {"guorn": "ILLIQ(5)", "local_expr": "MA( ((high-low)/prev_close) / ($amount/1e5), 5 )", "lag": "T-1", "status": "structure_exact", "parity": {"within_0.1pct": 0.125, "ratio_median": 0.863}, "rung": 4, "note": "numerator=股价振幅 NOT |1日涨幅| (aichat doc wrong); avg-of-ratios; residual ~0.86x = undocumented sub-detail"},
     {"guorn": "250日涨幅", "local_expr": "adjc / adjc.shift(250) - 1", "lag": "T0", "status": "data_validated", "parity": {"median_relerr": 0.059, "sign_match": 0.97}, "rung": 4, "note": "residual = N-day lookback window-membership counting (NOT data/复权/corp-action; window N=250 sharp min; no-corp-action subset equally off)"},
-    {"guorn": "N日乖离率(120)", "local_expr": "(adjc - MA(adjc,120)) / MA(adjc,120)", "lag": "T-1", "status": "data_validated", "parity": {"median_relerr": 0.068, "sign_match": 0.95}, "rung": 4, "note": "same root cause as 250日涨幅 (MA window-membership; no-corp-action subset equally off)"}
+    {"guorn": "N日乖离率(120)", "local_expr": "(adjc - MA(adjc,120)) / MA(adjc,120)", "lag": "T-1", "status": "data_validated", "parity": {"median_relerr": 0.068, "sign_match": 0.95}, "rung": 4, "note": "same root cause as 250日涨幅 (MA window-membership; no-corp-action subset equally off)"},
+    {"guorn": "股息率TTM", "local_expr": "$dv_ttm", "scale": 100.0, "lag": "T-1", "status": "validated", "parity": {"median_relerr": 0.007, "within_5pct": 0.747, "sign_match": 1.0, "n": 51408}, "rung": 5, "note": "dividend-yield path; residual = price signal-day + TTM-window def"},
+    {"guorn": "RnDQGR%PY", "local_expr": "($rd_exp_sq_q0 - $rd_exp_sq_q4) / $rd_exp_sq_q4", "lag": "T0", "status": "validated", "parity": {"median_relerr": 0.0063, "within_5pct": 0.855, "sign_match": 0.979, "n": 66886}, "rung": 5, "note": "R&D single-quarter YoY path"},
+    {"guorn": "CoreProfitQ", "local_expr": "$revenue_sq_q0 - $oper_cost_sq_q0 - ($admin_exp_sq_q0 + $sell_exp_sq_q0 + $fin_exp_sq_q0) - $biz_tax_surchg_sq_q0", "lag": "T0", "status": "penny_exact", "parity": {"median_relerr": 0.0, "within_1pct": 0.938, "sign_match": 0.99, "n": 18059}, "rung": 5, "note": "validates ALL expense lines (管理/销售/财务费用 + 营业税金及附加) + revenue/cost at once"}
   ],
   "un_validatable": [
     {"guorn": "股价振幅%当日成交额10日", "local_expr": "MA( ((high-low)/prev_close)/$amount, 10 )", "reason": "果仁 displays 0.00 (true value ~2e-6 rounds to zero at 2 decimals); formula provably correct but parity meaningless"}
+  ],
+  "unresolved": [
+    {"guorn": "股东数下降率", "local_expr": "$holder_num_q4/$holder_num_q0 - 1", "rung": 5, "parity": {"sign_match": 0.079, "median_relerr": 7.65}, "reason": "holder_num data SANE (correct magnitudes + PIT carry; early rows match 果仁) but provider disclosure coverage sparser/more irregular than 果仁's quarterly 股东数 grid -> _q4 reaches further back than 果仁 REF(股东数,4) (~8x change inflation). Needs 报告期-grid resampling. DATA present, factor NOT validated."}
   ],
   "doc_corrections": [
     {"doc": "guorn_aichat_indicator_defs.md", "indicator": "ILLIQ", "says": "Sum(|1日涨幅|/成交额(亿元),N)/N", "correct": "numerator = 股价振幅 (high-low)/prev_close, NOT |1日涨幅|"},
     {"doc": "indicator_reference_auto.md", "indicator": "BP", "says": "归属母公司股东权益合计/总市值", "correct": "field = total_hldr_eqy_EXC_min_int (parent), not inc_min_int (total)"},
     {"doc": "rung-2 finding", "indicator": "净利润(单季)", "says": "净利润(单季)", "correct": "TOTAL net profit $n_income, not 归母 $n_income_attr_p"}
   ],
+  "coverage_resolved_rung5": [
+    {"path": "分红/股息", "status": "validated", "via": "股息率TTM -> $dv_ttm (0.70% med)"},
+    {"path": "研发费用($rd_exp)", "status": "validated", "via": "RnDQGR%PY (0.63% med)"},
+    {"path": "expense_lines(管理/销售/财务费用+营业税金)", "status": "penny_exact", "via": "CoreProfitQ (med 0.0)"},
+    {"path": "总股本(share count)", "status": "validated_implicit", "via": "总市值 = close x total_share (both penny-exact)"}
+  ],
   "coverage_open": [
-    {"path": "分红/股息", "indicators": ["DivGrPY%", "股息率TTM", "近三年分红"]},
-    {"path": "股东数(holder_number)", "indicators": ["股东数下降率"]},
-    {"path": "研发费用($rd_exp)", "indicators": ["RnD%Assets", "RnDTTM%营业收入TTM"]},
-    {"path": "总股本", "indicators": ["SharesAvgGr%PY"]},
-    {"path": "expense_lines(管理/销售/财务费用)", "indicators": ["CoreProfitQ"]},
-    {"path": "折旧摊销", "indicators": ["EBITDAQ", "FCFQ_重算"]}
+    {"path": "股东数(holder_number)", "status": "unresolved", "note": "data sane but coverage sparser than 果仁 grid; 股东数下降率 needs 报告期-grid resampling (see unresolved[])"},
+    {"path": "折旧摊销(D&A)", "status": "not_materialized", "note": "$depr_fa_coga_dpba/$amort_intang_assets absent from provider -> EBITDAQ/FCFQ unreproducible; needs ingestion/materialization to validate"}
   ]
 }

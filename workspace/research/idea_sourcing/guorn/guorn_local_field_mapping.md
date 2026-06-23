@@ -49,6 +49,9 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **BP** | 归属母公司股东权益合计/总市值 | `$total_hldr_eqy_exc_min_int_q0 / $total_mv` (×1e4, lag T−1) | ✅ 0.66% med (66% w/1%, 96% w/5%, n=97k) — residual = 总市值 2-dec display-round + equity PIT-boundary | 4 |
 | **市盈率** | 市盈率TTM | `$pe_ttm` (lag T−1) | ✅ 0.9% med (54% w/1%, 92% w/5%, n=19k) — residual = price signal-day | 4 |
 | **ILLIQ(5)** | MA(股价振幅/成交额(亿元), 5) | `MA( ((high−low)/prev_close) / ($amount/1e5), 5 )` (lag T−1, avg-of-ratios) | ◑ structure-exact (12.5% w/0.1%); residual ~0.86× = undocumented platform sub-detail | 4 |
+| **股息率TTM** | 股息率TTM | `$dv_ttm` (lag T−1, scale 100) | ✅ 0.70% med (sign 100%, 75% w/5%, n=51k) — residual = price signal-day + TTM-window def | 5 |
+| **RnDQGR%PY** | (研发费用单季−refq(,4))/refq(研发费用单季,4) | `($rd_exp_sq_q0 − $rd_exp_sq_q4) / $rd_exp_sq_q4` (lag 0) | ✅ 0.63% med (85% w/5%, sign 97.9%, n=67k) | 5 |
+| **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
 
 Legend: ✅ penny/structure-exact (residual = display/PIT-boundary) · ◑ structure confirmed, sub-detail residual.
 
@@ -63,6 +66,7 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 |---|---|---|---|
 | **250日涨幅** | `adjc / adjc.shift(250) − 1` (lag 0) | ~5.5% med, signs 97% | window N=250 is a sharp confirmed min; ratio 复权-invariant; **no-corp-action subset EQUALLY off (5.45%)** → residual = N-day lookback window-MEMBERSHIP counting (果仁 suspension/calendar vs `.shift(250)`) |
 | **N日乖离率(120)** | `(adjc − MA(adjc,120)) / MA(adjc,120)` (lag 1) | ~6.8% med, signs 95% | **no-corp-action subset EQUALLY off (8.2%, n=80k)** → same root cause (MA window-membership counting) |
+| **股东数下降率** (rung-5) | `$holder_num_q4/$holder_num_q0 − 1` | ⚠ **NOT reproduced** (sign 7.9%, med ~8×) | holder_num data is SANE (correct magnitudes + PIT carry; early rows match 果仁, e.g. 000825 +0.046 vs +0.047). But provider holder_num disclosure coverage is **sparser/more irregular** than 果仁's quarterly 股东数 grid → `_q4` reaches FURTHER back than 果仁's `REF(股东数,4)` (~8× change inflation). Needs 报告期-grid resampling to match; raw `_q4` snapshot does NOT. **UNRESOLVED — data present, factor not validated.** |
 
 ---
 
@@ -107,15 +111,16 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 | valuation (pe_ttm) | ✅ validated | 市盈率 |
 | forecast 业绩预告 (event-PIT) | ✅ validated | rung-3 |
 | price/volume (close/high/low/amount/adj) | ✅ validated | 总市值 + momentum |
-| **分红 / 股息 (dividends)** | ⬜ OPEN | DivGrPY% / 股息率TTM / 近三年分红 |
-| **股东数 (holder_number)** | ⬜ OPEN | 股东数下降率 [10]/[55] |
-| **研发费用 ($rd_exp)** | ⬜ OPEN | RnD% factors |
-| **总股本 (share count)** | ⬜ OPEN | SharesAvgGr%PY |
-| **expense lines (管理/销售/财务费用)** | ⬜ OPEN | CoreProfitQ |
-| **折旧摊销 (D&A)** | ⬜ OPEN | EBITDAQ / FCFQ_重算 |
+| 分红 / 股息 (dividends) | ✅ validated (rung-5) | 股息率TTM → `$dv_ttm` (0.70% med) |
+| 研发费用 ($rd_exp) | ✅ validated (rung-5) | RnDQGR%PY (0.63% med) |
+| expense lines (管理/销售/财务费用 + 营业税金) | ✅ penny-exact (rung-5) | CoreProfitQ (med 0.0) |
+| 总股本 (share count) | ✅ validated (implicit) | 总市值 = close × total_share (both penny-exact) |
+| **股东数 (holder_number)** | ⚠ UNRESOLVED (rung-5) | data sane but coverage sparser than 果仁 grid; 股东数下降率 not reproduced (needs 报告期-grid resampling) |
+| **折旧摊销 (D&A)** | 🚫 NOT MATERIALIZED | `$depr_fa_coga_dpba`/`$amort_intang_assets` absent → EBITDAQ/FCFQ unreproducible (provider gap, not a data fault) |
 
-The 6 OPEN paths are the only candidates for a future targeted "rung-5 field sweep" — everything else
-is validated, redundant, or irreducible.
+**rung-5 (2026-06-23)** closed 4 of the 6 OPEN paths (分红/研发/费用明细 validated, 总股本 implicit).
+Remaining: 股东数 (data present but factor needs 报告期-grid reconstruction) + 折旧摊销 (D&A fields not
+materialized in the provider — would need an ingestion/materialization step to validate).
 
 ---
 
