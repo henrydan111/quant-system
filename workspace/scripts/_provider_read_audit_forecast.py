@@ -62,9 +62,10 @@ def main():
         return ("nan", np.nan) if pd.isna(v) else ("finite", float(v))
 
     def served_ffill(q, date):
-        """Consumer FORWARD-FILL value (last non-null <= date) — i.e. 果仁's carry-the-prior-
-        computable-forecast behaviour. Used ONLY to prove the exact-NaN cases are carry-
-        recoverable to 果仁, not wrong values."""
+        """Diagnostic ONLY: last non-null <= date (a consumer-side carry). Used solely to TEST
+        whether the exact-NaN cases are merely prior-value carry-recoverable. It must NEVER be
+        used for the provider-read parity metric. (Result: exact_nan_ffill_within_1pct ~ 0, so
+        they are NOT carry-recoverable.)"""
         if q not in wide.columns:
             return np.nan
         s = wide[q]; s = s[s.index <= pd.Timestamp(date)]
@@ -91,7 +92,8 @@ def main():
     cmp = pd.DataFrame(recs, columns=["guorn", "served", "kind", "ffill", "year"])
     fin = cmp[cmp["kind"] == "finite"].copy()
     rel = (fin["served"] - fin["guorn"]).abs() / fin["guorn"].abs().clip(lower=0.05)
-    # the 856 exact-NaN, forward-filled, should recover 果仁 (carry-recoverable, not wrong)
+    # Diagnostic: if exact_nan_ffill_within_1pct is near zero, the exact-NaN cases are NOT
+    # prior-carry recoverable (so 果仁's value there is from a different edge-case alignment).
     nanrows = cmp[cmp["kind"] == "nan"].copy()
     nan_ff = nanrows.dropna(subset=["ffill"])
     nan_ff_rel = (nan_ff["ffill"] - nan_ff["guorn"]).abs() / nan_ff["guorn"].abs().clip(lower=0.05)
