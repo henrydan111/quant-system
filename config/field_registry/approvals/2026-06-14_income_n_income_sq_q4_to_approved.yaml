@@ -16,7 +16,7 @@ reviewer: henrydan111
 related_pr: cicc-d4a-field-registration
 related_findings_id: null
 
-provider_build_id: indicators_fields_20260609
+provider_build_id: "20260623_004545"
 calendar_policy_id: frozen_20260227_system_build
 
 fields:

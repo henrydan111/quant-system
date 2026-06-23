@@ -354,6 +354,13 @@ datasets:
     field_prefixes:
       - $report_rc__
 
+  # ─── Approved: 业绩预告 (earnings-forecast) single-quarter net-profit YoY (rung-3, 2026-06-23) ──
+  forecast:
+    status: approved
+    reason: "业绩预告 (company earnings-forecast) single-quarter net-profit YoY growth = the 果仁 业绩预告净利润QGr%PYQ_v1 factor. Materialized by pit_backend._materialize_forecast_growth (a CROSS-LEDGER materializer joining the forecast ledger with the income ledger), served by provider build 20260623_004545 (published 2026-06-23 by atomic swap; old provider backed up at data/qlib_data.bak_20260623_004545). CONSTRUCTION: the latest visible 业绩预告 midpoint (net_profit_min/max, 万元) for fiscal quarter Q minus the visible cumulative income through Q-1 = the forecast's last single quarter; over the prior-year same single quarter (income_cum[FY-1,Q]-income_cum[FY-1,Q-1]). PIT: BOTH the forecast and the income anchor on effective_date = strict next-open after disclosure (§3.2); the income as-of lookup respects restatement timing (restatement canary 200/200: as-of returns OLD before / NEW on the restatement effective_date — no lookahead). CARRY: a step function recomputed at each forecast/income event; it carries the CURRENT latest COMPUTABLE forecast with NO TTL, but when a newer visible forecast is NOT yet computable (its required income not visible) it serves NaN — it does NOT stale-carry the prior (GPT R1 Blocker-1). VALIDATION vs 果仁 (full-market provider-read at the EXACT decision date, _provider_read_audit_forecast.py): 38,399 finite-served holdings match median rel-err 4.37e-05 / 92.9% within 1% / 98.2% sign, plus a clean 2.2% NaN COVERAGE gap (NaN where the latest forecast is not strictly PIT-computable — NOT carry-recoverable; a different reference-platform edge-case alignment). COVERAGE: SPARSE forecast-issuer SUB-UNIVERSE only (~1,927 stocks 2014 -> ~4,978 2026); served NaN is MEANINGFUL (no forecast coverage OR latest-forecast-incomputable), NOT an error. Non-issuers return no rows (standard Qlib sub-universe; consumers reindex -> NaN). CONSUMER RULE: formal/predictive factors MUST wrap every field in Ref(...,1) AND gate on non-null + forecast recency; NO implicit forward-fill to chase 果仁 parity. GPT 5.5 Pro cross-review R1->R4 = SHIP (B1 stale-carry, M1 same-effective-date tie-break, M2 restatement canary + full-market provider-read, all folded). Approval: config/field_registry/approvals/2026-06-23_forecast_np_q_yoy_to_approved.yaml."
+    fields:
+      - $forecast__np_q_yoy
+
   # ─── Approved: statement line-items (Wave-1 promotion 2026-05-31) ────────────
   # The income / balancesheet / cashflow STATEMENT FAMILIES anchor visibility on
   # max(ann_date, f_ann_date) (CLAUDE.md §3) — distinct from the indicators

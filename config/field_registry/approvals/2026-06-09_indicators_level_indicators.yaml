@@ -18,7 +18,7 @@ reviewer: henrydan111
 related_pr: report-rc-p1-plumbing + field-parity-audit fixes
 related_findings_id: workspace/research/data_audit/FINDINGS_AND_VERIFICATION.md (A2)
 
-provider_build_id: indicators_fields_20260609
+provider_build_id: "20260623_004545"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:
