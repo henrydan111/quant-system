@@ -14,15 +14,15 @@ CONTEXT — read to judge the plan against the contract:
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/src/result_analysis/metrics.py
 - (background only; may be on a feature branch, not on main) the 果仁 strategy library handoff describing the 65 books, their recipes, and the microcap-optimism caveat — workspace/research/idea_sourcing/guorn/HANDOFF.md
 
-RE-REVIEW (R2) — your R1 verdict was REVISE; ALL findings are folded into the embedded v2 plan. Please verify each is actually resolved:
-- Blocker-1 (OOS selection not sealed) -> §3.4 design-freeze 2023-05-31 + §4.0 ONE frozen deterministic selection rule (filter ΔMDD<0 & ΔCAGR bootstrap-LB>=-3pp -> rank by pre-holdout median paired-bootstrap ΔCalmar -> tie-break turnover then complexity -> single frozen candidate -> holdout single accept/reject; no param edits after seeing holdout).
-- Blocker-2 (multiple testing unspecified) -> §4.1 testing_ledger over the FULL grid; N_eff = eigenvalue participation ratio clamped [8,total]; paired block-bootstrap recomputing the full equity path for Calmar/MDD; max-stat family-wise correction; deflated-Sharpe demoted to secondary.
-- Blocker-3 (claims before test) -> §0 reframed to hypotheses H1/H2/H3 each bound to a named output; §4.2 named haircut test (5/10/20% annualized on A/D-group NAVs, rerun the full sealed pipeline).
-- Major-1 cadence-matched EW (monthly/quarterly/buy&hold, same cost) §3.2; Major-2 exact cost mechanics + 0/5/10/20bps one-way §3.1; Major-3 -3pp as pre-declared economic non-inferiority margin with bootstrap LB §7 D1; Major-4 floor/cap inside the optimizer for convex schemes, one deterministic simplex projection for the rest §3.3.
-- Minor-1 leave-one-style-family-out §4.3; Minor-2 both 252-day & calendar CAGR §3.5; Minor-3 max-Sharpe permanent negative control §5.
+RE-REVIEW (R3) — your R2 verdict was REVISE (R1=REVISE was already folded & you confirmed it). ALL R2 findings are now folded into the embedded v3 plan. Please verify each is resolved:
+- R2-Blocker-1 (bootstrap object wrong for path metrics) -> §4.1: testing_ledger stores TWO columns (strategy_return, ew_return), NOT a difference series; paired block-bootstrap resamples paired rows, rebuilds BOTH NAV paths separately, computes CAGR/MDD/Calmar on each, THEN Δ; never compute ΔMDD/ΔCalmar from an excess-return-only path. Mirrored in §3.5 and §5 deliverables.
+- R2-Blocker-2 (holdout corrected-ΔCalmar silently opened the whole grid) -> §4.0 step 3 + §4.1 + §7 D1: holdout computes ONLY the frozen candidate vs cadence-matched EW via single-candidate paired bootstrap; max-stat family-wise correction is used ONLY for the pre-holdout selection claim, never by reading other configs' holdout returns.
+- R2-Major-1 (full-sample diagnostics selection-relevant) -> §2 caveat + new §4.4: any return-based diagnostic that informs design (HRP clustering, complexity ordering, haircut grouping, candidate inclusion) is recomputed on <=2023-05-31 only; §2 full-sample numbers are descriptive, not used for selection; style groups A-E are a priori from recipes, not return clustering.
+- R2-Major-2 (S8 not truly excluded) -> §5: max-Sharpe is EXCLUDED from the frozen deployable selection rule and can NEVER be the recommended allocation; diagnostic-only.
+- R2-Minor-1 selection_trace.csv (pre-2023-05-31 turnover/complexity/filter-rank) §5; R2-Minor-2 haircut = stress test, not limit-up-buyability proof, true validation needs book-level replay §4.2; R2-Minor-3 holdout pass still requires paper/live-small before real money §5.
 
-SELF-REVIEW PREFLIGHT (v2): Verdict "clean for GPT R2"; no finding declined. Re-checked §3 invariants + each principle. Carried-forward facts: data integrity penny-exact vs 果仁 (total-return & MDD); total-return basis consistent across all 20; unlevered 1x long-only; metrics via result_analysis only; dormant portfolio_risk untouched.
-Residual concerns for R2: (1) Is a single ~3-year holdout (one accept/reject) statistically adequate given it spans essentially one regime, or should combinatorial-purged-CV / nested sequential holdouts replace it — accepting that this burns more of an already-short series? (2) Is participation-ratio N_eff the right effective-trial estimator, and is the [8,total] clamp defensible vs alternatives (e.g. Bonferroni on cluster count)? (3) Does the haircut test (annualized NAV haircut on A/D-group books) faithfully proxy 果仁 limit-up optimism, given a true limit-up-buyability penalty cannot be applied at the NAV/book level? (4) Is the deterministic tie-break (turnover -> complexity) itself provably free of any peek at post-2023-05-31 data?
+SELF-REVIEW PREFLIGHT (v3): Verdict "clean for GPT R3"; no finding declined across R1+R2. Re-checked §3 invariants + each principle. The two changes that close the accidental-leakage risk you flagged: (a) path-correct paired bootstrap (rebuild both NAV paths, never the excess path), (b) holdout reads ONLY the one frozen candidate (family-wise correction is a pre-holdout-only claim).
+Residual concerns for R3: (1) Even with a frozen single-candidate holdout, is one ~3-year regime enough power — should the plan pre-commit to a minimum effect size and an explicit 'inconclusive' verdict band rather than binary accept/reject? (2) Pre-holdout selection still uses ~9 years of ONE market (A-share microcap-heavy); is there residual single-market overfit the design cannot remove and should simply disclose? (3) Is the a-priori A-E grouping defensible enough to drive HRP/two-stage, or should those two schemes use a <=2023-05-31 data-driven clustering instead (and thus enter the trial family, increasing N_eff)?
 
 WHAT CHANGED (authoritative — treat the embedded plan as the source of truth; links cross-check the contract)
 The full design document follows under the marker below. Review IT.
@@ -58,7 +58,7 @@ OUTPUT FORMAT
 > 在**长期收益与回撤**上优于等权。
 > **数据**: `Knowledge/果仁回测结果/` 已下载的 65 个策略回测导出 (其中 20 个为实盘组合), 2014-01-02..2026-06-18,
 > 日频净值曲线, **总收益口径(含分红再投资), unlevered 1×**。
-> **状态**: 设计稿 **v2** (GPT-5.5 Pro R1=REVISE 的 3 Blocker + 4 Major + 3 Minor **已全部折入** → 待 R2 复审)。NON-FORMAL research artifact。
+> **状态**: 设计稿 **v3** (GPT-5.5 Pro R1=REVISE + R2=REVISE 的 finding **已全部折入** → 待 R3 复审)。NON-FORMAL research artifact。
 > **Last updated**: 2026-06-24
 
 ---
@@ -138,6 +138,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 
 > 全部基于已对齐的 20×3028 日收益矩阵 (`guorn20_daily_returns.parquet`)。**数据完整性已校验**:
 > 重建的总收益与最大回撤与果仁官方逐位一致(年化差异仅来自日历 vs 252 年化口径, 在相对比较中抵消)。
+> **⚠ 无泄漏边界(Major-1)**: 本节相关性/风险贡献为**全样本描述性数字, 不用于任何选择决策**。风格分组(A–E)是 **a priori = 按策略 recipe 经济逻辑**划分(非按收益相关性数据挖掘), 故 leakage-safe; 任何**用于设计的收益型诊断**(HRP 聚类、复杂度排序、haircut 分组、候选纳入)在 **§4.4** 须**仅用 ≤2023-05-31 数据重算**。全样本诊断只在 holdout 报告之后出现并标注"描述性"。
 
 **诊断 1 — EW 已经很强, 门槛高。** EW(月度再平衡) 实测: CAGR 47.2%(252口径)/~45%(日历), 波动 22.7%, **夏普 1.82**, 回撤 **−32.0%**, Calmar 1.47, Sortino 2.21。EW 波动 22.7% < 单券平均波动 29.5% (分散比 1.30) —— 已实现可观分散。
 
@@ -197,7 +198,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 - **★ 设计冻结日 = 2023-05-31 (Blocker-1 封存)**: **所有**方案/参数/"稳健性"判定**只用 ≤2023-05-31 的 walk-forward 数据**完成; **holdout = 2023-06-01..2026-06-18** 在选择完成、冻结**唯一**候选后才打开, 且**只能 accept/reject 该唯一候选、看后不得再改任何参数**。冻结的确定性选择规则见 **§4.0**。
 
 ### 3.5 评估指标 (全部经 `src/result_analysis/metrics.py`, 全部样本外)
-**CAGR 同时报告 252-口径与日历-口径**(Minor-2; `metrics.py` 默认 252 年化, 日历口径对齐果仁)、波动、夏普(rf 对齐果仁 ~3%)、Sortino、最大回撤、Calmar、最差滚动 12 月、月度跑赢 EW 比率、**年化换手 + 累计成本拖累**、扣成本后 CAGR。按 3 子区间(2014-18 / 19-22 / 23-26)分报。所有"相对 EW"指标(ΔCAGR/ΔMDD/ΔCalmar)以**配对 bootstrap 分布 + CI**报告(§4)。
+**CAGR 同时报告 252-口径与日历-口径**(Minor-2; `metrics.py` 默认 252 年化, 日历口径对齐果仁)、波动、夏普(rf 对齐果仁 ~3%)、Sortino、最大回撤、Calmar、最差滚动 12 月、月度跑赢 EW 比率、**年化换手 + 累计成本拖累**、扣成本后 CAGR。按 3 子区间(2014-18 / 19-22 / 23-26)分报。所有"相对 EW"指标(ΔCAGR/ΔMDD/ΔCalmar)以 **path-correct 配对 bootstrap(分别重建两条净值路径再求差, §4.1)分布 + CI** 报告。
 
 ---
 
@@ -212,17 +213,18 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
    - b. 排序: 按 **pre-holdout 配对 bootstrap ΔCalmar 中位数** 降序;
    - c. tie-break: 先**低换手**, 再**低复杂度**(EW < 逆波动 < 两段式 < HRP < ERC < min-var/max-div < max-Sharpe);
    - d. 取 rank-1 = **唯一冻结候选**。
-3. **打开 holdout (2023-06-01..2026-06-18)**: 只对该唯一候选算 accept/reject —— 通过 = holdout 上 **ΔMDD<0 ∧ 多重检验校正后 ΔCalmar>0 ∧ ΔCAGR≥EW−3pp**。**看 holdout 后不得再调任何参数**(任何回调 = OOS 失效, 须重新声明并消耗一次新的 holdout)。
+3. **打开 holdout (2023-06-01..2026-06-18)**: **只计算冻结候选 vs cadence-matched EW**(绝不读其余配置的 holdout 收益, 否则 = 为全网格打开 holdout, Blocker-2)。通过 = holdout 上 **单候选 path-correct 配对 bootstrap(§4.1)的 ΔMDD<0 ∧ ΔCalmar>0 ∧ ΔCAGR 下界≥−3pp**。family-wise 校正只用于 **pre-holdout 选择 claim**, 不在 holdout 阶段使用。**看 holdout 后不得再调任何参数**(任何回调 = OOS 失效, 须重新声明并消耗一次新 holdout)。
 
-### 4.1 多重检验与显著性 (Blocker-2 — 具体到算法, 非仅命名)
-- **测试账本 `testing_ledger.csv`**: 记录**每一个**配置(scheme/L/cadence/cap/floor)及其 daily (方案−EW) 收益差序列。试验族 = 全网格, **不止 8 个方案**。
+### 4.1 多重检验与显著性 (Blocker-2 + R2-Blocker-1 修正 bootstrap 对象)
+- **测试账本 `testing_ledger.csv`**: 记录**每一个**配置(scheme/L/cadence/cap/floor)逐日的**两列** `strategy_return` 与 `ew_return`(cadence-matched EW), **不存"收益差"单列**。试验族 = 全网格, 不止 8 个方案。
+- **★ path-correct 配对 block-bootstrap (R2-Blocker-1)**: Calmar/MDD/CAGR 是**路径指标** —— ΔMDD ≠ "超额收益路径的 MDD"。故对**成对两列收益**抽连续块 → **分别重建 strategy 与 EW 两条净值路径** → 各自算 CAGR/MDD/Calmar → **再求 Δ**。**绝不**从"仅超额收益"路径算 ΔMDD/ΔCalmar。得 Δ 指标分布与 CI。
 - **有效试验数 N_eff**: 由配置间"收益差序列"相关矩阵特征值算 participation ratio `N_eff=(Σλ)²/Σλ²`, clamp 到 `[8, 配置总数]`。
-- **Calmar/MDD 显著性 = 配对 block-bootstrap**(非 deflated-Sharpe): 对 daily (方案−EW) 分块自助, **每个 bootstrap 样本重算整条净值路径**再算 Calmar/MDD/CAGR → Δ 指标分布与 CI。
-- **family-wise 校正 = max-stat**: 零假设"全族无一胜 EW"下, bootstrap **跨全配置族的 max ΔCalmar** 分布, 据此给冻结候选的 ΔCalmar 一个 **family-wise 校正 p 值 / CI**。**deflated/PSR-Sharpe 仅辅助, 不作为 Calmar 胜出的证明。**
+- **★ family-wise 校正 = max-stat, 仅用于 pre-holdout 选择 claim (R2-Blocker-2)**: 零假设"全族无一胜 EW"下, 在 **≤2023-05-31** 数据上 bootstrap 跨全配置族的 max ΔCalmar 分布, 给"选出的候选在 pre-holdout 显著优于 EW"一个 family-wise 校正 p/CI。**holdout 阶段绝不读全网格** —— 只对冻结候选做**单候选** path-correct 配对 bootstrap(§4.0)。deflated/PSR-Sharpe 仅辅助, 不作为 Calmar 胜出证明。
 
 ### 4.2 继承性乐观偏差 = 具名 haircut 检验 (Blocker-3 — 不只叙述)
 - **假设**: 下调微盘成长券(A/D 组)在果仁"涨停可买"乐观下是保守的(memory `project_guorn_parity`)。
-- **检验 `haircut_sensitivity.csv`**: 对 A/D 组 NAV 施加 **5/10/20% 年化 haircut**(或 limit-up-buyability 惩罚)后**重跑整条封存流程**, 报告**冻结候选权重是否变化、ΔCalmar 是否存活**。偏差方向(利空高波券)对"下调高波券"结论是安全垫 —— 须由该表证实, 非断言。
+- **检验 `haircut_sensitivity.csv`**: 对 A/D 组 NAV 施加 **5/10/20% 年化 haircut** 后**重跑整条封存流程**, 报告**冻结候选权重是否变化、ΔCalmar 是否存活**。偏差方向(利空高波券)对"下调高波券"结论是安全垫 —— 须由该表证实, 非断言。
+- **注意(Minor-2)**: NAV 层年化 haircut 是 **stress test, 非"涨停可买性"的真实证明**(无法在 book 净值层施加真正的 limit-up-buyability 惩罚); 真正验证需 book 层逐笔交易/持仓 replay(若数据可得)。
 
 ### 4.3 稳健性套件 (其余 Major/Minor)
 - **参数敏感性而非寻优**: 全网格报告; 推荐 = §4.0 冻结规则选出的唯一候选, **非"最优格"**。
@@ -231,16 +233,24 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 - **成本敏感性**: §3.1 的 0/5/10/20 bps 单边全报告。
 - **全样本最优**: 仅作"事后天花板"参考, 明确标注**不可投资**, 绝不当结论。
 
+### 4.4 设计诊断的无泄漏边界 (R2-Major-1)
+任何**影响设计选择**的收益型诊断 —— HRP 距离/聚类、§4.0 复杂度排序的经验依据、haircut 的 A/D 分组、候选纳入 —— **只用 ≤2023-05-31 数据计算**。§2 的全样本相关/风险贡献是**描述性背景, 不进入选择**; 风格分组(A–E)按 recipe 经济逻辑 **a priori** 固定(非按收益数据聚类), 故 leakage-safe。全样本诊断仅在 holdout 报告**之后**呈现并标注"描述性"。
+
 ---
 
 ## 5. 交付物
 1. ✅ 提取脚本 `_guorn20_extract_recipes.py` + 特征刻画 `_guorn20_characterize.py` (已完成)。
 2. ✅ 对齐日收益矩阵 `guorn20_daily_returns.parquet` + 元数据 `guorn20_meta.csv` (已生成)。
-3. ⏳ **walk-forward 引擎 `guorn20_walkforward.py`** (workspace; 复用 `result_analysis.metrics`; 协方差/优化用 cvxpy/numpy, **不**依赖 dormant `src/portfolio_risk`, §3.4)。具名输出: **`paired_delta_metrics.csv`**(每配置 vs EW 的 ΔCAGR/ΔMDD/ΔCalmar + 配对 bootstrap CI)、**`testing_ledger.csv`**(全配置 + N_eff + max-stat 校正 p)、**`haircut_sensitivity.csv`**(§4.2)、**`frozen_candidate.json`**(§4.0 冻结候选 + holdout accept/reject)。
+3. ⏳ **walk-forward 引擎 `guorn20_walkforward.py`** (workspace; 复用 `result_analysis.metrics`; 协方差/优化用 cvxpy/numpy, **不**依赖 dormant `src/portfolio_risk`, §3.4)。具名输出:
+   - **`testing_ledger.csv`**: 全配置逐日**两列** `strategy_return`/`ew_return`(§4.1 path-correct bootstrap 用)+ N_eff + pre-holdout max-stat 校正 p。
+   - **`paired_delta_metrics.csv`**: 每配置 vs cadence-matched EW 的 ΔCAGR/ΔMDD/ΔCalmar + path-correct 配对 bootstrap CI。
+   - **`selection_trace.csv`(R2-Minor-1)**: 每配置的 **pre-2023-05-31** 换手、复杂度 rank、各 filter/rank 值 —— tie-break 可审计。
+   - **`haircut_sensitivity.csv`**(§4.2)、**`frozen_candidate.json`**(§4.0 冻结候选 + holdout **单候选** accept/reject)。
 4. ⏳ 结果报告 (markdown): 全配置对比表 + 样本外净值曲线 + 子区间/敏感性/bootstrap/haircut + **推荐权重**及理由 + caveat。
 5. ⏳ 可选: MLflow 记录本次对比实验; dashboard 提及。
 
-> **S8 max-Sharpe 永为 negative control(Minor-3)**: 除非通过 §4.1 family-wise 校正后仍显著, 否则**默认不可部署**; 它在清单里的作用是证明"复杂均值方差不胜出"。
+> **S8 max-Sharpe = 永久 negative control(R2-Major-2)**: **排除在冻结可部署选择规则之外**, 只作过拟合对照诊断, **在本研究中永不可能成为推荐配置**(即便偶然过 family-wise 校正)。
+> **部署 caveat(R2-Minor-3)**: 即便 holdout 通过, holdout(2023-06..2026-06)仍是**单一 regime** → 实盘前须经 paper / 小额实盘验证。
 
 ## 6. 里程碑
 - M1 数据 & 诊断 (✅ 本文 §1–§2)。
@@ -255,7 +265,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 
 | # | 决策 | **锁定结果** |
 |---|---|---|
-| D1 | **主目标** | ✅ **(b) 最大化样本外 Calmar / 压回撤, 年化经济非劣于 EW**; (a) 严格 Pareto 占优作附带检验。判定阈值(holdout): **多重检验校正后 ΔCalmar>0 ∧ ΔMDD<0 ∧ ΔCAGR 配对 bootstrap 下界 ≥ −3pp**。**−3pp 是事前声明的经济非劣边际(non-inferiority margin), 非统计结果**(Major-3): 是"愿为更低回撤让渡多少年化"的经济判断, 用 bootstrap 下界(非点估计)守门。 |
+| D1 | **主目标** | ✅ **(b) 最大化样本外 Calmar / 压回撤, 年化经济非劣于 EW**; (a) 严格 Pareto 占优作附带检验。判定阈值(holdout): **单候选 path-correct 配对 bootstrap 的 ΔCalmar>0 ∧ ΔMDD<0 ∧ ΔCAGR 下界 ≥ −3pp**(family-wise 校正仅用于 pre-holdout 选择 claim, holdout 不读全网格 — Blocker-2)。**−3pp 是事前声明的经济非劣边际(non-inferiority margin), 非统计结果**(Major-3): 用 bootstrap 下界(非点估计)守门。 |
 | D2 | **权重约束** | ✅ **(a) 保留全部 20 券 + 上下限**: 权重下限 `w_i ≥ floor`(候选 floor=1% 或 0.5×EW=2.5%)、上限 `w_i ≤ cap`(候选 10%/15%=2×/3×EW)。"允许置零/集中版"**仅作对照**展示, 不作为推荐输出。 |
 | D3 | **顶层再平衡频率/成本** | 默认**月度 + 季度变体**, 成本做敏感性 (无需单独拍板)。 |
 | D4 | **范围** | 默认**仅再加权**(保留 20 券, 无择时叠加层) —— 符合"对这 20 个再加权"原意。 |
@@ -264,7 +274,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 
 ---
 
-## 8. 自审 (Self-review, 对照 §3 硬不变量 + §7 量化研究原则; v2 = GPT R1 折入后)
+## 8. 自审 (Self-review, 对照 §3 硬不变量 + §7 量化研究原则; v3 = GPT R1+R2 折入后)
 
 - **无前视 (§7.1)**: walk-forward 每权重仅用 `[t−L,t)`; 实现须单测 `weight_t ⊥ returns_{≥t}`。✅
 - **OOS 神圣 + 封存 (§7.2/3)**: ★ R1-Blocker-1 折入 —— 设计冻结日 2023-05-31 + 唯一确定性选择规则 + holdout 单次 accept/reject(§4.0); 全样本最优仅作标注天花板。✅
@@ -276,6 +286,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 - **floor/cap 不扭曲 (Major-4)**: 凸族写进 optimizer 约束, 非凸族确定性 simplex 投影(§3.3)。✅
 - **留一族 (Minor-1) / 双 CAGR 口径 (Minor-2) / max-Sharpe negative control (Minor-3)**: 全折入(§4.3 / §3.5 / §5)。✅
 - **禁杠杆 (§7.11) / 复用 metrics (§7.8) / 总收益口径一致 (§3.3) / PIT 不直接适用(消费预计算净值)**: ✅
-- **残留开放风险**: (i) holdout 仅 ~3 年且含单一 regime(2023-26 中小盘行情), 单次 accept/reject 统计力有限 → 结论须配 §4.1 CI 诚实标注不确定性; (ii) ~150 月度观测下协方差噪声大 → 偏稳健族(S1/S2/S5/S6), 对 S3/S8 重收缩 + negative-control; (iii) E 组(ST/基金)分散收益可能主导 → §4.3 留一族检验。
+- **★ R2 折入 (5 项)**: **B1 path-metric bootstrap** = testing_ledger 存两列 strategy/ew、配对 bootstrap 分别重建两条净值路径再求 Δ, 绝不从超额收益路径算路径指标(§4.1); **B2 holdout 不读全网格** = holdout 只算冻结候选单候选 bootstrap, family-wise 仅 pre-holdout(§4.0/§4.1/§7 D1); **M1 诊断无泄漏** = 设计型收益诊断仅 ≤2023-05-31, §2 全样本数为描述性、分组 a priori 按 recipe(§2 caveat+§4.4); **M2 S8 真负控** = 排除在可部署选择规则外、永不可推荐(§5); **m1/m2/m3** = selection_trace.csv 审计 / haircut 是 stress-test 非真实证明(真验需 book replay)/ holdout 过后仍需 paper-小额实盘(§5)。✅
+- **残留开放风险**: (i) holdout 仅 ~3 年且含单一 regime, 单次 accept/reject 统计力有限 → 结论须配 §4.1 CI 诚实标注不确定性(R2-Minor-3 已要求实盘前 paper 验证); (ii) ~150 月度观测下协方差噪声大 → 偏稳健族(S1/S2/S5/S6), 对 S3 重收缩、S8 永负控; (iii) E 组(ST/基金)分散收益可能主导 → §4.3 留一族检验。
 
-**自审结论**: **clean for GPT R2** —— R1 的 3 Blocker + 4 Major + 3 Minor 全部折入为可执行协议, 无 finding 婉拒。
+**自审结论**: **clean for GPT R3** —— R1(3B+4M+3m)+ R2(2B+2M+3m)全部折入为可执行协议, 0 finding 婉拒。
