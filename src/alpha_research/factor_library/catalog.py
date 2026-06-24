@@ -198,7 +198,9 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # promotion — GPT Part-A m1). Vendor distinctions vs the existing qual_q_*/grow_*_q_*:
     # q_netprofit_margin/q_*_to_gr use 净利润(total)/营业总收入 (NOT 归母/营业收入); q_adminexp_to_gr =
     # (管理费用 + 研发费用)/营业总收入 with 研发 ZERO-FILLED when missing (研发 split out of 管理费用 post-2018;
-    # pre-2018 rd_exp is NaN → must be 0 not NaN — GPT Part-A Major-1).
+    # pre-2018 rd_exp is NaN → must be 0 not NaN — GPT Part-A Major-1). CAVEAT (GPT Part-A R2 Minor):
+    # `If(rd>0,rd,0)` also zeros the RARE negative rd_exp rows (~105 parity rows) — not a pure NaN-fill;
+    # document/normalize to a strict missing-only fill before any PROMOTION of qual_q_adminexp_to_gr.
     # GPT Part-A Major-2: every denominator GUARDED → NaN (not inf, not 0) when 0/NaN; positive
     # denominators use `>0`, sign-ambiguous (total_profit / opincome) use `Abs(...)>0`. `earn_opincome_q`
     # / `earn_q_eps` are LEVELS (not scale-free) — draft-only; pair with size/price before any promotion.
