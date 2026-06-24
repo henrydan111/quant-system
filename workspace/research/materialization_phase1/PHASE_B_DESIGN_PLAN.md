@@ -156,6 +156,50 @@ from existing `_sq`). Three Majors + 1 Minor folded:
 Revised canary set (9): + the coverage-vs-vendor + the synthetic `03-30 → NaN`. Revised accuracy: the
 value-parity also pins the denominator (n_income_sq vs the alternatives).
 
+### Part C — BUILD RESULTS (2026-06-24)
+
+**DENOMINATOR — EMPIRICALLY CORRECTED to 归母 (n_income_attr_p), NOT consolidated n_income.**
+The mandated value-parity test RAN (the served vendor `q_dtprofit_to_profit_q0` is the golden single-q
+ratio; `_phasec` denominator probe, 180 stocks × 2016-24, 254,576 obs). Reconstructing the vendor ratio
+`q_dtprofit_q0 / <denom>_sq_q0 × 100`:
+
+| candidate denominator | med abs diff (pct-pts) | within 0.5 pts |
+|---|---|---|
+| **`n_income_attr_p_sq_q0` (归母净利润)** | **0.000** | **99.2%** |
+| `n_income_sq_q0` (consolidated 净利润) | 2.264 | 33.1% |
+| `total_profit_sq_q0` (利润总额) | 16.557 | 2.4% |
+
+So GPT Plan-C Major-1 was directionally right (NOT 利润总额) but the specific 净利润 variant is **归母**
+(both numerator 扣非归母 and denominator 归母 are 归母-scope — accounting-consistent). The exact 99.2%
+match to the vendor's OWN ratio is the accuracy proof. Final factor (denominator corrected, rule #10 —
+proven from data):
+`qual_dtprofit_to_profit_q = If(Abs(Ref($n_income_attr_p_sq_q0,1))>0, Ref($profit_dedt_sq_q0,1)/Ref($n_income_attr_p_sq_q0,1), np.nan)`
+`$n_income_attr_p_sq_q0` is ALREADY approved (income family) — only `$profit_dedt_sq_q0` is newly registered.
+
+**MATERIALIZER** `_materialize_profit_dedt_sq` (pit_backend.py): reads the indicators ledger cumulative
+`profit_dedt`, PREFILTERS to standard fiscal-quarter ends (Major-3), drives the proven flow path
+(`materialize_canonical_quarter_segments` + `arrays_from_snapshot_segments`), writes `$profit_dedt_sq_q0..q4`.
+- **Canaries (5, `tests/data_infra/test_profit_dedt_sq.py`):** prefilter (03-30 sentinel never leaks),
+  Q1=cum, missing-prior→NaN, single-q derivation, slot-order — ALL PASS. (Late-restatement + provider-read-exact
+  are kernel-canaried + sandbox-proven respectively; docstring maps all 9 plan items.)
+- **Sandbox value-parity (5-stock build):** `profit_dedt_sq_q0` vs vendor `q_dtprofit_q0` med_rel **0.00000**,
+  within-1% **1.000**, sign **1.000**, ~98% non-NaN coverage → the PIT derivation reproduces the vendor's
+  direct single-q EXACTLY, but through the sanctioned PIT path (the vendor `q_dtprofit` is PIT-uncertain,
+  intentionally unregistered 2026-06-09 — this is the formal-eligible replacement).
+
+**COVERAGE (Major-2, `_phasec_profit_dedt_coverage_audit.py`) → `coverage_tier=sub` CONFIRMED.**
+Single-q derivability by board: 主板 84.6% / 创业板 64.6% / 科创板 52.4% / 北交所 27.0%; young-cohort
+thinning (Q4 derivability 60%→90%, 2016→2024). Structurally tilted to established Main-board names — the
+availability-floor concern `coverage_tier=sub` encodes (E1g/E1h precedent).
+
+**STAGING/PUBLISH approach (operational, NOT the materializer):** `shutil.copytree` of the 3.8M-file
+provider is ~8 h on this disk (130 files/s). Replaced with **robocopy /MT:32** (parallel, independent
+files — ~2 min, 192 dirs/s benchmarked) → materialize ONLY `profit_dedt_sq` into the staged tree (additive;
+existing bins are byte-identical robocopy copies, NOT re-derived → zero regression risk on existing fields)
+→ verify (vendor-parity + existing-field byte-identity) → proven `builder.publish()` atomic swap + manifest.
+End state + publish path identical to Phase-1; only the staging copy mechanism differs (verified byte-identical
+pre-swap).
+
 ---
 
 ## Sequencing & residual risks

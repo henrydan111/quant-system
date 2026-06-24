@@ -3057,6 +3057,68 @@ class StagedQlibBackendBuilder:
                 written.append(field_name)
         return written
 
+    def _materialize_profit_dedt_sq(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """Single-quarter 扣非净利润 (`$profit_dedt_sq_q0..q4`) from the indicators-ledger CUMULATIVE.
+
+        `profit_dedt` (扣除非经常性损益后的归母净利润) is reported CUMULATIVE YTD in the fina_indicator
+        (indicators) ledger at ALL four fiscal quarters (Q1 94% / H1 96% / Q3 95% / FY 98% — verified
+        _phasec_profit_dedt_selfreview.py, NOT semi-annual like the cashflow 折旧摊销). It is not a
+        flow-family ledger field, so this custom materializer drives the SAME flow path the
+        income/cashflow families use: `materialize_canonical_quarter_segments` (cumulative ->
+        single-quarter via `derive_single_quarter_value`, restatement-safe) + `arrays_from_snapshot_segments`
+        on the DERIVED quarter values. It does NOT snapshot-expand the raw cumulative (GPT Plan-C Minor).
+
+        PIT: anchored on the indicators `ann_date -> effective_date` (strict next-open after disclosure,
+        §3.2), same anchor as the approved q_roe; restatement-safe (the single-quarter retroactively
+        updates at a restatement's effective_date). Served NaN where the consecutive cumulative chain is
+        not yet PIT-computable is meaningful — a SUB-UNIVERSE coverage gap vs the vendor q_dtprofit (which
+        reports the single-q DIRECTLY at higher coverage); that gap is the PIT cost (GPT Plan-C Major-2,
+        coverage_tier=sub). Consumers wrap in Ref(...,1).
+
+        GPT Plan-C Major-3: PREFILTERS to standard fiscal-quarter ends (03-31/06-30/09-30/12-31) so an
+        irregular end_date can never be mis-mapped to a quarter (a 03-30 row is dropped, not treated as Q1).
+        """
+        field = "profit_dedt"
+        slots = [f"{field}_sq_q{s}" for s in range(self.slot_depth)]
+        if self.field_filter and not any(s in self.field_filter for s in slots):
+            return []
+        ledger_path = self.ledger_path("indicators")
+        if not os.path.exists(ledger_path):
+            return []
+        ledger = pd.read_parquet(ledger_path)
+        if ledger.empty or field not in ledger.columns:
+            return []
+        keep = [c for c in ("qlib_code", "end_date", "ann_date", "f_ann_date", "disclosure_date",
+                            "effective_date", "report_type", "update_flag", field) if c in ledger.columns]
+        ledger = ledger[keep].dropna(subset=[field, "effective_date", "end_date"]).copy()
+        # GPT Plan-C Major-3: keep ONLY standard fiscal-quarter ends; irregular dates -> excluded.
+        ed = normalize_date_series(ledger["end_date"])
+        std = (((ed.dt.month == 3) & (ed.dt.day == 31)) | ((ed.dt.month == 6) & (ed.dt.day == 30))
+               | ((ed.dt.month == 9) & (ed.dt.day == 30)) | ((ed.dt.month == 12) & (ed.dt.day == 31)))
+        ledger = ledger.loc[std.to_numpy()].copy()
+        ledger = ledger[ledger["qlib_code"].isin(set(target_dirs))]
+        if ledger.empty:
+            return []
+        written: list[str] = []
+        groups = {code: g for code, g in ledger.groupby("qlib_code")}
+        for qlib_code in iter_progress(sorted(groups), total=len(groups),
+                                       desc="Materialize profit_dedt_sq", unit="symbol", leave=False):
+            feature_dir = target_dirs.get(qlib_code)
+            if feature_dir is None:
+                continue
+            segments = materialize_canonical_quarter_segments(
+                groups[qlib_code], None, calendar, quarter_fields=[field], slot_depth=self.slot_depth)
+            arrays = arrays_from_snapshot_segments(segments, [field], len(calendar), self.slot_depth)
+            for slot in range(self.slot_depth):
+                name = f"{field}_sq_q{slot}"
+                self._write_feature_series(feature_dir, name, arrays[f"{field}_q{slot}"])
+                written.append(name)
+        return sorted(set(written))
+
     def _materialize_flow_family(
         self,
         family: StatementFamilySpec,
@@ -3420,6 +3482,10 @@ class StagedQlibBackendBuilder:
                     family_audits[family.name] = parity_path
         if "indicators" in active_datasets and os.path.exists(self.ledger_path("indicators")):
             written["indicators"] = self._materialize_snapshot_dataset("indicators", calendar, target_dirs)
+            # Custom: single-quarter 扣非净利润 derived from the indicators-ledger CUMULATIVE profit_dedt
+            # (flow-state via materialize_canonical_quarter_segments, NOT snapshot-expanded). Writes
+            # $profit_dedt_sq_q0..q4 (sub-universe; the vendor q_dtprofit reports the single-q directly).
+            written["profit_dedt_sq"] = self._materialize_profit_dedt_sq(calendar, target_dirs)
         if "forecast" in active_datasets and os.path.exists(self.ledger_path("forecast")):
             written["forecast"] = self._materialize_snapshot_dataset("forecast", calendar, target_dirs)
             # Custom: the derived single-quarter forecast-growth factor (业绩预告净利润QGr%PYQ_v1),
