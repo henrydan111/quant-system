@@ -104,16 +104,33 @@ def _provider_manifest_check() -> dict:
     missing or inconsistent with the on-disk provider.
     """
     try:
-        sys.path.insert(0, str(PROJECT_ROOT / "src"))
+        # Import the manifest-check dependencies via the repo-dominant
+        # ``from src.X`` convention (matching
+        # workspace/scripts/research_orchestrator_cli.py), which resolves only
+        # when the REPO ROOT is on sys.path. Running this as
+        # ``venv/Scripts/python.exe scripts/run_daily_qa.py`` puts scripts/ —
+        # NOT the repo root — on sys.path[0], so add the repo root here.
+        #
+        # Why src.-convention and not the bare ``from data_infra...`` /
+        # ``from research_orchestrator...`` the other in-process audit blocks
+        # use: importing ``research_orchestrator`` BARE triggers its package
+        # __init__, which (via hypothesis.py) does
+        # ``from src.research_orchestrator._types import AssetRef`` — re-entering
+        # the SAME package under the ``src.`` name and loading it under two
+        # names at once (import-aliasing). Importing src.-first keeps a single
+        # namespace. The other blocks target namespace packages / leaf modules
+        # with no such package __init__, so they stay bare.
+        if str(PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(PROJECT_ROOT))
         # PR 10a: shared resolver so the approval-evidence audit block
         # validates against the same provider path.
         qlib_dir = str(_resolve_qlib_dir_from_config())
 
-        from data_infra.provider_manifest import (
+        from src.data_infra.provider_manifest import (
             load_provider_manifest,
             validate_provider_manifest_against_qlib,
         )
-        from research_orchestrator.calendar_policy import load_calendar_policy
+        from src.research_orchestrator.calendar_policy import load_calendar_policy
 
         manifest = load_provider_manifest(qlib_dir)
 
