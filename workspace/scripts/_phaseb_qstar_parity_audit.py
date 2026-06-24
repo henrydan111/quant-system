@@ -58,8 +58,8 @@ MAPS = [
      lambda v: (v["n_income_sq_q0"] - v["n_income_sq_q1"]) / np.abs(v["n_income_sq_q1"])),
     ("q_netprofit_qoq", "归母净利润环比单季", ["n_income_attr_p_sq_q0", "n_income_attr_p_sq_q1"],
      lambda v: (v["n_income_attr_p_sq_q0"] - v["n_income_attr_p_sq_q1"]) / np.abs(v["n_income_attr_p_sq_q1"])),
-    ("q_adminexp_to_gr", "管理费用+研发/营业总收入 (post-2018 old 管理费用)", ["admin_exp_sq_q0", "rd_exp_sq_q0", "total_revenue_sq_q0"],
-     lambda v: (v["admin_exp_sq_q0"] + np.nan_to_num(v["rd_exp_sq_q0"])) / v["total_revenue_sq_q0"]),
+    ("q_adminexp_to_gr", "管理费用+研发(zero-fill)/营业总收入 — EXACT catalog If(rd>0,rd,0)", ["admin_exp_sq_q0", "rd_exp_sq_q0", "total_revenue_sq_q0"],
+     lambda v: (v["admin_exp_sq_q0"] + np.where(v["rd_exp_sq_q0"] > 0, v["rd_exp_sq_q0"], 0.0)) / v["total_revenue_sq_q0"]),
     ("q_exp_to_sales", "销售期间费用率单季 /营业收入", ["sell_exp_sq_q0", "admin_exp_sq_q0", "fin_exp_sq_q0", "revenue_sq_q0"],
      lambda v: (v["sell_exp_sq_q0"] + v["admin_exp_sq_q0"] + v["fin_exp_sq_q0"]) / v["revenue_sq_q0"]),
 ]
