@@ -132,8 +132,29 @@ The vendor `q_dtprofit` at 99.7% also confirms `profit_dedt` is the 归母 扣�
 the `n_income_attr_p_sq − extra_item_sq` cross-check will confirm the exact definition).
 
 **COST/VALUE flag (honest):** Part C is ONE factor (`qual_dtprofit_to_profit_q`, sub-universe), at the cost
-of a full materializer + build + publish + its own GPT review. The 14 Part-A factors already shipped. Worth
-building only if 扣非单季 is specifically wanted.
+of a full materializer + build + publish + its own GPT review. The 14 Part-A factors already shipped.
+
+### GPT Plan-C cross-review R1 = REVISE-PLAN → BUILD (2026-06-24); folds
+GPT confirmed BUILD-worthy as a draft sub-universe factor (the only remaining valuable q_* not expressible
+from existing `_sq`). Three Majors + 1 Minor folded:
+1. **Major-1 — DENOMINATOR (official-def parity).** Tushare doc 79: `q_dtprofit_to_profit` = 扣非净利润 / **净利润**
+   (NOT 利润总额). So the factor is `qual_dtprofit_to_profit_q = Ref($profit_dedt_sq_q0,1) / Ref($n_income_sq_q0,1)`
+   (guarded `If(Abs($n_income_sq_q0)>0, …, np.nan)`). The build's value-parity test compares `n_income_sq` /
+   `n_income_attr_p_sq` / `total_profit_sq` vs the vendor `q_dtprofit_to_profit` and ships ONLY the match
+   (expected n_income_sq); total_profit ships only if it unexpectedly wins, documented.
+2. **Major-2 — COVERAGE GAP IS NON-RANDOM (sub-universe bias).** GPT's smoke check: derivability much weaker for
+   BJ/STAR than main-board/SME — so the gap biases any univ_all screen. Fold: a **coverage audit by year × board ×
+   listing-age × ST/delist × mcap-bucket × index** before screening; register the factor `coverage_tier=sub`;
+   it must NOT compete as a full-universe factor without an explicit mask/disclosure.
+3. **Major-3 — FISCAL-PERIOD CANARY STRICTER.** `derive_single_quarter_value` treats `month==3` as Q1, not strictly
+   `03-31`. Fold: `_materialize_profit_dedt_sq` PREFILTERS to standard fiscal-quarter ends (03-31/06-30/09-30/12-31);
+   add a synthetic `2015-03-30 → NaN` canary (not just a non-March irregular date).
+4. **Minor — wording.** Use `materialize_visibility_segments` + `arrays_from_flow_segments` over `profit_dedt` and
+   write ONLY `$profit_dedt_sq_q0..q4`; the real prohibition is "do not SNAPSHOT-EXPAND the raw cumulative
+   `profit_dedt`" (post-derivation slot arrays are fine).
+
+Revised canary set (9): + the coverage-vs-vendor + the synthetic `03-30 → NaN`. Revised accuracy: the
+value-parity also pins the denominator (n_income_sq vs the alternatives).
 
 ---
 
