@@ -112,6 +112,29 @@ PIT-computable is meaningful.
 **Governance:** new materializer = substantial → GPT cross-review (like forecast R1→R4); build + publish
 + register `$profit_dedt_sq` + `qual_dtprofit_to_profit_q`.
 
+### Self-review addendum (2026-06-24, BEFORE building — _phasec_profit_dedt_selfreview.py)
+The make-or-break risk for Part C was the **D&A trap**: if `profit_dedt` were reported only semi-annually
+(H1+FY, like the cashflow 折旧摊销), the single-quarter derivation would collapse to NaN. **REFUTED by the
+data:** `profit_dedt` is reported at ALL four fiscal quarters — non-null coverage **Q1 94.0% / H1 96.1% /
+Q3 94.5% / FY 98.2%** (indicators ledger). So `profit_dedt[Q] − profit_dedt[Q−1]` is genuinely derivable.
+Two caveats folded into this plan:
+1. **Coverage gap vs the vendor (the PIT-correctness cost).** The vendor `q_dtprofit` is served at 99.7%
+   (Tushare reports the single-quarter DIRECTLY). Our PIT-correct derivation needs TWO consecutive
+   cumulative values (~90-95% at the report level; lower on the early-data/delisted tail), so
+   `$profit_dedt_sq` will have a modest coverage gap. It is a sub-universe factor (acceptable for draft).
+   ADD a **coverage-vs-vendor canary** + document the gap in the approval evidence.
+2. **Implementation: reuse the flow machinery, do NOT hand-roll.** `$profit_dedt_sq` needs q0..q4 SLOTS
+   (the forecast materializer wrote a single value). The materializer must drive the income/cashflow flow
+   path (`materialize_canonical_quarter_segments` + `derive_single_quarter_value` /
+   `arrays_from_flow_segments`) over the indicators ledger's `profit_dedt`, NOT re-implement cumulative→
+   single-q. This is exactly GPT M3 (flow-state, not snapshot expansion).
+The vendor `q_dtprofit` at 99.7% also confirms `profit_dedt` is the 归母 扣非 quantity (value-validation +
+the `n_income_attr_p_sq − extra_item_sq` cross-check will confirm the exact definition).
+
+**COST/VALUE flag (honest):** Part C is ONE factor (`qual_dtprofit_to_profit_q`, sub-universe), at the cost
+of a full materializer + build + publish + its own GPT review. The 14 Part-A factors already shipped. Worth
+building only if 扣非单季 is specifically wanted.
+
 ---
 
 ## Sequencing & residual risks
