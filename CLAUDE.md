@@ -314,6 +314,7 @@ Each is `master.parquet` + `evidence.parquet` + `run_index.parquet` + `status_hi
 
 - **Self-review first, then GPT.** Before each GPT cross-review or re-review, Claude must complete and record a structured self-review: for a substantial design-stage plan, review the plan before the design GPT review; after implementation, review the diff, tests, and evidence before the implementation GPT review. The self-review must explicitly check the §3 hard invariants plus each quantitative-research principle in the canonical template, list any fixes made, and end with a verdict ("clean for GPT" or "blocked: <reason>"). Include that self-review verdict in the GPT prompt or linked review note before asking GPT to review. This self-review is a prerequisite for, not a substitute for, the independent GPT gate.
 - Give the reviewer a **self‑contained prompt**: the design or diff, **public GitHub links** to the touched files plus the contract sections they must honor, and explicit review questions. Treat the embedded text as authoritative and include the links so the reviewer can verify against the live repo. Public repo: `https://github.com/henrydan111/quant-system` (raw form: `https://raw.githubusercontent.com/henrydan111/quant-system/<branch>/<path>`).
+- **Clear, precise, and pushed before sending.** The prompt must be unambiguous — exact file/section references, explicit review questions, and no dangling placeholders (a `<branch>`/`<path>`‑style token must be either filled in or clearly marked as a copy‑pattern). The GitHub links only cross‑check against live code when the files are actually on the remote, so **always `git push` the working branch BEFORE handing the prompt to GPT**, and point every raw link at that pushed branch (not a stale `main`). This cross‑review push is **pre‑authorized** — it does not need a separate §13 confirmation — but push the feature/working branch, never force‑push published history.
 - Use the canonical template at [docs/gpt_cross_review_prompt_template.md](docs/gpt_cross_review_prompt_template.md) — it foregrounds the **quantitative-research principles (PIT / no-lookahead first)** the change must be checked against.
 - **Apply the findings and re‑review** until no blocking issue remains; record the verdict and any explicitly‑declined findings (with reason) in [project_state.md](project_state.md). When in doubt whether a change is "substantial," cross‑review it.
 
@@ -402,7 +403,7 @@ Paths should be relative to the workspace root.
 
 Before any of the following, pause and confirm with the user (unless they have explicitly authorized it for the current task):
 
-- `git push`, force-push, branch deletion, `git reset --hard`, amending published commits
+- `git push` (except the cross‑review working‑branch push pre‑authorized in §10), force-push, branch deletion, `git reset --hard`, amending published commits
 - Removing or downgrading dependencies in `requirements.txt`
 - Touching CI/CD configuration
 - Running data-mutation scripts without `--dry-run` against production `data/`

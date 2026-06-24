@@ -2,6 +2,8 @@
 
 Canonical prompt for the **GPT cross-review gate** ([CLAUDE.md](../CLAUDE.md) §10 / [AGENTS.md](../AGENTS.md) §5): every substantial design or implementation passes an independent GPT‑5.5 Pro review before it is treated as final. Copy the block below, fill the `<…>` placeholders, paste the design/diff inline, send. Apply the findings and re‑review until no blocker remains; record the verdict in [project_state.md](../project_state.md).
 
+**Before sending (CLAUDE.md §10):** `git push` the working branch and set `<BRANCH>` to it so every raw link resolves against live code; leave **no** `<…>` token unfilled, and write the review questions to be specific and unambiguous.
+
 The template **foregrounds the quantitative-research principles** the change must be checked against. A change that *runs* but violates one of these — above all **PIT / no-lookahead** — is invalid, not "mostly fine." Add a raw link for every touched file so the reviewer can verify against the live public repo.
 
 ---
