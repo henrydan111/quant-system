@@ -16,7 +16,7 @@ related_findings_id: null
 
 # Bind to the provider build that materialized + serves the new fields (atomic swap published
 # 2026-06-24; old provider backed up at data/qlib_data.bak_phase1_qfields_holdertrade_v2_20260624).
-provider_build_id: "phase1_qfields_holdertrade_v2_20260624"
+provider_build_id: "phasec_profit_dedt_sq_20260624"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

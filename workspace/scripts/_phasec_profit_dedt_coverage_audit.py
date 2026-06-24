@@ -37,7 +37,7 @@ def board_of(code: str) -> str:
 def main():
     t = ds.dataset(str(ROOT / "data/pit_ledger/indicators")).to_table(
         columns=["qlib_code", "end_date", "profit_dedt"]).to_pandas()
-    t["end_date"] = pd.to_datetime(t["end_date"].astype(str), errors="coerce")
+    t["end_date"] = pd.to_datetime(t["end_date"].astype(str), errors="coerce")  # noqa: unsafe-pit-dates[PIT001] reason: diagnostic coverage audit — end_date parsed only to bucket by fiscal quarter; no factor/serving, no lookahead
     t = t.dropna(subset=["end_date"])
     # standard fiscal-quarter ends only (the materializer prefilter)
     m = t["end_date"].dt.month

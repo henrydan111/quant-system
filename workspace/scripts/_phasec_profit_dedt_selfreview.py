@@ -21,7 +21,7 @@ ROOT = Path("E:/量化系统")
 def main():
     t = ds.dataset(str(ROOT / "data/pit_ledger/indicators")).to_table(
         columns=["qlib_code", "end_date", "profit_dedt"]).to_pandas()
-    t["end_date"] = pd.to_datetime(t["end_date"].astype(str), errors="coerce")
+    t["end_date"] = pd.to_datetime(t["end_date"].astype(str), errors="coerce")  # noqa: unsafe-pit-dates[PIT001] reason: diagnostic quarterly-coverage self-review — end_date parsed only to bucket by fiscal quarter; no factor/serving, no lookahead
     t = t.dropna(subset=["end_date"])
     t["q"] = t["end_date"].dt.month.map({3: "Q1", 6: "H1", 9: "Q3", 12: "FY"})
     print("=== profit_dedt non-null coverage by fiscal quarter (quarterly vs semi-annual?) ===")

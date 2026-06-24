@@ -228,6 +228,11 @@ datasets:
       - $profit_prefin_exp
       - $rd_exp
       - $valuechange_income
+      # Phase-C (2026-06-24): single-quarter 扣非净利润 DERIVED from the indicators
+      # CUMULATIVE profit_dedt (derive_single_quarter_value). PIT-correct replacement for
+      # the unregistered vendor q_dtprofit_to_profit. coverage_tier=sub. q1..q4 stay
+      # unregistered until a factor needs them. See approvals/2026-06-24_profit_dedt_sq_to_approved.yaml.
+      - $profit_dedt_sq_q0
 
   reference:
     status: approved

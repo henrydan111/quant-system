@@ -117,11 +117,73 @@ def main() -> int:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         print("appended field_approval_log.jsonl entry")
 
-    print("\nREGISTRATION DONE. Follow-up (explicit, run next):")
+    # (6) RE-BIND all prior approval YAMLs to the new provider_build_id. SOUND only if the re-bound
+    #     datasets' fields are byte-identical new-live vs .bak (the old live the evidence was generated
+    #     against). The additive publish GUARANTEES this — every existing bin is a robocopy /MIR copy of
+    #     the old live, NOT re-derived; only $profit_dedt_sq_q0 is new (and is not in .bak). Verify, then bind.
+    bak = ROOT / f"data/qlib_data.bak_{BUILD_ID}"
+    if not bak.is_dir():
+        fail(f"backup {bak} missing — cannot prove re-bind byte-identity")
+    old_id = json.loads((bak / "metadata" / "provider_build.json").read_text(encoding="utf-8")).get("provider_build_id")
+    print(f"\nre-bind: OLD (.bak) = {old_id}  ->  NEW (live) = {BUILD_ID}")
+
+    def fbytes(prov: Path, code: str, field: str):
+        f = prov / "features" / code / (field + ".day.bin")
+        return f.read_bytes() if f.exists() else None
+
+    # byte-identity on a representative cross-section of EXISTING (copied) fields
+    sample_fields = ["close", "q_roe", "arturn_days", "n_income_sq_q0", "total_assets_q0",
+                     "forecast__np_q_yoy", "report_rc__n_active_analysts", "holdertrade_mgr_in_vol"]
+    ident_ok = True
+    for field in sample_fields:
+        res = []
+        for code in ("000001_sz", "600519_sh"):
+            s, b = fbytes(LIVE, code, field), fbytes(bak, code, field)
+            res.append(s is not None and b is not None and s == b)
+        allok = all(res)
+        print(f"  byte-identical new-live==.bak: {field:32s} {allok}")
+        ident_ok = ident_ok and allok
+    if not ident_ok:
+        fail("re-bound fields NOT byte-identical new-live vs .bak — additive guarantee violated, refusing re-bind")
+
+    n = 0
+    for f in glob.glob(str(APPROVALS / "*.yaml")):
+        t = Path(f).read_text(encoding="utf-8")
+        new = t.replace(f'provider_build_id: "{old_id}"', f'provider_build_id: "{BUILD_ID}"')
+        if new != t:
+            Path(f).write_text(new, encoding="utf-8")
+            n += 1
+    print(f"re-bound {n} approval YAMLs {old_id} -> {BUILD_ID}")
+
+    note = APPROVALS / "2026-06-24_rebind_to_phasec_publish.md"
+    if not note.exists():
+        note.write_text(
+            f"# Re-bind to the Phase-C additive publish ({BUILD_ID})\n\n"
+            f"After publishing $profit_dedt_sq_q0 via the additive robocopy /MIR path "
+            f"(workspace/scripts/_publish_phasec_additive.py), the live provider_build_id became "
+            f"`{BUILD_ID}`, so the prior approval YAMLs (bound to `{old_id}`) drifted. Re-bound after "
+            f"verifying byte-identity of a cross-section of existing fields new-live vs "
+            f"`data/qlib_data.bak_{BUILD_ID}` (the additive publish re-materialized NOTHING — every existing "
+            f"bin is a /MIR copy of the old live; only $profit_dedt_sq_q0 is new). "
+            f"evaluate_approval_evidence_bindings() -> 0 drift. See additive_build_provenance.json.\n",
+            encoding="utf-8")
+        print(f"wrote rebind note {note.name}")
+
+    # (7) verify 0 drift against the live manifest
+    from data_infra.approval_evidence import evaluate_approval_evidence_bindings  # noqa: E402
+    drifts = evaluate_approval_evidence_bindings()
+    n_drift = sum(1 for d in drifts if getattr(d, "drift", False))
+    print(f"approval bindings: {len(drifts)} scanned, {n_drift} drift")
+    if n_drift:
+        for d in drifts:
+            if getattr(d, "drift", False):
+                print("  DRIFT:", getattr(d, "approval_id", d))
+        fail("approval-evidence drift after re-bind")
+
+    print("\nREGISTRATION + RE-BIND DONE (0 drift). Follow-up (explicit, run next):")
     print("  1. add factor qual_dtprofit_to_profit_q to src/alpha_research/factor_library/catalog.py + sync_catalog (draft)")
     print("  2. run tests/data_infra/test_profit_dedt_sq_registry.py (now ACTIVE) + test_field_registry.py + test_approval_evidence.py")
-    print("  3. re-bind prior approvals to the new provider_build_id (daily-QA approval_evidence_binding = 0 drift)")
-    print("  4. run scripts/run_daily_qa.py")
+    print("  3. run scripts/run_daily_qa.py")
     return 0
 
 

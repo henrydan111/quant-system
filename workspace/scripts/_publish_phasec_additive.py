@@ -18,6 +18,7 @@ Run:  PYTHONPATH=src venv/Scripts/python.exe workspace/scripts/_publish_phasec_a
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -150,6 +151,10 @@ def new_field_parity(staged: Path, sample_n: int = 150) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="stage+materialize+verify but DO NOT publish")
+    ap.add_argument("--swap-only", action="store_true",
+                    help="REUSE an already-staged+materialized tree (skip robocopy+materialize); re-verify "
+                         "integrity+parity, then swap. For retrying a publish whose only failure was a "
+                         "transient handle on data/qlib_data during os.replace, or a disk-space stall.")
     args = ap.parse_args()
 
     builder = StagedQlibBackendBuilder(build_id=BUILD_ID, field_filter=ADDED_FIELDS)
@@ -158,13 +163,18 @@ def main() -> int:
     log(f"base_provider_build_id = {base_build_id}")
     log(f"staged provider dir    = {staged}")
 
-    # 1. stage (robocopy /MIR: mirror+purge; summary captured)
-    robo = run_robocopy(LIVE, staged)
-    log(f"robocopy /MIR: exit={robo['exit_code']} failed={robo['files_failed']} mismatch={robo['files_mismatch']} "
-        f"copied={robo['files_copied']} skipped={robo['files_skipped']} extras_purged={robo['files_extras_purged']} "
-        f"total={robo['files_total']}")
-    if not robo["success"] or (robo["files_failed"] or 0) > 0 or (robo["files_mismatch"] or 0) > 0:
-        log("ABORT: robocopy reported failures/mismatches"); return 2
+    # 1. stage (robocopy /MIR: mirror+purge; summary captured). Skipped in --swap-only (reuse staged tree).
+    if args.swap_only:
+        robo = {"reused_staged_tree": True, "note": "--swap-only: robocopy from the prior verified run; "
+                "integrity+parity re-verified below before the swap"}
+        log("--swap-only: reusing the already-staged+materialized tree (skipping robocopy)")
+    else:
+        robo = run_robocopy(LIVE, staged)
+        log(f"robocopy /MIR: exit={robo['exit_code']} failed={robo['files_failed']} mismatch={robo['files_mismatch']} "
+            f"copied={robo['files_copied']} skipped={robo['files_skipped']} extras_purged={robo['files_extras_purged']} "
+            f"total={robo['files_total']}")
+        if not robo["success"] or (robo["files_failed"] or 0) > 0 or (robo["files_mismatch"] or 0) > 0:
+            log("ABORT: robocopy reported failures/mismatches"); return 2
 
     # 2. integrity BEFORE materialize: staged must FULLY equal live (no new field yet)
     integ = integrity_check(staged, LIVE)
@@ -174,16 +184,22 @@ def main() -> int:
     if not integ["ok"]:
         log(f"ABORT: integrity mismatch: {integ['mismatches'][:3]}"); return 3
 
-    # 3. materialize ONLY the new field into the staged tree
-    calendar = provider_calendar(str(staged))
-    features_root = staged / "features"
-    target_dirs = {name: str(features_root / name) for name in os.listdir(features_root)
-                   if (features_root / name).is_dir()}
-    log(f"materializing {ADDED_FIELDS} into {len(target_dirs)} staged dirs ...")
-    written = builder._materialize_profit_dedt_sq(calendar, target_dirs)
-    log(f"materialized fields: {written}")
-    if sorted(set(written)) != sorted(ADDED_FIELDS):
-        log(f"ABORT: unexpected written set {written}"); return 4
+    # 3. materialize ONLY the new field into the staged tree. Skipped in --swap-only (already present).
+    if args.swap_only:
+        present = len(glob.glob(str(staged / "features" / "*" / "profit_dedt_sq_q0.day.bin")))
+        log(f"--swap-only: $profit_dedt_sq_q0 already materialized in {present} staged dirs (skipping materialize)")
+        if present < 5000:
+            log(f"ABORT: staged tree only has {present} profit_dedt_sq_q0 bins (<5000) — not a complete prior run"); return 4
+    else:
+        calendar = provider_calendar(str(staged))
+        features_root = staged / "features"
+        target_dirs = {name: str(features_root / name) for name in os.listdir(features_root)
+                       if (features_root / name).is_dir()}
+        log(f"materializing {ADDED_FIELDS} into {len(target_dirs)} staged dirs ...")
+        written = builder._materialize_profit_dedt_sq(calendar, target_dirs)
+        log(f"materialized fields: {written}")
+        if sorted(set(written)) != sorted(ADDED_FIELDS):
+            log(f"ABORT: unexpected written set {written}"); return 4
 
     # 4. new-field parity vs vendor (exact)
     parity = new_field_parity(staged)
@@ -199,7 +215,7 @@ def main() -> int:
         "added_fields": [f"${f}" for f in ADDED_FIELDS],
         "source_dataset": "indicators",
         "source_class": "derived_flow_from_snapshot_ledger",
-        "staging_method": "robocopy /MT:32 (parallel independent-file copy; shutil.copytree was ~8h)",
+        "staging_method": "robocopy /MIR /MT:32 (parallel mirror+purge; unchanged bins full filename/size verified; shutil.copytree was ~8h)",
         "robocopy_summary": robo,
         "unchanged_bin_integrity": integ,
         "new_field_parity_vs_vendor_q_dtprofit": parity,
@@ -214,8 +230,33 @@ def main() -> int:
 
     # 5. publish: proven atomic swap, but suppress the builder's hardcoded all/full manifest,
     #    then emit a TRUTHFUL manifest (update/provider-only) + the provenance sidecar.
+    #    Retry-with-backoff on PermissionError (transient handle on data/qlib_data from Search/Defender/
+    #    a qlib reader during the os.replace), WITH a half-swap safety guard.
+    import time
+    bak = f"{builder.paths.qlib_dir}.bak_{BUILD_ID}"
     log("publishing (atomic os.replace swap + .bak backup) ...")
-    builder.publish(emit_manifest=False)
+    last_err = None
+    for attempt in range(1, 9):
+        # SAFETY: publish() does os.replace(live->bak) THEN os.replace(staged->live). If the FIRST
+        # succeeded but the SECOND failed, live is gone and .bak holds the only old-live copy — a naive
+        # retry would rmtree that .bak. Detect that half-state and refuse to retry (manual recovery).
+        if not os.path.isdir(builder.paths.qlib_dir) and os.path.isdir(bak):
+            log(f"ABORT: HALF-SWAPPED state — live moved to .bak, staged not yet live. Do NOT re-run "
+                f"(would delete the backup). MANUAL RECOVERY: os.replace(r'{bak}', r'{builder.paths.qlib_dir}') "
+                f"to roll back to the old live, then investigate the handle holder."); return 7
+        try:
+            builder.publish(emit_manifest=False)
+            last_err = None
+            break
+        except PermissionError as e:
+            last_err = e
+            log(f"  publish attempt {attempt}/8 PermissionError (a process holds data/qlib_data); "
+                f"retry in {attempt*10}s ... {e}")
+            time.sleep(attempt * 10)
+    if last_err is not None:
+        log("ABORT: publish failed after 8 retries — a process persistently holds a handle on "
+            "data/qlib_data. Close qlib readers / dashboard / pause Search+Defender on it, then re-run "
+            "with --swap-only."); return 6
     log("PUBLISHED (atomic swap done).")
 
     cal_lines = [ln.strip() for ln in (LIVE / "calendars" / "day.txt").read_text(encoding="utf-8").splitlines() if ln.strip()]

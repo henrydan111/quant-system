@@ -29,7 +29,7 @@ related_findings_id: null
 # future provider rebuild whose provider_build_id or calendar_policy_id differs
 # from these values fails the daily-QA approval_evidence_binding check until the
 # evidence is re-verified.
-provider_build_id: "phase1_qfields_holdertrade_v2_20260624"
+provider_build_id: "phasec_profit_dedt_sq_20260624"
 calendar_policy_id: frozen_20260227_system_build
 
 # Per-stage scope — mirrors the `approved` status row in field_status.yaml.
