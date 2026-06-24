@@ -19,6 +19,8 @@ CONTEXT — read these to judge the change against the contract:
   https://raw.githubusercontent.com/henrydan111/quant-system/<BRANCH>/CLAUDE.md
 - <add one raw link per touched / relevant file>
 
+SELF-REVIEW PREFLIGHT — completed before this GPT request: <verdict>; checked §3 invariants + each quantitative-research principle in the canonical template; fixes made: <bullets or "none">; residual concerns for reviewer: <bullets or "none">.
+
 WHAT CHANGED (authoritative — treat the embedded text as the source of truth; the links cross-check the surrounding code)
 <paste the design doc / full diff / new files inline>
 
