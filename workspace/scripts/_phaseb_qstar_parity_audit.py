@@ -49,6 +49,19 @@ MAPS = [
      lambda v: v["n_income_attr_p_sq_q0"] / v["total_share"]),
     ("q_investincome", "价值变动净收益单季 (test invest_income — expect MISMATCH)", ["invest_income_sq_q0"],
      lambda v: v["invest_income_sq_q0"]),
+    # ── R2 build-audit confirms (qoq siblings + flagged) ──
+    ("q_sales_qoq", "营业收入环比单季", ["revenue_sq_q0", "revenue_sq_q1"],
+     lambda v: (v["revenue_sq_q0"] - v["revenue_sq_q1"]) / np.abs(v["revenue_sq_q1"])),
+    ("q_gr_qoq", "营业总收入环比单季", ["total_revenue_sq_q0", "total_revenue_sq_q1"],
+     lambda v: (v["total_revenue_sq_q0"] - v["total_revenue_sq_q1"]) / np.abs(v["total_revenue_sq_q1"])),
+    ("q_profit_qoq", "净利润环比单季", ["n_income_sq_q0", "n_income_sq_q1"],
+     lambda v: (v["n_income_sq_q0"] - v["n_income_sq_q1"]) / np.abs(v["n_income_sq_q1"])),
+    ("q_netprofit_qoq", "归母净利润环比单季", ["n_income_attr_p_sq_q0", "n_income_attr_p_sq_q1"],
+     lambda v: (v["n_income_attr_p_sq_q0"] - v["n_income_attr_p_sq_q1"]) / np.abs(v["n_income_attr_p_sq_q1"])),
+    ("q_adminexp_to_gr", "管理费用+研发/营业总收入 (post-2018 old 管理费用)", ["admin_exp_sq_q0", "rd_exp_sq_q0", "total_revenue_sq_q0"],
+     lambda v: (v["admin_exp_sq_q0"] + np.nan_to_num(v["rd_exp_sq_q0"])) / v["total_revenue_sq_q0"]),
+    ("q_exp_to_sales", "销售期间费用率单季 /营业收入", ["sell_exp_sq_q0", "admin_exp_sq_q0", "fin_exp_sq_q0", "revenue_sq_q0"],
+     lambda v: (v["sell_exp_sq_q0"] + v["admin_exp_sq_q0"] + v["fin_exp_sq_q0"]) / v["revenue_sq_q0"]),
 ]
 
 

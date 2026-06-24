@@ -1,0 +1,56 @@
+# Field-registry approval evidence (2026-06-24, Phase-B)
+#
+# Adds 7 income single-quarter _sq slots to the already-approved `income` family, to unlock the
+# Phase-B PIT-correct single-quarter factors (the _sq replacements for the unregistered vendor q_*).
+# Same family / anchoring (max(ann_date,f_ann_date) → effective_date, §3.2) / _sq derivation pipeline
+# as the existing approved income _sq fields. Already materialized in the live provider (no rebuild;
+# registry flip only).
+
+approval_id: 2026-06-24_income_phaseb_sq_to_approved
+date: 2026-06-24
+dataset_id: income
+source_endpoint: tushare.income
+from_status: approved          # the income family is already approved; this ADDS slots
+to_status: approved
+reviewer: henrydan111
+related_pr: materialization-phase1 / Phase-B (report-rc-registration)
+related_findings_id: null
+
+provider_build_id: "phase1_qfields_holdertrade_v2_20260624"
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+fields:
+  - $admin_exp_sq_q0
+  - $fin_exp_sq_q0
+  - $sell_exp_sq_q0
+  - $total_cogs_sq_q0
+  - $total_profit_sq_q0
+  - $revenue_sq_q1
+  - $n_income_attr_p_sq_q1
+
+# ── Validation (value-parity vs the materialized vendor q_*; GPT R1→R2 APPROVE-PLAN) ──
+# - admin_exp / fin_exp / sell_exp _sq: penny-exact via rung-5 CoreProfitQ vs 果仁 (med 0.0, 93.8%
+#   within 1%, n=18k — workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md §1).
+# - total_cogs / total_profit _sq: validated via the Phase-B parity audit
+#   (workspace/scripts/_phaseb_qstar_parity_audit.py): q_op_to_gr (operate_profit/total_revenue) and
+#   q_opincome (total_revenue−total_cogs) and q_opincome_to_ebt (…/total_profit) all MATCH the vendor
+#   q_* (med rel-err ~0, 96-99% within 1%, ≈150 stocks 2014-24).
+# - revenue/n_income_attr_p _sq_q1: additional slots of already-approved fields (revenue_sq /
+#   n_income_attr_p_sq), needed for the single-quarter QoQ factors. slot_depth=5 → q0..q4 materialized.
+#
+# ── PIT ──
+# income _sq anchors on max(ann_date, f_ann_date) → effective_date (strict next-open after disclosure,
+# §3.2); cumulative→single-q via derive_single_quarter_value (restatement-safe). Predictive factors
+# wrap each $field in Ref(...,1) (factor-library PIT-safety invariant).
+#
+# Unlocks Phase-B factors: qual_q_adminexp_to_gr, qual_q_finaexp_to_gr, earn_opincome_q,
+# qual_q_opincome_to_ebt, qual_q_ocf_to_opincome, grow_rev_q_qoq, grow_ni_attr_q_qoq.

@@ -187,6 +187,41 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['qual_q_gross_margin'] = "(Ref($revenue_sq_q0, 1) - Ref($oper_cost_sq_q0, 1)) / Ref($revenue_sq_q0, 1)"
     catalog['qual_q_op_margin'] = "Ref($operate_profit_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
 
+    # ── Phase-B single-quarter factors (2026-06-24): PIT-correct OUR-_sq replacements for the vendor
+    # q_* fina_indicator fields (intentionally unregistered as PIT-uncertain). Each local expr was
+    # VALUE-PARITY-VALIDATED vs the materialized vendor q_* bin (≈150 stocks 2014-24,
+    # _phaseb_qstar_parity_audit.py: med rel-err ~0, 94-99% within-1%; official Tushare defs doc 79;
+    # GPT R1→R2 APPROVE-PLAN). All fields field-approved income/cashflow _sq + Ref(...,1) PIT-safe.
+    # Draft; a CORRELATED family (cohort: phase_b_single_quarter_fina_indicator) — NOT independent
+    # signals, select by marginal orthogonal contribution. The vendor distinctions vs the existing
+    # qual_q_*/grow_*_q_*: q_netprofit_margin/q_*_to_gr use 净利润(total)/营业总收入 (NOT 归母/营业收入);
+    # q_adminexp_to_gr = (管理费用+研发费用)/营业总收入 (研发 split out of 管理费用 post-2018).
+    # 成长 single-quarter (营业收入/净利润-total yoy + qoq; distinct from the 归母/总收入 variants above)
+    catalog['grow_rev_q_yoy'] = ("(Ref($revenue_sq_q0, 1) - Ref($revenue_sq_q4, 1))"
+                                 " / Abs(Ref($revenue_sq_q4, 1))")            # q_sales_yoy
+    catalog['grow_ni_q_yoy'] = ("(Ref($n_income_sq_q0, 1) - Ref($n_income_sq_q4, 1))"
+                                " / Abs(Ref($n_income_sq_q4, 1))")            # q_profit_yoy (净利润 total)
+    catalog['grow_rev_q_qoq'] = ("(Ref($revenue_sq_q0, 1) - Ref($revenue_sq_q1, 1))"
+                                 " / Abs(Ref($revenue_sq_q1, 1))")           # q_sales_qoq
+    catalog['grow_or_q_qoq'] = ("(Ref($total_revenue_sq_q0, 1) - Ref($total_revenue_sq_q1, 1))"
+                                " / Abs(Ref($total_revenue_sq_q1, 1))")      # q_gr_qoq (营业总收入)
+    catalog['grow_ni_attr_q_qoq'] = ("(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q1, 1))"
+                                     " / Abs(Ref($n_income_attr_p_sq_q1, 1))")  # q_netprofit_qoq (归母)
+    # 利润率/费用率 single-quarter (净利润-total / 营业总收入 denominators — vendor q_*_to_gr family)
+    catalog['qual_q_sales_net_margin'] = "Ref($n_income_sq_q0, 1) / Ref($revenue_sq_q0, 1)"          # q_netprofit_margin
+    catalog['qual_q_op_to_gr'] = "Ref($operate_profit_sq_q0, 1) / Ref($total_revenue_sq_q0, 1)"      # q_op_to_gr
+    catalog['qual_q_np_to_gr'] = "Ref($n_income_sq_q0, 1) / Ref($total_revenue_sq_q0, 1)"            # q_profit_to_gr
+    catalog['qual_q_adminexp_to_gr'] = ("(Ref($admin_exp_sq_q0, 1) + Ref($rd_exp_sq_q0, 1))"
+                                        " / Ref($total_revenue_sq_q0, 1)")   # q_adminexp_to_gr (管理+研发)
+    catalog['qual_q_finaexp_to_gr'] = "Ref($fin_exp_sq_q0, 1) / Ref($total_revenue_sq_q0, 1)"        # q_finaexp_to_gr
+    catalog['qual_q_salescash_to_or'] = "Ref($c_fr_sale_sg_sq_q0, 1) / Ref($revenue_sq_q0, 1)"       # q_salescash_to_or
+    # 经营活动净收益 family (= 营业总收入 − 营业总成本; vendor q_opincome) + 单季 EPS
+    _opincome_q = "(Ref($total_revenue_sq_q0, 1) - Ref($total_cogs_sq_q0, 1))"
+    catalog['earn_opincome_q'] = _opincome_q                                  # q_opincome (level; scale downstream)
+    catalog['qual_q_opincome_to_ebt'] = f"{_opincome_q} / Ref($total_profit_sq_q0, 1)"               # q_opincome_to_ebt
+    catalog['qual_q_ocf_to_opincome'] = f"Ref($n_cashflow_act_sq_q0, 1) / {_opincome_q}"             # q_ocf_to_or
+    catalog['earn_q_eps'] = "Ref($n_income_attr_p_sq_q0, 1) / Ref($total_share, 1)"                  # q_eps (level; EP=÷price)
+
     # ═══════════════════════════════════════════════════════════════
     # CICC handbook replication batch (Phase D5, 2026-06-12) — 18 factors.
     # Constructions truth-certified against the 中金基本面手册 published tables

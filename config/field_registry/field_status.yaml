@@ -387,13 +387,16 @@ datasets:
   #   config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
   income:
     status: approved
-    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml."
+    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml. 2026-06-24 (Phase-B): added admin_exp/fin_exp/sell_exp/total_cogs/total_profit _sq_q0 + the revenue/n_income_attr_p _sq_q1 slots — same family/anchoring/pipeline, value-parity-validated vs the vendor q_* (admin/fin/sell penny-exact via rung-5 CoreProfitQ vs 果仁; total_cogs/total_profit via the Phase-B q_op_to_gr/q_opincome MATCH, _phaseb_qstar_parity_audit.py). Unlocks the Phase-B single-quarter factors. See approvals/2026-06-24_income_phaseb_sq_to_approved.yaml."
     fields:
+      - $admin_exp_sq_q0
       - $ebit_sq_q0
       - $ebit_sq_q1
       - $ebit_sq_q2
       - $ebit_sq_q3
+      - $fin_exp_sq_q0
       - $n_income_attr_p_sq_q0
+      - $n_income_attr_p_sq_q1
       - $n_income_attr_p_sq_q4
       - $n_income_sq_q0
       - $n_income_sq_q1
@@ -409,7 +412,11 @@ datasets:
       - $operate_profit_sq_q4
       - $rd_exp_sq_q0
       - $revenue_sq_q0
+      - $revenue_sq_q1
       - $revenue_sq_q4
+      - $sell_exp_sq_q0
+      - $total_cogs_sq_q0
+      - $total_profit_sq_q0
       - $total_revenue_sq_q0
       - $total_revenue_sq_q1
       - $total_revenue_sq_q2
