@@ -2550,10 +2550,21 @@ class StagedQlibBackendBuilder:
           - ``holdertrade_net_ratio``  : signed sum of change_ratio
           - ``holdertrade_events``     : number of holder transactions
 
+        Plus 高管 (holder_type=G, 董监高) DIRECTIONAL per-day aggregates that
+        enable 果仁-style rolling insider signals via a NaN-skipping window sum
+        (``高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)``):
+          - ``holdertrade_mgr_in_{vol,amount,events,ratio}``  : 高管增持 (IN)
+          - ``holdertrade_mgr_de_{vol,amount,events,ratio}``  : 高管减持 (DE)
+        ``vol`` = Σ change_vol (shares), ``amount`` = Σ change_vol·avg_price
+        (元; partial — avg_price ~71% covered), ``ratio`` = Σ change_ratio,
+        ``events`` = transaction count. Each directional field is non-NaN ONLY
+        on a day carrying that direction's 高管 event (sparse), so the window
+        sum is exact.
+
         Days with no event stay NaN (same convention as moneyflow /
-        block_trade). Researchers who need per-holder detail can read the
-        ledger at ``data/pit_ledger/stk_holdertrade/stk_holdertrade.parquet``
-        directly.
+        block_trade). Researchers who need per-holder detail (or 大股东 C / 个人 P
+        splits) can read the ledger at
+        ``data/pit_ledger/stk_holdertrade/stk_holdertrade.parquet`` directly.
         """
         ledger_path = self.ledger_path("stk_holdertrade")
         if not os.path.exists(ledger_path):
@@ -2572,12 +2583,16 @@ class StagedQlibBackendBuilder:
 
         change_vol = pd.to_numeric(ledger.get("change_vol"), errors="coerce")
         change_ratio = pd.to_numeric(ledger.get("change_ratio"), errors="coerce")
+        avg_price = pd.to_numeric(ledger.get("avg_price"), errors="coerce")
         in_de = ledger.get("in_de", pd.Series("", index=ledger.index)).astype(str).str.upper()
+        holder_type = ledger.get("holder_type", pd.Series("", index=ledger.index)).astype(str).str.upper()
         sign = np.where(in_de == "DE", -1.0, 1.0)
         ledger["_signed_vol"] = change_vol * sign
         ledger["_abs_vol"] = change_vol.abs()
         ledger["_signed_ratio"] = change_ratio * sign
         ledger["_event_count"] = 1
+        # transaction value (元) = shares × avg transaction price; NaN where avg_price absent (~29%)
+        ledger["_amount"] = change_vol * avg_price
 
         agg = (
             ledger.groupby(["qlib_code", "effective_date"], sort=False)
@@ -2589,12 +2604,46 @@ class StagedQlibBackendBuilder:
             )
             .reset_index()
         )
-        fields = ["holdertrade_net_vol", "holdertrade_gross_vol", "holdertrade_net_ratio", "holdertrade_events"]
-        fields = self._apply_field_filter(fields)
-        if not fields:
+
+        # 高管(holder_type=G, 董监高) directional per-day aggregates. Sparse: a field is non-NaN
+        # ONLY on days with a 高管-IN (resp. -DE) event, so the rolling 果仁 signal
+        #   高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)   (NaN-skipping sum)
+        # is exact. amount = Σ(change_vol·avg_price) (partial: avg_price ~71% covered).
+        def _dir_agg(mask: np.ndarray, prefix: str) -> tuple[pd.DataFrame, list[str]]:
+            sub = ledger[mask]
+            fmap = {f"{prefix}_vol": "change_vol", f"{prefix}_amount": "_amount",
+                    f"{prefix}_ratio": "change_ratio", f"{prefix}_events": "_event_count"}
+            if sub.empty:
+                return pd.DataFrame(columns=["qlib_code", "effective_date", *fmap]), list(fmap)
+            # carry the source numeric columns explicitly (change_vol/ratio are local Series)
+            work = sub[["qlib_code", "effective_date", "_amount", "_event_count"]].copy()
+            work["change_vol"] = change_vol[mask].values
+            work["change_ratio"] = change_ratio[mask].values
+            out = (
+                work.groupby(["qlib_code", "effective_date"], sort=False)
+                .agg(**{out_name: (src, "sum") for out_name, src in fmap.items()})
+                .reset_index()
+            )
+            return out, list(fmap)
+
+        is_mgr = (holder_type == "G").to_numpy()
+        is_in = (in_de == "IN").to_numpy()
+        is_de = (in_de == "DE").to_numpy()
+        mgr_in_agg, mgr_in_fields = _dir_agg(is_mgr & is_in, "holdertrade_mgr_in")
+        mgr_de_agg, mgr_de_fields = _dir_agg(is_mgr & is_de, "holdertrade_mgr_de")
+
+        base_fields = ["holdertrade_net_vol", "holdertrade_gross_vol", "holdertrade_net_ratio", "holdertrade_events"]
+        all_fields = self._apply_field_filter(base_fields + mgr_in_fields + mgr_de_fields)
+        if not all_fields:
             return []
+
+        def _per_symbol(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+            return {code: g.set_index("effective_date") for code, g in frame.groupby("qlib_code")} if not frame.empty else {}
+
+        sym_base = _per_symbol(agg)
+        sym_in = _per_symbol(mgr_in_agg)
+        sym_de = _per_symbol(mgr_de_agg)
         written: list[str] = []
-        per_symbol = {code: group.sort_values("effective_date") for code, group in agg.groupby("qlib_code")}
         for qlib_code, feature_dir in iter_progress(
             target_dirs.items(),
             total=len(target_dirs),
@@ -2602,12 +2651,14 @@ class StagedQlibBackendBuilder:
             unit="symbol",
             leave=False,
         ):
-            symbol_df = per_symbol.get(qlib_code)
-            if symbol_df is None or symbol_df.empty:
+            parts = [p.get(qlib_code) for p in (sym_base, sym_in, sym_de)]
+            if all(p is None or p.empty for p in parts):
                 continue
-            frame = symbol_df.set_index("effective_date")[fields].reindex(calendar).astype(np.float32, copy=False)
-            for field_name in fields:
-                self._write_feature_series(feature_dir, field_name, frame[field_name].to_numpy(dtype=np.float32))
+            merged = pd.concat([p for p in parts if p is not None and not p.empty], axis=1)
+            frame = merged.reindex(calendar)
+            for field_name in all_fields:
+                series = frame[field_name] if field_name in frame.columns else pd.Series(np.nan, index=calendar)
+                self._write_feature_series(feature_dir, field_name, series.to_numpy(dtype=np.float32))
                 written.append(field_name)
         return sorted(set(written))
 

@@ -858,16 +858,29 @@ Per-holder raw rows remain in the PIT ledger. The Qlib provider exposes
 per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 `$holdertrade_net_ratio`, and `$holdertrade_events`.
 
+> **高管 directional signals (added 2026-06-24, build `phase1_qfields_holdertrade_20260623`):**
+> `_materialize_stk_holdertrade` also emits per-day **高管 (holder_type=G, 董监高) DIRECTIONAL**
+> aggregates: `$holdertrade_mgr_in_{vol,amount,events,ratio}` (增持/IN) and
+> `$holdertrade_mgr_de_{vol,amount,events,ratio}` (减持/DE). `vol` = Σ change_vol (shares),
+> `amount` = Σ change_vol·avg_price (元; partial — avg_price ~71% covered), `ratio` = Σ change_ratio
+> (占流通 %), `events` = transaction count. Each is non-NaN ONLY on a day carrying that direction's
+> 高管 event (sparse), so the 果仁-style rolling signal **`高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)`**
+> (NaN-skipping window sum) is exact. Predictive use → `Ref(...,1)`. 大股东(C)/个人(P) splits are NOT
+> materialized — read the ledger for those.
+
 | Column | English | Chinese |
 |--------|---------|---------|
 | `ts_code` | TS Stock Code | TS代码 |
 | `ann_date` | Announcement Date | 公告日期 |
 | `holder_name` | Holder Name | 股东名称 |
-| `in_de` | Increase / Decrease Direction | 增持/减持 |
+| `holder_type` | Holder Type (G高管 / P个人 / C公司) | 股东类型 |
+| `in_de` | Increase / Decrease Direction (IN/DE) | 增持/减持 |
 | `change_vol` | Changed Shares | 变动股数 |
-| `change_ratio` | Changed Share Ratio | 变动比例 |
+| `change_ratio` | Changed Share Ratio (% of float) | 占流通比例(%) |
 | `after_share` | Shares After Change | 变动后持股 |
-| `after_ratio` | Holding Ratio After Change | 变动后持股比例 |
+| `after_ratio` | Holding Ratio After Change | 变动后占流通比例(%) |
+| `avg_price` | Average Transaction Price | 平均价格 |
+| `total_share` | Total Holding Shares | 持股总数 |
 
 ## 8. Bucket A — 15000积分 Expansion (downloaded 2026-06-08, RAW)
 

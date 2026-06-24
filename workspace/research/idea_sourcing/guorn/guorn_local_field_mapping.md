@@ -116,11 +116,28 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 | expense lines (管理/销售/财务费用 + 营业税金) | ✅ penny-exact (rung-5) | CoreProfitQ (med 0.0) |
 | 总股本 (share count) | ✅ validated (implicit) | 总市值 = close × total_share (both penny-exact) |
 | **股东数 (holder_number)** | ⚠ UNRESOLVED (rung-5) | data sane but coverage sparser than 果仁 grid; 股东数下降率 not reproduced (needs 报告期-grid resampling) |
-| **折旧摊销 (D&A)** | 🚫 NOT MATERIALIZED | `$depr_fa_coga_dpba`/`$amort_intang_assets` absent → EBITDAQ/FCFQ unreproducible (provider gap, not a data fault) |
+| **折旧摊销 (D&A)** | ◑ MATERIALIZED (cum only); single-q NaN by cadence | `$depr_fa_coga_dpba_cum_q0`/`$amort_intang_assets_cum_q0` ARE materialized (22.5% populated). `_sq_q0` is 0.91% non-NaN — NaN because D&A is disclosed only **semi-annually** (H1+FY cumulative, never Q1/Q3) so single-quarter differencing has no prior quarter. EBITDAQ/FCFQ single-q unreproducible **by reporting cadence**, NOT a materialization gap. `recp_disp_fiolta` (FCFQ disposal term) genuinely never fetched. |
 
 **rung-5 (2026-06-23)** closed 4 of the 6 OPEN paths (分红/研发/费用明细 validated, 总股本 implicit).
-Remaining: 股东数 (data present but factor needs 报告期-grid reconstruction) + 折旧摊销 (D&A fields not
-materialized in the provider — would need an ingestion/materialization step to validate).
+Remaining: 股东数 (data present but factor needs 报告期-grid reconstruction). **折旧摊销 (D&A): CORRECTED
+2026-06-23** — the earlier "not materialized" claim was a FALSE INFERENCE (from a 3-stock `notna().any()`
+probe). D&A cumulative IS materialized; the single-quarter is NaN by semi-annual disclosure cadence —
+no build fixes it (proven by the 茅台 cum-vs-sq trace + the 0.0091 vs 0.225 breadth fractions).
+
+## 7. Provider materialization audit (2026-06-23) — downloaded-but-unmaterialized fields
+
+Diff of every raw ledger numeric column vs the live provider bins ([_rung5_materialization_audit.py](../../../scripts/_rung5_materialization_audit.py)).
+**100% materialized:** income, balancesheet, cashflow, cashflow_quarterly, dividends, forecast,
+holder_number, income_quarterly. **Real gaps (ledger-populated, absent from provider — verified by
+ledger coverage + `D.features` probe, not just the base-name diff):**
+
+| dataset | unmaterialized | ledger coverage | note |
+|---|---|---|---|
+| **indicators** | 25 `q_*` single-quarter metrics (q_eps, q_netprofit_yoy, q_op_yoy, q_gr_yoy, q_dtprofit, q_sales_qoq, q_netprofit_margin, margins, qoq/yoy growths…) | ~83–89% (= materialized sibling `q_roe` 87.7%) | curated indicators list omits these 25; **highest-value materialization candidate** |
+| **report_rc** | 8 analyst fields (np 97%, op_rt 74%, tp 65%, ev_ebitda 49%, min_price 30%, rd 20%, op_pr 9%, max_price 1%) | as shown | only the eps_diffusion primitives were materialized (selective by design) |
+| **stk_holdertrade** | 5 (change_vol 100%, change_ratio 100%, after_share 88%, after_ratio 84%, avg_price 71%) | as shown | only the count was materialized (selective by design) |
+
+Materializing any of these needs a staged build + publish + field-registry registration + GPT review.
 
 ---
 

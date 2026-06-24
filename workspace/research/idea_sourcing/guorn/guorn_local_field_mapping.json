@@ -46,6 +46,15 @@
   ],
   "coverage_open": [
     {"path": "股东数(holder_number)", "status": "unresolved", "note": "data sane but coverage sparser than 果仁 grid; 股东数下降率 needs 报告期-grid resampling (see unresolved[])"},
-    {"path": "折旧摊销(D&A)", "status": "not_materialized", "note": "$depr_fa_coga_dpba/$amort_intang_assets absent from provider -> EBITDAQ/FCFQ unreproducible; needs ingestion/materialization to validate"}
-  ]
+    {"path": "折旧摊销(D&A)", "status": "materialized_cum_only", "note": "CORRECTED 2026-06-23: depr_fa_coga_dpba/amort_intang_assets ARE materialized (cum_q0 22.5% populated, bins exist). single-quarter _sq_q0 is 0.91% non-NaN = NaN by SEMI-ANNUAL disclosure cadence (H1+FY cumulative only, never Q1/Q3), NOT a materialization gap. EBITDAQ/FCFQ single-q unreproducible by cadence + recp_disp_fiolta never fetched. Earlier not_materialized claim was a false inference from a 3-stock notna() probe."}
+  ],
+  "materialization_audit_2026_06_23": {
+    "method": "diff(ledger numeric cols, provider bins) + D.features verify; _rung5_materialization_audit.py",
+    "fully_materialized": ["income","balancesheet","cashflow","cashflow_quarterly","dividends","forecast","holder_number","income_quarterly"],
+    "gaps_ledger_populated_not_in_provider": {
+      "indicators": {"count": 25, "coverage": "~83-89% (= materialized sibling q_roe 87.7%)", "fields": ["q_eps","q_netprofit_yoy","q_op_yoy","q_gr_yoy","q_dtprofit","q_dtprofit_to_profit","q_sales_qoq","q_profit_qoq","q_gr_qoq","q_netprofit_qoq","q_netprofit_margin","q_gsprofit_margin","q_op_to_gr","q_profit_to_gr","q_adminexp_to_gr","q_finaexp_to_gr","q_exp_to_sales","q_impair_to_gr_ttm","q_ocf_to_or","q_salescash_to_or","q_opincome","q_investincome","q_investincome_to_ebt","q_opincome_to_ebt","q_eps_others"], "note": "single-quarter financial metrics; curated indicators list omits these; HIGHEST-VALUE materialization candidate"},
+      "report_rc": {"count": 8, "fields_coverage": {"np":0.971,"op_rt":0.742,"tp":0.651,"ev_ebitda":0.488,"min_price":0.301,"rd":0.203,"op_pr":0.088,"max_price":0.009}, "note": "only eps_diffusion primitives materialized (selective by design)"},
+      "stk_holdertrade": {"count": 5, "fields_coverage": {"change_vol":1.0,"change_ratio":1.0,"after_share":0.882,"after_ratio":0.844,"avg_price":0.71}, "note": "only the count materialized (selective by design)"}
+    }
+  }
 }
