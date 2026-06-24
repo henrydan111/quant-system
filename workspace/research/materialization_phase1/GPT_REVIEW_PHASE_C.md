@@ -4,9 +4,10 @@ You are a senior reviewer for an A-share quantitative research system where RESE
 REPO (public — fetch any file to verify against the live code)
 https://github.com/henrydan111/quant-system   (branch: report-rc-registration)
 Raw file form: https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/<path>
-NOTE: the materializer + canaries are COMMITTED + PUSHED (commit c693fa6) — the permalinks below are LIVE.
-The factor `qual_dtprofit_to_profit_q` is NOT yet added to the catalog (that lands post-publish); it is
-embedded below as the authoritative proposed definition.
+NOTE: the materializer + canaries + all R2 folds (the publish script, the approval YAML, the Minor-1 helper
+fix, the Minor-2 test fix) are COMMITTED + PUSHED to branch report-rc-registration (HEAD = d5f9083) — the
+permalinks below are LIVE and reflect the R2 state. The factor `qual_dtprofit_to_profit_q` is NOT yet added
+to the catalog (that lands post-publish); it is embedded below as the authoritative proposed definition.
 
 CONTEXT — read these to judge the change against the contract:
 - CLAUDE.md (hard invariants §3, PIT §3.2, formal-run governance §3.4, factor lifecycle §3.5, research integrity §7, no-hedge §7.10)
@@ -19,6 +20,48 @@ CONTEXT — read these to judge the change against the contract:
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/tests/data_infra/test_profit_dedt_sq.py
 - config/field_registry/field_status.yaml (income family — `$n_income_attr_p_sq_q0` already approved @ L398)
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/config/field_registry/field_status.yaml
+
+================================================================================
+R3 — FOLDS APPLIED (responding to your R2 = REVISE: 1 Blocker + 1 Major)
+================================================================================
+BLOCKER (provider-bound approval YAML committed before the provider/registry state exists — §3.4
+approval-evidence binding fails on the branch; $profit_dedt_sq_q0 not in field_status.yaml). FOLDED:
+  - The approval YAML is MOVED OUT of config/field_registry/approvals/ to
+    workspace/research/materialization_phase1/pending_registration/2026-06-24_profit_dedt_sq_to_approved.yaml
+    so daily-QA approval_evidence_binding no longer sees a future-bound record. VERIFIED:
+    tests/data_infra/test_approval_evidence.py now PASSES (it exposed the blocker; green after the move).
+  - field_status.yaml is UNCHANGED pre-publish ($profit_dedt_sq_q0 stays unregistered → unknown → formal-blocked,
+    which is correct until the provider attests to it).
+  - The post-publish registration is now SCRIPTED + FAIL-CLOSED: workspace/scripts/_register_phasec.py REFUSES
+    to register unless (1) the live provider_build.json provider_build_id == phasec_profit_dedt_sq_20260624 AND
+    (2) the live provider actually SERVES $profit_dedt_sq_q0 (spot-checks real bins). Only then does it copy the
+    approval YAML into approvals/, insert $profit_dedt_sq_q0 into the INDICATORS block of field_status.yaml, and
+    append the field_approval_log.jsonl entry. So the governance layer can never claim an approved field the
+    live provider/registry does not attest (your residual risk).
+  - A field-registry smoke test is added: tests/data_infra/test_profit_dedt_sq_registry.py — SKIPS pre-publish
+    (field not yet in field_status.yaml), and post-publish actively pins `resolve_field($profit_dedt_sq_q0)` =
+    allowed/approved/dataset=indicators at every formal stage (also pins Major-2: indicators, NOT income).
+
+MAJOR (additive copy /E can publish stale extras; integrity sampled). FOLDED in _publish_phasec_additive.py:
+  - robocopy `/E` -> `/MIR` (MIRROR = /E + /PURGE): the staged tree is made EXACTLY equal to live, purging any
+    stale extras (incl. a prior --dry-run's $profit_dedt_sq_*.day.bin). The mirror runs BEFORE materialize, so
+    the order (mirror -> materialize the new field) is intact; the run also asserts robocopy mismatch==0 (not
+    just failed==0).
+  - integrity_check is now FULL (every one of the ~5755 feature dirs, not a 120-dir sample): per-dir
+    (filename, size) equality staged-vs-live, added-field bins excluded; fail-fast after 50 mismatches.
+
+ALL R3 + R2 helper/test/canary tests GREEN: test_profit_dedt_sq.py + test_profit_dedt_sq_registry.py(skip) +
+test_approval_evidence.py + test_pit_backend.py + test_field_registry.py + test_pit_alignment_core.py.
+
+R3 NEW/CHANGED FILES:
+  - workspace/scripts/_publish_phasec_additive.py        (/MIR + full integrity)
+  - workspace/scripts/_register_phasec.py                (NEW — fail-closed post-publish registration)
+  - tests/data_infra/test_profit_dedt_sq_registry.py     (NEW — skip-until-present smoke test)
+  - config/field_registry/approvals/2026-06-24_profit_dedt_sq_to_approved.yaml  (MOVED OUT -> pending_registration/)
+
+R3 REVIEW QUESTION: does moving the approval out of approvals/ (clean branch now) + the fail-closed
+_register_phasec.py (provider must attest the build-id AND serve the field before any governance edit) close
+the Blocker? Any remaining objection to the additive /MIR publish?
 
 ================================================================================
 R2 — FOLDS APPLIED (responding to your R1 = REVISE; no blocker was found)
