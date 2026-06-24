@@ -78,17 +78,19 @@ def run_robocopy(src: Path, dst: Path) -> dict:
 
 
 def integrity_check(staged: Path, live: Path, sample_n: int = 120) -> dict:
-    """Unchanged-bin integrity, BEFORE the new field is materialized: staged must equal live.
-    Global dir-count + a sampled per-dir (file-count, total-size) equality cross-check."""
+    """Unchanged-bin integrity: staged must equal live on EXISTING bins. Idempotent — a prior --dry-run
+    may have already materialized the added-field bins into staged, so they are EXCLUDED from the
+    comparison (live never has them). Global dir-count + a sampled per-dir (file-count, total-size) check."""
     sf = staged / "features"
     lf = live / "features"
+    added_bins = {f"{f}.day.bin" for f in ADDED_FIELDS}
     staged_dirs = sorted(d.name for d in os.scandir(sf) if d.is_dir())
     live_dirs = sorted(d.name for d in os.scandir(lf) if d.is_dir())
     dir_match = staged_dirs == live_dirs
     sample = live_dirs[:: max(1, len(live_dirs) // sample_n)][:sample_n]
     mismatches = []
     for d in sample:
-        sfiles = {f.name: f.stat().st_size for f in os.scandir(sf / d) if f.is_file()}
+        sfiles = {f.name: f.stat().st_size for f in os.scandir(sf / d) if f.is_file() and f.name not in added_bins}
         lfiles = {f.name: f.stat().st_size for f in os.scandir(lf / d) if f.is_file()}
         if sfiles != lfiles:
             extra = set(sfiles) - set(lfiles)
