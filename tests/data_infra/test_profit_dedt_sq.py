@@ -36,7 +36,7 @@ from data_infra.pit_backend import StagedQlibBackendBuilder
 
 # Synthetic 元-scale cumulative ledger for ONE stock. 2023 = full 4 quarters; a phantom 03-30
 # irregular end (sentinel 9999) that MUST be dropped by the prefilter; 2024 = Q1-only (Q1==cum).
-_FAKE_CODE = "000001_SZ"
+_FAKE_CODE = "000001_sz"  # lowercase = the production Qlib code format (Tushare 000001.SZ -> Qlib 000001_sz)
 _LEDGER_ROWS = [
     # end_date,      effective_date,  ann_date,     profit_dedt (cumulative YTD)
     ("2023-03-31", "2023-04-25", "2023-04-25", 100.0),  # Q1  cum -> single 100

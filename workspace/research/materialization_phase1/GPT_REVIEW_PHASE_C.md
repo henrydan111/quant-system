@@ -4,9 +4,9 @@ You are a senior reviewer for an A-share quantitative research system where RESE
 REPO (public — fetch any file to verify against the live code)
 https://github.com/henrydan111/quant-system   (branch: report-rc-registration)
 Raw file form: https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/<path>
-NOTE: the materializer + factor + test below are UNCOMMITTED working-tree edits (not yet pushed). The
-embedded text is AUTHORITATIVE; the links cross-check the SURROUNDING code (the proven flow kernel,
-the publish path, the field registry) which is unchanged on the branch.
+NOTE: the materializer + canaries are COMMITTED + PUSHED (commit c693fa6) — the permalinks below are LIVE.
+The factor `qual_dtprofit_to_profit_q` is NOT yet added to the catalog (that lands post-publish); it is
+embedded below as the authoritative proposed definition.
 
 CONTEXT — read these to judge the change against the contract:
 - CLAUDE.md (hard invariants §3, PIT §3.2, formal-run governance §3.4, factor lifecycle §3.5, research integrity §7, no-hedge §7.10)
@@ -15,8 +15,55 @@ CONTEXT — read these to judge the change against the contract:
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/src/data_infra/pit_backend.py
 - tests/data_infra/test_pit_backend.py (the EXISTING kernel canaries this change reuses: `test_flow_single_quarter_derivation_tracks_late_revision`, `test_canonical_quarter_segments_prefer_direct_quarter_and_fallback_per_field`)
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/tests/data_infra/test_pit_backend.py
+- tests/data_infra/test_profit_dedt_sq.py (the 5 NEW method-level canaries — full source)
+  https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/tests/data_infra/test_profit_dedt_sq.py
 - config/field_registry/field_status.yaml (income family — `$n_income_attr_p_sq_q0` already approved @ L398)
   https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/config/field_registry/field_status.yaml
+
+================================================================================
+R2 — FOLDS APPLIED (responding to your R1 = REVISE; no blocker was found)
+================================================================================
+Your R1 found 0 Blockers, 2 Majors, 2 Minors. All folded; please confirm SHIP.
+
+MAJOR-1 (publish provenance too informal — the residual risk). FOLDED via a scripted, honest-provenance
+additive publish: workspace/scripts/_publish_phasec_additive.py.
+  - The manifest schema (schemas/provider_build.schema.json) ENUM-constrains builder.stage to
+    {full, upstream-only, provider-only} and is additionalProperties=False — so `builder_stage="additive_provider_copy"`
+    would FAIL validation. Instead the script emits the TRUTHFUL existing enum values
+    `builder_mode="update"` + `builder_stage="provider-only"` (the builder's publish() hardcodes all/full for
+    EVERY publish — a latent inaccuracy your review surfaced; flagged separately, not fixed in-scope), via
+    `publish(emit_manifest=False)` then a direct `emit_manifest_at_publish(...)`. NO core-builder change.
+  - A free-form sidecar `data/qlib_data/metadata/additive_build_provenance.json` records exactly what you
+    asked: base_provider_build_id, added_fields=[$profit_dedt_sq_q0..q4], robocopy exit/summary (files
+    total/copied/skipped/FAILED, bytes), unchanged-bin integrity (dir-list identity + sampled per-dir
+    file-count/size equality, asserted BEFORE the new field is materialized), and new-field parity vs vendor
+    q_dtprofit. The script ABORTS (non-zero) on robocopy failures, integrity mismatch, or parity failure.
+  - The approval YAML (below) binds to provider_build_id="phasec_profit_dedt_sq_20260624" — the same id the
+    manifest + sidecar carry. So the rebind lands on a provider whose evidence fully describes the additive add.
+
+MAJOR-2 (registry placement must be indicators-derived, not income). FOLDED:
+  config/field_registry/approvals/2026-06-24_profit_dedt_sq_to_approved.yaml registers $profit_dedt_sq_q0 under
+  dataset_id=indicators with source_dataset=indicators, source_class=derived_flow_from_snapshot_ledger,
+  coverage_tier=sub, replacement_for_vendor_q=q_dtprofit_to_profit, bound to the new provider_build_id. The
+  field_status.yaml line is appended to the `indicators` family block (NOT income) at publish time.
+
+MINOR-1 (shared helper accepts any March date as Q1). FOLDED: pit_backend.py
+  derive_single_quarter_value L1273-1274 now `(end_date.month, end_date.day) == (3, 31)` (was `month == 3`).
+  Full helper-driving test files re-run GREEN: test_pit_backend.py + test_profit_dedt_sq.py +
+  test_pit_alignment_core.py (40) + test_field_registry.py (49) = 89 passed.
+
+MINOR-2 (test used uppercase fake Qlib code). FOLDED: test_profit_dedt_sq.py `_FAKE_CODE = "000001_sz"` (lowercase).
+
+NEW/CHANGED FILES FOR THIS R2 (raw links live after the R2 push):
+  - workspace/scripts/_publish_phasec_additive.py
+  - config/field_registry/approvals/2026-06-24_profit_dedt_sq_to_approved.yaml
+  - src/data_infra/pit_backend.py (helper Minor-1) ; tests/data_infra/test_profit_dedt_sq.py (Minor-2)
+
+R2 REVIEW QUESTION: does the additive-publish provenance (truthful update/provider-only manifest + the
+additive_build_provenance.json sidecar + the build-id-bound approval YAML) close your residual risk? Any
+remaining objection to the additive path vs forcing the full ~8h copytree+re-materialize?
+
+--------------------------------------------------------------------------------
 
 SELF-REVIEW PREFLIGHT — completed before this GPT request: PASS. Checked §3 invariants + the 9 principles.
 - PIT: the new field anchors on the indicators `ann_date → effective_date` (strict next-open after disclosure), the SAME anchor as the already-approved `q_roe`/`pit_*` indicators fields; it reuses the proven restatement-safe kernel `derive_single_quarter_value`; predictive factor wraps every field in `Ref(...,1)`. No raw-ledger read in any research path (the materializer is a BUILDER, not a research reader).

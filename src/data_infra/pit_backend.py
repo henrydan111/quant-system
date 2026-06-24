@@ -1271,7 +1271,10 @@ def derive_single_quarter_value(
         return np.nan
     prior_end = previous_quarter_end(end_date)
     if prior_end is None:
-        return np.float32(current_value) if end_date.month == 3 else np.nan
+        # Q1 single-quarter == the cumulative, but ONLY for a genuine 03-31 fiscal end.
+        # An irregular March date (e.g. 2013-03-30 in the legacy feed) is NOT Q1 -> NaN
+        # (GPT Phase-C Minor: align the shared helper with the standard-fiscal-end invariant).
+        return np.float32(current_value) if (end_date.month, end_date.day) == (3, 31) else np.nan
     prior_row = cumulative_state.get(prior_end)
     if prior_row is None:
         return np.nan
