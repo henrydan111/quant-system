@@ -4,7 +4,7 @@
 > 在**长期收益与回撤**上优于等权。
 > **数据**: `Knowledge/果仁回测结果/` 已下载的 65 个策略回测导出 (其中 20 个为实盘组合), 2014-01-02..2026-06-18,
 > 日频净值曲线, **总收益口径(含分红再投资), unlevered 1×**。
-> **状态**: 设计稿 **v5** (GPT-5.5 Pro R1+R2+R3+R4 的 finding **已全部折入**; R3/R4 = **无 Blocker** → 待 R5 确认)。NON-FORMAL research artifact。
+> **状态**: **v5 — GPT-5.5 Pro R5 = SHIP (2026-06-24)**; 设计冻结(§10 跨审门通过, R1→R5), 进入 **M3 实现**。NON-FORMAL research artifact。
 > **Last updated**: 2026-06-24
 
 ---
@@ -187,10 +187,10 @@
 
 ## 6. 里程碑
 - M1 数据 & 诊断 (✅ 本文 §1–§2)。
-- M2 计划 self-review + GPT cross-review + 用户确认 (← **当前所处阶段**)。
-- M3 实现 walk-forward 引擎 + 8 方案 + EW 基准。
-- M4 敏感性/子区间/bootstrap/留一 稳健性套件。
-- M5 推荐权重 + 报告 + (self-review → GPT 实现审查)。
+- M2 ✅ 计划 self-review + GPT cross-review (R1→R5, **R5=SHIP**) + 用户确认。
+- M3 ✅ 实现 + 运行: 引擎完成; holdout 三态裁决 = **fail → 维持 EW** ([GUORN20_FINDINGS.md](GUORN20_FINDINGS.md))。
+- M4 ⏳ 稳健性余项 (子区间 §4.3 / 留一族 / 成本网格 / haircut §4.2) — bootstrap+max-stat 已含; 余项待 (**不能把 fail 翻成 pass, 只强化"维持 EW"**)。
+- M5 ⏳ 实现自审 (已修 3 项) + GPT 实现审查 (§10)。
 
 ---
 
