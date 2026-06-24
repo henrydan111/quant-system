@@ -23,7 +23,7 @@ related_findings_id: null
 # which the on-disk verification was performed. A future provider rebuild
 # whose `calendar_policy_id` or `provider_build_id` differs from these
 # values means the approval evidence must be re-verified before formal use.
-provider_build_id: "20260623_004545"
+provider_build_id: "phase1_qfields_holdertrade_v2_20260624"
 calendar_policy_id: frozen_20260227_system_build
 
 # Per-stage scope — every flag here mirrors the `approved` status row in

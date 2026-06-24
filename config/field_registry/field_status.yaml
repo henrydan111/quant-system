@@ -315,12 +315,21 @@ datasets:
   # Same `pending_review` status as its sibling alpha endpoints.
   stk_holdertrade:
     status: approved
-    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): 168,024 holder-event rows 2008-2026, in_de split DE 124,982 / IN 43,042 (sensible). PROPERLY PIT-anchored — the ledger carries ann_date + disclosure_date + effective_date (effective_date is the visibility anchor), unlike the daily endpoints. Still wrap in Ref(...,1) as hygiene + apply staleness/decay (sparse holder events)."
+    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): 168,024 holder-event rows 2008-2026, in_de split DE 124,982 / IN 43,042 (sensible). PROPERLY PIT-anchored — the ledger carries ann_date + disclosure_date + effective_date (effective_date is the visibility anchor), unlike the daily endpoints. Still wrap in Ref(...,1) as hygiene + apply staleness/decay (sparse holder events). 2026-06-24: added 高管(holder_type=G,董监高) DIRECTIONAL per-day aggregates holdertrade_mgr_{in,de}_{vol,amount,events,ratio} (果仁-style 高管过去N日增持/减持 via NaN-skipping Sum(...,N)) via the testable module fn aggregate_directional_holdertrade; amount=Σ(|change_vol|·avg_price) over PRICED events only (min_count=1 -> all-unpriced day=NaN not 0; partial=lower bound; avg_price ~71% cov); vol/ratio/events complete. change_vol/change_ratio non-negative (data-audit canary: 0 negatives in 168,024 rows). Provider build phase1_qfields_holdertrade_v2_20260624. GPT R1(REVISE: amount false-zero)->R2 SHIP. approvals/2026-06-24_stk_holdertrade_mgr_directional_to_approved.yaml."
     fields:
       - $holdertrade_net_vol
       - $holdertrade_gross_vol
       - $holdertrade_net_ratio
       - $holdertrade_events
+      # 2026-06-24: 高管(G) directional — 果仁-style 高管过去N日增持/减持 signals (Sum(...,N))
+      - $holdertrade_mgr_in_vol
+      - $holdertrade_mgr_in_amount
+      - $holdertrade_mgr_in_ratio
+      - $holdertrade_mgr_in_events
+      - $holdertrade_mgr_de_vol
+      - $holdertrade_mgr_de_amount
+      - $holdertrade_mgr_de_ratio
+      - $holdertrade_mgr_de_events
 
   # ─── Pending review: event-like daily endpoints (post-2026-04-20 namespacing) ──
   top_list:

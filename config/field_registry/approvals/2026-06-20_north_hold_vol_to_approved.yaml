@@ -18,7 +18,7 @@ reviewer: henrydan111
 related_pr: cicc-e1g-northbound
 related_findings_id: null
 
-provider_build_id: "20260623_004545"
+provider_build_id: "phase1_qfields_holdertrade_v2_20260624"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:
