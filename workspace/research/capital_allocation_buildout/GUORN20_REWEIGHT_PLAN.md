@@ -4,16 +4,14 @@
 > 在**长期收益与回撤**上优于等权。
 > **数据**: `Knowledge/果仁回测结果/` 已下载的 65 个策略回测导出 (其中 20 个为实盘组合), 2014-01-02..2026-06-18,
 > 日频净值曲线, **总收益口径(含分红再投资), unlevered 1×**。
-> **状态**: 设计稿 **v4** (GPT-5.5 Pro R1+R2+R3 的 finding **已全部折入**; R3 = **无 Blocker** → 待 R4 确认)。NON-FORMAL research artifact。
+> **状态**: 设计稿 **v5** (GPT-5.5 Pro R1+R2+R3+R4 的 finding **已全部折入**; R3/R4 = **无 Blocker** → 待 R5 确认)。NON-FORMAL research artifact。
 > **Last updated**: 2026-06-24
 
 ---
 
 ## 0. 一句话结论 (先讲清楚这件事有多难)
 
-等权(EW)**本身已经是一个很强的基准**(以下全样本数字为**背景动机, 非设计输入** —— 见 §9 附录; 设计/判定一律用 ≤2023-05-31 + holdout): 实测 EW(月度再平衡) 夏普 **1.82**、最大回撤 **−32%**、年化 **~45%(日历口径)/47%(252口径)**。
-EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高), 因为它已经吃掉了绝大部分分散化收益(分散比 1.30)。
-所以"在收益和回撤上都严格优于 EW(Pareto 占优)"是一个**高门槛**目标, 不能假设一定能达到。
+等权(EW)**本身已经是一个很强的基准**: 其夏普高于绝大多数单券、波动显著低于单券平均(已吃掉大部分分散化收益)。**具体 2014-2026 全样本数值仅见 §9 附录 A**(于 `frozen_candidate.json` 锁定 + holdout 记录后重生成); **本节不列任何 2014-2026 数字**(R4-Major-2)。所以"在收益和回撤上都严格优于 EW(Pareto 占优)"是**高门槛**目标, 不能假设一定达到。
 
 机会判断 (以下均为**待检验假设 H, 各绑定一个具名输出**, 非结论 — §7 量化研究原则 6/7):
 - **H1 (回撤/Calmar)**: 风险型加权相对 EW **降低回撤、提高 Calmar/Sharpe**(依据: EW 把过多*风险*而非资本押在高波成长/微盘上, 诊断 3)。**检验**: `guorn20_walkforward.py` → `paired_delta_metrics.csv`(配对 bootstrap ΔMDD/ΔCalmar + §4 多重检验校正)。
@@ -151,7 +149,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 ### 4.1 多重检验与显著性 (Blocker-2 + R2-Blocker-1 修正 bootstrap 对象)
 - **测试账本 `testing_ledger.csv`**: 记录**每一个**配置(scheme/L/cadence/cap/floor)逐日的**两列** `strategy_return` 与 `ew_return`(cadence-matched EW), **不存"收益差"单列**。试验族 = 全网格, 不止 8 个方案。
 - **★ path-correct 配对 block-bootstrap (R2-Blocker-1)**: Calmar/MDD/CAGR 是**路径指标** —— ΔMDD ≠ "超额收益路径的 MDD"。故对**成对两列收益**抽连续块 → **分别重建 strategy 与 EW 两条净值路径** → 各自算 CAGR/MDD/Calmar → **再求 Δ**。**绝不**从"仅超额收益"路径算 ΔMDD/ΔCalmar。得 Δ 指标分布与 CI。
-- **★ 冻结 bootstrap 参数 (R3-Major-3, 保证 p/CI 可复现)**: **stationary paired block bootstrap**, 期望块长 **21 交易日**, **10,000** 次重抽, **固定 seed 记入 `frozen_candidate.json`**; 并在块长 **10 / 63** 报敏感性 —— **若 pass/fail 在三个块长间翻转 → 裁决 = inconclusive**。
+- **★ 冻结 bootstrap 参数 (R3-Major-3, 保证 p/CI 可复现)**: **stationary paired block bootstrap**, 期望块长 **21 交易日**, **10,000** 次重抽, **固定 seed 记入 `frozen_candidate.json`**。**块长稳健性聚合 (R4-Minor-1)**: 在块长 **10 / 21 / 63** 各算三态裁决 —— **最终 pass 仅当三者均 pass; 任一为 inconclusive 且无 fail → 最终 inconclusive; 任一 fail → 报告 fail 原因, 不得写成 pass**。
 - **有效试验数 N_eff**: 由配置间"收益差序列"相关矩阵特征值算 participation ratio `N_eff=(Σλ)²/Σλ²`, clamp 到 `[8, 配置总数]`。
 - **★ family-wise 校正 = max-stat, 仅用于 pre-holdout 选择 claim (R2-Blocker-2)**: 零假设"全族无一胜 EW"下, 在 **≤2023-05-31** 数据上 bootstrap 跨全配置族的 max ΔCalmar 分布, 给"选出的候选在 pre-holdout 显著优于 EW"一个 family-wise 校正 p/CI。**holdout 阶段绝不读全网格** —— 只对冻结候选做**单候选** path-correct 配对 bootstrap(§4.0)。deflated/PSR-Sharpe 仅辅助, 不作为 Calmar 胜出证明。
 
@@ -182,7 +180,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
    - **`selection_trace.csv`(R2-Minor-1)**: 每配置的 **pre-2023-05-31** 换手、复杂度 rank、各 filter/rank 值 —— tie-break 可审计。
    - **`haircut_sensitivity.csv`**(§4.2)、**`frozen_candidate.json`**(§4.0 冻结候选 + holdout **单候选** accept/reject)。
 4. ⏳ 结果报告 (markdown): 全配置对比表 + 样本外净值曲线 + 子区间/敏感性/bootstrap/haircut + **推荐权重**及理由 + caveat。
-5. ⏳ 可选: MLflow 记录本次对比实验; dashboard 提及。
+5. ⏳ **必须**用 `ExperimentTracker`/MLflow 记录本次 walk-forward 实验(R4-Major-3, CLAUDE.md §7.6 合约): design hash、数据文件 hash、完整配置网格、冻结候选、bootstrap seed/块长、成本假设、各输出文件路径+hash。MLflow 服务不可用时先写 `run_manifest.json`, 发布前补录 MLflow。dashboard 提及。
 
 > **S8 max-Sharpe = 永久 negative control(R2-Major-2)**: **排除在冻结可部署选择规则之外**, 只作过拟合对照诊断, **在本研究中永不可能成为推荐配置**(即便偶然过 family-wise 校正)。
 > **部署 caveat(R2-Minor-3)**: 即便 holdout 通过, holdout(2023-06..2026-06)仍是**单一 regime** → 实盘前须经 paper / 小额实盘验证。
@@ -200,7 +198,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 
 | # | 决策 | **锁定结果** |
 |---|---|---|
-| D1 | **主目标** | ✅ **(b) 最大化样本外 Calmar / 压回撤, 年化经济非劣于 EW**; (a) 严格 Pareto 占优作附带检验。判定阈值(holdout): **单候选 path-correct 配对 bootstrap 的 ΔCalmar>0 ∧ ΔMDD<0 ∧ ΔCAGR 下界 ≥ −3pp**(family-wise 校正仅用于 pre-holdout 选择 claim, holdout 不读全网格 — Blocker-2)。**−3pp 是事前声明的经济非劣边际(non-inferiority margin), 非统计结果**(Major-3): 用 bootstrap 下界(非点估计)守门。 |
+| D1 | **主目标** | ✅ **(b) 最大化样本外 Calmar / 压回撤, 年化经济非劣于 EW**; (a) 严格 Pareto 占优作附带检验。判定阈值(holdout) = **三态裁决(§4.0, R4-Major-1)**: **pass** = 点 ΔMDD<0 ∧ 点 ΔCalmar≥+0.10 ∧ ΔCAGR 下界≥−3pp ∧ P(ΔCalmar>0)≥80%; **inconclusive** = 符号对但效应/置信不足或块长敏感不稳; **fail** = 符号错或经济非劣失败。用**单候选 path-correct 配对 bootstrap**(family-wise 校正仅用于 pre-holdout 选择 claim, holdout 不读全网格)。**−3pp = 事前声明的经济非劣边际, 非统计结果**, 用 bootstrap 下界(非点估计)守门。 |
 | D2 | **权重约束** | ✅ **(a) 保留全部 20 券 + 上下限**: 权重下限 `w_i ≥ floor`(候选 floor=1% 或 0.5×EW=2.5%)、上限 `w_i ≤ cap`(候选 10%/15%=2×/3×EW)。"允许置零/集中版"**仅作对照**展示, 不作为推荐输出。 |
 | D3 | **顶层再平衡频率/成本** | 默认**月度 + 季度变体**, 成本做敏感性 (无需单独拍板)。 |
 | D4 | **范围** | 默认**仅再加权**(保留 20 券, 无择时叠加层) —— 符合"对这 20 个再加权"原意。 |
@@ -209,7 +207,7 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 
 ---
 
-## 8. 自审 (Self-review, 对照 §3 硬不变量 + §7 量化研究原则; v4 = GPT R1+R2+R3 折入后)
+## 8. 自审 (Self-review, 对照 §3 硬不变量 + §7 量化研究原则; v5 = GPT R1+R2+R3+R4 折入后)
 
 - **无前视 (§7.1)**: walk-forward 每权重仅用 `[t−L,t)`; 实现须单测 `weight_t ⊥ returns_{≥t}`。✅
 - **OOS 神圣 + 封存 (§7.2/3)**: ★ R1-Blocker-1 折入 —— 设计冻结日 2023-05-31 + 唯一确定性选择规则 + holdout 单次 accept/reject(§4.0); 全样本最优仅作标注天花板。✅
@@ -223,9 +221,10 @@ EW 的夏普**高于 20 个策略中的 19 个**(只有 ST_大市值 1.90 略高
 - **禁杠杆 (§7.11) / 复用 metrics (§7.8) / 总收益口径一致 (§3.3) / PIT 不直接适用(消费预计算净值)**: ✅
 - **★ R2 折入 (5 项)**: **B1 path-metric bootstrap** = testing_ledger 存两列 strategy/ew、配对 bootstrap 分别重建两条净值路径再求 Δ, 绝不从超额收益路径算路径指标(§4.1); **B2 holdout 不读全网格** = holdout 只算冻结候选单候选 bootstrap, family-wise 仅 pre-holdout(§4.0/§4.1/§7 D1); **M1 诊断无泄漏** = 设计型收益诊断仅 ≤2023-05-31, §2 全样本数为描述性、分组 a priori 按 recipe(§2 caveat+§4.4); **M2 S8 真负控** = 排除在可部署选择规则外、永不可推荐(§5); **m1/m2/m3** = selection_trace.csv 审计 / haircut 是 stress-test 非真实证明(真验需 book replay)/ holdout 过后仍需 paper-小额实盘(§5)。✅
 - **★ R3 折入 (4 Major + 2 Minor)**: **M1 全样本数移出设计包** = §2 改定性、数值入 §9 附录(post-holdout, 非设计输入); **M2 三态裁决** = holdout pass/inconclusive/fail, pass 须 ΔCalmar≥+0.10 ∧ P(ΔCalmar>0)≥80% ∧ ΔMDD<0 ∧ ΔCAGR 下界≥−3pp(§4.0); **M3 冻结 bootstrap 参数** = stationary block、期望块长 21、10000 抽、固定 seed 入 frozen_candidate.json、块长 10/63 敏感翻转→inconclusive(§4.1); **M4 固定 pre-holdout 三窗** 14-16/17-19/20-23.05(§4.3/§3.5); **m1** tie-break 去 max-Sharpe(§4.0); **m2** 数据驱动聚类须独立 scheme + ≤2023-05-31 + 入试验族(§4.4)。✅
-- **残留开放风险 (GPT R3 标注的首要残留, 不可由设计消除, 只能披露)**: **单一 A 股市场 + 单一 ~3 年 holdout regime 无法证明可部署性** → §5 已要求实盘前 paper/小额实盘验证; 且 (ii) ~150 月度观测协方差噪声大 → 偏稳健族(S1/S2/S5/S6)、S3 重收缩、S8 永负控; (iii) E 组分散收益可能主导 → §4.3 留一族检验; (iv) pre-holdout 仍是单一市场 ~9 年, 残余单市场过拟合只能披露。
+- **★ R4 折入 (3 Major + 1 Minor, 一致性/合约)**: **M1** §7 D1 旧二元阈值 → 同步为 §4.0 三态裁决; **M2** §0 移除全部 2014-26 全样本数字(只在 §9 附录); **M3** MLflow/ExperimentTracker **从"可选"改"必须"**(§7.6 合约 — design/数据 hash + 网格 + 冻结候选 + seed/块长 + 成本 + 输出 hash); **m1** §4.1 块长 10/21/63 各三态、全 pass 才 pass、任一 fail 即 fail。✅
+- **残留开放风险 (GPT R3/R4 标注的首要残留, 不可由设计消除, 只能披露)**: **单一 A 股市场 + 单一 ~3 年 holdout regime 无法证明可部署性** → §5 已要求实盘前 paper/小额实盘验证; 且 (ii) ~150 月度观测协方差噪声大 → 偏稳健族(S1/S2/S5/S6)、S3 重收缩、S8 永负控; (iii) E 组分散收益可能主导 → §4.3 留一族检验; (iv) pre-holdout 仍是单一市场 ~9 年, 残余单市场过拟合只能披露。
 
-**自审结论**: **clean for GPT R4** —— R1(3B+4M+3m)+ R2(2B+2M+3m)+ R3(**0 Blocker** + 4M+2m)全部折入为可执行协议, 0 finding 婉拒; 残留=单一市场/单一 holdout regime 的不可消除风险(已披露 + 实盘前 paper 验证)。**预期管理: inconclusive/fail → 维持 EW 是可接受且预期的结论(§0/§4.0), 不把 null 硬凑成 pass。**
+**自审结论**: **clean for GPT R5** —— R1(3B)+R2(2B)+R3(0B,4M+2m)+R4(0B,3M+1m)全部折入为可执行协议, 0 finding 婉拒; 自 R3 起**无 Blocker**, 残留 = 单一市场/单一 holdout regime 的不可消除风险(已披露 + 实盘前 paper 验证)。**预期管理: inconclusive/fail → 维持 EW 是可接受且预期的结论(§0/§4.0), 不把 null 硬凑成 pass。**
 
 ---
 
