@@ -836,6 +836,49 @@ def payload_numeric_columns(df: pd.DataFrame) -> list[str]:
     return [column for column in numeric if column not in CORE_METADATA_COLUMNS]
 
 
+def aggregate_directional_holdertrade(sub: pd.DataFrame, prefix: str) -> tuple[pd.DataFrame, list[str]]:
+    """Per-(qlib_code, effective_date) directional holder-trade aggregate for one
+    holder_type×direction subset of the stk_holdertrade ledger. Emits four columns
+    ``{prefix}_{vol,amount,ratio,events}``:
+
+      - ``vol``    = Σ|change_vol| (shares). ``abs`` is a no-op for Tushare's positive-magnitude
+                     ``change_vol`` feed (verified: 0 negatives) AND a guard if that ever changes —
+                     direction lives in ``in_de``/the subset, so a directional magnitude is wanted.
+      - ``amount`` = Σ(|change_vol|·avg_price) (元) with **min_count=1** → NaN (NOT 0) when EVERY
+                     event on the day lacks ``avg_price`` (~29% of rows are unpriced); a partial-priced
+                     day is a **priced-event lower bound**, not the full transaction value.
+      - ``ratio``  = Σ change_ratio (占流通 %).
+      - ``events`` = transaction count.
+
+    The caller reindexes to the trading calendar (non-event days → NaN), so a NaN-skipping window
+    ``Sum(...)`` reconstructs the 果仁 rolling signal exactly. Pure function → unit-testable
+    (tests/data_infra/test_holdertrade_directional.py).
+    """
+    fields = [f"{prefix}_vol", f"{prefix}_amount", f"{prefix}_ratio", f"{prefix}_events"]
+    if sub.empty:
+        return pd.DataFrame(columns=["qlib_code", "effective_date", *fields]), fields
+    cv = pd.to_numeric(sub["change_vol"], errors="coerce").abs()
+    work = pd.DataFrame({
+        "qlib_code": sub["qlib_code"].to_numpy(),
+        "effective_date": sub["effective_date"].to_numpy(),
+        "_vol": cv.to_numpy(),
+        "_amount": (cv * pd.to_numeric(sub["avg_price"], errors="coerce")).to_numpy(),
+        "_ratio": pd.to_numeric(sub["change_ratio"], errors="coerce").to_numpy(),
+        "_events": 1.0,
+    })
+    out = (
+        work.groupby(["qlib_code", "effective_date"], sort=False)
+        .agg(**{
+            f"{prefix}_vol": ("_vol", "sum"),
+            f"{prefix}_amount": ("_amount", lambda s: s.sum(min_count=1)),
+            f"{prefix}_ratio": ("_ratio", "sum"),
+            f"{prefix}_events": ("_events", "sum"),
+        })
+        .reset_index()
+    )
+    return out, fields
+
+
 def _coerce_update_priority(series: pd.Series) -> pd.Series:
     numeric = pd.to_numeric(series, errors="coerce")
     return numeric.fillna(-1)
@@ -2583,7 +2626,6 @@ class StagedQlibBackendBuilder:
 
         change_vol = pd.to_numeric(ledger.get("change_vol"), errors="coerce")
         change_ratio = pd.to_numeric(ledger.get("change_ratio"), errors="coerce")
-        avg_price = pd.to_numeric(ledger.get("avg_price"), errors="coerce")
         in_de = ledger.get("in_de", pd.Series("", index=ledger.index)).astype(str).str.upper()
         holder_type = ledger.get("holder_type", pd.Series("", index=ledger.index)).astype(str).str.upper()
         sign = np.where(in_de == "DE", -1.0, 1.0)
@@ -2591,10 +2633,8 @@ class StagedQlibBackendBuilder:
         ledger["_abs_vol"] = change_vol.abs()
         ledger["_signed_ratio"] = change_ratio * sign
         ledger["_event_count"] = 1
-        # transaction value (元) = shares × avg transaction price; NaN where avg_price absent (~29%)
-        ledger["_amount"] = change_vol * avg_price
 
-        agg = (
+        agg = (  # all-holder net/gross/net_ratio/events (unchanged contract)
             ledger.groupby(["qlib_code", "effective_date"], sort=False)
             .agg(
                 holdertrade_net_vol=("_signed_vol", "sum"),
@@ -2605,32 +2645,16 @@ class StagedQlibBackendBuilder:
             .reset_index()
         )
 
-        # 高管(holder_type=G, 董监高) directional per-day aggregates. Sparse: a field is non-NaN
-        # ONLY on days with a 高管-IN (resp. -DE) event, so the rolling 果仁 signal
-        #   高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)   (NaN-skipping sum)
-        # is exact. amount = Σ(change_vol·avg_price) (partial: avg_price ~71% covered).
-        def _dir_agg(mask: np.ndarray, prefix: str) -> tuple[pd.DataFrame, list[str]]:
-            sub = ledger[mask]
-            fmap = {f"{prefix}_vol": "change_vol", f"{prefix}_amount": "_amount",
-                    f"{prefix}_ratio": "change_ratio", f"{prefix}_events": "_event_count"}
-            if sub.empty:
-                return pd.DataFrame(columns=["qlib_code", "effective_date", *fmap]), list(fmap)
-            # carry the source numeric columns explicitly (change_vol/ratio are local Series)
-            work = sub[["qlib_code", "effective_date", "_amount", "_event_count"]].copy()
-            work["change_vol"] = change_vol[mask].values
-            work["change_ratio"] = change_ratio[mask].values
-            out = (
-                work.groupby(["qlib_code", "effective_date"], sort=False)
-                .agg(**{out_name: (src, "sum") for out_name, src in fmap.items()})
-                .reset_index()
-            )
-            return out, list(fmap)
-
-        is_mgr = (holder_type == "G").to_numpy()
-        is_in = (in_de == "IN").to_numpy()
-        is_de = (in_de == "DE").to_numpy()
-        mgr_in_agg, mgr_in_fields = _dir_agg(is_mgr & is_in, "holdertrade_mgr_in")
-        mgr_de_agg, mgr_de_fields = _dir_agg(is_mgr & is_de, "holdertrade_mgr_de")
+        # 高管(holder_type=G, 董监高) directional per-day aggregates (testable module fn
+        # aggregate_directional_holdertrade). Sparse: a field is non-NaN ONLY on a day carrying that
+        # direction's 高管 event, so 高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N) (NaN-skipping)
+        # is exact. amount uses min_count=1 → an all-unpriced day is NaN (not a false 0); a
+        # partial-priced day is a priced-event lower bound (avg_price ~71% covered).
+        is_mgr = holder_type == "G"
+        mgr_in_agg, mgr_in_fields = aggregate_directional_holdertrade(
+            ledger[is_mgr & (in_de == "IN")], "holdertrade_mgr_in")
+        mgr_de_agg, mgr_de_fields = aggregate_directional_holdertrade(
+            ledger[is_mgr & (in_de == "DE")], "holdertrade_mgr_de")
 
         base_fields = ["holdertrade_net_vol", "holdertrade_gross_vol", "holdertrade_net_ratio", "holdertrade_events"]
         all_fields = self._apply_field_filter(base_fields + mgr_in_fields + mgr_de_fields)
@@ -2638,7 +2662,10 @@ class StagedQlibBackendBuilder:
             return []
 
         def _per_symbol(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
-            return {code: g.set_index("effective_date") for code, g in frame.groupby("qlib_code")} if not frame.empty else {}
+            if frame.empty:
+                return {}
+            return {code: g.drop(columns=["qlib_code"]).set_index("effective_date")
+                    for code, g in frame.groupby("qlib_code")}
 
         sym_base = _per_symbol(agg)
         sym_in = _per_symbol(mgr_in_agg)

@@ -861,12 +861,15 @@ per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 > **高管 directional signals (added 2026-06-24, build `phase1_qfields_holdertrade_20260623`):**
 > `_materialize_stk_holdertrade` also emits per-day **高管 (holder_type=G, 董监高) DIRECTIONAL**
 > aggregates: `$holdertrade_mgr_in_{vol,amount,events,ratio}` (增持/IN) and
-> `$holdertrade_mgr_de_{vol,amount,events,ratio}` (减持/DE). `vol` = Σ change_vol (shares),
-> `amount` = Σ change_vol·avg_price (元; partial — avg_price ~71% covered), `ratio` = Σ change_ratio
-> (占流通 %), `events` = transaction count. Each is non-NaN ONLY on a day carrying that direction's
-> 高管 event (sparse), so the 果仁-style rolling signal **`高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)`**
-> (NaN-skipping window sum) is exact. Predictive use → `Ref(...,1)`. 大股东(C)/个人(P) splits are NOT
-> materialized — read the ledger for those.
+> `$holdertrade_mgr_de_{vol,amount,events,ratio}` (减持/DE). `vol` = Σ|change_vol| (shares),
+> `ratio` = Σ change_ratio (占流通 %), `events` = transaction count — all COMPLETE for the event rows.
+> **`amount` = Σ(|change_vol|·avg_price) over PRICED events only (元)**: `avg_price` is ~71% covered, so
+> if some events on a day lack `avg_price` the amount is a **lower-bound priced-event sum** (vol/ratio/events
+> stay complete); if ALL same-day directional events lack `avg_price`, amount is served as **NaN, not 0.0**
+> (`min_count=1`). Each field is non-NaN ONLY on a day carrying that direction's 高管 event (sparse), so the
+> 果仁-style rolling signal **`高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)`** (NaN-skipping window
+> sum) is exact. Predictive use → `Ref(...,1)`. 大股东(C)/个人(P) splits are NOT materialized — read the
+> ledger for those.
 
 | Column | English | Chinese |
 |--------|---------|---------|

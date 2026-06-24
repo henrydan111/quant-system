@@ -4,7 +4,8 @@ You are a senior reviewer for an A-share quantitative research system where RESE
 REPO (public — fetch any file to verify against the live code)
 https://github.com/henrydan111/quant-system   (branch: report-rc-registration)
 Raw file form: https://raw.githubusercontent.com/henrydan111/quant-system/report-rc-registration/<path>
-NOTE: the code diff below is LOCAL/uncommitted (the live link shows the PRE-change function for surrounding-code context). The embedded diff is authoritative.
+NOTE: the change IS PUSHED (commit bd9aa89) — fetch src/data_infra/pit_backend.py to read the live
+`_materialize_stk_holdertrade` (~line 2535) in full context. The embedded diff below is also authoritative.
 
 CONTEXT — read these to judge the change against the contract:
 - CLAUDE.md (hard invariants §3, PIT §3.2/§3.3, field-status governance §3.4, research integrity §7)
