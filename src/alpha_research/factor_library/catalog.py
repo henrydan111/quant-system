@@ -243,12 +243,15 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
                                          f" Ref($n_cashflow_act_sq_q0, 1) / {_opincome_q}, np.nan)")       # q_ocf_to_or
     catalog['earn_q_eps'] = ("If(Ref($total_share, 1) > 0,"
                              " Ref($n_income_attr_p_sq_q0, 1) / Ref($total_share, 1), np.nan)")            # q_eps (LEVEL; EP=÷price)
-    # 单季 扣非净利润 / 净利润 (earnings quality; vendor q_dtprofit_to_profit). $profit_dedt_sq_q0 is DERIVED
-    # (Phase-C, 2026-06-24) from the indicators CUMULATIVE profit_dedt via derive_single_quarter_value; the
-    # denominator is 净利润 = $n_income_sq_q0 (incl. minority — the vendor definition, NOT 利润总额/total_profit),
-    # guarded with Abs() since net income can be negative. coverage_tier=sub (主板 84.6% -> 北证 27.0%); draft-only.
-    catalog['qual_dtprofit_to_profit_q'] = ("If(Abs(Ref($n_income_sq_q0, 1)) > 0,"
-                                            " Ref($profit_dedt_sq_q0, 1) / Ref($n_income_sq_q0, 1), np.nan)")  # q_dtprofit_to_profit
+    # 单季 扣非归母净利润 / 归母净利润 (earnings quality; vendor q_dtprofit_to_profit). $profit_dedt_sq_q0 is
+    # DERIVED (Phase-C, 2026-06-24) from the indicators CUMULATIVE profit_dedt via derive_single_quarter_value.
+    # Denominator = 归母净利润 $n_income_attr_p_sq_q0 (NOT consolidated n_income, NOT 利润总额): a 254k-obs
+    # value-parity vs the vendor's OWN q_dtprofit_to_profit_q0 matched 归母 at 99.2% (med 0.000 pts) vs
+    # consolidated only 30% — accounting-consistent (扣非归母 ÷ 归母, both 归母-scope). GPT Plan-C Major-1 was
+    # directionally right (not 利润总额) but the build-phase probe corrected the variant to 归母 (rule #10).
+    # Abs()-guarded (net income can be negative). coverage_tier=sub (主板 84.6% -> 北证 27.0%); draft-only.
+    catalog['qual_dtprofit_to_profit_q'] = ("If(Abs(Ref($n_income_attr_p_sq_q0, 1)) > 0,"
+                                            " Ref($profit_dedt_sq_q0, 1) / Ref($n_income_attr_p_sq_q0, 1), np.nan)")  # q_dtprofit_to_profit
 
     # ═══════════════════════════════════════════════════════════════
     # CICC handbook replication batch (Phase D5, 2026-06-12) — 18 factors.
