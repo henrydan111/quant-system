@@ -186,3 +186,16 @@
     Read-only; no factor promotion off this path.
   permanent: true
   link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md
+
+- path: workspace/scripts/_holder_grid_probe.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    果仁 parity rung-5 holder-grid diagnostic (2026-06-25): reads raw
+    data/pit_ledger/holder_number to characterize its disclosure cadence (58.6%
+    quarter-end / 41.4% irregular) and test 报告期-grid vs consecutive-disclosure
+    conventions against 果仁's 股东数下降率. Inspecting the RAW disclosure-level rows
+    IS the diagnostic's purpose (the loader returns an aligned panel, not the raw
+    cadence under study). Read-only; no factor/serving path.
+  permanent: true
+  link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md

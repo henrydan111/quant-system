@@ -53,7 +53,25 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **RnDQGR%PY** | (研发费用单季−refq(,4))/refq(研发费用单季,4) | `($rd_exp_sq_q0 − $rd_exp_sq_q4) / $rd_exp_sq_q4` (lag 0) | ✅ 0.63% med (85% w/5%, sign 97.9%, n=67k) | 5 |
 | **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
 
-Legend: ✅ penny/structure-exact (residual = display/PIT-boundary) · ◑ structure confirmed, sub-detail residual.
+### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
+
+Validated at holding level (signal-date lag, scale-detect) for the first formal StrategyCandidate.
+
+| 果仁 indicator | 果仁 formula | local expression | status (parity, n) | rung |
+|---|---|---|---|---|
+| **RnDTTM%营业收入TTM** | TTM(研发费用)/TTM(营业收入) | `TTM($rd_exp_sq)/TTM($revenue_sq)` | ✅ penny-exact (3.7e-04 med, 93.8% w/1%, sign 100%, n=6.7k) | 6 |
+| **RND%Assets** | TTM(研发费用)/AvgQ(资产总计,4) | `TTM($rd_exp_sq)/mean($total_assets_q0..q3)` | ✅ penny-exact (4.6e-04 med, 94.0% w/1%, sign 100%, n=16.6k) | 6 |
+| **销售毛利率Q−销售毛利率** | 单季毛利率 − TTM毛利率 | `(rev_sq0−cost_sq0)/rev_sq0 − (TTMrev−TTMcost)/TTMrev` | ✅ penny-exact (5.5e-04 med, 89.7% w/1%, sign 98.2%, n=11.7k) | 6 |
+| **应收账款周转率** | TTM(营收)/(AvgQ(应收账款,4)+AvgQ(应收票据,4)−AvgQ(预收账款,4)) | `TTM($revenue_sq)/(avg4($accounts_receiv)+avg4($notes_receiv)−avg4($adv_receipts))` | ✅ penny-exact (3.2e-04 med, 92.4% w/1%, sign 99.6%, n=6.0k) | 6 |
+| **RoeCoreQ** | CoreProfitQ/归属母公司股东权益合计(单季) | `CoreProfitQ/$total_hldr_eqy_exc_min_int_q0` (q0=end is BEST; avg/begin worse) | ◑ rank-faithful (3.9% med, 59% w/5%, **sign 99.5%**); residual = core-profit/equity PIT-boundary, not chased (rank preserved) | 6 |
+| **HAVG(指标,1)** | 申万L1 行业截面均值 (`hAvg`=horizontal/group avg; 范围=1=一级行业) | `cs_mean($factor grouped by $sw2021_l1)` per date | ⊙ semantics RESOLVED (template `{0}<HAvg({0},{1})*{2}` 参数=指标,范围,倍数); reproducible, validate during build | 6 |
+| **扣非市盈率** (filter) | 总市值/扣非净利润TTM | `$total_mv/($dtprofit_to_profit×TTM($n_income_sq))` | ◑ 5.7% med, sign 99.7% — OK for coarse (0,60) gate; residual = dtp-ratio approx + price signal-day | 6 |
+
+**Omitted (documented, like rung-1's 退市风险):** `STDEVQ(RoeCoreQ,12)` / `STDEVQ(SalesQGr%PY,12)` need 12-quarter
+depth (provider materializes q0..q4 only → deeper-quarter materialization is a future build); `中性ROE`
+(果仁 neutralization, irreducible §5) is **inert** anyway (displays 0.0000 for 98.5% of #59 holdings).
+
+Legend: ✅ penny/structure-exact (residual = display/PIT-boundary) · ◑ structure confirmed, sub-detail residual · ⊙ semantics resolved, reproduction pending.
 
 ---
 
@@ -115,11 +133,15 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 | 研发费用 ($rd_exp) | ✅ validated (rung-5) | RnDQGR%PY (0.63% med) |
 | expense lines (管理/销售/财务费用 + 营业税金) | ✅ penny-exact (rung-5) | CoreProfitQ (med 0.0) |
 | 总股本 (share count) | ✅ validated (implicit) | 总市值 = close × total_share (both penny-exact) |
-| **股东数 (holder_number)** | ⚠ UNRESOLVED (rung-5) | data sane but coverage sparser than 果仁 grid; 股东数下降率 not reproduced (needs 报告期-grid resampling) |
+| **股东数 (holder_number)** | ✅ RESOLVED (2026-06-25) — DATA SOUND, NOT a materialization gap | 股东数下降率 = **`$holder_num_q1/$holder_num_q0 − 1`** (CONSECUTIVE-disclosure change, EXISTING fields) reproduces 果仁 at **0.24% med rel-err** on the non-zero subset (REF-depth sweep: depth-1 wins 0.24% ≫ depth-4 137%). The rung-5 "needs 报告期-grid resampling" diagnosis was **WRONG** (rule #10): QEND/ASOF 报告期-grid variants are WORSE (3.2× vs 1.37×); the failure was a **DEPTH error** (used `_q4` ≈ 4 disclosures, should be `_q1`). 果仁's factor is a **DISCLOSURE-EVENT signal**: non-zero only ~2 days after a new 股东数 disclosure (median 2d vs 53d for the zero rows), **92% zero between events** — near-inert (cf. #59 中性ROE, rung-4 振幅%成交额). No materializer/build warranted. Probe: [_holder_grid_probe.py](../../../scripts/_holder_grid_probe.py). |
 | **折旧摊销 (D&A)** | ◑ MATERIALIZED (cum only); single-q NaN by cadence | `$depr_fa_coga_dpba_cum_q0`/`$amort_intang_assets_cum_q0` ARE materialized (22.5% populated). `_sq_q0` is 0.91% non-NaN — NaN because D&A is disclosed only **semi-annually** (H1+FY cumulative, never Q1/Q3) so single-quarter differencing has no prior quarter. EBITDAQ/FCFQ single-q unreproducible **by reporting cadence**, NOT a materialization gap. `recp_disp_fiolta` (FCFQ disposal term) genuinely never fetched. |
 
 **rung-5 (2026-06-23)** closed 4 of the 6 OPEN paths (分红/研发/费用明细 validated, 总股本 implicit).
-Remaining: 股东数 (data present but factor needs 报告期-grid reconstruction). **折旧摊销 (D&A): CORRECTED
+**股东数: RESOLVED 2026-06-25** — ALL 6 OPEN paths now closed. The "needs 报告期-grid reconstruction"
+remaining-item was a MISDIAGNOSIS (rule #10): the data is sound; 股东数下降率 = consecutive-disclosure
+change `q1/q0−1` (existing fields, 0.24% med on the non-zero subset), a near-inert DISCLOSURE-EVENT factor
+(non-zero only ~2d post-disclosure, 92% zero). No 报告期 grid / no materializer needed (QEND/ASOF tested WORSE).
+**折旧摊销 (D&A): CORRECTED
 2026-06-23** — the earlier "not materialized" claim was a FALSE INFERENCE (from a 3-stock `notna().any()`
 probe). D&A cumulative IS materialized; the single-quarter is NaN by semi-annual disclosure cadence —
 no build fixes it (proven by the 茅台 cum-vs-sq trace + the 0.0091 vs 0.225 breadth fractions).
