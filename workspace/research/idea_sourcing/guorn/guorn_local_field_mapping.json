@@ -30,9 +30,7 @@
   "un_validatable": [
     {"guorn": "股价振幅%当日成交额10日", "local_expr": "MA( ((high-low)/prev_close)/$amount, 10 )", "reason": "果仁 displays 0.00 (true value ~2e-6 rounds to zero at 2 decimals); formula provably correct but parity meaningless"}
   ],
-  "unresolved": [
-    {"guorn": "股东数下降率", "local_expr": "$holder_num_q4/$holder_num_q0 - 1", "rung": 5, "parity": {"sign_match": 0.079, "median_relerr": 7.65}, "reason": "holder_num data SANE (correct magnitudes + PIT carry; early rows match 果仁) but provider disclosure coverage sparser/more irregular than 果仁's quarterly 股东数 grid -> _q4 reaches further back than 果仁 REF(股东数,4) (~8x change inflation). Needs 报告期-grid resampling. DATA present, factor NOT validated."}
-  ],
+  "unresolved": [],
   "doc_corrections": [
     {"doc": "guorn_aichat_indicator_defs.md", "indicator": "ILLIQ", "says": "Sum(|1日涨幅|/成交额(亿元),N)/N", "correct": "numerator = 股价振幅 (high-low)/prev_close, NOT |1日涨幅|"},
     {"doc": "indicator_reference_auto.md", "indicator": "BP", "says": "归属母公司股东权益合计/总市值", "correct": "field = total_hldr_eqy_EXC_min_int (parent), not inc_min_int (total)"},
@@ -42,10 +40,10 @@
     {"path": "分红/股息", "status": "validated", "via": "股息率TTM -> $dv_ttm (0.70% med)"},
     {"path": "研发费用($rd_exp)", "status": "validated", "via": "RnDQGR%PY (0.63% med)"},
     {"path": "expense_lines(管理/销售/财务费用+营业税金)", "status": "penny_exact", "via": "CoreProfitQ (med 0.0)"},
-    {"path": "总股本(share count)", "status": "validated_implicit", "via": "总市值 = close x total_share (both penny-exact)"}
+    {"path": "总股本(share count)", "status": "validated_implicit", "via": "总市值 = close x total_share (both penny-exact)"},
+    {"path": "股东数(holder_number)", "status": "validated_event_rows", "via": "股东数下降率 = $holder_num_q1/$holder_num_q0 - 1 (consecutive-disclosure change); provider-read 0.14% med / 93% sign on the non-zero EVENT subset (lag-0)", "note": "RESOLVED 2026-06-25: the rung-5 _q4 was a DEPTH error (depth-1 wins 0.24% >> depth-4 137%; 报告期-grid QEND/ASOF WORSE 3.2x -> NOT a grid/materialization gap). 果仁's factor is a near-inert DISCLOSURE-EVENT signal (non-zero ~2d post-disclosure, median 2d vs 53d; 92% zero); exact zero/event-window serving is a 果仁 convention (unreproduced) but the data path + value mapping are validated. _holder_grid_probe.py + _holder_provider_check.py"}
   ],
   "coverage_open": [
-    {"path": "股东数(holder_number)", "status": "unresolved", "note": "data sane but coverage sparser than 果仁 grid; 股东数下降率 needs 报告期-grid resampling (see unresolved[])"},
     {"path": "折旧摊销(D&A)", "status": "materialized_cum_only", "note": "CORRECTED 2026-06-23: depr_fa_coga_dpba/amort_intang_assets ARE materialized (cum_q0 22.5% populated, bins exist). single-quarter _sq_q0 is 0.91% non-NaN = NaN by SEMI-ANNUAL disclosure cadence (H1+FY cumulative only, never Q1/Q3), NOT a materialization gap. EBITDAQ/FCFQ single-q unreproducible by cadence + recp_disp_fiolta never fetched. Earlier not_materialized claim was a false inference from a 3-stock notna() probe."}
   ],
   "materialization_audit_2026_06_23": {

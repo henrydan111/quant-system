@@ -146,6 +146,22 @@ def main():
     for depth in (1, 2, 3, 4, 6, 8):
         print(f"  depth={depth}", _score(g_nz, lambda r, depth=depth: ratio_depth(led[r.q], r.date, 0, depth)))
 
+    # disclosure-recency split: WHY 果仁 is ~92% zero — it's a DISCLOSURE-EVENT convention (non-zero only
+    # just after a new 股东数 disclosure). zero rows sit far from a disclosure; non-zero rows right after one.
+    print("\n=== disclosure-recency split (median days since last visible disclosure) ===")
+
+    def _days_since(q, d):
+        e = led.get(q)
+        if e is None:
+            return np.nan
+        eff = e["_eff"].values
+        pos = int(np.searchsorted(eff, np.datetime64(d), side="right"))
+        return (np.datetime64(d) - eff[pos - 1]) / np.timedelta64(1, "D") if pos > 0 else np.nan
+
+    g2 = g.assign(_gap=[_days_since(r.q, r.date) for r in g.itertuples()])
+    for lab, sub in [("果仁 gf==0", g2[g2["gf"] == 0]), ("果仁 gf!=0", g2[g2["gf"] != 0])]:
+        print(f"  {lab}: n={len(sub)} median_days_since_disclosure={sub['_gap'].median():.0f}")
+
     print("\n=== FULL set (incl. 果仁 zeros) ===")
     for lag in (0, 1):
         for label, fn in [
