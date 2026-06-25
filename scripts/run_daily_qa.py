@@ -140,8 +140,17 @@ def _provider_manifest_check() -> dict:
             cal_lines = [line.strip() for line in handle if line.strip()]
         live_calendar_end = cal_lines[-1] if cal_lines else ""
 
-        # Cross-check against the calendar policy.
-        policy = load_calendar_policy(manifest.calendar_policy_id)
+        # Cross-check against the calendar policy. Resolve the policy dir from
+        # PROJECT_ROOT: the default CALENDAR_POLICY_DIR is the *relative*
+        # "config/calendar_policies", which is cwd-relative, so without this a
+        # governance gate that otherwise resolves correctly would false-fail
+        # whenever the script is launched from a working directory other than
+        # the repo root. This mirrors the PROJECT_ROOT-relative resolution in
+        # _resolve_qlib_dir_from_config above. (GPT cross-review Major, 2026-06-25.)
+        policy = load_calendar_policy(
+            manifest.calendar_policy_id,
+            root=PROJECT_ROOT / "config" / "calendar_policies",
+        )
 
         # PR 8a fix #3: daily QA must enforce the same semantics as the
         # formal-runtime validator. The pre-PR-8a behavior of

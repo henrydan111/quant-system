@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -203,6 +204,17 @@ class TestMedium1DailyQABehavioralInvocation:
             "storage:\n"
             f"  qlib_data_dir: \"{str(qlib_dir).replace(chr(92), '/')}\"\n",
             encoding="utf-8",
+        )
+        # _provider_manifest_check now resolves the calendar-policy dir from
+        # PROJECT_ROOT (GPT cross-review Major, 2026-06-25), so the temp
+        # project root must carry config/calendar_policies/ as well. Before the
+        # fix this test relied on the cwd-relative default leaking to the real
+        # repo — exactly the cwd-fragility the fix removes. Copy the committed
+        # policies in so the temp root is a self-contained governance context.
+        repo_root = Path(__file__).resolve().parents[2]
+        shutil.copytree(
+            repo_root / "config" / "calendar_policies",
+            tmp_path / "config" / "calendar_policies",
         )
         (qlib_dir / "calendars").mkdir(parents=True)
         (qlib_dir / "metadata").mkdir(parents=True)
