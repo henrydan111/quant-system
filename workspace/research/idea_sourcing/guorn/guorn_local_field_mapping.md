@@ -137,7 +137,7 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 | **折旧摊销 (D&A)** | ◑ MATERIALIZED (cum only); single-q NaN by cadence | `$depr_fa_coga_dpba_cum_q0`/`$amort_intang_assets_cum_q0` ARE materialized (22.5% populated). `_sq_q0` is 0.91% non-NaN — NaN because D&A is disclosed only **semi-annually** (H1+FY cumulative, never Q1/Q3) so single-quarter differencing has no prior quarter. EBITDAQ/FCFQ single-q unreproducible **by reporting cadence**, NOT a materialization gap. `recp_disp_fiolta` (FCFQ disposal term) genuinely never fetched. |
 
 **rung-5 (2026-06-23)** closed 4 of the 6 OPEN paths (分红/研发/费用明细 validated, 总股本 implicit).
-**股东数: RESOLVED 2026-06-25** — ALL 6 OPEN paths now closed. The "needs 报告期-grid reconstruction"
+**股东数: RESOLVED 2026-06-25** — all 6 rung-4 OPEN paths now RESOLVED: **5 validated** (分红/研发/费用明细/总股本/股东数) + **折旧摊销 (D&A) = materialized-cum-only** (single-quarter unreproducible by SEMI-ANNUAL disclosure cadence — proven NOT an actionable materialization gap; it remains in the JSON `coverage_open` tagged `materialized_cum_only`, not as a fixable gap). The "needs 报告期-grid reconstruction"
 remaining-item was a MISDIAGNOSIS (rule #10): the data is sound; 股东数下降率 = consecutive-disclosure
 change `q1/q0−1` (existing fields, 0.24% med on the non-zero subset), a near-inert DISCLOSURE-EVENT factor
 (non-zero only ~2d post-disclosure, 92% zero). No 报告期 grid / no materializer needed (QEND/ASOF tested WORSE).
