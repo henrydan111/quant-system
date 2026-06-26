@@ -203,16 +203,22 @@ EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4. Called from the same materi
 - **Determinism:** median/count/upgrade order-independent given the chronological pre-sort; org identity
   stabilized by `normalized_org_id` (M3); reuse the proven TTL sweep + income as-of.
 - **No-hedge:** vendor-approximation stated as fact + measured (§7). Rating window pre-registered (M4).
-- **Residual for R2:** is the field-level output canary (re-materialize + diff) the right restatement
-  guard for LEVEL/COUNT fields; is `(latest-disclosed-annual)+1` an acceptable approximate FY1 vs 朝阳永续.
+- **Residual (R4 = SHIP, resolved):** the build-bound STANDING fail-closed output canary (R3-M3/M4) is the
+  accepted restatement guard for the level/count fields; `(latest-disclosed-annual)+1` is the accepted
+  approximate FY1 (vendor-approximate by design, §0). GPT R4 verdict = SHIP — the single residual it named
+  (future report_rc restatements can demote fields → the canary MUST be wired fail-closed into
+  formal_validation, not just QA-reported) is exactly the R3-M4 design.
 
 ## 9. Phasing (M1 — registry refactor is the FIRST patch)
-P0 understanding (DONE). **P1 design → R1 REVISE → R2 REVISE → FOLDED (this v3) → R3.**
+P0 understanding (DONE). **P1 design → R1→R2→R3 REVISE → R4 = SHIP (this v4); §10 design gate PASSED.**
 **P2 (FIRST patch, M1) — explicit-registry refactor:** drop the `$report_rc__` prefix, list the 4
-eps_diffusion fields as explicit-approved + the 5 new fields as explicit-**quarantine** + the
-`$report_rc__future_probe` not-approved test. Closes the wildcard BEFORE any path can write a new bin.
+eps_diffusion fields as explicit-approved + the 5 new fields as **5 separate single-field quarantine
+entries** (R3-M2) + the `$report_rc__future_probe` not-approved + no-duplicate-field tests. Closes the
+wildcard BEFORE any path can write a new bin.
 **P3 — implement** `_materialize_report_rc_aggregates` + `normalized_org_id` + `RATING_CHANGE_WINDOW_OPEN_DAYS`
 + canary/truth-table/state-machine tests + the stale-doc updates (data_dictionary / data_tracker, m1) → GPT
-post-impl. **P4 — in-place additive publish** + provenance JSON / bound approval YAML + the STANDING output
-canary → per-field promote (ONLY 0-retroactive-drift fields). **P5 — reproduce** the 6 books (approximate,
-labeled) + the holding-level 评级机构数 vs 果仁 export.
+post-impl. **P4 — in-place additive publish** + provenance JSON / bound approval YAMLs + the STANDING output
+canary → BINARY per-field promote (ONLY 0-retroactive-drift fields) **+ formal-gate canary tests (R4-m2):
+an otherwise-approved consensus field RESOLVES FAIL at `formal_validation` when its canary JSON is missing /
+provider-build-mismatched / failed, and PASSES only when clean + current.** **P5 — reproduce** the 6 books
+(approximate, labeled) + the holding-level 评级机构数 vs 果仁 export.
