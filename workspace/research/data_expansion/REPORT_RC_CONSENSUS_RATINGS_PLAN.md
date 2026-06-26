@@ -27,6 +27,29 @@
 - **m2 (in-place publish evidence):** → materialization provenance JSON (bins/counts/hashes/coverage) +
   approval YAML bound to live `provider_build_id`/`calendar_policy_id` + daily-QA evidence check.
 
+## GPT R2 REVISE → folds (2026-06-27) — 0 Blocker, 4 Major + 2 Minor
+- **M1 (registry fix ordered too late):** the LIVE registry still prefix-approves `$report_rc__*` NOW.
+  → **phasing reordered (§9):** the explicit-registry refactor (drop prefix + 4 explicit approved + 5
+  quarantine + future_probe test) is the **FIRST patch**, landing before/with the materializer hook — no
+  build/publish path can create a new `$report_rc__*` bin while the wildcard is approved.
+- **M2 (FY1 TTL silently expires between events):** the carry-forward served a forecast even after it aged
+  past 120 open days with no intervening event. → **add TTL-EXPIRY events** (`effective_pos + TTL + 1` per
+  forecast) to the recompute set; recompute at forecast / annual-roll / EXPIRY; truth-table test "valid at
+  p, expires before the next event → NaN" (§3).
+- **M3 (canary bar too discretionary):** "bounded drift → assess" is too soft. → **pre-registered HARD
+  rules + STANDING canary** (§6/§7): any retroactive output drift on dates ≤ snapshot-1's calendar end →
+  the field stays quarantined/date-restricted; ANY `rating_up/dn` drift → FAIL; the canary re-runs on every
+  report_rc mutation and can DEMOTE a promoted field.
+- **M4 (unknown rating must CLEAR direction state):** an old upgrade wrongly stayed "current" after a newer
+  unmappable report. → **redefined state machine (§4):** every later org report supersedes — finite-changed
+  → up/dn (TTL); finite-unchanged → keep prior change only to its ORIGINAL TTL; unknown-real-label →
+  coverage only + CLEARS up/dn from that date; no-rating → clears + not coverage. Tests: upgrade→unknown,
+  upgrade→no-rating, upgrade→downgrade.
+- **m1 (stale docs):** update data_dictionary.md + data_tracker.md report_rc entries (create_time/+2 anchor
+  + the new quarantine fields) before publish.
+- **m2 (org collision):** drop `(香港)` from the suffix-strip (it distinguishes the HK research arm) + a
+  top-collision audit (raw names per normalized id, counts, representative stocks) + a denylist/alias map.
+
 ## 0. The hard caveat (set expectations first)
 **report_rc (Tushare 卖方研报 aggregation) is a DIFFERENT VENDOR than 果仁's 朝阳永续 (zyyx) consensus.**
 These YELLOW reproductions will be **APPROXIMATE** (different analyst panel, consensus method, rating
@@ -67,21 +90,40 @@ quarterly forecasts ignored (#14 净利润断层's 预期净利润Q DEFERRED —
 **Latest-per-org missing-value rule (m1):** the org's LATEST active FY1 forecast wins; if that row's
 `np`/`op_rt` is missing, the org is EXCLUDED from that metric's median at that recompute (no fallback to an
 older finite row — a newer visible report supersedes).
+**Recompute event set (M2 — TTL expiry):** the consensus is recomputed at {annual-forecast effective
+positions} ∪ {income annual-roll positions} ∪ **{per-forecast TTL-EXPIRY positions `effective_pos + TTL +
+1`}**, and carried only between consecutive events. So a forecast that ages past 120 open days with NO
+intervening event correctly drops out of the active set at its expiry (the served level recomputes from the
+remaining active forecasts, or → NaN if none) — it is NEVER served stale.
 **Truth-table tests (M2):** (1) pre-annual-disclosure (FY1 = current year), (2) on the annual effective
 date (roll), (3) post-roll with NO new FY1 forecast (NaN, not stale carry), (4) no income history
-(fallback), (5) multiple active Q4 years present (pick FY1 only).
+(fallback), (5) multiple active Q4 years present (pick FY1 only), (6) a single forecast valid at p with NO
+forecast/income event before its expiry → the level goes NaN at `effective_pos + TTL + 1`.
 
 ## 4. Rating ordinal + org normalization (M3, M4)
 `RATING_ORDINAL_CN/EN` → 5-pt (committed + validated, 93.4% of 793k rows); `RATING_NON_LABELS` (无/blank)
-→ NaN ordinal AND excluded from `n_active_orgs`; unknown label → NaN ordinal but counts toward coverage
+→ NaN ordinal AND excluded from `n_active_orgs`; unknown real label → NaN ordinal but counts toward coverage
 (`is_real_rating`). **`normalized_org_id(org)`** (NEW, M3): `re.sub(r"\s+"," ",NFKC(org).strip())` then strip
-trailing legal suffixes (证券股份有限公司 / 股份有限公司 / 有限责任公司 / 有限公司 / (香港)) so
-"中信证券股份有限公司" ≡ "中信证券" but "中信建投证券" stays distinct. Used for `n_active_orgs`,
-`rating_up/dn`, AND the FY1 latest-per-org consensus. **Rating-change state (no double-count, M3/R1-Q4):**
-per org, ordinal sequence (unknown skipped); a CHANGE = ordinal ≠ prior finite ordinal; the org's CURRENT
-direction-state = its LATEST change, held `RATING_CHANGE_WINDOW_OPEN_DAYS` open days OR until its next
-change — so an org that upgraded-then-downgraded counts ONLY in dn (never both). + alias audit on
-high-frequency org names; holding-level compare vs 果仁's exported 评级机构数.
+trailing legal suffixes (证券股份有限公司 / 股份有限公司 / 有限责任公司 / 有限公司) — **NOT `(香港)`** (it
+distinguishes the HK research arm; m2) — so "中信证券股份有限公司" ≡ "中信证券" but "中信建投证券" /
+"中信证券(香港)" stay distinct. Used for `n_active_orgs`, `rating_up/dn`, AND the FY1 latest-per-org consensus.
+**Pre-publish collision audit (m2):** top normalized-id collisions (raw names per id + row counts +
+representative stocks) → a denylist/alias map for any over-merge.
+
+**Rating direction-state machine (M4 — every later org report supersedes).** Per `normalized_org_id`, walk
+reports chronologically with `(state∈{UP,DN,NONE}, expiry, last_finite_ord)`; each report sets the state for
+`[its pos, min(expiry, next-report pos))`:
+- **finite ordinal `o`**: first finite → NONE (sets baseline); `o > last_finite_ord` → UP, expiry=pos+window;
+  `o < last_finite_ord` → DN, expiry=pos+window; `o == last_finite_ord` (reaffirm) → keep the PRIOR state to
+  its ORIGINAL expiry (no extension); then `last_finite_ord = o`.
+- **unknown real label** (NaN ordinal, `is_real_rating`): state → NONE (CLEARS up/dn from this date);
+  coverage = yes; `last_finite_ord` unchanged.
+- **explicit no-rating** (`无`/blank): state → NONE (clears); NOT coverage.
+`rating_up[d]` = # distinct orgs in UP state on d (baseline 0 during coverage, NaN before); `rating_dn`
+likewise. An org's state ALWAYS ends at its next report (ANY kind) or its expiry → an upgraded-then-
+{downgraded / unknown / no-rating} org is never double-counted. Tests: upgrade→unknown (clears),
+upgrade→no-rating (clears), upgrade→downgrade (flips to dn), upgrade→reaffirm (holds to original TTL).
+Holding-level compare vs 果仁's exported 评级机构数.
 
 ## 5. Materializer `_materialize_report_rc_aggregates` (reuse ALL infra)
 Reuse: ledger read + target-code filter, `normalize_date_series`, the calendar-position map, the
@@ -109,10 +151,15 @@ EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4. Called from the same materi
   acceptable. Predictive use MUST `Ref(...,1)` + gate non-null/recency (sub-universe, sparse).
 
 ## 7. Validation (M1 output canary + the parity leg)
-- **Field-level restatement canary (M1, the load-bearing gate):** snapshot the 5 materialized bins now;
-  re-materialize from a fresh report_rc pull ≥1 week later; diff per (code, date) for retroactive drift
-  (the `report_rc_backfill_canary` pattern but on the OUTPUT fields). Classify: 0 drift → promote; bounded
-  level drift → assess; rating_up/dn change-state drift → keep quarantine. NO field promoted before this.
+- **Field-level restatement canary (M1/M3 — PRE-REGISTERED HARD RULES, STANDING; the load-bearing gate):**
+  snapshot the 5 materialized bins now; re-materialize from a fresh report_rc pull ≥1 week later; diff per
+  (code, date) for retroactive drift (the `report_rc_backfill_canary` pattern, on the OUTPUT bins).
+  **Pass/fail FIXED before snapshot-1 (no post-hoc "assess"):** (a) ANY retroactive drift on a date ≤
+  snapshot-1's provider-calendar end → that field STAYS quarantined (or is date-restricted to the
+  drift-free tail); (b) ANY `rating_up`/`rating_dn` drift → FAIL (breadth-family rule); (c) a field is
+  promotable ONLY with 0 retroactive drift over the window. **STANDING, not one-time:** re-runs on every
+  report_rc ledger/provider mutation and can DEMOTE an already-promoted field back to quarantine. NO field
+  promoted before the first clean run.
 - **Parity leg (approximate, labeled):** reproduce #16/#17/#18/#8/#9 vs their 果仁 xlsx via `D.features`
   (`Ref(...,1)`); report selection overlap + return; holding-level 评级机构数 vs 果仁's exported value
   (rung-4 method) to measure the vendor gap directly.
@@ -129,8 +176,13 @@ EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4. Called from the same materi
 - **Residual for R2:** is the field-level output canary (re-materialize + diff) the right restatement
   guard for LEVEL/COUNT fields; is `(latest-disclosed-annual)+1` an acceptable approximate FY1 vs 朝阳永续.
 
-## 9. Phasing
-P0 understanding (DONE). **P1 design → self-review → GPT R1 REVISE → FOLDED (this v2) → R2.** P2 implement
-`_materialize_report_rc_aggregates` + `normalized_org_id` + `RATING_CHANGE_WINDOW_OPEN_DAYS` + canary/truth-
-table tests → GPT post-impl. P3 explicit-registry refactor + in-place publish + quarantine register +
-output canary → per-field promote. P4 reproduce the 6 books (approximate, labeled).
+## 9. Phasing (M1 — registry refactor is the FIRST patch)
+P0 understanding (DONE). **P1 design → R1 REVISE → R2 REVISE → FOLDED (this v3) → R3.**
+**P2 (FIRST patch, M1) — explicit-registry refactor:** drop the `$report_rc__` prefix, list the 4
+eps_diffusion fields as explicit-approved + the 5 new fields as explicit-**quarantine** + the
+`$report_rc__future_probe` not-approved test. Closes the wildcard BEFORE any path can write a new bin.
+**P3 — implement** `_materialize_report_rc_aggregates` + `normalized_org_id` + `RATING_CHANGE_WINDOW_OPEN_DAYS`
++ canary/truth-table/state-machine tests + the stale-doc updates (data_dictionary / data_tracker, m1) → GPT
+post-impl. **P4 — in-place additive publish** + provenance JSON / bound approval YAML + the STANDING output
+canary → per-field promote (ONLY 0-retroactive-drift fields). **P5 — reproduce** the 6 books (approximate,
+labeled) + the holding-level 评级机构数 vs 果仁 export.
