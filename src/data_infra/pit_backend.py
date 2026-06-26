@@ -222,6 +222,34 @@ def is_real_rating(rating) -> bool:
         return False
     s = str(rating).strip()
     return bool(s) and s not in RATING_NON_LABELS and s.lower() not in RATING_NON_LABELS
+
+
+# PRE-REGISTERED window for 评级调高家数 (report_rc rating_up/dn); a DIFFERENT window is a NEW field,
+# never a post-hoc 30/60/90 comparison (GPT §10 R3-M4). Equal to the forecast TTL today, but a distinct
+# named constant so the modelling choice is explicit + auditable.
+RATING_CHANGE_WINDOW_OPEN_DAYS = 120
+# Trailing legal-entity suffixes stripped by normalized_org_id. NOTE: NOT "证券股份..." — 证券 is part of
+# the firm name (中信证券 ≠ 中信), so only the pure legal tail is removed (中信证券股份有限公司 → 中信证券).
+_ORG_LEGAL_SUFFIXES = ("股份有限公司", "有限责任公司", "有限公司")
+
+
+def normalized_org_id(org) -> str:
+    """Stable broker-ORG identity for report_rc rating/consensus aggregates (GPT §10 R3-M3).
+
+    NFKC + trim + whitespace-collapse, then strip ONE trailing legal-entity suffix so alias/suffix
+    variants merge (中信证券股份有限公司 ≡ 中信证券) — but NOT ``(香港)`` (the HK research arm is a
+    distinct entity, R3-m2). A pre-publish collision audit + denylist catches any over-merge.
+    Empty / NaN → "" (the caller drops it)."""
+    import re
+    import unicodedata
+    if org is None or (isinstance(org, float) and pd.isna(org)):
+        return ""
+    s = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(org)).strip())
+    for suf in _ORG_LEGAL_SUFFIXES:
+        if s.endswith(suf) and len(s) > len(suf):
+            s = s[: -len(suf)]
+            break
+    return s.strip()
 # Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
 # rows whose create_time is absent OR a bulk-backfill stamp (see below), so a row
 # dated T is not exposed at next_open(T). Fixed + non-tunable (data-infra constant,
@@ -2890,6 +2918,227 @@ class StagedQlibBackendBuilder:
                 written.append(field_name)
         return sorted(set(written))
 
+    def _materialize_report_rc_aggregates(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """report_rc analyst-CONSENSUS levels + RATING aggregates (果仁 预期净利润/营收 + 评级机构数/调高家数).
+
+        Per (qlib_code, day), written DIRECTLY in the ``report_rc__`` namespace (NOT via
+        EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4 eps_diffusion primitives:
+          - ``report_rc__np_fy1`` / ``__op_rt_fy1``: MEDIAN over ``normalized_org_id`` of each org's LATEST
+            active forecast of net profit / revenue (万元) for FY1, among ANNUAL (quarter "YYYYQ4") forecasts.
+            FY1 = (latest income-ANNUAL fiscal year disclosed as-of the day) + 1 (income ledger
+            effective_date, STRICT PIT — an annual disclosed AFTER the day does NOT count). Recomputed at
+            forecast / income-roll / TTL-EXPIRY events, carried between (果仁 snapshot); NaN before first
+            computable / when no FY1 forecast is active (NEVER carried across an annual roll).
+          - ``report_rc__n_active_orgs``: # distinct ``normalized_org_id`` with a REAL (non-'无') rating
+            active within the TTL. NaN before first coverage.
+          - ``report_rc__rating_up`` / ``__rating_dn``: # distinct orgs whose CURRENT direction-state
+            (latest rating-change, supersede-on-EVERY-report) is an upgrade / downgrade, within
+            ``RATING_CHANGE_WINDOW_OPEN_DAYS``. Baseline 0 during rating coverage, NaN before.
+
+        TTL active window: ``0 <= p - effective_pos <= TTL`` (covers e..e+TTL, IDENTICAL to the existing
+        ``_materialize_report_rc_consensus`` sweep). report_rc is a DIFFERENT VENDOR than 果仁's 朝阳永续 ->
+        APPROXIMATE consensus, NOT bit-parity. PIT: reads ledger effective_date only (already create_time/+2
+        anchored); FY1 income test strict as-of d. Sub-universe (analyst-covered). The 5 fields are
+        QUARANTINE until the standing output canary passes (field_status.yaml). Predictive use MUST Ref(,1).
+        """
+        rc_path = self.ledger_path("report_rc")
+        if not os.path.exists(rc_path):
+            return []
+        fields = self._apply_field_filter([
+            "report_rc__np_fy1", "report_rc__op_rt_fy1",
+            "report_rc__n_active_orgs", "report_rc__rating_up", "report_rc__rating_dn",
+        ])
+        if not fields:
+            return []
+        rc = pd.read_parquet(rc_path)
+        if rc.empty:
+            return []
+        for _req in ("quarter", "rating", "np"):
+            if _req not in rc.columns:
+                logger.warning("report_rc aggregates: %r column absent — failing closed (no fields)", _req)
+                return []
+        target_codes = set(target_dirs)
+        if target_codes:
+            rc = rc[rc["qlib_code"].isin(target_codes)].copy()
+        if rc.empty:
+            return []
+        rc["effective_date"] = normalize_date_series(rc["effective_date"])
+        rc = rc.dropna(subset=["effective_date"]).copy()
+        rc["np"] = pd.to_numeric(rc.get("np"), errors="coerce")
+        rc["op_rt"] = pd.to_numeric(rc.get("op_rt"), errors="coerce")
+        rc["_org"] = (rc["org_name"].map(normalized_org_id) if "org_name" in rc.columns
+                      else pd.Series("", index=rc.index))
+        rc = rc[rc["_org"].astype(str).str.len() > 0].copy()
+        if rc.empty:
+            return []
+        rc["_ord"] = rc["rating"].map(normalize_rating_to_ordinal)
+        rc["_real"] = rc["rating"].map(is_real_rating)
+        _q = rc["quarter"].astype(str).str.strip()
+        rc["_fy"] = pd.to_numeric(_q.str[:4], errors="coerce")
+        rc["_annual"] = _q.str[-2:].str.upper().eq("Q4")
+        for _c in ("disclosure_date", "report_date", "create_time"):
+            if _c in rc.columns:
+                rc[_c] = normalize_date_series(rc[_c])
+        _sort = [c for c in ("qlib_code", "_org", "effective_date", "disclosure_date",
+                             "report_date", "create_time") if c in rc.columns]
+        rc = rc.sort_values(_sort, kind="mergesort")
+        rc_by = {k: g for k, g in rc.groupby("qlib_code")}
+
+        # income ANNUAL disclosure (end_date == YYYY-12-31) -> earliest effective per fiscal year (FY1 roll)
+        inc_annual_by: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        inc_path = self.ledger_path("income")
+        if inc_path and os.path.exists(inc_path):
+            inc = pd.read_parquet(inc_path, columns=["qlib_code", "end_date", "effective_date"])
+            if target_codes:
+                inc = inc[inc["qlib_code"].isin(target_codes)]
+            inc["end_date"] = normalize_date_series(inc["end_date"])
+            inc["effective_date"] = normalize_date_series(inc["effective_date"])
+            inc = inc.dropna(subset=["end_date", "effective_date"])
+            inc = inc[inc["end_date"].dt.month.eq(12) & inc["end_date"].dt.day.eq(31)]
+            for code, gg in inc.groupby("qlib_code"):
+                fy_eff = gg.groupby(gg["end_date"].dt.year)["effective_date"].min().sort_index()
+                inc_annual_by[code] = (fy_eff.index.to_numpy().astype(int),
+                                       fy_eff.values.astype("datetime64[ns]"))
+
+        cal_arr = calendar.values.astype("datetime64[ns]")
+        n_cal = len(calendar)
+        ttl = REPORT_RC_ACTIVE_TTL_OPEN_DAYS
+        rwin = RATING_CHANGE_WINDOW_OPEN_DAYS
+        c0, cN = cal_arr[0], cal_arr[-1]
+
+        def _pos(ts64) -> int:
+            return int(np.searchsorted(cal_arr, ts64, side="left"))
+
+        def _org_intervals_count(intervals_by_org: dict) -> np.ndarray:
+            """Count DISTINCT orgs live per day. intervals_by_org: {org: [(a,b), ...]} half-open [a,b);
+            an org's overlapping intervals are merged so it is counted once."""
+            diff = np.zeros(n_cal + 1, dtype=np.float64)
+            for ivs in intervals_by_org.values():
+                merged: list[list[int]] = []
+                for a, b in sorted(ivs):
+                    if a >= b:
+                        continue
+                    if merged and a <= merged[-1][1]:
+                        merged[-1][1] = max(merged[-1][1], b)
+                    else:
+                        merged.append([a, b])
+                for a, b in merged:
+                    diff[a] += 1.0
+                    diff[min(b, n_cal)] -= 1.0
+            return np.cumsum(diff[:n_cal]).astype(np.float32)
+
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize report_rc aggregates", unit="symbol", leave=False,
+        ):
+            g = rc_by.get(qlib_code)
+            if g is None or g.empty:
+                continue
+            arrays = {f: np.full(n_cal, np.nan, dtype=np.float32) for f in (
+                "report_rc__np_fy1", "report_rc__op_rt_fy1", "report_rc__n_active_orgs",
+                "report_rc__rating_up", "report_rc__rating_dn")}
+
+            # ---- (B)+(C) unified per-org walk: EVERY later report supersedes the org's prior state ----
+            #   coverage  = the org's LATEST report (within TTL) carries a REAL rating (a '无'/blank report
+            #               supersedes -> ends coverage; M4 "no-rating excluded from coverage");
+            #   direction = UP/DN held RATING_CHANGE window, cut by the next report (any kind).
+            cov_ivs: dict = {}
+            up_ivs: dict = {}
+            dn_ivs: dict = {}
+            cov_first = n_cal
+            for org, og in g.groupby("_org"):
+                last_finite = float("nan")
+                recs: list[tuple[int, bool, int, int]] = []   # (pos, real, state{-1,0,1}, rating_expiry)
+                for e, o, rl in zip(og["effective_date"].values, og["_ord"].values, og["_real"].values):
+                    e64 = np.datetime64(e)
+                    if not (c0 <= e64 <= cN):
+                        if rl and np.isfinite(o):
+                            last_finite = float(o)
+                        continue
+                    p = _pos(e64)
+                    if (not rl) or (not np.isfinite(o)):
+                        st, exp_r = 0, p                                  # no-rating / unknown: CLEAR direction
+                    elif np.isnan(last_finite):
+                        st, exp_r = 0, p                                  # first finite: baseline, NONE
+                    elif o > last_finite:
+                        st, exp_r = 1, min(p + rwin + 1, n_cal)           # UPGRADE
+                    elif o < last_finite:
+                        st, exp_r = -1, min(p + rwin + 1, n_cal)          # DOWNGRADE
+                    else:                                                # reaffirm: hold PRIOR state to its expiry
+                        st, exp_r = (recs[-1][2], recs[-1][3]) if recs else (0, p)
+                    recs.append((p, bool(rl), st, exp_r))
+                    if rl and np.isfinite(o):
+                        last_finite = float(o)
+                for i, (p, real, st, exp_r) in enumerate(recs):
+                    nxt = recs[i + 1][0] if i + 1 < len(recs) else n_cal   # superseded by the next report
+                    if real:
+                        cend = min(p + ttl + 1, nxt)                      # covered e..e+ttl, cut at next report
+                        if cend > p:
+                            cov_ivs.setdefault(org, []).append((p, cend))
+                            cov_first = min(cov_first, p)
+                    if st != 0:
+                        rend = min(exp_r, nxt)
+                        if rend > p:
+                            (up_ivs if st == 1 else dn_ivs).setdefault(org, []).append((p, rend))
+            if cov_first < n_cal:
+                n_active = _org_intervals_count(cov_ivs); n_active[:cov_first] = np.nan
+                arrays["report_rc__n_active_orgs"] = n_active
+                up_cnt = _org_intervals_count(up_ivs); up_cnt[:cov_first] = np.nan   # 0 baseline during coverage
+                arrays["report_rc__rating_up"] = up_cnt
+                dn_cnt = _org_intervals_count(dn_ivs); dn_cnt[:cov_first] = np.nan
+                arrays["report_rc__rating_dn"] = dn_cnt
+
+            # ---- (A) np_fy1 / op_rt_fy1: FY1 = (latest disclosed annual FY)+1, event-driven ----
+            ann = g[g["_annual"] & g["_fy"].notna()]
+            if not ann.empty:
+                a_fy = ann["_fy"].to_numpy().astype(int)
+                a_pos = np.array([_pos(np.datetime64(e)) for e in ann["effective_date"].values])
+                a_org = ann["_org"].to_numpy()
+                a_np = ann["np"].to_numpy(dtype="float64")
+                a_op = ann["op_rt"].to_numpy(dtype="float64")
+                fys_tab, effs_tab = inc_annual_by.get(qlib_code, (None, None))
+
+                def _fy1(asof) -> int:
+                    if fys_tab is not None:
+                        k = int(np.searchsorted(effs_tab, asof, side="right"))
+                        if k > 0:
+                            return int(fys_tab[k - 1]) + 1
+                    return int(pd.Timestamp(asof).year)
+
+                ev = set(int(p) for p in a_pos if 0 <= p < n_cal)
+                ev |= set(int(p + ttl + 1) for p in a_pos if 0 <= p + ttl + 1 < n_cal)   # TTL-expiry (M2)
+                if effs_tab is not None:
+                    ev |= set(_pos(e) for e in effs_tab if c0 <= e <= cN)
+                ev = sorted(e for e in ev if 0 <= e < n_cal)
+                for i, p in enumerate(ev):
+                    fy1 = _fy1(cal_arr[p])
+                    mask = (a_fy == fy1) & (a_pos <= p) & (a_pos >= p - ttl)   # 0 <= p - e <= ttl
+                    p1 = ev[i + 1] if i + 1 < len(ev) else n_cal
+                    if not mask.any():
+                        continue
+                    last_np: dict = {}
+                    last_op: dict = {}
+                    for o2, vn, vo in zip(a_org[mask], a_np[mask], a_op[mask]):
+                        last_np[o2] = vn   # chronological order -> latest-per-org wins
+                        last_op[o2] = vo
+                    np_vals = [v for v in last_np.values() if np.isfinite(v)]
+                    op_vals = [v for v in last_op.values() if np.isfinite(v)]
+                    if np_vals:
+                        arrays["report_rc__np_fy1"][p:p1] = float(np.median(np_vals))
+                    if op_vals:
+                        arrays["report_rc__op_rt_fy1"][p:p1] = float(np.median(op_vals))
+
+            for f in fields:
+                if np.isfinite(arrays[f]).any():
+                    self._write_feature_series(feature_dir, f, arrays[f])
+                    written.append(f)
+        return sorted(set(written))
+
     def _materialize_forecast_growth(
         self,
         calendar: pd.DatetimeIndex,
@@ -3707,6 +3956,10 @@ class StagedQlibBackendBuilder:
             # revision-direction primitives + active-analyst state (P1 subset).
             # Writes report_rc__* fields directly (NOT via the event-like prefix map).
             written["report_rc"] = self._materialize_report_rc_consensus(calendar, target_dirs)
+            # + CONSENSUS levels + RATING aggregates (np_fy1/op_rt_fy1/n_active_orgs/rating_up/rating_dn;
+            #   QUARANTINE until the standing output canary passes — field_status.yaml report_rc_* entries).
+            written["report_rc"] = sorted(set(written["report_rc"])
+                                          | set(self._materialize_report_rc_aggregates(calendar, target_dirs)))
         if "dividends" in active_datasets and os.path.exists(self.ledger_path("dividends")):
             written["dividends"] = self._materialize_dividend_compat(calendar, target_dirs)
         if ({"income", "balancesheet"} <= active_datasets
