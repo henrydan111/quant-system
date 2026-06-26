@@ -67,9 +67,17 @@ Validated at holding level (signal-date lag, scale-detect) for the first formal 
 | **HAVG(指标,1)** | 申万L1 行业截面均值 (`hAvg`=horizontal/group avg; 范围=1=一级行业) | `cs_mean($factor grouped by $sw2021_l1)` per date | ⊙ semantics RESOLVED (template `{0}<HAvg({0},{1})*{2}` 参数=指标,范围,倍数); reproducible, validate during build | 6 |
 | **扣非市盈率** (filter) | 总市值/扣非净利润TTM | `$total_mv/($dtprofit_to_profit×TTM($n_income_sq))` | ◑ 5.7% med, sign 99.7% — OK for coarse (0,60) gate; residual = dtp-ratio approx + price signal-day | 6 |
 
-**Omitted (documented, like rung-1's 退市风险):** `STDEVQ(RoeCoreQ,12)` / `STDEVQ(SalesQGr%PY,12)` need 12-quarter
-depth (provider materializes q0..q4 only → deeper-quarter materialization is a future build); `中性ROE`
-(果仁 neutralization, irreducible §5) is **inert** anyway (displays 0.0000 for 98.5% of #59 holdings).
+**Stability factors `STDEVQ(RoeCoreQ,12)` / `STDEVQ(SalesQGr%PY,12)` — VALIDATED 2026-06-25 (scoped deep-slot
+materialization).** Need 12-quarter depth (live provider has q0..q4 only). Built a SCOPED slot_depth=16 staged
+provider (7 fields × 4817 universe via `--touched-symbols`+`field_filter`, ~182GB transient, deleted;
+`_build_deepslot_scoped.py` + `guorn_parity_rung6_quality59.py build_stability`) → both computed (RoeCoreQ:
+`CoreProfit(t)/equity(t)`, SalesGr: `(rev[t]−rev[t+4])/|rev[t]|`, t=0..11, stdev ≥8/12, ~72% cov). **DECISIVE:
+the faithful 11-factor composite lifts #59 overlap 21.6%→35.9% (+14.3pp) AND converges the backtest (annual
++25.3→+21.4% vs 果仁 +22.6%; vol 27.1→25.7% vs 26.7%; Sharpe 0.82→0.73 vs 0.69) — the 2 STDEVQ were the dominant
+parity-gap cause, PROVEN.** NON-FORMAL (staged provider deleted; a formal book needs them in the LIVE provider +
+registered). `中性ROE` stays omitted — **inert** (0.0000 for 98.5% of #59 holdings), irreducible §5. ⚠ ALWAYS
+scope a slot_depth build (`--touched-symbols`+`field_filter`) — the unscoped first try hit 1TB (memory
+`feedback_provider_build_disk_hazard`).
 
 Legend: ✅ penny/structure-exact (residual = display/PIT-boundary) · ◑ structure confirmed, sub-detail residual · ⊙ semantics resolved, reproduction pending.
 

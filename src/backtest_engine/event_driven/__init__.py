@@ -280,7 +280,8 @@ class EventDrivenBacktester:
             require_provider_manifest: bool = False,
             run_mode: str | None = None,
             execution_profile: str | None = None,
-            override_reason: str | None = None) -> BacktestResult:
+            override_reason: str | None = None,
+            hold_on_limit_up: bool = False) -> BacktestResult:
         """Run a backtest with the given strategy.
 
         Args:
@@ -397,6 +398,12 @@ class EventDrivenBacktester:
             if volume_limit is None:
                 volume_limit = 0.25
 
+        # GPT R1 P1: hold_on_limit_up (果仁 不卖条件 涨停不卖) is a NON-profiled execution rule that changes
+        # SELL behavior. Track it as an explicit override so it is provenance-stamped (manual_override /
+        # override_diff below) and caught by the formal override-reason gate — never silently enabled.
+        if hold_on_limit_up:
+            override_diff_record["hold_on_limit_up"] = True
+
         # PR 8 fix #1: SINGLE is_formal computation considering BOTH run_mode
         # and profile.allowed_for_formal. Used uniformly below for preload
         # condition, strict preload, require_preloaded, and provider-manifest
@@ -404,6 +411,16 @@ class EventDrivenBacktester:
         mode_is_formal = run_mode in FORMAL_RUN_MODES if run_mode else False
         profile_is_formal = bool(profile_obj and profile_obj.allowed_for_formal)
         is_formal = mode_is_formal or profile_is_formal
+
+        # GPT R1 P1: a formal run must JUSTIFY hold_on_limit_up explicitly. This dedicated guard fires for
+        # BOTH profile-formal AND run_mode-formal (the generic override gate below only fires when a profile
+        # is present, so it would miss a run_mode-formal run with no profile).
+        if is_formal and hold_on_limit_up and not override_reason:
+            raise OverrideRequiresReasonError(
+                "Formal run enabled hold_on_limit_up=True (果仁 涨停不卖 — a non-profiled execution rule that "
+                "changes sell behavior) without override_reason. Pass override_reason='...' to document the "
+                "deliberate deviation, or disable it for formal runs."
+            )
 
         # Formal runs reject overrides unless override_reason is supplied.
         if profile_obj is not None and is_formal and override_diff_record and not override_reason:
@@ -576,6 +593,10 @@ class EventDrivenBacktester:
             fill_mode=fill_mode,
             require_preloaded=effective_require_preloaded,
         )
+        # 果仁 不卖条件 "调仓日交易时涨停" (hold limit-up winners): opt-in fill-step rule. Default OFF
+        # → zero impact on existing/formal runs; does NOT touch the §3.3 can_buy/can_sell limit GATE.
+        # NON-FORMAL research feature (果仁 parity); GPT §10 review required before any formal/load-bearing use.
+        engine._hold_on_limit_up = bool(hold_on_limit_up)
 
         # PR 8b: provider manifest + calendar validation moved above (before
         # feeder + preload). provider_build_id is already populated.
@@ -611,10 +632,14 @@ class EventDrivenBacktester:
         }
         if profile_obj is not None:
             provenance_kwargs.update(profile_obj.to_provenance_dict())
-            if override_diff_record:
-                provenance_kwargs["manual_override"] = True
-                provenance_kwargs["override_reason"] = override_reason
-                provenance_kwargs["override_diff"] = dict(override_diff_record)
+        # GPT R2 P2: stamp overrides REGARDLESS of profile, so a no-profile run (run_mode-formal or
+        # non-formal) that enabled an override (e.g. hold_on_limit_up) records it in provenance. Previously
+        # this was inside the profile branch, leaving run_mode-formal/no-profile with manual_override=False
+        # despite the override being active (execution_profile_id is Optional, so this is schema-safe).
+        if override_diff_record:
+            provenance_kwargs["manual_override"] = True
+            provenance_kwargs["override_reason"] = override_reason
+            provenance_kwargs["override_diff"] = dict(override_diff_record)
 
         provenance = ArtifactProvenance(**provenance_kwargs)
         provenance = ArtifactProvenance.from_dict(provenance.to_dict())

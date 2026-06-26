@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from glob import glob
@@ -2990,6 +2991,157 @@ class StagedQlibBackendBuilder:
                 written.append("forecast__np_q_yoy")
         return sorted(set(written))
 
+    def _materialize_quality_stability(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """果仁 #59 quality-stability factors `STDEVQ(RoeCoreQ,12)` / `STDEVQ(SalesQGr%PY,12)`.
+
+        RoeCoreQ(q) = CoreProfit_sq(q)/equity(q); CoreProfit_sq = revenue_sq − oper_cost_sq −
+        (admin+sell+fin)_sq − biz_tax_surchg_sq. SalesQGr%PY(q) = (revenue_sq(q) − revenue_sq(q−4))/
+        |revenue_sq(q)|. Each output = the cross-time POPULATION stdev (ddof=0, matching the rung-6
+        np.nanstd validation) over the N-th-most-recent REPORT-quarter slots known as-of the day
+        (slot-aligned: q−4 = 4 slots back, NOT a calendar year). Needs ≥8 FINITE slots of the 12.
+
+        Single-quarter slots come from the PROVEN kernel — `materialize_canonical_quarter_segments`
+        (direct-quarter precedence + cumulative fallback, restatement-safe via `derive_single_quarter_value`)
+        + `arrays_from_snapshot_segments` — the SAME path the `_sq_q*` slots and the deepslot f9/f10 use, so
+        no-lookahead, restatement-recompute, and same-effective-date dedup are inherited (GPT-R1 P2 + tail
+        fix: this REUSES the kernel rather than reinventing cum[q]−cum[q−1]). Equity is the snapshot
+        (`materialize_visibility_segments`). The stdev is then vectorized over the calendar. PREFILTERS to
+        standard fiscal quarter-ends (03-31/06-30/09-30/12-31) BEFORE the kernel so an irregular end_date
+        can't be mis-slotted (mirrors `_materialize_profit_dedt_sq`). `field_filter` is honored per output.
+        Writes `$roe_core_stab_12q` + `$sales_gr_stab_12q` (new `quality_stability` family; sub-universe —
+        needs ~3yr history; consumers Ref(...,1) + gate on non-null/recency). Canaries:
+        tests/data_infra/test_quality_stability_materializer.py. Validated vs the rung-6 deepslot f9/f10.
+        """
+        inc_path = self.ledger_path("income")
+        bs_path = self.ledger_path("balancesheet")
+        if not (os.path.exists(inc_path) and os.path.exists(bs_path)):
+            return []
+        out_fields = self._apply_field_filter(["roe_core_stab_12q", "sales_gr_stab_12q"])
+        if not out_fields:
+            return []
+        INC_F = ["revenue", "oper_cost", "admin_exp", "sell_exp", "fin_exp", "biz_tax_surchg"]
+        # Read the canonicalize_report_variants tie-break columns (those present) so same-(effective_date,
+        # end_date) restatement variants collapse to ONE canonical row deterministically — exactly like the
+        # normal statement path (GPT review P2; matches the deepslot truth the factor was validated against).
+        import pyarrow.parquet as _pq
+        _TIE = ["report_type", "update_flag", "disclosure_date", "f_ann_date", "ann_date",
+                _SRC_FILE_COLUMN, _SRC_ORDINAL_COLUMN]
+
+        def _read(path: str, payload: list[str]) -> pd.DataFrame:
+            have = set(_pq.ParquetFile(path).schema.names)
+            cols = [c for c in (["qlib_code", "end_date", "effective_date"] + payload + _TIE) if c in have]
+            return pd.read_parquet(path, columns=cols)
+
+        inc = _read(inc_path, INC_F)
+        bs = _read(bs_path, ["total_hldr_eqy_exc_min_int"])
+        # income_quarterly = Tushare DIRECT single-quarter income (the income family's quarterly_dataset).
+        # Feeding it as quarterly_df gives the kernel direct-quarter PRECEDENCE — matching the _sq_q* slots
+        # + the deepslot f9/f10 EXACTLY (the residual GPT-R1 tail = the cum-difference-only path missing it).
+        iq_path = self.ledger_path("income_quarterly")
+        iq = _read(iq_path, INC_F) if os.path.exists(iq_path) else pd.DataFrame()
+        for df in (inc, bs, iq):
+            if df.empty:
+                continue
+            for c in ("end_date", "effective_date"):
+                df[c] = normalize_date_series(df[c])
+        _QEND_DAY = {(3, 31), (6, 30), (9, 30), (12, 31)}
+
+        def _std_end(s: pd.Series) -> pd.Series:  # keep only standard fiscal quarter-ends
+            return s.apply(lambda d: pd.notna(d) and (d.month, d.day) in _QEND_DAY)
+
+        target_codes = set(target_dirs)
+
+        def _prep(df: pd.DataFrame) -> pd.DataFrame:
+            if df.empty:
+                return df
+            df = df[df["end_date"].notna() & df["effective_date"].notna() & _std_end(df["end_date"])]
+            df = df.sort_values("effective_date", kind="mergesort")
+            if target_codes:
+                df = df[df["qlib_code"].isin(target_codes)].copy()
+            return df
+
+        inc, bs, iq = _prep(inc), _prep(bs), _prep(iq)
+        if inc.empty:
+            return []
+        inc_by = {k: g for k, g in inc.groupby("qlib_code")}
+        bs_by = {k: g for k, g in bs.groupby("qlib_code")}
+        iq_by = {k: g for k, g in iq.groupby("qlib_code")} if not iq.empty else {}
+        cal_size = len(calendar)
+        want_roe = "roe_core_stab_12q" in out_fields
+        want_sal = "sales_gr_stab_12q" in out_fields
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize quality_stability", unit="symbol", leave=False,
+        ):
+            ig = inc_by.get(qlib_code)
+            if ig is None or ig.empty:
+                continue
+            bg = bs_by.get(qlib_code)
+            if bg is None or bg.empty:
+                continue
+            # Single-quarter income slots via the PROVEN kernel — the SAME path the _sq_q* slots + the
+            # deepslot f9/f10 use: canonicalize -> materialize_canonical_quarter_segments (direct-quarter
+            # precedence + cumulative fallback, restatement-safe via derive_single_quarter_value) ->
+            # per-slot single-quarter daily arrays. slot_depth=16 so SalesQGr%PY(q_t) can reach
+            # revenue_q{t+4} for t=0..11. (Reusing the kernel — NOT reinventing cum[q]-cum[q-1] — is the
+            # GPT-R1 tail fix; the standard-quarter-end prefilter above guards mis-slotting an irregular end.)
+            ig = canonicalize_report_variants(ig, "cumulative")
+            iqg = iq_by.get(qlib_code)
+            iqg = canonicalize_report_variants(iqg, "quarterly") if (iqg is not None and not iqg.empty) else None
+            q_segs = materialize_canonical_quarter_segments(ig, iqg, calendar, quarter_fields=INC_F, slot_depth=16)
+            q_arr = arrays_from_snapshot_segments(q_segs, INC_F, cal_size, 16)
+            eq_grp = canonicalize_report_variants(bg, "snapshot")
+            eq_segs = materialize_visibility_segments(eq_grp, calendar, slot_depth=12)
+            eq_arr = arrays_from_snapshot_segments(eq_segs, ["total_hldr_eqy_exc_min_int"], cal_size, 12)
+
+            def _slot(field, i):
+                return q_arr[f"{field}_q{i}"].astype(np.float64)
+
+            # Vectorized over the calendar: RoeCoreQ(q_i)=CoreProfit_sq(q_i)/equity(q_i) for the 12 most-
+            # recent slots; population stdev (ddof=0, matches the rung-6 np.nanstd) with ≥8 FINITE slots.
+            roe_arr = None
+            if want_roe:
+                roe_slots = np.empty((12, cal_size), dtype=np.float64)
+                for i in range(12):
+                    core = (_slot("revenue", i) - _slot("oper_cost", i)
+                            - (_slot("admin_exp", i) + _slot("sell_exp", i) + _slot("fin_exp", i))
+                            - _slot("biz_tax_surchg", i))
+                    eq = eq_arr[f"total_hldr_eqy_exc_min_int_q{i}"].astype(np.float64)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        roe_slots[i] = core / np.where(np.abs(eq) > 0, eq, np.nan)
+                cnt = np.sum(np.isfinite(roe_slots), axis=0)
+                with np.errstate(invalid="ignore"), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice -> NaN (masked by cnt<8)
+                    roe_arr = np.nanstd(roe_slots, axis=0).astype(np.float32)
+                roe_arr[cnt < 8] = np.nan
+            # SalesQGr%PY(q_i)=(revenue_sq(q_i)-revenue_sq(q_{i+4}))/|revenue_sq(q_i)| for the 12 most-recent.
+            sal_arr = None
+            if want_sal:
+                sal_slots = np.empty((12, cal_size), dtype=np.float64)
+                for i in range(12):
+                    rv, rv4 = _slot("revenue", i), _slot("revenue", i + 4)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        sal_slots[i] = (rv - rv4) / np.where(np.abs(rv) > 0, np.abs(rv), np.nan)
+                cnt = np.sum(np.isfinite(sal_slots), axis=0)
+                with np.errstate(invalid="ignore"), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice -> NaN (masked by cnt<8)
+                    sal_arr = np.nanstd(sal_slots, axis=0).astype(np.float32)
+                sal_arr[cnt < 8] = np.nan
+
+            # P1: honor field_filter — only write the requested field(s) (roe_arr/sal_arr are None if not wanted).
+            if want_roe and roe_arr is not None and np.isfinite(roe_arr).any():
+                self._write_feature_series(feature_dir, "roe_core_stab_12q", roe_arr)
+                written.append("roe_core_stab_12q")
+            if want_sal and sal_arr is not None and np.isfinite(sal_arr).any():
+                self._write_feature_series(feature_dir, "sales_gr_stab_12q", sal_arr)
+                written.append("sales_gr_stab_12q")
+        return sorted(set(written))
+
     def _materialize_snapshot_dataset(
         self,
         dataset_name: str,
@@ -3508,6 +3660,13 @@ class StagedQlibBackendBuilder:
             written["report_rc"] = self._materialize_report_rc_consensus(calendar, target_dirs)
         if "dividends" in active_datasets and os.path.exists(self.ledger_path("dividends")):
             written["dividends"] = self._materialize_dividend_compat(calendar, target_dirs)
+        if ({"income", "balancesheet"} <= active_datasets
+                and os.path.exists(self.ledger_path("income"))
+                and os.path.exists(self.ledger_path("balancesheet"))):
+            # Custom: 果仁 #59 quality-stability factors (trailing-12-quarter stdev of RoeCoreQ /
+            # SalesQGr%PY) — cross-quarter, not expressible from the q0..q4 _sq slots. Writes
+            # $roe_core_stab_12q / $sales_gr_stab_12q. Validated vs the rung-6 deepslot f9/f10.
+            written["quality_stability"] = self._materialize_quality_stability(calendar, target_dirs)
         for dataset_name in (
             "moneyflow", "northbound", "margin", "stk_limit",
             # New alpha endpoints (added 2026-04-16): daily-fact kind,

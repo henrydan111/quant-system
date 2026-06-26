@@ -477,3 +477,10 @@ datasets:
       - $n_cashflow_act_sq_q2
       - $n_cashflow_act_sq_q3
       - $n_cashflow_act_sq_q4
+
+  quality_stability:
+    status: approved
+    reason: "果仁 #59 Comp_Core_Quality earnings-STABILITY factors. $roe_core_stab_12q = STDEVQ(RoeCoreQ,12) (population stdev, ddof=0, of single-quarter core-profit ROE over the trailing 12 report quarters); $sales_gr_stab_12q = STDEVQ(SalesQGr%PY,12) (stdev of the slot-aligned single-quarter revenue YoY growth, q-4 = 4 REPORT slots back). DERIVED cross-quarter from the approved income + balancesheet + income_quarterly PIT ledgers via the custom materializer StagedQlibBackendBuilder._materialize_quality_stability — REUSES the proven single-quarter kernel (materialize_canonical_quarter_segments direct-quarter precedence + cumulative fallback, restatement-safe derive_single_quarter_value) + the snapshot-visibility kernel for equity (total_hldr_eqy_exc_min_int); NOT expressible from the q0..q4 _sq slots (needs 12-quarter depth). PIT: as-of/restatement-aware (effective_date>disclosure STRICT, §3.2), standard-fiscal-end prefilter (03-31/06-30/09-30/12-31), >=8-of-12-finite gate. coverage_tier=sub (needs ~3yr history -> per-day cov ~0.71-0.72; per-stock 0.945/0.952). Predictive factors MUST wrap in Ref(...,1) + gate on non-null/recency. Added IN-PLACE to the live provider 2026-06-25 (workspace/scripts/_publish_stability_inplace.py — purely additive, 2 new bins/dir, existing bins untouched by construction; base provider phasec_profit_dedt_sq_20260624 NOT rotated). Validated BIT-FAITHFUL vs the rung-6 deepslot truth f9/f10 (median rel-err 0.0 FULL universe, within-1% 0.986/0.999, n~2M; _verify_stability_live.py) -> reproduces the +14.3pp #59 holdings-overlap (21.6->35.9%) + backtest convergence to 果仁. Canaries tests/data_infra/test_quality_stability_materializer.py (7). GPT R1(REVISE)->R2 SHIP. See approvals/2026-06-25_quality_stability_to_approved.yaml."
+    fields:
+      - $roe_core_stab_12q
+      - $sales_gr_stab_12q

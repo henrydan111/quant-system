@@ -217,11 +217,12 @@ class ModelIIPosProfitStrategy(Strategy):
     def __init__(self, ranked_schedule, *, buy_rank: int = 7, sell_rank: int = 8,
                  target_n: int = 5, pos_max: float = 0.26,
                  tp: float = 1.00, sl: float = 0.18, trail: float = 0.18,
-                 rebuy_cooldown: int = 10, use_exits: bool = True):
+                 rebuy_cooldown: int = 10, use_exits: bool = True, max_holds: int | None = None):
         super().__init__()
         self.ranked_schedule = {pd.Timestamp(d): tuple(c) for d, c in ranked_schedule.items()}
         self.buy_rank, self.sell_rank = int(buy_rank), int(sell_rank)
         self.target_n, self.pos_max = int(target_n), float(pos_max)
+        self.max_holds = int(max_holds) if max_holds else None   # 果仁 最大持仓数 cap (None = no cap, rung-2 default)
         self.tp, self.sl, self.trail = float(tp), float(sl), float(trail)
         self.rebuy_cooldown, self.use_exits = int(rebuy_cooldown), bool(use_exits)
         self.peak: dict = {}        # code -> running max prev-close since entry
@@ -296,6 +297,12 @@ class ModelIIPosProfitStrategy(Strategy):
         exit_reason = {c: _exit_reason(c) for c in held}
         keep = [c for c in held
                 if _suspended(c) or (rank_of.get(c, BIG) < self.sell_rank and exit_reason[c] is None)]
+        # 果仁 最大持仓数 cap: if more held names are still in-band than 最大持仓, sell the WORST-ranked
+        # down to the cap (suspended names can't be sold -> always retained).
+        if self.max_holds and len(keep) > self.max_holds:
+            susp = [c for c in keep if _suspended(c)]
+            tradable = sorted((c for c in keep if not _suspended(c)), key=lambda c: rank_of.get(c, BIG))
+            keep = (susp + tradable)[:max(self.max_holds, len(susp))]
         for c in held:                          # SOLD this period -> rebuy cooldown + tally reason
             if c not in keep:
                 self.cooldown[c] = self.rebuy_cooldown

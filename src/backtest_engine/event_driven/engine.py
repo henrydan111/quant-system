@@ -732,6 +732,23 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data (delisted?)')
                 continue
             row = day_indexed.loc[order.code]
+            # 果仁 不卖条件 "调仓日交易时涨停" (opt-in, default OFF; set via EventDrivenBacktester.run
+            # hold_on_limit_up): HOLD a winner that is limit-up at the fill — skip the sell, retain the
+            # position (its capital is not redeployed this bar). The engine knows the same-day limit state
+            # at fill; the pre-open strategy cannot. Does NOT alter the §3.3 can_buy/can_sell gate below.
+            # Limit-state mirrors the can_sell gate: daily-AVERAGE fill -> 一字 all-day lock (the synthetic
+            # avg is not a tradability state); open/close fill -> is_limit_up at the actual fill column.
+            # GPT R1 P2: exclude a TRUE no-limit day (is_true_no_limit_day) — on a no-limit IPO coverage-hole
+            # is_limit_up can be spuriously True (missing up_limit) while the name is actually freely
+            # tradable; mirror the can_buy/can_sell pattern (locked AND NOT is_true_no_limit_day) so we don't
+            # "hold" a name that has no real limit.
+            if (getattr(self, "_hold_on_limit_up", False)
+                    and (self.exchange.is_all_day_limit_up(row, order.code, date)
+                         if limit_gate == 'all_day_lock'
+                         else self.exchange.is_limit_up(row, order.code, date, price_field=fill_price))
+                    and not self.exchange.is_true_no_limit_day(order.code, date, row)):
+                self._log_order(order, 'BLOCKED', '涨停不卖 (hold limit-up winner)')
+                continue
             if not self.exchange.can_sell(row, order.code, date, price_field=fill_price, limit_gate=limit_gate):
                 self._log_order(order, 'BLOCKED', 'not tradable for sell')
                 continue

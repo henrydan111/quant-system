@@ -265,13 +265,13 @@ class TestEventDrivenWrapperProfile:
             engine.run.return_value = MagicMock(config={})
             # PR 8a fix #1: formal profile runs require calendar_policy_id.
             run_kwargs.setdefault("calendar_policy_id", "frozen_20260227_system_build")
-            EventDrivenBacktester(data_dir=str(tmp_path)).run(
+            result = EventDrivenBacktester(data_dir=str(tmp_path)).run(
                 strategy=strategy,
                 start_time="2024-01-02",
                 end_time="2024-01-31",
                 **run_kwargs,
             )
-        return feeder_cls, exchange_cls, engine_cls
+        return feeder_cls, exchange_cls, engine_cls, result
 
     def test_vectorized_profile_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ExecutionProfileError, match="backend='vectorized'"):
@@ -283,7 +283,7 @@ class TestEventDrivenWrapperProfile:
 
     def test_joinquant_daily_sim_applies_profile_defaults(self, tmp_path: Path) -> None:
         # Profile resolution should populate fill_mode, slippage, cost on the engine.
-        _, exchange_cls, engine_cls = self._run_with_mocks(
+        _, exchange_cls, engine_cls, _ = self._run_with_mocks(
             tmp_path, execution_profile="joinquant_daily_sim"
         )
         # Engine received jq_daily_avg fill_mode from the profile.
@@ -303,9 +303,36 @@ class TestEventDrivenWrapperProfile:
                 fill_mode="open_close",  # differs from profile's jq_daily_avg
             )
 
+    def test_formal_hold_on_limit_up_without_reason_raises(self, tmp_path: Path) -> None:
+        # GPT R1 P1: a formal run must NOT silently enable hold_on_limit_up (果仁 涨停不卖 — a non-profiled
+        # execution rule that changes sell behavior); it requires override_reason.
+        with pytest.raises(OverrideRequiresReasonError, match="hold_on_limit_up|override_reason"):
+            self._run_with_mocks(
+                tmp_path,
+                execution_profile="joinquant_daily_sim",
+                hold_on_limit_up=True,
+            )
+
+    def test_formal_hold_on_limit_up_with_reason_stamped(self, tmp_path: Path) -> None:
+        # With override_reason a formal run MAY enable it; the flag reaches the engine and is recorded
+        # as a deliberate override (provenance manual_override/override_diff).
+        _, _, engine_cls, result = self._run_with_mocks(
+            tmp_path,
+            execution_profile="joinquant_daily_sim",
+            hold_on_limit_up=True,
+            override_reason="果仁 涨停不卖 parity reproduction",
+        )
+        # The wrapper set the opt-in flag on the engine instance ...
+        assert engine_cls.return_value._hold_on_limit_up is True
+        # ... AND it is recorded in artifact provenance as a deliberate override (GPT R2 P3).
+        prov = result.config["artifact_provenance"]
+        assert prov["manual_override"] is True
+        assert prov["override_diff"].get("hold_on_limit_up") is True
+        assert prov["override_reason"] == "果仁 涨停不卖 parity reproduction"
+
     def test_formal_override_with_reason_allowed(self, tmp_path: Path) -> None:
         # Same as above but with override_reason — should pass.
-        _, _, engine_cls = self._run_with_mocks(
+        _, _, engine_cls, _ = self._run_with_mocks(
             tmp_path,
             execution_profile="joinquant_daily_sim",
             fill_mode="open_close",
