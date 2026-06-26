@@ -893,7 +893,12 @@ in the Qlib provider. Coverage table + PIT notes: [data_tracker.md](data_tracker
 
 ### report_rc (卖方盈利预测明细 — analyst forecasts)
 Total Columns: 21. `data/analyst/report_rc/report_rc_{YYYY}.parquet`. Each row = one analyst's forecast
-for one stock × one forecast `quarter`. Visibility anchor = `report_date` (PIT canary under test).
+for one stock × one forecast `quarter`. **PIT visibility anchor (resolved 2026-06-08)** = ledger
+`effective_date` = a CONTEMPORANEOUS `create_time` (gap ≤ 45 cal days → `max(report_date, create_time)`)
+else `report_date + 2 open days` (validated market-wide vs the JoinQuant 朝阳永续 oracle; breadth canary
+ran 2026-06-14). **Materialized** into the PIT ledger + Qlib provider: the 4 `$report_rc__eps_*` event-flow
+primitives (approved) + the 5 consensus/rating aggregates `$report_rc__{np_fy1, op_rt_fy1, n_active_orgs,
+rating_up, rating_dn}` (quarantine until the bound output canary passes). Predictive use MUST `Ref(...,1)`.
 Sparse fields (expected NaN): `tp`, `op_pr`, `rd`, `max_price`, `min_price`.
 
 | Column | English | Chinese |

@@ -85,6 +85,18 @@ def test_fy1_rolls_on_annual_disclosure():
     assert a[_pos("2022-05-10")] == pytest.approx(900.0)   # FY2021 disclosed -> FY1=2022
 
 
+def test_fy1_non_monotonic_income_uses_max_visible_fy():
+    # GPT post-impl Major-1: a DELAYED older annual (FY2020) discloses AFTER FY2021's annual. FY1 must use
+    # the MAX fiscal year VISIBLE as-of d (+1), NOT the fiscal-year-ordered last row (a date-unsorted
+    # searchsorted picked the wrong FY). FY2021 on time (2022-04-20); FY2020 delayed/restated (2022-06-20).
+    rows = [_rc("2022-02-01", "2021Q4", np_=100), _rc("2022-02-01", "2022Q4", np_=900)]
+    inc = [{"qlib_code": CODE, "end_date": "2021-12-31", "effective_date": "2022-04-20"},   # FY2021 on time
+           {"qlib_code": CODE, "end_date": "2020-12-31", "effective_date": "2022-06-20"}]   # FY2020 DELAYED (later!)
+    a = _run(rows, inc)["report_rc__np_fy1"]
+    # after the later FY2020 disclosure, max-visible-FY is STILL 2021 -> FY1=2022 -> 900 (NOT pulled back to 100)
+    assert a[_pos("2022-07-01")] == pytest.approx(900.0)
+
+
 def test_fy1_expires_to_nan_after_ttl_with_no_event():
     # M2: a lone forecast at e; with NO later forecast/income event it must go NaN at e+TTL+1 (not served stale).
     e = "2022-02-01"

@@ -374,7 +374,7 @@ datasets:
 
   # ─── Quarantine: report_rc CONSENSUS + RATING aggregates (2026-06-27; GPT §10 R1→R4 SHIP; 5 single-field entries, R3-M2) ──
   # report_rc = Tushare 卖方研报 — a DIFFERENT vendor than 果仁's 朝阳永续 → APPROXIMATE consensus, NOT penny-parity.
-  # Materialized by pit_backend._materialize_report_rc_aggregates (PENDING P3). QUARANTINE per field until the
+  # Materialized by pit_backend._materialize_report_rc_aggregates (P3 landed, commit ccf1767). QUARANTINE per field until the
   # STANDING field-level restatement OUTPUT canary (re-materialize+diff, 0-retroactive-drift, bound to
   # provider_build_id, fail-closed in run_daily_qa) passes. Predictive use MUST Ref(...,1) + recency (sub-universe).
   report_rc_np_fy1:

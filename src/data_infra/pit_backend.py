@@ -3000,9 +3000,17 @@ class StagedQlibBackendBuilder:
             inc = inc.dropna(subset=["end_date", "effective_date"])
             inc = inc[inc["end_date"].dt.month.eq(12) & inc["end_date"].dt.day.eq(31)]
             for code, gg in inc.groupby("qlib_code"):
-                fy_eff = gg.groupby(gg["end_date"].dt.year)["effective_date"].min().sort_index()
-                inc_annual_by[code] = (fy_eff.index.to_numpy().astype(int),
-                                       fy_eff.values.astype("datetime64[ns]"))
+                # FY -> earliest effective_date, then sort BY EFFECTIVE_DATE + carry a RUNNING-MAX fiscal
+                # year. GPT post-impl Major-1: annual effective dates are NON-monotonic in fiscal-year order
+                # for ~233 stocks (a delayed/restated OLDER annual can disclose AFTER a newer one) -> a
+                # fiscal-year-ordered searchsorted is unsorted-by-key and picks the wrong FY1. FY1(d) = the
+                # LARGEST annual fiscal year VISIBLE as-of d + 1 -> running-max over the date-sorted series.
+                fy_eff = (gg.groupby(gg["end_date"].dt.year)["effective_date"].min()
+                          .rename_axis("fy").reset_index(name="effective_date")
+                          .sort_values("effective_date", kind="mergesort"))
+                effs = fy_eff["effective_date"].values.astype("datetime64[ns]")
+                max_fys = np.maximum.accumulate(fy_eff["fy"].to_numpy(dtype=int))
+                inc_annual_by[code] = (effs, max_fys)
 
         cal_arr = calendar.values.astype("datetime64[ns]")
         n_cal = len(calendar)
@@ -3101,13 +3109,15 @@ class StagedQlibBackendBuilder:
                 a_org = ann["_org"].to_numpy()
                 a_np = ann["np"].to_numpy(dtype="float64")
                 a_op = ann["op_rt"].to_numpy(dtype="float64")
-                fys_tab, effs_tab = inc_annual_by.get(qlib_code, (None, None))
+                effs_tab, max_fys_tab = inc_annual_by.get(qlib_code, (None, None))
 
                 def _fy1(asof) -> int:
-                    if fys_tab is not None:
+                    # largest annual fiscal year VISIBLE as-of asof, + 1 (running-max over date-sorted effs;
+                    # a later-disclosed delayed OLDER annual never lowers FY1 — GPT post-impl Major-1).
+                    if effs_tab is not None:
                         k = int(np.searchsorted(effs_tab, asof, side="right"))
                         if k > 0:
-                            return int(fys_tab[k - 1]) + 1
+                            return int(max_fys_tab[k - 1]) + 1
                     return int(pd.Timestamp(asof).year)
 
                 ev = set(int(p) for p in a_pos if 0 <= p < n_cal)
