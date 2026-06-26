@@ -173,6 +173,55 @@ PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
 # report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
 REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
 EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
+# Sell-side rating -> 5-point ordinal (for 评级调高家数 / 评级机构数 aggregates, 2026-06-26).
+# A higher ordinal = more bullish. Mixed CN/EN labels (raw report_rc.rating is ~30+ distinct
+# strings). Unknown labels map to NaN (fail-OPEN): the org still counts as rating-active
+# (n_active_orgs) but is SKIPPED from up/down detection (no ordinal to compare) — a new vendor
+# label can never silently fabricate an upgrade. Chinese matched exact (post-strip); English
+# matched case-insensitively.
+RATING_ORDINAL_CN: dict[str, int] = {
+    "买入": 5, "强烈推荐": 5, "强推": 5, "强烈买入": 5, "买进": 5, "强力买入": 5, "强力买进": 5,
+    "增持": 4, "推荐": 4, "谨慎推荐": 4, "审慎推荐": 4, "跑赢行业": 4, "优于大市": 4,
+    "强于大市": 4, "超配": 4, "看好": 4, "强烈增持": 4, "谨慎增持": 4, "审慎增持": 4,
+    "中性": 3, "持有": 3, "同步大市": 3, "区间操作": 3, "观望": 3, "标配": 3, "中立": 3,
+    "减持": 2, "审慎": 2, "弱于大市": 2, "跑输行业": 2, "低配": 2, "回避": 2, "谨慎": 2,
+    "卖出": 1, "强烈卖出": 1, "沽出": 1, "确信卖出": 1,
+}
+RATING_ORDINAL_EN: dict[str, int] = {
+    "buy": 5, "strong buy": 5, "strongbuy": 5,
+    "overweight": 4, "outperform": 4, "accumulate": 4, "add": 4, "market outperform": 4,
+    "neutral": 3, "hold": 3, "in-line": 3, "inline": 3, "equal-weight": 3, "equal weight": 3,
+    "market perform": 3, "market-perform": 3,
+    "underweight": 2, "underperform": 2, "reduce": 2, "market underperform": 2,
+    "sell": 1, "strong sell": 1,
+}
+# Explicit "no rating given" sentinels: NaN ordinal AND excluded from 评级机构数 (an org issuing a
+# report with no rating is not a rating agency for that period). Distinct from an UNKNOWN label
+# (which still counts toward coverage but can't be ordinal-compared).
+RATING_NON_LABELS: frozenset[str] = frozenset({"无", "无评级", "未评级", "暂无", "暂无评级", "-", "—", "none", ""})
+
+
+def normalize_rating_to_ordinal(rating) -> float:
+    """Map a raw sell-side rating string to a 5-point ordinal (NaN if unknown/blank/no-rating)."""
+    if rating is None:
+        return float("nan")
+    s = str(rating).strip()
+    if not s or s in RATING_NON_LABELS or s.lower() in RATING_NON_LABELS:
+        return float("nan")
+    if s in RATING_ORDINAL_CN:
+        return float(RATING_ORDINAL_CN[s])
+    return float(RATING_ORDINAL_EN.get(s.lower(), float("nan")))
+
+
+def is_real_rating(rating) -> bool:
+    """True if the report carries an actual sell-side rating (not blank / explicit no-rating).
+
+    Used by 评级机构数 (n_active_orgs) to count rating-issuing orgs, INDEPENDENT of whether the
+    label is ordinal-mappable (a rare unmapped-but-real label like '关注' still counts as coverage)."""
+    if rating is None:
+        return False
+    s = str(rating).strip()
+    return bool(s) and s not in RATING_NON_LABELS and s.lower() not in RATING_NON_LABELS
 # Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
 # rows whose create_time is absent OR a bulk-backfill stamp (see below), so a row
 # dated T is not exposed at next_open(T). Fixed + non-tunable (data-infra constant,
