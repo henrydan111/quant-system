@@ -1,8 +1,17 @@
-# GPT §10 POST-IMPLEMENTATION review packet — report_rc consensus materializer (P2 + P3)
+# GPT §10 POST-IMPLEMENTATION review packet — report_rc consensus materializer (P2 + P3) — R2
 
 > The DESIGN passed §10 R1→R4 SHIP. This is the POST-IMPL code review of P2 (registry refactor) + P3
 > (materializer + tests) against that SHIP'd design, BEFORE P4 (publish + standing canary). Branch
-> `report-rc-registration` pushed (commit ccf1767); all raw links are live. Paste the block into GPT-5.5 Pro.
+> `report-rc-registration` pushed (commit **8dc7944**); all raw links live. Paste the block into GPT-5.5 Pro.
+
+## Post-impl R1 = REVISE → folded (this is R2)
+- **★ Major (real PIT bug, FIXED):** `inc_annual_by` was sorted by FISCAL YEAR then `searchsorted`'d — but
+  searchsorted needs the array sorted by the SEARCH KEY (effective_date). For ~233 stocks with
+  non-monotonic annual disclosures (a delayed/restated older annual discloses AFTER a newer one) this
+  picked the wrong FY1. **Fixed:** sort by `effective_date` + `np.maximum.accumulate` running-max fiscal
+  year → `FY1 = max-visible-FY-as-of-d + 1`; + a non-monotonic regression test (11 aggregates tests pass).
+- **Minor (FIXED):** refreshed the stale report_rc PIT docs (data_dictionary §report_rc, data_tracker §11,
+  field_status PENDING comment, project_state) to the resolved create_time/+2 anchor + the 5 quarantine fields.
 
 ## What landed (P2 + P3)
 - **P2 (commit 9b9bafb):** field_status.yaml report_rc block `field_prefixes: $report_rc__` → EXPLICIT 4
@@ -33,7 +42,7 @@ READ:
 - The tests: tests/data_infra/test_report_rc_aggregates.py (10) + tests/data_infra/test_field_registry.py (the 3 report_rc tests)
 - CLAUDE.md (PIT §3.2, formal-run governance §3.4, research integrity §7)
 
-SELF-REVIEW PREFLIGHT — verdict CLEAN FOR POST-IMPL GPT. Implements the SHIP'd v4 design: FY1=(latest disclosed annual FY)+1 via income searchsorted (strict PIT, mirrors _materialize_forecast_growth._inc_asof); active window 0<=p-effective_pos<=TTL (option-b, matches the existing sweep); per-forecast TTL-EXPIRY recompute events (a stale forecast -> NaN); latest-per-org median, missing-metric excludes the org; UNIFIED per-org supersede walk for coverage + direction (a '无'/blank report ends coverage; unknown-real clears direction but keeps coverage; reaffirm holds prior state to its ORIGINAL expiry; no upgraded-then-X double-count). normalized_org_id strips trailing legal suffixes but NOT (香港). 5 fields QUARANTINE (per-field entries). Reads ledger effective_date only (already create_time/+2 anchored). Tests + real-data sandbox pass. Residual: the standing OUTPUT canary + provenance + formal-gate canary tests are P4 (not in this diff); per-field promotion happens only after the canary.
+SELF-REVIEW PREFLIGHT — verdict CLEAN FOR POST-IMPL R2 (R1 Major+Minor folded). Implements the SHIP'd v4 design: FY1=(largest annual FY VISIBLE as-of d)+1 via a DATE-SORTED income searchsorted + np.maximum.accumulate running-max fiscal year (R1-Major fix: handles ~233 non-monotonic-disclosure stocks; strict PIT, mirrors _materialize_forecast_growth._inc_asof); active window 0<=p-effective_pos<=TTL (option-b, matches the existing sweep); per-forecast TTL-EXPIRY recompute events (a stale forecast -> NaN); latest-per-org median, missing-metric excludes the org; UNIFIED per-org supersede walk for coverage + direction (a '无'/blank report ends coverage; unknown-real clears direction but keeps coverage; reaffirm holds prior state to its ORIGINAL expiry; no upgraded-then-X double-count). normalized_org_id strips trailing legal suffixes but NOT (香港). 5 fields QUARANTINE (per-field entries). Reads ledger effective_date only (already create_time/+2 anchored). Tests + real-data sandbox pass. Residual: the standing OUTPUT canary + provenance + formal-gate canary tests are P4 (not in this diff); per-field promotion happens only after the canary.
 
 WHAT TO CHECK (PIT FIRST)
 1. NO-LOOKAHEAD: in _materialize_report_rc_aggregates, does any served value at calendar position p use a report/income row not visible as-of p? Specifically: (a) FY1's income searchsorted(effs_tab, cal_arr[p], side='right')-1 — can a future annual leak in? (b) the active mask (a_pos<=p)&(a_pos>=p-ttl); (c) the event-range fill [p, next_event); (d) the org state-machine intervals [pos, min(expiry, next_report_pos)). The factor layer adds Ref(,1) on top.
