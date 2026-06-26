@@ -242,7 +242,7 @@ def _read_guorn_yearly():
             continue
         v = pd.to_numeric(r.iloc[1], errors="coerce")
         if pd.notna(v):
-            out[y] = float(v) / (100.0 if abs(v) > 3 else 1.0)
+            out[y] = float(v)   # 果仁 年度收益统计 stores DECIMALS (0.8445=84%, 3.4035=340%); never /100
     return out
 
 

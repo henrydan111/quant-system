@@ -17,9 +17,9 @@
 
 | # | strategy | cat | xlsx | 果仁 年化/夏普 | triage | gating factor(s) | status |
 |---|---|---|---|---|---|---|---|
-| 1 | sm_01_成长动量 | sm | 01 | 57.2% / 1.68 | 🟢 | 市值+CoreProfitQGr+EpsExclXorQGr+ROETTMDiffPQ+mom | **IN PROGRESS — 涨停不卖 closed half the gap (ceiling verdict RETRACTED)** my **+47.6** (was +39.8) vs 果仁 +57.2, gap −17.4→**−9.6pp**. ROOT CAUSE: extractor consumed 5/8 recipe sub-fields, dropped 不卖条件 涨停不卖 (on **17/20** books); +涨停不卖 (engine hold_on_limit_up) = **+8.1pp**, 2015 −72→+48. Remaining −9.6pp = selection 2022/2024 + more momentum 2025. [verify01_FINDINGS.md](verify01_FINDINGS.md) |
-| 2 | sm_01_成长_v1 | sm | 05 | 58.2% / 1.58 | 🟢 | same 成长 family | pending |
-| 6 | sm_01_成长高贝塔@TMT_v1 | sm | 06 | 60.3% / 1.44 | 🟢 | 成长 family + beta + TMT行业 | pending |
+| 1 | sm_01_成长动量 | sm | 01 | 57.2% / 1.68 | 🟢 | 市值+CoreProfitQGr+EpsExclXorQGr+ROETTMDiffPQ+mom | **✅ VERIFIED 2026-06-26** my **+49.09** vs 果仁 +57.2 (**−8.1pp**); overlap 40.8%/58.6%. +涨停不卖 +8.1pp + industry-fix +1.5pp. Residual = 果仁 microcap-fill optimism (rung-1). [verify01_FINDINGS.md](verify01_FINDINGS.md) |
+| 2 | sm_01_成长_v1 | sm | 05 | 58.2% / 1.58 | 🟢 | 成长 (−mom +业绩快报) | **✅ VERIFIED 2026-06-26** my **+50.11** vs +58.2 (**−8.1pp**); overlap 47.9%/69.6%. Reuses #1 cache (6 shared factors); 业绩快报(express w=1) OMITTED (unmaterialized). |
+| 6 | sm_01_成长高贝塔@TMT_v1 | sm | 06 | 60.3% / 1.44 | 🟢 | 成长+beta+TMT (−预期营收−快报) | **✅ VERIFIED 2026-06-26** my **+53.73** vs +60.3 (**−6.6pp**, smallest); vol 38.8≈39.2, MDD −51.5≈−51.9 (near-exact); overlap 45.9%/67.2%. beta(000001,250)+研发销售比率 computed; 预期营收(consensus)+快报 OMITTED. |
 | 4 | sm_GARP_illiq | sm | 09 | 49.6% / 1.54 | 🟢 | SalesQGr+CoreProfit+ILLIQ (all rung-4/5) | pending |
 | 5 | sm_双创研发强度_v1 | sm | 10 | 62.7% / 1.54 | 🟢 | 市值+ILLIQ+R&D (rung-5) | pending |
 | 15 | 成长_双创_GARP@周期_v2 | 成长 | 44 | 43.4% / 1.13 | 🟢 | GARP (= #4 on 创业板) | pending |
@@ -38,9 +38,48 @@
 | 19 | MultiA_风险平价_v1 | MultiA | 31 | 13.8% / 0.60 | 🔴 | fund/ETF rotation (ATR/vol/涨幅/sortino) — 别域 | pending |
 | 20 | MultiA_动量18 | MultiA | 29 | 32.6% / 1.14 | 🔴 | fund/ETF momentum (20日涨幅) — 别域 | pending |
 
+## 成长 cluster — VERIFIED (2026-06-26): #1, #2, #6
+
+All three reproduced faithfully through the daily model-II engine (0.2%/side, 涨停不卖, total return) vs their
+果仁 xlsx ground-truth. Harnesses: [guorn_verify_01_growth.py](../../../scripts/guorn_verify_01_growth.py) /
+`_02_` / `_06_`; selection check [_guorn_overlap.py](../../../scripts/_guorn_overlap.py); corrected-yearly
+re-display [_guorn_redisplay.py](../../../scripts/_guorn_redisplay.py).
+
+| # | LOCAL | 果仁 | gap | Sharpe L/果 | vol L/果 | MDD L/果 | overlap topN/2N |
+|---|---|---|---|---|---|---|---|
+| 1 | +49.09% | +57.21% | −8.1pp | 1.26/1.68 | 32.9/31.7 | −53.3/−47.9 | 40.8% / 58.6% |
+| 2 | +50.11% | +58.20% | −8.1pp | 1.25/1.58 | 34.0/34.4 | −53.8/−50.0 | 47.9% / 69.6% |
+| 6 | +53.73% | +60.32% | **−6.6pp** | 1.20/1.44 | **38.8/39.2** | **−51.5/−51.9** | 45.9% / 67.2% |
+
+- **Construction is faithful** at the selection layer (40–48% top-N name overlap with 果仁, stable 2014–2026,
+  above #59's 36%). The uniform **−6.6 to −8.1pp** return gap is NOT a defect: it is the **same quantified 果仁
+  execution optimism** from rung-1 (`sm_纯市值01`) — 果仁 fills limit-up microcaps in explosive years (#2 2015
+  −86pp; both 2023/2025 −41 to −47pp) that our realistic engine's fill-price-aware limit gate correctly refuses.
+  #6's risk profile (vol/MDD) matches 果仁 almost exactly. **These are deployable reproductions; the gap is 果仁
+  over-counting illiquid fills, and our engine being right to skip them.**
+- **OMISSIONS (documented):** #2 omits 业绩快报归母净利QGr%PY (express, w=1 of 10 — unmaterialized §7); #6 omits
+  预期营收2年复合增长 (analyst consensus, irreducible §5) + 业绩快报 (2 of 11). Immaterial to selection (overlap
+  unaffected). #6's two NEW factors — 贝塔N日(000001,250) = rolling-250d Cov/Var on 上证综指, and 研发销售比率 =
+  TTM(rd)/TTM(rev) — are computed locally.
+
+### Two accuracy bugs found + fixed (the careful-verification mandate)
+1. **`mktcap_ind` (w=2 一级行业内) was silently a SECOND GLOBAL rank.** `$sw2021_l1` is NOT a Qlib provider field
+   (SW industry lives in `data/universe/industry_sw2021_members/`) → the read returned all-NaN → `astype("str")`
+   → one `"nan"` group → `groupby` collapsed it to a global market-cap rank. Proven exactly: `corr(mktcap_ind,
+   global)=1.0000` (broken) → `0.91` (fixed). Rebuilt the industry frame via the canonical PIT-safe resolver
+   `provider_metadata.build_industry_series_asof` ([_fix_industry_cache.py](../../../scripts/_fix_industry_cache.py);
+   31 SW L1 codes, coverage 52%→99% 2014→2025). **#1 +47.60% → +49.09% (+1.5pp).** ⚠ Confined to the parity
+   harness — **formal code is CLEAN** (`catalog.py`/`operators.py` use the resolver, NOT `$sw2021_l1`; grep-verified).
+2. **果仁 yearly decimal-parse.** 果仁 年度收益统计 stores DECIMALS (`3.4035` = +340%); the old `/100 if abs(v)>3`
+   heuristic wrongly divided >300% years (only #2's 2015 mis-shown +3.4% → corrected +340%). Headline numbers were
+   always correct (from the recipe stats + actual net). Fixed to `float(v)` in all 3 harnesses + `_guorn_redisplay.py`.
+
 ## Roadmap
 
-1. **🟢 6 GREEN now** (sm 成长/GARP cluster) — reuse the rung 1-5 base + the #59 harness pattern. Highest-Sharpe deployed books; #1/#2/#6 share the 成长 factor base → build a reusable family harness.
+1. **🟢 6 GREEN — 3 DONE (#1/#2/#6).** Remaining 🟢: #4 sm_GARP_illiq / #5 双创研发强度 / #15 GARP@周期 — but the
+   FULL recipes show gaps the partial-read triage missed (#4 = 23 factors incl 3 中性化(irreducible §5) + 快报 +
+   StdevQ(CoreProfit,12); #5 = 评级(consensus) + 10日融资偿还(quarantined repayment) + 壳价值 + 机构/管理层持股).
+   Reproducible with documented omissions, but heavier than the 成长 cluster.
 2. **🟡 7 YELLOW** — most are blocked only on **analyst CONSENSUS + rating aggregates** (预期净利润/营收/股息, 评级机构数/调高家数). Materializing report_rc consensus (Phase-2, was deferred) unlocks #8/#9/#14/#16/#17/#18 at once — the high-value data-infra task (like the stability factors unlocked #59). Light-neutral #7/#12 reproducible with documented approximation.
 3. **🔴 7 RED** — out-of-scope or new-domain: AH溢价 (#10, H股 data), 中性化-stack (#3, irreducible regression), FCF (#11, 处置FIOLTA unmaterialized), consensus-heavy (#13), fund rotation (#19/#20, need fund/ETF price data).
 
