@@ -26,7 +26,7 @@
 | 7 | value_红利低波_v2 | value | 19 | 29.7% / 1.32 | 🟡 | 股息率✓ + 中性N日换手率 (1 light neutral) | pending |
 | 8 | value_红利低波_央企_v1 | value | 20 | 32.1% / 1.27 | 🟡 | 股息率✓ + 预期股息率 (1 consensus) | pending |
 | 9 | value_红利低波_重股息_v1 | value | 21 | 33.3% / 1.27 | 🟡 | 分红波动率 + 预期DivAGrPY% (1 consensus) | pending |
-| 18 | ST_大市值_v3 | ST | 53 | 55.5% / 2.00 | 🟡 | 市值+CoreProfitQ+业绩预告✓ + 评级机构数 | pending |
+| 18 | ST_大市值_v3 | ST | 53 | 55.5% / 2.00 | 🟢 | 市值+CoreProfitQ+业绩预告✓ + **评级机构数(NEW=$report_rc__n_active_orgs)** | **✅ P5 PROOF 2026-06-27** my **+26.5** vs +55.5 (−29pp); overlap **34.5%/44.7%** (faithful, validated band) → **the published report_rc 评级机构数 field WORKS end-to-end**. Return gap = ST limit-up execution (2015 −84/2021 −190pp[果仁+242.7], rung-1 amplified) + omitted exits/退市风险 (2018), NOT a field/selection defect. ST = extreme RETURN-parity target; clean SELECTION proof. [guorn_verify_18_stbigcap.py](../../../scripts/guorn_verify_18_stbigcap.py) |
 | 16 | 成长_隔夜动量@周期 | 成长 | 45 | 27.8% / 0.81 | 🟡 | 隔夜动量✓+业绩预告✓ + 评级机构数 | pending |
 | 17 | 成长_高波@周期 | 成长 | 48 | 29.5% / 0.72 | 🟡 | 业绩预告✓ + 评级调高家数 | pending |
 | 12 | value_创业板sm_v1 | value | 24 | 41.8% / 1.14 | 🟡 | GrossProfit✓ + EBITDAQ%EV + BP带壳01 + 1中性化 | pending |
