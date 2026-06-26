@@ -888,8 +888,11 @@ per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 ## 8. Bucket A — 15000积分 Expansion (downloaded 2026-06-08, RAW)
 
 Eight deep-history endpoints from the Tushare 5000→15000积分 upgrade, fetched by
-[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py). RAW only — not yet normalized / PIT-aligned /
-in the Qlib provider. Coverage table + PIT notes: [data_tracker.md](data_tracker.md) §11.
+[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py). MOST remain RAW only — not yet normalized /
+PIT-aligned / in the Qlib provider. **EXCEPTION: `report_rc`** is fully PIT-ledger + Qlib-provider
+materialized (create_time/+2-open-day `effective_date` anchor) — 4 approved `$report_rc__eps_*` primitives
++ 5 quarantined consensus/rating aggregates `$report_rc__{np_fy1,op_rt_fy1,n_active_orgs,rating_up,rating_dn}`
+(see §report_rc below). Coverage table + PIT notes: [data_tracker.md](data_tracker.md) §11.
 
 ### report_rc (卖方盈利预测明细 — analyst forecasts)
 Total Columns: 21. `data/analyst/report_rc/report_rc_{YYYY}.parquet`. Each row = one analyst's forecast
