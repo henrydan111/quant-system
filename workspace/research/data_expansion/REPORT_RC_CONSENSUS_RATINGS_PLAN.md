@@ -1,10 +1,28 @@
-# report_rc consensus + rating-aggregate materialization — DESIGN PLAN (v2, GPT R1-folded)
+# report_rc consensus + rating-aggregate materialization — DESIGN PLAN (v4, GPT R1+R2+R3-folded)
 
 > **Goal:** materialize analyst-CONSENSUS levels + RATING aggregates from the already-ingested+approved
 > `report_rc` PIT ledger to unlock the 6 YELLOW deployed books (#8/#9 预期净利润; #16/#18 评级机构数;
 > #5/#17 评级调高家数). Extends the existing `_materialize_report_rc_consensus` (the 4 eps_diffusion
 > event-flow primitives) with LEVEL + RATING fields. Fields go through the FULL governance toll. Status:
-> **DESIGN — GPT §10 R1 = REVISE folded (below); awaiting R2.**
+> **DESIGN — GPT §10 R1→R2→R3 = REVISE, all folded (below); awaiting R4.**
+
+## GPT R3 REVISE → folds (2026-06-27) — 0 Blocker, 4 Major + 2 Minor (ENFORCEABILITY)
+- **M1 (TTL window off-by-one):** doc had expiry `e+TTL+1` but the algorithm said active `(p-TTL,p]` (=
+  expiry `e+TTL`). → **PINNED to option-b:** active iff `0 ≤ p − effective_pos ≤ TTL` (covers `e..e+TTL`,
+  matching the EXISTING `_materialize_report_rc_consensus` sweep `[p, min(p+ttl, n_cal-1)]`); expiry event
+  `e+TTL+1`. Boundary test: active at `e+TTL`, NaN at `e+TTL+1`.
+- **M2 (per-field status not representable by one block):** `DatasetEntry` has ONE status for all `fields`.
+  → register the 5 new fields as **5 SEPARATE single-field dataset entries** (each its own status), promoted/
+  demoted independently; + a no-duplicate-field test (a field never in two blocks).
+- **M3 (date-restricted promotion not enforceable):** `resolve_field()` gates by field+stage, NOT date. →
+  **REMOVE date-restriction entirely.** BINARY: any retroactive drift → field stays quarantine; only
+  0-retroactive-drift → promote.
+- **M4 (standing canary needs a fail-closed hook):** → name the enforcement: the canary writes a result
+  JSON BOUND to `provider_build_id`; **daily QA** runs/verifies it; if the canary is missing / stale (≠
+  current build) / failed, the approved consensus fields **FAIL formal validation** (resolver/release-gate
+  fail-closed), exactly like `approval_evidence_binding`.
+- **m1 (stale doc metadata):** this header + §8 label updated to v4/R4. **m2:** the data_dictionary /
+  data_tracker PIT updates land in **P3 (before the P4 publish)** — made explicit in §9.
 
 ## GPT R1 REVISE → folds (2026-06-26)
 - **B1 (prefix auto-approval — the data gate is bypassed):** the existing `report_rc` block approves
@@ -90,11 +108,14 @@ quarterly forecasts ignored (#14 净利润断层's 预期净利润Q DEFERRED —
 **Latest-per-org missing-value rule (m1):** the org's LATEST active FY1 forecast wins; if that row's
 `np`/`op_rt` is missing, the org is EXCLUDED from that metric's median at that recompute (no fallback to an
 older finite row — a newer visible report supersedes).
-**Recompute event set (M2 — TTL expiry):** the consensus is recomputed at {annual-forecast effective
-positions} ∪ {income annual-roll positions} ∪ **{per-forecast TTL-EXPIRY positions `effective_pos + TTL +
-1`}**, and carried only between consecutive events. So a forecast that ages past 120 open days with NO
-intervening event correctly drops out of the active set at its expiry (the served level recomputes from the
-remaining active forecasts, or → NaN if none) — it is NEVER served stale.
+**Active window + recompute events (M1/M2 — pinned, option-b):** a forecast at `effective_pos = e` is
+active at `p` iff **`0 ≤ p − e ≤ TTL`** (covers `e..e+TTL`, identical to the existing
+`_materialize_report_rc_consensus` interval sweep `[p, min(p+ttl, n_cal−1)]`); its expiry event is
+`e + TTL + 1` (the first `p` with `p − e > TTL`). The consensus is recomputed at {annual-forecast effective
+positions} ∪ {income annual-roll positions} ∪ **{per-forecast TTL-EXPIRY positions `e + TTL + 1`}**, and
+carried only between consecutive events. So a forecast that ages past its window with NO intervening event
+drops out of the active set at its expiry (the level recomputes from the remaining active forecasts, or →
+NaN if none) — NEVER served stale. Boundary test: a lone forecast is active at `e+TTL`, NaN at `e+TTL+1`.
 **Truth-table tests (M2):** (1) pre-annual-disclosure (FY1 = current year), (2) on the annual effective
 date (roll), (3) post-roll with NO new FY1 forecast (NaN, not stale carry), (4) no income history
 (fallback), (5) multiple active Q4 years present (pick FY1 only), (6) a single forecast valid at p with NO
@@ -140,31 +161,40 @@ EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4. Called from the same materi
   1. Convert the existing `report_rc` block: drop `field_prefixes`, add explicit `fields:` =
      `$report_rc__eps_up` / `__eps_dn` / `__eps_revision_count` / `__n_active_analysts` (status unchanged
      = approved). This CLOSES the wildcard hole — an unlisted `$report_rc__*` is no longer auto-approved.
-  2. NEW block `report_rc_consensus`: status **quarantine**, explicit `fields:` = the 5 new names + the
-     pre-registered 120d rating window in the reason (M4) + the vendor-approximation caveat.
-  3. Registry test: `resolve_field('$report_rc__future_probe','formal_validation')` is NOT approved
-     (proves no prefix auto-approval survives).
+  2. **5 SEPARATE single-field dataset entries (R3-M2 — `DatasetEntry` carries ONE status for all its
+     `fields`, so per-field promotion REQUIRES per-field ENTRIES):** `report_rc_np_fy1` /
+     `report_rc_op_rt_fy1` / `report_rc_n_active_orgs` / `report_rc_rating_up` / `report_rc_rating_dn`, each
+     status **quarantine**, explicit single `fields:`, the pre-registered 120d window + vendor caveat in
+     each reason. Promoted/demoted INDEPENDENTLY by flipping that entry's status — a field is NEVER in two
+     blocks.
+  3. Registry tests: `resolve_field('$report_rc__future_probe','formal_validation')` is NOT approved (no
+     prefix auto-approval survives); + a NO-DUPLICATE-FIELD test (no `$field` token appears in two dataset
+     entries — guards the 5-entry split, R3-M2).
 - **Evidence (m2):** materialization provenance JSON (bins added, per-field counts, byte-hash, coverage,
-  `provider_build_id` binding) + approval YAML bound to live `provider_build_id` + `calendar_policy_id`
+  `provider_build_id` binding) + each approval YAML bound to live `provider_build_id` + `calendar_policy_id`
   (daily-QA `approval_evidence_binding` checks it, like quality_stability).
-- **Promotion (M1):** quarantine → approved PER FIELD, only after the §7 output canary classifies drift
-  acceptable. Predictive use MUST `Ref(...,1)` + gate non-null/recency (sub-universe, sparse).
+- **Promotion (BINARY, R3-M3 — no date-restriction; `resolve_field` gates by field+stage, NOT date):** a
+  field's entry flips quarantine→approved ONLY on **0 retroactive drift** over the §7 canary window; ANY
+  drift → stays quarantine. Predictive use MUST `Ref(...,1)` + gate non-null/recency (sub-universe, sparse).
 
 ## 7. Validation (M1 output canary + the parity leg)
-- **Field-level restatement canary (M1/M3 — PRE-REGISTERED HARD RULES, STANDING; the load-bearing gate):**
-  snapshot the 5 materialized bins now; re-materialize from a fresh report_rc pull ≥1 week later; diff per
-  (code, date) for retroactive drift (the `report_rc_backfill_canary` pattern, on the OUTPUT bins).
-  **Pass/fail FIXED before snapshot-1 (no post-hoc "assess"):** (a) ANY retroactive drift on a date ≤
-  snapshot-1's provider-calendar end → that field STAYS quarantined (or is date-restricted to the
-  drift-free tail); (b) ANY `rating_up`/`rating_dn` drift → FAIL (breadth-family rule); (c) a field is
-  promotable ONLY with 0 retroactive drift over the window. **STANDING, not one-time:** re-runs on every
-  report_rc ledger/provider mutation and can DEMOTE an already-promoted field back to quarantine. NO field
-  promoted before the first clean run.
+- **Field-level restatement canary (M1/M3/M4 — PRE-REGISTERED HARD RULES, STANDING + FAIL-CLOSED; the
+  load-bearing gate):** snapshot the 5 materialized bins now; re-materialize from a fresh report_rc pull
+  ≥1 week later; diff per (code, date) for retroactive drift (the `report_rc_backfill_canary` pattern, on
+  the OUTPUT bins). **Pass/fail FIXED before snapshot-1 (no post-hoc "assess", NO date-restriction —
+  R3-M3 dropped it as unenforceable by the field+stage resolver):** (a) ANY retroactive drift on a date ≤
+  snapshot-1's provider-calendar end → that field STAYS quarantine; (b) ANY `rating_up`/`rating_dn` drift →
+  FAIL (breadth-family rule); (c) promotable ONLY with 0 retroactive drift over the window. **Enforcement
+  (R3-M4 — fail-closed hook):** the canary writes a result JSON BOUND to the live `provider_build_id`;
+  `scripts/run_daily_qa.py` runs/verifies it; a MISSING / STALE (build-mismatched) / FAILED canary makes
+  the consensus fields resolve as FAIL at `formal_validation` (a daily-QA + release-gate check mirroring
+  `approval_evidence_binding`). **STANDING:** re-runs on every report_rc ledger/provider mutation and
+  DEMOTES an already-promoted field on new drift. NO field promoted before the first clean run.
 - **Parity leg (approximate, labeled):** reproduce #16/#17/#18/#8/#9 vs their 果仁 xlsx via `D.features`
   (`Ref(...,1)`); report selection overlap + return; holding-level 评级机构数 vs 果仁's exported value
   (rung-4 method) to measure the vendor gap directly.
 
-## 8. Self-review (CLAUDE.md §10) — verdict: CLEAN FOR R2 (all R1 findings folded)
+## 8. Self-review (CLAUDE.md §10) — verdict: CLEAN FOR R4 (all R1+R2+R3 findings folded)
 - **PIT / no-lookahead (FIRST):** reads ledger `effective_date` only (create_time/+2 anchored); the FY1
   income-disclosed test is strict as-of d (mirrors the GPT-approved `_inc_asof`); consensus carried
   forward only; factor layer adds `Ref(...,1)`. No string-date compares.
