@@ -13,7 +13,8 @@
 > **Two settings silently break parity if left at default — always set them first:**
 > 1. **Universe dropdowns** (esp. **ST股票=仅有ST** for an ST book) — default 全部 returns the whole ~4600 market.
 > 2. **选股日期** — default is *today* (outside our frozen local calendar); pick a trading day **≤ the local
->    provider calendar max** (currently 2026-02-27; the comparator reads + prints it from `trade_cal.parquet`).
+>    provider calendar max** — read it from `data/reference/trade_cal.parquet` or let `guorn_factor_parity.py`
+>    print it at runtime (don't rely on a date shown in a historical example).
 
 ## What it can verify (3 modes)
 1. **筛选条件 only** — the full set of stocks passing a filter (e.g. `ILLIQ(5) rank 0–65%`). Validates a
@@ -58,7 +59,7 @@ makes any factor/overlap comparison meaningless. The full checklist (from `deplo
 | 果仁 dropdown | options (select value) | what it does | LOCAL equivalent |
 |---|---|---|---|
 | **ST股票** | 包含ST `0` / 排除ST `1` / **仅有ST** `-1` | keep both / drop ST·*ST / keep ONLY ST·*ST | `ru.st_codes_on(d)` from the authoritative range-form `data/qlib_data/instruments/st_stocks.txt` (§3.1). 排除→`code not in st`; 仅有→`code in st`. |
-| **科创板** | **排除科创板** `1` / 包含科创板 `0` / 仅有科创板 `-1` | drop 688/689 / keep / keep ONLY STAR | prefix gate on `688`/`689`. 排除→exclude from `MAIN_PREFIXES`; 包含→add 688/689; 仅有→only 688/689. |
+| **科创板** | **排除科创板** `1` / 包含科创板 `0` / 仅有科创板 `-1` | drop 688/689 / keep / keep ONLY STAR | use the shared `board_of()` (`workspace/research/jq_replication/jq_rep_utils.py`): STAR = `board_of(c)=="star"`; 排除→drop STAR; 包含→keep; 仅有→keep only STAR. **Do NOT build universes from bare prefix tuples** — `MAIN_PREFIXES`-style snapshots drift (they miss new 30xxxx ChiNext names, e.g. 302xxx); a legacy prefix list must be asserted == `board_of()` on the frozen provider first. |
 | **过滤停牌股票** | 是 (checked) / 否 | drop names 停牌 on the date / keep | schedule proxy `close_raw.loc[pday].notna()` (suspended ⇒ NaN OHLCV row ⇒ dropped) + the engine's `can_buy` tradability gate on `d`. |
 
 **★★ THE TRAP — 科创板 is a SEPARATE knob from 板块.** `板块=全部` does **NOT** put STAR (688/689) in the
@@ -66,7 +67,8 @@ universe — the **科创板 dropdown independently removes it**. Across the dep
 `板块:全部 + 科创板:排除科创板` ⇒ **STAR is excluded even though "all boards" is selected** (#1/#2/#4/#6/#7/#8/#9…).
 Only #3/#5/#15/#18 use `包含科创板`. So when reading a recipe, the 688/689 membership is decided by the **科创板**
 field, never by 板块. (Symmetrically, 果仁's `全部股票` already excludes **北证/BSE** — 8xx/920/.BJ are never in
-it, proven via holdings; our `MAIN_PREFIXES` correctly omit them.)
+it, proven via holdings; locally enforce this with `board_of(c) != "bse"`, NOT a bare prefix tuple — legacy
+`MAIN_PREFIXES` snapshots are drift-prone and currently miss 30xxxx ChiNext extensions such as 302xxx.)
 
 **过滤停牌 timing note (honest, not bit-exact):** 果仁's 过滤停牌:是 evaluates suspension as-of the trade day
 `d`; our schedule proxy evaluates `notna()` on the T−1 signal day `pday`. The residual case (trades on pday,
@@ -91,8 +93,9 @@ second-order. If a book sets **过滤停牌:否** (e.g. #14), do NOT apply the `
    **⚠ CRITICAL — the 选股日期 MUST be within LOCAL data coverage to be reproducible.** The field DEFAULTS to
    *today* (e.g. `2026/06/26`), which is OUTSIDE our frozen local calendar — a selection on that default date can
    NOT be matched by any local reproduction (we have no data past the freeze). **Always set 选股日期 to a trading
-   day ≤ the local provider calendar max** (currently 2026-02-27; `guorn_factor_parity.py` reads it from
-   `data/reference/trade_cal.parquet` and prints it, and fails closed on a non-trading or out-of-range date).
+   day ≤ the local provider calendar max** — `guorn_factor_parity.py` reads it from `data/reference/trade_cal.parquet`
+   and prints it at runtime, and fails closed on a non-trading or out-of-range date (don't rely on a date shown
+   in a historical example).
    Validated 2026-06-27 with **`2025/12/31`**
    (`form_input{ref_date, "2025/12/31"}` → confirm it changed off `2026/06/26` → 开始选股). It ran and the
    export is locally re-runnable.

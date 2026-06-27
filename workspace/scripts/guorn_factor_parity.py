@@ -170,8 +170,16 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
     print("\n" + "=" * 72)
     print(f"  果仁 ↔ LOCAL parity — {label}")
     print(f"  kind={kind}  guorn_scale={gscale:g}  n_果仁={n_g}  matched={len(both)}  coverage={cov:.1%}")
+    if cov < min_coverage:                                   # coverage gate fires for ANY row count (B1 + Minor)
+        print(f"  VERDICT: ✗ coverage gap — matched {cov:.1%} < --min-coverage {min_coverage:.1%}; fix "
+              "universe/join/provider coverage before trusting any matched-subset metrics (lower --min-coverage "
+              "with a documented reason to inspect the matched subset)")
+        print("  (NON-FORMAL. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
+        return
     if len(both) < 5:
-        print("  too few matched rows for metrics."); return
+        print("  too few matched rows for stable metrics.")
+        print("  VERDICT: ✗ insufficient matched rows — collect a larger export or use a purpose-built small-N audit")
+        return
     gvl, lvl = both["gval"], both["lval"]
     sp = gvl.corr(lvl, method="spearman")
     pe = gvl.corr(lvl, method="pearson")
@@ -211,14 +219,7 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
             else "◑ structure-exact (sub-detail residual)"
             if med <= 0.05 and sign >= 0.95 and sp >= 0.90
             else "✗ divergence — investigate (local bug vs vendor/复权/lag diff)")
-    # Coverage gate (B1): a high score on a partial matched panel can be survivorship- or join-broken → NEVER ✅.
-    if cov < min_coverage:
-        verdict = (f"✗ coverage gap — matched {cov:.1%} < --min-coverage {min_coverage:.1%}; fix universe/join/"
-                   "provider coverage before trusting the metrics above (a high matched-subset score can be "
-                   "survivorship- or join-biased)")
-    else:
-        verdict = metric_verdict
-    print(f"  VERDICT: {verdict}")
+    print(f"  VERDICT: {metric_verdict}")                    # coverage already cleared the gate above
     print("  (NON-FORMAL. A residual can be a legit vendor diff — 果仁 uses 朝阳永续 / its own 复权;")
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
 
