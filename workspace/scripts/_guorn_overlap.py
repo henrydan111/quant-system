@@ -19,6 +19,10 @@ BOOKS = {
     "01": ("01_sm_01_成长动量.xlsx", "verify01_schedule.json", (10, 20)),
     "02": ("05_sm_01_成长_v1.xlsx", "verify02_schedule.json", (10, 20)),
     "06": ("06_sm_01_成长高贝塔@TMT_v1.xlsx", "verify06_schedule.json", (7, 15)),
+    "18": ("53_ST_大市值_v3.xlsx", "verify18_schedule.json", (5, 8)),
+    "04": ("09_sm_GARP_illiq.xlsx", "verify04_schedule.json", (10, 20)),
+    "15": ("44_成长_双创_GARP@周期_v2.xlsx", "verify15_schedule.json", (10, 20)),
+    "05": ("10_sm_双创研发强度_v1.xlsx", "verify05_schedule.json", (5, 10)),
 }
 
 

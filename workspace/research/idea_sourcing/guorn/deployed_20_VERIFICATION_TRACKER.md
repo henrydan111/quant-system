@@ -20,9 +20,9 @@
 | 1 | sm_01_成长动量 | sm | 01 | 57.2% / 1.68 | 🟢 | 市值+CoreProfitQGr+EpsExclXorQGr+ROETTMDiffPQ+mom | **✅ VERIFIED 2026-06-26** my **+49.09** vs 果仁 +57.2 (**−8.1pp**); overlap 40.8%/58.6%. +涨停不卖 +8.1pp + industry-fix +1.5pp. Residual = 果仁 microcap-fill optimism (rung-1). [verify01_FINDINGS.md](verify01_FINDINGS.md) |
 | 2 | sm_01_成长_v1 | sm | 05 | 58.2% / 1.58 | 🟢 | 成长 (−mom +业绩快报) | **✅ VERIFIED 2026-06-26** my **+50.11** vs +58.2 (**−8.1pp**); overlap 47.9%/69.6%. Reuses #1 cache (6 shared factors); 业绩快报(express w=1) OMITTED (unmaterialized). |
 | 6 | sm_01_成长高贝塔@TMT_v1 | sm | 06 | 60.3% / 1.44 | 🟢 | 成长+beta+TMT (−预期营收−快报) | **✅ VERIFIED 2026-06-26** my **+53.73** vs +60.3 (**−6.6pp**, smallest); vol 38.8≈39.2, MDD −51.5≈−51.9 (near-exact); overlap 45.9%/67.2%. beta(000001,250)+研发销售比率 computed; 预期营收(consensus)+快报 OMITTED. |
-| 4 | sm_GARP_illiq | sm | 09 | 49.6% / 1.54 | 🟢 | SalesQGr+CoreProfit+ILLIQ (all rung-4/5) | pending |
-| 5 | sm_双创研发强度_v1 | sm | 10 | 62.7% / 1.54 | 🟢 | 市值+ILLIQ+R&D (rung-5) | pending |
-| 15 | 成长_双创_GARP@周期_v2 | 成长 | 44 | 43.4% / 1.13 | 🟢 | GARP (= #4 on 创业板) | pending |
+| 4 | sm_GARP_illiq | sm | 09 | 49.6% / 1.54 | 🟢 | SalesQGr+CoreProfit+ILLIQ (all rung-4/5) | **✅ VERIFIED 2026-06-27** my **+32.2** vs +49.6 (−17.4pp); vol 29.8≈29.6, MDD −40.6≈−42.5 (near-exact); overlap 19.4%/31.5%. ★ ILLIQ-filter DIRECTION bug found+fixed (果仁 holds ILLIQUID, "0-65%" is DESCENDING; overlap 9.7%→19.4%). 12/23 weight OMITTED. Composite faithful (果仁 @94.6 pct). |
+| 5 | sm_双创研发强度_v1 | sm | 10 | 62.7% / 1.54 | 🟢 | 市值+ILLIQ+R&D (rung-5) | **✅ VERIFIED 2026-06-27** my **+40.7** vs +62.7 (−22pp); vol 39.0≈38.1, MDD −49.1 (better than −61.0); 2015 LOCAL AHEAD (+381 vs +298); overlap 13.7%/21.4% (top5/10). 9/16 weight OMITTED incl w=2 RnDTTMGr%PY (no rd q5-7 depth). Composite faithful (@91 pct). HEAVIEST-omission GREEN. |
+| 15 | 成长_双创_GARP@周期_v2 | 成长 | 44 | 43.4% / 1.13 | 🟢 | GARP (= #4 on 双创) | **✅ VERIFIED 2026-06-27** my **+15.8** (exits-off faithful) vs +43.4 (−27.6pp); vol 35.2≈34.9 (near-exact), MDD −70.3 vs −46.6; overlap 24.2%/38.3%. Reuses #4 cache (双创 mask); 日均成交价→jq_daily_avg. exits-ON over-fires (+11.5%, rung-2). 12/24 weight OMITTED. WIDEST gap (双创 vol amplifies omission+fill optimism). |
 | 7 | value_红利低波_v2 | value | 19 | 29.7% / 1.32 | 🟡 | 股息率✓ + 中性N日换手率 (1 light neutral) | pending |
 | 8 | value_红利低波_央企_v1 | value | 20 | 32.1% / 1.27 | 🟡 | 股息率✓ + 预期股息率 (1 consensus) | pending |
 | 9 | value_红利低波_重股息_v1 | value | 21 | 33.3% / 1.27 | 🟡 | 分红波动率 + 预期DivAGrPY% (1 consensus) | pending |
@@ -74,12 +74,57 @@ re-display [_guorn_redisplay.py](../../../scripts/_guorn_redisplay.py).
    heuristic wrongly divided >300% years (only #2's 2015 mis-shown +3.4% → corrected +340%). Headline numbers were
    always correct (from the recipe stats + actual net). Fixed to `float(v)` in all 3 harnesses + `_guorn_redisplay.py`.
 
+## GARP / R&D cluster — VERIFIED (2026-06-27): #4, #15, #5
+
+The 3 remaining GREEN books, reproduced through the same daily model-II engine (0.2%/side, 涨停不卖, total
+return) vs their 果仁 xlsx. These are FACTOR-HEAVY books — **44–52% of recipe weight is irreducible/unavailable**,
+so they carry LARGER residuals than the 成长 cluster (documented below). Harnesses:
+[guorn_verify_04_garp.py](../../../scripts/guorn_verify_04_garp.py) (builds the broad universe incl 科创板 → #4
+masks it out) / [guorn_verify_15_garp_cycle.py](../../../scripts/guorn_verify_15_garp_cycle.py) (REUSES #4's
+cache + composite, 双创 mask) / [guorn_verify_05_rnd.py](../../../scripts/guorn_verify_05_rnd.py).
+
+| # | LOCAL | 果仁 | gap | Sharpe L/果 | vol L/果 | MDD L/果 | overlap | kept weight |
+|---|---|---|---|---|---|---|---|---|
+| 4 | +32.2% | +49.6% | −17.4pp | 0.95/1.54 | **29.8/29.6** | **−40.6/−42.5** | 19.4%/31.5% (top10/20) | 13/25 (52%) |
+| 15 | +15.8%¹ | +43.4% | −27.6pp | 0.48/1.13 | **35.2/34.9** | −70.3/−46.6 | 24.2%/38.3% (top10/20) | 12/24 (50%) |
+| 5 | +40.7% | +62.7% | −22.0pp | 0.97/1.54 | **39.0/38.1** | −49.1/−61.0² | 13.7%/21.4% (top5/10) | 7/16 (44%) |
+
+¹ #15 exits-OFF (faithful baseline); exits-ON over-fires to +11.5%/MDD −71% (rung-2). ² #5 MDD BETTER than 果仁.
+
+- **Construction is FAITHFUL despite the lower overlap** — PROVEN by the same composite-percentile test that
+  cleared #1/#59 ([_diag04_overlap.py](../../../scripts/_diag04_overlap.py) /
+  [_diag05_composite.py](../../../scripts/_diag05_composite.py)): 果仁's actual held names sit at my composite's
+  **94.6th** (#4/#15) / **91st** (#5, median 96th) percentile — the kept factors AGREE with 果仁's selection. The
+  lower top-N overlap (vs 成长's 40-48%) is the **44–52% recipe-weight OMISSION** shifting the fine-ordering at
+  concentrated top-N, NOT a defect. **vol matches 果仁 almost exactly on all three** (29.8/29.6, 35.2/34.9,
+  39.0/38.1) ⇒ the engine + risk scaling are sound; #4's MDD is near-exact, #5's is tighter than 果仁.
+- **★ #4 ILLIQ-DIRECTION bug (the careful-verification catch).** First pass = 9.7% overlap, too low even for the
+  omission. Diagnosis (universe 100% correct, 果仁 holds at 94.6 pct ⇒ composite fine) localized it to the
+  **ILLIQ(5) filter direction**: 果仁's #4 holds sit at ILLIQ-ascending-pct **mean 0.68** (frac<0.35 ≈ 1.2%) — the
+  book "sm_GARP_illiq" **TARGETS illiquidity**, so "ILLIQ(5) 排名%区间 0%-65%" keeps the **most-illiquid 65%**
+  (DESCENDING), not the most-liquid. My ascending filter excluded 55% of 果仁's picks. Flipped ⇒ overlap
+  **9.7%→19.4%**. (Confined to #4's harness; #15 has no ILLIQ filter, #5's 振幅 is a ranking not a filter.)
+- **OMISSIONS — every one measured-impossible from the field probe
+  ([_guorn_garp_field_probe.py](../../../scripts/_guorn_garp_field_probe.py)), NOT assumed (rule #10):** provider
+  single-quarter depth is **q0..q4 only** (no q5-7) ⇒ all TTM-YoY / 3yr-CAGR growths + the w=2 RnDTTMGr%PY (#5) +
+  12q-StdevQ unreproducible; **no EV field** (`$ev`/`$ev_ttm`/`$enterprise_value` all absent) ⇒ EBITDAQ%EV +
+  gross÷EV dropped; **D&A single-q = 0%** (semi-annual cadence) ⇒ FCFQ_重算 family dropped; 3 中性化 (HNeutralize)
+  + 壳价值 + 快报 + 评级(report_rc quarantine, parallel session) + 10日融资偿还($rzche quarantine) + 机构/管理层持股
+  (unmaterialized) = irreducible. Full per-book list in each `verifyNN_result.json`.
+- **The residual is the rung-1 mechanism, scaled by universe volatility × omission weight.** Calm years tight
+  (#4 2016 +2.7/2018 −3.4/2022 −8.9/2026 +3.2; #15 2014 −6.2/2017 +0.3/2023 −2.4/2025 +3.0; #5 2019 −5.8/2021
+  −11.1/2020 +8.0); bull years undershoot — 果仁 fills 一字 limit-up 双创/微盘 microcaps that our fill-price-aware
+  gate + volume cap (10%) correctly refuse. **#15 carries the WIDEST gap** because 双创 (创业+科创) is the most
+  explosive universe (果仁 2015 +358%) — same factors as #4 but the high-dispersion universe amplifies BOTH the
+  omission-driven selection-precision gap AND the fill optimism (and 日均成交价/jq_daily_avg pays the up-day
+  average). **#5's 2015 is LOCAL-AHEAD (+381 vs +298)** and its MDD beats 果仁 — the R&D core reproduces well.
+
 ## Roadmap
 
-1. **🟢 6 GREEN — 3 DONE (#1/#2/#6).** Remaining 🟢: #4 sm_GARP_illiq / #5 双创研发强度 / #15 GARP@周期 — but the
-   FULL recipes show gaps the partial-read triage missed (#4 = 23 factors incl 3 中性化(irreducible §5) + 快报 +
-   StdevQ(CoreProfit,12); #5 = 评级(consensus) + 10日融资偿还(quarantined repayment) + 壳价值 + 机构/管理层持股).
-   Reproducible with documented omissions, but heavier than the 成长 cluster.
+1. **🟢 6 GREEN — ALL 6 DONE (#1/#2/#6 成长 cluster 2026-06-26; #4/#15/#5 GARP/R&D cluster 2026-06-27).** The
+   GARP/R&D trio is factor-heavier (44–52% recipe-weight omitted: TTM-depth>q4, no EV field, D&A single-q=0%,
+   中性化/壳/快报) → larger residuals (−17 to −28pp) than the 成长 cluster's −7 to −8pp, but composite-faithful
+   (果仁 holds @91-95 pct) with near-exact vol. ★ Caught + fixed the #4 ILLIQ-direction bug (overlap 9.7%→19.4%).
 2. **🟡 7 YELLOW** — most are blocked only on **analyst CONSENSUS + rating aggregates** (预期净利润/营收/股息, 评级机构数/调高家数). Materializing report_rc consensus (Phase-2, was deferred) unlocks #8/#9/#14/#16/#17/#18 at once — the high-value data-infra task (like the stability factors unlocked #59). Light-neutral #7/#12 reproducible with documented approximation.
 3. **🔴 7 RED** — out-of-scope or new-domain: AH溢价 (#10, H股 data), 中性化-stack (#3, irreducible regression), FCF (#11, 处置FIOLTA unmaterialized), consensus-heavy (#13), fund rotation (#19/#20, need fund/ETF price data).
 

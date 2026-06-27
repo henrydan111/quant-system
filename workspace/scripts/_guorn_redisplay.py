@@ -22,6 +22,12 @@ BOOKS = {
            dict(annual=0.5820, sharpe=1.58, mdd=0.5004, vol=0.3438), "sm_01_成长_v1 (业绩快报 OMITTED)"),
     "06": ("06_sm_01_成长高贝塔@TMT_v1.xlsx", "verify06_net.parquet",
            dict(annual=0.6032, sharpe=1.44, mdd=0.5188, vol=0.392), "sm_01_成长高贝塔@TMT_v1 (预期营收+快报 OMITTED)"),
+    "04": ("09_sm_GARP_illiq.xlsx", "verify04_net.parquet",
+           dict(annual=0.4959, sharpe=1.54, mdd=0.4245, vol=0.296), "sm_GARP_illiq (12/23 weight OMITTED)"),
+    "15": ("44_成长_双创_GARP@周期_v2.xlsx", "verify15_net.parquet",
+           dict(annual=0.4339, sharpe=1.13, mdd=0.4655, vol=0.3492), "成长_双创_GARP@周期_v2 (12/24 weight OMITTED)"),
+    "05": ("10_sm_双创研发强度_v1.xlsx", "verify05_net.parquet",
+           dict(annual=0.6267, sharpe=1.54, mdd=0.6095, vol=0.3805), "sm_双创研发强度_v1 (9/16 weight OMITTED)"),
 }
 
 
