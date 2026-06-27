@@ -20,9 +20,9 @@
 | 1 | sm_01_成长动量 | sm | 01 | 57.2% / 1.68 | 🟢 | 市值+CoreProfitQGr+EpsExclXorQGr+ROETTMDiffPQ+mom | **✅ VERIFIED 2026-06-26** my **+49.09** vs 果仁 +57.2 (**−8.1pp**); overlap 40.8%/58.6%. +涨停不卖 +8.1pp + industry-fix +1.5pp. Residual = 果仁 microcap-fill optimism (rung-1). [verify01_FINDINGS.md](verify01_FINDINGS.md) |
 | 2 | sm_01_成长_v1 | sm | 05 | 58.2% / 1.58 | 🟢 | 成长 (−mom +业绩快报) | **✅ VERIFIED 2026-06-26** my **+50.11** vs +58.2 (**−8.1pp**); overlap 47.9%/69.6%. Reuses #1 cache (6 shared factors); 业绩快报(express w=1) OMITTED (unmaterialized). |
 | 6 | sm_01_成长高贝塔@TMT_v1 | sm | 06 | 60.3% / 1.44 | 🟢 | 成长+beta+TMT (−预期营收−快报) | **✅ VERIFIED 2026-06-26** my **+53.73** vs +60.3 (**−6.6pp**, smallest); vol 38.8≈39.2, MDD −51.5≈−51.9 (near-exact); overlap 45.9%/67.2%. beta(000001,250)+研发销售比率 computed; 预期营收(consensus)+快报 OMITTED. |
-| 4 | sm_GARP_illiq | sm | 09 | 49.6% / 1.54 | 🟢 | SalesQGr+CoreProfit+ILLIQ (all rung-4/5) | **✅ VERIFIED 2026-06-27** my **+32.2** vs +49.6 (−17.4pp); vol 29.8≈29.6, MDD −40.6≈−42.5 (near-exact); overlap 19.4%/31.5%. ★ ILLIQ-filter DIRECTION bug found+fixed (果仁 holds ILLIQUID, "0-65%" is DESCENDING; overlap 9.7%→19.4%). 12/23 weight OMITTED. Composite faithful (果仁 @94.6 pct). |
-| 5 | sm_双创研发强度_v1 | sm | 10 | 62.7% / 1.54 | 🟢 | 市值+ILLIQ+R&D (rung-5) | **✅ VERIFIED 2026-06-27** my **+40.7** vs +62.7 (−22pp); vol 39.0≈38.1, MDD −49.1 (better than −61.0); 2015 LOCAL AHEAD (+381 vs +298); overlap 13.7%/21.4% (top5/10). 9/16 weight OMITTED incl w=2 RnDTTMGr%PY (no rd q5-7 depth). Composite faithful (@91 pct). HEAVIEST-omission GREEN. |
-| 15 | 成长_双创_GARP@周期_v2 | 成长 | 44 | 43.4% / 1.13 | 🟢 | GARP (= #4 on 双创) | **✅ VERIFIED 2026-06-27** my **+15.8** (exits-off faithful) vs +43.4 (−27.6pp); vol 35.2≈34.9 (near-exact), MDD −70.3 vs −46.6; overlap 24.2%/38.3%. Reuses #4 cache (双创 mask); 日均成交价→jq_daily_avg. exits-ON over-fires (+11.5%, rung-2). 12/24 weight OMITTED. WIDEST gap (双创 vol amplifies omission+fill optimism). |
+| 4 | sm_GARP_illiq | sm | 09 | 49.6% / 1.54 | 🟢 | SalesQGr+CoreProfit+ILLIQ (all rung-4/5) | **✅ VERIFIED 2026-06-27** my **+32.2** vs +49.6 (−17.4pp); vol 29.8≈29.6, MDD −40.6≈−42.5 (near-exact); overlap 19.4%/31.5%. ★ ILLIQ-filter DIRECTION bug found+fixed (果仁 holds ILLIQUID, "0-65%" is DESCENDING; overlap 9.7%→19.4%). 12/23 weight OMITTED. **★ REPLAY: 果仁's names thru my eng EW = +48.7 ≥ 果仁 +47.1 → gap = 100% SELECTION (omitted factors), EXEC −1.6pp / CONSTR +2.3pp.** |
+| 5 | sm_双创研发强度_v1 | sm | 10 | 62.7% / 1.54 | 🟢 | 市值+ILLIQ+R&D (rung-5) | **✅ VERIFIED 2026-06-27** my **+40.7** vs +62.7 (−22pp); vol 39.0≈38.1, MDD −49.1 (better than −61.0); 2015 LOCAL AHEAD (+381 vs +298); overlap 13.7%/21.4% (top5/10). 9/16 weight OMITTED incl w=2 RnDTTMGr%PY (no rd q5-7 depth). Composite faithful (@91 pct). **★ REPLAY: 果仁's names thru my eng EW = +58.1 ≥ 果仁 +59.4 → gap = SELECTION (SEL +23.9pp, EXEC +1.3pp); R&D core out-selects 果仁 2014/15/19/21, loses only 2022-25.** HEAVIEST-omission GREEN. |
+| 15 | 成长_双创_GARP@周期_v2 | 成长 | 44 | 43.4% / 1.13 | 🟢 | GARP (= #4 on 双创) | **✅ VERIFIED 2026-06-27** my **+15.8** (exits-off faithful) vs +43.4 (−27.6pp); vol 35.2≈34.9 (near-exact), MDD −70.3 vs −46.6; overlap 24.2%/38.3%. Reuses #4 cache (双创 mask); 日均成交价→jq_daily_avg. exits-ON over-fires (+11.5%, rung-2). 12/24 weight OMITTED. **★ REPLAY: 果仁's names thru my eng EW = +41.1 ≈ 果仁 +41.2 → gap = 100% SELECTION (SEL +27.3pp, EXEC +0.1pp). WIDEST gap = largest SELECTION leg (双创 amplifies the OMISSION cost, not fills); 2015 limit-up 4.3% nets to 0.** |
 | 7 | value_红利低波_v2 | value | 19 | 29.7% / 1.32 | 🟡 | 股息率✓ + 中性N日换手率 (1 light neutral) | pending |
 | 8 | value_红利低波_央企_v1 | value | 20 | 32.1% / 1.27 | 🟡 | 股息率✓ + 预期股息率 (1 consensus) | pending |
 | 9 | value_红利低波_重股息_v1 | value | 21 | 33.3% / 1.27 | 🟡 | 分红波动率 + 预期DivAGrPY% (1 consensus) | pending |
@@ -111,13 +111,32 @@ cache + composite, 双创 mask) / [guorn_verify_05_rnd.py](../../../scripts/guor
   gross÷EV dropped; **D&A single-q = 0%** (semi-annual cadence) ⇒ FCFQ_重算 family dropped; 3 中性化 (HNeutralize)
   + 壳价值 + 快报 + 评级(report_rc quarantine, parallel session) + 10日融资偿还($rzche quarantine) + 机构/管理层持股
   (unmaterialized) = irreducible. Full per-book list in each `verifyNN_result.json`.
-- **The residual is the rung-1 mechanism, scaled by universe volatility × omission weight.** Calm years tight
-  (#4 2016 +2.7/2018 −3.4/2022 −8.9/2026 +3.2; #15 2014 −6.2/2017 +0.3/2023 −2.4/2025 +3.0; #5 2019 −5.8/2021
-  −11.1/2020 +8.0); bull years undershoot — 果仁 fills 一字 limit-up 双创/微盘 microcaps that our fill-price-aware
-  gate + volume cap (10%) correctly refuse. **#15 carries the WIDEST gap** because 双创 (创业+科创) is the most
-  explosive universe (果仁 2015 +358%) — same factors as #4 but the high-dispersion universe amplifies BOTH the
-  omission-driven selection-precision gap AND the fill optimism (and 日均成交价/jq_daily_avg pays the up-day
-  average). **#5's 2015 is LOCAL-AHEAD (+381 vs +298)** and its MDD beats 果仁 — the R&D core reproduces well.
+- **★ GAP DECOMPOSITION (replay method, 2026-06-27) — the gap is ~100% SELECTION, NOT fill optimism. The
+  "rung-1 fill-optimism co-driver" claimed in earlier commits is RETRACTED.** Feeding 果仁's EXACT daily held
+  names (各阶段持仓详单) through MY engine equal-weight
+  ([_guorn_gap_decompose.py](../../../scripts/_guorn_gap_decompose.py)) REPRODUCES-OR-BEATS 果仁 on every book ⇒
+  the engine/data/execution path is SOUND and there is NO net execution penalty. Full-period geo-CAGR 2014-26:
+
+  | # | R_guorn | R_replay (果仁 names, my eng, EW) | R_myew (my names, EW) | R_mine | EXEC (g−rep) | SELECT (rep−my) | CONSTR (my−mine) |
+  |---|---|---|---|---|---|---|---|
+  | 4 | +47.1% | **+48.7%** | +31.0% | +28.6% | **−1.6pp** | **+17.7pp** | +2.3pp |
+  | 15 | +41.2% | **+41.1%** | +13.8% | +14.2% | **+0.1pp** | **+27.3pp** | −0.3pp |
+  | 5 | +59.4% | **+58.1%** | +34.2% | +36.0% | **+1.3pp** | **+23.9pp** | −1.9pp |
+
+  EXECUTION is ±1.6pp (my realistic fills + EW EQUAL 果仁's model-II on their names); CONSTRUCTION (model-II band
+  vs EW) is ±2pp. **The ENTIRE gap is SELECTION** (+18 to +27pp): 果仁's name choice beats mine by that much at
+  identical execution. So the lower top-N overlap is not cosmetic — at 5-10 concentrated holds the **44–52%
+  OMITTED factor weight** fine-orders the elite pool differently and my composite picks an 18-27pp worse top-N
+  (果仁's names ARE in my top ~5% by composite, but the omitted factors pick the BETTER 10 within that elite — the
+  #1 "top-N-at-concentration" finding). **#15's gap is WIDEST because its SELECTION leg is largest (+27.3pp)** —
+  the omitted factors cost most on the high-dispersion 双创 universe, NOT fill optimism.
+- **Fill optimism IS real but per-bull-year and self-offsetting** (the per-year EXEC = 果仁−replay;
+  [_guorn_exec_diag.py](../../../scripts/_guorn_exec_diag.py)): the 一字-limit-up-at-OPEN fraction of 果仁's entries
+  (names my fill-price-aware gate refuses, 果仁 buys) is ~0 EXCEPT the 2015 双创 bull (**#15 2015 = 4.3%
+  locked-open / 17% closed limit-up; #4 = 0.2% overall**). 果仁 beats the replay by +17-28pp in 2015/2019/2025
+  ALONE, but the replay BEATS 果仁 in 2020/2021/2023/2026 ⇒ the execution leg NETS to ±1.6pp full-period. **#5's
+  R&D core out-selects 果仁 in 2014/2015/2019/2021** (SELECT negative) and only loses on selection in 2022-25 (when
+  the omitted w=2 RnDTTMGr%PY growth + rating factors matter most). #5's 2015 LOCAL-ahead + better MDD stand.
 
 ## Roadmap
 
