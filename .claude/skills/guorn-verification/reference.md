@@ -47,7 +47,7 @@ Validated worked cases: 总市值(亿) vs `$total_mv/1e4` → 100% cov, Spearman
 | 果仁 dropdown | semantics | local |
 |---|---|---|
 | **ST股票** 包含/排除/仅有 | both / drop ST·*ST / only ST·*ST | `ru.st_codes_on(d)` from range-form `data/qlib_data/instruments/st_stocks.txt` (§3.1) |
-| **科创板** 排除/包含/仅有 | drop / keep / only 688·689 | prefix gate (see step 2) |
+| **科创板** 排除/包含/仅有 | drop / keep / only STAR | shared `board_of()` (step 2): 排除→`board_of(c)!="star"`; 包含→keep; 仅有→`board_of(c)=="star"`. Enforce 北证/BSE exclusion separately with `board_of(c)!="bse"`. Do NOT use bare prefix tuples (drift-prone; assert == board_of() first). |
 | **过滤停牌** 是/否 | drop suspended on the date | `close.loc[pday].notna()` proxy + engine `can_buy` gate |
 
 **★ 科创板 ≠ 板块.** `板块=全部` does NOT include STAR; the 科创板 field independently removes 688/689. Most deployed books are `板块:全部 + 科创板:排除` ⇒ STAR EXCLUDED. 果仁 `全部股票` also excludes 北证/BSE (8xx/920/.BJ). Cross-check the result count against the book's universe before trusting it.
