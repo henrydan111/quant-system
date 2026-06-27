@@ -7,6 +7,9 @@
 >
 > **This file is CANONICAL; the JSON is a derived snapshot — keep them in sync.**
 >
+> **Canonical for penny/structure-exact mappings (§1).** VENDOR-APPROXIMATE (rank-faithful, RANKING-USE-ONLY)
+> mappings — e.g. 评级机构数 → `$report_rc__n_active_orgs` — live in **§1c**; they are NOT penny/threshold-exact.
+>
 > **Raw 果仁 formulas (do NOT duplicate here):** [indicator_reference_auto.md](indicator_reference_auto.md)
 > (99 custom + 14 builtin), [guorn_aichat_indicator_defs.md](guorn_aichat_indicator_defs.md) (builtins:
 > ILLIQ / 中性化 / 朝阳永续 / 评级), [内联公式85条拆解.md](内联公式85条拆解.md) (85 inline).
