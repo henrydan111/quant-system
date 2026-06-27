@@ -485,38 +485,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "10日融资偿还金额",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "管理层持股比例",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "RND%Assets",
       "bucket": "validated",
       "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
@@ -533,7 +501,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "20日换手率",
+      "guorn_indicator": "10日融资偿还金额",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -565,10 +533,42 @@
       "note": null
     },
     {
-      "guorn_indicator": "YieldRfrDiff",
+      "guorn_indicator": "20日换手率",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "管理层持股比例",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "连续N年分红(3)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -613,10 +613,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "连续N年分红(3)",
+      "guorn_indicator": "YieldRfrDiff",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
+      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -677,22 +677,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "RnDTTMGr%PY",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "RoeQ",
       "bucket": "doable",
       "local_expr": null,
@@ -713,6 +697,22 @@
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "RnDTTMGr%PY",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -757,10 +757,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "EpsTTMGr%",
+      "guorn_indicator": "AH股溢价率",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "(ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1",
+      "guorn_formula": null,
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -789,10 +789,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "AH股溢价率",
+      "guorn_indicator": "EpsTTMGr%",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": null,
+      "guorn_formula": "(ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -805,55 +805,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "sortinoN日(250)",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "ATR%收盘价N日(20)",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "60日波动率",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "120日涨幅",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -885,7 +837,55 @@
       "note": null
     },
     {
-      "guorn_indicator": "分析师评级分",
+      "guorn_indicator": "ATR%收盘价N日(20)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "120日涨幅",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "sortinoN日(250)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "近期评级变化",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -917,7 +917,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "近期评级变化",
+      "guorn_indicator": "分析师评级分",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -950,10 +950,10 @@
         "#9 sm_GARP_illiq"
       ],
       "status": "done",
-      "verdict": "✅ top-5/10/20 = 100%/100%/100% (broad 4397 names, Spearman 1.000); direct field  reproduces 果仁 EXACTLY at top-K",
+      "verdict": "✅ penny/display-exact (broad 4397, Spearman 1.000, cov 99.7%); selection overlap top-5/10/20 = 100%/100%/100% — direct field reproduces 果仁 EXACTLY at top-K",
       "export_file": "果仁_20251231_排除ST排除科创_排名-总市值降序.xlsx",
       "selection_date": "2025-12-31",
-      "note": "re-validated on BROAD universe (was 170-ST); rank-match top5/10/20 all 100%"
+      "note": "broad universe; comparator now auto-reports top-K"
     },
     {
       "guorn_indicator": "股息率TTM",

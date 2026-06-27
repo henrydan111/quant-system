@@ -157,7 +157,8 @@ def load_local_factor(expr: str, date: str, lag: int, code6_set: set[str]) -> pd
 
 
 # ----------------------------------------------------------------------------- compare
-def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverage: float, label: str):
+def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverage: float, label: str,
+           rank_desc: bool = True):
     m = g.join(lv, how="left")
     m["gval"] = m["gval"] * gscale
     n_g = len(m)
@@ -220,6 +221,13 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
             if med <= 0.05 and sign >= 0.95 and sp >= 0.90
             else "✗ divergence — investigate (local bug vs vendor/复权/lag diff)")
     print(f"  VERDICT: {metric_verdict}")                    # coverage already cleared the gate above
+    # top-K SELECTION overlap — a factor ultimately picks a small top-K, so this is the deployment-relevant match
+    asc = not rank_desc
+    go = both["gval"].sort_values(ascending=asc, kind="mergesort")
+    lo = both["lval"].sort_values(ascending=asc, kind="mergesort")
+    ov = [f"top{k}={len(set(go.head(min(k, len(both))).index) & set(lo.head(min(k, len(both))).index)) / min(k, len(both)):.0%}"
+          for k in (5, 10, 20)]
+    print(f"  selection overlap (by {'smallest' if asc else 'largest'} value): " + "  ".join(ov))
     print("  (NON-FORMAL. A residual can be a legit vendor diff — 果仁 uses 朝阳永续 / its own 复权;")
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
 
@@ -236,6 +244,8 @@ def main():
     ap.add_argument("--kind", choices=["auto", "value", "count"], default="auto")
     ap.add_argument("--min-coverage", type=float, default=0.98,
                     help="min matched-果仁 fraction required before any ✅ verdict; lower ONLY with a documented reason")
+    ap.add_argument("--select-asc", action="store_true",
+                    help="factor selects the SMALLEST values (top-K = smallest, e.g. 市值最小); default = largest")
     a = ap.parse_args()
 
     assert_pointwise(a.local_expr)                                    # B2: refuse cross-sectional/composite
@@ -245,7 +255,8 @@ def main():
     xlsx = (ROOT / a.xlsx) if not Path(a.xlsx).is_absolute() else Path(a.xlsx)
     g = load_guorn_export(xlsx, a.code_col, a.guorn_col)
     lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index))
-    report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})")
+    report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})",
+           rank_desc=not a.select_asc)
 
 
 if __name__ == "__main__":
