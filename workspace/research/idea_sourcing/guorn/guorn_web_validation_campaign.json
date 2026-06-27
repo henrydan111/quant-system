@@ -436,7 +436,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "交易天数",
+      "guorn_indicator": "管理层持股比例",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -484,22 +484,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "管理层持股比例",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "10日融资偿还金额",
       "bucket": "doable",
       "local_expr": null,
@@ -516,10 +500,26 @@
       "note": null
     },
     {
-      "guorn_indicator": "连续N年分红(3)",
+      "guorn_indicator": "交易天数",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "YieldRfrDiff",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -564,10 +564,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "YieldRfrDiff",
+      "guorn_indicator": "连续N年分红(3)",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
+      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -628,10 +628,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "RnDTTMGr%PY",
+      "guorn_indicator": "RoeQ",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
+      "guorn_formula": "ifnull(扣非净利润(单季),净利润(单季))/资产总计(单季)",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -644,10 +644,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "RoeQ",
+      "guorn_indicator": "RnDTTMGr%PY",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "ifnull(扣非净利润(单季),净利润(单季))/资产总计(单季)",
+      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -772,42 +772,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "sortinoN日(250)",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "120日涨幅",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "sortinoN日(120)",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -836,7 +804,39 @@
       "note": null
     },
     {
-      "guorn_indicator": "评级增持家数",
+      "guorn_indicator": "sortinoN日(120)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "sortinoN日(250)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "分析师评级分",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -852,7 +852,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "分析师评级分",
+      "guorn_indicator": "评级增持家数",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -911,7 +911,7 @@
     {
       "guorn_indicator": "ROETTMDiffPQ",
       "bucket": "doable",
-      "local_expr": "(TTM归母_q0/eq_q0)-(TTM归母_q1/eq_q1) — DIVERGES",
+      "local_expr": "TTM-ROE QoQ diff — top-K = negative-equity explosion outliers, irreproducible",
       "guorn_formula": "净资产收益率-RefQ(净资产收益率,1)",
       "n_deployed_books": 9,
       "n_strategies_all": 20,
@@ -927,10 +927,10 @@
         "#9 sm_GARP_illiq"
       ],
       "status": "diverged",
-      "verdict": "✗ DIVERGENCE: derived ROE-diff (TTM归母/end-eq) ≠ 果仁 净资产收益率 — sign 60.2%, Pearson 0.052, Spearman 0.857, top-5/10/20 = 20%/40%/35%. Diverges at tiny-equity ROE-explosion extremes (the SELECTED top-K). 果仁's 净资产收益率 uses a different ROE definition (#1 harness ⚠ ROE-field caveat confirmed). Needs the exact 果仁 ROE builtin to reproduce.",
+      "verdict": "✗ IRREDUCIBLE (factor-design fragility, NOT a data bug). ROETTMDiffPQ = REFQ(净资产收益率,0)-REFQ(净资产收益率,1) [formula-confirmed, strat#68]. 净资产收益率=TTM-ROE (Spearman 0.87 w/ TTM归母 build vs 0.37 reported-YTD → definitively TTM). The SELECTED top-K is dominated by NEGATIVE/tiny-equity stocks (果仁 #1=000692 eq −1.29亿 val 333; 002513 eq −0.14亿 opposite sign) where ROE=profit/equity is mathematically UNSTABLE; 果仁's vendor negative-equity handling ≠ our naive TTM归母/period-end-equity. ALL 4 NI×equity variants give top-20 ≤40%, Pearson 0.05. Bulk rank OK (0.87), selection zone irreproducible.",
       "export_file": "果仁_20251231_排除ST排除科创_排名-ROETTMDiffPQ.xlsx",
       "selection_date": "2025-12-31",
-      "note": "in 9 deployed books; factor NOT reproducible with current 净资产收益率 mapping — investigate ROE definition"
+      "note": "9 deployed books; factor selects unstable negative-equity ROE-explosions (000692 eq=−1.29亿 is 果仁's #1 pick) — a factor-quality red flag, not just a parity gap"
     },
     {
       "guorn_indicator": "总市值",
@@ -967,10 +967,10 @@
         "#20 value_红利低波_央企_v1"
       ],
       "status": "diverged",
-      "verdict": "◑ structure-exact OVERALL (Spearman 0.983) BUT selection top-5/10/20 = 60%/80%/80% — top-yield stocks DIVERGE: 603508 NaN local; 603165 11.5%vs8.5%, 600329 8.2%vs2.8% (TTM-dividend window / special-div diff in $dv_ttm). Rank-faithful in the tail, weaker at the selected top.",
+      "verdict": "◑ $dv_ttm = CORRECT base mapping (exact for 002271/600256) but VENDOR-DATA divergence at high-yield tail (the selected top-K): 果仁 dividend source/window differs from Tushare — 603167 uses annual(dv_ratio) not ttm, 600329/603165 neither, 603508 Tushare-missing. Irreducible vendor diff (like 评级机构数), NOT a field bug. top-5/10/20=60/80/80.",
       "export_file": "果仁_20251231_排除ST排除科创_排名-股息率TTM.xlsx",
       "selection_date": "2025-12-31",
-      "note": "rigorous top-K caught a selection-zone coverage+value gap (user's 筛选一致 directive)"
+      "note": "ROOT CAUSE: vendor dividend-data diff at high-yield stocks; dv_ttm best-but-not-exact at tail"
     },
     {
       "guorn_indicator": "评级机构数",
