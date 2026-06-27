@@ -36,9 +36,47 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "workspace" / "scripts"))
-sys.stdout.reconfigure(encoding="utf-8")
+try:                                          # import-safe under pytest's captured stdout
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")
+TRADE_CAL = ROOT / "data" / "reference" / "trade_cal.parquet"
 EPS = 1e-9
+# Pointwise-only guard. qlib's expression engine is PER-INSTRUMENT time-series (Ref/Mean/Corr/Rank-over-window
+# …), so a valid --local-expr is computed independently per stock and the export-codes-only fetch is correct.
+# A genuine CROSS-SECTIONAL / group / neutralized / composite factor is NOT a qlib expression (it lives in the
+# factor_eval helpers / the 综合级 harness); refuse these tokens with a clear redirect rather than mis-handle.
+CROSS_SECTIONAL_TOKENS = ("cs_", "csrank", "havg", "hneutralize", "neutralize", "grouped by")
+
+
+def _trading_days() -> pd.DatetimeIndex:
+    """The local provider trading calendar (the §3.1 ground truth)."""
+    cal = pd.read_parquet(TRADE_CAL, columns=["cal_date", "is_open"])
+    cal = cal[cal["is_open"] == 1]
+    return pd.DatetimeIndex(pd.to_datetime(cal["cal_date"].astype(str), format="%Y%m%d")).sort_values()
+
+
+def assert_pointwise(expr: str) -> None:
+    """Refuse cross-sectional/group/neutralized/composite expressions (B2). They change value with the instrument
+    set, and this tool fetches only the 果仁-export codes; qlib expressions are per-instrument, so a valid expr is
+    pointwise — these tokens signal a 综合级 factor that must use the full-universe harness instead."""
+    bad = [t for t in CROSS_SECTIONAL_TOKENS if t in expr.lower()]
+    if bad:
+        raise SystemExit(
+            f"guorn_factor_parity.py is POINTWISE-only (fetches only 果仁-export codes); {expr!r} contains "
+            f"cross-sectional token(s) {bad}. Compute a cross-sectional / group / neutralized / composite factor "
+            "on the FULL intended universe via the 综合级 harness (_composite_row pattern), then join to the export.")
+
+
+def validate_trading_date(date: str, cal: pd.DatetimeIndex) -> pd.Timestamp:
+    """--date must be an actual trading day ≤ the local provider calendar max (no silent fallback, no lookahead)."""
+    target = pd.Timestamp(date)
+    if target > cal.max():
+        raise SystemExit(f"--date {date} > local calendar max {cal.max().date()} — outside local coverage, unreproducible")
+    if target not in set(cal):
+        raise SystemExit(f"--date {date} is not a trading day in the local calendar — pass an actual trading day")
+    return target
 
 
 # ----------------------------------------------------------------------------- 果仁 export side
@@ -119,7 +157,7 @@ def load_local_factor(expr: str, date: str, lag: int, code6_set: set[str]) -> pd
 
 
 # ----------------------------------------------------------------------------- compare
-def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, label: str):
+def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverage: float, label: str):
     m = g.join(lv, how="left")
     m["gval"] = m["gval"] * gscale
     n_g = len(m)
@@ -148,12 +186,17 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, label: str)
         print(f"  corr (non-zero)  = {pe_nz:.3f}   (n_nonzero={len(nz)})")
         print(f"  frac>0  果仁={fg:.1%}  local={fl:.1%}")
         print(f"  Spearman={sp:.3f}  Pearson={pe:.3f}")
-        # a vendor-approximate count (果仁 朝阳永续 vs our 卖方研报) can be off-by-one yet track perfectly —
-        # rank + breadth agreement = reproduces; exact-match is the stricter same-vendor (penny) bar.
+        # A vendor-approximate count (果仁 朝阳永续 vs our 卖方研报) can be off-by-one yet RANK perfectly — usable
+        # for ranking/composite, NOT for a threshold filter or an exact data audit (a scaled count can rank-corr
+        # 1.0 yet be threshold-wrong). So rank-faithful is ◑, not ✅; ✅ is reserved for same-vendor exact with
+        # matching >0 breadth.
         strong_track = (pe_nz >= 0.95 and sp >= 0.95) if not np.isnan(pe_nz) else (sp >= 0.97)
-        verdict = ("✅ reproduces (vendor-approximate)" if exact >= 0.75 or strong_track
-                   else "◑ partial — inspect (vendor diff vs local bug)" if exact >= 0.50 or sp >= 0.7
-                   else "✗ divergence — investigate")
+        metric_verdict = (
+            "✅ same-vendor count-exact" if exact >= 0.95 and abs(fg - fl) <= 0.01
+            else "◑ vendor-approx rank-faithful — ranking/composite use ONLY; NOT threshold/value-exact"
+            if strong_track and abs(fg - fl) <= 0.03
+            else "◑ partial — inspect (vendor diff vs local bug)" if exact >= 0.50 or sp >= 0.7
+            else "✗ divergence — investigate")
     else:
         rel = ((lvl - gvl) / gvl.where(gvl.abs() > EPS)).replace([np.inf, -np.inf], np.nan).abs()
         med = float(rel.median())
@@ -162,11 +205,19 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, label: str)
         print(f"  within 0.1% / 1% / 5% = {w[0.001]:.1%} / {w[0.01]:.1%} / {w[0.05]:.1%}")
         print(f"  sign-agreement   = {sign:.1%}")
         print(f"  Spearman={sp:.3f}  Pearson={pe:.3f}")
-        verdict = ("✅ penny/display-exact (residual = display/PIT-boundary)"
-                   if med <= 0.01 and w[0.05] >= 0.90 and sign >= 0.97
-                   else "◑ structure-exact (sub-detail residual)"
-                   if med <= 0.05 and sign >= 0.95 and sp >= 0.90
-                   else "✗ divergence — investigate (local bug vs vendor/复权/lag diff)")
+        metric_verdict = (
+            "✅ penny/display-exact (residual = display/PIT-boundary)"
+            if med <= 0.01 and w[0.05] >= 0.90 and sign >= 0.97
+            else "◑ structure-exact (sub-detail residual)"
+            if med <= 0.05 and sign >= 0.95 and sp >= 0.90
+            else "✗ divergence — investigate (local bug vs vendor/复权/lag diff)")
+    # Coverage gate (B1): a high score on a partial matched panel can be survivorship- or join-broken → NEVER ✅.
+    if cov < min_coverage:
+        verdict = (f"✗ coverage gap — matched {cov:.1%} < --min-coverage {min_coverage:.1%}; fix universe/join/"
+                   "provider coverage before trusting the metrics above (a high matched-subset score can be "
+                   "survivorship- or join-biased)")
+    else:
+        verdict = metric_verdict
     print(f"  VERDICT: {verdict}")
     print("  (NON-FORMAL. A residual can be a legit vendor diff — 果仁 uses 朝阳永续 / its own 复权;")
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
@@ -175,19 +226,25 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, label: str)
 def main():
     ap = argparse.ArgumentParser(description="果仁 web-export ↔ local factor parity")
     ap.add_argument("--xlsx", required=True, help="path to the 果仁 每日选股 export")
-    ap.add_argument("--date", required=True, help="选股日期 YYYY-MM-DD (must be ≤ local freeze 2026-02-27)")
-    ap.add_argument("--local-expr", required=True, help="qlib expression, e.g. '$total_mv/1e4'")
+    ap.add_argument("--date", required=True, help="选股日期 YYYY-MM-DD; a trading day ≤ the local provider calendar max (printed at runtime)")
+    ap.add_argument("--local-expr", required=True, help="POINTWISE qlib expression, e.g. '$total_mv/1e4' (no cross-sectional/composite)")
     ap.add_argument("--guorn-col", default=None, help="export column holding 果仁's value (header or 0-based idx)")
     ap.add_argument("--code-col", default=None, help="export code column (default col 0)")
     ap.add_argument("--lag", type=int, default=1, help="1=T−1 display lag (default); 0=lag-0 PIT fundamentals")
     ap.add_argument("--guorn-scale", type=float, default=1.0, help="multiply 果仁 value to match local unit")
     ap.add_argument("--kind", choices=["auto", "value", "count"], default="auto")
+    ap.add_argument("--min-coverage", type=float, default=0.98,
+                    help="min matched-果仁 fraction required before any ✅ verdict; lower ONLY with a documented reason")
     a = ap.parse_args()
 
+    assert_pointwise(a.local_expr)                                    # B2: refuse cross-sectional/composite
+    cal = _trading_days()
+    print(f"[cal] local provider calendar max = {cal.max().date()}", flush=True)
+    validate_trading_date(a.date, cal)                               # Minor 1+2: trading-day ≤ calendar max
     xlsx = (ROOT / a.xlsx) if not Path(a.xlsx).is_absolute() else Path(a.xlsx)
     g = load_guorn_export(xlsx, a.code_col, a.guorn_col)
     lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index))
-    report(g, lv, a.kind, a.guorn_scale, f"{a.local_expr}  @ {a.date} (lag {a.lag})")
+    report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})")
 
 
 if __name__ == "__main__":

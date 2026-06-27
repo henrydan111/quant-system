@@ -81,6 +81,16 @@ scope a slot_depth build (`--touched-symbols`+`field_filter`) — the unscoped f
 
 Legend: ✅ penny/structure-exact (residual = display/PIT-boundary) · ◑ structure confirmed, sub-detail residual · ⊙ semantics resolved, reproduction pending.
 
+### 1c. Vendor-approximate (rank-faithful — RANKING-USE ONLY, not penny/threshold-exact)
+
+These reproduce 果仁's **ranking** but come from a DIFFERENT vendor than 果仁's 朝阳永续, so they are NOT
+penny-exact and MUST NOT be used as a threshold filter or an exact data audit. Validated vs 果仁's web export
+(`guorn_factor_parity.py --kind count`), not just JoinQuant.
+
+| 果仁 indicator | local expression | status (parity, n) | allowed use |
+|---|---|---|---|
+| **评级机构数** | `$report_rc__n_active_orgs` | ◑ vendor-approx **rank-faithful** vs 果仁 web (Tushare 卖方研报 ≠ 朝阳永续): exact 70.8%, corr-on-non-zero 0.990, Spearman 0.982 @2025-12-31 (broad univ, 92% coverage → `--min-coverage 0.90`) | a RANKING factor / composite term only — NOT a threshold filter or value audit |
+
 ---
 
 ## 2. Data-validated, residual = reconstruction convention (NOT a data error)
@@ -120,8 +130,9 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
   EPCoreProfitQ, EBITDAQ, all revenue/profit/asset growth-rate transforms, ROETTMDiffPQ, etc.
 - **Irreducible** (cannot penny-match 果仁): 中性化 family (`HNeutralize`/`HNeutralizeMI` — 果仁's exact
   industry regression), 壳价值 (`SSlopeXY` AH-premium regression), 退市风险 screens (预期ST2021 / 风险预警25版
-  / 重大违规 / 国九条 — no local data), 朝阳永续 预期 (预期净利润 / 评级机构数 — report_rc, validated vs
-  **JoinQuant** not 果仁, different vendor), 大盘择时 (涨停/跌停家数比例 — market-aggregate), ETF selectors
+  / 重大违规 / 国九条 — no local data), 朝阳永续 预期净利润 (report_rc; vendor-approximate, not penny-mappable —
+  Tushare 卖方研报 ≠ 朝阳永续) [⚠ **评级机构数 is NOT here — it is now mapped vendor-approximate, see §1c**, web-
+  validated rank-faithful vs 果仁], 大盘择时 (涨停/跌停家数比例 — market-aggregate), ETF selectors
   (`TICKER()=...`), 未来20日新增流通股 (PIT lockup schedule, no clean feed — realized shares = lookahead).
 
 ---

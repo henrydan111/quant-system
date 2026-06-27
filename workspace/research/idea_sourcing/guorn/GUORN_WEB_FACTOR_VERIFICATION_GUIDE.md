@@ -12,7 +12,8 @@
 >
 > **Two settings silently break parity if left at default — always set them first:**
 > 1. **Universe dropdowns** (esp. **ST股票=仅有ST** for an ST book) — default 全部 returns the whole ~4600 market.
-> 2. **选股日期** — default is *today* (outside our frozen local calendar); pick a trading day **≤ 2026-02-27**.
+> 2. **选股日期** — default is *today* (outside our frozen local calendar); pick a trading day **≤ the local
+>    provider calendar max** (currently 2026-02-27; the comparator reads + prints it from `trade_cal.parquet`).
 
 ## What it can verify (3 modes)
 1. **筛选条件 only** — the full set of stocks passing a filter (e.g. `ILLIQ(5) rank 0–65%`). Validates a
@@ -88,9 +89,11 @@ second-order. If a book sets **过滤停牌:否** (e.g. #14), do NOT apply the `
    #4 ILLIQ bug: "0–65%" was DESCENDING = keep the most-illiquid 65%, not the most-liquid).
 5. **每日选股:** click the **每日选股** bottom tab → set **选股日期** → **开始选股**.
    **⚠ CRITICAL — the 选股日期 MUST be within LOCAL data coverage to be reproducible.** The field DEFAULTS to
-   *today* (e.g. `2026/06/26`), which is OUTSIDE our frozen local calendar (max local date **2026-02-27**) — a
-   selection on that default date can NOT be matched by any local reproduction (we have no data past the
-   freeze). **Always set 选股日期 to a trading day ≤ 2026-02-27.** Validated 2026-06-27 with **`2025/12/31`**
+   *today* (e.g. `2026/06/26`), which is OUTSIDE our frozen local calendar — a selection on that default date can
+   NOT be matched by any local reproduction (we have no data past the freeze). **Always set 选股日期 to a trading
+   day ≤ the local provider calendar max** (currently 2026-02-27; `guorn_factor_parity.py` reads it from
+   `data/reference/trade_cal.parquet` and prints it, and fails closed on a non-trading or out-of-range date).
+   Validated 2026-06-27 with **`2025/12/31`**
    (`form_input{ref_date, "2025/12/31"}` → confirm it changed off `2026/06/26` → 开始选股). It ran and the
    export is locally re-runnable.
    - ⚠ For a PAST date 果仁 adds a **未来5日涨幅** (realized forward 5-day return) column — useful as an
@@ -149,9 +152,12 @@ venv/Scripts/python.exe workspace/scripts/guorn_factor_parity.py \
 - VALUE — `总市值(亿)` vs `$total_mv/1e4`, 170 ST names @2025-12-31: coverage 100%, **Spearman 0.999 / Pearson
   1.000 / sign 100%**, median rel-err 1.08% → ◑ structure-exact (residual = 果仁's 2-dec 亿 display-round on
   tiny ST caps; 总市值 reproduces).
-- COUNT — `评级机构数` vs `$report_rc__n_active_orgs`, 4057 broad names @2025-12-31: **exact-match 70.8%,
-  corr-on-non-zero 0.990, Spearman 0.982, frac>0 57.7% vs 57.4%** → **✅ reproduces (vendor-approximate)**
-  (re-confirms the #18 field on the web flow; the 29% non-exact = Tushare 卖方研报 ≠ 果仁 朝阳永续, ±1–2 analysts).
+- COUNT — `评级机构数` vs `$report_rc__n_active_orgs` @2025-12-31: **92% coverage** (4057/4412; 355 果仁 names
+  absent from the frozen provider → the default `--min-coverage 0.98` returns `✗ coverage gap`; rerun with
+  `--min-coverage 0.90` + that documented reason), **exact 70.8% / corr-on-non-zero 0.990 / Spearman 0.982 /
+  frac>0 57.7% vs 57.4%** → **`◑ vendor-approx rank-faithful`** (usable as a RANKING factor; NOT a threshold/audit
+  value — the 29% non-exact = Tushare 卖方研报 ≠ 果仁 朝阳永续, ±1–2 analysts). Re-confirms the #18 field at the
+  RANK level, with the coverage gap surfaced (not a blanket ✅).
 
 ### The LOCAL side — which field/expression (the canonical map)
 **[guorn_local_field_mapping.md](guorn_local_field_mapping.md) is the canonical 果仁-indicator → local-field
@@ -163,8 +169,10 @@ every comparison must apply:
   成交额(亿)=`$amount/1e5` (千元→亿); BP needs `×1e4` (equity元 / mktcap万元). Or pass `--guorn-scale`.
 - **后复权** — `$close × $adj_factor`; for a price RATIO (e.g. 250日涨幅) it is 复权-base-invariant; raw close is wrong.
 - **single-quarter** — `$<field>_sq_q0` = latest single Q; TTM = Σ(`_sq_q0.._q3`); 去年同期 single-Q = `_sq_q4`.
-- Any qlib expression works (`--local-expr '($revenue_sq_q0-$oper_cost_sq_q0)/$total_assets_q0'`) — Qlib
-  evaluates it; the comparator reads it via `D.features` at the chosen lag.
+- **POINTWISE qlib expressions only** (`--local-expr '($revenue_sq_q0-$oper_cost_sq_q0)/$total_assets_q0'`) —
+  raw fields / arithmetic / time-series ops, which qlib evaluates per-instrument, so the export-codes-only fetch
+  is exact. The comparator **REFUSES cross-sectional / group / neutralized / composite** expressions (`cs_`,
+  HAVG, neutralize) — those change with the instrument set; verify them on the FULL universe via the 综合级 harness.
 
 ### The JOIN — 6-digit 果仁 code → Qlib instrument
 果仁 exports a bare 6-digit code; local frames are Qlib form (`603268_SH`). The comparator maps via the
@@ -175,19 +183,21 @@ table). Human-readable suffix rule (reference): SH = `600/601/603/605/688/689/90
 ### Acceptance rubric (the de-facto rung-4 standard)
 | metric (comparator prints) | for | "reproduces" looks like |
 |---|---|---|
-| coverage | all | ≥ ~90% of 果仁 names found locally (misses = newly-listed / out-of-universe) |
+| coverage (GATE) | all | ≥ `--min-coverage` (default 0.98) before ANY ✅ — below it the verdict is forced to `✗ coverage gap` (a high score on a partial panel can be survivorship/join-broken). Lower only with a documented reason. |
 | median \|rel-err\|, within 0.1/1/5% | continuous | med ≤ 1% & within-5% ≥ 90% = display-exact |
 | sign-agreement | signed | ≥ 97% (a sign flip = wrong direction = real bug) |
 | Spearman / Pearson | all | ≥ 0.95 = same factor; low = real divergence |
-| EXACT-match | integer/count | ≥ 75% same-vendor; lower + high corr = vendor-approximate |
+| EXACT-match + frac>0 breadth | integer/count | ≥ 95% & breadth-match = same-vendor exact; lower + corr≥0.95 = vendor-approx **rank-faithful (ranking-only, NOT threshold)** |
 | corr-on-non-zero | sparse/count | the real test for a sparse field (≥ 0.95 = tracks) |
 
-Verdict tiers: **✅ penny/display-exact** · **✅ reproduces (vendor-approximate)** (count tracks at corr ≥ 0.95
-though off-by-one) · **◑ structure-exact** (sign+rank agree, small value residual) · **✗ divergence**.
+Verdict tiers — value: **✅ penny/display-exact** · **◑ structure-exact** · **✗ divergence**; count: **✅ same-vendor
+count-exact** (exact≥95% + matching >0 breadth) · **◑ vendor-approx rank-faithful** (corr≥0.95 — ranking/composite
+use ONLY, NOT threshold/value-exact) · **✗**. Any tier is OVERRIDDEN to **✗ coverage gap** when coverage < `--min-coverage`.
 **Reading a residual (the discipline):** a gap is NOT automatically a local bug — rule out, IN ORDER, (1) lag
-mismatch (T−1 vs lag-0), (2) unit/scale, (3) 后复权 base, (4) **vendor** (果仁 朝阳永续 / its own 复权 —
-legitimately different), THEN (5) a local bug. Localize before you claim. (The #18 lesson: prove a field by
-this DIRECT comparison, never by a book's return.)
+mismatch (T−1 vs lag-0), (2) unit/scale, (3) 后复权 base, (4) **calendar / suspension / window-membership
+convention** (proven to drive long-window residuals — 250日涨幅, 乖离率 — that are NOT data/vendor errors),
+(5) **vendor** (果仁 朝阳永续 / its own 复权 — legitimately different), THEN (6) a local bug. Localize before you
+claim. (The #18 lesson: prove a field by this DIRECT comparison, never by a book's return.)
 
 ## Using it for parity (the high-value play)
 - **Field validation** (e.g. did `$report_rc__n_active_orgs` reproduce 评级机构数?): rank-only on 评级机构数,
