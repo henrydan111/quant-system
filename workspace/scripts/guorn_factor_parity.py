@@ -221,13 +221,22 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
             if med <= 0.05 and sign >= 0.95 and sp >= 0.90
             else "✗ divergence — investigate (local bug vs vendor/复权/lag diff)")
     print(f"  VERDICT: {metric_verdict}")                    # coverage already cleared the gate above
-    # top-K SELECTION overlap — a factor ultimately picks a small top-K, so this is the deployment-relevant match
+    # top-K SELECTION overlap (deployment-relevant). RIGOROUS — 果仁's top-K is from its FULL export, so a 果仁
+    # top name that local CAN'T value is a real MISS (local can't select it): any universe/筛选条件 inconsistency
+    # surfaces here, not hidden by restricting to the matched subset. m = full 果仁 set (lval NaN where missing).
     asc = not rank_desc
-    go = both["gval"].sort_values(ascending=asc, kind="mergesort")
-    lo = both["lval"].sort_values(ascending=asc, kind="mergesort")
-    ov = [f"top{k}={len(set(go.head(min(k, len(both))).index) & set(lo.head(min(k, len(both))).index)) / min(k, len(both)):.0%}"
-          for k in (5, 10, 20)]
+    gtop = m["gval"].sort_values(ascending=asc, kind="mergesort")           # 果仁's true ranking (full universe)
+    ltop = m["lval"].dropna().sort_values(ascending=asc, kind="mergesort")  # local's ranking (names local can value)
+    ov = []
+    for k in (5, 10, 20):
+        kk = min(k, len(gtop))
+        gk = set(gtop.head(kk).index)
+        ov.append(f"top{k}={len(gk & set(ltop.head(min(k, len(ltop))).index)) / kk:.0%}")
     print(f"  selection overlap (by {'smallest' if asc else 'largest'} value): " + "  ".join(ov))
+    miss20 = int(m.loc[list(set(gtop.head(min(20, len(gtop))).index)), "lval"].isna().sum())
+    if miss20:
+        print(f"  ⚠ {miss20} of 果仁's top-20 are NOT valued locally — coverage gap in the SELECTION zone; the "
+              "rank comparison is affected. Match the 果仁 universe/筛选条件 to the local set before trusting top-K.")
     print("  (NON-FORMAL. A residual can be a legit vendor diff — 果仁 uses 朝阳永续 / its own 复权;")
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
 
