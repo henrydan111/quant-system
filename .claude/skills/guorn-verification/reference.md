@@ -57,7 +57,7 @@ It joins 果仁's export to a local qlib expression (6-digit→Qlib via the prov
 
 ## Hard constraints
 
-- **NON-FORMAL** — a fidelity diagnostic, not a formal gate. Never bypass §3: PIT reads via `pit_research_loader` / `qlib_windowed_features` only; never read `data/pit_ledger/*` raw or hand-roll alignment; factor definitions from `get_factor_catalog()`.
+- **NON-FORMAL** — a fidelity diagnostic, not a formal gate. It reads the published PROVIDER (`D.features`, already PIT-aligned at build time, like the harnesses), which is fine for parity; the §3 guards still bind — never read `data/pit_ledger/*` raw, never hand-roll PIT alignment or string-compare dates. Any FORMAL factor work routes through `pit_research_loader` / `qlib_windowed_features` + `get_factor_catalog()` (the sanctioned doors).
 - 选股日期 / compare window ≤ the frozen-calendar max (confirm via `project_state.md` / `data/reference/trade_cal.parquet`).
 - Don't hard-code volatile facts (approved-field list, registry counts) — cite `config/field_registry/field_status.yaml` / `project_state.md` and read them.
 - Run backends with `venv/Scripts/python.exe`.

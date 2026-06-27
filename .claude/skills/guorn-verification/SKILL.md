@@ -5,7 +5,7 @@ description: Use when reproducing a 果仁 (guorn.com) strategy/book locally, ve
 
 # 果仁 Verification (guorn parity)
 
-果仁 = the trusted external benchmark; the local system is **under test**. Goal: reproduce 果仁 books, verify local factors/data, and land returns approximating 果仁's official backtest. This is **NON-FORMAL** diagnostic work — never let it bypass CLAUDE.md §3 (PIT reads go through the sanctioned loaders only; no raw `data/pit_ledger/*` reads, no hand-rolled alignment).
+果仁 = the trusted external benchmark; the local system is **under test**. Goal: reproduce 果仁 books, verify local factors/data, and land returns approximating 果仁's official backtest. This is **NON-FORMAL** diagnostic work: it reads the published PROVIDER (`D.features`, already PIT-aligned at build time, like the `guorn_verify_*` harnesses), and still honors CLAUDE.md §3 — never read raw `data/pit_ledger/*`, never hand-roll PIT alignment or string-compare dates; any FORMAL factor work routes through the sanctioned wrappers + `get_factor_catalog()`.
 
 ## Core model: fidelity BEFORE alpha
 
