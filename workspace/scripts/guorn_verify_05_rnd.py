@@ -55,7 +55,7 @@ CACHE = OUT / "verify05_cache"
 CACHE.mkdir(parents=True, exist_ok=True)
 SCHED = OUT / "verify05_schedule.json"
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")
-SHUANGCHUANG = ("300", "301", "688", "689")          # 双创 = 创业板 + 科创板
+from guorn_universe import in_guorn_universe, SHUANGCHUANG  # noqa: E402  (board_of()-based 双创=创业板+科创板)
 XLSX = ROOT / "Knowledge" / "果仁回测结果" / "10_sm_双创研发强度_v1.xlsx"
 GR = dict(annual=0.6267, sharpe=1.54, mdd=0.6095, vol=0.3805, excess=0.2019)
 
@@ -94,7 +94,7 @@ LISTED_BOUNDS = _load_listed_bounds()
 
 
 def _in_universe(c: str) -> bool:
-    return c.split("_")[0][:3] in SHUANGCHUANG
+    return in_guorn_universe(c, boards=SHUANGCHUANG)             # 双创 = 创业板 + 科创板 (chinext + star)
 
 
 def build(start: str, end: str):

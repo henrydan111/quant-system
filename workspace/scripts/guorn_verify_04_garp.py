@@ -67,8 +67,7 @@ CACHE.mkdir(parents=True, exist_ok=True)
 SCHED = OUT / "verify04_schedule.json"
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")
 # build on main+中小板+创业板+科创板 (so #15 can reuse); #4 masks 科创板 OUT at schedule time
-BUILD_PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301", "688", "689")
-MAIN4_PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")   # #4 universe (excl 科创板)
+from guorn_universe import in_guorn_universe  # noqa: E402  (board_of()-based; build=incl 科创板, #4 mask=excl 科创板)
 XLSX = ROOT / "Knowledge" / "果仁回测结果" / "09_sm_GARP_illiq.xlsx"
 GR = dict(annual=0.4959, sharpe=1.54, mdd=0.4245, vol=0.296, excess=0.1052)
 
@@ -117,7 +116,7 @@ LISTED_BOUNDS = _load_listed_bounds()
 
 
 def _in_build(c: str) -> bool:
-    return c.split("_")[0][:3] in BUILD_PREFIXES
+    return in_guorn_universe(c, include_star=True)               # broad cache: incl 科创板 (so #15 双创 reuses it)
 
 
 def build(start: str, end: str):
@@ -255,7 +254,7 @@ def build_schedule(start, end, headroom=25):
         ok = []
         for c in insts:
             b = LISTED_BOUNDS.get(c.upper())
-            ok.append(c.split("_")[0][:3] in MAIN4_PREFIXES and c.upper() not in st
+            ok.append(in_guorn_universe(c) and c.upper() not in st                      # #4 = 排除科创板
                       and b is not None and b[0] <= pday <= b[1] and (pday - b[0]).days > 30)
         keep &= pd.Series(ok, index=insts)
         # ILLIQ(5) 排名%区间 0%-65% is DESCENDING (0% = MOST illiquid): the book "sm_GARP_illiq" TARGETS

@@ -40,7 +40,7 @@ CACHE = OUT / "verify18_cache"
 CACHE.mkdir(parents=True, exist_ok=True)
 SCHED = OUT / "verify18_schedule.json"
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")
-PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301", "688", "689")  # +科创板
+from guorn_universe import in_guorn_universe  # noqa: E402  (board_of()-based; supersedes drift-prone prefix tuple)
 XLSX = ROOT / "Knowledge" / "果仁回测结果" / "53_ST_大市值_v3.xlsx"
 GR = dict(annual=0.5546, sharpe=2.00, mdd=0.4351, vol=0.2575, excess=0.4631)
 
@@ -68,7 +68,7 @@ BOUNDS = _load_bounds()
 
 
 def _in_universe(c: str) -> bool:
-    return c.split("_")[0][:3] in PREFIXES
+    return in_guorn_universe(c, include_star=True)               # 果仁 包含科创板 (main+中小板+创业板+科创板)
 
 
 def build(start: str, end: str):

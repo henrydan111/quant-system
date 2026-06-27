@@ -44,7 +44,7 @@ from guorn_verify_04_garp import _load, composite_row, LISTED_BOUNDS, CACHE  # n
 
 OUT = ROOT / "workspace" / "outputs" / "guorn_parity"
 SCHED = OUT / "verify15_schedule.json"
-SHUANGCHUANG = ("300", "301", "688", "689")          # 双创 = 创业板 + 科创板
+from guorn_universe import in_guorn_universe, SHUANGCHUANG  # noqa: E402  (board_of()-based 双创=创业板+科创板)
 XLSX = ROOT / "Knowledge" / "果仁回测结果" / "44_成长_双创_GARP@周期_v2.xlsx"
 GR = dict(annual=0.4339, sharpe=1.13, mdd=0.4655, vol=0.3492, excess=0.3064)
 
@@ -94,7 +94,7 @@ def build_schedule(start, end, headroom=25):
         ok = []                                                          # 双创 universe + 上市>20 + not-ST + listed
         for c in insts:
             b = LISTED_BOUNDS.get(c.upper())
-            ok.append(c.split("_")[0][:3] in SHUANGCHUANG and c.upper() not in st
+            ok.append(in_guorn_universe(c, boards=SHUANGCHUANG) and c.upper() not in st
                       and b is not None and b[0] <= pday <= b[1] and (pday - b[0]).days > 20)
         keep &= pd.Series(ok, index=insts)
         elig_names = keep[keep].index

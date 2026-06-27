@@ -45,7 +45,7 @@ CACHE_06.mkdir(parents=True, exist_ok=True)
 SCHED_06 = OUT / "verify06_schedule.json"
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")
 INDEX_000001 = ROOT / "data" / "market" / "index" / "index_000001.SH.parquet"
-MAIN_PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
+from guorn_universe import in_guorn_universe  # noqa: E402  (board_of()-based; supersedes drift-prone prefix tuple)
 TMT_L1 = {"801760.SI", "801080.SI", "801750.SI", "801770.SI"}        # 传媒/电子/计算机/通信 (SW2021)
 XLSX = ROOT / "Knowledge" / "果仁回测结果" / "06_sm_01_成长高贝塔@TMT_v1.xlsx"
 GR = dict(annual=0.6032, sharpe=1.44, mdd=0.5188, vol=0.392, excess=0.1845)
@@ -59,7 +59,7 @@ _Q = lambda b, qs: [f"${b}_sq_q{i}" for i in qs]                      # noqa: E7
 
 
 def _in_universe(c: str) -> bool:
-    return c.split("_")[0][:3] in MAIN_PREFIXES
+    return in_guorn_universe(c)                                  # 果仁 排除科创板 (main+中小板+创业板)
 
 
 def build_extras(start: str, end: str):

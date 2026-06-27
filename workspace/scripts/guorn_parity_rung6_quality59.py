@@ -37,6 +37,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "workspace" / "research" / "long_only_50cagr"))
+sys.path.insert(0, str(ROOT / "workspace" / "scripts"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 import research_utils as ru                                   # noqa: E402
@@ -49,7 +50,7 @@ SCHED = OUT / "rung6_schedule.json"
 PROVIDER_URI = str(ROOT / "data" / "qlib_data")   # overridable via --provider-dir (staged deep-slot build)
 REBAL_EVERY = 5
 TOP_N = 20
-MAIN_PREFIXES = ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
+from guorn_universe import in_guorn_universe  # noqa: E402  (board_of()-based; supersedes drift-prone prefix tuple)
 
 GR_HEADLINE = dict(annual=0.2256, sharpe=0.69, mdd=0.4086, vol=0.2671, info_ratio=0.92,
                    beta=0.94, alpha=0.1644, excess=0.1535, benchmark_annual=0.0625)
@@ -88,7 +89,7 @@ LISTED_BOUNDS = _load_listed_bounds()
 
 
 def _in_universe(qlib_code: str) -> bool:
-    return qlib_code.split("_")[0][:3] in MAIN_PREFIXES
+    return in_guorn_universe(qlib_code)                          # 果仁 排除科创板 (main+中小板+创业板)
 
 
 def _rebal_dates(start, end):
