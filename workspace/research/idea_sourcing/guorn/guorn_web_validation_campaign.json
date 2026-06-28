@@ -303,23 +303,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "DivGrPY%",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "sumq(分红总金额,4,0)/sumq(分红总金额,4,4)-1",
-      "n_deployed_books": 2,
-      "n_strategies_all": 4,
-      "deployed_books": [
-        "#19 value_红利低波_v2",
-        "#20 value_红利低波_央企_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "历史贝塔",
       "bucket": "doable",
       "local_expr": null,
@@ -329,6 +312,23 @@
       "deployed_books": [
         "#19 value_红利低波_v2",
         "#48 成长_高波@周期"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "DivGrPY%",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "sumq(分红总金额,4,0)/sumq(分红总金额,4,4)-1",
+      "n_deployed_books": 2,
+      "n_strategies_all": 4,
+      "deployed_books": [
+        "#19 value_红利低波_v2",
+        "#20 value_红利低波_央企_v1"
       ],
       "status": "pending",
       "verdict": null,
@@ -436,6 +436,22 @@
       "note": null
     },
     {
+      "guorn_indicator": "20日换手率",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
       "guorn_indicator": "10日融资偿还金额",
       "bucket": "doable",
       "local_expr": null,
@@ -468,10 +484,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "20日换手率",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
+      "guorn_indicator": "RND%Assets",
+      "bucket": "validated",
+      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
+      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -500,14 +516,14 @@
       "note": null
     },
     {
-      "guorn_indicator": "RND%Assets",
-      "bucket": "validated",
-      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
-      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
+      "guorn_indicator": "YieldRfrDiff",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
-        "#10 sm_双创研发强度_v1"
+        "#21 value_红利低波_重股息_v1"
       ],
       "status": "pending",
       "verdict": null,
@@ -532,42 +548,26 @@
       "note": null
     },
     {
-      "guorn_indicator": "波动率_日度指标(分红总金额,720)",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "Stdev({0}, {1})\n[模板参数] 参数名: 指标,日数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#21 value_红利低波_重股息_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "YieldRfrDiff",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#21 value_红利低波_重股息_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "DivOP%",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": "sumq(分红总金额,4)/TTM(营业利润,0)",
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#21 value_红利低波_重股息_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "波动率_日度指标(分红总金额,720)",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "Stdev({0}, {1})\n[模板参数] 参数名: 指标,日数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
@@ -628,10 +628,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "RnDTTMGr%PY",
+      "guorn_indicator": "机构持股比例",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
+      "guorn_formula": null,
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -644,10 +644,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "机构持股比例",
+      "guorn_indicator": "RnDTTMGr%PY",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": null,
+      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -756,10 +756,10 @@
       "note": null
     },
     {
-      "guorn_indicator": "ATR%收盘价N日(20)",
+      "guorn_indicator": "sortinoN日(120)",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -788,22 +788,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "60日波动率",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "pending",
-      "verdict": null,
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "120日涨幅",
       "bucket": "doable",
       "local_expr": null,
@@ -820,10 +804,26 @@
       "note": null
     },
     {
-      "guorn_indicator": "sortinoN日(120)",
+      "guorn_indicator": "ATR%收盘价N日(20)",
       "bucket": "doable",
       "local_expr": null,
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "guorn_formula": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "pending",
+      "verdict": null,
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "60日波动率",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
@@ -852,7 +852,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "评级增持家数",
+      "guorn_indicator": "分析师评级分",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -868,7 +868,7 @@
       "note": null
     },
     {
-      "guorn_indicator": "分析师评级分",
+      "guorn_indicator": "评级增持家数",
       "bucket": "doable",
       "local_expr": null,
       "guorn_formula": null,
@@ -911,7 +911,7 @@
     {
       "guorn_indicator": "ROETTMDiffPQ",
       "bucket": "doable",
-      "local_expr": "TTM-ROE QoQ diff — top-K = negative-equity explosion outliers, irreproducible",
+      "local_expr": "净资产收益率=TTM-ROE (level reproducible 0.96/0.3pp); ROETTMDiffPQ diff fragile",
       "guorn_formula": "净资产收益率-RefQ(净资产收益率,1)",
       "n_deployed_books": 9,
       "n_strategies_all": 20,
@@ -927,10 +927,10 @@
         "#9 sm_GARP_illiq"
       ],
       "status": "diverged",
-      "verdict": "✗ IRREDUCIBLE (factor-design fragility, NOT a data bug). ROETTMDiffPQ = REFQ(净资产收益率,0)-REFQ(净资产收益率,1) [formula-confirmed, strat#68]. 净资产收益率=TTM-ROE (Spearman 0.87 w/ TTM归母 build vs 0.37 reported-YTD → definitively TTM). The SELECTED top-K is dominated by NEGATIVE/tiny-equity stocks (果仁 #1=000692 eq −1.29亿 val 333; 002513 eq −0.14亿 opposite sign) where ROE=profit/equity is mathematically UNSTABLE; 果仁's vendor negative-equity handling ≠ our naive TTM归母/period-end-equity. ALL 4 NI×equity variants give top-20 ≤40%, Pearson 0.05. Bulk rank OK (0.87), selection zone irreproducible.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-ROETTMDiffPQ.xlsx",
+      "verdict": "✗ DIFF fragile at selection (REFINED via level export 2026-06-28). 净资产收益率 LEVEL IS reproducible: = TTM-ROE (TTM归母净利/净资产), Spearman 0.96, med 0.3pp (NOT reported $roe which is cumulative-YTD, 2.2pp off). BUT ROETTMDiffPQ=REFQ diff: 果仁 median |val|=0.01 (1pp) tiny signal swamped by per-leg level residual (~0.3pp) + NEGATIVE-equity instability (果仁 #1=000692 eq −1.29亿). Best build (TTM/avg-eq diff) still top-5 0%/top-20 40%. Factor-design fragility, NOT a missing caliber (unlike 股息率).",
+      "export_file": "果仁_20251231_包含ST排除科创_排名-净资产收益率.xlsx",
       "selection_date": "2025-12-31",
-      "note": "9 deployed books; factor selects unstable negative-equity ROE-explosions (000692 eq=−1.29亿 is 果仁's #1 pick) — a factor-quality red flag, not just a parity gap"
+      "note": "LEVEL pinned: 净资产收益率=TTM-ROE not reported $roe — reusable for RoeQ #38. Diff factor stays fragile."
     },
     {
       "guorn_indicator": "总市值",
