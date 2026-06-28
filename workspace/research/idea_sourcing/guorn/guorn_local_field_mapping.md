@@ -52,7 +52,7 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **BP** | 归属母公司股东权益合计/总市值 | `$total_hldr_eqy_exc_min_int_q0 / $total_mv` (×1e4, lag T−1) | ✅ 0.66% med (66% w/1%, 96% w/5%, n=97k) — residual = 总市值 2-dec display-round + equity PIT-boundary | 4 |
 | **市盈率** | 市盈率TTM | `$pe_ttm` (lag T−1) | ✅ 0.9% med (54% w/1%, 92% w/5%, n=19k) — residual = price signal-day | 4 |
 | **ILLIQ(5)** | MA(股价振幅/成交额(亿元), 5) | `MA( ((high−low)/prev_close) / ($amount/1e5), 5 )` (lag T−1, avg-of-ratios) | ◑ structure-exact (12.5% w/0.1%); residual ~0.86× = undocumented platform sub-detail | 4 |
-| **股息率TTM** | 股息率TTM | `$dv_ttm` (lag T−1, scale 100) | ✅ 0.70% med (sign 100%, 75% w/5%, n=51k) — residual = price signal-day + TTM-window def | 5 |
+| **股息率TTM** | Σ declared cash div (税前, **ann-date** TTM) / 收盘价 | **bulk:** `$dv_ttm` (lag T−1, ×100); **selection tail:** ann-date declared caliber → [guorn_dividend_caliber.py](../../../scripts/guorn_dividend_caliber.py) `dividend_yield_ttm()` | ✅ bulk 0.70% med (n=51k). ⚠ **caliber split (2026-06-28):** `$dv_ttm`=ex-date REALIZED diverges at the high-yield TAIL (the selection zone — top-5 **60%**) because 果仁=ann-date **DECLARED**: it counts announced-not-yet-ex divs (600329 2.450 ann 2025-10-31/ex 2026-02-12) and drops ex'd-but-old-announcement divs (603167 0.220). Ann-date caliber → top-5 **100%**, med 0.52% isolated | 5 |
 | **RnDQGR%PY** | (研发费用单季−refq(,4))/refq(研发费用单季,4) | `($rd_exp_sq_q0 − $rd_exp_sq_q4) / $rd_exp_sq_q4` (lag 0) | ✅ 0.63% med (85% w/5%, sign 97.9%, n=67k) | 5 |
 | **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
 
@@ -151,7 +151,7 @@ counting convention, proven NOT to be data / 复权 / corporate-action.
 | valuation (pe_ttm) | ✅ validated | 市盈率 |
 | forecast 业绩预告 (event-PIT) | ✅ validated | rung-3 |
 | price/volume (close/high/low/amount/adj) | ✅ validated | 总市值 + momentum |
-| 分红 / 股息 (dividends) | ✅ validated (rung-5) | 股息率TTM → `$dv_ttm` (0.70% med) |
+| 分红 / 股息 (dividends) | ✅ validated (rung-5 bulk) + ⚠ CALIBER split (2026-06-28) | 股息率TTM → `$dv_ttm` 0.70% med **bulk** BUT ex-date≠ann-date at the high-yield **selection tail**; use ann-date DECLARED caliber [guorn_dividend_caliber.py](../../../scripts/guorn_dividend_caliber.py) for tail/selection (top-5 100%). **Applies to ALL dividend factors** (DivGrPY%, Div%NetIncY2, 近三年分红之和, 预期股息率) |
 | 研发费用 ($rd_exp) | ✅ validated (rung-5) | RnDQGR%PY (0.63% med) |
 | expense lines (管理/销售/财务费用 + 营业税金) | ✅ penny-exact (rung-5) | CoreProfitQ (med 0.0) |
 | 总股本 (share count) | ✅ validated (implicit) | 总市值 = close × total_share (both penny-exact) |
