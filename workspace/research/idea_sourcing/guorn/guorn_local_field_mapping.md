@@ -21,6 +21,15 @@
 
 ---
 
+> **⚠ Top-K completion gate (2026-06-28, per the guorn-verification skill).** A ✅ below means the per-stock
+> VALUE is validated — **necessary but NOT sufficient**. A factor is verification-COMPLETE only with a reported
+> 果仁-web **top-5/10/20** selection overlap that clears the bar (净资产收益率: value Spearman 0.991 yet **top-5
+> 0%**). Most §1 rows were validated at the HOLDING/value level (rungs 1–6) WITHOUT a standalone 果仁-web top-K →
+> they are **value-validated, top-K-PENDING** (re-run through the campaign comparator, which now auto-prints top-K).
+> Top-K-COMPLETE today: 总市值 · CoreProfitQGr%PY · 股息率TTM (all 100%); ROETTMDiffPQ / 净资产收益率 are
+> top-K-measured but **selection-DIVERGED**. Pure FILTER factors (BP · 市盈率 · 负债资产率) are threshold-tested,
+> not top-K-ranked.
+
 ## 0. Reusable conventions (apply to EVERY indicator)
 
 | convention | value | evidence |
