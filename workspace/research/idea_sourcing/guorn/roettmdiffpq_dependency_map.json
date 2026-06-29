@@ -1,0 +1,335 @@
+{
+  "_meta": {
+    "factor": "ROETTMDiffPQ",
+    "generated": "2026-06-28",
+    "n_strategies": 21,
+    "n_deployed": 9,
+    "roe_share_range": [
+      0.05,
+      0.1
+    ],
+    "note": "All strategies weight ROETTMDiffPQ at 5-10% of total rank weight; the 2026-06-28 ablation shows the ROE caliber gap is book-level immaterial (top-10 selection 90-100% preserved) at <=14% share, so the conclusion generalizes to ALL 21."
+  },
+  "strategies": [
+    {
+      "nn": 9,
+      "name": "sm_GARP_illiq",
+      "deployed": true,
+      "roe_weight": 2,
+      "total_rank_weight": 25,
+      "roe_share": 0.08,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "nn": 42,
+      "name": "成长_机构预期@周期_v1",
+      "deployed": true,
+      "roe_weight": 2,
+      "total_rank_weight": 24,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        },
+        {
+          "form": "公式(HAVG(ROETTMDiffPQ,1))",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 44,
+      "name": "成长_双创_GARP@周期_v2",
+      "deployed": true,
+      "roe_weight": 2,
+      "total_rank_weight": 24,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "nn": 1,
+      "name": "sm_01_成长动量",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 12,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 5,
+      "name": "sm_01_成长_v1",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 10,
+      "roe_share": 0.1,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 6,
+      "name": "sm_01_成长高贝塔@TMT_v1",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 13,
+      "roe_share": 0.077,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 10,
+      "name": "sm_双创研发强度_v1",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 16,
+      "roe_share": 0.062,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 19,
+      "name": "value_红利低波_v2",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 11,
+      "roe_share": 0.091,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 20,
+      "name": "value_红利低波_央企_v1",
+      "deployed": true,
+      "roe_weight": 1,
+      "total_rank_weight": 10,
+      "roe_share": 0.1,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 49,
+      "name": "成长_化工_GARP@周期",
+      "deployed": false,
+      "roe_weight": 2,
+      "total_rank_weight": 25,
+      "roe_share": 0.08,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "nn": 52,
+      "name": "成长_GARP白酒",
+      "deployed": false,
+      "roe_weight": 2,
+      "total_rank_weight": 25,
+      "roe_share": 0.08,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "nn": 62,
+      "name": "Comp_GARP",
+      "deployed": false,
+      "roe_weight": 2,
+      "total_rank_weight": 24,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "nn": 2,
+      "name": "sm_01_成长动量_大盘择时",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 12,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 3,
+      "name": "sm_01_成长动量_大盘择时01",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 12,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 4,
+      "name": "sm_01_成长动量_大盘择时02",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 12,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 17,
+      "name": "sm_BJ_成长均衡_v1",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 11,
+      "roe_share": 0.091,
+      "forms": [
+        {
+          "form": "公式(REFQ(净资产收益率,0)-REFQ(净资产收益率,1))",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 23,
+      "name": "value_FCF_非金sm_v2",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 20,
+      "roe_share": 0.05,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 47,
+      "name": "成长_新高@周期",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 15,
+      "roe_share": 0.067,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 50,
+      "name": "成长_GARP医药",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 12,
+      "roe_share": 0.083,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 56,
+      "name": "Comp_Core_growth",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 19,
+      "roe_share": 0.053,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "nn": 63,
+      "name": "Comp_FCF",
+      "deployed": false,
+      "roe_weight": 1,
+      "total_rank_weight": 11,
+      "roe_share": 0.091,
+      "forms": [
+        {
+          "form": "ROETTMDiffPQ",
+          "scope": "全部",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
