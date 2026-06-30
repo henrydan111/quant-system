@@ -163,7 +163,7 @@ def load_local_factor(expr: str, date: str, lag: int, code6_set: set[str],
 
 # ----------------------------------------------------------------------------- compare
 def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverage: float, label: str,
-           rank_desc: bool = True):
+           rank_desc: bool = True, min_topk: dict[int, float] | None = None):
     m = g.join(lv, how="left")
     m["gval"] = m["gval"] * gscale
     n_g = len(m)
@@ -232,16 +232,31 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
     asc = not rank_desc
     gtop = m["gval"].sort_values(ascending=asc, kind="mergesort")           # 果仁's true ranking (full universe)
     ltop = m["lval"].dropna().sort_values(ascending=asc, kind="mergesort")  # local's ranking (names local can value)
-    ov = []
+    ovk: dict[int, float] = {}
     for k in (5, 10, 20):
         kk = min(k, len(gtop))
         gk = set(gtop.head(kk).index)
-        ov.append(f"top{k}={len(gk & set(ltop.head(min(k, len(ltop))).index)) / kk:.0%}")
-    print(f"  selection overlap (by {'smallest' if asc else 'largest'} value): " + "  ".join(ov))
+        ovk[k] = len(gk & set(ltop.head(min(k, len(ltop))).index)) / kk
+    print(f"  selection overlap (by {'smallest' if asc else 'largest'} value): "
+          + "  ".join(f"top{k}={ovk[k]:.0%}" for k in (5, 10, 20)))
     miss20 = int(m.loc[list(set(gtop.head(min(20, len(gtop))).index)), "lval"].isna().sum())
     if miss20:
         print(f"  ⚠ {miss20} of 果仁's top-20 are NOT valued locally — coverage gap in the SELECTION zone; the "
               "rank comparison is affected. Match the 果仁 universe/筛选条件 to the local set before trusting top-K.")
+    # GPT R2 M3 — MACHINE-GATE top-K, then emit a SINGLE overall verdict so the artifact can never read
+    # "accepted" on pointwise parity alone (necessary, not sufficient — campaign rule m1).
+    mt = min_topk or {}
+    topk_fail = [k for k in (5, 10, 20) if ovk[k] < mt.get(k, 0.0)]
+    metric_fail = metric_verdict.startswith("✗")
+    if topk_fail:
+        print("  TOP-K GATE: ✗ " + "  ".join(
+            f"top{k}={ovk[k]:.0%}<{mt[k]:.0%}" for k in topk_fail) + "  (selection-overlap gate failed)")
+    elif mt:
+        print("  TOP-K GATE: ✓ " + "  ".join(f"top{k}={ovk[k]:.0%}≥{mt[k]:.0%}" for k in (5, 10, 20)))
+    if miss20 and not topk_fail:
+        print("  TOP-K GATE: ✗ selection-zone coverage gap (top-20 has local NaNs — overlap is unreliable)")
+    overall_fail = metric_fail or topk_fail or miss20
+    print(f"  OVERALL: {'✗ NOT verified — ' + ('pointwise+' if metric_fail else '') + 'selection gate failed' if overall_fail else '✅ verified (pointwise parity AND top-K selection)'}")
     print("  (NON-FORMAL. A residual can be a legit vendor diff — 果仁 uses 朝阳永续 / its own 复权;")
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
 
@@ -262,6 +277,9 @@ def main():
                     help="factor selects the SMALLEST values (top-K = smallest, e.g. 市值最小); default = largest")
     ap.add_argument("--provider-uri", default=PROVIDER_URI,
                     help="Qlib provider to read; pass data/qlib_builds/<build_id>/provider for deep-slot parity (M2)")
+    ap.add_argument("--min-top5", type=float, default=0.8, help="machine-gate: min top-5 selection overlap (M3)")
+    ap.add_argument("--min-top10", type=float, default=0.8, help="machine-gate: min top-10 selection overlap (M3)")
+    ap.add_argument("--min-top20", type=float, default=0.8, help="machine-gate: min top-20 selection overlap (M3)")
     a = ap.parse_args()
 
     assert_pointwise(a.local_expr)                                    # B2: refuse cross-sectional/composite
@@ -272,7 +290,7 @@ def main():
     g = load_guorn_export(xlsx, a.code_col, a.guorn_col)
     lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index), provider_uri=a.provider_uri)
     report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})",
-           rank_desc=not a.select_asc)
+           rank_desc=not a.select_asc, min_topk={5: a.min_top5, 10: a.min_top10, 20: a.min_top20})
 
 
 if __name__ == "__main__":
