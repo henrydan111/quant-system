@@ -85,6 +85,34 @@ the level `{field}_q{slot}` for `slot in range(self.slot_depth)`. Today the live
 - No factor/test breakage (audited + 90 tests green). ✓ No hedge words. ✓
 - **Verdict: clean for GPT review.**
 
+## GPT §10 review — APPROVED (2026-06-30), publish gates MANDATORY
+
+GPT-5.5 Pro: **APPROVE** — "no PIT/no-lookahead reason to block; depth extension over the same effective-date /
+restatement-safe machinery, not a new alignment rule." No blockers, no majors. PIT confirmed safe across all 5
+periodic families; additive confirmed; default-change is the correct durability choice; q5..q8-unregistered is
+the correct governance posture. The conditions are PUBLISH gates (the residual risk is **operational, not PIT**:
+publishing without a q0..q4 byte audit could silently invalidate prior formal evidence). Enforced as fail-closed:
+
+- **m1 — staged-vs-live q0..q4 byte/hash audit BEFORE the atomic swap.** For every existing registered periodic
+  slot (`*_q0..q4`, `*_sq_q0..q4`, `*_cum_q0..q4` where present) across income/balancesheet/cashflow/indicators/
+  profit_dedt: staged bins MUST be byte-identical to current live → else FAIL publish (do not swap).
+- **m2 — rebind approval evidence ONLY after the audit.** Emit the new `provider_build.json`, then rebind
+  approval YAMLs to the new `provider_build_id` only after: q0..q4 byte audit passes → manifest emitted →
+  `run_daily_qa.py` passes provider-boundary + manifest + field-gate + PIT live regression.
+- **m3 — document the sandbox side effect.** Default is now depth 9; shallow sandbox/scoped builds that want q0..q4
+  only MUST pass `slot_depth=5` explicitly; live/provider-maintenance builds use the default 9. (Add to the
+  data-ops note + the scoped-build wrappers.)
+
+**Pre-publish checklist (ALL must pass before the atomic swap):**
+1. Full staged provider build completes at slot_depth=9.
+2. q0..q4 existing registered bins byte/hash-identical staged-vs-live (m1).
+3. q5..q8 smoke tests pass for BOTH `_sq_q*` and level `_q*` slots.
+4. A q8-using expression resolves through Qlib and matches the rung-6 deepslot truth on samples.
+5. `provider_build.json` emitted with the new `provider_build_id` + unchanged calendar policy (2026-02-27).
+6. `run_daily_qa.py` passes provider-boundary, manifest, field-gate, PIT live regression.
+7. q5..q8 remain ABSENT from `field_status.yaml` (no bulk-register just because they exist on disk).
+8. approval-evidence bindings updated ONLY after the byte audit + manifest checks (m2).
+
 ## Review questions for GPT
 
 1. **PIT:** Is upgrading `SLOT_DEPTH_DEFAULT` 5→9 + full re-materialization PIT-safe for ALL periodic families
