@@ -5,7 +5,9 @@
 **Origin:** GPT-5.5 Pro §10 cross-review (verdict REVISE). Every finding below was ACCEPTED.
 These are the machine-checkable contracts + the tests that gate each phase's build approval.
 
-> Convention: a Phase cannot start building until its contracts here have passing tests.
+> Convention (status lattice — see C14): **implementation may start at `test_stub`; phase build approval and
+> any alpha evidence require `enforced` / `evidence_ready`** as specified by C14 (this supersedes the earlier
+> "passing tests before build" wording, which was not machine-checkable).
 > `fail closed` everywhere — missing/ambiguous metadata = reject, never default-accept.
 
 ---
@@ -81,8 +83,13 @@ recorded now; IPO path is deferred like RD-Agent.)
 **Scope (M2):** IPO is `PARKED_NON_EVIDENTIARY` — **no roadmap / README / CLI / report / investor-facing
 artifact may describe IPO alpha as active** until C4 is unparked.
 
+**Unpark gate (R3-Minor-2):** C4 can be unparked ONLY by a signed `IPO_UNPARK_REQUEST.md` that flips the C14
+status from `parked` → `test_stub`, names the owner modules, and lists the applicant-ledger source plan —
+before any IPO alpha work begins. README / ROADMAP drift cannot reopen it.
+
 **Required tests (if/when unparked):** `tests/universe/test_ipo_applicant_survivorship.py` ·
-`tests/pit/test_ipo_filing_visible_at.py` · `tests/execution/test_ipo_first_tradable_date.py`.
+`tests/pit/test_ipo_filing_visible_at.py` · `tests/execution/test_ipo_first_tradable_date.py` ·
+`tests/docs/test_ipo_unpark_requires_signed_request.py`.
 
 ---
 
@@ -105,12 +112,23 @@ ledgers, baselines, promotion gates. **Results from one mode cannot tune, justif
 **Reporting (m3):** separate report sections + strategy IDs per mode; no Sharpe/IC/drawdown/promotion
 conclusion is pooled across modes.
 
-## C7 · AI overlay caps in portfolio terms (M6) — Phase 2B/3
+## C7 · AI overlay caps in portfolio terms (M6 + R3-Major-1) — Phase 2B/3
 The overlay may ONLY: (a) reduce a name to zero via a documented risk veto, or (b) apply a signed tilt
 within `max_name_delta, max_sector_delta, max_turnover_delta, max_active_risk_delta` relative to the
 quant-only portfolio. It cannot introduce names outside the PIT universe, cannot override
-no-leverage/gross≤1×, cannot increase exposure to untradable securities. ("Bounded" is executable, not
-prose.)
+no-leverage/gross≤1×, cannot increase exposure to untradable securities.
+
+**Fail-closed numeric caps (R3-Major-1) — "bounded" is a pre-registered number, not a word.** The overlay cap
+config is an **immutable pre-registered artifact committed before any Phase 2B/3 evaluation**.
+`max_name_delta`, `max_sector_delta`, `max_turnover_delta`, `max_active_risk_delta` MUST be **finite numeric
+values with explicit units and hard upper bounds declared in the strategy registry**. **Missing, null,
+unbounded, post-hoc-modified, or OOS-tuned cap values FAIL CLOSED** (no default-accept). Any cap large enough
+to let the overlay dominate the quant-only ranking **reclassifies the strategy as `ai_final_decider_shadow`,
+NOT `bounded_overlay_production_candidate`** (C6) — the LLM must not silently become the alpha engine.
+
+**Required tests:** `tests/portfolio_risk/test_overlay_caps_required_numeric.py` ·
+`tests/portfolio_risk/test_overlay_caps_frozen_before_eval.py` ·
+`tests/portfolio_risk/test_overlay_dominance_reclassifies_strategy.py`.
 
 ## C8 · Identifier + panel contracts (M4) — before any Phase 2 join
 All external identifiers enter through `SecurityMaster.translate(source, raw_code, asof)`; every factor
@@ -151,9 +169,23 @@ caution but cannot be cited as named evidence for a quantitative claim.**
 
 ---
 
-## C14 · Contract implementation matrix (M1)
-A phase cannot advance design→build unless its required contracts are ≥ `test_stub`; it cannot produce
-alpha evidence unless they are `enforced`. **Current status (design stage): all `design_only`.**
+## C14 · Contract implementation matrix (M1 + R3-Major-2)
+**Status lattice (totally ordered):** `design_only < test_stub < enforced < evidence_ready`.
+- `design_only` — contract text exists; no committed test.
+- `test_stub` — a **committed, CI-discovered test exists and fails or xfails** against the missing
+  implementation. Permits **implementation work only — NOT phase build approval.**
+- `enforced` — the test **passes in CI and is required for merge.**
+- `evidence_ready` — **all** phase-relevant contracts are `enforced` AND the experiment registry + OOS-spend
+  ledger are frozen.
+
+**Gates:** a phase advances design→build only when its required contracts are ≥ `test_stub`; it may produce
+**alpha evidence** only when they are `enforced` (and the phase is `evidence_ready`). A `.md` artifact existing
+is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Current status (design stage): all
+`design_only`.**
+
+**Required tests:** `tests/contracts/test_contract_status_lattice.py` ·
+`tests/contracts/test_design_to_build_requires_test_stub_only.py` ·
+`tests/contracts/test_alpha_evidence_requires_evidence_ready.py`.
 
 | Contract | Risk | Phase gate | Status | Owner module (planned) | Last verified commit |
 |---|---|---|---|---|---|
@@ -169,7 +201,7 @@ alpha evidence unless they are `enforced`. **Current status (design stage): all 
 | C10 solo MVG | governance | all | design_only | research_orchestrator | — |
 | C11 bucket freeze | comparability | all eval | design_only | alpha_research | — |
 | C12 analyst typed output | auditability | Phase 2B | design_only | ai_layer (new) | — |
-| C13 evidence registry | integrity | all | test_stub (md exists) | docs | — |
+| C13 evidence registry | integrity | all | design_only (md exists; test pending) | docs | — |
 
 ---
 
