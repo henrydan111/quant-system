@@ -126,13 +126,18 @@ def load_guorn_export(xlsx: Path, code_col, guorn_col) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------- local side
-def load_local_factor(expr: str, date: str, lag: int, code6_set: set[str]) -> pd.Series:
+def load_local_factor(expr: str, date: str, lag: int, code6_set: set[str],
+                      provider_uri: str = PROVIDER_URI) -> pd.Series:
     """Read `expr` (any qlib expression) at the (lag)-th trading day on/before `date`, return a Series indexed
-    by 6-digit code. Restricted to the codes present in the export (cheap fetch)."""
+    by 6-digit code. Restricted to the codes present in the export (cheap fetch). `provider_uri` selects the
+    Qlib provider — pass a STAGED deep-slot build (data/qlib_builds/<build_id>/provider) for deep-slot parity
+    (M2: the comparator must read the provider the factor is tested against, not always the live one)."""
     import qlib
     from qlib.config import REG_CN
     from qlib.data import D
-    qlib.init(provider_uri=PROVIDER_URI, region=REG_CN, kernels=1)
+    staged = "qlib_builds" in str(provider_uri).replace("\\", "/")
+    print(f"[provider] uri={provider_uri}  staged_deepslot={staged}", flush=True)
+    qlib.init(provider_uri=provider_uri, region=REG_CN, kernels=1)
 
     all_insts = D.list_instruments(D.instruments("all"), as_list=True)
     by6 = {}                                  # 6-digit -> Qlib code (provider-driven join; robust)
@@ -255,6 +260,8 @@ def main():
                     help="min matched-果仁 fraction required before any ✅ verdict; lower ONLY with a documented reason")
     ap.add_argument("--select-asc", action="store_true",
                     help="factor selects the SMALLEST values (top-K = smallest, e.g. 市值最小); default = largest")
+    ap.add_argument("--provider-uri", default=PROVIDER_URI,
+                    help="Qlib provider to read; pass data/qlib_builds/<build_id>/provider for deep-slot parity (M2)")
     a = ap.parse_args()
 
     assert_pointwise(a.local_expr)                                    # B2: refuse cross-sectional/composite
@@ -263,7 +270,7 @@ def main():
     validate_trading_date(a.date, cal)                               # Minor 1+2: trading-day ≤ calendar max
     xlsx = (ROOT / a.xlsx) if not Path(a.xlsx).is_absolute() else Path(a.xlsx)
     g = load_guorn_export(xlsx, a.code_col, a.guorn_col)
-    lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index))
+    lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index), provider_uri=a.provider_uri)
     report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})",
            rank_desc=not a.select_asc)
 

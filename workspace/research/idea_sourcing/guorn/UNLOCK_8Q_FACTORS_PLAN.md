@@ -9,6 +9,15 @@ provider publish, no registry writes.
 
 Public repo for review: `https://github.com/henrydan111/quant-system` (branch `report-rc-registration`).
 
+```
+SCRIPT_STATUS: NON_FORMAL_PARITY_DIAGNOSTIC
+No publish (staged provider only, publish=False, deleted after).  No field_status writes.
+No factor-registry writes.  No OOS spend.  Route-A provider = an explicit STAGED URI (data/qlib_builds/<id>/provider).
+ACCEPTANCE GATES (all factors): coverage ≥ 0.90 (sub-universe) / 0.98 (broad)  AND  pointwise value parity
+(median rel-err + within-0.1/1/5% + sign)  AND  Spearman  AND  top-5/10/20 selection overlap. Top-K ALONE is
+NOT sufficient (m1). A caliber is accepted ONLY by 果仁 parity, never by intuition (M5/M6).
+```
+
 ---
 
 ## Route A — scoped deep-slot build (RnDTTMGr%PY, AssetTurnoverDiffPY)
@@ -25,20 +34,34 @@ STRICT) the live q0..q4 slots use — so the deep slots inherit the §3.2 PIT gu
   universe (~4400, via the Python API like rung-6, not the CLI), `field_filter` = the 3 fields,
   `datasets=["income","balancesheet"]`, `publish=False` → staged-only. **Size estimate ≈ 4–5GB** (3 fields ×
   ~16 bins × ~4400 syms; cf rung-6's 7×24-bin scoped ~18GB). `--test` (2 syms) first to confirm before scaling.
-- **Compute (read the staged deep-slot provider):**
+- **Build script (GPT-M4):** `workspace/scripts/_build_deepslot_8q.py` — task-specific wrapper (slot_depth=8,
+  the 3 fields above, datasets=[income,balancesheet], publish=False) with HARD preflight: prints symbols / est
+  bins / est GB; ABORTS if est > 30GB, if publish=True, or if the target is the live `data/qlib_data`. `--test`
+  (2 syms) → `--go`. (Does NOT reuse the rung-6 `_build_deepslot_scoped.py`, which is depth-16 / 7-field.)
+- **Universe preflight (GPT-m2):** touched_symbols = all main+chinext (排除科创/北证) instruments = a SUPERSET
+  of every 果仁-export code for these factors. Assert `set(果仁_export_codes) − set(touched) == ∅` before
+  trusting any top-K (a narrower build → false top-K on a subset).
+- **Compute (read the STAGED provider via the M2 `--provider-uri data/qlib_builds/guorn_unlock_8q_scoped/provider`):**
   - `RnDTTMGr%PY = (Σrd_exp_sq_q0..q3 − Σrd_exp_sq_q4..q7) / |Σrd_exp_sq_q4..q7|`
-  - `AssetTurnoverDiffPY = ATO(0) − ATO(4)`, `ATO(k)=Σrevenue_sq_q[k..k+3] / mean(total_assets_q[k..k+3])`
-- **Teardown:** delete the staged dir after computing (rung-6 pattern; ~GB transient, not persisted).
+  - `AssetTurnoverDiffPY = ATO(0) − ATO(4)`. **果仁's denominator caliber is UNVERIFIED (GPT-M5)** → pre-register
+    BOTH, pick ONLY by 果仁 parity: **(A)** `ATO(k)=Σrev_sq[k..k+3]/mean(total_assets_q[k..k+3])` (4-quarter avg)
+    vs **(B)** `ATO(k)=Σrev_sq[k..k+3]/((total_assets_q[k]+total_assets_q[k+4])/2)` (begin+end avg).
+- **Teardown:** delete the staged dir after computing (rung-6 pattern; transient, not persisted).
 
 ## Route B — daily total_share sampling (SharesAvgGr%PY) — no build
 
 `$total_share` is a **daily series** (verified: steps at share-change events). 果仁
 `SharesAvgGr%PY = AvgQ(总股本,4,0)/AvgQ(总股本,4,4) − 1`.
-- Sample the **daily** `$total_share` at the 8 trailing fiscal-quarter-end dates (q0=latest disclosed report
-  period … q7), take the two 4-quarter means, ratio − 1. **PIT:** all 8 quarter-ends are strictly in the past
-  at the signal date, so each sampled value was already known (no lookahead). Custom helper (~30 lines), no
-  provider build, no comparator (date-specific sampling isn't a single qlib expr) → compare the helper output
-  to the 果仁 export directly.
+- **PIT anchor (GPT-M3 — the key fix; was the residual REVISE risk):** the eight fiscal periods q0..q7 are
+  taken from the **PIT-visible report sequence** (the same as-of financial-state kernel that drives the statement
+  slots) — NOT inferred from the signal calendar. q0 = the latest fiscal period whose report is ANNOUNCED as of
+  the signal date; q1..q7 step back from there. A calendar quarter-end whose report is not yet visible (e.g. the
+  current-FY-Q4 end before the annual report drops) is **INELIGIBLE**. For each eligible end_date, sample daily
+  `$total_share` on the latest trading day ≤ that end_date. **If the 8-quarter chain is incomplete → serve NaN.**
+- Two 4-quarter means → ratio − 1. Custom helper (no build, no comparator — date-specific sampling isn't a
+  single qlib expr) → compare to the 果仁 export directly with the same pointwise+top-K battery.
+- **Canary:** for a signal date BEFORE a stock's annual-report announcement, that FY's quarter-end must NOT
+  enter the 8-quarter window (no undisclosed-period leak).
 
 ## Route C — dividend-ledger aggregation (DivGrPY%, DivOP%, Div%NetIncY2, DivAGrPY%, 连续N年分红) — no build
 
@@ -49,9 +72,13 @@ Extend the **validated** dividend caliber (`workspace/scripts/guorn_dividend_cal
 - `DivAGrPY% = annual_div(FY0)/annual_div(FY−1) − 1`; `Div%NetIncY2` = 2-yr avg payout (annual div / annual NI).
   → add an `annual_dividend(fiscal_year)` aggregator (group the ledger by `end_date` fiscal year, PIT ann≤signal).
 - `连续N年分红(3)` = a dividend declared in each of the last 3 fiscal years (boolean/count).
-- **⚠ amount basis:** 分红总金额 is the TOTAL amount = `cash_div_tax × shares`; the helper returns per-share
-  `dps`. For the growth/payout RATIOS, per-share is share-stable-equivalent; where 果仁 uses 分红总金额 against
-  a total (NI/OP), multiply `dps × total_share` per event for faithfulness. All PIT ann_date≤signal.
+- **⚠ amount basis (GPT-M6) — pre-register the share base, accept ONLY by 果仁 parity:** the helper returns
+  PER-SHARE `dps`; the total-denominated ratios (DivOP%, Div%NetIncY2) need 分红总金额 = `dps × share_base`.
+  Pre-register share_base candidates and test EACH vs 果仁: (1) total_share at record_date, (2) at ex_date,
+  (3) at earliest ann/proposal date, (4) at fiscal end_date, (5) a Tushare total-amount field if PIT-safe. Do
+  NOT accept dividend-YIELD parity as proof for total-ratio parity (per-share can be right while the total
+  ratio is wrong by a share-base/unit convention). **Unit checks:** cash_div_tax per-share vs per-10-shares;
+  total_share in shares vs 万股; the NI/OP denominator units. All PIT ann_date≤signal.
 
 ---
 
@@ -92,3 +119,29 @@ ones may carry a caliber.
    avoid the 1TB hazard, and is NON-FORMAL (no publish/register) the right call for a parity check?
 4. **Anything that would make a result a false pass** (e.g. a coverage gap in the deep-slot universe, a
    fiscal-quarter-end vs disclosure-date mismatch in Route B, a per-share-vs-total error in Route C)?
+
+---
+
+## GPT R1 — findings folded (2026-06-30)
+
+- **M1 (plan not fetchable):** root cause was a branch slip — the session committed on local `trading-agents-design`
+  while `git push` targeted a stale `report-rc-registration` (no-op). FIXED: fast-forwarded the remote branch to
+  the session commits (`bff4449..787bed5`); the plan + all work are now live on `report-rc-registration`. Added the
+  `SCRIPT_STATUS` governance header + acceptance gates (above).
+- **M2 (comparator read the live provider):** FIXED in code — `guorn_factor_parity.py` now takes `--provider-uri`
+  (default = live), threaded into `load_local_factor` + `qlib.init`, with `[provider] uri=… staged_deepslot=…`
+  logging. Route A passes the staged URI.
+- **M3 (Route B PIT anchor):** REWRITTEN — q0..q7 come from the PIT-visible report sequence, not the signal
+  calendar; ineligible-if-unannounced; NaN if the chain is incomplete; + the pre-annual-report canary.
+- **M4 (Route A wrapper mismatch):** ADDED `workspace/scripts/_build_deepslot_8q.py` (slot_depth=8, 3 fields,
+  publish=False) with hard disk/governance preflight (est-GB ceiling 30GB, refuse-live-provider, refuse-publish).
+- **M5 (asset-turnover denominator):** pre-register BOTH AvgQ(4) and (begin+end)/2; accept by 果仁 parity only.
+- **M6 (dividend total-amount share base):** pre-register 5 share-base candidates + unit checks; per-share-yield
+  parity is NOT accepted as proof for total-denominated ratios.
+- **m1:** acceptance gate now requires pointwise parity AND top-K (top-K alone insufficient).
+- **m2:** Route A universe = main+chinext superset; assert `果仁_export_codes ⊆ touched_symbols`.
+- **m3:** Route C stays NON-FORMAL (direct ledger via the validated caliber helper); any future FORMAL use must
+  route through the PIT ledger/provider + registration, not direct reads.
+
+Self-review of the folds: §3.2 PIT preserved+strengthened (M3); §6.3 disk/governance hardened (M4); no publish/
+registry writes (m3); no hedge words. **Verdict: clean for GPT re-review.**
