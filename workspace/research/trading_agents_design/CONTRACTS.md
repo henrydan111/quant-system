@@ -22,7 +22,7 @@ Historical re-downloads are **engineering fixtures only** unless matched to an i
 `source_published_at, source_updated_at, retrieved_at, content_hash, query_hash, asof_decision_time`.
 Fail closed if `source_published_at` missing, `source_updated_at > decision_time` without an archived
 prior version, or `retrieved_at` after a replay decision. Live forward decisions record actual retrieval
-time + immutable raw payload.
+time + immutable raw payload. **Live-source byte-replay (M3):** adapters also emit `raw_payload_hash`, `archive_or_vendor_snapshot_id`; the forward harness **fails closed if the raw payload cannot be replayed byte-identically** from the audit log, or content was updated after decision time without an archived prior version.
 
 **Required tests (before Phase 2A build):**
 `tests/pit/test_text_visible_time_gate.py` · `tests/pit/test_text_backfill_rejection.py` ·
@@ -78,6 +78,8 @@ listing date, first tradable date, board, lock-up, every filing's `visible_at`/`
 Fundamentals computed on the full applicant ledger; execution begins only after first tradable date with
 A-share IPO constraints. **Backtests including only successfully-listed IPOs are banned.** (Constraint
 recorded now; IPO path is deferred like RD-Agent.)
+**Scope (M2):** IPO is `PARKED_NON_EVIDENTIARY` — **no roadmap / README / CLI / report / investor-facing
+artifact may describe IPO alpha as active** until C4 is unparked.
 
 **Required tests (if/when unparked):** `tests/universe/test_ipo_applicant_survivorship.py` ·
 `tests/pit/test_ipo_filing_visible_at.py` · `tests/execution/test_ipo_first_tradable_date.py`.
@@ -100,6 +102,8 @@ baselines = quant-only + equal-weight.
 `bounded_overlay_production_candidate` (deployable architecture) and `ai_final_decider_shadow` (shadow
 experiment) have **separate** strategy IDs, pre-registration records, prompt/model hashes, OOS-spend
 ledgers, baselines, promotion gates. **Results from one mode cannot tune, justify, or approve the other.**
+**Reporting (m3):** separate report sections + strategy IDs per mode; no Sharpe/IC/drawdown/promotion
+conclusion is pooled across modes.
 
 ## C7 · AI overlay caps in portfolio terms (M6) — Phase 2B/3
 The overlay may ONLY: (a) reduce a name to zero via a documented risk veto, or (b) apply a signed tilt
@@ -144,6 +148,28 @@ optional and non-trading.
 Literature claims live in [evidence_registry.md](evidence_registry.md): claim · paper · URL/arXiv ·
 verified_date · supported/contradicted/partial · design implication. **Unverified papers may motivate
 caution but cannot be cited as named evidence for a quantitative claim.**
+
+---
+
+## C14 · Contract implementation matrix (M1)
+A phase cannot advance design→build unless its required contracts are ≥ `test_stub`; it cannot produce
+alpha evidence unless they are `enforced`. **Current status (design stage): all `design_only`.**
+
+| Contract | Risk | Phase gate | Status | Owner module (planned) | Last verified commit |
+|---|---|---|---|---|---|
+| C1 text visible-time PIT | lookahead | Phase 2A | design_only | data_infra/text_store | — |
+| C2 LLM evidence labels | lookahead/leakage | Phase 2B | design_only | research_orchestrator | — |
+| C3 金股 PIT universe | survivorship | Phase 0 | design_only | data_infra/provider_metadata | — |
+| C4 IPO ledger | survivorship | PARKED | parked | — | — |
+| C5 forward-only evidence | lookahead | Phase 3 | design_only | harness | — |
+| C6 two-mode ledgers | overfitting | Phase 2B/3 | design_only | strategy_registry | — |
+| C7 overlay caps | risk | Phase 2B | design_only | portfolio_risk | — |
+| C8 id/panel contracts | corruption | Phase 2 | design_only | data_infra | — |
+| C9 Phase-0 diagnostics-only | cost-realism | Phase 0 | design_only | result_analysis | — |
+| C10 solo MVG | governance | all | design_only | research_orchestrator | — |
+| C11 bucket freeze | comparability | all eval | design_only | alpha_research | — |
+| C12 analyst typed output | auditability | Phase 2B | design_only | ai_layer (new) | — |
+| C13 evidence registry | integrity | all | test_stub (md exists) | docs | — |
 
 ---
 

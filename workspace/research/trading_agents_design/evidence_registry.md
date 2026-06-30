@@ -3,6 +3,11 @@
 **Date:** 2026-06-28. Rule: unverified papers may motivate caution but **cannot be cited as named
 evidence for a quantitative claim**. "Verified by me" = fetched the arXiv page directly this session.
 
+**Schema (M4):** the **Claim** column = `paper_claim` (what the paper states); **Design implication** =
+`project_inference` (how it maps to a contract). A paper backs a contract ONLY via an explicit inference
+row, never an indirect/unverified claim. **Verified** ∈ {✅ me = independently fetched, 🔎 = search-surfaced
+→ re-fetch before citing as named evidence}.
+
 | Claim | Paper | arXiv/URL | Verified | Support | Design implication |
 |---|---|---|---|---|---|
 | LLM-agent backtest returns evaporate past training cutoff (info leakage); SR decay 51–62%, TR decay 50–72% across TradingAgents/FinMem/FinAgent/FinCON/QuantAgent | Profit Mirage | [2510.07920](https://arxiv.org/abs/2510.07920) | ✅ me (title+thesis confirmed) | supported | C2 evidence labels; AI ≠ alpha engine |

@@ -67,6 +67,7 @@
 
 ### PARKED · RD-Agent AI 因子挖掘
 - 文档 [INTEGRATION_RDAGENT.md](INTEGRATION_RDAGENT.md) 保留;当前**不在主线**(用户本轮决定先不做 AI 因子挖掘)。未来若 Phase 2 受阻或需更多候选因子可复活。
+- **IPO(即将上市公司,Option B)= `PARKED_NON_EVIDENTIARY`(C4/M2)**:任何文档/README/CLI/报告**不得**把 IPO alpha 描述为 active;解封需 C4 申报人 ledger(含被拒/撤回/延迟申报人 + 上市后执行约束)。
 
 ---
 
@@ -74,6 +75,7 @@
 
 - **数据前置**:① **Tushare 文本权限/积分**(Phase 2A 闸)② **解冻日历 + 日度接入**(Phase 3 闸)。
 - **治理**:§10 GPT 跨审(新基建前)· sealed-OOS 一次性 · **no-leverage(1×)** · §6.1 先读接口正文再 fetch · MLflow 全程 · project_state 更新。
+- **m2 烟雾测试**:每阶段推进前跑 `make validate-research-governance`(执行该目标阶段相关的 PIT / universe / OOS / 面板契约 / 源适配器 / 契约矩阵 测试)。
 
 ---
 
