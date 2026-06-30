@@ -43,9 +43,13 @@ but `ingested_at > decision_date` → excluded).
 Two labels, fail-closed:
 - **`historical_llm_text_factor`** — allowed ONLY for schema dev, extraction QA, plumbing. **NOT alpha
   evidence** if the decision model's training cutoff is after any evaluated decision date.
-- **`clean_llm_text_factor`** — requires
-  `decision_date > max(model_training_cutoff, model_release_date, prompt_freeze_time, data_snapshot_freeze_time)`,
-  evaluated ONLY through pre-registered forward or post-cutoff OOS.
+- **`clean_llm_text_factor`** — requires `decision_date > max(` **cutoff∨release∨freeze of EVERY
+  learned/parametric component** that can affect document inclusion / extraction / entity-linking /
+  retrieval / dedup / clustering / rerank / OCR-layout / summarization / scoring / analysis `)` — incl.
+  `Qwen_cutoff, Claude_cutoff, embedding_model_cutoff, reranker_cutoff, entity_linker_cutoff,
+  OCR_layout_cutoff, prompt_freeze, schema_freeze, data_snapshot_freeze` **(R5-B2: not just "the decision
+  model")**. Any unknown / mutable / post-decision component → `historical_*` only. Evaluated ONLY through
+  pre-registered forward or post-cutoff OOS.
 
 Historical sealed-OOS may validate **deterministic non-LLM parsers** or **frozen pre-cutoff models** —
 **not** current LLM semantic factor generation. **M1 correction:** a sealed window *entirely pre-cutoff*
@@ -172,6 +176,48 @@ caution but cannot be cited as named evidence for a quantitative claim.**
 
 ---
 
+## C15 · Anti-manipulation / source-trust + injection isolation (R5-M2 + R6-m4) — gates Phase 2B
+Every text object carries a `source_trust_tier`: **strong** (`anns_d` / `irm_qa` / `npr` / `monetary_policy`,
+official) · **medium** (`research_report` broker / `news`/`major_news` media) · **weak** (social — not
+ingested). **A weak-tier source is a lead only; it can NEVER be sole evidence for a score.** Red-flag
+manipulation detectors (receivables/inventory growth > revenue; scarcity claim without margin improvement;
+price driven by social heat; single unnamed customer; …) feed `penalty_scores`.
+**Injection isolation (FULL PATH):** external text is **untrusted data at EVERY stage** (Qwen / Dossier /
+Claude / Risk Judge / audit-replay tools); passed only as quoted/escaped fields, NEVER as system/developer
+instructions or concatenated into executable prompts. **No LLM, prompt content, evidence span, or PDF/URL
+text may trigger ad-hoc tool calls, URL fetching, PDF fetching, order generation, file writes, config
+changes, or prompt/schema changes.** **(R6-m4)** Whitelisted source adapters MAY fetch official fields (e.g.
+`anns_d` PDF URLs) ONLY through deterministic, pre-registered ingestion jobs (`adapter_id`, allowlist,
+`retrieved_at`, `pdf_hash`, `pdf_visible_at`, `content_hash`, audit log) — adapter fetches are **data
+ingestion, NOT LLM/tool actions**, and extracted PDF text remains untrusted under C15. Instruction-like
+spans → `risk_flags=[injection]`, may only reduce trust / block, never drive action. **Anti-herding
+(Fin-Bias ✅me):** broker/KOL opinions enter as *evidence*, never as *conclusions*. ⚠️ **A-share-specific
+anti-manipulation empirical is ABSENT → design-only / forward-calibrated** (honestly labeled; not a gate).
+**Required tests:** `tests/text/test_injection_isolation_full_path.py` ·
+`tests/text/test_source_trust_weak_not_sole_evidence.py`.
+
+## C16 · LLM-score containment (R5-B3) — gates Phase 2B
+**Deterministic aggregation is NOT an alpha firewall.** Every LLM sub-score (`factor_score` / `penalty` /
+persona) is itself a model output = a **candidate factor**; `final = clamp(Σ factor·w − Σ penalty·2)` only
+*launders* an LLM decision unless every sub-score family: (1) is **pre-registered immutable** (name / rubric
+/ evidence types / source-trust / horizon / universe / window / `prompt_hash` / `model_id` / weights);
+(2) is **C2-clean** for historical evidence, else forward-only; (3) enters the **text candidate-factor
+registry** and passes **marginal orthogonal contribution over the pure-quant baseline after costs +
+DSR/PSR/FDR/PBO** (C16b multiplicity); (4) is produced by a scorer **BLIND to** realized returns / target
+labels / desired action / future portfolio outcomes (quant-rank exposure only in a pre-registered
+bounded-overlay test); (5) carries `evidence_spans` + passes deterministic schema/trust/timestamp
+validation — **invalid → no-score, NOT neutral-positive**; (6) maps to tilt/veto/action ONLY through
+deterministic **C7-bounded** logic — **the LLM never emits the final number / decision**; any guard failure
+→ no AI tilt/veto for that object.
+**C16b · text multiple-testing:** register `CandidateID = source_type × parser/model_id × prompt_hash ×
+schema_version × scorecard_factor × persona/role × entity_scope × horizon × universe × aggregation_window`;
+ALL explored variants/discarded prompts/thresholds count toward effective trials; approved → `FrozenSelectionSet`
+before OOS/forward; no post-hoc merge/relabel/threshold-move within a frozen cycle.
+**Required tests:** `tests/text/test_llm_subscore_is_candidate_factor.py` ·
+`tests/text/test_deterministic_action_mapping_c7_bounded.py` · `tests/text/test_text_candidate_multiplicity_registry.py`.
+
+---
+
 ## C14 · Contract implementation matrix (M1 + R3-Major-2)
 **Status enum (R3-#4 m1):** `parked` + the ordered active lattice `design_only < test_stub < enforced < evidence_ready`. **`parked` is a non-active, fail-closed sentinel** — NOT comparable for phase advancement and **never eligible for alpha evidence**; a parked contract moves to `test_stub` ONLY through its explicit signed unpark gate (e.g. C4 → `IPO_UNPARK_REQUEST.md`). CI treats `parked` as a known sentinel, never an unknown value.
 - `design_only` — contract text exists; no committed test.
@@ -204,7 +250,16 @@ is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Cur
 | C11 bucket freeze | comparability | all eval | design_only | alpha_research | — |
 | C12 analyst typed output | auditability | Phase 2B | design_only | ai_layer (new) | — |
 | C13 evidence registry | integrity | all | design_only (md exists; test pending) | docs | — |
+| C15 anti-manip / injection | manipulation/injection | Phase 2B | design_only | data_infra/text_store + ai_layer | — |
+| C16 LLM-score containment | overfitting / alpha-firewall | Phase 2B | design_only | ai_layer + alpha_research | — |
 
 ---
 
 **Re-review #4 = SHIP (2026-06-30).** Minor m1 applied (`parked` explicit sentinel, C14 above). **GPT's single residual risk = implementation drift:** C1-C14 are `design_only` prose — before any phase build approval or alpha evidence, convert the phase-gating contracts into CI-discovered `test_stub` tests, then `enforced`.
+
+**Re-review #5 (Phase-2 increment) = REVISE → all applied; re-review #6 = SHIP (2026-06-30).** Added **C15**
+(anti-manipulation / full-path injection isolation; R5-M2 + R6-m4) + **C16** (LLM-score containment; R5-B3)
+→ CONTRACTS now **C1-C16**; C2 extended to ALL learned components (R5-B2); **B1 `earliest`→`max` PIT bug
+fixed in C1** (it was latent in the #4-SHIP'd C1). Same residual risk: implementation drift — esp. treating
+C16-registered LLM sub-scores as "validated" before they pass forward/sealed evidence + marginal-contribution
++ multiple-testing.

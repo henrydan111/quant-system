@@ -3,7 +3,7 @@
 **Date:** 2026-06-30
 **Status:** DESIGN — details [ROADMAP.md](ROADMAP.md) Phase 2; **binds to** [CONTRACTS.md](CONTRACTS.md)
 (C1/C2/C3/C6/C7/C8/C12 + 提议新增 C15 反操纵/C16 LLM-分数遏制);**§10 re-review #5 = REVISE → 全部应用,
-re-review #6 pending**. All `design_only` (C14).
+re-review #6 = SHIP (2026-06-30; 0B/0M/1m, m4 applied; C15/C16 → CONTRACTS, now C1-C16)**. All `design_only` (C14).
 **Evidence base:** 我方 deep-research `wf_903e4a9f`(21/25 三票)+ GPT deep-research(合并,带核实滤网)
 + §6.1 读 8 接口 + [SERENITY_SKILL_DISSECTION.md](SERENITY_SKILL_DISSECTION.md)。✅me 新证据:KTD-Fin
 [2605.28359](https://arxiv.org/abs/2605.28359)·Bias-Consideration [2602.14233](https://arxiv.org/abs/2602.14233)
@@ -69,7 +69,7 @@ schema(C12 typed)= serenity scorecard 形状:`{factor_scores:[{name,score_0_5,ev
 
 - **三级证据梯(serenity→Tushare)**:强=公告/互动易/政策 · 中=研报/财媒 · 弱=社媒(未接)。**弱源仅线索,需强源确认。**
 - **红旗惩罚(serenity,可编码)**:应收/存货增速>收入 · 称稀缺但毛利不改善 · 股价靠社媒热度 · 单一未具名客户 · 转收入前先融资 · 管理层主题语言但分部不动 → penalty_scores。
-- **注入隔离边界(M2,全栈)**:外部文本在**每一阶段**(Qwen/Dossier/Claude/Risk Judge/审计回放工具)都是**不可信数据**;只作引用/转义字段传递,**绝不**拼进系统/开发者指令或可执行 prompt。**任何外部文本不得触发** tool call / URL 抓取 / PDF 抓取 / 下单 / 写文件 / 改配置 / 改 prompt-schema。**PDF 抽取在沙箱**。指令样文本 → `risk_flags=[injection]`,只能降信任/阻断,不能驱动动作。
+- **注入隔离边界(M2,全栈)**:外部文本在**每一阶段**(Qwen/Dossier/Claude/Risk Judge/审计回放工具)都是**不可信数据**;只作引用/转义字段传递,**绝不**拼进系统/开发者指令或可执行 prompt。**任何外部文本不得触发** tool call / URL 抓取 / PDF 抓取 / 下单 / 写文件 / 改配置 / 改 prompt-schema。**PDF 抽取在沙箱**。**(R6-m4)白名单源适配器**可经确定性预注册摄入作业抓取官方字段(如 anns_d PDF URL),带 `adapter_id/allowlist/retrieved_at/pdf_hash/pdf_visible_at/content_hash/审计日志`——适配器抓取=**数据摄入,非 LLM/tool 动作**,抽出 PDF 文本仍是 C15 不可信数据。指令样文本 → `risk_flags=[injection]`,只能降信任/阻断,不能驱动动作。
 - **反从众(✅ Fin-Bias)**:LLM 会 herd 上下文人类偏见 → 券商/KOL 意见结构化成"证据"而非"结论"喂入。
 - ⚠️ A 股专属反操纵实证仍缺 → 🔧,前向校准(GPT 同意:边界须契约完整,但 A 股证据缺口不构成 Blocker)。
 
