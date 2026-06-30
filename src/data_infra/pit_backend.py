@@ -67,7 +67,10 @@ def compute_limit_status(close, up_limit, down_limit, tol: float = LIMIT_STATUS_
     status[valid & (close <= dn + tol)] = -1.0
     return status
 
-SLOT_DEPTH_DEFAULT = 5
+SLOT_DEPTH_DEFAULT = 9  # q0..q8 — single-quarter (_sq_q*) AND level (_q*) slots. Upgraded 5→9 (2026-06-30)
+# so the year-ago TTM leg (q4..q7) and the begin/end balance endpoint (q8) are natively available to ALL
+# periodic factors (no transient deep-slot build needed). Additive: q0..q4 unchanged; q5..q8 added. Deepslot
+# special-cases (income growth path) keep their explicit slot_depth (12/16) and are unaffected by this default.
 CORE_METADATA_COLUMNS = {
     "ts_code",
     "qlib_code",
