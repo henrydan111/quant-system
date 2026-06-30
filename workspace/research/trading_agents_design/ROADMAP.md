@@ -1,7 +1,8 @@
 # ROADMAP — AI 增强 A 股系统(plan of record)
 
 **Date:** 2026-06-28
-**Status:** DESIGN / 计划基准 — pending §10 GPT cross-review
+**Status:** DESIGN / 计划基准 — GPT §10 review #1 = **REVISE**(所有 finding 已接受并应用 → [CONTRACTS.md](CONTRACTS.md));re-review pending
+**⚠️ 绑定契约**:[CONTRACTS.md](CONTRACTS.md)(C1–C13)在冲突时**优先于**本路线图;文献引用受 [evidence_registry.md](evidence_registry.md) 约束。
 **Sequences:** [BLUEPRINT.md](BLUEPRINT.md) · [INSTITUTIONAL_WORKFLOW.md](INSTITUTIONAL_WORKFLOW.md) ·
 [HARNESS_FORWARD_AI_TRADER.md](HARNESS_FORWARD_AI_TRADER.md) ·
 [INTEGRATION_RDAGENT.md](INTEGRATION_RDAGENT.md)(**PARKED** — 见下)
@@ -25,6 +26,8 @@
 ### Phase 0 · 量化母信号(地基,无 AI)
 - **目标**:金股池 ∩ 流动带 → approved 因子(市值中性、边际贡献)→ 月度 top-K,事件驱动总收益、真实成本、**1×**,对比宽基 + 等权金股。
 - **闸门(金股生死)**:券商预筛若对量化零增量(打不过 quant-on-broad)→ 弃金股池,改 universe。
+- **C3(B3)金股 PIT universe**:`golden_stock_universe(date)` = PIT 布尔掩码,只含 `published_at ≤ decision_time` 的推荐事件,**保留退市/停牌/改名/ST/合并**名;走现成 survivorship 基建,**不从当前 vendor 表重建**;可交易性只在执行层。
+- **C9(M7)报告纪律**:Phase 0 只报 IC/RankIC/ICIR/单调/换手/分位 = 研究诊断;**Phase 1 事件驱动总收益(T+1/涨跌停/停牌/分红/成本/1×)之前不得声称可部署收益**。
 - **依赖**:无(现成机器)。
 - **AI/收益**:无 AI。**高置信 · 地基**。
 
@@ -36,6 +39,7 @@
 
 ### Phase 2 · 多源文本 + AI 多分析师层(重头戏,深化)
 两个子项目,数据基建先于 agent。**兑现最初愿景**(收集消息源 → AI 总结 → 模拟多类分析师 → 辅佐决策)。
+> **绑定契约**:C1 文本可见时点(`visible_at`,trade_date 不算)+ C5 源适配器 · C2 LLM 文本因子两类证据标签(historical=仅管道 / clean=严格晚于模型 cutoff,前向/post-cutoff)· C7 叠加上限 · C8 代码/面板契约 · C12 分析师 typed 输出。**历史文本基本不可做 alpha 验证(无 PIT 存档)→ 干净路径是前向。**
 
 **2A · 多源文本数据基建(§6.1 治理,无 AI)**
 - **硬前置 ⚠️**:**Tushare 文本数据需额外权限/积分**(doc-142「大模型语料专题」:`research_report` / `news` / `major_news` / `npr` / `anns_d` 等)——**先取得访问权,且每个接口接入前按 §6.1 读接口正文**(字段/限量/可见时点),记入 data_dictionary。
@@ -56,6 +60,7 @@
 ### Phase 3 · AI 交易员前向 harness(最速、最慢、最不确定)
 - **目标**:量化初筛 → AI 决策层(AlphaAgents 辩论 + FinMem 记忆)→ 前向纸面实盘(StockBench 无污染协议)。详见 [HARNESS_FORWARD_AI_TRADER.md](HARNESS_FORWARD_AI_TRADER.md)。
 - **硬前置 ⚠️**:**解除日历冻结**(恢复 Tushare 日度接入,跑过 2026-02-27)+ 实时文本。
+- **C5(B6)**:**准前向回放 = 非证据**(仅接口/延迟/审计/执行模拟测试);AI 最终决策唯一证据 = 预注册前向 paper-live(不可变决策日志 + 冻结 prompt/模型/工具哈希 + 决策前快照)。
 - **闸门**:AI-on-shortlist vs 纯量化 vs 等权买入持有,前向 ≥6-12 月;AI ≤ 纯量化 → 降级为解释器。
 - **依赖**:Phase 0/1/2 + 实时数据 + §10。
 - **AI/收益**:用 AI。**低 · 慢**——唯一诚实验证 AI 最终决策的路。

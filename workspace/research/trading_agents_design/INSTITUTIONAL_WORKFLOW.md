@@ -1,7 +1,8 @@
 # 专业投资机构工作流 — AI 增强 A 股系统的制度骨架
 
 **Date:** 2026-06-28
-**Status:** DESIGN (pending §10 GPT cross-review before any load-bearing build)
+**Status:** DESIGN — GPT §10 review #1 = REVISE (applied; re-review pending)
+> **⚠️ GPT §10 review applied (2026-06-28).** 绑定契约见 [CONTRACTS.md](CONTRACTS.md)。本文档应用:C10/M3 单人最小可行治理(独立挑战 agent 只可评论、不可改研究工件/OOS 标签/审批态)。审核确认 separation-of-duties 是 load-bearing,非过度设计。
 **Companion:** [BLUEPRINT.md](BLUEPRINT.md) — the AI multi-agent architecture sits *inside* Stage 2 +
 Stage 7 of this workflow, it is NOT the whole workflow.
 

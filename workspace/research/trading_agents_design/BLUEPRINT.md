@@ -1,7 +1,8 @@
 # Trading-Agents System Blueprint — 券商金股 Pool + 量化选股 + AI 主观增强
 
 **Date:** 2026-06-28
-**Status:** DESIGN (pending §10 GPT cross-review before any load-bearing build)
+**Status:** DESIGN — GPT §10 review #1 = REVISE (applied; re-review pending)
+> **⚠️ GPT §10 review applied (2026-06-28).** 绑定契约见 [CONTRACTS.md](CONTRACTS.md);冲突处以契约为准。本文档应用:C6/M2 两模式分账 · C7/M6 叠加层"组合维度"上限(max_name/sector/turnover/active_risk_delta,非散文) · C12/m3 分析师 typed 输出 · C3/B3 金股 PIT universe。
 **Premise (validated):** 券商金股 is a **candidate pool**, not an alpha signal
 ([broker_recommend_alpha/FINDINGS.md](../broker_recommend_alpha/FINDINGS.md)). Alpha must come
 from the quant + AI overlay ON the pool.

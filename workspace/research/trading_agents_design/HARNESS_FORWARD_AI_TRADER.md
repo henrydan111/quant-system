@@ -1,7 +1,8 @@
 # 量化初筛 → AI 交易员 → 前向纸面实盘 验证 harness
 
 **Date:** 2026-06-28
-**Status:** DESIGN (pending §10 GPT cross-review before any load-bearing build)
+**Status:** DESIGN — GPT §10 review #1 = REVISE (applied; re-review pending)
+> **⚠️ GPT §10 review applied (2026-06-28).** 绑定契约见 [CONTRACTS.md](CONTRACTS.md)。本文档应用:C5/B6 准前向回放=非证据(下文已改) · C6/M2 `ai_final_decider_shadow` 独立分账(与 bounded_overlay 不共享 OOS/prompt/阈值) · C1/M5 源适配器契约(每条文本带 source_published_at/updated_at/retrieved_at/content_hash,fail-closed)。
 **Companion:** [BLUEPRINT.md](BLUEPRINT.md)(有界 veto/tilt 那一端)· 本 harness 是"给 AI 更大决策权"那一端
 
 ---
@@ -56,7 +57,7 @@ harness = **量化初筛(历史可验证)+ AI 决策层(模板已有)+ 前向纸
 
 ### Part 3 · 前向纸面实盘验证(命门)
 - **两种模式**:
-  - (a) **准前向回放**:在你**最近的、晚于决策模型 cutoff** 的历史窗上跑(注意部分重叠,较弱)。
+  - (a) **准前向回放 = 非证据(C5/B6)**:仅用于接口/延迟/审计/执行模拟测试,**绝不**作为 alpha/OOS/AI 交易员业绩;干净证据只有 (b)。
   - (b) **真前向 paper-live**:从**当下边缘**起,t 时刻记录决策、t+h 实现结果,**决策一经记录不可重跑**(StockBench"持续更新"、Autonomous Market Intelligence"时间边缘"的做法)。
 - **执行**:用你的**事件驱动引擎**当纸面账户(真实 A 股成本、T+1、涨跌停)。
 - **三方比较(决定去留)**:AI-on-shortlist　vs　纯量化-on-shortlist　vs　等权买入持有(shortlist)。
@@ -97,7 +98,7 @@ harness = **量化初筛(历史可验证)+ AI 决策层(模板已有)+ 前向纸
 1. **Part 1** 先跑通(= Phase 0 金股池量化母信号,你已在路上)。
 2. **恢复日度数据接入**(解除冻结前置),否则前向无从谈起。
 3. **Part 2** 决策层:先 3 个 agent(fundamental / 分析师-revision / valuation)+ 简单辩论,prompt+模型冻结。
-4. **Part 3** 前向 harness:预注册 → 准前向(最近 post-cutoff 窗)先做 sanity → 真 paper-live 起跑 → 三方比较。
+4. **Part 3** 前向 harness:预注册 → 准前向**仅管道 sanity(非证据)** → 真 paper-live 起跑(唯一证据)→ 三方比较。
 5. 固化成 `ai_trader_forward` profile + MLflow。
 
 ---

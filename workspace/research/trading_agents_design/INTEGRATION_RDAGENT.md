@@ -1,7 +1,8 @@
 # RD-Agent(Q) → 你的 factor_lifecycle 集成方案
 
 **Date:** 2026-06-28
-**Status:** DESIGN (pending §10 GPT cross-review before any load-bearing build)
+**Status:** DESIGN / **PARKED** — GPT §10 review #1 = REVISE (applied)
+> **⚠️ GPT §10 review applied (2026-06-28).** 本文档 PARKED;绑定契约 [CONTRACTS.md](CONTRACTS.md)。解封条件加严(C2/B5):家族预注册 + cluster-level FDR + PBO/purged-CV + 有效试验计数(`IC≥0.99` 去重**不算**过拟合控制)。M1 确认 F4——只有**晚于生成模型 cutoff** 的前向窗才干净;**pre-cutoff 封存窗更差(全在参数记忆内),不是更强**。
 **Source paper (verified):** [arXiv 2505.15155](https://arxiv.org/abs/2505.15155) "R&D-Agent-Quant" (MSRA,
 NeurIPS 2025) · code [github.com/microsoft/RD-Agent](https://github.com/microsoft/RD-Agent) (MIT)
 
