@@ -14,8 +14,11 @@ These are the machine-checkable contracts + the tests that gate each phase's bui
 
 ## C1 · Text visibility PIT (B1 + M5) — gates Phase 2A
 **Rule:** `trade_date` / `report_date` / `ann_date` / title date / event date are **NEVER** accepted as
-visibility time. Every text row carries an immutable **`visible_at` = earliest of (verified source
-publication timestamp, first successful project ingestion timestamp)**, plus `ingested_at`,
+visibility time. Every text row carries an immutable **`visible_at` = max(verified source publication
+timestamp, first ingestion timestamp)** — **R5-B1 fix: `max`, NOT `earliest`** (information is actionable
+only once it is BOTH published AND in our system; `earliest()` would admit post-ingestion data into a
+pre-ingestion decision = lookahead). Fail-closed to `first_ingested_at` when source time is absent /
+nominal-only / date-only / ambiguous / revised / vendor-backfilled. Also store `ingested_at`,
 `source_url_or_doc_id`, `content_hash`, `vendor_snapshot_id`, `revision_id`. The text loader **fails
 closed** when `visible_at` is missing, ambiguous, later revised, or after the decision timestamp.
 Historical re-downloads are **engineering fixtures only** unless matched to an immutable as-of snapshot.
