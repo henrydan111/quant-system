@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-28
 **Status:** DESIGN contract spec — supersedes the 4 design docs + ROADMAP where they conflict.
-**Origin:** GPT-5.5 Pro §10 cross-review (verdict REVISE). Every finding below was ACCEPTED.
+**Origin:** GPT-5.5 Pro §10 cross-review — reviews #1-#3 = REVISE (all findings applied), **re-review #4 = SHIP (2026-06-30, clearing pass; 0 Blocker / 0 Major / 1 Minor)**. Every finding accepted.
 These are the machine-checkable contracts + the tests that gate each phase's build approval.
 
 > Convention (status lattice — see C14): **implementation may start at `test_stub`; phase build approval and
@@ -170,7 +170,7 @@ caution but cannot be cited as named evidence for a quantitative claim.**
 ---
 
 ## C14 · Contract implementation matrix (M1 + R3-Major-2)
-**Status lattice (totally ordered):** `design_only < test_stub < enforced < evidence_ready`.
+**Status enum (R3-#4 m1):** `parked` + the ordered active lattice `design_only < test_stub < enforced < evidence_ready`. **`parked` is a non-active, fail-closed sentinel** — NOT comparable for phase advancement and **never eligible for alpha evidence**; a parked contract moves to `test_stub` ONLY through its explicit signed unpark gate (e.g. C4 → `IPO_UNPARK_REQUEST.md`). CI treats `parked` as a known sentinel, never an unknown value.
 - `design_only` — contract text exists; no committed test.
 - `test_stub` — a **committed, CI-discovered test exists and fails or xfails** against the missing
   implementation. Permits **implementation work only — NOT phase build approval.**
@@ -180,8 +180,7 @@ caution but cannot be cited as named evidence for a quantitative claim.**
 
 **Gates:** a phase advances design→build only when its required contracts are ≥ `test_stub`; it may produce
 **alpha evidence** only when they are `enforced` (and the phase is `evidence_ready`). A `.md` artifact existing
-is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Current status (design stage): all
-`design_only`.**
+is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Current status (design stage): all active contracts `design_only`; C4 `parked` (non-active sentinel).**
 
 **Required tests:** `tests/contracts/test_contract_status_lattice.py` ·
 `tests/contracts/test_design_to_build_requires_test_stub_only.py` ·
@@ -205,4 +204,4 @@ is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Cur
 
 ---
 
-**Re-review:** these contracts answer the REVISE blockers; the corpus goes back to GPT for a clearing pass.
+**Re-review #4 = SHIP (2026-06-30).** Minor m1 applied (`parked` explicit sentinel, C14 above). **GPT's single residual risk = implementation drift:** C1-C14 are `design_only` prose — before any phase build approval or alpha evidence, convert the phase-gating contracts into CI-discovered `test_stub` tests, then `enforced`.

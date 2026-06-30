@@ -1,8 +1,8 @@
 # ROADMAP — AI 增强 A 股系统(plan of record)
 
 **Date:** 2026-06-28
-**Status:** DESIGN / 计划基准 — GPT §10 review #1 = **REVISE**(所有 finding 已接受并应用 → [CONTRACTS.md](CONTRACTS.md));re-review pending
-**⚠️ 绑定契约**:[CONTRACTS.md](CONTRACTS.md)(C1–C13)在冲突时**优先于**本路线图;文献引用受 [evidence_registry.md](evidence_registry.md) 约束。
+**Status:** DESIGN / 计划基准 — GPT §10 **re-review #4 = SHIP**(2026-06-30;reviews #1-#3 REVISE 全部应用,#4 clearing pass SHIP,Minor m1 已应用 → [CONTRACTS.md](CONTRACTS.md))
+**⚠️ 绑定契约**:[CONTRACTS.md](CONTRACTS.md)(C1–C14)在冲突时**优先于**本路线图;文献引用受 [evidence_registry.md](evidence_registry.md) 约束。
 **Sequences:** [BLUEPRINT.md](BLUEPRINT.md) · [INSTITUTIONAL_WORKFLOW.md](INSTITUTIONAL_WORKFLOW.md) ·
 [HARNESS_FORWARD_AI_TRADER.md](HARNESS_FORWARD_AI_TRADER.md) ·
 [INTEGRATION_RDAGENT.md](INTEGRATION_RDAGENT.md)(**PARKED** — 见下)
