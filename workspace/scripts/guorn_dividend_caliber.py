@@ -82,6 +82,33 @@ def dividend_yield_ttm(signal_date: str, close_by_code6: pd.Series, *, pretax: b
     return (dps.reindex(close_by_code6.index) / close_by_code6).rename("dv_ttm_guorn")
 
 
+def declared_dividend_by_quarter(signal_date: str, *, pretax: bool = True) -> pd.DataFrame:
+    """Per-fiscal-QUARTER declared dividend PER SHARE (for 果仁's `sumq(分红总金额, N, M)`), PIT ann_date ≤ signal,
+    most-finalized per (ts_code, end_date). Returns a DataFrame indexed by 6-digit code, columns = fiscal-period
+    end_date string (e.g. '20241231'), values = that period's declared dividend/share.
+
+    ⚠ CALIBER (2026-07-01, pinned via 建发股份 decomposition): 果仁's `分红总金额` is a 季报指标 attributed to the
+    dividend's REPORT PERIOD (`end_date`), and `sumq(分红总金额,4,0)` sums the last 4 FISCAL QUARTERS. This is NOT
+    the same as the ann-date trailing-365-day window (`declared_dividend_ttm`, which is the 股息率TTM caliber): a
+    2024-interim dividend (end_date 2024Q3, announced 2025-01) is INSIDE a 365-day ann-window but OUTSIDE the last-4
+    fiscal quarters {2024Q4,2025Q1,Q2,Q3}. Use THIS (report-period) for 分红总金额 sumq/annual factors
+    (DivOP%/DivGrPY%/…); use `declared_dividend_ttm` only for 股息率TTM. (建发: ann-window 0.7 vs report-period 0.3.)"""
+    sig = pd.Timestamp(signal_date)
+    amount_col = "cash_div_tax" if pretax else "cash_div"
+    frames = [pd.read_parquet(f) for f in glob.glob(DIV_GLOB)]
+    d = pd.concat(frames, ignore_index=True)
+    d["proc"] = d["div_proc"].map(_decode_gbk)
+    d["ann"] = pd.to_datetime(d["ann_date"], format="%Y%m%d", errors="coerce")
+    d = d[(d[amount_col].fillna(0) > 0) & (d["ann"].notna()) & (d["ann"] <= sig)].copy()  # PIT
+    d["prio"] = d["proc"].map(_PROC_PRIORITY).fillna(0)
+    ev = (d.sort_values("prio")
+            .groupby(["ts_code", "end_date"])
+            .agg(dps=(amount_col, "last")).reset_index())
+    ev["code6"] = ev["ts_code"].str.split(".").str[0]
+    ev["ed"] = ev["end_date"].astype(str)
+    return ev.groupby(["code6", "ed"])["dps"].sum().unstack("ed")
+
+
 def declared_dividend_by_fy(signal_date: str, *, pretax: bool = True) -> pd.DataFrame:
     """Per-FISCAL-YEAR declared dividend PER SHARE (for 果仁's `annual(分红总金额, k)`), PIT ann_date ≤ signal,
     most-finalized amount per (ts_code, end_date) event. Returns a DataFrame indexed by 6-digit code, columns =

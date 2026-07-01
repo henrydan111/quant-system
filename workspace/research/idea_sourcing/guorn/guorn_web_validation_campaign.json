@@ -300,7 +300,7 @@
         "#21 value_红利低波_重股息_v1"
       ],
       "status": "diverged",
-      "verdict": "◑ RANK-FAITHFUL, VALUE-DIVERGED (2026-07-01, T1 batch): top-5/10/20 = 100%/90%/85%, Spearman 0.935, but value NOT penny-exact (within-5% only 22%; median rel-err inflated by the zero-centered denominator). Structure CONFIRMED: AvgQ(总股本,4,0)/AvgQ(总股本,4,4)-1 = (Σ$total_share_q0..3)/(Σ$total_share_q4..7)-1; MANY stable-share firms match near-exactly (索通发展 -0.0790 vs -0.079027, 广东明珠, 贤丰控股, 日发精机). Divergences concentrate on MAJOR-share-change firms (中航成飞 3.53 vs 2.65, 比亚迪 1.09 vs 0.56, 步步高 0.52 vs 1.06, broker mergers 国联民生/国泰海通) => ROOT CAUSE = 总股本 SOURCE/timing: local $total_share_qN = balancesheet 期末总股本 (recognizes 增发/回购 at the report date); 果仁's AvgQ 总股本 recognizes share changes on the effective/market date -> the two diverge exactly on 增发/回购/M&A firms. A vendor/source diff, NOT a local bug (stable-share firms are exact). Rank-usable; NOT value-verified. To close: sample the daily $total_share series at the 4 quarter-end trading days (untested). 果仁_20251231_排除ST排除科创_排名-SharesAvgGrPY.xlsx",
+      "verdict": "◑ RANK-FAITHFUL, VALUE-DIVERGED (2026-07-01, T1 batch): top-5/10/20 = 100%/90%/85%, Spearman 0.935, but value NOT penny-exact (within-5% only 22%; median rel-err inflated by the zero-centered denominator). Structure CONFIRMED: AvgQ(总股本,4,0)/AvgQ(总股本,4,4)-1 = (Σ$total_share_q0..3)/(Σ$total_share_q4..7)-1; MANY stable-share firms match near-exactly (索通发展 -0.0790 vs -0.079027, 广东明珠, 贤丰控股, 日发精机). Divergences concentrate on MAJOR-share-change firms (中航成飞 3.53 vs 2.65, 比亚迪 1.09 vs 0.56, 步步高 0.52 vs 1.06, broker mergers 国联民生/国泰海通) => ROOT CAUSE = 总股本 SOURCE/timing: local $total_share_qN = balancesheet 期末总股本 (recognizes 增发/回购 at the report date); 果仁's AvgQ 总股本 recognizes share changes on the effective/market date -> the two diverge exactly on 增发/回购/M&A firms. A vendor/source diff, NOT a local bug (stable-share firms are exact). Rank-usable; NOT value-verified. To close: sample the daily $total_share series at the 4 quarter-end trading days (untested). 果仁_20251231_排除ST排除科创_排名-SharesAvgGrPY.xlsx || RAW 总股本 VERIFIED (2026-07-01 fresh export): current 总股本 penny-exact vs 果仁 (Spearman 1.000, 总股本(亿)x1e8=$total_share) -> the divergence is NOT the 总股本 source but the AvgQ HISTORICAL quarter-end sampling (total_share_q4..q7) on 增发/回购 firms.",
       "export_file": "果仁_20251231_排除ST排除科创_排名-SharesAvgGrPY.xlsx",
       "selection_date": "2025-12-31",
       "note": "T1 batch; rank-faithful, value diverges on 增发/回购/M&A firms (总股本 source/timing)"
@@ -377,7 +377,7 @@
     {
       "guorn_indicator": "DivGrPY%",
       "bucket": "doable",
-      "local_expr": "declared_div_ttm(now)/declared_div_ttm(now-1yr)-1 (果仁 ann-date declared caliber; guorn_dividend_caliber.py)",
+      "local_expr": "sumq(分红,4,0)/sumq(分红,4,4)-1 REPORT-PERIOD (declared_dividend_by_quarter; per-share)",
       "guorn_formula": "sumq(分红总金额,4,0)/sumq(分红总金额,4,4)-1",
       "n_deployed_books": 2,
       "n_strategies_all": 4,
@@ -386,10 +386,10 @@
         "#20 value_红利低波_央企_v1"
       ],
       "status": "diverged",
-      "verdict": "◑ VALUE-FAITHFUL, TOP-K FRAGILE (unstable-denom) (2026-07-01, T1 batch): domain-EXACT (3319/3321 果仁-defined prior-year payers matched; the 75% raw coverage was non-payer dilution, not a gap), Spearman 0.976, median rel-err 0.07%, and 果仁's GENUINE top matches near-exactly (恒宇信通 18.33=18.33, 大唐发电 14.61, 华林证券 9.0, 中集集团 7.0, 无线传媒 6.18 — 7/8 penny-close). Caliber CONFIRMED: DivGrPY% = declared_div_ttm(now)/declared_div_ttm(now-1yr)-1 on the 果仁 ann-date DECLARED-dividend caliber (guorn_dividend_caliber.py, per-share; 总股本 cancels in the ratio). BUT top-5 = 3/5 (< 80% gate) from a FEW recent-IPO/tiny-prev-base firms that explode: 雅艺科技(301113) my +2533% vs 果仁 +168% — the trailing-year dividend-EVENT SET differs at a near-zero base. Unstable-denominator family (same as RnDTTMGr%PY / EpsTTMGr%): value+domain faithful, selection tail fragile BY DESIGN - don't chase. The declared-dividend caliber is now validated (reusable for DivAGrPY%/DivOP%/Div%NetIncY2/连续N年分红). 果仁_20251231_排除ST排除科创_排名-DivGrPY.xlsx",
+      "verdict": "◑ CALIBER-CORRECTED, residual GENUINE (2026-07-01, raw-primitive decomposition): rebuilt with 果仁's actual REPORT-PERIOD sumq(分红总金额,4,0)/sumq(,4,4) window (NOT ann-date-365d - see DivOP%). Spearman 0.985, med rel-err 0.060%, top-5/10/20 = 4/5, 9/10, 16/20 (was 3/5,8/10,15/20). Raw primitives verified (总股本 ✅ penny, 分红=股息率x总股本 ✅). The residual top-5 miss is GENUINE growth-ratio fragility (unstable tiny prior-year base -> explosive growth -> hypersensitive order, 雅艺科技-type), NOT a caliber gap - no window fix removes it (unlike DivOP%, whose stable 营业利润 denominator made it clean after the same fix). 果仁_20251231_排除ST排除科创_排名-DivGrPY.xlsx",
       "export_file": "果仁_20251231_排除ST排除科创_排名-DivGrPY.xlsx",
       "selection_date": "2025-12-31",
-      "note": "T1 batch; value+domain exact, top-K fragile (unstable denom, tiny-prev-base IPOs); declared-div caliber validated"
+      "note": "T1 decomp; caliber corrected to report-period; residual = genuine tiny-base growth fragility"
     },
     {
       "guorn_indicator": "历史贝塔",
@@ -542,38 +542,6 @@
       "note": "top-K 0/30/30 — financial coverage gap (value penny-exact)"
     },
     {
-      "guorn_indicator": "20日换手率",
-      "bucket": "doable",
-      "local_expr": "Mean($turnover_rate,20) (lag-0; ~5× scale caliber)",
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "done",
-      "verdict": "◑ rank-faithful (Spearman 0.999 on TOTAL-share turnover; free-float turnover_rate_f WORSE 0.907). Value ~5× scaled = unit caliber (果仁 换手率 convention), NOT free-float. FILTER-use (排名%最小/区间, rank-based) → reproduces by rank; top-K-largest diverges at high-turnover recent-IPO extremes (not the filter zone). Mean($turnover_rate,20), lag-0.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-20日换手率.xlsx",
-      "selection_date": "2025-12-31",
-      "note": "rank-faithful 0.999; FILTER by rank-%"
-    },
-    {
-      "guorn_indicator": "RND%Assets",
-      "bucket": "validated",
-      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
-      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "done",
-      "verdict": "✅ penny-exact + TOP-K COMPLETE: top-5/10/20 = 100/100/100, Spearman 0.999, Pearson 0.999, median 0.12%, cov 91.5%, sign 99.6%. TTM(rd)/AvgQ(assets,4) reproduces exactly incl the selection zone. Broad 排除ST排除科创, single rank condition.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-RNDpctAssets.xlsx",
-      "selection_date": "2025-12-31",
-      "note": "top-K 100/100/100 — CLEAN PASS"
-    },
-    {
       "guorn_indicator": "管理层持股比例",
       "bucket": "doable",
       "local_expr": null,
@@ -590,20 +558,20 @@
       "note": null
     },
     {
-      "guorn_indicator": "10日融资偿还金额",
+      "guorn_indicator": "20日换手率",
       "bucket": "doable",
-      "local_expr": null,
+      "local_expr": "Mean($turnover_rate,20) (lag-0; ~5× scale caliber)",
       "guorn_formula": null,
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
         "#10 sm_双创研发强度_v1"
       ],
-      "status": "blocked",
-      "verdict": "🔴 BLOCKED — margin repayment $rzche is QUARANTINED (CLAUDE.md §3.4).",
-      "export_file": null,
-      "selection_date": null,
-      "note": null
+      "status": "done",
+      "verdict": "◑ rank-faithful (Spearman 0.999 on TOTAL-share turnover; free-float turnover_rate_f WORSE 0.907). Value ~5× scaled = unit caliber (果仁 换手率 convention), NOT free-float. FILTER-use (排名%最小/区间, rank-based) → reproduces by rank; top-K-largest diverges at high-turnover recent-IPO extremes (not the filter zone). Mean($turnover_rate,20), lag-0.",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-20日换手率.xlsx",
+      "selection_date": "2025-12-31",
+      "note": "rank-faithful 0.999; FILTER by rank-%"
     },
     {
       "guorn_indicator": "交易天数",
@@ -622,20 +590,52 @@
       "note": null
     },
     {
-      "guorn_indicator": "连续N年分红(3)",
+      "guorn_indicator": "RND%Assets",
+      "bucket": "validated",
+      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
+      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "done",
+      "verdict": "✅ penny-exact + TOP-K COMPLETE: top-5/10/20 = 100/100/100, Spearman 0.999, Pearson 0.999, median 0.12%, cov 91.5%, sign 99.6%. TTM(rd)/AvgQ(assets,4) reproduces exactly incl the selection zone. Broad 排除ST排除科创, single rank condition.",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-RNDpctAssets.xlsx",
+      "selection_date": "2025-12-31",
+      "note": "top-K 100/100/100 — CLEAN PASS"
+    },
+    {
+      "guorn_indicator": "10日融资偿还金额",
       "bucket": "doable",
-      "local_expr": "annual(分红,0&1&2)>0 = paid FY2024&2023&2022 (declared_dividend_by_fy + list_year<=2022 gate); count-type",
-      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "blocked",
+      "verdict": "🔴 BLOCKED — margin repayment $rzche is QUARANTINED (CLAUDE.md §3.4).",
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "YieldRfrDiff",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
         "#21 value_红利低波_重股息_v1"
       ],
-      "status": "diverged",
-      "verdict": "◑ COUNT-APPROX (2026-07-01, T1 batch): 94.3% exact-match (100% coverage) with the discrete caliber annual(分红,0/1/2)>0 = a dividend paid in EACH of FY2024/2023/2022 (per-FY declared_dividend_by_fy, PIT ann<=signal) + a list_year<=2022 gate. I OVER-mark ~250 (my 2413 =1 vs 果仁 2164). RULED OUT two decodes: (a) the tracker's min(股息率,750td)>0 continuous-yield variant is TOO STRICT (annual-announcement drift creates brief trailing-yield 0-gaps -> only 421 =1, 60% match) so it is NOT 果仁's def; (b) annual-only end_date=1231 is worse (92.8%). Residual ~5.7% = a subtler annual-dividend-existence rule (late-FY2024 announcers / young-firm annual-offset) not fully pinned. Boolean FILTER (top-K degenerate/irrelevant); usable with caveat; spot-check the ~250 if load-bearing. 果仁_20251231_排除ST排除科创_排名-连续3年分红.xlsx",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-连续3年分红.xlsx",
-      "selection_date": "2025-12-31",
-      "note": "T1 batch; 94.3% count-approx; ruled out min(股息率,750) & annual-only; residual = subtle annual-existence rule"
+      "status": "blocked",
+      "verdict": "🔴 BLOCKED — needs 10年国债收益率 (treasury); not a local provider field.",
+      "export_file": null,
+      "selection_date": null,
+      "note": null
     },
     {
       "guorn_indicator": "波动率_日度指标(分红总金额,720)",
@@ -654,36 +654,36 @@
       "note": "T1 batch; local built+staged; 果仁 export deferred (templated-param UI + rate-limit + daily-ization caliber ambiguity)"
     },
     {
-      "guorn_indicator": "DivOP%",
+      "guorn_indicator": "连续N年分红(3)",
       "bucket": "doable",
-      "local_expr": "(declared_div_ttm x $total_share)/Sum($operate_profit_sq_q0..3) (分红总金额=total / TTM营业利润)",
-      "guorn_formula": "sumq(分红总金额,4)/TTM(营业利润,0)",
+      "local_expr": "annual(分红,0&1&2)>0 = paid FY2024&2023&2022 (declared_dividend_by_fy + list_year<=2022 gate); count-type",
+      "guorn_formula": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
         "#21 value_红利低波_重股息_v1"
       ],
       "status": "diverged",
-      "verdict": "◑ VALUE-FAITHFUL, TOP-K FRAGILE (2026-07-01, T1 batch): shared payer domain (n=3140) Spearman 0.985, median rel-err 0.031%, within-5% 88%, sign 99.9%; 果仁's top-6 match to 4 decimals (皖通科技 56.11=56.11, 金明精机 32.66, 万东医疗 31.04, 安达维尔 29.61, 红墙股份 28.26; 好想你 17170 explosive both sides). Caliber CONFIRMED: DivOP% = 分红总金额TTM/TTM营业利润 = (declared_div_ttm x 总股本)/Sum($operate_profit_sq_q0..3). 分红总金额 = TOTAL (元): the x总股本 gives sane payout ratios (茅台 0.52, 格力 0.61, 工行 0.25); $total_share is in shares. BUT top-5 = 2/5 (< gate): the 营业利润 denominator goes near-zero for marginal firms -> explosive top (好想你 17170) -> outlier ORDER hypersensitive; plus ~12% firm-level residual (建发股份 0.24 vs 0.10 = 营业利润 caliber nuance, spot-check if load-bearing). Unstable-denominator family (like DivGrPY%/RnDTTMGr%): value+caliber faithful, selection tail fragile - don't chase. 果仁_20251231_排除ST排除科创_排名-DivOP.xlsx",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-DivOP.xlsx",
+      "verdict": "◑ COUNT-APPROX (2026-07-01, T1 batch): 94.3% exact-match (100% coverage) with the discrete caliber annual(分红,0/1/2)>0 = a dividend paid in EACH of FY2024/2023/2022 (per-FY declared_dividend_by_fy, PIT ann<=signal) + a list_year<=2022 gate. I OVER-mark ~250 (my 2413 =1 vs 果仁 2164). RULED OUT two decodes: (a) the tracker's min(股息率,750td)>0 continuous-yield variant is TOO STRICT (annual-announcement drift creates brief trailing-yield 0-gaps -> only 421 =1, 60% match) so it is NOT 果仁's def; (b) annual-only end_date=1231 is worse (92.8%). Residual ~5.7% = a subtler annual-dividend-existence rule (late-FY2024 announcers / young-firm annual-offset) not fully pinned. Boolean FILTER (top-K degenerate/irrelevant); usable with caveat; spot-check the ~250 if load-bearing. 果仁_20251231_排除ST排除科创_排名-连续3年分红.xlsx",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-连续3年分红.xlsx",
       "selection_date": "2025-12-31",
-      "note": "T1 batch; value+caliber faithful (Spearman 0.985), top-K fragile (营业利润 denom instability); confirms 分红总金额=total"
+      "note": "T1 batch; 94.3% count-approx; ruled out min(股息率,750) & annual-only; residual = subtle annual-existence rule"
     },
     {
-      "guorn_indicator": "YieldRfrDiff",
+      "guorn_indicator": "DivOP%",
       "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": "股息率TTM-MA(10年国债收益率,60)",
+      "local_expr": "(Sum分红_report-period-4Q x $total_share)/Sum($operate_profit_sq_q0..3) (declared_dividend_by_quarter)",
+      "guorn_formula": "sumq(分红总金额,4)/TTM(营业利润,0)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
         "#21 value_红利低波_重股息_v1"
       ],
-      "status": "blocked",
-      "verdict": "🔴 BLOCKED — needs 10年国债收益率 (treasury); not a local provider field.",
-      "export_file": null,
-      "selection_date": null,
-      "note": null
+      "status": "done",
+      "verdict": "✅ VERIFIED (2026-07-01, raw-primitive decomposition): after fixing the 分红总金额 caliber to REPORT-PERIOD, top-5/10/20 = 100%/90%/95%, Pearson 1.000, median rel-err 0.031% (payer domain; 建发股份 0.235->0.1007 = 果仁 0.102). RAW PRIMITIVES all verified EXACT: 总股本 (Spearman 1.000, fresh export 总股本(亿)x1e8=$total_share), 营业利润TTM (Pearson 1.000, med rel-err 0.0000%, fresh export), 分红=每股股利(股息率-validated)x总股本. ROOT CAUSE of the earlier 'top-K 40% fragile' was NOT an unstable denominator - it was the WRONG 分红总金额 window: 果仁 sumq(分红总金额,4,0) sums the last 4 FISCAL QUARTERS (by end_date), NOT my ann-date trailing-365d declared_div_ttm (which double-counts an interim dividend whose end_date is >4Q back). Caliber = (Sum per-share div over end_date in {last 4 quarters} x 总股本)/TTM营业利润. Reusable: guorn_dividend_caliber.declared_dividend_by_quarter. 果仁_20251231_排除ST排除科创_排名-DivOP.xlsx",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-DivOP.xlsx",
+      "selection_date": "2025-12-31",
+      "note": "T1 decomp; VERIFIED after report-period 分红 caliber fix; raw 总股本+营业利润TTM penny-exact"
     },
     {
       "guorn_indicator": "预期盈利增长率",
@@ -734,22 +734,6 @@
       "note": "T1 batch; count-exact 99.7%; -1 = days-since convention; top-K degenerate (ties)"
     },
     {
-      "guorn_indicator": "RnDTTMGr%PY",
-      "bucket": "doable",
-      "local_expr": "(Σrd_exp_sq_q0..3 - Σq4..7)/abs(Σq4..7)",
-      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "diverged",
-      "verdict": "◑ VALUE penny-exact (depth-9; Spearman 0.98, med relerr 0.015%) but TOP-K DIVERGED 40/60/65 — year-ago R&D coverage gap (annual-only reporters, 7/20 top NaN local); 4 caliber variants (raw/symmetric/floor/NaN-tol) tried, NONE close it → unstable-denom family; 果仁_20251231_排除ST排除科创_排名-RnDTTMGrPY.xlsx",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-RnDTTMGrPY.xlsx",
-      "selection_date": "2025-12-31",
-      "note": null
-    },
-    {
       "guorn_indicator": "机构持股比例",
       "bucket": "doable",
       "local_expr": null,
@@ -780,6 +764,22 @@
       "export_file": "果仁_20251231_排除ST排除科创_排名-RoeQ.xlsx",
       "selection_date": "2025-12-31",
       "note": "top5=100%  top10=100%  top20=95%"
+    },
+    {
+      "guorn_indicator": "RnDTTMGr%PY",
+      "bucket": "doable",
+      "local_expr": "(Σrd_exp_sq_q0..3 - Σq4..7)/abs(Σq4..7)",
+      "guorn_formula": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "diverged",
+      "verdict": "◑ VALUE penny-exact (depth-9; Spearman 0.98, med relerr 0.015%) but TOP-K DIVERGED 40/60/65 — year-ago R&D coverage gap (annual-only reporters, 7/20 top NaN local); 4 caliber variants (raw/symmetric/floor/NaN-tol) tried, NONE close it → unstable-denom family; 果仁_20251231_排除ST排除科创_排名-RnDTTMGrPY.xlsx",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-RnDTTMGrPY.xlsx",
+      "selection_date": "2025-12-31",
+      "note": null
     },
     {
       "guorn_indicator": "Div%NetIncY2",
@@ -814,22 +814,6 @@
       "note": "T1 batch; value+domain exact, top-K marginal (unstable denom); same family as DivGrPY%"
     },
     {
-      "guorn_indicator": "市研率",
-      "bucket": "doable",
-      "local_expr": "$total_mv/TTM($rd_exp_sq) (~2× R&D-basis caliber)",
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#22 value_AH_低溢价GARP_v1"
-      ],
-      "status": "done",
-      "verdict": "◑ rank-faithful (Spearman 0.998, Pearson 0.999, cov 91% of R&D-reporters) but value ~2× = R&D-basis caliber (果仁 likely 研发投入 incl capitalized vs my expensed $rd_exp TTM). top-K cheap/smallest 60/70/85, largest 60/50/55. Sub-universe (R&D-reporters), 1 book. $total_mv/TTM($rd_exp_sq), lag-0.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-市研率.xlsx",
-      "selection_date": "2025-12-31",
-      "note": "rank 0.998; top-K(smallest) 60/70/85; 2× caliber"
-    },
-    {
       "guorn_indicator": "AH股溢价率",
       "bucket": "doable",
       "local_expr": null,
@@ -844,6 +828,22 @@
       "export_file": null,
       "selection_date": null,
       "note": null
+    },
+    {
+      "guorn_indicator": "市研率",
+      "bucket": "doable",
+      "local_expr": "$total_mv/TTM($rd_exp_sq) (~2× R&D-basis caliber)",
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#22 value_AH_低溢价GARP_v1"
+      ],
+      "status": "done",
+      "verdict": "◑ rank-faithful (Spearman 0.998, Pearson 0.999, cov 91% of R&D-reporters) but value ~2× = R&D-basis caliber (果仁 likely 研发投入 incl capitalized vs my expensed $rd_exp TTM). top-K cheap/smallest 60/70/85, largest 60/50/55. Sub-universe (R&D-reporters), 1 book. $total_mv/TTM($rd_exp_sq), lag-0.",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-市研率.xlsx",
+      "selection_date": "2025-12-31",
+      "note": "rank 0.998; top-K(smallest) 60/70/85; 2× caliber"
     },
     {
       "guorn_indicator": "EpsTTMGr%",
@@ -942,22 +942,6 @@
       "note": "returns-validated via 60日波动率; template-N deferred"
     },
     {
-      "guorn_indicator": "分析师评级分",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#42 成长_机构预期@周期_v1"
-      ],
-      "status": "blocked",
-      "verdict": "🔴 BLOCKED — analyst rating-SCORE (report_rc); the rating-score aggregate is NOT materialized (only rating_up/n_active_orgs were; §7 report_rc unmaterialized) + vendor-approx (Tushare≠朝阳永续).",
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
       "guorn_indicator": "评级增持家数",
       "bucket": "doable",
       "local_expr": null,
@@ -969,6 +953,22 @@
       ],
       "status": "blocked",
       "verdict": "🔴 BLOCKED — $report_rc__rating_buy NOT materialized (only rating_up/n_active_orgs were; field-mapping §7 report_rc unmaterialized list).",
+      "export_file": null,
+      "selection_date": null,
+      "note": null
+    },
+    {
+      "guorn_indicator": "分析师评级分",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#42 成长_机构预期@周期_v1"
+      ],
+      "status": "blocked",
+      "verdict": "🔴 BLOCKED — analyst rating-SCORE (report_rc); the rating-score aggregate is NOT materialized (only rating_up/n_active_orgs were; §7 report_rc unmaterialized) + vendor-approx (Tushare≠朝阳永续).",
       "export_file": null,
       "selection_date": null,
       "note": null

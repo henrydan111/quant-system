@@ -68,6 +68,18 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
 | **每股收益** (财务指标--每股指标) | 每股收益 TTM (滚动 4 单季) | `Σ$basic_eps_sq_q[0..3]` (lag 0) | ◑ structure-exact (1.39% med, Spearman 0.9975, sign 98.7%, n=4.4k @2025-12-31; value-confirmed 茅台 71.75 vs 果仁 71.89, 万科A −5.02 vs −4.99); residual = TTM 单季求和 vs 累计差分 + 重述时点 | field-probe 2026-07-01 |
 | **基本每股收益(单季)** (财报条目--收益利润) | 基本每股收益 单季 | `$basic_eps_sq_q0` (lag 0) | ✅ penny-exact (0.00% med, Spearman 0.9996, n=4.4k @2025-12-31) | field-probe 2026-07-01 |
+| **总股本(亿)** (行情--股本和市值) | 总股本 | `$total_share / 1e8` (lag 0) | ✅ penny/display-exact (0.037% med, Spearman/Pearson 1.000, top-K 100%, n=4.4k @2025-12-31); residual = 亿 2-dec display-round | T1-decomp 2026-07-01 |
+| **营业利润TTM(万)** (财务指标--最近一年合计TTM) | TTM(营业利润,0) | `Σ$operate_profit_sq_q[0..3] / 1e4` (lag 0) | ✅ penny-exact (0.0000% med, Pearson 1.000, Spearman 0.997, n=4.4k @2025-12-31) | T1-decomp 2026-07-01 |
+
+> **⚠ 分红总金额 caliber — REPORT-PERIOD, not ann-date (pinned 2026-07-01, T1 raw-primitive decomposition).** 果仁's
+> `分红总金额` is a **季报指标** attributed to the dividend's REPORT PERIOD (`end_date` fiscal quarter); `sumq(分红总金额,4,0)`
+> sums the last **4 FISCAL QUARTERS** (`{2024Q4,2025Q1,Q2,Q3}` as-of 2025-12-31), and `annual(分红总金额,k)` = FY(end_date year).
+> This is **NOT** the ann-date trailing-365-day window (`declared_dividend_ttm`, which is the **股息率TTM** caliber): a 2024-interim
+> dividend (end_date 2024Q3, announced 2025-01) is *inside* a 365-day ann-window but *outside* the last-4 fiscal quarters. Using the
+> wrong window silently breaks `sumq(分红)`-based factors (建发股份: ann-window 0.7 vs report-period 0.3 → DivOP% 0.235 vs 果仁 0.102).
+> **Helpers:** `guorn_dividend_caliber.declared_dividend_by_quarter` (report-period, for 分红总金额 sumq) · `declared_dividend_by_fy`
+> (per-FY, for `annual(分红)`) · `declared_dividend_ttm` (ann-date-365d, for **股息率TTM only**). After the fix DivOP% top-5 = 100%
+> (was 40%), Pearson 1.000 — the earlier "top-K fragile" was a caliber artifact, not an unstable denominator.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
