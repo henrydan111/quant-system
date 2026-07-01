@@ -82,6 +82,27 @@ def dividend_yield_ttm(signal_date: str, close_by_code6: pd.Series, *, pretax: b
     return (dps.reindex(close_by_code6.index) / close_by_code6).rename("dv_ttm_guorn")
 
 
+def declared_dividend_by_fy(signal_date: str, *, pretax: bool = True) -> pd.DataFrame:
+    """Per-FISCAL-YEAR declared dividend PER SHARE (for 果仁's `annual(分红总金额, k)`), PIT ann_date ≤ signal,
+    most-finalized amount per (ts_code, end_date) event. Returns a DataFrame indexed by 6-digit code, columns =
+    fiscal_year int (from end_date), values = that FY's total declared dividend/share (interim+final summed; NaN
+    if the firm declared no dividend for that FY). `annual(分红,k)` as-of a year-end signal Y = column (Y-1-k)."""
+    sig = pd.Timestamp(signal_date)
+    amount_col = "cash_div_tax" if pretax else "cash_div"
+    frames = [pd.read_parquet(f) for f in glob.glob(DIV_GLOB)]
+    d = pd.concat(frames, ignore_index=True)
+    d["proc"] = d["div_proc"].map(_decode_gbk)
+    d["ann"] = pd.to_datetime(d["ann_date"], format="%Y%m%d", errors="coerce")
+    d = d[(d[amount_col].fillna(0) > 0) & (d["ann"].notna()) & (d["ann"] <= sig)].copy()  # PIT
+    d["prio"] = d["proc"].map(_PROC_PRIORITY).fillna(0)
+    d["fy"] = pd.to_datetime(d["end_date"], format="%Y%m%d", errors="coerce").dt.year
+    ev = (d.sort_values("prio")
+            .groupby(["ts_code", "end_date"])
+            .agg(dps=(amount_col, "last"), fy=("fy", "first")).reset_index())
+    ev["code6"] = ev["ts_code"].str.split(".").str[0]
+    return ev.groupby(["code6", "fy"])["dps"].sum().unstack("fy")
+
+
 if __name__ == "__main__":  # quick self-check against the 2025-12-31 export
     import sys
     sys.path.insert(0, str(ROOT / "workspace" / "scripts"))
