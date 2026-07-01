@@ -127,6 +127,12 @@ fixed; everything else cleared.**
   `SLOT_DEPTH_DEFAULT` (single source of truth) → the daily path inherits depth 9. `tests/data_infra` 317
   passed/9 skipped after the fix. The staged provider (built with explicit `slot_depth=9`) is UNAFFECTED — no
   rebuild needed; the fix only governs FUTURE updates.
+- **BLOCKER round 2 (fixed): one more live-capable depth-5 path.** Codex re-review caught `scripts/manual_qlib_dump.py`
+  (a DEPRECATED compat wrapper) still had `--slot-depth default=5` (L56) + a `--publish` flag (L57) → `python
+  scripts/manual_qlib_dump.py --publish` could promote a depth-5 provider. Same single-source fix (default →
+  `SLOT_DEPTH_DEFAULT`). Whole-repo sweep confirms NO remaining `slot_depth=5` literal can reach `publish=True`
+  (the only other `slot_depth=5`, `workspace/scripts/_validate_stability_materializer.py`, is `publish=False`
+  = transient sandbox). Codex: after this fix, prior clearances = **SHIP**.
 - **Cleared by Codex (independently verified):** staged provider is COMPLETE not scoped (`target_symbols: []`,
   5755 dirs, 4410 cal days, q5..q8 added — `mode=all` never triggers `scoped_update`); m1 audit SUFFICIENT (Codex
   spot-decoded bins, matched live exactly; deterministic provider-only rebuild + same inputs make same-size
