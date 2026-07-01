@@ -4182,8 +4182,9 @@ class StagedQlibBackendBuilder:
                 f"on the same drive as the staged build."
             )
 
-        # Safe STAGED-FIRST ordering (2026-07-01): NEVER leave ``qlib_dir`` missing if a rename
-        # fails. The old backup-first order (live->backup, THEN staged->live) left a broken window:
+        # Safe STAGED-FIRST ordering (2026-07-01): a SINGLE rename failure never leaves ``qlib_dir``
+        # missing (a catastrophic DOUBLE failure raises a loud, recoverable error — see step (3) below).
+        # The old backup-first order (live->backup, THEN staged->live) left a broken window:
         # if the 2nd rename failed (e.g. a Windows directory handle on the freshly-built staged
         # tree — the depth9_20260630 publish hit exactly this, WinError 5), the live provider was
         # already moved to backup and ``qlib_dir`` was GONE. Instead:
