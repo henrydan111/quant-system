@@ -1,6 +1,6 @@
 # 果仁 web-validation campaign — DEPLOYED-20 (per-factor)
 
-> One export per factor, deployed-20 first, highest-usage first. **56 web-validatable factors** (27 done / 29 pending). Resumable: status lives in `guorn_web_validation_campaign.json`; re-run `build_guorn_validation_campaign.py` to re-seed (preserves status). NON-FORMAL.
+> One export per factor, deployed-20 first, highest-usage first. **56 web-validatable factors** (30 done / 26 pending; +4 T1-derived verified 2026-07-01: 上市天数, 贝塔N日, 历史贝塔, ATR%; 交易天数 & EpsTTMGr% diverged). Resumable: status lives in `guorn_web_validation_campaign.json`; re-run `build_guorn_validation_campaign.py` to re-seed (preserves status). NON-FORMAL.
 
 Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, universe to match (or a broad universe — factor VALUES are 范围/universe-invariant), 选股日期 ≤ local calendar max. 2. 导出 → rename 果仁_{date}_{universe}_{indicator}.xlsx under Knowledge/果仁验证因子/. 3. derive/confirm the local_expr (validated rows already have it; doable rows: map the 果仁_formula → local qlib expr via guorn_local_field_mapping.md conventions). 4. guorn_factor_parity.py --xlsx <export> --date <date> --local-expr '<expr>' --guorn-col <name> [--kind count] [--min-coverage X w/ reason]. 5. record status/verdict here (re-run this script preserves it).
 
@@ -10,7 +10,7 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 2 | ROETTMDiffPQ | doable | (TTM归母_q0/eq_q0)-(TTM归母_q1/eq_q1) | 9 | ✗ diverged | ✗ SELECTION-DIVERGED — top-K re-test (20 |
 | 3 | 总市值 | validated | `$total_mv` (万元) | 8 | ✅ done | ✅ penny/display-exact (broad 4397, Spear |
 | 4 | 业绩预告净利润QGr%PYQ_v1 | validated | `$forecast__np_q_yoy` | 8 | ✅ done | ◑ top-K NOT ASSESSABLE at 2025-12-31 — o |
-| 5 | 上市天数 | doable | — derive — | 7 | 🔴 blocked | 🔴 BLOCKED — today−list_date is a stock_b |
+| 5 | 上市天数 | doable | days_listed_cal (INCLUSIVE +1) | 7 | ✅ done | ✅ VALUE-EXACT (broad 排除ST排除科创 4412 @2025-12-31): EXACT-match 100%, Spearman/Pearson 1.000, sign 100%, top-K 100/100/100 (cov 100%). 果仁 caliber = calendar days INCLUSIVE of the listing day (listed-today=1); local guorn_days_listed.py cal branch patched +1 (proven uniform +1, std=0). 果仁_20251231_排除ST排除科创_排名-上市天数.xlsx |
 | 6 | EpsExclXorQGr%PY | doable | ($profit_dedt_sq_q0-$profit_dedt_sq_q4)/ | 7 | ✅ done | ✅ penny-exact + TOP-K CLEAN: top-5/10/20 |
 | 7 | GrossProfit%AssetsQ | validated | `($revenue_sq_q0 − $oper_cost_sq_q0) / $ | 5 | ✅ done | ✅ penny-exact + TOP-K PERFECT (broad 排除S |
 | 8 | 5日平均成交额 | doable | Mean($amount,5)/1e5 (lag 0) | 5 | ✅ done | ✅ value penny-exact at LAG-0: median 0.1 |
@@ -26,9 +26,9 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 18 | 业绩预告净利润QGr%PYQ | doable | — derive — | 2 | ✅ done | ◑ top-K N/A at 2025-12-31 — same sparsit |
 | 19 | DivGrPY% | doable | — derive — | 2 | 🔴 blocked | 🔴 BLOCKED(comparator) — sumq(分红总金额,4,0)/ |
 | 20 | 股息率TTM | validated | `$dv_ttm` (lag T−1, scale 100) | 2 | ✅ done | ✅ REPRODUCED via caliber (my earlier 'ir |
-| 21 | 历史贝塔 | doable | — derive — | 2 | 🔴 blocked | 🔴 BLOCKED — beta vs index needs a Cov/Va |
+| 21 | 历史贝塔 | doable | beta_000300_sh_250 (simple 后复权) | 2 | ✅ done | ✅ OVERALL verified (◑ structure-exact): medRelErr 1.13%, Spearman/Pearson 0.998, sign 99.9%, top-K 80/100/95 (cov 98.4%). CALIBER DISCOVERED: beta vs 沪深300 (000300_SH), N=250, SIMPLE 后复权 returns (NOT 上证指数; index×window probe: 000300@250 medRelErr 1.10% vs all other combos 10-40%). beta_000300_sh_250_20251231.parquet; 果仁_20251231_排除ST排除科创_排名-贝塔N日+历史贝塔.xlsx (col 历史贝塔) |
 | 22 | 评级机构数 | validated | ◑ vendor-approx **rank-faithful** vs 果仁  | 2 | ✅ done | ◑ vendor-approx rank-faithful + TOP-K CO |
-| 23 | 贝塔N日(000001,250) | doable | — derive — | 2 | 🔴 blocked | 🔴 BLOCKED — SlopeXY(1日涨幅, 指数涨幅(000001),  |
+| 23 | 贝塔N日(000001,250) | doable | beta_000001_sh_250 (simple 后复权) | 2 | ✅ done | ✅ penny/display-exact: medRelErr 0.196%, within-1% 94.2%, Spearman/Pearson 0.999, sign 100%, top-K 80/90/100 (cov 98.1%). CALIBER = SIMPLE daily returns of 后复权 close, idx 上证指数(000001), N=250 (fixed guorn_beta.py log-raw→simple-后复权; log-raw was medRelErr 1.52%). beta_000001_sh_250_20251231.parquet; 果仁_20251231_排除ST排除科创_排名-贝塔N日+历史贝塔.xlsx (col 贝塔N日(000001,250)) |
 | 24 | 研发销售比率 | doable | (Σrd_exp_sq_q0..3)/(Σrevenue_sq_q0..3) | 2 | ✅ done | ✅ penny-exact + TOP-K STRONG: top-5/10/2 |
 | 25 | AssetTurnoverDiffPY | doable | ATO(0)-ATO(4); ATO=Σ总营收_sq[k..k+3]/AvgQ4(总资产) | 2 | ✅ done | ✅ VERIFIED (depth-9 q0..q8 unlock): penny-exact + TOP-K 100/100/100 (cov 98%, Spearman 0.98); cand-A 4q-avg denom; 果仁_20251231_排除ST排除科创_排名-AssetTurnoverDiffPY.xlsx |
 | 26 | 财报预约公布天数 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — 预约披露 disclosure-schedule cal |
@@ -37,7 +37,7 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 29 | RND%Assets | validated | `TTM($rd_exp_sq)/mean($total_assets_q0.. | 1 | ✅ done | ✅ penny-exact + TOP-K COMPLETE: top-5/10 |
 | 30 | 10日融资偿还金额 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — margin repayment $rzche is Q |
 | 31 | 管理层持股比例 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — management holding % NOT mat |
-| 32 | 交易天数 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — trading-days count since lis |
+| 32 | 交易天数 | doable | days_listed_trd (market-cal, 2008-capped) | 1 | ✗ diverged | ✗ NOT verified (top-K 0/0/0, EXACT 35.4%, Spearman 0.986, cov 100%). 2 PROVEN causes (not a bug): (1) 果仁 交易天数 = actual traded-bar count, suspension-EXCLUDED — 果仁==provider $close bars EXACTLY 4/4 (300278=2833, 300071=3247, 002239=3753, 002252=3766); local counts market-CALENDAR days so local≥果仁. (2) 2008 data-start cap (trade_cal+day.txt begin 2008-01-02): 1299 pre-2008 names pinned 4376 vs 果仁 4400-8453 → oldest-name top-K unrecoverable. Clean post-2008 no-suspension: local==果仁 exact. 果仁_20251231_排除ST排除科创_排名-交易天数.xlsx |
 | 33 | 20日换手率 | doable | Mean($turnover_rate,20) (lag-0; ~5× scal | 1 | ✅ done | ◑ rank-faithful (Spearman 0.999 on TOTAL |
 | 34 | YieldRfrDiff | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — needs 10年国债收益率 (treasury); n |
 | 35 | DivOP% | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED(comparator) — sumq(分红,4)/TTM(营 |
@@ -52,11 +52,11 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 44 | Div%NetIncY2 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED(comparator) — annual(分红)/annua |
 | 45 | DivAGrPY% | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED(comparator) — annual(分红 0)/ann |
 | 46 | 市研率 | doable | $total_mv/TTM($rd_exp_sq) (~2× R&D-basis | 1 | ✅ done | ◑ rank-faithful (Spearman 0.998, Pearson |
-| 47 | EpsTTMGr% | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — (每股收益 q0 − q4) needs reporte |
+| 47 | EpsTTMGr% | doable | (Σeps_sq q0..3 − q4..7)/abs(Σq4..7) (lag1) | 1 | ✗ diverged | ✗ NOT reproduced. 果仁 formula (ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1 (dialog-confirmed) diverges from local TTM-basic-eps-YoY in BOTH rank (Spearman −0.245; −0.264 even on stable \|g\|≤1) and value (茅台 果仁 −1.98 vs mine +0.09; BYD −1.89 vs −0.34). Causes: opaque 果仁 caliber (trailing −1 + undisclosed EPS/TTM def — no clean YoY gives 茅台 −198%) + unstable near-zero denom (67% names \|v\|>100%, 果仁 range −1044..+12417). runbook's BYD−34/恒瑞+35 were MINE, not a 果仁 match. 1 book, don't chase. 果仁_20251231_排除ST排除科创_排名-ATRN50+EpsTTMGr.xlsx |
 | 48 | AH股溢价率 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — needs H-share price; no HK d |
 | 49 | sortinoN日(250) | doable | Mean($pct_chg,250)/Std(If(Lt($pct_chg,0) | 1 | ✅ done | ◑ same as sortinoN日(120) — returns-based |
 | 50 | 60日波动率 | doable | Std($pct_chg,60) (lag-0; 果仁 annualizes × | 1 | ✅ done | ✅ low-vol selection (从小到大, the actual us |
-| 51 | ATR%收盘价N日(20) | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — ATR (avg true-range) has no  |
+| 51 | ATR%收盘价N日(20) | doable | Mean(TrueRange,N)/$close (simple-MA) | 1 | ✅ done | ◑ rank-faithful, precision-capped by 果仁's 2-decimal export: within-0.01 (1 rounding unit) 99.9%, Spearman 0.966, sign 100% (cov 99.5%). 果仁 = custom ATRN = ATR(N)/后复权收盘价 (edit-dialog confirmed); verified at N=50 (ATRN(50)) → transfers to book's N=20 (identical formula). Value-exact/top-K NOT assessable: 果仁 exports 2dp only → 12 distinct values over 4412 → top-5 tie at 0.13. raw≈后复权; NOT Wilder (Wilder worse, Spearman 0.881). 果仁_20251231_排除ST排除科创_排名-ATRN50+EpsTTMGr.xlsx |
 | 52 | 120日涨幅 | doable | ($close*$adj_factor)/Ref(,120)-1 | 1 | ✅ done | ✅ 后复权 ratio (close*adj)/Ref(,120)-1, lag |
 | 53 | sortinoN日(120) | doable | Mean($pct_chg,120)/Std(If(Lt($pct_chg,0) | 1 | ✅ done | ◑ returns-based ratio Mean(1日涨幅,120)/Std |
 | 54 | 评级增持家数 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — $report_rc__rating_buy NOT m |
