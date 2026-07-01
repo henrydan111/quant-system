@@ -683,6 +683,75 @@ def test_publish_refuses_cross_volume_atomic_replace():
             raise AssertionError("publish() should have raised BuildGateError for cross-volume")
 
 
+def test_publish_staged_first_swap_success(tmp_path):
+    """Staged-first publish success: staged provider is promoted into qlib_dir and
+    the old live provider is moved to the backup dir."""
+    from data_infra.pit_backend import StagedQlibBackendBuilder
+
+    builder = StagedQlibBackendBuilder.__new__(StagedQlibBackendBuilder)
+    staged = tmp_path / "swaptest" / "provider"  # build_id = basename(build_root) = "swaptest"
+    target = tmp_path / "qlib_data"
+    staged.mkdir(parents=True)
+    (staged / "marker.txt").write_text("NEW", encoding="utf-8")
+    target.mkdir()
+    (target / "marker.txt").write_text("OLD", encoding="utf-8")
+
+    class _P:
+        provider_dir = str(staged)
+        qlib_dir = str(target)
+        build_root = str(tmp_path / "swaptest")
+
+    builder.paths = _P()
+    builder.publish(emit_manifest=False)
+
+    assert (target / "marker.txt").read_text(encoding="utf-8") == "NEW"  # staged promoted
+    backup = tmp_path / "qlib_data.bak_swaptest"
+    assert backup.is_dir() and (backup / "marker.txt").read_text(encoding="utf-8") == "OLD"  # old live backed up
+    assert not staged.exists()  # staged source consumed
+
+
+def test_publish_staged_first_no_broken_window(tmp_path):
+    """Regression (depth9_20260630 incident): if the FIRST rename (staged->adjacent)
+    fails — e.g. a Windows directory handle on the freshly-built staged tree — qlib_dir
+    MUST remain the live provider, untouched. No broken window."""
+    import os as _os
+    from unittest.mock import patch
+
+    import pytest as _pytest
+
+    from data_infra.pit_backend import StagedQlibBackendBuilder
+
+    builder = StagedQlibBackendBuilder.__new__(StagedQlibBackendBuilder)
+    staged = tmp_path / "lockedtest" / "provider"  # build_id = basename(build_root) = "lockedtest"
+    target = tmp_path / "qlib_data"
+    staged.mkdir(parents=True)
+    (staged / "marker.txt").write_text("NEW", encoding="utf-8")
+    target.mkdir()
+    (target / "marker.txt").write_text("OLD", encoding="utf-8")
+
+    class _P:
+        provider_dir = str(staged)
+        qlib_dir = str(target)
+        build_root = str(tmp_path / "lockedtest")
+
+    builder.paths = _P()
+    real_replace = _os.replace
+
+    def _fail_staged_move(src, dst, *a, **k):
+        if str(dst).endswith(".new_lockedtest"):  # the staged->adjacent step
+            raise PermissionError("WinError 5 simulated: staged tree locked")
+        return real_replace(src, dst, *a, **k)
+
+    with patch("data_infra.pit_backend.os.replace", side_effect=_fail_staged_move):
+        with _pytest.raises(PermissionError):
+            builder.publish(emit_manifest=False)
+
+    # broken-window check: live provider still present + unchanged
+    assert target.is_dir() and (target / "marker.txt").read_text(encoding="utf-8") == "OLD"
+    assert staged.is_dir() and (staged / "marker.txt").read_text(encoding="utf-8") == "NEW"  # staged untouched
+    assert not (tmp_path / "qlib_data.bak_lockedtest").exists()  # never reached the backup step
+
+
 def test_collapse_duplicate_versions_populates_provenance_buffer_on_backfill():
     """P0-5: when a backfill event occurs, the provenance buffer must receive
     a dict with the target row identity and the source row's metadata.

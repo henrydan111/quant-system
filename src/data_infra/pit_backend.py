@@ -4144,6 +4144,11 @@ class StagedQlibBackendBuilder:
         refused with remediation guidance. See CLAUDE.md §6.3 "Backend Rebuild
         Discipline" for the full contract.
 
+        The swap uses a STAGED-FIRST ordering (staged->adjacent, then live->backup,
+        then adjacent->live) with rollback at each step, so a failed rename can
+        NEVER leave ``qlib_dir`` missing (see the inline comment for the full
+        rationale — this replaced a backup-first order that had a broken window).
+
         After the atomic swap, a ``provider_build.json`` manifest is emitted
         under ``<qlib_dir>/metadata/`` so every formal artifact downstream can
         record ``provider_build_id``. Disable with ``emit_manifest=False`` only
@@ -4173,13 +4178,37 @@ class StagedQlibBackendBuilder:
                 f"on the same drive as the staged build."
             )
 
+        # Safe STAGED-FIRST ordering (2026-07-01): NEVER leave ``qlib_dir`` missing if a rename
+        # fails. The old backup-first order (live->backup, THEN staged->live) left a broken window:
+        # if the 2nd rename failed (e.g. a Windows directory handle on the freshly-built staged
+        # tree — the depth9_20260630 publish hit exactly this, WinError 5), the live provider was
+        # already moved to backup and ``qlib_dir`` was GONE. Instead:
+        #   (1) move the staged provider ADJACENT to the target first — if the staged tree is locked
+        #       this raises BEFORE ``qlib_dir`` is touched (no broken window);
+        #   (2) back up the live provider;  (3) promote the staged provider into place.
+        # Each step rolls back on failure, so ``qlib_dir`` is ALWAYS the OLD live provider (on any
+        # failure) or the NEW provider (on success). All renames are same-volume (guarded above),
+        # so each ``os.replace`` is atomic.
         backup_dir = f"{self.paths.qlib_dir}.bak_{self.build_id}"
+        staging_dir = f"{self.paths.qlib_dir}.new_{self.build_id}"
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+        os.replace(self.paths.provider_dir, staging_dir)  # (1) staged -> adjacent; qlib_dir untouched if this raises
         if os.path.exists(backup_dir):
             shutil.rmtree(backup_dir)
         if os.path.isdir(self.paths.qlib_dir):
-            os.replace(self.paths.qlib_dir, backup_dir)
-        os.replace(self.paths.provider_dir, self.paths.qlib_dir)
-        logger.info("Published staged provider to %s", self.paths.qlib_dir)
+            try:
+                os.replace(self.paths.qlib_dir, backup_dir)  # (2) live -> backup
+            except OSError:
+                os.replace(staging_dir, self.paths.provider_dir)  # rollback (1); qlib_dir stays live
+                raise
+        try:
+            os.replace(staging_dir, self.paths.qlib_dir)  # (3) staged -> live
+        except OSError:
+            if os.path.isdir(backup_dir):
+                os.replace(backup_dir, self.paths.qlib_dir)  # rollback (2); staged left at staging_dir for retry
+            raise
+        logger.info("Published staged provider to %s (safe staged-first swap)", self.paths.qlib_dir)
 
         if emit_manifest:
             self._emit_provider_manifest_at_publish(calendar_policy_id=calendar_policy_id)
