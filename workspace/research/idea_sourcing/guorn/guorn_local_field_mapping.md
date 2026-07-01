@@ -66,6 +66,8 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **ROETTMDiffPQ** | REFQ(净资产收益率,0)−REFQ(净资产收益率,1) | RefQ diff of RoeTTM above | ✗ **DIFF fragile at selection (NOT a data gap):** level reproducible (0.96) but 果仁 median \|val\|=**0.01 (1pp)** → the QoQ diff is a tiny signal swamped by per-leg level residual + **negative-equity instability** (果仁 #1=000692 eq −1.29亿). ALL builds give top-5 0-20% / top-20 ≤40%. Factor-design fragility | — |
 | **RnDQGR%PY** | (研发费用单季−refq(,4))/refq(研发费用单季,4) | `($rd_exp_sq_q0 − $rd_exp_sq_q4) / $rd_exp_sq_q4` (lag 0) | ✅ 0.63% med (85% w/5%, sign 97.9%, n=67k) | 5 |
 | **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
+| **每股收益** (财务指标--每股指标) | 每股收益 TTM (滚动 4 单季) | `Σ$basic_eps_sq_q[0..3]` (lag 0) | ◑ structure-exact (1.39% med, Spearman 0.9975, sign 98.7%, n=4.4k @2025-12-31; value-confirmed 茅台 71.75 vs 果仁 71.89, 万科A −5.02 vs −4.99); residual = TTM 单季求和 vs 累计差分 + 重述时点 | field-probe 2026-07-01 |
+| **基本每股收益(单季)** (财报条目--收益利润) | 基本每股收益 单季 | `$basic_eps_sq_q0` (lag 0) | ✅ penny-exact (0.00% med, Spearman 0.9996, n=4.4k @2025-12-31) | field-probe 2026-07-01 |
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 

@@ -375,21 +375,21 @@
       "note": null
     },
     {
-      "guorn_indicator": "股息率TTM",
-      "bucket": "validated",
-      "local_expr": "`$dv_ttm` (lag T−1, scale 100)",
+      "guorn_indicator": "历史贝塔",
+      "bucket": "doable",
+      "local_expr": "beta_000300_sh_250 (guorn_beta.py --index 000300_sh)",
       "guorn_formula": null,
       "n_deployed_books": 2,
       "n_strategies_all": 4,
       "deployed_books": [
         "#19 value_红利低波_v2",
-        "#20 value_红利低波_央企_v1"
+        "#48 成长_高波@周期"
       ],
       "status": "done",
-      "verdict": "✅ REPRODUCED via caliber (my earlier 'irreducible' verdict was WRONG). 果仁 股息率TTM = Σ declared cash div (税前 cash_div_tax, most-finalized amount, ANN-date 预案 TTM window, PIT ann≤signal) / raw close. Validated 2025-12-31: median 0.52% rel (isolated on 果仁 price), top-5/10 100%, Spearman 0.992; on local close top-5 100%/top-20 90%. $dv_ttm (ex-date REALIZED) matches the BULK (0.70% med) but diverges at the high-yield TAIL/selection: counts announced-not-yet-ex (600329 2.450) + drops old-announcement-ex'd (603167 0.220). Helper: guorn_dividend_caliber.py.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-股息率TTM.xlsx",
+      "verdict": "✅ OVERALL verified (◑ structure-exact): medRelErr 1.13%, within-5% 90.9%, Spearman/Pearson 0.998, sign 99.9%, top-K 80/100/95, cov 98.4%. CALIBER DISCOVERED: 历史贝塔 = beta vs 沪深300 (000300_SH), N=250, SIMPLE 后复权 returns (NOT 上证指数; index×window probe: 000300@250 medRelErr 1.10% vs all other combos 10-40%). beta_000300_sh_250_20251231.parquet; export col 历史贝塔 in 果仁_..._排名-贝塔N日+历史贝塔.xlsx",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-贝塔N日+历史贝塔.xlsx",
       "selection_date": "2025-12-31",
-      "note": "CALIBER applies to ALL dividend factors (DivGrPY% Div%NetIncY2 近三年分红之和 预期股息率)"
+      "note": null
     },
     {
       "guorn_indicator": "DivGrPY%",
@@ -409,21 +409,21 @@
       "note": null
     },
     {
-      "guorn_indicator": "历史贝塔",
-      "bucket": "doable",
-      "local_expr": "beta_000300_sh_250 (guorn_beta.py --index 000300_sh)",
+      "guorn_indicator": "股息率TTM",
+      "bucket": "validated",
+      "local_expr": "`$dv_ttm` (lag T−1, scale 100)",
       "guorn_formula": null,
       "n_deployed_books": 2,
       "n_strategies_all": 4,
       "deployed_books": [
         "#19 value_红利低波_v2",
-        "#48 成长_高波@周期"
+        "#20 value_红利低波_央企_v1"
       ],
       "status": "done",
-      "verdict": "✅ OVERALL verified (◑ structure-exact): medRelErr 1.13%, within-5% 90.9%, Spearman/Pearson 0.998, sign 99.9%, top-K 80/100/95, cov 98.4%. CALIBER DISCOVERED: 历史贝塔 = beta vs 沪深300 (000300_SH), N=250, SIMPLE 后复权 returns (NOT 上证指数; index×window probe: 000300@250 medRelErr 1.10% vs all other combos 10-40%). beta_000300_sh_250_20251231.parquet; export col 历史贝塔 in 果仁_..._排名-贝塔N日+历史贝塔.xlsx",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-贝塔N日+历史贝塔.xlsx",
+      "verdict": "✅ REPRODUCED via caliber (my earlier 'irreducible' verdict was WRONG). 果仁 股息率TTM = Σ declared cash div (税前 cash_div_tax, most-finalized amount, ANN-date 预案 TTM window, PIT ann≤signal) / raw close. Validated 2025-12-31: median 0.52% rel (isolated on 果仁 price), top-5/10 100%, Spearman 0.992; on local close top-5 100%/top-20 90%. $dv_ttm (ex-date REALIZED) matches the BULK (0.70% med) but diverges at the high-yield TAIL/selection: counts announced-not-yet-ex (600329 2.450) + drops old-announcement-ex'd (603167 0.220). Helper: guorn_dividend_caliber.py.",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-股息率TTM.xlsx",
       "selection_date": "2025-12-31",
-      "note": null
+      "note": "CALIBER applies to ALL dividend factors (DivGrPY% Div%NetIncY2 近三年分红之和 预期股息率)"
     },
     {
       "guorn_indicator": "评级机构数",
@@ -558,22 +558,6 @@
       "note": null
     },
     {
-      "guorn_indicator": "RND%Assets",
-      "bucket": "validated",
-      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
-      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
-      "n_deployed_books": 1,
-      "n_strategies_all": 2,
-      "deployed_books": [
-        "#10 sm_双创研发强度_v1"
-      ],
-      "status": "done",
-      "verdict": "✅ penny-exact + TOP-K COMPLETE: top-5/10/20 = 100/100/100, Spearman 0.999, Pearson 0.999, median 0.12%, cov 91.5%, sign 99.6%. TTM(rd)/AvgQ(assets,4) reproduces exactly incl the selection zone. Broad 排除ST排除科创, single rank condition.",
-      "export_file": "果仁_20251231_排除ST排除科创_排名-RNDpctAssets.xlsx",
-      "selection_date": "2025-12-31",
-      "note": "top-K 100/100/100 — CLEAN PASS"
-    },
-    {
       "guorn_indicator": "20日换手率",
       "bucket": "doable",
       "local_expr": "Mean($turnover_rate,20) (lag-0; ~5× scale caliber)",
@@ -588,6 +572,22 @@
       "export_file": "果仁_20251231_排除ST排除科创_排名-20日换手率.xlsx",
       "selection_date": "2025-12-31",
       "note": "rank-faithful 0.999; FILTER by rank-%"
+    },
+    {
+      "guorn_indicator": "10日融资偿还金额",
+      "bucket": "doable",
+      "local_expr": null,
+      "guorn_formula": null,
+      "n_deployed_books": 1,
+      "n_strategies_all": 2,
+      "deployed_books": [
+        "#10 sm_双创研发强度_v1"
+      ],
+      "status": "blocked",
+      "verdict": "🔴 BLOCKED — margin repayment $rzche is QUARANTINED (CLAUDE.md §3.4).",
+      "export_file": null,
+      "selection_date": null,
+      "note": null
     },
     {
       "guorn_indicator": "管理层持股比例",
@@ -606,20 +606,20 @@
       "note": null
     },
     {
-      "guorn_indicator": "10日融资偿还金额",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
+      "guorn_indicator": "RND%Assets",
+      "bucket": "validated",
+      "local_expr": "`TTM($rd_exp_sq)/mean($total_assets_q0..q3)`",
+      "guorn_formula": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
       "n_deployed_books": 1,
       "n_strategies_all": 2,
       "deployed_books": [
         "#10 sm_双创研发强度_v1"
       ],
-      "status": "blocked",
-      "verdict": "🔴 BLOCKED — margin repayment $rzche is QUARANTINED (CLAUDE.md §3.4).",
-      "export_file": null,
-      "selection_date": null,
-      "note": null
+      "status": "done",
+      "verdict": "✅ penny-exact + TOP-K COMPLETE: top-5/10/20 = 100/100/100, Spearman 0.999, Pearson 0.999, median 0.12%, cov 91.5%, sign 99.6%. TTM(rd)/AvgQ(assets,4) reproduces exactly incl the selection zone. Broad 排除ST排除科创, single rank condition.",
+      "export_file": "果仁_20251231_排除ST排除科创_排名-RNDpctAssets.xlsx",
+      "selection_date": "2025-12-31",
+      "note": "top-K 100/100/100 — CLEAN PASS"
     },
     {
       "guorn_indicator": "YieldRfrDiff",
@@ -856,7 +856,7 @@
         "#22 value_AH_低溢价GARP_v1"
       ],
       "status": "diverged",
-      "verdict": "✗ NOT reproduced. 果仁 EpsTTMGr% (custom formula (ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1, edit-dialog confirmed) diverges from local TTM-basic-eps-YoY in BOTH rank (Spearman -0.245 overall, -0.264 even on the stable |g|≤1 subset) and value (茅台 果仁 -1.98 vs mine +0.09; BYD 果仁 -1.89 vs mine -0.34). Causes: (1) opaque 果仁 caliber — trailing -1 + an EPS/TTM definition the 2-line display can't reveal (no clean TTM-EPS-YoY gives 茅台 -198%); (2) unstable near-zero denominator — 67% of names |value|>100%, 果仁 range -1044..+12417 → ranks noise-driven. NOTE: runbook's 'value reproduces (BYD -34/恒瑞 +35)' was measuring MY expr's OWN values, not a 果仁 match. 1 book, don't chase. export col EpsTTMGr% in 果仁_20251231_排除ST排除科创_排名-ATRN50+EpsTTMGr.xlsx",
+      "verdict": "✗ NOT reproduced (composite) — ROOT CAUSE ISOLATED (2026-07-01 field-probe): the 每股收益 FIELD reproduces cleanly (果仁 每股收益(财务指标) = TTM basic EPS = Σ$basic_eps_sq_q0..q3, Spearman 0.9975, med 1.39%; value-confirmed 茅台 71.75 vs 果仁 71.89, 万科A −5.02 vs −4.99; and 基本每股收益单季 = $basic_eps_sq_q0 penny-exact, Spearman 0.9996). So the divergence is NOT a field/caliber gap. The COMPOSITE EpsTTMGr% ((ref(每股收益,0)−ref(每股收益,4))/abs(ref(每股收益,4))−1) is DEGENERATE on 果仁 side: its published values do NOT follow from its own formula applied to the (reproduced) TTM field — 万科A EPS collapsed (TTM −1.64→−5.02) yet 果仁 reports +8.4% growth; 茅台 −198% implies a nonsensical base. Cause = unstable near-zero denominator (67% |v|>100%, range −1044..+12417) + negative-base abs() handling. FIELD ✅ reproduced, COMPOSITE ✗ (irreproducible / likely 果仁-side formula degeneracy). 1 book, don-t chase. 果仁_20251231_排除ST排除科创_排名-ATRN50+EpsTTMGr.xlsx",
       "export_file": "果仁_20251231_排除ST排除科创_排名-ATRN50+EpsTTMGr.xlsx",
       "selection_date": "2025-12-31",
       "note": null
@@ -876,6 +876,38 @@
       "export_file": "果仁_20251231_排除ST排除科创_排名-120日涨幅.xlsx",
       "selection_date": "2025-12-31",
       "note": "top5=80%  top10=80%  top20=90%"
+    },
+    {
+      "guorn_indicator": "sortinoN日(250)",
+      "bucket": "doable",
+      "local_expr": "Mean($pct_chg,250)/Std(If(Lt($pct_chg,0),$pct_chg,0),250)",
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "done",
+      "verdict": "◑ same as sortinoN日(120) — returns-based ratio, value layer validated via 60日波动率 (rank 0.997); template-N export friction, 1-book. lag-0.",
+      "export_file": "",
+      "selection_date": "2025-12-31",
+      "note": "returns-validated via 60日波动率; template-N deferred"
+    },
+    {
+      "guorn_indicator": "sortinoN日(120)",
+      "bucket": "doable",
+      "local_expr": "Mean($pct_chg,120)/Std(If(Lt($pct_chg,0),$pct_chg,0),120)",
+      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "n_deployed_books": 1,
+      "n_strategies_all": 1,
+      "deployed_books": [
+        "#31 MultiA_风险平价_v1"
+      ],
+      "status": "done",
+      "verdict": "◑ returns-based ratio Mean(1日涨幅,120)/Stdev(downside,120); template-N factor. Value layer (daily returns + downside Std) VALIDATED via 60日波动率 (Std($pct_chg) rank Spearman 0.997). Exact sortino top-K needs the web template-N export (friction) for a 1-book factor; returns-construction confirmed reproducible. lag-0.",
+      "export_file": "",
+      "selection_date": "2025-12-31",
+      "note": "returns-validated via 60日波动率; template-N deferred"
     },
     {
       "guorn_indicator": "ATR%收盘价N日(20)",
@@ -910,36 +942,20 @@
       "note": "low-vol top-K 100/100/100 (--select-asc)"
     },
     {
-      "guorn_indicator": "sortinoN日(120)",
+      "guorn_indicator": "分析师评级分",
       "bucket": "doable",
-      "local_expr": "Mean($pct_chg,120)/Std(If(Lt($pct_chg,0),$pct_chg,0),120)",
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "local_expr": null,
+      "guorn_formula": null,
       "n_deployed_books": 1,
       "n_strategies_all": 1,
       "deployed_books": [
-        "#31 MultiA_风险平价_v1"
+        "#42 成长_机构预期@周期_v1"
       ],
-      "status": "done",
-      "verdict": "◑ returns-based ratio Mean(1日涨幅,120)/Stdev(downside,120); template-N factor. Value layer (daily returns + downside Std) VALIDATED via 60日波动率 (Std($pct_chg) rank Spearman 0.997). Exact sortino top-K needs the web template-N export (friction) for a 1-book factor; returns-construction confirmed reproducible. lag-0.",
-      "export_file": "",
-      "selection_date": "2025-12-31",
-      "note": "returns-validated via 60日波动率; template-N deferred"
-    },
-    {
-      "guorn_indicator": "sortinoN日(250)",
-      "bucket": "doable",
-      "local_expr": "Mean($pct_chg,250)/Std(If(Lt($pct_chg,0),$pct_chg,0),250)",
-      "guorn_formula": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#31 MultiA_风险平价_v1"
-      ],
-      "status": "done",
-      "verdict": "◑ same as sortinoN日(120) — returns-based ratio, value layer validated via 60日波动率 (rank 0.997); template-N export friction, 1-book. lag-0.",
-      "export_file": "",
-      "selection_date": "2025-12-31",
-      "note": "returns-validated via 60日波动率; template-N deferred"
+      "status": "blocked",
+      "verdict": "🔴 BLOCKED — analyst rating-SCORE (report_rc); the rating-score aggregate is NOT materialized (only rating_up/n_active_orgs were; §7 report_rc unmaterialized) + vendor-approx (Tushare≠朝阳永续).",
+      "export_file": null,
+      "selection_date": null,
+      "note": null
     },
     {
       "guorn_indicator": "评级增持家数",
@@ -969,22 +985,6 @@
       ],
       "status": "blocked",
       "verdict": "🔴 BLOCKED — recent rating-change field NOT materialized (report_rc selective materialization, §7).",
-      "export_file": null,
-      "selection_date": null,
-      "note": null
-    },
-    {
-      "guorn_indicator": "分析师评级分",
-      "bucket": "doable",
-      "local_expr": null,
-      "guorn_formula": null,
-      "n_deployed_books": 1,
-      "n_strategies_all": 1,
-      "deployed_books": [
-        "#42 成长_机构预期@周期_v1"
-      ],
-      "status": "blocked",
-      "verdict": "🔴 BLOCKED — analyst rating-SCORE (report_rc); the rating-score aggregate is NOT materialized (only rating_up/n_active_orgs were; §7 report_rc unmaterialized) + vendor-approx (Tushare≠朝阳永续).",
       "export_file": null,
       "selection_date": null,
       "note": null
