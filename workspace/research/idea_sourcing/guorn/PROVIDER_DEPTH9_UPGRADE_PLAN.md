@@ -113,6 +113,30 @@ publishing without a q0..q4 byte audit could silently invalidate prior formal ev
 7. q5..q8 remain ABSENT from `field_status.yaml` (no bulk-register just because they exist on disk).
 8. approval-evidence bindings updated ONLY after the byte audit + manifest checks (m2).
 
+## Codex pre-publish review (2026-07-01) — REVISE → fixed
+
+Independent Codex review (shell, inspected the staged build + audit + code). **Verdict: REVISE — 1 BLOCKER, now
+fixed; everything else cleared.**
+
+- **BLOCKER (fixed): the durability path still defaulted to depth 5.** `SLOT_DEPTH_DEFAULT=9` fixed the pit_backend
+  materializers, but the WRAPPER `build_unified_qlib` ([build_qlib_backend.py](../../../src/data_infra/pipeline/build_qlib_backend.py))
+  had its OWN literal `slot_depth: int = 5` (L56) + CLI `--slot-depth default=5` (L93), and
+  `update_daily_data.py` `trigger_qlib_rebuild` (mode=all, publish=True) / `trigger_qlib_incremental` call the
+  wrapper WITHOUT `slot_depth` → the next daily/full update would rebuild/refresh at depth 5, **DELETING q5..q8
+  (full publish) or staling them (incremental)**. FIX: both wrapper + CLI defaults now reference
+  `SLOT_DEPTH_DEFAULT` (single source of truth) → the daily path inherits depth 9. `tests/data_infra` 317
+  passed/9 skipped after the fix. The staged provider (built with explicit `slot_depth=9`) is UNAFFECTED — no
+  rebuild needed; the fix only governs FUTURE updates.
+- **Cleared by Codex (independently verified):** staged provider is COMPLETE not scoped (`target_symbols: []`,
+  5755 dirs, 4410 cal days, q5..q8 added — `mode=all` never triggers `scoped_update`); m1 audit SUFFICIENT (Codex
+  spot-decoded bins, matched live exactly; deterministic provider-only rebuild + same inputs make same-size
+  out-of-sample corruption negligible); publish same-volume (`st_dev` equal) with the old provider retained as
+  `qlib_data.bak_depth9_20260630` (caveat: publish = two atomic renames, not one transaction — if the 2nd fails,
+  the backup is intact but recovery is manual); q5..q8 slot-shift identity is a valid strong canary; no new
+  PIT/lookahead rule; q5..q8 correctly unregistered.
+- **Non-blocking (post-publish cleanup):** several workspace docs/scripts still say provider depth = q0..q4 / q5
+  unmaterialized — stale after publish, update in the governance pass.
+
 ## Review questions for GPT
 
 1. **PIT:** Is upgrading `SLOT_DEPTH_DEFAULT` 5→9 + full re-materialization PIT-safe for ALL periodic families
