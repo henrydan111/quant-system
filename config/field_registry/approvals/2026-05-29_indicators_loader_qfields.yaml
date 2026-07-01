@@ -28,7 +28,7 @@ related_findings_id: v33_PIT_lookahead_bug_report
 # Bind to the exact provider build + calendar policy under which the parity
 # verification was performed. A future provider rebuild with a different
 # provider_build_id / calendar_policy_id requires re-verifying parity.
-provider_build_id: "phasec_profit_dedt_sq_20260624"
+provider_build_id: "depth9_20260630"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

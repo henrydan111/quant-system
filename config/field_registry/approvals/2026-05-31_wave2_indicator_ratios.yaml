@@ -29,7 +29,7 @@ related_pr: factor-expansion-wave2-promotion
 related_findings_id: gpt_round6_sequencing
 
 # Same provider build + calendar policy binding as the other indicators approvals.
-provider_build_id: "phasec_profit_dedt_sq_20260624"
+provider_build_id: "depth9_20260630"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:
