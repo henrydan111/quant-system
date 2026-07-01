@@ -220,7 +220,7 @@ def _run_factor_research_and_selection(prepared: dict[str, Any]) -> dict[str, An
         )
         decay_df = event_research.compute_ic_decay(strategy_variant, adj_close)
         optimal_horizon = event_research.find_optimal_horizon(decay_df)
-        quantile_df = event_research.compute_quantile_returns(strategy_variant, forward_return, n_quantiles=5)
+        quantile_df = event_research.compute_quantile_returns(strategy_variant, forward_return, n_quantiles=10)
         quantile_summary = event_research.compute_quantile_summary(quantile_df) if not quantile_df.empty else pd.DataFrame()
         long_short_returns = event_research.compute_long_short_returns(quantile_df) if not quantile_df.empty else pd.Series(dtype=float)
         long_short_stats = event_research.compute_long_short_stats(long_short_returns)

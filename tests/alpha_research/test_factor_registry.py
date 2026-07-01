@@ -861,5 +861,95 @@ class FactorRegistryIntegrationTests(unittest.TestCase):
             self.assertTrue((export_df["status"] == "approved").all())
 
 
+class FormalRefreshEvidenceTests(unittest.TestCase):
+    """2026-06-10 unified merge: the UNGATED refresh writer for the formal methodology.
+
+    Two-class taxonomy: discovery (screening) / formal (lifecycle methodology). Refresh rows
+    share the formal methodology but must NEVER look gate-approved — run_type
+    'factor_lifecycle_auto', evidence_class 'formal_auto', formal_evidence_eligible=False
+    (the "refresh" label was retired 2026-06-11 — external taxonomy is discovery/formal only).
+    """
+
+    def _record(self, fid: str, **over) -> dict:
+        rec = {
+            "factor": fid, "heldout_rank_icir": 0.30, "sign_consistency": 1.0,
+            "mean_rank_ic": 0.02, "mean_rank_ic_hac_t": 3.2,
+            "neutralized_rank_icir": 0.4, "neutralized_hac_t": 4.1,
+            "mono_shape": "monotonic_up", "direction_source": "train_fold",
+            "coverage": 0.99, "coverage_tier": "full", "turnover_ann": 5.0,
+            "resid_ic_vs_approved_stable_oriented": 0.02,
+            "resid_ic_vs_style_controls_v1_oriented": 0.01,
+            "long_leg_ir_proxy_is_csi300": 0.5, "long_leg_ir_proxy_is_csi500": 1.1,
+            "decay_icir_40": 0.25,  # column-less metric → must survive via unified_metrics_json
+        }
+        rec.update(over)
+        return rec
+
+    def test_refresh_rows_are_formal_methodology_but_never_gate_eligible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-06-10 12:00:00")
+            fid = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]["factor_id"]
+            out = store.record_formal_refresh_evidence(
+                run_id="unified_refresh_testhash", records=[self._record(fid)],
+                methodology_hash="testhash", source_path="workspace/outputs/unified_eval",
+                generated_at="2026-06-10 12:01:00",
+            )
+            self.assertEqual(out["attached"], [fid])
+            ev = store.factor_evidence
+            row = ev[ev["factor_id"] == fid].iloc[-1]
+            self.assertEqual(row["run_type"], "factor_lifecycle_auto")
+            self.assertEqual(row["evidence_class"], "formal_auto")
+            self.assertFalse(bool(row["formal_evidence_eligible"]))  # NEVER gate-eligible
+            self.assertEqual(row["methodology_hash"], "testhash")
+            self.assertAlmostEqual(float(row["is_rank_icir"]), 0.30)
+            self.assertAlmostEqual(float(row["neutralized_rank_icir"]), 0.4)
+            self.assertEqual(row["mono_shape"], "monotonic_up")
+            payload = json.loads(row["unified_metrics_json"])
+            self.assertAlmostEqual(payload["decay_icir_40"], 0.25)  # full record preserved
+
+    def test_refresh_writer_is_definition_bound_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-06-10 12:00:00")
+            cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+            fid = cur.iloc[0]["factor_id"]
+            # poison the stored definition hash → drifted → must be SKIPPED, never attached
+            store.factor_master.loc[store.factor_master["factor_id"] == fid, "definition_hash"] = "drifted"
+            out = store.record_formal_refresh_evidence(
+                run_id="r1", records=[self._record(fid), self._record("no_such_factor")],
+                methodology_hash="h",
+            )
+            self.assertIn(fid, out["skipped_drift"])
+            self.assertIn("no_such_factor", out["skipped_unknown"])
+            self.assertEqual(out["attached"], [])
+
+    def test_refresh_writer_idempotent_per_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-06-10 12:00:00")
+            fid = store.factor_master[store.factor_master["is_current"].fillna(False)].iloc[0]["factor_id"]
+            for _ in range(2):  # re-import the same run → no duplicate rows
+                store.record_formal_refresh_evidence(
+                    run_id="rX", records=[self._record(fid)], methodology_hash="h")
+            ev = store.factor_evidence
+            self.assertEqual(int(((ev["run_id"] == "rX") & (ev["factor_id"] == fid)).sum()), 1)
+
+    def test_old_evidence_parquet_widens_on_load(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-06-10 12:00:00")
+            store.save()
+            # simulate an OLD on-disk evidence file lacking the new columns
+            ev_path = Path(temp_dir) / "factor_evidence.parquet"
+            old = pd.read_parquet(ev_path)
+            old = old.drop(columns=[c for c in old.columns if c in (
+                "methodology_hash", "unified_metrics_json", "mono_shape")], errors="ignore")
+            old.to_parquet(ev_path, index=False)
+            reloaded = FactorRegistryStore(temp_dir)  # must not raise; new columns appear as NA
+            for col in ("methodology_hash", "unified_metrics_json", "mono_shape"):
+                self.assertIn(col, reloaded.factor_evidence.columns)
+
+
 if __name__ == "__main__":
     unittest.main()

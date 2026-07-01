@@ -84,6 +84,13 @@ FACTOR_MASTER_COLUMNS = [
     "last_revalidated_at",
     "latest_provider_build_id",
     "latest_calendar_policy_id",
+    # P-GATE/F3 (GPT R1 deferred): reverse cohort linkage stamped at gate adjudication. A factor
+    # carrying a replication_cohort_id "claims CICC metadata"; the gate fails closed if it then
+    # resolves to != 1 manifest row (a forgotten/dropped link). Metadata-only — does NOT affect
+    # status / approval_validity / definition_hash. The append-only audit history + definition_hash
+    # binding live in the CohortFactorLinkageStore (F11).
+    "replication_cohort_id",
+    "replication_handbook_id",
 ]
 
 FACTOR_EVIDENCE_COLUMNS = [
@@ -121,6 +128,38 @@ FACTOR_EVIDENCE_COLUMNS = [
     "source_hash",
     "provider_build_id",
     "calendar_policy_id",
+    # 2026-06-10 unified formal-eval merge: lifecycle + unified_eval are ONE formal methodology
+    # (two run modes — gated orchestrator run vs ungated refresh sweep, split by
+    # formal_evidence_eligible). These columns carry the unified metric set; the full record
+    # (decay vector, CIs, signed residuals, …) is packed in unified_metrics_json.
+    "methodology_hash",
+    "universe_id",
+    "mean_rank_ic_hac_t",
+    "neutralized_rank_icir",
+    "neutralized_hac_t",
+    "mono_shape",
+    "direction_source",
+    "coverage",
+    "coverage_tier",
+    "turnover_ann",
+    "resid_ic_vs_approved_stable_oriented",
+    "resid_ic_vs_style_controls_v1_oriented",
+    "long_leg_ir_proxy_is_csi300",
+    "long_leg_ir_proxy_is_csi500",
+    "unified_metrics_json",
+    # Reference-decoupling provenance (GPT impl-review). layer1_methodology_hash is the
+    # reference-INVARIANT identity; methodology_hash above is legacy (reference-included).
+    # row_role: "" / "legacy" = pre-decoupling; "native_layer1" = produced under the new schema;
+    # "migrated_layer1" = derived row appended by the migration. resid_ic_vs_approved_* above is a
+    # CACHE — the canonical marginal-vs-book metric lives in the Layer2ResidualStore.
+    "methodology_schema_version",
+    "layer1_methodology_hash",
+    "reference_set_stable_hash",
+    "reference_set_current_hash",
+    "row_role",
+    "legacy_methodology_hash",
+    "migration_id",
+    "layer1_value_digest",
 ]
 
 RUN_INDEX_COLUMNS = [
@@ -191,6 +230,8 @@ FACTOR_MASTER_SCHEMA = {
     "last_revalidated_at": "string",
     "latest_provider_build_id": "string",
     "latest_calendar_policy_id": "string",
+    "replication_cohort_id": "string",
+    "replication_handbook_id": "string",
 }
 
 FACTOR_EVIDENCE_SCHEMA = {
@@ -227,6 +268,31 @@ FACTOR_EVIDENCE_SCHEMA = {
     "source_hash": "string",
     "provider_build_id": "string",
     "calendar_policy_id": "string",
+    # 2026-06-10 unified formal-eval merge (see FACTOR_EVIDENCE_COLUMNS note)
+    "methodology_hash": "string",
+    "universe_id": "string",
+    "mean_rank_ic_hac_t": "Float64",
+    "neutralized_rank_icir": "Float64",
+    "neutralized_hac_t": "Float64",
+    "mono_shape": "string",
+    "direction_source": "string",
+    "coverage": "Float64",
+    "coverage_tier": "string",
+    "turnover_ann": "Float64",
+    "resid_ic_vs_approved_stable_oriented": "Float64",
+    "resid_ic_vs_style_controls_v1_oriented": "Float64",
+    "long_leg_ir_proxy_is_csi300": "Float64",
+    "long_leg_ir_proxy_is_csi500": "Float64",
+    "unified_metrics_json": "string",
+    # Reference-decoupling provenance (GPT impl-review; all string, default "").
+    "methodology_schema_version": "string",
+    "layer1_methodology_hash": "string",
+    "reference_set_stable_hash": "string",
+    "reference_set_current_hash": "string",
+    "row_role": "string",
+    "legacy_methodology_hash": "string",
+    "migration_id": "string",
+    "layer1_value_digest": "string",
 }
 
 RUN_INDEX_SCHEMA = {
@@ -379,6 +445,55 @@ def _apply_schema(df: pd.DataFrame, columns: list[str], schema: dict[str, str]) 
             working[column] = pd.Series([pd.NA] * len(working))
         working[column] = _coerce_series(working[column], schema[column])
     return working[columns]
+
+
+# Reference-decoupling: row_role precedence for the canonical Layer-1 view (GPT impl-review).
+# A native re-eval (produced under the new schema) supersedes a migration-derived row, which in
+# turn supersedes the original immutable legacy row it was derived from.
+ROW_ROLE_PRECEDENCE = {"native_layer1": 3, "migrated_layer1": 2, "legacy": 1, "": 1}
+# Rows positively quarantined as KNOWN-CONTAMINATED (GPT pre-flight blocker 4) — excluded from the
+# canonical view entirely (never selected, even if they are the only row for a (factor, universe)).
+# `legacy_contaminated_residual_scope` = a pre-fix matrix/refresh row whose residual columns used the
+# batch-order-dependent control scope. Kept in the raw table for audit; fail-closed out of default reads.
+LEGACY_CONTAMINATED_RESIDUAL_SCOPE = "legacy_contaminated_residual_scope"
+QUARANTINE_ROLES = {LEGACY_CONTAMINATED_RESIDUAL_SCOPE}
+# the reference-decoupled (unified-eval / matrix) evidence family — the only rows that carry row_role
+LAYER1_AUTO_RUN_TYPES = {"factor_lifecycle_auto", "factor_lifecycle_refresh"}
+
+
+def canonical_layer1_evidence(evidence: pd.DataFrame) -> pd.DataFrame:
+    """Collapse reference-decoupled Layer-1 evidence to ONE canonical row per
+    (factor_id, version, universe_id) so a ``migrated_layer1`` sibling never double-counts against
+    the immutable ``legacy`` ("") row it was derived from (GPT impl-review item 1: a dedupe /
+    default-view that keeps migrated XOR legacy, never both).
+
+    Precedence: native_layer1 > migrated_layer1 > legacy(""), then most-recent evidence_time. Only
+    the unified-eval / matrix family (run_type in :data:`LAYER1_AUTO_RUN_TYPES`) is deduped; rows of
+    every other run_type pass through untouched (they are not reference-decoupled). Rows whose row_role
+    is in :data:`QUARANTINE_ROLES` (known-contaminated) are DROPPED entirely (GPT pre-flight blocker 4),
+    so a stale contaminated row can never surface as canonical. Use this for any aggregation/comparison
+    over auto/matrix Layer-1 evidence (dashboard, marginal-contribution reads).
+    """
+    if evidence.empty:
+        return evidence
+    is_auto = evidence["run_type"].map(_coerce_string).isin(LAYER1_AUTO_RUN_TYPES)
+    auto = evidence[is_auto].copy()
+    other = evidence[~is_auto]
+    if auto.empty:
+        return evidence
+    # fail-closed: drop quarantined (known-contaminated) rows before selecting the canonical row
+    auto = auto[~auto["row_role"].map(_coerce_string).isin(QUARANTINE_ROLES)]
+    if auto.empty:
+        return other
+    auto["__role_rank"] = auto["row_role"].map(
+        lambda v: ROW_ROLE_PRECEDENCE.get(_coerce_string(v), 1))
+    auto["__t"] = pd.to_datetime(auto["evidence_time"], errors="coerce")
+    auto["__uni"] = auto["universe_id"].map(lambda v: _coerce_string(v) or "univ_all")
+    # highest role-rank, then latest time, then run_id wins -> .last() after a stable sort
+    auto = auto.sort_values(["__role_rank", "__t", "run_id"], kind="stable")
+    dedup = (auto.groupby(["factor_id", "version", "__uni"], as_index=False, dropna=False)
+             .last().drop(columns=["__role_rank", "__t", "__uni"]))
+    return pd.concat([other, dedup], ignore_index=True)
 
 
 def _sort_with_version(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -543,6 +658,38 @@ class FactorEvidenceRecord:
     source_hash: str = ""
     provider_build_id: str = ""
     calendar_policy_id: str = ""
+    # 2026-06-10 unified formal-eval merge (defaults keep existing constructors unchanged)
+    methodology_hash: str = ""
+    # F1b (universe plan §3.2): the evaluation domain of this evidence row.
+    # Empty/null on legacy rows == semantically univ_all (pre-F1 full-market runs).
+    universe_id: str = ""
+    mean_rank_ic_hac_t: float | None = None
+    neutralized_rank_icir: float | None = None
+    neutralized_hac_t: float | None = None
+    mono_shape: str = ""
+    direction_source: str = ""
+    coverage: float | None = None
+    coverage_tier: str = ""
+    turnover_ann: float | None = None
+    resid_ic_vs_approved_stable_oriented: float | None = None
+    resid_ic_vs_style_controls_v1_oriented: float | None = None
+    long_leg_ir_proxy_is_csi300: float | None = None
+    long_leg_ir_proxy_is_csi500: float | None = None
+    unified_metrics_json: str = ""
+    # Reference-decoupling provenance (GPT impl-review; defaults keep existing constructors unchanged).
+    # layer1_methodology_hash is the reference-INVARIANT identity; methodology_hash is legacy. row_role:
+    # "" / "legacy" = pre-decoupling row; "native_layer1" = produced under the new schema;
+    # "migrated_layer1" = a derived row appended by the migration (carries legacy_methodology_hash +
+    # layer1_value_digest proving Layer-1 values are unchanged). resid_ic_vs_approved_* above is a CACHE
+    # (Option B) — the canonical marginal-vs-book metric lives in the Layer2ResidualStore.
+    methodology_schema_version: str = ""
+    layer1_methodology_hash: str = ""
+    reference_set_stable_hash: str = ""
+    reference_set_current_hash: str = ""
+    row_role: str = ""
+    legacy_methodology_hash: str = ""
+    migration_id: str = ""
+    layer1_value_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -1100,6 +1247,17 @@ class FactorRegistryStore:
                 # FAIL-CLOSED: drifted (or unknown to catalog) -> no FORMAL evidence.
                 skipped_drift.append(fid)
                 continue
+            # Window + universe provenance (2026-06-14 re-sign support). A verdict MAY carry
+            # the IS window it was computed on (``effective_start``/``effective_end``) +
+            # ``universe_id``. When present they are stamped (universe_id column +
+            # unified_metrics_json) so the dashboard can establish SAME-WINDOW comparability
+            # vs the automated sweep — the gate itself emits no methodology_hash, so the
+            # window is the only sound equality key. Legacy gate callers pass none → both
+            # stay empty (semantically univ_all on the row's historical window; unchanged).
+            _univ = _coerce_string(v.get("universe_id")) or "univ_all"
+            _win = {k: v.get(k) for k in ("effective_start", "effective_end") if v.get(k)}
+            _umj = (json.dumps({**_win, "universe_id": _univ}, ensure_ascii=False)
+                    if _win else "")
             evidence_rows.append(FactorEvidenceRecord(
                 run_id=run_id, run_type="factor_lifecycle", factor_id=fid,
                 version=int(row["version"]), is_current_at_import=True,
@@ -1115,6 +1273,7 @@ class FactorRegistryStore:
                 evidence_class=str(evidence_class), formal_evidence_eligible=True,
                 source_path="", source_hash=registry_hash,
                 provider_build_id="", calendar_policy_id="",
+                universe_id=_univ, unified_metrics_json=_umj,
             ))
             attached.append(fid)
         if evidence_rows:
@@ -1142,6 +1301,178 @@ class FactorRegistryStore:
             "skipped_drift": sorted(skipped_drift),
             "skipped_unknown": sorted(skipped_unknown),
         }
+
+    def record_formal_refresh_evidence(
+        self,
+        *,
+        run_id: str,
+        records: list[Mapping[str, Any]],
+        methodology_hash: str,
+        source_path: str = "",
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """2026-06-10 unified merge: append FORMAL-methodology evidence from an UNGATED
+        refresh sweep (the full-catalog unified evaluation). Same metric口径 and engine as
+        the gated ``factor_lifecycle`` runs — the taxonomy is two-class (discovery = screening
+        / formal = lifecycle methodology) with the gated/ungated split carried by
+        ``formal_evidence_eligible``: automated rows are ``run_type='factor_lifecycle_auto'``,
+        ``evidence_class='formal_auto'``, ``formal_evidence_eligible=False`` — they can
+        NEVER support a status change (the gated orchestrator run + human gate remains the
+        only path; resolve-but-label). Definition-bound FAIL-CLOSED exactly like
+        :meth:`record_lifecycle_evidence` (drifted / catalog-unknown factors are skipped).
+        Idempotent per ``(run_id, factor_id, version)``. Writes EVIDENCE only — never status.
+
+        Each record is a mapping from the unified-eval full-run output (keys: ``factor``,
+        ``heldout_rank_icir``, ``sign_consistency``, ``mean_rank_ic_hac_t``,
+        ``neutralized_rank_icir``, ``mono_shape``, ``coverage``, ``turnover_ann``,
+        oriented residuals, long-leg IRs, …); the WHOLE record is also packed verbatim into
+        ``unified_metrics_json`` so no metric is lost to the column subset.
+        """
+        now = generated_at or _now_str()
+        code_hashes = self.current_catalog_definition_hashes()
+        current = self.factor_master[self.factor_master["is_current"].fillna(False)]
+        evidence_rows: list[FactorEvidenceRecord] = []
+        attached: list[str] = []
+        skipped_unknown: list[str] = []
+        skipped_drift: list[str] = []
+        for rec in records:
+            fid = _coerce_string(rec.get("factor"))
+            match = current[current["factor_id"] == fid] if fid else current.iloc[0:0]
+            if not fid or match.empty:
+                skipped_unknown.append(fid)
+                continue
+            row = match.sort_values("version").iloc[-1]
+            registry_hash = _coerce_string(row.get("definition_hash"))
+            code_hash = code_hashes.get(fid)
+            if not registry_hash or code_hash is None or registry_hash != code_hash:
+                skipped_drift.append(fid)
+                continue
+            evidence_rows.append(FactorEvidenceRecord(
+                run_id=run_id, run_type="factor_lifecycle_auto", factor_id=fid,
+                version=int(row["version"]), is_current_at_import=True,
+                grade="", rank_icir_5d=None, mean_rank_ic_5d=_coerce_float(rec.get("mean_rank_ic")),
+                ic_hit_rate_5d=None, monotonic=None, best_decay_horizon=None,
+                peak_decay_icir=None, ls_ann_return=None, validation_pass_count=None,
+                selected_fold_count=None, avg_validation_rank_icir=None,
+                source_run_dir="", evidence_time=now,
+                is_rank_icir=_coerce_float(rec.get("heldout_rank_icir")), oos_rank_icir=None,
+                sign_consistency=_coerce_float(rec.get("sign_consistency")),
+                oos_ls_sharpe=None, retain_pct=None, lo_excess_ann_gross=None,
+                lo_sharpe_gross=None, lo_hit=None,
+                evidence_class="formal_auto", formal_evidence_eligible=False,
+                source_path=str(source_path), source_hash=registry_hash,
+                provider_build_id="", calendar_policy_id="",
+                methodology_hash=str(methodology_hash),
+                universe_id=_coerce_string(rec.get("universe_id")) or "univ_all",
+                mean_rank_ic_hac_t=_coerce_float(rec.get("mean_rank_ic_hac_t")),
+                neutralized_rank_icir=_coerce_float(rec.get("neutralized_rank_icir")),
+                neutralized_hac_t=_coerce_float(rec.get("neutralized_hac_t")),
+                mono_shape=_coerce_string(rec.get("mono_shape")),
+                direction_source=_coerce_string(rec.get("direction_source")),
+                coverage=_coerce_float(rec.get("coverage")),
+                coverage_tier=_coerce_string(rec.get("coverage_tier")),
+                turnover_ann=_coerce_float(rec.get("turnover_ann")),
+                resid_ic_vs_approved_stable_oriented=_coerce_float(
+                    rec.get("resid_ic_vs_approved_stable_oriented")),
+                resid_ic_vs_style_controls_v1_oriented=_coerce_float(
+                    rec.get("resid_ic_vs_style_controls_v1_oriented")),
+                long_leg_ir_proxy_is_csi300=_coerce_float(rec.get("long_leg_ir_proxy_is_csi300")),
+                long_leg_ir_proxy_is_csi500=_coerce_float(rec.get("long_leg_ir_proxy_is_csi500")),
+                unified_metrics_json=json.dumps(
+                    {k: (None if isinstance(v, float) and v != v else v) for k, v in dict(rec).items()},
+                    ensure_ascii=False, default=str),
+                # Reference-decoupling provenance (GPT impl-review). The LIVE identity is
+                # layer1_methodology_hash (reference-INVARIANT); methodology_hash above is legacy.
+                # A native sweep/matrix row is row_role="native_layer1" with empty legacy/migration
+                # fields; the migration writes "migrated_layer1" siblings via its own path. The
+                # reference hashes identify the ACTUAL neutralization book used for the resid_* cache.
+                methodology_schema_version=_coerce_string(rec.get("methodology_schema_version")),
+                layer1_methodology_hash=_coerce_string(rec.get("layer1_methodology_hash")),
+                reference_set_stable_hash=_coerce_string(rec.get("reference_set_stable_hash")),
+                reference_set_current_hash=_coerce_string(rec.get("reference_set_current_hash")),
+                row_role=_coerce_string(rec.get("row_role")) or "native_layer1",
+                legacy_methodology_hash=_coerce_string(rec.get("legacy_methodology_hash")),
+                migration_id=_coerce_string(rec.get("migration_id")),
+                layer1_value_digest=_coerce_string(rec.get("layer1_value_digest")),
+            ))
+            attached.append(fid)
+        if evidence_rows:
+            # F1b: replace key includes universe_id so per-domain imports of the SAME
+            # run are additive (a csi300 import must not delete the univ_all rows).
+            # Legacy rows with empty universe_id coerce to univ_all for keying.
+            # GPT impl-review V5: the key ALSO includes row_role so the migration can append
+            # a "migrated_layer1" sibling WITHOUT deleting the immutable legacy ("") row that
+            # shares (run_id, factor, version, universe). Native imports use a fresh
+            # run_id=<prefix>_<schema>_<layer1_hash> (never a legacy run_id) so a native row
+            # (row_role="native_layer1") can never collide with a legacy row_role="" row.
+            new_keys = {(run_id, r.factor_id, int(r.version), r.universe_id or "univ_all",
+                         r.row_role or "native_layer1")
+                        for r in evidence_rows}
+            existing = self.factor_evidence
+            if not existing.empty:
+                has_univ = "universe_id" in existing.columns
+                has_role = "row_role" in existing.columns
+                # existing-side row_role uses its ACTUAL value (legacy "" stays "") — a native
+                # import (role "native_layer1") then never matches a legacy "" row even under a
+                # shared key, so legacy/migrated rows are always preserved (V5 immutability).
+                keep = ~existing.apply(
+                    lambda x: (
+                        _coerce_string(x["run_id"]),
+                        _coerce_string(x["factor_id"]),
+                        _coerce_int(x["version"]),
+                        (_coerce_string(x["universe_id"]) if has_univ else "") or "univ_all",
+                        (_coerce_string(x["row_role"]) if has_role else ""),
+                    ) in new_keys,
+                    axis=1,
+                )
+                existing = existing[keep]
+            new_df = _apply_schema(
+                pd.DataFrame([asdict(r) for r in evidence_rows]),
+                FACTOR_EVIDENCE_COLUMNS, FACTOR_EVIDENCE_SCHEMA,
+            )
+            self.factor_evidence = pd.concat([existing, new_df], ignore_index=True)
+            self.refresh_master_derived_fields()
+        return {
+            "run_id": run_id,
+            "attached": sorted(attached),
+            "skipped_drift": sorted(skipped_drift),
+            "skipped_unknown": sorted(skipped_unknown),
+        }
+
+
+    # 2026-06-11 directive: the "refresh" label is retired — external taxonomy is
+    # discovery / formal only. New rows write run_type='factor_lifecycle_auto'.
+    record_formal_auto_evidence = record_formal_refresh_evidence
+
+    def canonical_layer1_evidence(self) -> pd.DataFrame:
+        """The reference-decoupled Layer-1 evidence, deduped to one row per
+        (factor, version, universe) by row_role precedence (migrated XOR legacy). See the
+        module-level :func:`canonical_layer1_evidence`."""
+        return canonical_layer1_evidence(self.factor_evidence)
+
+    def quarantine_legacy_residual_scope(self, *, dry_run: bool = True) -> dict:
+        """Positively mark pre-fix matrix/refresh rows as ``legacy_contaminated_residual_scope`` so
+        default reads (:func:`canonical_layer1_evidence`) exclude them (GPT pre-flight blocker 4).
+        Target = auto/refresh rows with an EMPTY ``layer1_methodology_hash`` — i.e. produced before
+        the residual-scope fix + hash stamping (their residual columns used the batch-order-dependent
+        control scope). NATIVE rows from the fixed rerun carry the new hash and are spared; already-
+        quarantined rows are idempotently skipped. Rows are KEPT in the table for audit. Returns a
+        summary; ``dry_run=False`` mutates in-memory (caller must ``save()``)."""
+        ev = self.factor_evidence
+        if ev.empty:
+            return {"matched": 0, "dry_run": dry_run}
+        is_auto = ev["run_type"].map(_coerce_string).isin(LAYER1_AUTO_RUN_TYPES)
+        no_l1 = ev["layer1_methodology_hash"].map(_coerce_string) == ""
+        not_already = ~ev["row_role"].map(_coerce_string).isin(QUARANTINE_ROLES)
+        target = is_auto & no_l1 & not_already
+        n = int(target.sum())
+        by_run = (ev.loc[target, "run_id"].map(_coerce_string).value_counts().to_dict()
+                  if n else {})
+        if not dry_run and n:
+            self.factor_evidence.loc[target, "row_role"] = LEGACY_CONTAMINATED_RESIDUAL_SCOPE
+            self.refresh_master_derived_fields()
+        return {"matched": n, "dry_run": dry_run, "by_run_id": by_run,
+                "marker": LEGACY_CONTAMINATED_RESIDUAL_SCOPE}
 
     def set_status(
         self,
@@ -1303,6 +1634,27 @@ class FactorRegistryStore:
             )
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         self.factor_master.at[index, "expected_direction"] = ed
+        self.factor_master.at[index, "updated_at"] = _now_str()
+
+    def set_replication_link(
+        self,
+        *,
+        factor_id: str,
+        cohort_id: str,
+        handbook_id: str = "",
+        version: int | None = None,
+    ) -> None:
+        """Metadata-only: stamp the reverse cohort linkage (P-GATE/F3) on the current row. Set at
+        gate adjudication once the factor resolves to exactly one manifest row, so a later DROPPED
+        manifest link (a factor still carrying the stamp but resolving to != 1 row) fails closed
+        instead of silently reverting to non-cohort. Does NOT touch status / approval_validity /
+        definition_hash and writes NO status-history row. Blank cohort_id is a no-op."""
+        cid = str(cohort_id or "").strip()
+        if not cid:
+            return
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        self.factor_master.at[index, "replication_cohort_id"] = cid
+        self.factor_master.at[index, "replication_handbook_id"] = str(handbook_id or "")
         self.factor_master.at[index, "updated_at"] = _now_str()
 
     def export_current(

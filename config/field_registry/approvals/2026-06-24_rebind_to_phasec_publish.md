@@ -1,0 +1,3 @@
+# Re-bind to the Phase-C additive publish (phasec_profit_dedt_sq_20260624)
+
+After publishing $profit_dedt_sq_q0 via the additive robocopy /MIR path (workspace/scripts/_publish_phasec_additive.py), the live provider_build_id became `phasec_profit_dedt_sq_20260624`, so the prior approval YAMLs (bound to `phase1_qfields_holdertrade_v2_20260624`) drifted. Re-bound after verifying byte-identity of a cross-section of existing fields new-live vs `data/qlib_data.bak_phasec_profit_dedt_sq_20260624` (the additive publish re-materialized NOTHING — every existing bin is a /MIR copy of the old live; only $profit_dedt_sq_q0 is new). evaluate_approval_evidence_bindings() -> 0 drift. See additive_build_provenance.json.

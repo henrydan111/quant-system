@@ -1,0 +1,312 @@
+{
+  "run_id": "e1b_is_candidate_2010_2020",
+  "generated_at": "2026-06-18T14:54:08",
+  "live": true,
+  "evidence_class": "a_priori",
+  "mechanism": "matrix-reuse (resign pattern): 2010-2020 univ_all run_is_walk_forward(a_priori) from unified_eval_matrix, bit-identical to the gate; rows validated ESTU_STYLE_V1 native 2010-2020 (schema+layer1_hash+scope+window).",
+  "gate_authorization": "User authorized 'all passers, with cohort-redundancy caveat' (AskUserQuestion 2026-06-17). Writing formal_evidence_eligible + set_status(candidate) IS the human gate.",
+  "oos_status": "a_priori IS-selection on 2010-2020 only; 2021+ UNBURNED/sealed.",
+  "cohort_redundancy_caveat": "chart-16 volatility family (sign-conditional vol / intraday range / normalized + Williams shadows x {avg,std} x {20,60,120}) — HIGHLY CORRELATED; promoted resolve-but-label, NOT independent discoveries; a downstream marginal-contribution selection picks ~4-6 orthogonal representatives (cf. CICC chart-100's 4 *_std_6M picks).",
+  "hardening_guards": [
+    "assign_candidate_status(field_ok)",
+    "all-or-none attach",
+    "matrix-row identity (ESTU_STYLE_V1 native 2010-2020)",
+    "pre-status==draft"
+  ],
+  "promoted": [
+    "vol_down_std_120d",
+    "vol_down_std_60d",
+    "vol_downshadow_avg_120d",
+    "vol_downshadow_avg_20d",
+    "vol_downshadow_avg_60d",
+    "vol_downshadow_std_120d",
+    "vol_downshadow_std_20d",
+    "vol_downshadow_std_60d",
+    "vol_highlow_avg_120d",
+    "vol_highlow_avg_20d",
+    "vol_highlow_avg_60d",
+    "vol_highlow_std_120d",
+    "vol_highlow_std_20d",
+    "vol_highlow_std_60d",
+    "vol_up_std_120d",
+    "vol_up_std_20d",
+    "vol_up_std_60d",
+    "vol_upshadow_avg_120d",
+    "vol_upshadow_avg_20d",
+    "vol_upshadow_avg_60d",
+    "vol_upshadow_std_120d",
+    "vol_upshadow_std_20d",
+    "vol_upshadow_std_60d",
+    "vol_w_downshadow_avg_120d",
+    "vol_w_downshadow_avg_20d",
+    "vol_w_downshadow_avg_60d",
+    "vol_w_downshadow_std_120d",
+    "vol_w_downshadow_std_20d",
+    "vol_w_downshadow_std_60d",
+    "vol_w_upshadow_avg_120d",
+    "vol_w_upshadow_avg_20d",
+    "vol_w_upshadow_avg_60d",
+    "vol_w_upshadow_std_120d",
+    "vol_w_upshadow_std_20d",
+    "vol_w_upshadow_std_60d"
+  ],
+  "blocked": [
+    [
+      "vol_down_std_20d",
+      "candidate-rule: marginal IS-heldout (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.183, sign-consistency=0.64)"
+    ]
+  ],
+  "verdicts": [
+    {
+      "factor": "vol_down_std_120d",
+      "heldout_rank_icir": -0.2079,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_down_std_60d",
+      "heldout_rank_icir": -0.2002,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_avg_120d",
+      "heldout_rank_icir": -0.3113,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_avg_20d",
+      "heldout_rank_icir": -0.4749,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_avg_60d",
+      "heldout_rank_icir": -0.3727,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_std_120d",
+      "heldout_rank_icir": -0.2731,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_std_20d",
+      "heldout_rank_icir": -0.3505,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_downshadow_std_60d",
+      "heldout_rank_icir": -0.2981,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_avg_120d",
+      "heldout_rank_icir": -0.3151,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_avg_20d",
+      "heldout_rank_icir": -0.428,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_avg_60d",
+      "heldout_rank_icir": -0.3624,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_std_120d",
+      "heldout_rank_icir": -0.4505,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_std_20d",
+      "heldout_rank_icir": -0.5696,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_highlow_std_60d",
+      "heldout_rank_icir": -0.4849,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_up_std_120d",
+      "heldout_rank_icir": -0.3804,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_up_std_20d",
+      "heldout_rank_icir": -0.4985,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_up_std_60d",
+      "heldout_rank_icir": -0.4275,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_avg_120d",
+      "heldout_rank_icir": -0.356,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_avg_20d",
+      "heldout_rank_icir": -0.4856,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_avg_60d",
+      "heldout_rank_icir": -0.4034,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_std_120d",
+      "heldout_rank_icir": -0.4282,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_std_20d",
+      "heldout_rank_icir": -0.5797,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_upshadow_std_60d",
+      "heldout_rank_icir": -0.4631,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_avg_120d",
+      "heldout_rank_icir": -0.3441,
+      "sign_consistency": 0.91,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_avg_20d",
+      "heldout_rank_icir": -0.5277,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_avg_60d",
+      "heldout_rank_icir": -0.4299,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_std_120d",
+      "heldout_rank_icir": -0.4718,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_std_20d",
+      "heldout_rank_icir": -0.5886,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_downshadow_std_60d",
+      "heldout_rank_icir": -0.5314,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_avg_120d",
+      "heldout_rank_icir": -0.2817,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_avg_20d",
+      "heldout_rank_icir": -0.2933,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_avg_60d",
+      "heldout_rank_icir": -0.2874,
+      "sign_consistency": 0.82,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_std_120d",
+      "heldout_rank_icir": -0.2327,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_std_20d",
+      "heldout_rank_icir": -0.2379,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    },
+    {
+      "factor": "vol_w_upshadow_std_60d",
+      "heldout_rank_icir": -0.2331,
+      "sign_consistency": 0.73,
+      "expected_direction": "inverse"
+    }
+  ],
+  "recorder_result": {
+    "attached": [
+      "vol_down_std_120d",
+      "vol_down_std_60d",
+      "vol_downshadow_avg_120d",
+      "vol_downshadow_avg_20d",
+      "vol_downshadow_avg_60d",
+      "vol_downshadow_std_120d",
+      "vol_downshadow_std_20d",
+      "vol_downshadow_std_60d",
+      "vol_highlow_avg_120d",
+      "vol_highlow_avg_20d",
+      "vol_highlow_avg_60d",
+      "vol_highlow_std_120d",
+      "vol_highlow_std_20d",
+      "vol_highlow_std_60d",
+      "vol_up_std_120d",
+      "vol_up_std_20d",
+      "vol_up_std_60d",
+      "vol_upshadow_avg_120d",
+      "vol_upshadow_avg_20d",
+      "vol_upshadow_avg_60d",
+      "vol_upshadow_std_120d",
+      "vol_upshadow_std_20d",
+      "vol_upshadow_std_60d",
+      "vol_w_downshadow_avg_120d",
+      "vol_w_downshadow_avg_20d",
+      "vol_w_downshadow_avg_60d",
+      "vol_w_downshadow_std_120d",
+      "vol_w_downshadow_std_20d",
+      "vol_w_downshadow_std_60d",
+      "vol_w_upshadow_avg_120d",
+      "vol_w_upshadow_avg_20d",
+      "vol_w_upshadow_avg_60d",
+      "vol_w_upshadow_std_120d",
+      "vol_w_upshadow_std_20d",
+      "vol_w_upshadow_std_60d"
+    ],
+    "skipped_drift": [],
+    "skipped_unknown": []
+  }
+}

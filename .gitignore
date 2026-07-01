@@ -162,7 +162,8 @@ workspace/scripts/sandbox_*.py
 # Claude Code / Codex local tooling cache (binaries, sessions)
 # =============================================================================
 .codex/
-.claude/
+.claude/*
+!.claude/skills/
 
 # =============================================================================
 # Backtest result archives (Chinese-named directories)
@@ -180,6 +181,13 @@ Knowledge/**/*.parquet
 Knowledge/**/*.csv
 Knowledge/**/*.xlsx
 Knowledge/**/*.pkl
+# CICC handbook raw artifacts — bulky source HTML + downloaded CDN images +
+# verification crops; the structured markdown (CICC_*.md) is the committed product.
+# Images are re-fetchable via workspace/scripts/cicc_fetch_images.py.
+Knowledge/**/_extracted/
+Knowledge/**/_verify/
+Knowledge/AI量化增强/*.html
+Knowledge/AI量化增强/*.pdf
 # Factor-expansion GPT 5.5 Pro review CSVs — tracked so the handoff artifact set is
 # complete in-repo (referenced by the factor_expansion proposal + README).
 !Knowledge/factor_expansion_gpt_review_new_candidates.csv
@@ -209,3 +217,11 @@ Thumbs.db
 # =============================================================================
 *.orig
 *.rej
+
+# =============================================================================
+# Dashboard (centralized board)
+# Generated board body lives at the project root; the data.json snapshot + the
+# session cache live under workspace/outputs/ (already ignored above).
+# =============================================================================
+/index.html
+/build_id.txt

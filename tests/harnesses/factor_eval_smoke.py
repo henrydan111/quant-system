@@ -25,7 +25,10 @@ from src.alpha_research.factor_eval.quantile_analysis import (
     compute_quantile_returns,
     compute_quantile_summary,
     compute_long_short_returns,
-    test_monotonicity,
+    # Aliased: the production name matches pytest's test_* collection pattern,
+    # so importing it un-aliased makes pytest collect it as a test and fail
+    # with "fixture 'quantile_summary' not found".
+    test_monotonicity as check_monotonicity,
 )
 from src.alpha_research.factor_eval.neutralization import (
     neutralize,
@@ -124,7 +127,7 @@ def test_quantile_monotonic():
     factor, fwd = _make_perfect_signal(n_dates=100, n_stocks=200)
     q_returns = compute_quantile_returns(factor, fwd, n_quantiles=5, min_obs=30)
     q_summary = compute_quantile_summary(q_returns)
-    mono = test_monotonicity(q_summary)
+    mono = check_monotonicity(q_summary)
     assert mono["is_monotonic"], f"Expected monotonic, got corr={mono['spearman_corr']:.4f}"
     print("  ✓ test_quantile_monotonic PASSED")
 

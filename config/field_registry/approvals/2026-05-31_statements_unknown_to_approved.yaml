@@ -39,7 +39,7 @@ related_findings_id: factor_expansion_pr27
 # Bind to the exact provider build + calendar policy under which the coverage
 # and parity verification were performed. A future provider rebuild with a
 # different provider_build_id / calendar_policy_id requires re-verification.
-provider_build_id: report_rc_incr_20260608
+provider_build_id: "depth9_20260630"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

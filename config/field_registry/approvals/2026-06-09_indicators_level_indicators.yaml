@@ -1,0 +1,107 @@
+# Field-registry approval evidence (2026-06-09) — 33 fina_indicator level indicators.
+#
+# The 2026-06-08 field-parity audit (workspace/research/data_audit/) found that the
+# `indicators` raw store carried only Tushare's default-显示=Y subset (109/167) because
+# the VIP refresh passed no `fields=`. fina_indicator_vip was re-fetched with the FULL
+# 167-field set; these 33 NON-q_* level indicators were then materialized into provider
+# build `indicators_fields_20260609` (mode=update provider-only). The 25 q_* single-
+# quarter fields were INTENTIONALLY NOT registered (we self-compute PIT-correct pit_*
+# equivalents via derive_single_quarter_value; the vendor q_* are not guaranteed PIT-safe).
+
+approval_id: 2026-06-09_indicators_level_indicators
+date: 2026-06-09
+dataset_id: indicators
+source_endpoint: tushare.fina_indicator_vip
+from_status: unregistered          # newly materialized + absent from field_status.yaml
+to_status: approved
+reviewer: henrydan111
+related_pr: report-rc-p1-plumbing + field-parity-audit fixes
+related_findings_id: workspace/research/data_audit/FINDINGS_AND_VERIFICATION.md (A2)
+
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# fina_indicator snapshot ratios. PIT-anchored on ann_date — IDENTICAL anchoring +
+# _materialize_snapshot_dataset pipeline as the indicators fields approved 2026-05-27 /
+# 05-29 / 05-31. Predictive factors MUST wrap each $field in Ref(...,1).
+pit_contract:
+  availability_column: ann_date
+  knowable_at: disclosure_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: snapshot_dataset_ann_date_anchored   # same as approved indicators family
+
+evidence:
+  family_inheritance:
+    finding: "All 33 are produced by the SAME pit_backend._materialize_snapshot_dataset path and the SAME ann_date PIT anchor as the indicators fields approved 2026-05-27 (PR 9a: $roe/$roa/$roic/…), 2026-05-29 ($roe_waa/$q_roe/…) and 2026-05-31 ($op_of_gr/$ebit_of_gr/$profit_to_gr). They inherit that family's verified ann_date anchoring + leak-free snapshot serving; they were simply never fetched (no `fields=` was passed to fina_indicator_vip) until the 2026-06-08 audit fix re-fetched the full 167-field set."
+  q_fields_excluded:
+    finding: "The 25 q_* single-quarter fields gained in the same re-fetch (q_netprofit_yoy, q_op_yoy, q_eps, q_*_to_gr, …) were DELIBERATELY NOT registered/materialized. We self-compute PIT-correct single-quarter growth via the pit_* provider fields (pit_netprofit_yoy / pit_op_yoy / pit_or_yoy / pit_q_op_qoq / pit_q_sales_yoy) and single-quarter levels via derive_single_quarter_value. Tushare's vendor q_* are not guaranteed PIT-safe (may embed restatements), so introducing them as a second source of truth is avoided."
+  coverage:
+    method: "non-null fraction over the full indicators PIT ledger (310,998 firm-quarter rows, 2008-2025)."
+    high_ge_90pct: "non_op_profit 99.4, ocf_to_or 99.0, profit_prefin_exp 97.5, salescash_to_or 97.0, roic_yearly 96.8, total_fa_trun 96.4, op_to_debt 96.2, op_to_liqdebt 94.2, cash_to_liqdebt 94.1, arturn_days 93.7, inv_turn 92.3, invturn_days 92.3"
+    mid_75_90pct: "nop_to_ebt/opincome_of_ebt/op_to_ebt 84.2, n_op_profit_of_ebt 83.5, tax_to_ebt 83.3, ocf_to_interestdebt 83.2, ocf_to_profit 82.6, valuechange_income 81.9, cash_to_liqdebt_withinterest 81.5, dtprofit_to_profit 81.1, ocf_to_opincome 77.2"
+    sub_universe_45_75pct: "longdebt_to_workingcapital 74.0, interst_income 73.1, investincome_of_ebt 69.7, ebit_to_interest 65.6, roe_avg 61.2, rd_exp 60.8, daa 54.7, capitalized_to_da 54.3, ebitda_to_debt 52.8, ocf_to_netdebt 45.5"
+    coverage_caveat: "The <75% fields are debt/coverage/interest ratios that are UNDEFINED for net-cash and financial firms (e.g. ebit_to_interest is NaN for Moutai/Ping An Bank — verified) → factors built on them are intentionally SUB-UNIVERSE. This is an economic property, not a data defect."
+  provider_validation:
+    method: "Direct-bin cross-section read on the published provider (indicators_fields_20260609) across 8 sector-diverse names."
+    result: "roe_avg/total_fa_trun/ocf_to_or populated for all; ebit_to_interest/ebitda_to_debt/inv_turn correctly populated for leveraged industrials (海康 535×, CATL 37×, 万科 −4 negative-EBT) and correctly NaN for net-cash/financial (Moutai/平安/招行). Field-applicability semantics verified correct."
+  scoped_materialization_check:
+    finding: "A scoped 3-symbol provider-only validation build (sandbox_validate_20260609) first confirmed each of the 33 materializes as base + _q0.._q4 slots (6 bins/field) before the full all-symbol build."
+
+fields_added:
+  # turnover/efficiency
+  - {field: $arturn_days,                  note: "AR turnover days; cov 93.7%"}
+  - {field: $inv_turn,                     note: "inventory turnover; cov 92.3% (NaN for no-inventory financials)"}
+  - {field: $invturn_days,                 note: "inventory turnover days; cov 92.3%"}
+  - {field: $total_fa_trun,                note: "total fixed-asset turnover; cov 96.4%"}
+  # solvency/coverage
+  - {field: $cash_to_liqdebt,              note: "cash / current liabilities; cov 94.1%"}
+  - {field: $cash_to_liqdebt_withinterest, note: "cash / interest-bearing current liab; cov 81.5%"}
+  - {field: $ebit_to_interest,             note: "interest coverage EBIT/interest; cov 65.6% sub-universe (NaN for net-cash/financial)"}
+  - {field: $ebitda_to_debt,               note: "EBITDA / debt; cov 52.8% sub-universe"}
+  - {field: $longdebt_to_workingcapital,   note: "long debt / working capital; cov 74.0%"}
+  - {field: $ocf_to_interestdebt,          note: "OCF / interest-bearing debt; cov 83.2%"}
+  - {field: $ocf_to_netdebt,               note: "OCF / net debt; cov 45.5% sub-universe (net debt undefined for net-cash)"}
+  - {field: $op_to_debt,                   note: "operating profit / debt; cov 96.2%"}
+  - {field: $op_to_liqdebt,                note: "operating profit / current liab; cov 94.2%"}
+  # cash quality
+  - {field: $ocf_to_opincome,              note: "OCF / operating income; cov 77.2%"}
+  - {field: $ocf_to_or,                    note: "OCF / operating revenue; cov 99.0%"}
+  - {field: $ocf_to_profit,                note: "OCF / profit; cov 82.6%"}
+  - {field: $salescash_to_or,              note: "sales cash receipts / revenue; cov 97.0%"}
+  # profitability structure/quality
+  - {field: $dtprofit_to_profit,           note: "deducted-non-recurring profit share; cov 81.1%"}
+  - {field: $investincome_of_ebt,          note: "investment income share of EBT; cov 69.7%"}
+  - {field: $n_op_profit_of_ebt,           note: "non-operating profit share of EBT; cov 83.5%"}
+  - {field: $nop_to_ebt,                   note: "non-operating / EBT; cov 84.2%"}
+  - {field: $op_to_ebt,                    note: "operating profit / EBT; cov 84.2%"}
+  - {field: $opincome_of_ebt,              note: "operating income share of EBT; cov 84.2%"}
+  - {field: $roe_avg,                      note: "average ROE; cov 61.2%"}
+  - {field: $roic_yearly,                  note: "annualized ROIC; cov 96.8%"}
+  - {field: $tax_to_ebt,                   note: "effective tax rate (tax/EBT); cov 83.3%"}
+  # other/niche
+  - {field: $capitalized_to_da,            note: "capitalized expenditure / D&A; cov 54.3%"}
+  - {field: $daa,                          note: "depreciation & amortization; cov 54.7%"}
+  - {field: $interst_income,               note: "interest income; cov 73.1%"}
+  - {field: $non_op_profit,                note: "non-operating net profit; cov 99.4%"}
+  - {field: $profit_prefin_exp,            note: "profit before financing expense (EBIT-like); cov 97.5%"}
+  - {field: $rd_exp,                       note: "R&D expense (indicator-table version; income family has $rd_exp_sq_q0); cov 60.8%"}
+  - {field: $valuechange_income,           note: "fair-value-change income; cov 81.9%"}
+
+notes: |
+  Same-family extension (fina_indicator_vip snapshot, ann_date-anchored), not a new
+  dataset. No new PIT mechanism — the fields were already produced by the approved
+  _materialize_snapshot_dataset path once fetched. The all-symbol provider build was
+  published as indicators_fields_20260609 (atomic swap; previous live backed up to
+  data/qlib_data.bak_indicators_fields_20260609). The 25 q_* single-quarter fields are
+  out of scope here (self-computed pit_* preferred). run_daily_qa (approval_evidence
+  binding + field gate) is the standard confirming gate.

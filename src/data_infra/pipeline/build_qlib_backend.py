@@ -18,7 +18,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
 sys.path.insert(0, os.path.join(project_root, "src"))
 
-from data_infra.pit_backend import BuildGateError, build_qlib_backend, resolve_build_paths
+from data_infra.pit_backend import BuildGateError, SLOT_DEPTH_DEFAULT, build_qlib_backend, resolve_build_paths
 
 log_dir = os.path.join(project_root, "logs")
 os.makedirs(log_dir, exist_ok=True)
@@ -53,7 +53,7 @@ def build_unified_qlib(
     datasets: list[str] | None = None,
     touched_symbols: list[str] | None = None,
     build_id: str | None = None,
-    slot_depth: int = 5,
+    slot_depth: int = SLOT_DEPTH_DEFAULT,
     allow_exceptions: bool = False,
     write_compat_aliases: bool = True,
     stage: str = "full",
@@ -90,7 +90,8 @@ def main() -> None:
         help="Build stage selection",
     )
     parser.add_argument("--build-id", type=str, default=None, help="Explicit staged build id")
-    parser.add_argument("--slot-depth", type=int, default=5, help="Quarter slot depth (default: 5)")
+    parser.add_argument("--slot-depth", type=int, default=SLOT_DEPTH_DEFAULT,
+                        help=f"Quarter slot depth (default: {SLOT_DEPTH_DEFAULT})")
     parser.add_argument("--publish", action="store_true", help="Promote the staged build into data/qlib_data")
     parser.add_argument("--exclude-phase3", action="store_true", help="Skip Phase 3 datasets")
     parser.add_argument(

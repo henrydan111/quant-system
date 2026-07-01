@@ -33,11 +33,20 @@ RETPANEL = OUT / "daily_ret_panel.parquet"
 
 # ---------- board classification (qlib code form e.g. 000001_SZ) ----------
 def board_of(code: str) -> str:
-    c = code.split("_")[0]
-    if c[:3] in ("300", "301"): return "chinext"     # 创业板
+    parts = code.split("_")
+    c = parts[0]
+    suffix = parts[1].upper() if len(parts) > 1 else ""   # qlib form e.g. 920145_BJ
+    if c[:2] == "30": return "chinext"               # 创业板 — the whole SZSE 30xxxx block
+                                                     # (300/301/302…; matched by block so a
+                                                     # future range extension can't leak to "other")
     if c[:3] in ("688", "689"): return "star"        # 科创板
-    if c[0] in ("4", "8"):      return "bse"         # 北交/老三板
-    if c[0] == "9" or c[:3] in ("200", "201"): return "bshare"
+    # 北交所/老三板. The post-2024 reassigned 北证 listings use the 920xxx range —
+    # these start with "9" but are NOT B-shares, so they MUST be caught before the
+    # generic "9" rule below. The _BJ suffix is the robust catch-all for any 北证 code.
+    if c[:3] == "920" or suffix == "BJ" or c[0] in ("4", "8"): return "bse"
+    # true B-shares ONLY: 900xxx (沪B) / 200xxx, 201xxx (深B). Tightened from a bare
+    # "9" prefix so 920xxx 北证 names are not swept in here.
+    if c[:3] == "900" or c[:3] in ("200", "201"): return "bshare"
     if c[:3] in ("600", "601", "603", "605", "000", "001", "002", "003"):
         return "main"                                # 主板(含中小板)
     return "other"

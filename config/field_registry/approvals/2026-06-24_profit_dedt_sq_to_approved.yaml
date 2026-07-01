@@ -1,0 +1,67 @@
+# Field-registry approval evidence (2026-06-24, Phase-C)
+#
+# Registers $profit_dedt_sq_q0 — single-quarter 扣非净利润 (扣除非经常性损益后的归母净利润), DERIVED from
+# the indicators (fina_indicator) PIT-ledger CUMULATIVE `profit_dedt`. This is the self-computed,
+# PIT-correct replacement for the vendor single-quarter ratio `q_dtprofit_to_profit` (one of the 25
+# vendor q_* fields INTENTIONALLY left unregistered 2026-06-09 as PIT-uncertain — see the indicators
+# block comment in field_status.yaml). It is the LAST valuable q_* not expressible from existing approved
+# _sq fields, so it is materialized as a new provider field rather than registered from the vendor feed.
+#
+# GPT Phase-C Major-2: registered under the INDICATORS family (its source ledger), NOT income — income uses
+# different source-family assumptions (max(ann_date,f_ann_date) anchor); indicators anchors on ann_date.
+
+approval_id: 2026-06-24_profit_dedt_sq_to_approved
+date: 2026-06-24
+dataset_id: indicators
+source_endpoint: tushare.fina_indicator_vip
+from_status: approved          # the indicators family is already approved; this ADDS one derived field
+to_status: approved
+reviewer: henrydan111
+related_pr: materialization-phase1 / Phase-C (report-rc-registration)
+related_findings_id: null
+
+# Bound to the additive provider publish (workspace/scripts/_publish_phasec_additive.py). The matching
+# data/qlib_data/metadata/provider_build.json (provider_build_id below) + the additive_build_provenance.json
+# sidecar fully describe how this field was added (robocopy stage, unchanged-bin integrity, new-field parity).
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+# Source/derivation classification (GPT Phase-C Major-2):
+source_dataset: indicators
+source_class: derived_flow_from_snapshot_ledger   # cumulative profit_dedt -> single-quarter via derive_single_quarter_value
+coverage_tier: sub                                # board-skewed derivability (主板 84.6% -> 北证 27.0%)
+replacement_for_vendor_q: q_dtprofit_to_profit    # the PIT-uncertain vendor field this PIT-correctly replaces
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+fields:
+  - $profit_dedt_sq_q0
+# NOTE: the materializer writes q0..q4 (slot_depth=5) but only q0 is registered (the only slot a factor
+# consumes). q1..q4 stay materialized-but-unregistered (fail-closed) until a factor needs them.
+
+# ── Derivation / PIT ──
+# profit_dedt (扣非归母净利润, YTD cumulative) lives in the indicators PIT ledger at all four fiscal quarters
+# (coverage Q1 94% / H1 96% / Q3 95% / FY 98% — NOT semi-annual). Single quarter = profit_dedt[Q] −
+# profit_dedt[Q−1] via the proven restatement-safe kernel materialize_canonical_quarter_segments +
+# derive_single_quarter_value (StagedQlibBackendBuilder._materialize_profit_dedt_sq). Anchored on the
+# indicators ann_date → effective_date (strict next-open after disclosure, §3.2), SAME anchor as the
+# already-approved q_roe/$pit_* indicators fields. The materializer PREFILTERS to standard fiscal-quarter
+# ends (03-31/06-30/09-30/12-31). Predictive factors MUST wrap $profit_dedt_sq_q0 in Ref(...,1).
+#
+# ── Validation ──
+# - Canaries: tests/data_infra/test_profit_dedt_sq.py (5: prefilter/Q1=cum/missing-prior→NaN/single-q/slot-order).
+# - Value-parity (the new field IS PIT-correct; the vendor q_dtprofit is the VALUE oracle, NOT a PIT oracle):
+#   $profit_dedt_sq_q0 == vendor $q_dtprofit_q0 EXACT (med_rel 0.000, within-1% 1.000, ~98% cov; the new-field
+#   parity is re-asserted at publish time in additive_build_provenance.json).
+# - Denominator for the consuming factor qual_dtprofit_to_profit_q = 归母 $n_income_attr_p_sq_q0 (already
+#   approved), empirically 99.2% vs the vendor's own $q_dtprofit_to_profit_q0 (NOT consolidated n_income).
+# - Coverage audit: workspace/scripts/_phasec_profit_dedt_coverage_audit.py (coverage_tier=sub justification).
+#
+# Unlocks the Phase-C factor: qual_dtprofit_to_profit_q (单季扣非占归母净利润; earnings quality; coverage_tier=sub).

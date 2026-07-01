@@ -1,0 +1,59 @@
+# Field-registry approval evidence (2026-06-14) — balancesheet equity + payables for D4a batch 3.
+#
+# Adds total shareholders' equity (incl. minority interest, q0/q1) and accounts payable
+# (q0/q1) to the approved `balancesheet` family — same pit_backend period-end (_q*) snapshot
+# derivation as the approved q0/q4 slots, unregistered until now. Unlocks the final D4a
+# difference factors: ROED (Δ net-income/equity), DTED (Δ debt/equity), APRD (Δ payables
+# turnover). Equity is the INCL-minority series ($total_hldr_eqy_inc_min_int) deliberately:
+# the D5 TTM numerator $n_income_sq is total net income (incl minority, because n_income_attr_p
+# lacks q1..q3 slots), so ROE/DTE must use the MATCHED total-equity denominator — mixing
+# total NI with 归母 equity would overstate ROE. Same documented incl-minority basis as
+# qual_roa_ttm.
+#
+# ░░ R3 UPDATE (factor-logic cross-review, 2026-06-14) ░░
+# The `accounts_pay_q0/q1` slots are now UNCONSUMED: they were registered for `qual_aprd`, which
+# was a mis-built payables-turnover factor (Δ营业成本TTM/应付账款) — NOT the CICC accruals ratio
+# (应计利润TTM/营业利润TTM) that APRD denotes. qual_aprd has been REMOVED from the catalog; APRD
+# stays un-built (faithful build needs operate_profit_sq q1-q3 + a transcribed 应计利润 numerator).
+# `total_hldr_eqy_inc_min_int_q0/q1` REMAIN consumed by qual_roed/qual_dted (now proxy_approx).
+# accounts_pay stays `approved` — a registered-but-unused valid PIT field is harmless; de-registering
+# would churn the log for no benefit. See workspace/research/cicc_replication/FACTOR_LOGIC_cross_review_response.md.
+
+approval_id: 2026-06-14_balancesheet_d4a_equity_payables_to_approved
+date: 2026-06-14
+dataset_id: balancesheet
+source_endpoint: tushare.balancesheet
+from_status: unregistered
+to_status: approved
+reviewer: henrydan111
+related_pr: cicc-d4a-field-registration
+related_findings_id: null
+
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+fields:
+  - $total_hldr_eqy_inc_min_int_q0
+  - $total_hldr_eqy_inc_min_int_q1
+  - $accounts_pay_q0
+  - $accounts_pay_q1
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Period-end balance-sheet snapshots. PIT-anchored on max(ann_date, f_ann_date) — IDENTICAL
+# derivation + anchoring as the approved q0/q4 slots. Coverage over 2020-H2 (600-name sample):
+# total_hldr_eqy_inc_min_int_q0/q1 1.000, accounts_pay_q0/q1 0.981/0.980 (payables not
+# reported by some financials — sub-universe property). Predictive factors MUST wrap in Ref(...,1).
+pit_contract:
+  availability_column: ann_date
+  knowable_at: disclosure_day
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: period_end_q0_q1_snapshot_from_balancesheet

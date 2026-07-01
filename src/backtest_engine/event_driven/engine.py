@@ -17,11 +17,12 @@ from typing import Optional
 import pandas as pd
 
 from .data_feeder import QlibDataFeeder, strict_cache_mode
-from .portfolio import Portfolio
+from .portfolio import Portfolio, Position
 from .exchange import Exchange
 from .corporate_actions import CorporateActionHandler
 from .strategy import Strategy, BacktestContext, Order
 from .constants import ENGINE_REQUIRED_FIELDS
+from .pre_open_guard import PhaseBoundFeeder, StrategyExchangeView
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,12 @@ class BacktestEngine:
         self._daily_records: list[dict] = []
         self._daily_holdings: list[dict] = []
         self._benchmark_returns: pd.Series = pd.Series(dtype=float)
+        # Carry-forward cache of each held name's last KNOWN real (non-NaN,
+        # positive) close. Used by ``_handle_delistings`` to price a delisting
+        # force-close at the true last traded value even across a suspension
+        # gap (where the final in-universe bars are NaN), instead of the
+        # optimistic ``avg_cost`` fallback. Populated in ``_record_day``.
+        self._last_valid_price: dict[str, float] = {}
 
         # Instrumentation (plan ``snappy-buzzing-meerkat`` v5 verification gate).
         # Per-day wall-clock timing for the full day loop iteration, used by
@@ -383,8 +390,10 @@ class BacktestEngine:
               day_data_indexed=pd.DataFrame(),
               prev_day_data=prev_day_data,
               portfolio=self.portfolio,
-              exchange=self.exchange,
-              feeder=self.feeder,
+              # initialize may read only data <= the warmup (previous) day; the
+              # raw feeder/exchange are same-day side channels (GPT R2 Blocker-1).
+              exchange=StrategyExchangeView(self.exchange),
+              feeder=PhaseBoundFeeder(self.feeder, prev_date),
               total_days=total_days,
           )
           self.strategy.initialize(init_context)
@@ -418,15 +427,21 @@ class BacktestEngine:
             # Delisting check
             self._handle_delistings(day_data, prev_day_data, date)
 
-            # Phase 1: Pre-market — strategy sees prev_day_data only
+            # Phase 1: Pre-market open-order decision. The strategy may see ONLY
+            # previous-day data. TODAY's OHLCV is withheld (empty frames) AND the
+            # feeder/exchange are phase-bound so the same-day side channels
+            # (context.feeder.get_features, context.exchange._feeder) cannot bypass
+            # the empty frames (GPT R2 Blocker-1). The engine keeps the real
+            # `day_indexed` LOCAL for execution gating; on_bar gets full access back.
+            last_visible = calendar[i - 1] if i > 0 else prev_date
             context = BacktestContext(
                 date=date,
-                day_data=day_data,
-                day_data_indexed=day_indexed,
+                day_data=day_data.iloc[0:0],
+                day_data_indexed=day_indexed.iloc[0:0],
                 prev_day_data=prev_day_data,
                 portfolio=self.portfolio,
-                exchange=self.exchange,
-                feeder=self.feeder,
+                exchange=StrategyExchangeView(self.exchange),
+                feeder=PhaseBoundFeeder(self.feeder, last_visible),
                 trading_day_index=i,
                 total_days=total_days,
                 phase='pre_open',
@@ -444,7 +459,12 @@ class BacktestEngine:
             if open_orders:
                 self._execute_orders(open_orders, day_indexed, date, open_fill_col)
 
-            # Phase 2: EOD bar — strategy sees full OHLCV
+            # Phase 2: EOD bar — strategy sees the FULL same-day OHLCV + raw
+            # feeder/exchange (all knowable at close).
+            context.day_data = day_data
+            context.day_data_indexed = day_indexed
+            context.exchange = self.exchange
+            context.feeder = self.feeder
             context.phase = 'on_bar'
             close_orders = self.strategy.on_bar(context)
             if close_orders:
@@ -626,16 +646,43 @@ class BacktestEngine:
         for code in list(self.portfolio.positions.keys()):
             if code not in today_codes:
                 pos = self.portfolio.positions[code]
-                if code in prev_indexed.index:
-                    last_price = prev_indexed.loc[code, 'close']
-                else:
-                    last_price = pos.avg_cost
+                last_price = self._resolve_delist_price(code, pos, prev_indexed)
                 logger.warning(
                     'Delisting detected: %s on %s, force-closing %d '
-                    'shares at %.2f',
+                    'shares at %.4f',
                     code, date, pos.shares, last_price
                 )
                 self.portfolio.force_close(code, price=last_price)
+
+    def _resolve_delist_price(self, code: str, pos: Position,
+                              prev_indexed: pd.DataFrame) -> float:
+        """Best-known exit price for a position leaving the universe (delisting).
+
+        Carries forward the last KNOWN real (non-NaN, positive) traded close so
+        the force-close prices at the true last traded value even when the final
+        in-universe bars were NaN suspension rows. Preference order:
+
+          1. ``self._last_valid_price[code]`` — last real close seen while held
+             (survives a suspension gap; populated in ``_record_day``)
+          2. yesterday's close, if real — covers a position not yet recorded
+          3. ``pos.avg_cost`` — cost-basis last resort
+          4. ``0.0`` — total loss; never NaN, never negative
+
+        No discount is applied: the pre-delisting collapse (退市整理期 /
+        consecutive limit-downs) is ALREADY captured day-by-day in the price
+        path and marked through daily P&L, so this returns the real last traded
+        price. A haircut here would double-count a loss already booked.
+        """
+        cached = self._last_valid_price.get(code)
+        if cached is not None and not pd.isna(cached) and cached > 0:
+            return float(cached)
+        if not prev_indexed.empty and code in prev_indexed.index:
+            prev_close = prev_indexed.loc[code, 'close']
+            if not pd.isna(prev_close) and prev_close > 0:
+                return float(prev_close)
+        if pos.avg_cost > 0:
+            return float(pos.avg_cost)
+        return 0.0
 
     # ─── Fill-price column synthesis ──────────────────────────────
 
@@ -672,8 +719,11 @@ class BacktestEngine:
             orders: List of Order objects.
             day_indexed: Day data indexed by ts_code.
             date: Trading date.
-            fill_price: 'open' or 'close'.
+            fill_price: the fill column ('raw_open' / 'raw_close' / 'raw_avg').
         """
+        # For the daily-AVERAGE fill mode the fill price ('raw_avg') is not a
+        # tradability state, so gate on the all-day 一字 lock instead of the avg.
+        limit_gate = 'all_day_lock' if fill_price == 'raw_avg' else 'fill_price'
         sells = [o for o in orders if o.direction == 'sell']
         buys = [o for o in orders if o.direction == 'buy']
 
@@ -682,7 +732,24 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data (delisted?)')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_sell(row, order.code, date):
+            # 果仁 不卖条件 "调仓日交易时涨停" (opt-in, default OFF; set via EventDrivenBacktester.run
+            # hold_on_limit_up): HOLD a winner that is limit-up at the fill — skip the sell, retain the
+            # position (its capital is not redeployed this bar). The engine knows the same-day limit state
+            # at fill; the pre-open strategy cannot. Does NOT alter the §3.3 can_buy/can_sell gate below.
+            # Limit-state mirrors the can_sell gate: daily-AVERAGE fill -> 一字 all-day lock (the synthetic
+            # avg is not a tradability state); open/close fill -> is_limit_up at the actual fill column.
+            # GPT R1 P2: exclude a TRUE no-limit day (is_true_no_limit_day) — on a no-limit IPO coverage-hole
+            # is_limit_up can be spuriously True (missing up_limit) while the name is actually freely
+            # tradable; mirror the can_buy/can_sell pattern (locked AND NOT is_true_no_limit_day) so we don't
+            # "hold" a name that has no real limit.
+            if (getattr(self, "_hold_on_limit_up", False)
+                    and (self.exchange.is_all_day_limit_up(row, order.code, date)
+                         if limit_gate == 'all_day_lock'
+                         else self.exchange.is_limit_up(row, order.code, date, price_field=fill_price))
+                    and not self.exchange.is_true_no_limit_day(order.code, date, row)):
+                self._log_order(order, 'BLOCKED', '涨停不卖 (hold limit-up winner)')
+                continue
+            if not self.exchange.can_sell(row, order.code, date, price_field=fill_price, limit_gate=limit_gate):
                 self._log_order(order, 'BLOCKED', 'not tradable for sell')
                 continue
             if not self.portfolio.can_sell(order.code):
@@ -735,12 +802,12 @@ class BacktestEngine:
                 self._log_order(order, 'BLOCKED', 'no data')
                 continue
             row = day_indexed.loc[order.code]
-            if not self.exchange.can_buy(row, order.code, date):
+            if not self.exchange.can_buy(row, order.code, date, price_field=fill_price, limit_gate=limit_gate):
                 self._log_order(order, 'BLOCKED', 'not tradable for buy')
                 continue
 
             # Volume constraint
-            max_value = self.exchange.max_buyable_value(row)
+            max_value = self.exchange.max_buyable_value(row, price_field=fill_price)
             actual_value = min(order.target_value, max_value)
             if actual_value <= 0:
                 self._log_order(order, 'BLOCKED', 'zero buyable value')
@@ -860,6 +927,13 @@ class BacktestEngine:
 
         # Per-stock holdings snapshot
         for code, pos in self.portfolio.positions.items():
+            # Carry-forward last KNOWN real close for robust delisting pricing
+            # (see _resolve_delist_price). Skip NaN/absent (suspension) and
+            # non-positive values so the cache retains the last genuine traded
+            # price across a halt rather than overwriting it with a NaN.
+            _raw_px = prices.get(code)
+            if _raw_px is not None and not pd.isna(_raw_px) and _raw_px > 0:
+                self._last_valid_price[code] = float(_raw_px)
             mkt_price = prices.get(code, pos.avg_cost)
             self._daily_holdings.append({
                 'date': date,

@@ -6,6 +6,18 @@ from unittest.mock import mock_open, patch
 
 import pandas as pd
 
+# Pre-import the pyarrow-backed parquet machinery BEFORE any
+# patch.dict(sys.modules, ...) block below. patch.dict restores sys.modules to
+# its pre-block snapshot on exit, evicting modules first imported INSIDE the
+# block. compute_factors now routes through qlib_windowed_features →
+# cache_manifest → pd.read_parquet, whose first call lazily imports
+# pandas.core.arrays.arrow.extension_types; that module registers pyarrow
+# extension types at import time, and a forced re-import in the next test
+# raises ArrowKeyError ("pandas.period already defined") because pyarrow's
+# global registry survives the eviction.
+import pandas.core.arrays.arrow.extension_types  # noqa: F401
+import pyarrow.parquet  # noqa: F401
+
 import src.alpha_research.factor_library as factor_library
 import src.alpha_research.factor_library.catalog as factor_catalog_module
 from src.alpha_research.factor_library import operators

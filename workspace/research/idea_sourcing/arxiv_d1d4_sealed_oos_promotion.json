@@ -1,0 +1,98 @@
+{
+  "promoted_at_oos_end": "2026-02-27",
+  "factors": [
+    "alpha_chip_cgo_smooth_20d",
+    "earn_sue_ni_mcap",
+    "earn_sue_ni_assets",
+    "north_hold_change_20d_cov",
+    "north_hold_change_60d_cov"
+  ],
+  "frozen_set_hash": "092524eb5d2f250e3b32428c4e5554440c7bf5393bda2aef6f46b8e2b76b9974",
+  "git_sha": "5a946c13e724ed4250790ff307fb735de5a00c05",
+  "provider_build_id": "indicators_fields_20260609",
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "evidence_class": "single_shot_sealed_oos",
+  "selection_class": "a_priori_is_only",
+  "literature_informed_caveat": true,
+  "promoted": [
+    {
+      "factor_id": "earn_sue_ni_assets",
+      "oos_rank_icir": 0.02551831811651863,
+      "oos_ls_sharpe": 1.0631893235835053
+    }
+  ],
+  "skipped": [
+    {
+      "factor_id": "alpha_chip_cgo_smooth_20d",
+      "oos_rank_icir": -0.26488879349686284,
+      "oos_ls_sharpe": -0.6330637127173228
+    },
+    {
+      "factor_id": "earn_sue_ni_mcap",
+      "oos_rank_icir": 0.06614166149285833,
+      "oos_ls_sharpe": 0.7717370032468406
+    },
+    {
+      "factor_id": "north_hold_change_20d_cov",
+      "oos_rank_icir": -0.06567687512476635,
+      "oos_ls_sharpe": 2.4725464067685055
+    },
+    {
+      "factor_id": "north_hold_change_60d_cov",
+      "oos_rank_icir": -0.11349076689064592,
+      "oos_ls_sharpe": 1.825780248262877
+    }
+  ],
+  "promotion_evidence": {
+    "independent_reproduction": {
+      "source": "qlib_windowed_features",
+      "provider_build_id": "indicators_fields_20260609",
+      "calendar_policy_id": "frozen_20260227_system_build",
+      "frozen_set_hash": "092524eb5d2f250e3b32428c4e5554440c7bf5393bda2aef6f46b8e2b76b9974",
+      "oos_window": "2021-01-01..2026-02-27",
+      "horizon": 20,
+      "rank_icir_horizon": 20,
+      "ls_sharpe_horizon": 5,
+      "metric_note": "Approval bar reproduced exactly as the Round-6 screening defined it: rank_icir at 20d + run_batch_screening's primary-horizon ls_sharpe from horizons=(5, 10, 20) (i.e. 5d long-short Sharpe). This is the registration metric, not a horizon-consistent tradability metric; strategy-level deployment validation is a separate gate.",
+      "max_label_realization_date": "2026-02-27 00:00:00",
+      "per_factor": {
+        "alpha_chip_cgo_smooth_20d": {
+          "oos_rank_icir": -0.26488879349686284,
+          "oos_ls_sharpe": -0.6330637127173228,
+          "ls_sharpe_horizon": 5
+        },
+        "earn_sue_ni_mcap": {
+          "oos_rank_icir": 0.06614166149285833,
+          "oos_ls_sharpe": 0.7717370032468406,
+          "ls_sharpe_horizon": 5
+        },
+        "earn_sue_ni_assets": {
+          "oos_rank_icir": 0.02551831811651863,
+          "oos_ls_sharpe": 1.0631893235835053,
+          "ls_sharpe_horizon": 5
+        },
+        "north_hold_change_20d_cov": {
+          "oos_rank_icir": -0.06567687512476635,
+          "oos_ls_sharpe": 2.4725464067685055,
+          "ls_sharpe_horizon": 5
+        },
+        "north_hold_change_60d_cov": {
+          "oos_rank_icir": -0.11349076689064592,
+          "oos_ls_sharpe": 1.825780248262877,
+          "ls_sharpe_horizon": 5
+        }
+      }
+    },
+    "unsafe_pit_dates_lint": "passed",
+    "live_provider_parity": "passed",
+    "dirty_tree": false,
+    "promotion_status": "approved",
+    "synthetic_lookahead_canary": "passed",
+    "restatement_canary": "passed",
+    "q0_canary_multiperiod": "passed",
+    "q0_canary_stateful_restatement": "passed",
+    "q0_canary_missing_field": "passed",
+    "availability_assertion": "passed",
+    "git_sha": "5a946c13e724ed4250790ff307fb735de5a00c05"
+  }
+}

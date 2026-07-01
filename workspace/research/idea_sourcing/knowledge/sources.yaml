@@ -1,0 +1,90 @@
+# Knowledge-source registry — the channels that feed research IDEAS into the
+# knowledge layer. A "source" is either external literature (arXiv / OSAP /
+# 券商研报 / journals / news) OR an internal data integration (report_rc, and
+# every future Tushare/alt-data set you add) that yields research directions +
+# curated value content. The dashboard 知识源 page renders one card per source;
+# the 研究方向 / 价值内容 pages filter by the `source` id (data-cat).
+#
+# EXTENSIBLE — to add a data source: add an entry here (status: planned→active)
+# and tag its directions in research_directions.yaml with `source_kind: <id>`
+# (and, when it has its own content store, tag those rows `source: <id>`). The
+# board then auto-shows its card + filter option. No dashboard code change.
+#
+# name/summary are authored BILINGUALLY here (infra metadata, few + static);
+# the high-volume dynamic content (dimension labels / direction one-liners /
+# paper glosses) is Sonnet-translated in translations.json.
+
+meta:
+  generated: "2026-06-10"
+  note: "source ids must match research_directions.yaml `source_kind` (absent => arxiv) and any content store `source` tag."
+
+sources:
+  - id: arxiv
+    name_cn: "arXiv 学术论文"
+    name_en: "arXiv preprints"
+    kind: academic
+    status: active
+    summary_cn: "q-fin 量化金融预印本。四层知识框架：主题相关性收割 → 知识骨干(饱和分类法) → 价值打分 → 方向聚类。"
+    summary_en: "q-fin preprints; the 4-layer framework (themed harvest → taxonomy backbone → value scoring → direction clustering)."
+    pipeline_cn: "取数 → 知识骨干 → 价值打分 → 方向聚类"
+    cadence_cn: "持续（每日新增），定期重收割"
+    provides: [research_directions, value_papers, saturation_map]
+    links:
+      - {title: "知识框架设计", path: "workspace/research/idea_sourcing/knowledge/KNOWLEDGE_FRAMEWORK.md"}
+      - {title: "完整方向提炼", path: "workspace/research/idea_sourcing/knowledge/TOP_DIRECTIONS.md"}
+
+  - id: osap
+    name_cn: "Open Source Asset Pricing"
+    name_en: "OSAP SignalDoc"
+    kind: anomaly_catalog
+    status: active
+    summary_cn: "212 个已发表美股异象因子目录（含 sign / 经济类别 / t-stat / 引用 / 复现质量）。A股可行性×新颖度三筛。"
+    summary_en: "Catalog of 212 published US anomaly predictors (sign/category/t-stat/cites/repro-quality). A-share feasibility × novelty triage."
+    cadence_cn: "季度发布"
+    provides: [research_directions, signal_catalog]
+    links:
+      - {title: "OSAP→A股三筛", path: "workspace/research/idea_sourcing/triage/osap_ashare_triage.md"}
+
+  - id: report_rc
+    name_cn: "Tushare 分析师数据 (report_rc)"
+    name_en: "Tushare analyst forecasts"
+    kind: structured_data
+    status: active
+    summary_cn: "卖方 FY1 EPS / 目标价 / 评级修正事件流（report_date+1 PIT）。催生 eps_diffusion——首个 approved 的新维度因子。"
+    summary_en: "Sell-side FY1 EPS / target-price / rating revision flow (report_date+1 PIT). Yielded eps_diffusion — the first approved new-dimension factor."
+    cadence_cn: "事件驱动"
+    provides: [research_directions]
+    links: []
+
+  - id: brokerage_report
+    name_cn: "券商研报"
+    name_en: "Brokerage research reports"
+    kind: brokerage
+    status: planned
+    summary_cn: "中文卖方研报（AKShare / 慧博）。叙事与逻辑层 → 假设来源。ToS 灰区，全文 PDF 受限——先做标题/摘要层。"
+    summary_en: "Chinese sell-side reports (AKShare / 慧博). Narrative/thesis layer → hypotheses. ToS-gray, full-text PDF limited — start at title/abstract layer."
+    cadence_cn: "未接入 · 探针已验证可行性"
+    provides: [value_articles, research_directions]
+    links: []
+
+  - id: journal
+    name_cn: "学术期刊 / SSRN"
+    name_en: "Journals / SSRN"
+    kind: academic
+    status: planned
+    summary_cn: "arXiv 之外的期刊与工作论文（经 OpenAlex / SSRN）。补充经同行评审、更成熟的工作。"
+    summary_en: "Journals + working papers beyond arXiv (via OpenAlex / SSRN). Peer-reviewed, more mature work."
+    cadence_cn: "未接入"
+    provides: [value_papers, research_directions]
+    links: []
+
+  - id: news
+    name_cn: "财经新闻 / 资讯"
+    name_en: "Financial news"
+    kind: news
+    status: planned
+    summary_cn: "事件 / 情绪 / 主题层。服务 text_nlp 受阻前沿（财报电话会 / 公告文本是最高价值的数据采集目标）。"
+    summary_en: "Event / sentiment / theme layer. Serves the text_nlp blocked frontier (earnings-call / filing text = the top acquisition target)."
+    cadence_cn: "未接入"
+    provides: [value_articles]
+    links: []

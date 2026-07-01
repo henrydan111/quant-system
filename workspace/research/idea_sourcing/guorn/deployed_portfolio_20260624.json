@@ -1,0 +1,33 @@
+{
+  "source": "guorn.com 持仓策略 tab (live deployed portfolio, user's real capital)",
+  "captured_at": "2026-06-24 10:29:24",
+  "quote_time": "2026-06-24 15:35:59",
+  "note": "持仓市值和今日涨跌根据 2026-06-24 15:35:59 行情数据计算; ~equal-weight ~5% per strategy across a ~9.93M book. This is the PRIORITY verification queue for the 果仁 parity ladder (user directive 2026-06-24).",
+  "total": {
+    "assets": 9930330.43, "asset_pct": 100.00, "holding_value": 9556682.84,
+    "cash": 373647.59, "n_holdings": 148, "daily_return_pct": -0.89
+  },
+  "n_strategies": 20,
+  "strategies": [
+    {"idx": 1,  "name": "sm_01_成长动量",          "category": "sm",     "assets": 488943.39, "asset_pct": 4.92, "holding_value": 486958.00, "cash": 1985.39,   "n_holdings": 12, "daily_return_pct": -3.44, "rebalance_date": "2026-06-24"},
+    {"idx": 2,  "name": "sm_01_成长_v1",            "category": "sm",     "assets": 492837.34, "asset_pct": 4.96, "holding_value": 490955.00, "cash": 1882.34,   "n_holdings": 11, "daily_return_pct": -3.79, "rebalance_date": "2026-06-24"},
+    {"idx": 3,  "name": "sm_大制造GARP_v3",         "category": "sm",     "assets": 488883.17, "asset_pct": 4.92, "holding_value": 488882.82, "cash": 0.35,      "n_holdings": 11, "daily_return_pct": -2.84, "rebalance_date": "2026-06-24"},
+    {"idx": 4,  "name": "sm_GARP_illiq",            "category": "sm",     "assets": 498951.70, "asset_pct": 5.02, "holding_value": 497567.00, "cash": 1384.70,   "n_holdings": 11, "daily_return_pct": -1.84, "rebalance_date": "2026-06-24"},
+    {"idx": 5,  "name": "sm_双创研发强度_v1",       "category": "sm",     "assets": 487421.89, "asset_pct": 4.91, "holding_value": 487402.70, "cash": 19.19,     "n_holdings": 6,  "daily_return_pct": -2.21, "rebalance_date": "2026-06-24"},
+    {"idx": 6,  "name": "sm_01_成长高贝塔@TMT_v1",  "category": "sm",     "assets": 485818.36, "asset_pct": 4.89, "holding_value": 484493.00, "cash": 1325.36,   "n_holdings": 8,  "daily_return_pct": -3.65, "rebalance_date": "2026-06-24"},
+    {"idx": 7,  "name": "value_红利低波_v2",        "category": "value",  "assets": 492911.37, "asset_pct": 4.96, "holding_value": 492458.00, "cash": 453.37,    "n_holdings": 10, "daily_return_pct": -1.40, "rebalance_date": "2026-06-24"},
+    {"idx": 8,  "name": "value_红利低波_央企_v1",   "category": "value",  "assets": 500401.42, "asset_pct": 5.04, "holding_value": 500263.00, "cash": 138.42,    "n_holdings": 7,  "daily_return_pct": -0.51, "rebalance_date": "2026-06-24"},
+    {"idx": 9,  "name": "value_红利低波_重股息_v1", "category": "value",  "assets": 489135.71, "asset_pct": 4.93, "holding_value": 488888.00, "cash": 247.71,    "n_holdings": 10, "daily_return_pct": -1.79, "rebalance_date": "2026-06-24"},
+    {"idx": 10, "name": "value_AH_低溢价GARP_v1",   "category": "value",  "assets": 498343.87, "asset_pct": 5.02, "holding_value": 480464.00, "cash": 17879.87,  "n_holdings": 11, "daily_return_pct": 1.43,  "rebalance_date": "2026-06-24"},
+    {"idx": 11, "name": "value_FCF_非企sm_v2",      "category": "value",  "assets": 494304.50, "asset_pct": 4.98, "holding_value": 484879.00, "cash": 9425.50,   "n_holdings": 10, "daily_return_pct": -1.68, "rebalance_date": "2026-06-24"},
+    {"idx": 12, "name": "value_创业板sm_v1",        "category": "value",  "assets": 491512.22, "asset_pct": 4.95, "holding_value": 488970.00, "cash": 2542.22,   "n_holdings": 11, "daily_return_pct": -1.99, "rebalance_date": "2026-06-24"},
+    {"idx": 13, "name": "成长_机构预期@周期_v1",    "category": "成长",   "assets": 521048.05, "asset_pct": 5.25, "holding_value": 520806.00, "cash": 242.05,    "n_holdings": 5,  "daily_return_pct": 0.33,  "rebalance_date": "2026-06-24"},
+    {"idx": 14, "name": "成长_净利润断层_v2",       "category": "成长",   "assets": 501339.91, "asset_pct": 5.05, "holding_value": 173758.00, "cash": 327581.91, "n_holdings": 2,  "daily_return_pct": -0.66, "rebalance_date": "2026-06-24"},
+    {"idx": 15, "name": "成长_双创_GARP@周期_v2",   "category": "成长",   "assets": 512404.06, "asset_pct": 5.16, "holding_value": 512128.14, "cash": 275.92,    "n_holdings": 11, "daily_return_pct": 0.08,  "rebalance_date": "2026-06-24"},
+    {"idx": 16, "name": "成长_隔夜动量@周期",       "category": "成长",   "assets": 495486.95, "asset_pct": 4.99, "holding_value": 493301.00, "cash": 2185.95,   "n_holdings": 11, "daily_return_pct": 1.35,  "rebalance_date": "2026-07-08"},
+    {"idx": 17, "name": "成长_高波@周期",           "category": "成长",   "assets": 516235.22, "asset_pct": 5.20, "holding_value": 515444.00, "cash": 791.22,    "n_holdings": 11, "daily_return_pct": 5.20,  "rebalance_date": "2026-06-24"},
+    {"idx": 18, "name": "ST_大市值_v3",             "category": "ST",     "assets": 481490.87, "asset_pct": 4.85, "holding_value": 481265.98, "cash": 224.89,    "n_holdings": 5,  "daily_return_pct": -1.65, "rebalance_date": "2026-06-24"},
+    {"idx": 19, "name": "MultiA_风险平价_v1",       "category": "MultiA", "assets": 490247.51, "asset_pct": 4.94, "holding_value": 487117.80, "cash": 3129.71,   "n_holdings": 3,  "daily_return_pct": 0.03,  "rebalance_date": "2026-06-24"},
+    {"idx": 20, "name": "MultiA_动量18",            "category": "MultiA", "assets": 502612.92, "asset_pct": 5.06, "holding_value": 500681.40, "cash": 1931.52,   "n_holdings": 2,  "daily_return_pct": 1.49,  "rebalance_date": "2026-06-24"}
+  ]
+}

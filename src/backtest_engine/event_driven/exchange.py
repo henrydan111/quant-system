@@ -251,6 +251,34 @@ def _round_half_up_2dp(value: float) -> float:
 # Board reform dates
 _CHINEXT_REFORM_DATE = pd.Timestamp('2020-08-24')
 _STAR_LAUNCH_DATE = pd.Timestamp('2019-07-22')
+# 全面注册制 (comprehensive registration system) main-board reform: the first
+# batch of registration-based main-board IPOs listed 2023-04-10. A main-board
+# stock listed on/after this date has NO price limit for its first 5 trading
+# days (then ±10%). BEFORE it, a main-board IPO's first day was the old
+# +44% / −36% cap (an ASYMMETRIC but REAL, published limit) — NOT a no-limit day.
+_MAIN_BOARD_REGISTRATION_DATE = pd.Timestamp('2023-04-10')
+
+# stk_limit no-limit SENTINEL: on a genuine no-limit stock-day Tushare publishes
+# an UNREACHABLE band, NOT NaN — up_limit ≈ 1e6 (main/ChiNext/STAR first days)
+# or 99999.99 (BSE listing day), down_limit ≈ 0.01/0.00. The up-floor sits far
+# above the highest real A-share limit (~¥3k for 贵州茅台) and just below the
+# 99999.99 BSE sentinel, so it can never collide with a real limit price. See
+# resolve_limit_prices + workspace/scripts/diag_stk_limit_nolimit_days.py.
+_NO_LIMIT_UP_SENTINEL_FLOOR = 99999.0
+_NO_LIMIT_DOWN_SENTINEL_CEIL = 0.01
+
+# Board code classification — shared by get_limit_pct + is_true_no_limit_day so
+# the two can never drift (GPT cross-review 2026-06-22, Major-2). Main board =
+# 沪深主板 (incl. ex-中小板 002 and the newer SZ 003). BSE = 北交所: detected by
+# the .BJ suffix (robust across segments) with a numeric-prefix fallback for any
+# suffix-less code — 43 (legacy NEEQ), 83/87/88, and 92 (the new 920 segment).
+_MAIN_BOARD_PREFIXES = ('000', '001', '002', '003', '600', '601', '603', '605')
+_BSE_NUMERIC_PREFIXES = ('43', '83', '87', '88', '92')
+
+
+def _is_bse_code(code: str) -> bool:
+    """True for a 北交所 (Beijing Stock Exchange) ts_code — suffix-first."""
+    return code.endswith('.BJ') or code[:2] in _BSE_NUMERIC_PREFIXES
 
 
 class Exchange:
@@ -382,8 +410,8 @@ class Exchange:
         - ST: ±5%
         - ChiNext (300/301): ±20% since 2020-08-24, else ±10%
         - STAR (688/689): ±20% since 2019-07-22, else ±10%
-        - BSE (83/87/43/92): ±30%
-        - Main board: ±10%
+        - BSE (北交所, .BJ / 43/83/87/88/92 incl. 920): ±30%
+        - Main board (沪深主板) + out-of-universe fallback: ±10%
 
         Args:
             code: Tushare ts_code (e.g., '300001.SZ').
@@ -400,9 +428,11 @@ class Exchange:
             return 0.20 if date >= _CHINEXT_REFORM_DATE else 0.10
         if prefix in ('688', '689'):  # STAR (科创板)
             return 0.20 if date >= _STAR_LAUNCH_DATE else 0.10
-        if code[:2] in ('83', '87', '43', '92'):  # BSE (北交所)
+        if _is_bse_code(code):  # BSE (北交所, incl. 920xxx)
             return 0.30
-        return 0.10  # Main board (主板) default
+        if prefix in _MAIN_BOARD_PREFIXES:  # Main board (主板)
+            return 0.10
+        return 0.10  # Conservative fallback for out-of-universe A/B/fund codes
 
     def compute_limit_prices(self, pre_close: float,
                              limit_pct: float) -> tuple[float, float]:
@@ -470,46 +500,67 @@ class Exchange:
         return self.compute_limit_prices(pre_close, limit_pct)
 
     def is_limit_up(self, row: pd.Series, code: str,
-                    date: pd.Timestamp) -> bool:
-        """Check if a stock closed at limit-up.
+                    date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+        """Check if a stock is at limit-up at ``price_field`` (default raw_close).
 
         Cannot buy at limit-up (no sellers). Can still sell.
 
-        Uses Tushare's published ``up_limit`` when available, else the
-        computed band (see :meth:`resolve_limit_prices`).
+        ``price_field`` selects WHICH price the gate tests against the limit.
+        The execution path passes the actual fill column so the gate matches the
+        fill: an OPEN fill passes ``'raw_open'`` → blocks when the daily OPEN is at
+        the limit (the daily-bar PROXY for a locked-at-open 一字 / 调仓时涨停). A
+        name that opens BELOW the limit and merely CLOSES limit-up was buyable at
+        the open, so the default close-based gate would wrongly block it (and would
+        use end-of-day info to block an open trade). Caveat: a name that opens AT
+        the limit but trades intraday (high>low) is not all-day-locked; blocking it
+        is the conservative choice under a daily-bar fill — exact 09:35/open-time
+        tradability needs minute or order-book data. Default ``'raw_close'``
+        preserves the legacy close-fill semantics.
+
+        Uses Tushare's published ``up_limit`` when available, else the computed
+        band (see :meth:`resolve_limit_prices`).
 
         Args:
-            row: Daily data row with 'close' (+ optional 'up_limit').
+            row: Daily data row with the fill price (+ optional 'up_limit').
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test (e.g. 'raw_open' / 'raw_close' / 'raw_avg').
 
         Returns:
-            True if close is at limit-up price.
+            True if ``price_field`` is at the limit-up price.
         """
-        close = row.get('raw_close', row['close'])
+        price = row.get(price_field)
+        if price is None or pd.isna(price):           # NaN/absent fill field -> close fallback
+            price = row.get('raw_close', row.get('close'))
         limit_up, _ = self.resolve_limit_prices(row, code, date)
-        return abs(close - limit_up) < 0.005  # within half a fen
+        return bool(pd.notna(price) and abs(price - limit_up) < 0.005)  # within half a fen
 
     def is_limit_down(self, row: pd.Series, code: str,
-                      date: pd.Timestamp) -> bool:
-        """Check if a stock closed at limit-down.
+                      date: pd.Timestamp, price_field: str = 'raw_close') -> bool:
+        """Check if a stock is at limit-down at ``price_field`` (default raw_close).
 
-        Cannot sell at limit-down (no buyers). Can still buy.
+        Cannot sell at limit-down (no buyers). Can still buy. Symmetric to
+        :meth:`is_limit_up`: the execution path passes the fill column so an OPEN
+        fill blocks a SELL only when the stock is locked-DOWN at the open. Default
+        ``'raw_close'`` preserves the legacy close-fill semantics.
 
-        Uses Tushare's published ``down_limit`` when available, else the
-        computed band (see :meth:`resolve_limit_prices`).
+        Uses Tushare's published ``down_limit`` when available, else the computed
+        band (see :meth:`resolve_limit_prices`).
 
         Args:
-            row: Daily data row with 'close' (+ optional 'down_limit').
+            row: Daily data row with the fill price (+ optional 'down_limit').
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test (e.g. 'raw_open' / 'raw_close' / 'raw_avg').
 
         Returns:
-            True if close is at limit-down price.
+            True if ``price_field`` is at the limit-down price.
         """
-        close = row.get('raw_close', row['close'])
+        price = row.get(price_field)
+        if price is None or pd.isna(price):           # NaN/absent fill field -> close fallback
+            price = row.get('raw_close', row.get('close'))
         _, limit_down = self.resolve_limit_prices(row, code, date)
-        return abs(close - limit_down) < 0.005
+        return bool(pd.notna(price) and abs(price - limit_down) < 0.005)
 
     def is_suspended(
         self,
@@ -543,9 +594,19 @@ class Exchange:
         return False
 
     def is_ipo_period(self, code: str, date: pd.Timestamp) -> bool:
-        """Check if a stock is in its IPO no-limit period.
+        """Check if a stock is in its nominal IPO trading-day window.
 
-        IPO no-limit periods (no price limit on these days):
+        ⚠ NOT a no-limit-day predicate — DO NOT use it to bypass the limit
+        gate. This answers "is the stock inside its board's IPO window" from
+        board + days-since-listing ONLY; it does NOT know the listing-date
+        regime, so it treats a *pre-registration-reform* main-board / ChiNext
+        FIRST day (the old +44% / −36% cap, a REAL published limit) as if it
+        were in-window. Buying a name locked at that +44% limit has no seller.
+        Use :meth:`is_true_no_limit_day` for the buy-gate bypass (GPT
+        cross-review 2026-06-22, Major-2). Retained only as the nominal-window
+        helper / for diagnostics.
+
+        Nominal IPO windows (by board, days since listing):
         - Main Board (沪深主板): 1 day (listing day only)
         - ChiNext (创业板, 300/301): 5 days since 2020-08-24
         - STAR (科创板, 688/689): 5 days since launch
@@ -590,73 +651,235 @@ class Exchange:
         # Main board and BSE: 1 day (listing day only)
         return trading_days_since <= 1
 
+    def is_true_no_limit_day(self, code: str, date: pd.Timestamp,
+                             row: Optional[pd.Series] = None) -> bool:
+        """Return True iff this stock-day genuinely has NO price limit.
+
+        This is the buy-gate's no-limit predicate, and it REPLACES the old
+        ``is_ipo_period`` bypass in :meth:`can_buy`. ``is_ipo_period`` answered
+        "is this stock inside its nominal IPO trading-day window" from board +
+        days-since-listing ONLY — so it treated a *pre-registration-reform*
+        main-board (or pre-2020-reform ChiNext) FIRST day as no-limit and
+        wrongly let :meth:`can_buy` buy a name locked at its old +44% / −36%
+        first-day limit. That first-day cap is a REAL published limit (Tushare
+        carries it in ``up_limit`` / ``down_limit``; e.g. 002728.SZ 2014-07-31
+        → up_limit 20.16 off a 14.0 issue price), so a buyer at the locked limit
+        has no seller. (GPT cross-review 2026-06-22, Major-2.)
+
+        For this engine, a day is confirmed no-limit only when one of the
+        following holds:
+
+        1. **Published no-limit sentinel (primary, definitive).** On a real
+           no-limit stock-day Tushare's ``stk_limit`` publishes an UNREACHABLE
+           band — ``up_limit ≈ 1e6`` (main/ChiNext/STAR) or ``99999.99`` (BSE
+           listing day) and ``down_limit ≈ 0.01/0.00`` — NOT NaN. When the row
+           carries that sentinel the day is no-limit regardless of board/date.
+           (On such a row :meth:`is_limit_up` already returns False, so the buy
+           gate would not even block — but the predicate stands alone.)
+
+        2. **Confirmed board + listing-date regime (fallback for ``stk_limit``
+           coverage holes).** When the published field is absent/NaN the
+           computed band can FALSELY flag a no-limit IPO day that happens to sit
+           on the steady-state ±10/20% boundary as a limit. The regime check
+           rescues exactly the windows that are genuinely no-limit, keyed on the
+           LISTING-date regime (not the trade date):
+
+             - ChiNext (300/301) listed on/after 2020-08-24 → first 5 trading days
+             - STAR (688/689) → first 5 trading days (registration-based since launch)
+             - Main board listed on/after 2023-04-10 (全面注册制) → first 5 days
+             - BSE (北交所, .BJ suffix / 43/83/87/88/92, incl. 920xxx) → listing day only
+
+           It returns False for the OLD main-board / pre-2020 ChiNext +44% / −36%
+           first day (``list_date`` before the board's reform date): that cap is
+           a real published limit, not a no-limit window. It also returns False
+           for any out-of-universe code (B-share / fund / unknown) that matches
+           no board — failing CLOSED rather than guessing a main-board IPO window.
+
+        Non-IPO no-limit events (e.g. relisting first day, delisting-arrangement
+        first day, and exchange-designated special cases) are recognized ONLY
+        through the published ``stk_limit`` sentinel (branch 1). Without that
+        sentinel / event metadata the regime fallback deliberately returns False
+        rather than guessing — so true no-limit days OUTSIDE an IPO window are
+        correct only when sentinel coverage is present.
+
+        Args:
+            code: Stock ts_code.
+            date: Trading date.
+            row: Daily data row (optional). When present, its ``up_limit`` /
+                ``down_limit`` are checked for the no-limit sentinel (branch 1).
+
+        Returns:
+            True iff the stock-day has no enforceable price limit.
+        """
+        # 1. Published no-limit sentinel — definitive when present.
+        if row is not None:
+            up = row.get('up_limit')
+            down = row.get('down_limit')
+            if (up is not None and down is not None
+                    and pd.notna(up) and pd.notna(down)
+                    and float(up) >= _NO_LIMIT_UP_SENTINEL_FLOOR
+                    and float(down) <= _NO_LIMIT_DOWN_SENTINEL_CEIL):
+                return True
+
+        # 2. Board + listing-date regime fallback (stk_limit coverage holes).
+        if self._feeder is None:
+            return False
+        sb = self._feeder.get_stock_basic()
+        stock = sb[sb['ts_code'] == code]
+        if stock.empty:
+            return False
+        list_date = stock.iloc[0]['list_date']
+        if pd.isna(list_date):
+            return False
+
+        # count_trading_days is INCLUSIVE on both ends → listing day == 1.
+        trading_days_since = self._feeder.count_trading_days(list_date, date)
+        if trading_days_since < 1:
+            return False  # date precedes listing — not an IPO no-limit day
+
+        prefix = code[:3]
+        if prefix in ('300', '301'):
+            # ChiNext: 5-day no-limit window ONLY for post-reform listings;
+            # a pre-reform ChiNext first day was the old +44% cap.
+            return list_date >= _CHINEXT_REFORM_DATE and trading_days_since <= 5
+        if prefix in ('688', '689'):
+            # STAR has been registration-based since its 2019-07-22 launch.
+            return trading_days_since <= 5
+        if _is_bse_code(code):
+            # BSE (北交所, incl. 920xxx): listing day only.
+            return trading_days_since <= 1
+        if prefix in _MAIN_BOARD_PREFIXES:
+            # Main board: 5-day no-limit window ONLY for 全面注册制 listings;
+            # a pre-reform main-board first day was the old +44% cap.
+            return list_date >= _MAIN_BOARD_REGISTRATION_DATE and trading_days_since <= 5
+        # Out-of-universe (B-share / fund / unknown) — fail CLOSED: without a
+        # published sentinel we will not guess a no-limit window.
+        return False
+
     # ─── Tradability ──────────────────────────────────────────────
 
     def can_buy(self, row: pd.Series, code: str,
-                date: pd.Timestamp) -> bool:
+                date: pd.Timestamp, price_field: str = 'raw_close',
+                limit_gate: str = 'fill_price') -> bool:
         """Check if a stock can be bought.
 
         Cannot buy if:
         - Suspended (vol == 0)
-        - Limit-up (no sellers), UNLESS in IPO period
+        - Limit-up (no sellers), UNLESS the day is genuinely no-limit
+          (see :meth:`is_true_no_limit_day` — a real no-limit IPO window or a
+          published no-limit sentinel; NOT the old main-board +44% first day)
+
+        ``limit_gate`` selects the limit-up test: ``'fill_price'`` (default) blocks
+        when ``price_field`` is at the limit (correct for open/close fills);
+        ``'all_day_lock'`` blocks only on a 一字 day (high==low==limit) — used for
+        the daily-AVERAGE fill mode. ``price_field`` is forwarded to
+        :meth:`is_limit_up`; the execution path passes the fill column (e.g.
+        ``'raw_open'`` for a 09:35 fill) so the gate reflects buyability AT THE
+        FILL, not at the close. Default ``'raw_close'`` preserves legacy semantics.
 
         Args:
             row: Daily data row.
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test against the limit.
 
         Returns:
             True if stock is buyable.
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_up(row, code, date):
-            if not self.is_ipo_period(code, date):
-                return False
+        locked = (self.is_all_day_limit_up(row, code, date) if limit_gate == 'all_day_lock'
+                  else self.is_limit_up(row, code, date, price_field=price_field))
+        if locked and not self.is_true_no_limit_day(code, date, row):
+            return False
         return True
 
+    def is_all_day_limit_up(self, row: pd.Series, code: str, date: pd.Timestamp) -> bool:
+        """一字涨停: the bar never traded away from the upper limit
+        (high == low == up_limit) -> genuinely unbuyable ALL DAY. Used for the
+        daily-AVERAGE fill mode (jq_daily_avg), where the synthetic avg price is
+        not itself a tradability state (raw_avg < up_limit can still be locked,
+        and raw_avg == up_limit can have traded). GPT cross-review Major-1."""
+        up, _ = self.resolve_limit_prices(row, code, date)
+        low = row.get('raw_low', row.get('low'))
+        high = row.get('raw_high', row.get('high'))
+        if low is None or high is None or pd.isna(low) or pd.isna(high):
+            return False
+        return abs(low - up) < 0.005 and abs(high - up) < 0.005
+
+    def is_all_day_limit_down(self, row: pd.Series, code: str, date: pd.Timestamp) -> bool:
+        """一字跌停: high == low == down_limit -> unsellable all day (avg-fill gate)."""
+        _, down = self.resolve_limit_prices(row, code, date)
+        low = row.get('raw_low', row.get('low'))
+        high = row.get('raw_high', row.get('high'))
+        if low is None or high is None or pd.isna(low) or pd.isna(high):
+            return False
+        return abs(low - down) < 0.005 and abs(high - down) < 0.005
+
     def can_sell(self, row: pd.Series, code: str,
-                 date: pd.Timestamp) -> bool:
+                 date: pd.Timestamp, price_field: str = 'raw_close',
+                 limit_gate: str = 'fill_price') -> bool:
         """Check if a stock can be sold.
 
         Cannot sell if:
         - Suspended (vol == 0)
-        - Limit-down (no buyers)
+        - Limit-down (no buyers), UNLESS the day is genuinely no-limit
+          (see :meth:`is_true_no_limit_day`; in a no-limit coverage hole the
+          computed fallback band is not an enforceable exchange limit, so a
+          sell must not be blocked — symmetric with :meth:`can_buy`)
+
+        ``limit_gate`` mirrors :meth:`can_buy`: ``'fill_price'`` blocks when
+        ``price_field`` is at the down-limit; ``'all_day_lock'`` blocks only on a
+        一字 down day. ``price_field`` is forwarded to :meth:`is_limit_down`; the
+        execution path passes the fill column so an OPEN fill blocks a sell only
+        when locked-down at the open. Default ``'raw_close'`` preserves legacy semantics.
 
         Args:
             row: Daily data row.
             code: Stock ts_code.
             date: Trading date.
+            price_field: Fill column to test against the limit.
+            limit_gate: 'fill_price' (default) or 'all_day_lock'.
 
         Returns:
             True if stock is sellable.
         """
         if self.is_suspended(row, code=code, date=date):
             return False
-        if self.is_limit_down(row, code, date):
+        locked = (self.is_all_day_limit_down(row, code, date) if limit_gate == 'all_day_lock'
+                  else self.is_limit_down(row, code, date, price_field=price_field))
+        if locked and not self.is_true_no_limit_day(code, date, row):
             return False
         return True
 
     # ─── Volume Constraints ───────────────────────────────────────
 
-    def max_buyable_value(self, row: pd.Series) -> float:
+    def max_buyable_value(self, row: pd.Series, price_field: str = 'raw_open') -> float:
         """Maximum value that can be bought for a single stock.
 
-        Capped at volume_limit fraction of daily volume.
-        vol is in 手 (lots of 100 shares).
+        Capped at volume_limit fraction of daily volume, valued at the FILL price
+        (``price_field``) — the execution path passes the fill column so the cap is
+        consistent with the fill (close-fill -> raw_close, avg-fill -> raw_avg),
+        not always the open. vol is in 手 (lots of 100 shares). GPT R2 Major-1.
 
         Args:
-            row: Daily data row with 'vol' and 'open'.
+            row: Daily data row with 'vol' and the fill price.
+            price_field: fill column to value the cap at (default 'raw_open').
 
         Returns:
-            Maximum buy value in ¥.
+            Maximum buy value in ¥ (0 if vol or price is missing/non-positive).
         """
         vol = row.get('vol', 0)
         if pd.isna(vol) or vol <= 0:
             return 0.0
+        # Fail closed: value the cap at the ACTUAL fill column, or 0 if it is
+        # missing/non-positive (no raw_open fallback — a close/avg fill with a
+        # missing fill price must not yield a positive cap; GPT R3 m1).
+        price = row.get(price_field)
+        if price is None or pd.isna(price) or price <= 0:
+            return 0.0
         max_shares = vol * 100 * self.volume_limit  # vol in 手 -> shares
-        price = row.get('raw_open', row.get('open', 0))
-        return max_shares * price
+        return float(max_shares * price)
 
     def max_sellable_shares(self, row: pd.Series) -> int:
         """Maximum shares that can be sold in one order.

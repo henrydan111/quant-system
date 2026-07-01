@@ -159,7 +159,7 @@ def oracle_ic_summary(ic_series):
     }
 
 
-def oracle_quantile_returns(factor, forward_return, n_quantiles=5, min_obs=50):
+def oracle_quantile_returns(factor, forward_return, n_quantiles=10, min_obs=50):
     """Independent quantile return table using pandas qcut."""
     factor = _normalize_multiindex_independent(factor)
     forward_return = _normalize_multiindex_independent(forward_return)
@@ -324,7 +324,7 @@ def evaluate_oracle(factors_df, fwd_df, horizons, progress_every=5):
         q_ret = oracle_quantile_returns(
             factor,
             fwd_df[f"fwd_{primary_h}d"],
-            n_quantiles=5,
+            n_quantiles=10,
             min_obs=100,
         )
         if not q_ret.empty:

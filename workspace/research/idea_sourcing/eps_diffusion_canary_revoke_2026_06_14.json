@@ -1,0 +1,32 @@
+{
+  "event": "eps_diffusion_provisional_approval_revoked",
+  "date": "2026-06-14",
+  "factors": [
+    "earn_eps_diffusion_60",
+    "earn_eps_diffusion_120"
+  ],
+  "status_before": {
+    "earn_eps_diffusion_60": "approved",
+    "earn_eps_diffusion_120": "approved"
+  },
+  "status_after": {
+    "earn_eps_diffusion_60": "candidate",
+    "earn_eps_diffusion_120": "candidate"
+  },
+  "trigger": "report_rc breadth restatement canary run (SNAP1 20260607 vs SNAP2 20260614)",
+  "canary_genuine_findings": {
+    "backfilled": 138,
+    "report_date_drift": 0,
+    "payload_restatement": 26,
+    "note": "138 all weekend-dated, absent at Mon pre-market snapshot, present by 06-14; 674 raw-812 were lookback-overshoot artifact"
+  },
+  "corrected_understanding": {
+    "deployed_anchor": "create_time+1 (contemporaneous) / report_date+3 (deep) via pit_backend REPORT_RC_VENDOR_LAG_OPEN_DAYS=2 + Ref(,1)",
+    "backfill": "HANDLED by provider anchor (NOT raw report_date+1); validated no-lookahead by buffer sweep +1/+2/+3 td Spearman 0.940 ratio 0.91",
+    "create_time": "real per-row ingestion stamp 2022-05+ (p50=1/p99=2/max~4 cal days); frozen 2022-05 pre-2022",
+    "residual": "restatement (26/wk, provider best-known-state re-dates neither) + deep-history breadth per-revision granularity (JQ consensus-level only) + unexplained too-good LS Sharpe"
+  },
+  "fields_not_requarantined": "report_rc * fields KEPT approved — level/count PIT is validated; only breadth has the residual (re-quarantine of the whole family would be over-broad). Flagged for user.",
+  "requalification_path": "restatement-stability check + deep-breadth-granularity handling on the validated +2/create_time anchor; deployment-grade OOS on 2022-05+ create_time window",
+  "rule_ref": "CLAUDE.md 3.5 (canary-overridden provisional approval; revoke if canary fails)"
+}

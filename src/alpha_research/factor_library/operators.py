@@ -126,6 +126,11 @@ ADJ_LOW_T1 = f"Ref({ADJ_LOW}, 1)"
 # Every operator built on DAILY_RET inherits this PIT-safe base.
 DAILY_RET = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, 2) - 1)"
 
+# PIT-safe limit-day flag (the materialized, basis-certified $limit_status field; approved 2026-06-17):
+# +1 close-at-up-limit, -1 close-at-down-limit, 0 normal, NaN suspended/no-limit. Ref(...,1) aligns it
+# with DAILY_RET (both reference the t-1 bar). Single certified source for 剔除涨跌停日 exclusion.
+LIMIT_STATUS_T1 = "Ref($limit_status, 1)"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  LAYER 1: QLIB EXPRESSION OPERATORS
@@ -324,6 +329,176 @@ def up_down_ratio(window):
         Qlib expression string.
     """
     return f"Sum(If({DAILY_RET} > 0, 1, 0), {window}) / {window}"
+
+
+# ─────────── CICC price-volume 系列7 图表4 — momentum (E1a, P-OP certified) ───────────
+# Each builder below has its operator SEMANTICS certified through the OperatorCertification
+# harness (workspace/scripts/certify_e1a_operators.py) BEFORE any factor using it may enter
+# the formal IS gate (§10A). The certified pandas reference was verified to match the Qlib
+# primitives used here (Sum/Abs, Sign+Mean, IdxMax, Rank) — see the operators they compile to.
+
+def path_adjusted_momentum(window):
+    """Path-adjusted momentum over N days — CICC mmt_route (路径调整动量).
+
+    Formula (PIT-safe, literal handbook transcription): period_return(N) / Sum(|daily_ret|, N),
+    i.e. the N-day PERIOD return (adj_close_{t-1}/adj_close_{t-N-1} - 1) divided by the total
+    path length Sum(|daily_ret|, N), guarded to 0 over a fully flat / suspended window. NOT the
+    Kaufman efficiency ratio Sum(ret)/Sum(|ret|) — the handbook numerator "过去N内收益率" is the
+    period return (the same reading op.momentum uses for "收益率"; GPT 5.5 Pro E1a cross-review
+    Q1). So the value is NOT bounded by +-1 (compounding lifts a pure uptrend slightly above 1).
+    Numerator + denominator are both Ref(...,1)-wrapped via ADJ_CLOSE / DAILY_RET.
+
+    Price basis: adjusted close. Decay: short (1M) to medium (1Y). Operator semantics certified
+    via the P-OP harness at W in {20, 250} (operator_id=path_adjusted_momentum).
+
+    Args:
+        window: Lookback in trading days (20 = 1M, 250 = 1Y per the handbook).
+
+    Returns:
+        Qlib expression string.
+    """
+    period_ret = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {window + 1}) - 1)"
+    den = f"Sum(Abs({DAILY_RET}), {window})"
+    return f"If({den} > 0, {period_ret} / {den}, 0)"
+
+
+def up_down_day_share(window):
+    """Up-minus-down day share over N days — CICC mmt_discrete (信息离散度动量).
+
+    Formula (PIT-safe): Mean(Sign(daily_ret), N) = (#up - #down)/N, range [-1, 1]. Flat days
+    (ret == 0) contribute 0 (sign(0)=0) — the ONLY thing distinguishing it from the up-day
+    fraction ``up_down_ratio`` (rank-equivalent to it modulo flat-day handling).
+
+    Price basis: adjusted close-to-close daily returns. Decay: short to medium.
+    Operator semantics certified via the P-OP harness (operator_id=up_down_day_share).
+
+    Args:
+        window: Lookback in trading days.
+
+    Returns:
+        Qlib expression string.
+    """
+    return f"Mean(Sign({DAILY_RET}), {window})"
+
+
+def days_since_high(window):
+    """Trading days since the rolling-N high — CICC mmt_highest_days.
+
+    Formula (PIT-safe): N - IdxMax(adj_high_{t-1}, N). Qlib IdxMax is 1-indexed (today=N), so
+    N - IdxMax == (N-1) - argmax0: 0 = the high is the most recent (t-1) bar, N-1 = the oldest
+    bar in the window. First-occurrence tie-break. Higher = price has fallen further from its
+    peak (weaker / more reverted).
+
+    Price basis: adjusted high — used because cross-day high comparisons must be on a comparable
+    adjusted-price basis. NOTE: an ex-rights adjustment CAN change which date is the window max,
+    so the adjusted-high argmax may differ from the raw-high argmax around splits/dividends; that
+    is the REASON adjusted is correct here, not an accident to work around (GPT 5.5 Pro E1a
+    cross-review Q4). Decay: medium (1Y form). Operator semantics certified via the P-OP harness
+    at W in {20, 250} (operator_id=days_since_high). Warmup: Qlib uses min_periods=1 so the first
+    N-1 bars carry partial-window values (dropped by the eval warmup buffer).
+
+    Args:
+        window: Lookback in trading days (250 = 1Y per the handbook).
+
+    Returns:
+        Qlib expression string.
+    """
+    return f"{window} - IdxMax({ADJ_HIGH_T1}, {window})"
+
+
+def ts_rank(window, field=None):
+    """Rolling time-series percentile rank of the current value within trailing N — the
+    building block of CICC mmt_time_rank (时序rank动量).
+
+    Formula (PIT-safe): Rank(field_{t-1}, N) in [0, 1] (1 = current value is the window max;
+    average-tie percentile). Defaults to the adjusted close. Compose with an outer Mean for
+    the handbook factor: ``Mean(ts_rank(250), 20)``.
+
+    Price basis: adjusted close (default). Operator semantics certified via the P-OP harness
+    (operator_id=ts_rank).
+
+    Args:
+        window: Rolling window over which the current value is ranked.
+        field: PIT-safe Qlib sub-expression to rank (defaults to ADJ_CLOSE_T1).
+
+    Returns:
+        Qlib expression string.
+    """
+    base = ADJ_CLOSE_T1 if field is None else field
+    return f"Rank({base}, {window})"
+
+
+# ─────────────────────── Volatility (CICC 价量 图表16, Wave E1b) ───────────────────────
+# Shadow lines are RATIOS, so the price-adjustment factor cancels (adjusted ≡ raw) — adjusted _T1
+# atoms are used for basis consistency. ``Greater``/``Less`` are Qlib ELEMENTWISE max/min (first use
+# in this catalog; verified). All per-day quantities are Ref(...,1)-wrapped (PIT-safe), aggregated by
+# an outer Mean/Std over the window.
+
+def sign_conditional_std(sign, window):
+    """Subset standard deviation of daily returns over only the SIGN-matching, LIMIT-EXCLUDED days in
+    the window — CICC 下行/上行波动率 (vol_down_std / vol_up_std, 图表16).
+
+    Handbook: std of adjusted daily returns on days with 涨跌幅<0 (down) or >0 (up), EXCLUDING 涨跌停日.
+    This is a TRUE subset std (only the matching days enter the statistic), NOT the zero-fill proxy
+    ``Std(If(ret<0, ret, 0), N)`` that ``risk_downvol`` uses (zero-fill keeps non-matching days at 0,
+    changing both the mean and the count). Limit exclusion reads the materialized ``$limit_status``
+    field (basis-certified) — never an inline raw/adjusted comparison (GPT E1b review B1/B2).
+
+    Construction (ddof=1, to match Qlib ``Std``): with the selection indicator
+    ``sel = [ret<0] * (1 - [|limit_status|>=0.5])`` (down; ``ret>0`` for up), and ``m = sel*ret`` (0 on
+    non-selected, NaN-safe via ``If``), the sample variance is ``(Σm² - (Σm)²/n) / (n-1)`` where
+    ``n = Σsel``. This form yields NaN automatically when ``n < 2`` (0/0), so the handbook's
+    "min 2 observations" floor needs no separate guard. NaN ``limit_status`` (no published limit) →
+    ``[|·|>=0.5]`` is 0 → the day is INCLUDED (we exclude only KNOWN limit days). NaN ``ret``
+    (suspended) → ``[ret<0]`` is 0 → not selected. ``Std = Power(var, 0.5)`` (Qlib has no ``Sqrt``).
+
+    Operator semantics certified via the P-OP harness (operator_id=sign_conditional_std). Args:
+        sign: ``"down"`` (ret<0) or ``"up"`` (ret>0).
+        window: lookback in trading days (20/60/120 = 1M/3M/6M).
+    Returns: Qlib expression string.
+    """
+    cmp = "Lt" if sign == "down" else "Gt"
+    is_signed = f"{cmp}({DAILY_RET}, 0)"
+    sel = f"({is_signed} * (1 - Ge(Abs({LIMIT_STATUS_T1}), 0.5)))"
+    masked = f"If({sel} > 0.5, {DAILY_RET}, 0)"
+    n = f"Sum({sel}, {window})"
+    s1 = f"Sum({masked}, {window})"
+    s2 = f"Sum(({masked} * {masked}), {window})"
+    var = f"(({s2} - {s1} * {s1} / {n}) / ({n} - 1))"
+    # Greater(var, 0) clamps a tiny-NEGATIVE float (sum-of-squares cancellation when the selected
+    # returns are ~equal -> zero variance) up to 0 before the root. The n<2 -> NaN floor can't rely on
+    # the 0/0 in var (rolling-sum float error makes the numerator tiny-nonzero -> +-inf, and the clamp
+    # would mask -inf as 0), so it is enforced explicitly by the mask Ge(n,2)/Ge(n,2) = 1 for n>=2 and
+    # 0/0 = NaN for n<2 (anything * NaN = NaN). Qlib Ge returns a BOOL array and bool/bool raises,
+    # so cast to float (* 1.0) before the division: 1.0/1.0=1 (n>=2), 0.0/0.0=NaN (n<2).
+    mask = f"((Ge({n}, 2) * 1.0) / (Ge({n}, 2) * 1.0))"
+    return f"Power(Greater({var}, 0), 0.5) * {mask}"
+
+
+def norm_upper_shadow():
+    """Standardized upper shadow (上影线), per-day: (high - max(open, close)) / high. CICC 图表16."""
+    return f"(({ADJ_HIGH_T1} - Greater({ADJ_OPEN_T1}, {ADJ_CLOSE_T1})) / {ADJ_HIGH_T1})"
+
+
+def norm_lower_shadow():
+    """Standardized lower shadow (下影线), per-day: (min(open, close) - low) / low. CICC 图表16."""
+    return f"((Less({ADJ_OPEN_T1}, {ADJ_CLOSE_T1}) - {ADJ_LOW_T1}) / {ADJ_LOW_T1})"
+
+
+def williams_upper_shadow():
+    """Williams upper shadow (威廉上影线), per-day: (high - close) / high. CICC 图表16."""
+    return f"(({ADJ_HIGH_T1} - {ADJ_CLOSE_T1}) / {ADJ_HIGH_T1})"
+
+
+def williams_lower_shadow():
+    """Williams lower shadow (威廉下影线), per-day: (close - low) / low. CICC 图表16."""
+    return f"(({ADJ_CLOSE_T1} - {ADJ_LOW_T1}) / {ADJ_LOW_T1})"
+
+
+def intraday_highlow():
+    """Intraday amplitude (日内振幅), per-day: high / low. CICC 图表16 (distinct from
+    risk_range_ratio = (high-low)/close)."""
+    return f"({ADJ_HIGH_T1} / {ADJ_LOW_T1})"
 
 
 # ─────────────────────── Value ───────────────────────
@@ -679,6 +854,238 @@ def volume_cv(window):
         Qlib expression string.
     """
     return f"Std(Ref($vol, 1), {window}) / Mean(Ref($vol, 1), {window})"
+
+
+# ── E1c liquidity (CICC chart 28) builders — guarded inline (GPT factor-logic review B1/B2): a
+# non-positive denominator yields NaN (which the rolling Mean/Std skip), NEVER +/-inf. No custom
+# operator. All atoms PIT-shifted (Ref(...,1)). ─────────────────────────────────────────────
+_AMT_T1 = "Ref($amount, 1)"
+
+
+def _nan_if_nonpos(den_expr: str) -> str:
+    """Return ``den_expr`` when it is > 0, else NaN: ``den * (Gt(den,0)*1.0) / (Gt(den,0)*1.0)`` —
+    the ``*1.0`` casts the Qlib bool comparison to float; den<=0 (or NaN) -> 0/0 -> NaN. Dividing a
+    numerator by this is the GPT B1/B2 guard (no inf from amount=0 / return-std=0 windows)."""
+    g = f"(Gt({den_expr}, 0) * 1.0)"
+    return f"(({den_expr}) * {g} / {g})"
+
+
+def turnover_std(window):
+    """Std of turnover rate over N days (CICC liq_turn_std; distinct from volume_cv)."""
+    return f"Std(Ref($turnover_rate, 1), {window})"
+
+
+def amihud_illiquidity_avg(window):
+    """GUARDED Amihud illiquidity mean (|ret| / amount), NaN on amount<=0 (GPT B1). Distinct from the
+    legacy unguarded ``amihud_illiquidity``."""
+    return f"Mean(Abs({DAILY_RET}) / {_nan_if_nonpos(_AMT_T1)}, {window})"
+
+
+def amihud_illiquidity_std(window):
+    """GUARDED Amihud illiquidity std."""
+    return f"Std(Abs({DAILY_RET}) / {_nan_if_nonpos(_AMT_T1)}, {window})"
+
+
+def liq_vstd(window):
+    """Volume-volatility ratio: Sum(amount, N) / Std(ret, N) — a single window-level ratio (CICC
+    liq_vstd; no avg/std split), guarded against a zero return-std denominator (GPT B2)."""
+    return f"Sum({_AMT_T1}, {window}) / {_nan_if_nonpos(f'Std({DAILY_RET}, {window})')}"
+
+
+# shortcut illiquidity day = (CICC 日K线最短路径 = 2*(high-low) - |open-close|) / amount, on ADJUSTED
+# PIT-shifted OHLC (GPT B4: split-robust project convention; raw-K-line vendor basis not truth-certified)
+_SHORTCUT_DAY = (f"(2 * ({ADJ_HIGH_T1} - {ADJ_LOW_T1}) - Abs({ADJ_OPEN_T1} - {ADJ_CLOSE_T1})) "
+                 f"/ {_nan_if_nonpos(_AMT_T1)}")
+
+
+def shortcut_illiquidity_avg(window):
+    """GUARDED shortcut illiquidity mean (adjusted OHLC range / amount)."""
+    return f"Mean({_SHORTCUT_DAY}, {window})"
+
+
+def shortcut_illiquidity_std(window):
+    """GUARDED shortcut illiquidity std."""
+    return f"Std({_SHORTCUT_DAY}, {window})"
+
+
+# ── E1d price-volume correlation (CICC chart 40) builders — inline Corr+Ref, NO custom operator
+# (GPT factor-logic review APPROVE 2026-06-18). lead/lag is realized by shifting the LEADING series
+# further BACK, never a forward Ref(...,-1) → PIT-safe by construction (latest pair strictly < T).
+# lead_lag_semantics: _post = price/return is POSTerior (t+1) so turnover LEADS; _prior = price/return
+# is PRIOR (t-1) so price/return LEADS. Adjusted close LEVEL for the price-corr family (split-robust);
+# adjusted DAILY_RET + raw $turnover_rate elsewhere. All atoms PIT-shifted (Ref(...,1)). ──────────────
+_TURN_T1 = "Ref($turnover_rate, 1)"                       # turnover at T-1
+_TURND_T1 = f"({_TURN_T1} - Ref($turnover_rate, 2))"      # Δturnover = turn[T-1] - turn[T-2]
+
+
+def corr_price_turn(window):
+    """corr(turnover, adjusted close LEVEL) over N — 量价同步 (sync)."""
+    return f"Corr({_TURN_T1}, {ADJ_CLOSE_T1}, {window})"
+
+
+def corr_price_turn_post(window):
+    """量能领先 (turnover LEADS price): corr(turnover_t, close_{t+1}); shift the LEADER (turnover) back 1."""
+    return f"Corr(Ref({_TURN_T1}, 1), {ADJ_CLOSE_T1}, {window})"
+
+
+def corr_price_turn_prior(window):
+    """价格领先 (price LEADS turnover): corr(turnover_t, close_{t-1}); shift the counterpart (close) back 1."""
+    return f"Corr({_TURN_T1}, Ref({ADJ_CLOSE_T1}, 1), {window})"
+
+
+def corr_ret_turn(window):
+    """corr(turnover, adjusted return) over N — 量价同步 (sync)."""
+    return f"Corr({_TURN_T1}, {DAILY_RET}, {window})"
+
+
+def corr_ret_turn_post(window):
+    """量能领先 (turnover LEADS return): corr(turnover_t, ret_{t+1}); shift turnover back 1."""
+    return f"Corr(Ref({_TURN_T1}, 1), {DAILY_RET}, {window})"
+
+
+def corr_ret_turn_prior(window):
+    """价格领先 (return LEADS turnover): corr(turnover_t, ret_{t-1}); shift return back 1."""
+    return f"Corr({_TURN_T1}, Ref({DAILY_RET}, 1), {window})"
+
+
+def corr_ret_turnd(window):
+    """corr(Δturnover, adjusted return) over N — 量价同步 (sync). Distinct from the unwired price_vol_corr
+    (raw-volume RATIO change, not turnover DIFFERENCE)."""
+    return f"Corr({_TURND_T1}, {DAILY_RET}, {window})"
+
+
+def corr_ret_turnd_prior(window):
+    """价格领先 (return LEADS Δturnover): corr(Δturnover_t, ret_{t-1}); shift return back 1."""
+    return f"Corr({_TURND_T1}, Ref({DAILY_RET}, 1), {window})"
+
+
+# ── E1f capital flow (CICC chart 64) — 大小单 ACTIVE-NET family. Inline Sum/Ref, guarded (NaN not inf via
+# _nan_if_nonpos). moneyflow is a same-day OUTCOME → every field Ref(...,1). Sizes sm/md/lg/elg = handbook
+# s/m/l/xl. act_buy = NET active inflow (buy − sell); prop = Sum(net,N)/Sum(turnover,N) (ratio-of-sums,
+# faithful to "Σ净买入/Σ成交额", distinct from the existing mean-of-ratios flow_*_net_pct); shift_dist
+# (位移路程比) = Sum(net,N)/Sum(gross,N) ∈ [−1,1] (net displacement / gross path, self-contained units).
+# The handbook "总买入含被动" (buy) family is DEFERRED (GPT factor-logic review 2026-06-19): moneyflow has
+# only ACTIVE buy/sell, so "total incl. passive" is unbuildable, and buy_shift_dist = Sum(buy)/Sum(buy+sell)
+# = 0.5*(1 + act_buy_shift_dist) is a RANK-IDENTICAL affine alias. The 开盘/尾盘 family is also deferred
+# (no intraday split in daily moneyflow). Use the buy/sell COMPONENTS, never the opaque $net_mf_amount. ──
+_MF_SIZES = ("sm", "md", "lg", "elg")
+
+
+def _mf_net(scope: str) -> str:
+    """Net active inflow expr (Ref-lagged) for an order size, or 'total' across all four sizes."""
+    if scope == "total":
+        return "(" + " + ".join(f"Ref($buy_{s}_amount, 1) - Ref($sell_{s}_amount, 1)" for s in _MF_SIZES) + ")"
+    return f"(Ref($buy_{scope}_amount, 1) - Ref($sell_{scope}_amount, 1))"
+
+
+def _mf_gross(scope: str) -> str:
+    """Gross activity expr (Ref-lagged) for an order size, or 'total' across all four sizes."""
+    if scope == "total":
+        return "(" + " + ".join(f"Ref($buy_{s}_amount, 1) + Ref($sell_{s}_amount, 1)" for s in _MF_SIZES) + ")"
+    return f"(Ref($buy_{scope}_amount, 1) + Ref($sell_{scope}_amount, 1))"
+
+
+def flow_act_buy_prop(scope, window):
+    """Net active-buy proportion = Sum(net, N) / Sum(turnover, N), guarded NaN-not-inf. scope ∈
+    {total, sm, md, lg, elg}. ⚠ moneyflow amounts are 万元, $amount the provider turnover unit — a
+    constant scale → rank-invariant (IC/RankIC unaffected; absolute level is unit-scaled)."""
+    return f"Sum({_mf_net(scope)}, {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}"
+
+
+def flow_act_buy_shift_dist(scope, window):
+    """位移路程比 = Sum(net, N) / Sum(gross, N) ∈ [−1,1], guarded NaN-not-inf. scope ∈ {total, sm, md, lg, elg}."""
+    return f"Sum({_mf_net(scope)}, {window}) / {_nan_if_nonpos(f'Sum({_mf_gross(scope)}, {window})')}"
+
+
+# ── E1g northbound (CICC chart 76) builders — inline, guarded, MASKED to the northbound-held sub-universe
+# (If(Ref($ratio,1)>0, …, np.nan) — the arXiv-D4 cov pattern; ~35% of names are non-Connect, ratio=0). hk_hold
+# serves $ratio (% of ISSUED shares per doc 188 — close to but NOT exact to CICC's 流通股本) + $north_hold_vol
+# (holding shares). VWAP-based holding-VALUE uses $north_hold_vol (NOT a ratio×VWAP proxy — GPT factor-logic
+# review 2026-06-20: the share-base must not be assumed to cancel). Same-day fact → Ref(...,1). north family
+# OOS spent_same_family (arXiv D4); short IS window (hk_hold 2017+). The 持仓偏好 prefer family is DEFERRED:
+# level = cross-sectional rank-alias of north_hold_pct; st/lt change need a cross-sectional materialization
+# path (Qlib per-instrument expressions can't compute cs_mean). ───────────────────────────────────────────
+_NB_R = "Ref($ratio, 1)"                                            # northbound holding % at T-1
+_NB_VWAP = f"(Ref($amount, 1) / {_nan_if_nonpos('Ref($vol, 1)')})"  # VWAP at T-1 (turnover / volume)
+_NB_HV = f"(Ref($north_hold_vol, 1) * {_NB_VWAP})"                  # holding VALUE = shares × VWAP (faithful)
+
+
+def _nb_mask(expr: str) -> str:
+    """Mask to the northbound-held sub-universe: NaN where ratio<=0 (non-Connect / non-held)."""
+    return f"If({_NB_R} > 0, {expr}, np.nan)"
+
+
+def north_hold_prop_st_chg(window):
+    """ratio − Mean(ratio, N): short-term northbound-holding deviation (mean-deviation; distinct from the
+    point-to-point north_hold_change). Faithful to the issued-share ratio field."""
+    return _nb_mask(f"{_NB_R} - Mean({_NB_R}, {window})")
+
+
+def north_inflow_shift_dist(window):
+    """位移路程比 = Sum(Δratio, N) / Sum(|Δratio|, N) ∈ [−1,1] (net northbound flow / gross path), guarded."""
+    d = f"Delta({_NB_R}, 1)"
+    return _nb_mask(f"Sum({d}, {window}) / {_nan_if_nonpos(f'Sum(Abs({d}), {window})')}")
+
+
+def north_excess_hold_st(window):
+    """Excess holding-VALUE = HV_t / Mean(HV, N) − ret_N (current vs recent holding value, minus N-day return);
+    HV = $north_hold_vol × VWAP (faithful, no share-base assumption)."""
+    ret = f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {window + 1}) - 1)"
+    return _nb_mask(f"{_NB_HV} / {_nan_if_nonpos(f'Mean({_NB_HV}, {window})')} - {ret}")
+
+
+def north_trade_prop(window):
+    """Holding-VALUE turnover = (HV_t / Mean(HV, N)) / Sum(amount, N) (current/recent holding value per turnover)."""
+    excess = f"{_NB_HV} / {_nan_if_nonpos(f'Mean({_NB_HV}, {window})')}"
+    return _nb_mask(f"({excess}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
+# ── E1h margin (CICC chart 88) builders — inline, guarded, MASKED to the margin-eligible sub-universe
+# (GPT factor-logic review 2026-06-20: unmasked zeros would inject a −ret20 reversal artifact into non-
+# eligible names). Eligibility proxy = ANY margin activity (sum of the 4 non-negative approved fields > 0;
+# broader than rzye>0, doesn't drop eligible-but-zero-balance names). margin_detail is T-disclosed-AFTER-
+# close → every field Ref(...,1). Approved fields: $rzye 融资余额 / $rqye 融券余额 / $rzmre 融资买入额 /
+# $rqmcl 融券卖出量; $rzche/$rqchl (repayment) QUARANTINED → net_margin_*_shift_dist blocked. ⚠ UNIT NOTE:
+# $rzmre/$rqmcl/$amount are in mixed units (元 vs 千元 vs shares) — the prop ratios are RANK-correct (the
+# unit factors are stock-invariant constants that cancel cross-sectionally) but absolute values are NOT true
+# proportions → formula_equivalent_pending, not exact-certified. ──────────────────────────────────────────
+_MARGIN_ELIGIBLE = "(Ref($rzye, 1) + Ref($rzmre, 1) + Ref($rqye, 1) + Ref($rqmcl, 1))"
+_MARGIN_VWAP = f"(Ref($amount, 1) / {_nan_if_nonpos('Ref($vol, 1)')})"
+
+
+def _margin_mask(expr: str) -> str:
+    """Mask to the margin-eligible sub-universe: NaN where no margin activity (all 4 approved fields 0)."""
+    return f"If({_MARGIN_ELIGIBLE} > 0, {expr}, np.nan)"
+
+
+def _margin_ret(window: str) -> str:
+    return f"({ADJ_CLOSE_T1} / Ref({ADJ_CLOSE}, {int(window) + 1}) - 1)"
+
+
+def margin_buy_money_prop(window):
+    """融资买入占比 = Sum(融资买入额, N) / Sum(成交额, N), masked + guarded."""
+    return _margin_mask(f"Sum(Ref($rzmre, 1), {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
+def margin_money_bal_growth(window):
+    """融资增量增长率 = 融资余额 / (融资余额[t−N] + 1) − ret_N (handbook +1 denominator guard), masked."""
+    return _margin_mask(f"Ref($rzye, 1) / (Ref($rzye, {int(window) + 1}) + 1) - {_margin_ret(window)}")
+
+
+def margin_sell_sec_prop(window):
+    """融券卖出占比 = Sum(融券卖出量·VWAP, N) / Sum(成交额, N) (rqmcl is VOLUME → ×VWAP = value), masked."""
+    sv = f"(Ref($rqmcl, 1) * {_MARGIN_VWAP})"
+    return _margin_mask(f"Sum({sv}, {window}) / {_nan_if_nonpos(f'Sum(Ref($amount, 1), {window})')}")
+
+
+def margin_sec_bal_prop():
+    """融券余额占比 = 融券余额 / 流通市值 (point ratio, no window), masked + guarded."""
+    return _margin_mask(f"Ref($rqye, 1) / {_nan_if_nonpos('Ref($circ_mv, 1)')}")
+
+
+def margin_sec_bal_growth(window):
+    """融券增量增长率 = 融券余额 / (融券余额[t−N] + 1) − ret_N (handbook +1 guard), masked."""
+    return _margin_mask(f"Ref($rqye, 1) / (Ref($rqye, {int(window) + 1}) + 1) - {_margin_ret(window)}")
 
 
 def log_dollar_volume(window):

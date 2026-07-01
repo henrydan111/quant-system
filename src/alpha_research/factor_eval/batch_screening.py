@@ -27,6 +27,14 @@ from src.alpha_research.factor_eval.quantile_analysis import (
 
 logger = logging.getLogger(__name__)
 
+#: Unified group count (2026-06-11 directive): ALL evaluation paths use 10 groups
+#: (deciles), matching factor_lifecycle's DEFAULT_N_QUANTILES and the CICC手册 protocol.
+#: HISTORICAL NOTE: evidence registered before 2026-06-11 (incl. the Round-6 sealed-OOS
+#: winners) was produced with quintiles — pass ``n_quantiles=5`` to reproduce it
+#: bit-for-bit. Decile-based ls_sharpe (Q10−Q1) is NOT comparable to the historical
+#: quintile-based numbers (a more extreme spread on fewer names).
+DEFAULT_SCREENING_QUANTILES = 10
+
 
 def _prepare_inputs(factors_df: pd.DataFrame, fwd_df: pd.DataFrame):
     factors_df = _normalize_multiindex(factors_df)
@@ -181,6 +189,7 @@ def run_reference_batch_screening(
     checkpoint_every: int = 0,
     checkpoint_callback=None,
     log=None,
+    n_quantiles: int = DEFAULT_SCREENING_QUANTILES,
 ):
     """Reference helper-based screening path."""
     log = log or logger
@@ -231,7 +240,7 @@ def run_reference_batch_screening(
                 q_ret = compute_quantile_returns(
                     factor,
                     fwd_df[fwd_col],
-                    n_quantiles=5,
+                    n_quantiles=n_quantiles,
                     min_obs=100,
                 )
                 q_summary = compute_quantile_summary(q_ret)
@@ -371,6 +380,7 @@ def run_optimized_batch_screening(
     checkpoint_every: int = 0,
     checkpoint_callback=None,
     log=None,
+    n_quantiles: int = DEFAULT_SCREENING_QUANTILES,
 ):
     """Optimized screening path for the batch script.
 
@@ -435,7 +445,7 @@ def run_optimized_batch_screening(
                 factor_values,
                 primary_fwd,
                 date_slices,
-                n_quantiles=5,
+                n_quantiles=n_quantiles,
                 min_obs=100,
             )
             q_summary = compute_quantile_summary(q_ret)
@@ -486,8 +496,13 @@ def run_batch_screening(
     checkpoint_every: int = 0,
     checkpoint_callback=None,
     log=None,
+    n_quantiles: int = DEFAULT_SCREENING_QUANTILES,
 ):
-    """Dispatch to the requested screening engine."""
+    """Dispatch to the requested screening engine.
+
+    ``n_quantiles`` defaults to the unified 10-group standard; pass ``5`` only to
+    reproduce pre-2026-06-11 registered evidence (see DEFAULT_SCREENING_QUANTILES).
+    """
     if engine == "reference":
         return run_reference_batch_screening(
             factors_df,
@@ -499,6 +514,7 @@ def run_batch_screening(
             checkpoint_every=checkpoint_every,
             checkpoint_callback=checkpoint_callback,
             log=log,
+            n_quantiles=n_quantiles,
         )
     if engine == "batch":
         return run_optimized_batch_screening(
@@ -511,5 +527,6 @@ def run_batch_screening(
             checkpoint_every=checkpoint_every,
             checkpoint_callback=checkpoint_callback,
             log=log,
+            n_quantiles=n_quantiles,
         )
     raise ValueError(f"Unknown screening engine: {engine}")

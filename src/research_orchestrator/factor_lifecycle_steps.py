@@ -18,11 +18,16 @@ registry, the gate triplet); only the lifecycle-status allow-set widens to inclu
 
 from __future__ import annotations
 
+import json
+import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from src.research_orchestrator.dag import StepExecutionContext, StepExecutionResult
 from src.research_orchestrator.runtime import write_json
+
+logger = logging.getLogger(__name__)
 # Top-level so tests can monkeypatch `factor_lifecycle_steps.load_is_windowed_panel`
 # (no import cycle: walk_forward_validation does not import research_orchestrator).
 from src.alpha_research.factor_lifecycle.walk_forward_validation import (
@@ -369,6 +374,217 @@ def _read_gate_decision(context: StepExecutionContext) -> str:
     return decision
 
 
+# --------------------------------------------------------------------------- #
+# P-GATE/F3 (item 2b): CICC-cohort replication-ceiling adjudication at publish
+# --------------------------------------------------------------------------- #
+# Non-cohort factors are UNAFFECTED — `_cohort_ceiling` returns None and the gate behaves
+# exactly as before. A cohort factor whose adjudicated ceiling is below candidate
+# (blocked / dev_evidence_only / evidence_only) is REFUSED candidate promotion; a
+# candidate_ceiling-or-higher cohort factor promotes as before. Either way a
+# ReplicationGovernanceRecord is persisted so the ceiling is gate-readable (roadmap Rev5
+# §item-2). The lifecycle gate is univ_all-primary, so the gated domain is univ_all.
+_CANDIDATE_BLOCKED_CEILINGS = frozenset({"blocked", "dev_evidence_only", "evidence_only"})
+
+
+def _parse_umj(v: Any) -> dict:
+    try:
+        return json.loads(v) if isinstance(v, str) else (v or {})
+    except (TypeError, ValueError):
+        return {}
+
+
+def _load_cohort_manifests() -> list:
+    """Load every frozen cohort manifest under config/replication/. A manifest that fails to
+    load (e.g. a ``manifest_sha`` mismatch — the frozen content was edited) is a HARD
+    governance stop (GPT review F2): it RAISES rather than being skipped, so a broken manifest
+    can NEVER make a cohort factor silently look non-cohort and slip through the gate. In a
+    healthy system every manifest loads, so non-cohort publish runs are unaffected; only a
+    genuinely broken manifest halts the publish step."""
+    from src.alpha_research.factor_registry.replication_governance import (
+        DEFAULT_MANIFEST_DIR,
+        load_cohort_manifest,
+    )
+
+    out = []
+    if DEFAULT_MANIFEST_DIR.exists():
+        for p in sorted(DEFAULT_MANIFEST_DIR.glob("*.yaml")):
+            try:
+                out.append(load_cohort_manifest(p))
+            except Exception as e:  # noqa: BLE001
+                raise ValueError(
+                    f"cohort manifest {p.name} failed to load ({e}); refusing the publish step — "
+                    "a broken cohort manifest is a hard governance stop (GPT review F2), not a "
+                    "warning, so no cohort factor can slip through the gate as non-cohort") from e
+    return out
+
+
+def _composite_components(factor_id: str) -> list:
+    """Component factor ids of a composite (empty if not a composite). Used for F5-lite
+    composite truth-observation inheritance (GPT R2 Cond-4)."""
+    try:
+        from src.alpha_research.factor_library.catalog import get_composite_defs
+        for d in get_composite_defs():
+            if d.get("name") == factor_id:
+                return [str(c) for c in d.get("components", [])]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+@lru_cache(maxsize=1)
+def _oos_trade_calendar() -> tuple:
+    """Sorted ``YYYY-MM-DD`` trading days for the EXACT OOS quarantine (R1 F9). Cached.
+
+    Returns ``()`` on ANY load failure — ``_cohort_ceiling`` then leaves the quarantine
+    ``approximate=True``, which the sealed-OOS gate refuses (fail-safe: a missing/broken calendar
+    can NEVER make an approximate quarantine look exact, so it cannot authorize an OOS spend)."""
+    try:
+        from src.data_infra.pit_research_loader import _trading_calendar
+        return tuple(d.strftime("%Y-%m-%d") for d in _trading_calendar())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("OOS trade calendar load failed (quarantine stays approximate): %s", e)
+        return ()
+
+
+def _cohort_ceiling(factor_id: str, universe_id: str, *, manifests, evidence_df, claim_store,
+                    system_oos_start: str = "2021-01-01", current_definition_hash: str = "",
+                    certified_operators=frozenset(), trade_calendar=None,
+                    is_cohort_linked: bool = False, linked_definition_hash: str = ""):
+    """Adjudicate the replication status ceiling for one (factor, universe) by composing the
+    cohort manifest (tier + oos_eligibility), the 7-domain matrix evidence (coverage + depth)
+    and the FactorDomainClaim (class). Returns ``None`` ONLY if the factor is in NO cohort
+    manifest (→ the gate is unchanged for it). Everything that can fail is done AFTER cohort
+    membership is confirmed, so the caller can treat any raised exception as a cohort-factor
+    failure and fail closed (GPT review F1). Fail-closed details:
+      * >1 manifest match → ambiguous membership → raise (F3);
+      * a non-univ_all ``primary_claim_universe`` → raise (the univ_all-only gate cannot
+        adjudicate it, F9);
+      * the OOS quarantine is computed from the truth-table label window (F4);
+      * required operators outside the built-in whitelist → uncertified (F7);
+      * missing claim / missing matrix evidence are passed through as fail-closed caps (F6/F8).
+    """
+    from src.alpha_research.factor_registry.replication_governance import (
+        CERTIFIED_BUILTIN_OPERATORS,
+        compute_oos_quarantine_start,
+        resolve_replication_ceiling,
+    )
+
+    matches = []
+    for m in manifests:
+        r = m.row_for(catalog_factor_id=factor_id)
+        if r is not None:
+            matches.append((m.source_cohort_id, r, str(m.handbook_label_window_end or "")))
+    if not matches:
+        # F3 (GPT R1, now enforced): a factor that CARRIES a cohort linkage (factor_master stamp
+        # or an active CohortFactorLinkageStore entry) but resolves to 0 manifest rows is a
+        # dropped/forgotten link — fail closed rather than silently revert to non-cohort. A
+        # genuinely non-cohort factor (no stamp/link) returns None and the gate is unchanged.
+        if is_cohort_linked:
+            raise ValueError(
+                f"{factor_id} carries a cohort linkage stamp/ledger entry but matches 0 manifest "
+                "rows — a dropped/forgotten manifest link; failing closed (F3) rather than treating "
+                "a CICC-claiming factor as non-cohort")
+        return None
+    if len(matches) > 1:
+        raise ValueError(
+            f"{factor_id} matches {len(matches)} cohort manifest rows ({[c for c, *_ in matches]}) "
+            "— ambiguous cohort membership, failing closed (F3)")
+    cohort_id, row, handbook_label_end = matches[0]
+
+    # F11 drift (GPT scale-review #3): if an active linkage ledger row exists for this factor, its
+    # definition_hash (the implementation bound to the cohort at link time) must equal the CURRENT
+    # registry definition_hash. A mismatch = the factor's definition drifted since it was linked →
+    # fail closed (do NOT silently relink). An explicit relink (relinked event) is required after
+    # confirming the change, so a definition change can't quietly ride the old cohort linkage.
+    if linked_definition_hash and current_definition_hash and linked_definition_hash != current_definition_hash:
+        raise ValueError(
+            f"{factor_id} cohort linkage definition_hash {linked_definition_hash[:12]}… != current "
+            f"{current_definition_hash[:12]}… — STALE linkage (definition drifted since link); failing "
+            "closed (F11 drift). Re-link explicitly after confirming the change.")
+
+    # F9-full (GPT R1, now enforced): the gate adjudicates the REQUESTED ``universe_id`` directly,
+    # not only the manifest ``primary_claim_universe``. The replication tier is domain-agnostic;
+    # coverage (matrix evidence) and the FactorDomainClaim are pulled per-universe below, so a
+    # declared non-primary domain (e.g. csi300) is adjudicated on its OWN evidence/claim. The
+    # manifest ``primary_claim_universe`` is retained as informational provenance only.
+
+    # F8 + freshness (GPT R2 Cond-1b): matrix evidence counts as coverage ONLY when its
+    # source_hash matches the factor's CURRENT definition_hash — a stale row from before an
+    # expression change must NOT satisfy the availability audit. Unknown current hash or no
+    # matching fresh row → coverage_observed stays False → availability_audit_missing cap.
+    coverage_tier, effective_ic_days, coverage_observed = "", None, False
+    if evidence_df is not None and len(evidence_df) and current_definition_hash:
+        auto = evidence_df[
+            (evidence_df["factor_id"] == factor_id)
+            & (evidence_df["run_type"].isin(["factor_lifecycle_auto", "factor_lifecycle_refresh"]))
+            & (evidence_df["universe_id"].fillna("univ_all") == universe_id)
+            & (evidence_df["source_hash"].astype("string").fillna("") == current_definition_hash)
+        ]
+        if len(auto):
+            rr = auto.sort_values("evidence_time").iloc[-1]
+            coverage_tier = str(rr.get("coverage_tier") or "")
+            effective_ic_days = _parse_umj(rr.get("unified_metrics_json")).get("effective_ic_days")
+            coverage_observed = bool(coverage_tier) or effective_ic_days is not None
+
+    # F6 + exactly-one (GPT R2 Cond-2): a cohort factor must resolve to EXACTLY one active
+    # claim for the adjudicated universe — 0 → missing_domain_claim cap (in the resolver);
+    # >1 → ambiguous, fail closed (DataFrame order must not silently pick the ceiling).
+    claim_class = claim_id = ""
+    claims = claim_store.claims()
+    if len(claims):
+        cc = claims[(claims["factor_id"] == factor_id) & (claims["universe_id"] == universe_id)
+                    & (claims["status"] != "rejected_claim")]
+        if len(cc) > 1:
+            raise ValueError(
+                f"{factor_id} has {len(cc)} active claims for {universe_id!r} — ambiguous, failing "
+                "closed; expected exactly one active claim (GPT R2 Cond-2)")
+        if len(cc):
+            claim_class = str(cc.iloc[0]["claim_class"] or "")
+            claim_id = str(cc.iloc[0]["claim_id"] or "")
+
+    # F4 (+ GPT R2 Cond-3): truth-observation quarantines the OOS window. The row's own
+    # truth_table_label_end takes precedence; if blank, fall back to the cohort-level
+    # handbook_label_window_end so a lazily-enumerated row cannot escape the short-OOS cap.
+    truth_label_end = str(getattr(row, "truth_table_label_end", "") or "") or handbook_label_end
+    # F5-lite (GPT R2 Cond-4): a COMPOSITE inherits truth-observation from any truth-observed
+    # component — closes the leak where a composite's own row omits truth_label_end while its
+    # components were observed. (Full §3.1c lineage taint remains deferred.)
+    if not truth_label_end:
+        for comp in _composite_components(factor_id):
+            for m in manifests:
+                cr = m.row_for(catalog_factor_id=comp)
+                if cr is not None:
+                    truth_label_end = (str(getattr(cr, "truth_table_label_end", "") or "")
+                                       or str(m.handbook_label_window_end or ""))
+                    if truth_label_end:
+                        break
+            if truth_label_end:
+                break
+    # OOS quarantine (§9.3). Inject the trading calendar (R1 F9 "approximate=False") so the
+    # quarantine date is EXACT, not the conservative calendar-day fallback. trade_calendar is a
+    # sorted iterable of YYYY-MM-DD strings; when absent (e.g. unit tests) the helper falls back
+    # to approximate=True, which the sealed-OOS gate then refuses (assert_oos_quarantine_satisfied).
+    oos_quarantine_start, oos_quarantine_approximate = compute_oos_quarantine_start(
+        truth_label_end, system_oos_start, trade_calendar=trade_calendar)
+    # F7 + P-OP: an operator is certified iff it is a trusted built-in OR has a `certified`
+    # OperatorCertification record; anything else is uncertified → hard-block (a wrong
+    # operator silently produces plausible-but-wrong alpha, §10A).
+    required_ops = set(getattr(row, "required_operators", ()) or ())
+    certified = set(CERTIFIED_BUILTIN_OPERATORS) | set(certified_operators)
+    has_uncertified_operator = bool(required_ops - certified)
+
+    decision = resolve_replication_ceiling(
+        replication_tier=row.replication_tier_planned, claim_class=claim_class,
+        coverage_tier=coverage_tier, effective_ic_days=effective_ic_days,
+        oos_eligibility=row.oos_eligibility, truth_observed=bool(truth_label_end),
+        coverage_observed=coverage_observed, require_claim=True,
+        has_uncertified_operator=has_uncertified_operator,
+    )
+    return {"decision": decision, "cohort_id": cohort_id, "row": row, "claim_id": claim_id,
+            "oos_quarantine_start": oos_quarantine_start,
+            "oos_quarantine_approximate": oos_quarantine_approximate}
+
+
 def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> StepExecutionResult:
     """Phase 5 slice 6: DIRECT decision matrix (must-fix #2 — NOT
     ``_assert_gate_allows_publication``, whose ``quarantined`` -> ``under_review`` has no
@@ -407,18 +623,175 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
         return StepExecutionResult(status="completed", outputs=outputs)
 
     from src.alpha_research.factor_registry import FactorRegistryStore
+    from src.alpha_research.factor_registry.domain_claims import DomainClaimStore
+    from src.alpha_research.factor_registry.replication_governance import ReplicationGovernanceStore
 
     rd = context.registry_dirs
     store = FactorRegistryStore(rd["factor_registry_dir"])
     run_id = Path(str(context.run_dir)).name or "factor_lifecycle_run"
 
-    # Evidence FIRST (idempotent), then the non-privileged candidate status change.
+    # P-GATE/F3 (item 2b, GPT-review-hardened): adjudicate CICC-cohort factors against the
+    # replication ceiling (univ_all — the gate is univ_all-primary). Non-cohort factors return
+    # None and are unaffected. FAIL-CLOSED (GPT review F1): `_cohort_ceiling` does all fallible
+    # work AFTER confirming cohort membership, so a raised exception is a COHORT factor whose
+    # adjudication failed → REFUSE it (never fall back to non-cohort promotion). A broken
+    # manifest already hard-stopped in `_load_cohort_manifests` (F2).
+    gate_universe = "univ_all"
+    try:
+        system_oos_start = str(_lifecycle_time_split(context.request).oos_start)
+    except Exception:  # noqa: BLE001
+        system_oos_start = "2021-01-01"
+    manifests = _load_cohort_manifests()
+    claim_store = DomainClaimStore(rd["factor_registry_dir"])
+    # current definition_hash per factor — matrix evidence must match it to count as fresh
+    # coverage (GPT R2 Cond-1b: a stale row from before an expression change must not pass).
+    _cur = store.factor_master[store.factor_master["is_current"].fillna(False)]
+    def_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
+                   for _, r in _cur.iterrows()} if len(_cur) else {})
+    # P-OP: operators with a `certified` OperatorCertification (fail-safe — if the cert store
+    # can't be read, no operator is treated as certified → uncertified ones block).
+    try:
+        from src.alpha_research.factor_library.operator_certification import OperatorCertStore
+        certified_ops = OperatorCertStore(rd["factor_registry_dir"]).certified_operators()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P-OP cert store read failed (fail-closed: none certified): %s", e)
+        certified_ops = frozenset()
+    # F11 linkage ledger + F3 reverse-stamp: a factor that has an active CohortFactorLinkageStore
+    # entry OR a factor_master replication_cohort_id stamp "claims CICC metadata" → _cohort_ceiling
+    # fails closed if it then resolves to != 1 manifest row (a dropped/forgotten link). Fail-safe:
+    # an unreadable ledger degrades to the factor_master stamp only, never to "not linked".
+    from src.alpha_research.factor_registry.replication_governance import CohortFactorLinkageStore
+    linkage_store = CohortFactorLinkageStore(rd["factor_registry_dir"])
+    try:
+        _active = linkage_store.active_links()
+        linked_ids = set(_active["factor_id"].astype(str).tolist()) if len(_active) else set()
+        # per-factor linked definition_hash (latest active link) for the F11 drift check
+        linked_hashes = ({str(r["factor_id"]): str(r.get("definition_hash") or "")
+                          for _, r in _active.iterrows()} if len(_active) else {})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("linkage ledger read failed (fail-safe: stamp-only): %s", e)
+        linked_ids, linked_hashes = set(), {}
+    if len(_cur) and "replication_cohort_id" in _cur.columns:
+        stamped = _cur[_cur["replication_cohort_id"].notna()]
+        if len(stamped):
+            stamped = stamped[stamped["replication_cohort_id"].astype("string").str.strip() != ""]
+            linked_ids |= set(stamped["factor_id"].astype(str).tolist())
+    oos_cal = _oos_trade_calendar() or None   # exact OOS quarantine (R1 F9); None → approximate
+    cohort_adj: dict[str, dict] = {}
+    refused: list[str] = []
+    cohort_errors: dict[str, str] = {}
+    for v in candidate_verdicts:
+        fid = str(v.get("factor", ""))
+        if not fid:
+            continue
+        try:
+            info = _cohort_ceiling(
+                fid, gate_universe, manifests=manifests, evidence_df=store.factor_evidence,
+                claim_store=claim_store, system_oos_start=system_oos_start,
+                current_definition_hash=def_hashes.get(fid, ""),
+                certified_operators=certified_ops,
+                trade_calendar=oos_cal, is_cohort_linked=(fid in linked_ids),
+                linked_definition_hash=linked_hashes.get(fid, ""),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("P-GATE adjudication FAILED for %s — refusing (fail-closed): %s", fid, e)
+            refused.append(fid)
+            cohort_errors[fid] = str(e)
+            continue
+        if info is not None:
+            cohort_adj[fid] = info
+            if info["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS:
+                refused.append(fid)
+
+    # F3 + F11: stamp the reverse cohort link + append a definition-hash-bound ledger event for
+    # every CONFIRMED cohort factor (==1 manifest match above). Done after adjudication so only
+    # genuine members are stamped; a future dropped manifest link then trips the is_cohort_linked
+    # fail-closed path. Non-fatal (the load-bearing governance record is persisted by F10 below);
+    # a stamp/ledger failure is logged, not promoted-around. The stamp is in-memory until store.save().
+    # GPT scale-review #4: linkage persistence is FATAL for confirmed cohort factors — a stamp/
+    # ledger write failure raises BEFORE any status write (a promoted factor without a durable link
+    # would defeat the future dropped-link fail-closed check). #3: drift already raised in
+    # _cohort_ceiling, so we never silently relink — append a `linked` event only for a NEW link
+    # (idempotent stamp always; no ledger churn for an unchanged existing link).
+    for fid, info in cohort_adj.items():
+        hb = str(getattr(info["row"], "handbook_id", "") or "")
+        store.set_replication_link(factor_id=fid, cohort_id=info["cohort_id"], handbook_id=hb)
+        if fid not in linked_ids:
+            linkage_store.record_linkage(
+                cohort_id=info["cohort_id"], factor_id=fid, handbook_id=hb,
+                definition_hash=def_hashes.get(fid, ""), event="linked",
+                notes=f"P-GATE registry_publish (universe={gate_universe})")
+
+    # F9-full: adjudicate every OTHER declared domain (active-claim universe != univ_all) the
+    # factor carries, persisting a governance record PER domain (resolve-but-label). Promotion is
+    # still decided by the univ_all primary; non-primary domains are recorded, not promoted.
+    extra_domain_adj: list[tuple] = []   # (fid, universe, info)
+    _claims_all = claim_store.claims()
+    if len(_claims_all):
+        for fid in cohort_adj:
+            doms = sorted({str(u) for u in _claims_all[
+                (_claims_all["factor_id"] == fid) & (_claims_all["status"] != "rejected_claim")
+            ]["universe_id"].tolist()} - {gate_universe})
+            for dom in doms:
+                try:
+                    di = _cohort_ceiling(
+                        fid, dom, manifests=manifests, evidence_df=store.factor_evidence,
+                        claim_store=claim_store, system_oos_start=system_oos_start,
+                        current_definition_hash=def_hashes.get(fid, ""),
+                        certified_operators=certified_ops, trade_calendar=oos_cal,
+                        is_cohort_linked=(fid in linked_ids),
+                        linked_definition_hash=linked_hashes.get(fid, ""))
+                except Exception as e:  # noqa: BLE001
+                    logger.error("F9-full per-domain adjudication failed for %s@%s: %s", fid, dom, e)
+                    continue
+                if di is not None:
+                    extra_domain_adj.append((fid, dom, di))
+
+    refused_set = set(refused)
+    to_promote = [v for v in candidate_verdicts if str(v.get("factor", "")) not in refused_set]
+
+    # F10: persist EVERY cohort factor's ReplicationGovernanceRecord BEFORE any status write.
+    # The upsert raises on a store failure, so no cohort candidate promotion is committed
+    # without its durable ceiling record (was previously persisted AFTER set_status).
+    if cohort_adj:
+        gov_store = ReplicationGovernanceStore(rd["factor_registry_dir"])
+        for fid, info in cohort_adj.items():
+            dec, row = info["decision"], info["row"]
+            gov_store.upsert(
+                cohort_id=info["cohort_id"], factor_id=fid,
+                factor_domain_claim_id=info["claim_id"] or f"{fid}:{gate_universe}",
+                replication_tier=row.replication_tier_planned,
+                active_cap_reasons=dec.active_cap_reasons,
+                oos_eligible_gates_met=dec.oos_eligible_gates_met,
+                cohort_denominator_membership=["formalization_candidate"],
+                truth_label_end=row.truth_table_label_end,
+                oos_quarantine_start=info.get("oos_quarantine_start", ""),
+                oos_quarantine_approximate=bool(info.get("oos_quarantine_approximate", False)),
+                notes=f"P-GATE adjudicated at registry_publish (universe={gate_universe})",
+            )
+        # F9-full: one governance record per OTHER declared domain (keyed by the per-domain claim).
+        for fid, dom, di in extra_domain_adj:
+            dec, row = di["decision"], di["row"]
+            gov_store.upsert(
+                cohort_id=di["cohort_id"], factor_id=fid,
+                factor_domain_claim_id=di["claim_id"] or f"{fid}:{dom}",
+                replication_tier=row.replication_tier_planned,
+                active_cap_reasons=dec.active_cap_reasons,
+                oos_eligible_gates_met=dec.oos_eligible_gates_met,
+                cohort_denominator_membership=["formalization_candidate"],
+                truth_label_end=row.truth_table_label_end,
+                oos_quarantine_start=di.get("oos_quarantine_start", ""),
+                oos_quarantine_approximate=bool(di.get("oos_quarantine_approximate", False)),
+                notes=f"P-GATE F9-full declared-domain adjudication (universe={dom})",
+            )
+
+    # Evidence (idempotent) for the promotable set, then the candidate status change.
     ev_report = store.record_lifecycle_evidence(
-        run_id=run_id, verdicts=candidate_verdicts, evidence_class=evidence_kind,
+        run_id=run_id, verdicts=to_promote, evidence_class=evidence_kind,
         source_run_dir=str(context.run_dir),
     )
     promoted: list[str] = []
-    for v in candidate_verdicts:
+    for v in to_promote:
         fid = str(v.get("factor", ""))
         if fid and fid in ev_report["attached"]:
             store.set_status(
@@ -434,6 +807,16 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
             promoted.append(fid)
     store.save()
 
+    # gate-readable governance summary for step_outputs (accurate `promoted` after the loop).
+    promoted_set = set(promoted)
+    governance = [
+        {"factor": fid, "universe": gate_universe,
+         "status_ceiling": info["decision"].status_ceiling,
+         "blocking_reasons": list(info["decision"].blocking_reasons),
+         "promoted": fid in promoted_set}
+        for fid, info in cohort_adj.items()
+    ]
+
     # produced_objects for orchestrator lineage (GPT PR-#34 review): the promoted factors,
     # recorded at lifecycle status `candidate` (never typed-registry `approved` artifacts).
     produced_objects = [
@@ -445,6 +828,17 @@ def handle_factor_lifecycle_registry_publish(context: StepExecutionContext) -> S
         "evidence_attached": ev_report["attached"],
         "promoted_to_candidate": sorted(promoted),
         "published": len(promoted),
+        # GPT R2 Finding-4: distinguish "the evidence producer never ran" from "real
+        # governance failure" so the operator knows which to fix.
+        "refused_by_missing_prerequisite": sorted(
+            fid for fid in cohort_adj
+            if "availability_audit_missing" in cohort_adj[fid]["decision"].blocking_reasons),
+        "refused_by_true_governance_cap": sorted(
+            fid for fid in cohort_adj
+            if cohort_adj[fid]["decision"].status_ceiling in _CANDIDATE_BLOCKED_CEILINGS
+            and "availability_audit_missing" not in cohort_adj[fid]["decision"].blocking_reasons),
+        "refused_by_adjudication_error": cohort_errors,
+        "replication_governance": governance,
         "skipped_drift": ev_report.get("skipped_drift", []),
         "skipped_unknown": ev_report.get("skipped_unknown", []),
         "produced_objects": produced_objects,

@@ -180,6 +180,59 @@ datasets:
       - $op_of_gr
       - $ebit_of_gr
       - $profit_to_gr
+      # Wave-3 (2026-06-09): 33 level indicators added after re-fetching
+      # fina_indicator_vip with the FULL 167-field set (field-parity audit found 58
+      # non-default fields were dropped because no `fields=` was passed). Materialized
+      # into provider build indicators_fields_20260609. Same ann_date-anchored
+      # fina_indicator_vip family + pipeline as the fields above. The 25 q_* single-
+      # quarter fields were INTENTIONALLY NOT added (we self-compute PIT-correct
+      # pit_* equivalents; the vendor q_* are not guaranteed PIT-safe). Coverage
+      # 45-99% (debt/coverage ratios are undefined for net-cash/financial firms →
+      # sub-universe factors, not a data defect). Predictive factors MUST Ref(...,1).
+      # See approvals/2026-06-09_indicators_level_indicators.yaml.
+      # turnover / efficiency
+      - $arturn_days
+      - $inv_turn
+      - $invturn_days
+      - $total_fa_trun
+      # solvency / coverage
+      - $cash_to_liqdebt
+      - $cash_to_liqdebt_withinterest
+      - $ebit_to_interest
+      - $ebitda_to_debt
+      - $longdebt_to_workingcapital
+      - $ocf_to_interestdebt
+      - $ocf_to_netdebt
+      - $op_to_debt
+      - $op_to_liqdebt
+      # cash quality
+      - $ocf_to_opincome
+      - $ocf_to_or
+      - $ocf_to_profit
+      - $salescash_to_or
+      # profitability structure / quality
+      - $dtprofit_to_profit
+      - $investincome_of_ebt
+      - $n_op_profit_of_ebt
+      - $nop_to_ebt
+      - $op_to_ebt
+      - $opincome_of_ebt
+      - $roe_avg
+      - $roic_yearly
+      - $tax_to_ebt
+      # other / niche
+      - $capitalized_to_da
+      - $daa
+      - $interst_income
+      - $non_op_profit
+      - $profit_prefin_exp
+      - $rd_exp
+      - $valuechange_income
+      # Phase-C (2026-06-24): single-quarter 扣非净利润 DERIVED from the indicators
+      # CUMULATIVE profit_dedt (derive_single_quarter_value). PIT-correct replacement for
+      # the unregistered vendor q_dtprofit_to_profit. coverage_tier=sub. q1..q4 stay
+      # unregistered until a factor needs them. See approvals/2026-06-24_profit_dedt_sq_to_approved.yaml.
+      - $profit_dedt_sq_q0
 
   reference:
     status: approved
@@ -225,9 +278,10 @@ datasets:
 
   hk_hold:
     status: approved
-    reason: "Northbound foreign-holding ratio ($ratio, hk_hold endpoint). Promoted quarantine->approved 2026-06-05 (approvals/2026-06-05_hk_hold_quarantine_to_approved.yaml). The raw mixes northbound A-share rows (exchange=SH/SZ, the wanted data) with southbound HK rows (exchange=HK); the staged backend filters to A-share ts_codes so the served $ratio is A-share-only (the earlier .HK 'contamination' flag was a mis-read of legitimate southbound rows). Served $ratio clean + parity-verified 2017-2025. COVERAGE CAVEAT: the 2026 tail (Jan-Feb) has no SH/SZ northbound rows — likely a genuine northbound-disclosure cutoff (~end-2025); negligible for research. PIT: end-of-day fact -> wrap $ratio in Ref(...,1)."
+    reason: "Northbound foreign-holding ratio ($ratio) + holding volume ($north_hold_vol), hk_hold endpoint. $ratio promoted quarantine->approved 2026-06-05 (approvals/2026-06-05_hk_hold_quarantine_to_approved.yaml). The raw mixes northbound A-share rows (exchange=SH/SZ, the wanted data) with southbound HK rows (exchange=HK); the staged backend filters to A-share ts_codes so the served fields are A-share-only (the earlier .HK 'contamination' flag was a mis-read of legitimate southbound rows). Served clean + parity-verified 2017-2025. PIT: end-of-day fact -> wrap fields in Ref(...,1). 2026-06-20: $north_hold_vol (持股数量/holding shares; raw `vol` renamed via NORTHBOUND_RENAMES so it does not shadow kline $vol; bin already materialized) registered approved (approvals/2026-06-20_north_hold_vol_to_approved.yaml) for the CICC E1g VWAP-based holding-VALUE factors. CORRECTION (doc 188): $ratio is % of ISSUED shares (占已发行股份百分比), NOT free-float — close to but not exact to CICC's 流通股本 wording. Daily northbound stopped 2024-08-20 (quarterly after); daily series effectively 2017..2024-08."
     fields:
       - $ratio
+      - $north_hold_vol
 
   margin_detail:
     status: approved
@@ -253,6 +307,12 @@ datasets:
       - $up_limit
       - $down_limit
 
+  limit_status:
+    status: approved
+    reason: "DERIVED tri-state limit-day flag (+1 close>=up_limit, -1 close<=down_limit, 0 normal, NaN suspended/no-limit), materialized in the provider build (PITBackend._materialize_derived_limit_status / shared compute_limit_status) from RAW $close vs RAW $up_limit/$down_limit and backfilled into the live provider 2026-06-17 (scripts/backfill_limit_status.py; future builds maintain it via the wired step). Basis-correct by construction (all three inputs raw, same day, half-fen tolerance) so no factor re-derives the raw/adjusted limit basis inline. Verified 2026-06-17: 5748 symbols, 0 misaligned, limit-day rate 2.69% (up 250929 / down 133585 / normal 13.9M); served through Qlib the definition holds 100% ($close>=$up_limit on every +1 row, $close<=$down_limit on every -1 row, 0 normal rows at a limit), value domain {-1,0,1,NaN}. Single certified source for limit-day exclusion across the price-volume factor wave (E1b 剔除涨跌停日 / mmt_off_limit). Same-day-CLOSE knowable (uses close, unlike session-open $up_limit/$down_limit) -> predictive factors MUST wrap in Ref(...,1). Approval: config/field_registry/approvals/2026-06-17_limit_status_derived_to_approved.yaml."
+    fields:
+      - $limit_status
+
   # PR 9a (2026-05-27): stk_holdertrade is an alpha endpoint bootstrapped
   # 2026-04-15/16 alongside top_list/top_inst/block_trade/cyq_perf. Unlike
   # the others it has a custom aggregator (`_materialize_stk_holdertrade`)
@@ -260,12 +320,21 @@ datasets:
   # Same `pending_review` status as its sibling alpha endpoints.
   stk_holdertrade:
     status: approved
-    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): 168,024 holder-event rows 2008-2026, in_de split DE 124,982 / IN 43,042 (sensible). PROPERLY PIT-anchored — the ledger carries ann_date + disclosure_date + effective_date (effective_date is the visibility anchor), unlike the daily endpoints. Still wrap in Ref(...,1) as hygiene + apply staleness/decay (sparse holder events)."
+    reason: "Tushare stk_holdertrade aggregator (`_materialize_stk_holdertrade`). Emits bare-named summary columns. Promoted pending_review->approved 2026-06-04 (approvals/2026-06-04_alpha_endpoints_batch_to_approved.yaml; review: diag_sparse_event_review.py): 168,024 holder-event rows 2008-2026, in_de split DE 124,982 / IN 43,042 (sensible). PROPERLY PIT-anchored — the ledger carries ann_date + disclosure_date + effective_date (effective_date is the visibility anchor), unlike the daily endpoints. Still wrap in Ref(...,1) as hygiene + apply staleness/decay (sparse holder events). 2026-06-24: added 高管(holder_type=G,董监高) DIRECTIONAL per-day aggregates holdertrade_mgr_{in,de}_{vol,amount,events,ratio} (果仁-style 高管过去N日增持/减持 via NaN-skipping Sum(...,N)) via the testable module fn aggregate_directional_holdertrade; amount=Σ(|change_vol|·avg_price) over PRICED events only (min_count=1 -> all-unpriced day=NaN not 0; partial=lower bound; avg_price ~71% cov); vol/ratio/events complete. change_vol/change_ratio non-negative (data-audit canary: 0 negatives in 168,024 rows). Provider build phase1_qfields_holdertrade_v2_20260624. GPT R1(REVISE: amount false-zero)->R2 SHIP. approvals/2026-06-24_stk_holdertrade_mgr_directional_to_approved.yaml."
     fields:
       - $holdertrade_net_vol
       - $holdertrade_gross_vol
       - $holdertrade_net_ratio
       - $holdertrade_events
+      # 2026-06-24: 高管(G) directional — 果仁-style 高管过去N日增持/减持 signals (Sum(...,N))
+      - $holdertrade_mgr_in_vol
+      - $holdertrade_mgr_in_amount
+      - $holdertrade_mgr_in_ratio
+      - $holdertrade_mgr_in_events
+      - $holdertrade_mgr_de_vol
+      - $holdertrade_mgr_de_amount
+      - $holdertrade_mgr_de_ratio
+      - $holdertrade_mgr_de_events
 
   # ─── Pending review: event-like daily endpoints (post-2026-04-20 namespacing) ──
   top_list:
@@ -292,12 +361,54 @@ datasets:
     field_prefixes:
       - $cyq_perf__
 
-  # ─── Quarantine: report_rc analyst-forecast event-flow primitives (P1, 2026-06-08) ──
+  # ─── Approved: report_rc analyst-forecast event-flow primitives (P1, 2026-06-08; EXPLICIT fields R3-B1
+  #     2026-06-27 — the $report_rc__ PREFIX was dropped so a new $report_rc__* name is NOT auto-approved) ──
   report_rc:
     status: approved
-    reason: "Analyst-forecast (report_rc) event-flow primitives. Promoted quarantine->approved 2026-06-09 (config/field_registry/approvals/2026-06-09_report_rc_quarantine_to_approved.yaml); served by provider report_rc_incr_20260608. Materialized by pit_backend._materialize_report_rc_consensus from the report_rc PIT ledger; effective_date anchors on report_date+1 (strictly_next_open): a CONTEMPORANEOUS create_time (gap<=REPORT_RC_BACKFILL_GAP_DAYS=45 cal days) -> max(report_date,create_time); a bulk-backfill stamp (gap>45 — the 2022-05 stamp on 2010-2021 reports) OR missing create_time -> report_date+REPORT_RC_VENDOR_LAG_OPEN_DAYS(=2) open days. report_date+1 VALIDATED market-wide vs JoinQuant genuine-PIT 朝阳永续 consensus (REPORT_RC_PIT_ANCHOR_VALIDATION.md: level corr +0.997, broad per-date Spearman +0.94, holds small-cap+delisted; forecast-error parity reproduces 2015/2017 regime sign-flips with Tushare LESS accurate than the oracle = no lookahead). Evidence: ~2.1k-3.5k covered stocks/yr 2010-2026 (CAP-TILTED -> rank within-coverage + size-neutralize hard), value-sanity clean (eps_up/dn>=0, revision_count==up+dn on every event row, n_active 0-72, 0 negatives), test-covered byte-determinism. Fields: $report_rc__eps_up / $report_rc__eps_dn / $report_rc__eps_revision_count / $report_rc__n_active_analysts. PIT: events anchored at report_date+1 (effective_date); predictive factors MUST additionally wrap every field in Ref(...,1). OUTSTANDING (recorded in the approval YAML, NOT discharged): the breadth restatement canary (2026-06-15) is a HARD gate before the eps_diffusion sealed-OOS — a FAIL re-quarantines."
-    field_prefixes:
-      - $report_rc__
+    reason: "Analyst-forecast (report_rc) event-flow primitives. Promoted quarantine->approved 2026-06-09 (config/field_registry/approvals/2026-06-09_report_rc_quarantine_to_approved.yaml); served by provider report_rc_incr_20260608. Materialized by pit_backend._materialize_report_rc_consensus from the report_rc PIT ledger; effective_date anchors on report_date+1 (strictly_next_open): a CONTEMPORANEOUS create_time (gap<=REPORT_RC_BACKFILL_GAP_DAYS=45 cal days) -> max(report_date,create_time); a bulk-backfill stamp (gap>45 — the 2022-05 stamp on 2010-2021 reports) OR missing create_time -> report_date+REPORT_RC_VENDOR_LAG_OPEN_DAYS(=2) open days. report_date+1 VALIDATED market-wide vs JoinQuant genuine-PIT 朝阳永续 consensus (REPORT_RC_PIT_ANCHOR_VALIDATION.md: level corr +0.997, broad per-date Spearman +0.94, holds small-cap+delisted; forecast-error parity reproduces 2015/2017 regime sign-flips with Tushare LESS accurate than the oracle = no lookahead). Evidence: ~2.1k-3.5k covered stocks/yr 2010-2026 (CAP-TILTED -> rank within-coverage + size-neutralize hard), value-sanity clean (eps_up/dn>=0, revision_count==up+dn on every event row, n_active 0-72, 0 negatives), test-covered byte-determinism. Fields: $report_rc__eps_up / $report_rc__eps_dn / $report_rc__eps_revision_count / $report_rc__n_active_analysts. PIT: events anchored at report_date+1 (effective_date); predictive factors MUST additionally wrap every field in Ref(...,1). CANARY DISCHARGED 2026-06-14/15 (verdict FAIL -> eps_diffusion factors revoked, report_rc FIELDS kept approved): the breadth restatement canary RAN (report_rc_backfill_canary.py, SNAP1 2026-06-07 vs SNAP2 2026-06-14) and did NOT pass the literal '0 backfilled + 0 drift' bar (138 genuine backfilled + 0 drift + 26 restatement) — but the backfill is ALREADY handled by the deployed create_time/+2-open-day provider anchor (validated no-lookahead by the buffer sweep + create_time p99=2cal), so the report_rc * FIELDS STAY approved (consensus level/count PIT validated market-wide; whole-family re-quarantine would be over-broad). Only the breadth second-difference (eps_diffusion) carried the residual (restatement not re-dated + suspiciously-high gross LS Sharpe 7.24) -> earn_eps_diffusion_60/_120 REVOKED approved->candidate (factor_registry, 2026-06-15). See the approval YAML outstanding_gate (status: discharged_fail) + project_state 2026-06-14/15."
+    fields:
+      - $report_rc__eps_up
+      - $report_rc__eps_dn
+      - $report_rc__eps_revision_count
+      - $report_rc__n_active_analysts
+
+  # ─── Quarantine: report_rc CONSENSUS + RATING aggregates (2026-06-27; GPT §10 R1→R4 SHIP; 5 single-field entries, R3-M2) ──
+  # report_rc = Tushare 卖方研报 — a DIFFERENT vendor than 果仁's 朝阳永续 → APPROXIMATE consensus, NOT penny-parity.
+  # Materialized by pit_backend._materialize_report_rc_aggregates (P3 landed, commit ccf1767). QUARANTINE per field until the
+  # STANDING field-level restatement OUTPUT canary (re-materialize+diff, 0-retroactive-drift, bound to
+  # provider_build_id, fail-closed in run_daily_qa) passes. Predictive use MUST Ref(...,1) + recency (sub-universe).
+  report_rc_np_fy1:
+    status: quarantine
+    reason: "果仁 预期净利润1年: MEDIAN over normalized_org_id of each org's latest active (0<=p-effective_pos<=120 open-day TTL) annual (quarter YYYYQ4) np forecast for FY1 = (latest income-annual FY disclosed as-of d)+1 (万元). VENDOR-APPROXIMATE (Tushare report_rc vs 果仁 朝阳永续). Quarantine until the standing output canary passes 0-retroactive-drift; Ref(...,1)+recency."
+    fields:
+      - $report_rc__np_fy1
+  report_rc_op_rt_fy1:
+    status: quarantine
+    reason: "果仁 预期营收1年: MEDIAN over normalized_org_id of each org's latest active annual op_rt forecast for FY1 (万元). VENDOR-APPROXIMATE. Quarantine until the standing output canary passes 0-retroactive-drift; Ref(...,1)+recency."
+    fields:
+      - $report_rc__op_rt_fy1
+  report_rc_n_active_orgs:
+    status: quarantine
+    reason: "果仁 评级机构数: # distinct normalized_org_id with a REAL (non-'无') rating active within the 120-open-day TTL. VENDOR-APPROXIMATE. Quarantine until the standing output canary passes 0-retroactive-drift; Ref(...,1)+recency."
+    fields:
+      - $report_rc__n_active_orgs
+  report_rc_rating_up:
+    status: quarantine
+    reason: "果仁 评级调高家数: # distinct orgs whose current direction-state (latest rating-change, supersede-on-every-report state machine) is an UPGRADE, within a PRE-REGISTERED RATING_CHANGE_WINDOW_OPEN_DAYS=120 window (any other window = a NEW field, not this one). VENDOR-APPROXIMATE; change-state is breadth-adjacent → ANY canary drift FAILS. Quarantine until the standing output canary passes 0-retroactive-drift; Ref(...,1)+recency."
+    fields:
+      - $report_rc__rating_up
+  report_rc_rating_dn:
+    status: quarantine
+    reason: "Rating DOWNGRADE count (symmetry/diagnostic for rating_up; same PRE-REGISTERED 120-open-day window + supersede-on-every-report state machine). VENDOR-APPROXIMATE; ANY canary drift FAILS. Quarantine until the standing output canary passes 0-retroactive-drift; Ref(...,1)+recency."
+    fields:
+      - $report_rc__rating_dn
+
+  # ─── Approved: 业绩预告 (earnings-forecast) single-quarter net-profit YoY (rung-3, 2026-06-23) ──
+  forecast:
+    status: approved
+    reason: "业绩预告 (company earnings-forecast) single-quarter net-profit YoY growth = the 果仁 业绩预告净利润QGr%PYQ_v1 factor. Materialized by pit_backend._materialize_forecast_growth (a CROSS-LEDGER materializer joining the forecast ledger with the income ledger), served by provider build 20260623_004545 (published 2026-06-23 by atomic swap; old provider backed up at data/qlib_data.bak_20260623_004545). CONSTRUCTION: the latest visible 业绩预告 midpoint (net_profit_min/max, 万元) for fiscal quarter Q minus the visible cumulative income through Q-1 = the forecast's last single quarter; over the prior-year same single quarter (income_cum[FY-1,Q]-income_cum[FY-1,Q-1]). PIT: BOTH the forecast and the income anchor on effective_date = strict next-open after disclosure (§3.2); the income as-of lookup respects restatement timing (restatement canary 200/200: as-of returns OLD before / NEW on the restatement effective_date — no lookahead). CARRY: a step function recomputed at each forecast/income event; it carries the CURRENT latest COMPUTABLE forecast with NO TTL, but when a newer visible forecast is NOT yet computable (its required income not visible) it serves NaN — it does NOT stale-carry the prior (GPT R1 Blocker-1). VALIDATION vs 果仁 (full-market provider-read at the EXACT decision date, _provider_read_audit_forecast.py): 38,399 finite-served holdings match median rel-err 4.37e-05 / 92.9% within 1% / 98.2% sign, plus a clean 2.2% NaN COVERAGE gap (NaN where the latest forecast is not strictly PIT-computable — NOT carry-recoverable; a different reference-platform edge-case alignment). COVERAGE: SPARSE forecast-issuer SUB-UNIVERSE only (~1,927 stocks 2014 -> ~4,978 2026); served NaN is MEANINGFUL (no forecast coverage OR latest-forecast-incomputable), NOT an error. Non-issuers return no rows (standard Qlib sub-universe; consumers reindex -> NaN). CONSUMER RULE: formal/predictive factors MUST wrap every field in Ref(...,1) AND gate on non-null + forecast recency; NO implicit forward-fill to chase 果仁 parity. GPT 5.5 Pro cross-review R1->R4 = SHIP (B1 stale-carry, M1 same-effective-date tie-break, M2 restatement canary + full-market provider-read, all folded). Approval: config/field_registry/approvals/2026-06-23_forecast_np_q_yoy_to_approved.yaml."
+    fields:
+      - $forecast__np_q_yoy
 
   # ─── Approved: statement line-items (Wave-1 promotion 2026-05-31) ────────────
   # The income / balancesheet / cashflow STATEMENT FAMILIES anchor visibility on
@@ -316,18 +427,22 @@ datasets:
   #   config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
   income:
     status: approved
-    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml."
+    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml. 2026-06-24 (Phase-B): added admin_exp/fin_exp/sell_exp/total_cogs/total_profit _sq_q0 + the revenue/n_income_attr_p _sq_q1 slots — same family/anchoring/pipeline, value-parity-validated vs the vendor q_* (admin/fin/sell penny-exact via rung-5 CoreProfitQ vs 果仁; total_cogs/total_profit via the Phase-B q_op_to_gr/q_opincome MATCH, _phaseb_qstar_parity_audit.py). Unlocks the Phase-B single-quarter factors. See approvals/2026-06-24_income_phaseb_sq_to_approved.yaml."
     fields:
+      - $admin_exp_sq_q0
       - $ebit_sq_q0
       - $ebit_sq_q1
       - $ebit_sq_q2
       - $ebit_sq_q3
+      - $fin_exp_sq_q0
       - $n_income_attr_p_sq_q0
+      - $n_income_attr_p_sq_q1
       - $n_income_attr_p_sq_q4
       - $n_income_sq_q0
       - $n_income_sq_q1
       - $n_income_sq_q2
       - $n_income_sq_q3
+      - $n_income_sq_q4
       - $oper_cost_sq_q0
       - $oper_cost_sq_q1
       - $oper_cost_sq_q2
@@ -337,7 +452,11 @@ datasets:
       - $operate_profit_sq_q4
       - $rd_exp_sq_q0
       - $revenue_sq_q0
+      - $revenue_sq_q1
       - $revenue_sq_q4
+      - $sell_exp_sq_q0
+      - $total_cogs_sq_q0
+      - $total_profit_sq_q0
       - $total_revenue_sq_q0
       - $total_revenue_sq_q1
       - $total_revenue_sq_q2
@@ -348,22 +467,32 @@ datasets:
     status: approved
     reason: "Tushare balance-sheet line-items (period-end _q* snapshots). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
     fields:
+      - $accounts_pay_q0
+      - $accounts_pay_q1
       - $accounts_receiv_q0
       - $accounts_receiv_q4
       - $goodwill_q0
       - $inventories_q0
+      - $inventories_q1
       - $inventories_q4
       - $lt_borr_q0
       - $money_cap_q0
+      - $money_cap_q1
       - $retained_earnings_q0
       - $st_borr_q0
       - $total_assets_q0
+      - $total_assets_q1
       - $total_assets_q4
       - $total_cur_assets_q0
+      - $total_cur_assets_q1
       - $total_cur_assets_q4
       - $total_cur_liab_q0
+      - $total_cur_liab_q1
       - $total_cur_liab_q4
+      - $total_hldr_eqy_inc_min_int_q0
+      - $total_hldr_eqy_inc_min_int_q1
       - $total_liab_q0
+      - $total_liab_q1
       - $total_liab_q4
 
   cashflow:
@@ -382,3 +511,11 @@ datasets:
       - $n_cashflow_act_sq_q1
       - $n_cashflow_act_sq_q2
       - $n_cashflow_act_sq_q3
+      - $n_cashflow_act_sq_q4
+
+  quality_stability:
+    status: approved
+    reason: "果仁 #59 Comp_Core_Quality earnings-STABILITY factors. $roe_core_stab_12q = STDEVQ(RoeCoreQ,12) (population stdev, ddof=0, of single-quarter core-profit ROE over the trailing 12 report quarters); $sales_gr_stab_12q = STDEVQ(SalesQGr%PY,12) (stdev of the slot-aligned single-quarter revenue YoY growth, q-4 = 4 REPORT slots back). DERIVED cross-quarter from the approved income + balancesheet + income_quarterly PIT ledgers via the custom materializer StagedQlibBackendBuilder._materialize_quality_stability — REUSES the proven single-quarter kernel (materialize_canonical_quarter_segments direct-quarter precedence + cumulative fallback, restatement-safe derive_single_quarter_value) + the snapshot-visibility kernel for equity (total_hldr_eqy_exc_min_int); NOT expressible from the q0..q4 _sq slots (needs 12-quarter depth). PIT: as-of/restatement-aware (effective_date>disclosure STRICT, §3.2), standard-fiscal-end prefilter (03-31/06-30/09-30/12-31), >=8-of-12-finite gate. coverage_tier=sub (needs ~3yr history -> per-day cov ~0.71-0.72; per-stock 0.945/0.952). Predictive factors MUST wrap in Ref(...,1) + gate on non-null/recency. Added IN-PLACE to the live provider 2026-06-25 (workspace/scripts/_publish_stability_inplace.py — purely additive, 2 new bins/dir, existing bins untouched by construction; base provider phasec_profit_dedt_sq_20260624 NOT rotated). Validated BIT-FAITHFUL vs the rung-6 deepslot truth f9/f10 (median rel-err 0.0 FULL universe, within-1% 0.986/0.999, n~2M; _verify_stability_live.py) -> reproduces the +14.3pp #59 holdings-overlap (21.6->35.9%) + backtest convergence to 果仁. Canaries tests/data_infra/test_quality_stability_materializer.py (7). GPT R1(REVISE)->R2 SHIP. See approvals/2026-06-25_quality_stability_to_approved.yaml."
+    fields:
+      - $roe_core_stab_12q
+      - $sales_gr_stab_12q

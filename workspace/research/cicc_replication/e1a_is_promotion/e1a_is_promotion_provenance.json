@@ -1,0 +1,62 @@
+{
+  "run_id": "e1a_is_candidate_2010_2020",
+  "generated_at": "2026-06-17T21:13:09",
+  "live": true,
+  "evidence_class": "a_priori",
+  "mechanism": "matrix-reuse (resign pattern): 2010-2020 univ_all run_is_walk_forward(factor_origin='a_priori') from unified_eval_matrix, bit-identical to the orchestrator candidate gate (1e-15, 2026-06-10); rows validated for corrected ESTU_STYLE_V1 native Layer-1 identity (schema+layer1_hash+scope+window).",
+  "gate_authorization": "User authorized 'promote all 3 IS-passers' (AskUserQuestion 2026-06-17). Writing formal_evidence_eligible=True + set_status(candidate) IS the human gate.",
+  "oos_status": "a_priori IS-selection on 2010-2020 only; 2021+ is UNBURNED/sealed for a future candidate->approved step (NOT oos_informed_backfill).",
+  "hardening_guards": [
+    "assign_candidate_status(field_ok)",
+    "all-or-none attach",
+    "matrix-row identity (ESTU_STYLE_V1 native 2010-2020)",
+    "pre-status==draft"
+  ],
+  "non_independence_caveats": {
+    "mmt_discrete_20d": "rev_up_down_ratio_20d"
+  },
+  "promoted": [
+    "mmt_route_20d",
+    "mmt_route_250d",
+    "mmt_discrete_20d"
+  ],
+  "blocked": [],
+  "verdicts": [
+    {
+      "factor": "mmt_route_20d",
+      "heldout_rank_icir": -0.35431976498109774,
+      "sign_consistency": 1.0,
+      "expected_direction": "inverse",
+      "field_ok": true,
+      "rule_reason": "IS-heldout stable (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.354, sign-consistency=1.00)",
+      "near_duplicate_of": null
+    },
+    {
+      "factor": "mmt_route_250d",
+      "heldout_rank_icir": -0.18907058333493013,
+      "sign_consistency": 0.7272727272727273,
+      "expected_direction": "inverse",
+      "field_ok": true,
+      "rule_reason": "IS-heldout stable (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.189, sign-consistency=0.73)",
+      "near_duplicate_of": null
+    },
+    {
+      "factor": "mmt_discrete_20d",
+      "heldout_rank_icir": -0.1432309574396927,
+      "sign_consistency": 0.8181818181818182,
+      "expected_direction": "inverse",
+      "field_ok": true,
+      "rule_reason": "IS-heldout stable (a_priori_2010_2020_matrix_reuse: heldout ICIR=-0.143, sign-consistency=0.82)",
+      "near_duplicate_of": "rev_up_down_ratio_20d"
+    }
+  ],
+  "recorder_result": {
+    "attached": [
+      "mmt_discrete_20d",
+      "mmt_route_20d",
+      "mmt_route_250d"
+    ],
+    "skipped_drift": [],
+    "skipped_unknown": []
+  }
+}

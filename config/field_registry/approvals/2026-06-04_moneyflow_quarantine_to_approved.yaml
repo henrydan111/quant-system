@@ -21,7 +21,7 @@ related_findings_id: null
 # Bind to the exact provider build + calendar policy the on-disk review ran
 # against (PR 10 contract). A future rebuild with different ids fails the
 # daily-QA approval_evidence_binding check until the evidence is re-verified.
-provider_build_id: report_rc_incr_20260608
+provider_build_id: "depth9_20260630"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

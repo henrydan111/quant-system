@@ -1,0 +1,82 @@
+# Field-registry approval evidence (2026-06-25)
+#
+# Registers the 2 果仁 #59 Comp_Core_Quality earnings-STABILITY factors as new provider fields:
+#   $roe_core_stab_12q  = STDEVQ(RoeCoreQ, 12)     — pop stdev of single-quarter core-profit ROE, trailing 12 report quarters
+#   $sales_gr_stab_12q  = STDEVQ(SalesQGr%PY, 12)  — pop stdev of slot-aligned single-quarter revenue YoY growth
+# DERIVED cross-quarter from the approved income + balancesheet + income_quarterly PIT ledgers (custom
+# materializer _materialize_quality_stability). These are the 2 factors PROVEN (果仁 rung-6) to be the
+# dominant cause of the #59 holdings-overlap gap: adding them lifts overlap 21.6%->35.9% (+14.3pp) and
+# converges the event-driven backtest to 果仁 (annual 25.3->21.4% vs 22.56; vol 27.1->25.7 vs 26.71). A
+# FORMAL 11-factor #59 StrategyCandidate (Phase D) needs them in the live provider — they were previously
+# only in a deleted scoped deep-slot build.
+
+approval_id: 2026-06-25_quality_stability_to_approved
+date: 2026-06-25
+dataset_id: quality_stability
+source_endpoint: "derived (tushare.income + tushare.balancesheet + tushare.income_quarterly PIT ledgers)"
+from_status: unregistered       # new derived family — first registration
+to_status: approved
+reviewer: henrydan111
+related_pr: report-rc-registration / 果仁 rung-6 (Comp_Core_Quality #59)
+related_findings_id: null
+
+# Bound to the LIVE provider the fields were added into. The in-place additive publish
+# (_publish_stability_inplace.py) did NOT rotate the base build (purely additive: only the 2 new bin
+# filenames are written per dir, existing bins untouched by construction) -> binds to the current live
+# provider_build_id. Provenance: workspace/outputs/guorn_parity/quality_stability_inplace_provenance.json
+# (PRE/POST bin counts proving additive + the full-universe parity vs the deepslot truth).
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+# Source/derivation classification:
+source_dataset: quality_stability
+source_class: derived_cross_quarter_stdev   # trailing-12-quarter population stdev of single-quarter RoeCoreQ / revenue-growth
+coverage_tier: sub                          # needs ~3yr history -> per-day cov ~0.71-0.72 (per-stock 0.945/0.952)
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+fields:
+  - $roe_core_stab_12q
+  - $sales_gr_stab_12q
+
+# ── Definitions / derivation / PIT ──
+# RoeCoreQ(q)    = CoreProfit_sq(q) / equity(q);  CoreProfit_sq = revenue_sq − oper_cost_sq −
+#                  (admin_exp+sell_exp+fin_exp)_sq − biz_tax_surchg_sq;  equity = total_hldr_eqy_exc_min_int
+#                  (balance-sheet point snapshot, 归母净资产 excl. minority interest).
+# SalesQGr%PY(q) = (revenue_sq(q) − revenue_sq(q−4)) / |revenue_sq(q)|  — slot-aligned: q−4 = 4 REPORT slots
+#                  back (matches the provider _sq_q{i} convention the factor was validated against), NOT a calendar year.
+# Output         = POPULATION stdev (ddof=0) over the 12 most-recent report-quarter slots known AS-OF the day;
+#                  >=8 of 12 must be finite (else NaN).
+# Single-quarter slots come from the PROVEN kernel materialize_canonical_quarter_segments (direct-quarter
+# precedence via income_quarterly + cumulative fallback, restatement-safe derive_single_quarter_value) — the
+# SAME path the approved _sq_q* slots use; equity from materialize_visibility_segments. As-of/restatement-aware
+# (effective_date>disclosure STRICT, §3.2); PREFILTERS to standard fiscal quarter-ends so an irregular end_date
+# can't be mis-slotted. Predictive factors MUST wrap $roe_core_stab_12q/$sales_gr_stab_12q in Ref(...,1).
+#
+# ── Validation ──
+# - Canaries: tests/data_infra/test_quality_stability_materializer.py (7: >=8-finite, no-future-leak,
+#   restatement-recompute, irregular-end-excluded, slot-aligned q−4, field_filter-honored, exact hand-calc value).
+#   33 data_infra tests pass (canaries + core PIT backend, no regression).
+# - BIT-FAITHFUL parity vs the rung-6 deepslot truth f9 (RoeCoreQ-stab) / f10 (SalesGr-stab) — the independent
+#   slot_depth=16 reference the +14.3pp ablation was measured on — over the LIVE provider, FULL universe:
+#     $roe_core_stab_12q vs f9:   n=1,991,553  median_relerr=0.0  within-1%=0.986  cov 0.715 vs 0.739
+#     $sales_gr_stab_12q vs f10:  n=1,979,352  median_relerr=0.0  within-1%=0.999  cov 0.711 vs 0.725
+#   (workspace/scripts/_verify_stability_live.py — VERDICT PASS). median=0.0 ⇒ identical where both defined;
+#   the ~2-3pp lower live coverage is the float32/equity-snapshot edge (negligible).
+# - Strategy evidence: 果仁 #59 holdings-overlap 21.6%->35.9% (+14.3pp; --drop-stab reproduces 21.6% exactly)
+#   + event-driven backtest convergence to 果仁 (GUORN_HARNESS_59_PLAN.md Phase C).
+# - Additive integrity: PRE bin-counts {0,0} -> POST {5440,5476} of 5755 dirs (purely additive; only the 2 new
+#   filenames written). Provenance: workspace/outputs/guorn_parity/quality_stability_inplace_provenance.json.
+#
+# GPT cross-review: R1 REVISE (field_filter honor + canary tests + deterministic canonicalize) -> all folded ->
+# R2 SHIP (PIT/no-lookahead strictly clean; single-quarter derivation correct + restatement-consistent;
+# slot-aligned q−4 correct; ddof=0 + >=8-of-12 threshold appropriate; units dimensionless/safe).
+#
+# Unlocks: the FORMAL 11-factor 果仁 #59 Comp_Core_Quality StrategyCandidate (Phase D).

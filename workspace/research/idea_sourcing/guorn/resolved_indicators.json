@@ -1,0 +1,3778 @@
+{
+  "n_named": 195,
+  "n_custom": 99,
+  "n_builtin_table": 14,
+  "n_builtin_prose_or_field": 82,
+  "used_functions": [
+    "abs",
+    "accuq",
+    "and",
+    "annual",
+    "avgq",
+    "corr",
+    "greater",
+    "havg",
+    "hneutralize",
+    "hneutralizemi",
+    "hpercentrank",
+    "hrank",
+    "hstdev",
+    "hwinsorize",
+    "if",
+    "ifnull",
+    "klast",
+    "less",
+    "ln",
+    "log",
+    "ma",
+    "max",
+    "min",
+    "mod",
+    "or",
+    "rank",
+    "ref",
+    "refq",
+    "savg",
+    "skewness",
+    "slopexy",
+    "smed",
+    "square",
+    "sslopexy",
+    "stdev",
+    "stdevm",
+    "stdevq",
+    "sum",
+    "sumq",
+    "ticker",
+    "timing",
+    "ttm",
+    "wma"
+  ],
+  "resolved": [
+    {
+      "token": "总市值",
+      "base": "总市值",
+      "count": 29,
+      "n_strategies": 23,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "CoreProfitQGr%PY",
+      "base": "CoreProfitQGr%PY",
+      "count": 23,
+      "n_strategies": 22,
+      "kind": "custom",
+      "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))",
+      "unit": "百分数  /  2 位小数",
+      "note": "核心利润同比\n",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "CoreProfitQ"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        }
+      ]
+    },
+    {
+      "token": "未来20日新增流通股占比",
+      "base": "未来20日新增流通股占比",
+      "count": 23,
+      "n_strategies": 23,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "ROETTMDiffPQ",
+      "base": "ROETTMDiffPQ",
+      "count": 20,
+      "n_strategies": 20,
+      "kind": "custom",
+      "expr": "净资产收益率-RefQ(净资产收益率,1)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "净资产收益率"
+      ],
+      "dep_fields": [],
+      "expansion": []
+    },
+    {
+      "token": "上市天数",
+      "base": "上市天数",
+      "count": 19,
+      "n_strategies": 19,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "EpsExclXorQGr%PY",
+      "base": "EpsExclXorQGr%PY",
+      "count": 18,
+      "n_strategies": 18,
+      "kind": "custom",
+      "expr": "(refq(EpsExclXorQ,0)-refq(EpsExclXorQ,4))/abs(refq(EpsExclXorQ,4))",
+      "unit": "百分数  /  2 位小数",
+      "note": "每股收益扣非Q同比",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "EpsExclXorQ"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "EpsExclXorQ",
+          "expr": "IfNULL(refq(扣非净利润(单季),0),refq(归属于母公司所有者的净利润(单季),0))/refq(总股本,0)"
+        }
+      ]
+    },
+    {
+      "token": "基础过滤_退市风险_v1(2)",
+      "base": "基础过滤_退市风险_v1",
+      "count": 16,
+      "n_strategies": 16,
+      "kind": "custom",
+      "expr": "OR(收盘价<{0},sum(预期ST2021,30)>0,sum(果仁风险预警25版,30)>0,过去N日重大违规数量(30)>0)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "基础过滤_退市风险_v1=0, 用于筛选条件\n基础过滤_退市风险_v1，直接用于卖出条件",
+      "dep_funcs": [
+        "or",
+        "sum"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "收盘价",
+        "果仁风险预警25版",
+        "模板参数",
+        "过去N日重大违规数量",
+        "预期ST2021",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "GrossProfit%AssetsQ",
+      "base": "GrossProfit%AssetsQ",
+      "count": 15,
+      "n_strategies": 15,
+      "kind": "custom",
+      "expr": "(营业收入(单季度)- 营业成本(单季度))/资产总计(单季)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "单季度",
+        "营业成本",
+        "营业收入",
+        "资产总计"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "BP筹资市值比调整",
+      "base": "BP筹资市值比调整",
+      "count": 14,
+      "n_strategies": 14,
+      "kind": "custom",
+      "expr": "HNeutralize(hpercentrank(BP,1,0),hpercentrank(SumQ(筹资活动现金流入小计(单季),4)/总市值,1,0),0)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "hpercentrank",
+        "sumq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "BP"
+      ],
+      "dep_fields": [
+        "总市值",
+        "筹资活动现金流入小计"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "无",
+      "base": "无",
+      "count": 14,
+      "n_strategies": 14,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "5日平均成交额",
+      "base": "5日平均成交额",
+      "count": 13,
+      "n_strategies": 13,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "20日平均成交额",
+      "base": "20日平均成交额",
+      "count": 11,
+      "n_strategies": 11,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "过去N日重大违规数量(30)",
+      "base": "过去N日重大违规数量",
+      "count": 11,
+      "n_strategies": 11,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "业绩预告净利润QGr%PYQ_v1",
+      "base": "业绩预告净利润QGr%PYQ_v1",
+      "count": 10,
+      "n_strategies": 10,
+      "kind": "custom",
+      "expr": "(业绩预告净利润Q_v1-refQ(净利润(单季),3))/abs(refQ(净利润(单季),3))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "业绩预告净利润Q_v1"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润"
+      ],
+      "expansion": [
+        {
+          "name": "业绩预告净利润Q_v1",
+          "expr": "if(mod(预告季度ID-1,4)+1=1, (预计累计净利润上限+预计累计净利润下限)/2, (预计累计净利润上限+预计累计净利润下限)/2-accuQ(净利润,0))"
+        }
+      ]
+    },
+    {
+      "token": "基础过滤_退市风险_v1(3)",
+      "base": "基础过滤_退市风险_v1",
+      "count": 10,
+      "n_strategies": 10,
+      "kind": "custom",
+      "expr": "OR(收盘价<{0},sum(预期ST2021,30)>0,sum(果仁风险预警25版,30)>0,过去N日重大违规数量(30)>0)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "基础过滤_退市风险_v1=0, 用于筛选条件\n基础过滤_退市风险_v1，直接用于卖出条件",
+      "dep_funcs": [
+        "or",
+        "sum"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "收盘价",
+        "果仁风险预警25版",
+        "模板参数",
+        "过去N日重大违规数量",
+        "预期ST2021",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "EBITDAQ%EV",
+      "base": "EBITDAQ%EV",
+      "count": 9,
+      "n_strategies": 9,
+      "kind": "custom",
+      "expr": "EBITDAQ/EV",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "EBITDAQ",
+        "EV"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "EBITDAQ",
+          "expr": "(归属于母公司所有者的净利润(单季)+财务费用(单季)+折旧和摊销(单季))"
+        },
+        {
+          "name": "EV",
+          "expr": "总市值+长期借款(单季)+短期借款(单季)+应付债券(单季)+少数股东权益(单季)-货币资金(单季)-货币资金(单季)-交易性金融资产(单季)"
+        }
+      ]
+    },
+    {
+      "token": "业绩快报归母净利QGr%PY",
+      "base": "业绩快报归母净利QGr%PY",
+      "count": 9,
+      "n_strategies": 9,
+      "kind": "custom",
+      "expr": "(快报归属母公司净利润-accuQ(归属于母公司所有者的净利润(单季),0)-refQ(归属于母公司所有者的净利润(单季),3))/abs(refQ(归属于母公司所有者的净利润(单季),3))",
+      "unit": "百分数  /  2 位小数",
+      "note": "业绩预告单季度归母净利润Q同比增长率",
+      "dep_funcs": [
+        "abs",
+        "accuq",
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属于母公司所有者的净利润",
+        "快报归属母公司净利润"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(EPCOREPROFITQ,总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 8,
+      "n_strategies": 8,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标标准化后中性化MI(RNDQP)",
+      "base": "指标标准化后中性化MI",
+      "count": 8,
+      "n_strategies": 8,
+      "kind": "custom",
+      "expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "unit": "无  /  4 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralizemi",
+        "hwinsorize"
+      ],
+      "dep_customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        },
+        {
+          "name": "CoreProfitQGr%PY",
+          "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))"
+        }
+      ]
+    },
+    {
+      "token": "真实负债资产率",
+      "base": "真实负债资产率",
+      "count": 8,
+      "n_strategies": 8,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "FCFQ%总市值",
+      "base": "FCFQ%总市值",
+      "count": 7,
+      "n_strategies": 7,
+      "kind": "custom",
+      "expr": "FCFQ_重算/总市值",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "FCFQ_重算"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        }
+      ]
+    },
+    {
+      "token": "FCFQ_重算Gr%PYQ",
+      "base": "FCFQ_重算Gr%PYQ",
+      "count": 7,
+      "n_strategies": 7,
+      "kind": "custom",
+      "expr": "(FCFQ_重算-refq(FCFQ_重算,4))/abs(refq(FCFQ_重算,4))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "FCFQ_重算"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        }
+      ]
+    },
+    {
+      "token": "所得税费用QGr%PY",
+      "base": "所得税费用QGr%PY",
+      "count": 7,
+      "n_strategies": 7,
+      "kind": "custom",
+      "expr": "(refQ(所得税费用(单季),0)-refQ(所得税费用(单季),4))/abs(refQ(所得税费用(单季),0))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "所得税费用"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "股价振幅%当日成交额10日",
+      "base": "股价振幅%当日成交额10日",
+      "count": 7,
+      "n_strategies": 7,
+      "kind": "custom",
+      "expr": "MA(股价振幅/当日成交额,10)",
+      "unit": "无  /  2 位小数",
+      "note": "股价振幅_成交金额",
+      "dep_funcs": [
+        "ma"
+      ],
+      "dep_customs": [
+        "股价振幅"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "当日成交额"
+      ],
+      "expansion": [
+        {
+          "name": "股价振幅",
+          "expr": "(最高价-最低价)/前日收盘价"
+        }
+      ]
+    },
+    {
+      "token": "BP带壳",
+      "base": "BP带壳",
+      "count": 6,
+      "n_strategies": 6,
+      "kind": "custom",
+      "expr": "(归属母公司股东权益合计(单季)+壳价值)/总市值",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "壳价值"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属母公司股东权益合计",
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "壳价值",
+          "expr": "SSlopeXY(AH股溢价率,1/总市值, AH两地上市,0)"
+        }
+      ]
+    },
+    {
+      "token": "OPCFNPDiff%NP",
+      "base": "OPCFNPDiff%NP",
+      "count": 6,
+      "n_strategies": 5,
+      "kind": "custom",
+      "expr": "(经营现金流量净额TTM-净利润TTM)/净利润TTM",
+      "unit": "百分数  /  2 位小数",
+      "note": "经营现金流净额净利润差占净利润比，衡量盈利质量",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [
+        "净利润TTM",
+        "经营现金流量净额TTM"
+      ],
+      "dep_fields": [],
+      "expansion": []
+    },
+    {
+      "token": "SalesQGr%PY",
+      "base": "SalesQGr%PY",
+      "count": 6,
+      "n_strategies": 6,
+      "kind": "custom",
+      "expr": "(refQ(营业收入(单季),0)-refQ(营业收入(单季),4))/abs(refQ(营业收入(单季),0))",
+      "unit": "百分数  /  2 位小数",
+      "note": "营业收入Q同比",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "营业收入"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "波动率_季度指标(CoreprofitQGr%PY,12)",
+      "base": "波动率_季度指标",
+      "count": 6,
+      "n_strategies": 6,
+      "kind": "custom",
+      "expr": "StdevQ({0}, {1})\n[模板参数] 参数名: 指标,季度数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "stdevq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "季度数",
+        "指标",
+        "模板参数",
+        "经营现金流量净额",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "流通市值",
+      "base": "流通市值",
+      "count": 6,
+      "n_strategies": 6,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "调入指数(10)",
+      "base": "调入指数",
+      "count": 6,
+      "n_strategies": 6,
+      "kind": "custom",
+      "expr": "OR(AND(SUM(沪深300成分权重=0,{0})>0,沪深300成分权重>0),AND(SUM(中证500成分权重=0,{0})>0,中证500成分权重>0),AND(SUM(中证1000成分权重=0,{0})>0,中证1000成分权重>0))\n[模板参数] 参数名: N  默认值: 10,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "=0,说明没有发生调入指数的事件",
+      "dep_funcs": [
+        "and",
+        "or",
+        "sum"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "N",
+        "中证1000成分权重",
+        "中证500成分权重",
+        "参数名",
+        "模板参数",
+        "沪深300成分权重",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "BP",
+      "base": "BP",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "builtin",
+      "expr": "归属母公司股东权益合计/总市值",
+      "note": "市净率的倒数，等于归属母公司股东权益合计/总市值",
+      "src": "财务指标公式",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属母公司股东权益合计",
+        "总市值"
+      ]
+    },
+    {
+      "token": "ILLIQ(5)",
+      "base": "ILLIQ",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "N日乖离率(120)",
+      "base": "N日乖离率",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "RnDQGR%PY",
+      "base": "RnDQGR%PY",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "custom",
+      "expr": "(研发费用-refq(研发费用,4))/refq(研发费用,4)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "研发费用"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "SharesAvgGr%PY",
+      "base": "SharesAvgGr%PY",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "custom",
+      "expr": "AvgQ(总股本,4,0)/AvgQ(总股本,4,4)-1",
+      "unit": "百分数  /  2 位小数",
+      "note": "总股本同比增长率",
+      "dep_funcs": [
+        "avgq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总股本"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "业绩预告净利润QGr%PYQ",
+      "base": "业绩预告净利润QGr%PYQ",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "custom",
+      "expr": "(业绩预告净利润Q-refQ(净利润(单季),3))/abs(refQ(净利润(单季),3))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "业绩预告净利润Q"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润"
+      ],
+      "expansion": [
+        {
+          "name": "业绩预告净利润Q",
+          "expr": "(预计累计净利润上限+预计累计净利润下限)/2-accuQ(净利润(单季),0)"
+        }
+      ]
+    },
+    {
+      "token": "评级调高家数",
+      "base": "评级调高家数",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期股息率",
+      "base": "预期股息率",
+      "count": 5,
+      "n_strategies": 5,
+      "kind": "custom",
+      "expr": "ifnull(预期净利润1年,TTM(净利润(单季),0))*Div%NetInc/总股本/收盘价",
+      "unit": "百分数  /  2 位小数",
+      "note": "预期股息率",
+      "dep_funcs": [
+        "ifnull",
+        "ttm"
+      ],
+      "dep_customs": [
+        "Div%NetInc"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "总股本",
+        "收盘价",
+        "预期净利润1年"
+      ],
+      "expansion": [
+        {
+          "name": "Div%NetInc",
+          "expr": "Annual(分红总金额,0)/Annual(净利润(单季),0)"
+        }
+      ]
+    },
+    {
+      "token": "250日涨幅",
+      "base": "250日涨幅",
+      "count": 4,
+      "n_strategies": 4,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "DivGrPY%",
+      "base": "DivGrPY%",
+      "count": 4,
+      "n_strategies": 4,
+      "kind": "custom",
+      "expr": "sumq(分红总金额,4,0)/sumq(分红总金额,4,4)-1",
+      "unit": "百分数  /  2 位小数",
+      "note": "分红总金额同比增长率",
+      "dep_funcs": [
+        "sumq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "中性N日波动率(120)",
+      "base": "中性N日波动率",
+      "count": 4,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "历史贝塔",
+      "base": "历史贝塔",
+      "count": 4,
+      "n_strategies": 4,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "股息率TTM",
+      "base": "股息率TTM",
+      "count": 4,
+      "n_strategies": 4,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "评级机构数",
+      "base": "评级机构数",
+      "count": 4,
+      "n_strategies": 4,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "20日涨幅",
+      "base": "20日涨幅",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "CoreProfitQ",
+      "base": "CoreProfitQ",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "custom",
+      "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)",
+      "unit": "无  /  0 位小数",
+      "note": "扣除非经常性项目的核心利润\n核心利润=营业收入-营业成本-（管理费用+销售费用+财务费用）-营业税金及附加\n净利润=核心利润+投资收益+营业外收入-营业外支出-所得税",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "管理费用",
+        "营业成本",
+        "营业收入",
+        "营业税金及附加",
+        "财务费用",
+        "销售费用"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "RoeCoreQ",
+      "base": "RoeCoreQ",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "custom",
+      "expr": "CoreProfitQ/归属母公司股东权益合计(单季)",
+      "unit": "无  /  2 位小数",
+      "note": "ROE核心净利润计算Q",
+      "dep_funcs": [],
+      "dep_customs": [
+        "CoreProfitQ"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属母公司股东权益合计"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        }
+      ]
+    },
+    {
+      "token": "中性EP",
+      "base": "中性EP",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日波动率(20)",
+      "base": "中性N日波动率",
+      "count": 3,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日波动率(5)",
+      "base": "中性N日波动率",
+      "count": 3,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "净利润增长",
+      "base": "净利润增长",
+      "count": 3,
+      "n_strategies": 2,
+      "kind": "builtin",
+      "expr": "(TTM(净利润,0)-TTM(净利润,4)) / abs (TTM(净利润,4))",
+      "note": "过去12个月的净利润相对4季度前的12个月的净利润的增长率。",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润"
+      ]
+    },
+    {
+      "token": "基础过滤_流动性2(5000000)",
+      "base": "基础过滤_流动性2",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "custom",
+      "expr": "and(5日平均成交额>{0},当日跌停标记=0)\n[模板参数] 参数名: 成交额  默认值: 5000000,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "and"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "5日平均成交额",
+        "参数名",
+        "当日跌停标记",
+        "成交额",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "基础过滤_退市风险(2)",
+      "base": "基础过滤_退市风险",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "custom",
+      "expr": "and(收盘价>{0},预期ST2021=0,交易类退市预警=0,国九条分红ST预警!=1,国九条财务退市预警!=1,国九条交易退市预警!=1,年报公布逾期!=1,重大事项违规处罚标记!=1)\n[模板参数] 参数名: 收盘价  默认值: 2,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "and"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "交易类退市预警",
+        "参数名",
+        "国九条交易退市预警",
+        "国九条分红ST预警",
+        "国九条财务退市预警",
+        "年报公布逾期",
+        "收盘价",
+        "模板参数",
+        "重大事项违规处罚标记",
+        "预期ST2021",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "市盈率",
+      "base": "市盈率",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin",
+      "expr": "总市值/TTM(归属于母公司所有者的净利润,0)",
+      "note": "即PE_TTM，等于总市值除以过去12个月的归属于母公司所有者的净利润",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属于母公司所有者的净利润",
+        "总市值"
+      ]
+    },
+    {
+      "token": "行业N日涨幅(20)",
+      "base": "行业N日涨幅",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "行业净利润增长",
+      "base": "行业净利润增长",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "行业净利润环比增长",
+      "base": "行业净利润环比增长",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "贝塔N日(000001,250)",
+      "base": "贝塔N日",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "custom",
+      "expr": "SlopeXY(1日涨幅,指数涨幅({0}),{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000001,-1,-1,250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "slopexy"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "基准指数",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "负债资产率",
+      "base": "负债资产率",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin",
+      "expr": "负债合计/ 资产总计",
+      "note": "等于最近一季的负债合计除以资产总计。",
+      "src": "财务指标公式",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "负债合计",
+        "资产总计"
+      ]
+    },
+    {
+      "token": "财报预约公布天数",
+      "base": "财报预约公布天数",
+      "count": 3,
+      "n_strategies": 3,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "10日融资偿还金额",
+      "base": "10日融资偿还金额",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "20日换手率",
+      "base": "20日换手率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "5日平均溢价率",
+      "base": "5日平均溢价率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "AssetTurnoverDiffPY",
+      "base": "AssetTurnoverDiffPY",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "(Refq(总资产周转率,0)-Refq(总资产周转率,4))",
+      "unit": "百分数  /  2 位小数",
+      "note": "总资产周转率同比变动",
+      "dep_funcs": [
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "总资产周转率"
+      ],
+      "dep_fields": [],
+      "expansion": []
+    },
+    {
+      "token": "DivOP%",
+      "base": "DivOP%",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "sumq(分红总金额,4)/TTM(营业利润,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "分红L12M利润比",
+      "dep_funcs": [
+        "sumq",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额",
+        "营业利润"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "EP",
+      "base": "EP",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin",
+      "expr": "TTM(归属于母公司所有者的净利润,0)/总市值",
+      "note": "市盈率TTM的倒数， 等于过去12个月的归属于母公司所有者的净利润/总市值",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属于母公司所有者的净利润",
+        "总市值"
+      ]
+    },
+    {
+      "token": "EPCoreProfitQ",
+      "base": "EPCoreProfitQ",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "CoreProfitQ/总市值",
+      "unit": "无  /  1 位小数",
+      "note": "EP用单季核心利润",
+      "dep_funcs": [],
+      "dep_customs": [
+        "CoreProfitQ"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        }
+      ]
+    },
+    {
+      "token": "N日均成交金额(20)",
+      "base": "N日均成交金额",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "RND%Assets",
+      "base": "RND%Assets",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "TTM(研发费用,0)/AvgQ(资产总计,4,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "研发费用总资产比",
+      "dep_funcs": [
+        "avgq",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "研发费用",
+        "资产总计"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "YieldRfrDiff",
+      "base": "YieldRfrDiff",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "股息率TTM-MA(10年国债收益率,60)",
+      "unit": "无  /  2 位小数",
+      "note": "无风险收益率调整后的股息率",
+      "dep_funcs": [
+        "ma"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "10年国债收益率",
+        "股息率TTM"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "交易天数",
+      "base": "交易天数",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "偏度_残差N日(000001,120)",
+      "base": "偏度_残差N日",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "Skewness(1日涨幅-指数涨幅({0})*历史贝塔,{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000300,-1,-1,60,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "skewness"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "历史贝塔",
+        "参数名",
+        "基准指数",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "年内累计涨幅",
+      "base": "年内累计涨幅",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "扣非市盈率",
+      "base": "扣非市盈率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin",
+      "expr": "总市值/TTM(扣非净利润,0)",
+      "note": "等于等于总市值除以过去12个月的扣非净利润",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值",
+        "扣非净利润"
+      ]
+    },
+    {
+      "token": "指标_偏度(1日涨幅,120)",
+      "base": "指标_偏度",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "Skewness({0},{1})\n[模板参数] 参数名: 指标,N  默认值: 1日涨幅,-1,-1,60,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "skewness"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "收盘价",
+      "base": "收盘价",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "最近3年累计分红金额大于5000万",
+      "base": "最近3年累计分红金额大于5000万",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "近三年分红之和>50000000",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "近三年分红之和"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "近三年分红之和",
+          "expr": "annual(分红总金额,0)+annual(分红总金额,1)+annual(分红总金额,2)"
+        }
+      ]
+    },
+    {
+      "token": "最近三个会计年度累计现金分红总额大于年均净利润的30%",
+      "base": "最近三个会计年度累计现金分红总额大于年均净利润的30%",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "近三年分红之和>0.3*三年净利润",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "三年净利润",
+        "近三年分红之和"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "近三年分红之和",
+          "expr": "annual(分红总金额,0)+annual(分红总金额,1)+annual(分红总金额,2)"
+        },
+        {
+          "name": "三年净利润",
+          "expr": "(annual(净利润,0)+annual(净利润,1)+annual(净利润,2))"
+        }
+      ]
+    },
+    {
+      "token": "期望收益月度(24)",
+      "base": "期望收益月度",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "胜率月度({0})*赔率月度({0})-(1-胜率月度({0}))\n[模板参数] 参数名: N  默认值: 24,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "p*b-(1-p)",
+      "dep_funcs": [],
+      "dep_customs": [
+        "胜率月度",
+        "赔率月度"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "N",
+        "参数名",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "1月涨幅",
+          "expr": "(REF( KLAST(后复权收盘价, M),0)-REF( KLAST(后复权收盘价, M),1))/REF( KLAST(后复权收盘价, M),1)"
+        },
+        {
+          "name": "胜率月度",
+          "expr": "SUM(IF(1月涨幅>0,1,0),{0})/{0}\n[模板参数] 参数名: N  默认值: 24,-1,-1"
+        },
+        {
+          "name": "赔率月度",
+          "expr": "(SUM(IF(1月涨幅>0,1月涨幅,0),{0})/SUM(IF(1月涨幅>0,1,0),{0}))/abs(SUM(IF(1月涨幅<0,1月涨幅,0),{0})/SUM(IF(1月涨幅<0,1,0),{0}))\n[模板参数] 参数名: N  默认值: 24,-1,-1"
+        }
+      ]
+    },
+    {
+      "token": "未来60日新增流通股数",
+      "base": "未来60日新增流通股数",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "机构持股环比增长",
+      "base": "机构持股环比增长",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "波动率_日度指标(分红总金额,720)",
+      "base": "波动率_日度指标",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "Stdev({0}, {1})\n[模板参数] 参数名: 指标,日数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "指标",
+        "日数",
+        "模板参数",
+        "经营现金流量净额",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "申万行业指数标记",
+      "base": "申万行业指数标记",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "研发销售比率",
+      "base": "研发销售比率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "管理层持股比例",
+      "base": "管理层持股比例",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "股东数60日变化率",
+      "base": "股东数60日变化率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "股息率",
+      "base": "股息率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin",
+      "expr": "上一年总现金分红/总市值",
+      "note": "等于最近一年每股现金分红除以股票价格。",
+      "src": "财务指标公式",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "上一年总现金分红",
+        "总市值"
+      ]
+    },
+    {
+      "token": "胜率月度(24)",
+      "base": "胜率月度",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "SUM(IF(1月涨幅>0,1,0),{0})/{0}\n[模板参数] 参数名: N  默认值: 24,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "过去N个月月度收益率上涨次数/总月数",
+      "dep_funcs": [
+        "if",
+        "sum"
+      ],
+      "dep_customs": [
+        "1月涨幅"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "N",
+        "参数名",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "1月涨幅",
+          "expr": "(REF( KLAST(后复权收盘价, M),0)-REF( KLAST(后复权收盘价, M),1))/REF( KLAST(后复权收盘价, M),1)"
+        }
+      ]
+    },
+    {
+      "token": "近三年分红之和",
+      "base": "近三年分红之和",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "annual(分红总金额,0)+annual(分红总金额,1)+annual(分红总金额,2)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "annual"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "连续N年分红(3)",
+      "base": "连续N年分红",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "min(股息率,250*{0})>0\n[模板参数] 参数名: 连续N年  默认值: 3,-1,-1",
+      "unit": "无  /  0 位小数",
+      "note": "",
+      "dep_funcs": [
+        "min"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "股息率"
+      ],
+      "dep_fields": [
+        "参数名",
+        "模板参数",
+        "连续N年",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "连续三年分红",
+      "base": "连续三年分红",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "custom",
+      "expr": "And(annual(分红总金额,0)>0,and(annual(分红总金额,1)>0,annual(分红总金额,2)>0))",
+      "unit": "无  /  0 位小数",
+      "note": "连续3年分红",
+      "dep_funcs": [
+        "and",
+        "annual"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "预期盈利2年复合增长",
+      "base": "预期盈利2年复合增长",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期盈利增长率",
+      "base": "预期盈利增长率",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期营收2年复合增长",
+      "base": "预期营收2年复合增长",
+      "count": 2,
+      "n_strategies": 2,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "高低振幅动量差(60,0.2)",
+      "base": "高低振幅动量差",
+      "count": 2,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "SUM(IF(RANK(股价振幅,{0},0)>{0}*(1-{1}-0.02),LOG(1+1日涨幅),0),{0})- SUM(IF(RANK(股价振幅,{0},0)<{0}*({1}+0.02),LOG(1+1日涨幅),0),{0})\n[模板参数] 参数名: N,振幅阈值  默认值: 250,-1,-1,0.2,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "if",
+        "log",
+        "rank",
+        "sum"
+      ],
+      "dep_customs": [
+        "股价振幅"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "振幅阈值",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "股价振幅",
+          "expr": "(最高价-最低价)/前日收盘价"
+        }
+      ]
+    },
+    {
+      "token": "%(销售毛利率Q,refq(销售毛利率Q,4))",
+      "base": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "归属母公司股东权益合计",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "%(预期ROE1年,ref(预期ROE1年,250))",
+      "base": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "归属母公司股东权益合计",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "%(预期盈利增长率,REF(预期盈利增长率,250))",
+      "base": "%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "({0}-{1})/abs({1})\n[模板参数] 参数名: 指标1,指标2  默认值: TTM(归属母公司股东权益合计,0),-1,-1,TTM(归属母公司股东权益合计,4),-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "归属母公司股东权益合计",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "120日换手率",
+      "base": "120日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "120日涨幅",
+      "base": "120日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "250日波动率",
+      "base": "250日波动率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "5日换手率",
+      "base": "5日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "60日波动率",
+      "base": "60日波动率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "60日涨幅",
+      "base": "60日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "AH股溢价率",
+      "base": "AH股溢价率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "ATR%收盘价N日(20)",
+      "base": "ATR%收盘价N日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ATR({0})/后复权收盘价\n[模板参数] 参数名: N  默认值: 50,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "ATR",
+        "N",
+        "参数名",
+        "后复权收盘价",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "BP带壳01",
+      "base": "BP带壳01",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(归属母公司股东权益合计(单季)+壳价值01)/总市值",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "壳价值01"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "归属母公司股东权益合计",
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "壳价值01",
+          "expr": "SSLOPEXY(log(HWINSORIZE(AH股溢价率,0.01,0.01,0)),1/总市值, AH_剔除最大5pct,0)"
+        }
+      ]
+    },
+    {
+      "token": "CoreProfitQGr%PQ",
+      "base": "CoreProfitQGr%PQ",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,1))/abs(refq(CoreProfitQ,1))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [
+        "CoreProfitQ"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        }
+      ]
+    },
+    {
+      "token": "Div%NetIncY2",
+      "base": "Div%NetIncY2",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ifnull((Annual(分红总金额,0)/Annual(净利润(单季),0)+Annual(分红总金额,1)/Annual(净利润(单季),1))/2,Annual(分红总金额,0)/Annual(净利润(单季),0))",
+      "unit": "百分数  /  2 位小数",
+      "note": "过去两年平均分红占净利润比例",
+      "dep_funcs": [
+        "annual",
+        "ifnull"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "分红总金额"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "DivAGrPY%",
+      "base": "DivAGrPY%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(annual(分红总金额,0)-annual(分红总金额,1))/annual(分红总金额,1)",
+      "unit": "百分数  /  2 位小数",
+      "note": "分红总金额同比增长率",
+      "dep_funcs": [
+        "annual"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "EPCoreProfitQ_v1",
+      "base": "EPCoreProfitQ_v1",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "IFNULL(业绩预告净利润Q,COREPROFITQ_v1)/总市值",
+      "unit": "无  /  1 位小数",
+      "note": "EP用单季核心利润",
+      "dep_funcs": [
+        "ifnull"
+      ],
+      "dep_customs": [
+        "CoreProfitQ_v1",
+        "业绩预告净利润Q"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "业绩预告净利润Q",
+          "expr": "(预计累计净利润上限+预计累计净利润下限)/2-accuQ(净利润(单季),0)"
+        },
+        {
+          "name": "业绩预告净利润Q_v1",
+          "expr": "if(mod(预告季度ID-1,4)+1=1, (预计累计净利润上限+预计累计净利润下限)/2, (预计累计净利润上限+预计累计净利润下限)/2-accuQ(净利润,0))"
+        },
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        },
+        {
+          "name": "CoreProfitQ_v1",
+          "expr": "IFNULL(业绩预告净利润Q_v1,COREPROFITQ)"
+        }
+      ]
+    },
+    {
+      "token": "EpsTTMGr%",
+      "base": "EpsTTMGr%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(ref(每股收益,0)-ref(每股收益,4))/abs(ref(每股收益,4))-1",
+      "unit": "百分数  /  2 位小数",
+      "note": "每股收益TTM同比",
+      "dep_funcs": [
+        "abs",
+        "ref"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "每股收益"
+      ],
+      "dep_fields": [],
+      "expansion": []
+    },
+    {
+      "token": "FCFLMgn%TTM",
+      "base": "FCFLMgn%TTM",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "TTM(企业自由现金流量,0)/TTM(营业收入,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "企业自由现金流量",
+        "营业收入"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "FCFLMgn%TTM_重算",
+      "base": "FCFLMgn%TTM_重算",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "TTM(FCFQ_重算,0)/TTM(营业收入,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [
+        "FCFQ_重算"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "营业收入"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        }
+      ]
+    },
+    {
+      "token": "FCFQ_重算",
+      "base": "FCFQ_重算",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "处置固定资产",
+        "折旧和摊销",
+        "无形资产和其他长期资产支付的现金",
+        "无形资产和其他长期资产收回的现金净额",
+        "经营现金流量净额",
+        "购建固定资产"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "FCFTTM%总市值",
+      "base": "FCFTTM%总市值",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "TTM(FCFQ_重算,0)/总市值",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [
+        "FCFQ_重算"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        }
+      ]
+    },
+    {
+      "token": "NetFCFTTM",
+      "base": "NetFCFTTM",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(TTM(FCFQ_重算,0)-分红总金额)",
+      "unit": "无  /  2 位小数",
+      "note": "减去分红后的FCF，代表企业可以继续投入的自由现金流",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [
+        "FCFQ_重算"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "分红总金额"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        }
+      ]
+    },
+    {
+      "token": "NetFCFTTM%AstToQ",
+      "base": "NetFCFTTM%AstToQ",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "NetFCFTTM/资产总计(单季)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "NetFCFTTM"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "资产总计"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        },
+        {
+          "name": "NetFCFTTM",
+          "expr": "(TTM(FCFQ_重算,0)-分红总金额)"
+        }
+      ]
+    },
+    {
+      "token": "NetFCFTTM%总市值",
+      "base": "NetFCFTTM%总市值",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "NetFCFTTM/总市值",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [
+        "NetFCFTTM"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值"
+      ],
+      "expansion": [
+        {
+          "name": "FCFQ_重算",
+          "expr": "经营现金流量净额(单季)-购建固定资产、无形资产和其他长期资产支付的现金(单季)+处置固定资产、无形资产和其他长期资产收回的现金净额(单季)+折旧和摊销(单季)"
+        },
+        {
+          "name": "NetFCFTTM",
+          "expr": "(TTM(FCFQ_重算,0)-分红总金额)"
+        }
+      ]
+    },
+    {
+      "token": "N日乖离率(60)",
+      "base": "N日乖离率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "N日涨幅(100)",
+      "base": "N日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "N日涨幅(120)",
+      "base": "N日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "N日涨幅(200)",
+      "base": "N日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "N日涨幅(250)",
+      "base": "N日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "OPCF%Assets",
+      "base": "OPCF%Assets",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "经营现金流量净额TTM/AvgQ(资产总计(单季),4,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "经营净现金流总资产比",
+      "dep_funcs": [
+        "avgq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "经营现金流量净额TTM"
+      ],
+      "dep_fields": [
+        "资产总计"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "RSI(14)",
+      "base": "RSI",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "RnDTTM%营业收入TTM",
+      "base": "RnDTTM%营业收入TTM",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "TTM(研发费用,0)/TTM(营业收入,0)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "研发费用",
+        "营业收入"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "RnDTTMGr%PY",
+      "base": "RnDTTMGr%PY",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(TTM(研发费用,0)-TTM(研发费用,4))/abs(TTM(研发费用,4))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "研发费用"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "RoeQ",
+      "base": "RoeQ",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ifnull(扣非净利润(单季),净利润(单季))/资产总计(单季)",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "ifnull"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "扣非净利润",
+        "资产总计"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "WMA_(1日涨幅,当日成交额,120)",
+      "base": "WMA_",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "WMA({0},{1}, {2})\n[模板参数] 参数名: 指标,权重指标,N  默认值: 1日涨幅,-1,-1,当日成交额,-1,-1,20,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "wma"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "当日成交额",
+        "指标",
+        "权重指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "sortinoN日(120)",
+      "base": "sortinoN日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "less",
+        "ma",
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "sortinoN日(250)",
+      "base": "sortinoN日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ma(1日涨幅,{0})/Stdev(less(1日涨幅,0), {0})\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "less",
+        "ma",
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "中性BP",
+      "base": "中性BP",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日换手率(120)",
+      "base": "中性N日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日换手率(20)",
+      "base": "中性N日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日换手率(5)",
+      "base": "中性N日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性N日换手率(50)",
+      "base": "中性N日换手率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性SP",
+      "base": "中性SP",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "中性历史贝塔",
+      "base": "中性历史贝塔",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "净利润(单季)",
+      "base": "净利润",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "净利润环比增长",
+      "base": "净利润环比增长",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "净资产收益率",
+      "base": "净资产收益率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "TTM(净利润,0)/AvgQ(所有者权益合计,4,1)",
+      "note": "过去12个月的净利润除以一季度前过去12个月的平均所有者权益合计",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "avgq",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "所有者权益合计"
+      ]
+    },
+    {
+      "token": "分析师评级分",
+      "base": "分析师评级分",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "协偏度_个股指数N日(000001,120)",
+      "base": "协偏度_个股指数N日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "MA((1日涨幅 - MA(1日涨幅, {1})) * Square(指数涨幅({0}) - MA(指数涨幅({0}), {1})), {1}) / Stdev(1日涨幅, {1}) / Square(Stdev(指数涨幅({0}), {1}))\n[模板参数] 参数名: 基准指数,N  默认值: 000300,-1,-1,60,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "个股收益和指数收益的协偏度的标准化版本，并且在某种形式上近似了60日协偏度（co-skewness）的表达。\n协偏度（Co-skewness）是衡量两个变量之间**偏态联动（非对称性关系）**的三阶矩指标。\n\n正值高：个股在市场上涨或下跌剧烈时，也往往出现同方向的放大表现（如高β成长股）。\n负值：个股在市场剧烈波动时反而更稳定或反向（如防御型股或避险资产）",
+      "dep_funcs": [
+        "ma",
+        "square",
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "基准指数",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "回报离散度相关度(000001,120)",
+      "base": "回报离散度相关度",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize(Corr(ln(1+1日涨幅),HStdev(ln(1+1日涨幅-贝塔N日({0},{1})*指数涨幅({0})),0),{1}),ln(总市值),0)\n[模板参数] 参数名: 指数基准,N  默认值: 000001,-1,-1,250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "回报离散度——截面上股价涨幅的离散度(标准差)：\n涨幅用残差涨幅替代；\n计算过去一段时间，股价涨幅与回报离散度的相关性，再中性化。\n相关度越低，股价涨幅越独立于市场。",
+      "dep_funcs": [
+        "corr",
+        "hneutralize",
+        "hstdev",
+        "ln"
+      ],
+      "dep_customs": [
+        "贝塔N日"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "总市值",
+        "指数基准",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "贝塔N日",
+          "expr": "SlopeXY(1日涨幅,指数涨幅({0}),{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000001,-1,-1,250,-1,-1"
+        }
+      ]
+    },
+    {
+      "token": "基础过滤_流动性(5000000)",
+      "base": "基础过滤_流动性",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "and(5日平均成交额>{0},当日跌停标记=0,开盘涨停标记=0)\n[模板参数] 参数名: 成交额  默认值: 5000000,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "and"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "5日平均成交额",
+        "参数名",
+        "开盘涨停标记",
+        "当日跌停标记",
+        "成交额",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "基金持股比例%PYQ",
+      "base": "基金持股比例%PYQ",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(基金持股比例-refq(基金持股比例,4))/refq(基金持股比例,4)",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "基金持股比例"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "市净率B",
+      "base": "市净率B",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "市研率",
+      "base": "市研率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "市销率",
+      "base": "市销率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "总市值/TTM(营业总收入,0)",
+      "note": "即PS_TTM，等于总市值除以过去12个月的营业总收入。",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总市值",
+        "营业总收入"
+      ]
+    },
+    {
+      "token": "应收账款周转率",
+      "base": "应收账款周转率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "TTM(营业收入,0)/（AvgQ(应收账款,4,0) + AvgQ(应收票据,4,0) - AvgQ(预收账款,4,0) ）",
+      "note": "等于过去12个月的营业收入/过去12个月的平均（应收账款+应收票据-预收账款）。",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "avgq",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "应收票据",
+        "应收账款",
+        "营业收入",
+        "预收账款"
+      ]
+    },
+    {
+      "token": "扣非净利润单季同比增长率Gr%PQ",
+      "base": "扣非净利润单季同比增长率Gr%PQ",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(扣非净利润(单季同比增长)-refq(扣非净利润(单季同比增长),1))/abs(refq(扣非净利润(单季同比增长),1))",
+      "unit": "百分数  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "abs",
+        "refq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "单季同比增长",
+        "扣非净利润"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(EBITDAQ,EV,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(EPCOREPROFITQ_V1,总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(FCFQ_重算,总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(净资产收益率,总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度),总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度)-营业成本(单季度),总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(营业收入(单季度)-营业成本(单季度),资产总计,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(评级机构数,总市值,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标1指标2中性化(预期目标价,收盘价,0)",
+      "base": "指标1指标2中性化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HNeutralize({0},ln({1}), {2})\n[模板参数] 参数名: 指标1,指标2,范围  默认值: 扣非净利润,-1,-1,总市值,-1,-1,0,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralize",
+        "ln"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "总市值",
+        "扣非净利润",
+        "指标1",
+        "指标2",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标小于截面均值x倍(市净率,0,1.5)",
+      "base": "指标小于截面均值x倍",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "{0}<HAvg({0},{1})*{2}\n[模板参数] 参数名: 指标,范围,倍数  默认值: 扣非市盈率,-1,-1,0,-1,-1,1,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "havg"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "扣非市盈率"
+      ],
+      "dep_fields": [
+        "倍数",
+        "参数名",
+        "指标",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标小于截面均值x倍(扣非市盈率,0,1.5)",
+      "base": "指标小于截面均值x倍",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "{0}<HAvg({0},{1})*{2}\n[模板参数] 参数名: 指标,范围,倍数  默认值: 扣非市盈率,-1,-1,0,-1,-1,1,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "havg"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "扣非市盈率"
+      ],
+      "dep_fields": [
+        "倍数",
+        "参数名",
+        "指标",
+        "模板参数",
+        "范围",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "指标标准化后中性化MI(FCFQ%总市值)",
+      "base": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "unit": "无  /  4 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralizemi",
+        "hwinsorize"
+      ],
+      "dep_customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        },
+        {
+          "name": "CoreProfitQGr%PY",
+          "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))"
+        }
+      ]
+    },
+    {
+      "token": "指标标准化后中性化MI(FCFQ_重算Gr%PYQ)",
+      "base": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "unit": "无  /  4 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralizemi",
+        "hwinsorize"
+      ],
+      "dep_customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        },
+        {
+          "name": "CoreProfitQGr%PY",
+          "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))"
+        }
+      ]
+    },
+    {
+      "token": "指标标准化后中性化MI(TTM(FCFQ_重算,0)/TTM(EBITDAQ,0))",
+      "base": "指标标准化后中性化MI",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "HneutralizeMI(Hwinsorize({0},0.05,0.05,0))\n[模板参数] 参数名: 指标  默认值: CoreProfitQGr%PY,-1,-1",
+      "unit": "无  /  4 位小数",
+      "note": "",
+      "dep_funcs": [
+        "hneutralizemi",
+        "hwinsorize"
+      ],
+      "dep_customs": [
+        "CoreProfitQGr%PY"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "指标",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "CoreProfitQ",
+          "expr": "营业收入-营业成本(单季)-(管理费用(单季)+销售费用(单季)+财务费用(单季))-营业税金及附加(单季)"
+        },
+        {
+          "name": "CoreProfitQGr%PY",
+          "expr": "(refq(CoreProfitQ,0)-refq(CoreProfitQ,4))/abs(refq(CoreProfitQ,4))"
+        }
+      ]
+    },
+    {
+      "token": "机构持股比例",
+      "base": "机构持股比例",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "果仁风险预警25版",
+      "base": "果仁风险预警25版",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "每股经营性现金流",
+      "base": "每股经营性现金流",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "TTM(经营现金流量净额)/总股本",
+      "note": "过去12个月经营现金流量净额/总股本",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "总股本",
+        "经营现金流量净额"
+      ]
+    },
+    {
+      "token": "波动率_季度指标(FCFTTM_重算GR%PY,12)",
+      "base": "波动率_季度指标",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "StdevQ({0}, {1})\n[模板参数] 参数名: 指标,季度数  默认值: 经营现金流量净额(单季),-1,-1,12,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "stdevq"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "参数名",
+        "季度数",
+        "指标",
+        "模板参数",
+        "经营现金流量净额",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "波动率_残差(000001,20)",
+      "base": "波动率_残差",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "STDEV((1+1日涨幅-历史贝塔*指数涨幅({0})),{1})\n[模板参数] 参数名: BenchIndex,N  默认值: 000001,-1,-1,20,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "BenchIndex",
+        "N",
+        "历史贝塔",
+        "参数名",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "波动率积_中性换手率250",
+      "base": "波动率积_中性换手率250",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "中性N日换手率(250)/stdev(中性N日换手率(250),250)",
+      "unit": "无  /  2 位小数",
+      "note": "换手率低，换手率方差小",
+      "dep_funcs": [
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "中性N日换手率"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "溢价率",
+      "base": "溢价率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "相对跳跃因子N日(250)",
+      "base": "相对跳跃因子N日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(Square(Stdev(IF(1日涨幅>0,1日涨幅,0),{0}))-Square(Stdev(IF(1日涨幅<0,1日涨幅,0),{0})))/Square(Stdev(1日涨幅,{0}))\n[模板参数] 参数名: N  默认值: 250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "相对跳跃因子250 :\n描述：（上半方差-下半方差）/方差 https://guorn.com/forum/post/p.2322932.283031264766870\n公式：(Square(Stdev(IF(1日涨幅&amp;gt;0,1日涨幅,0),250))-Square(Stdev(IF(1日涨幅&amp;lt;0,1日涨幅,0),250)))/Square(Stdev(1日涨幅,250))",
+      "dep_funcs": [
+        "if",
+        "square",
+        "stdev"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "经营现金流量净额(单季)",
+      "base": "经营现金流量净额",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "股息率大于10年国债收益率plus(0.01)",
+      "base": "股息率大于10年国债收益率plus",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "股息率TTM>(10年国债收益率+{0})\n[模板参数] 参数名: 风险溢价  默认值: 0.01,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "10年国债收益率",
+        "参数名",
+        "模板参数",
+        "股息率TTM",
+        "风险溢价",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "股权质押比例",
+      "base": "股权质押比例",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "营业收入(单季)",
+      "base": "营业收入",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "营业收入增长",
+      "base": "营业收入增长",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "(TTM(营业收入,0)-TTM(营业收入,4))/abs(TTM(营业收入,4))",
+      "note": "过去12个月的营业收入相对4季度前的12个月的营业收入的增长率。",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "abs",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "营业收入"
+      ]
+    },
+    {
+      "token": "营业收入环比增长",
+      "base": "营业收入环比增长",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "行业N日涨幅(200)",
+      "base": "行业N日涨幅",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "评级增持家数",
+      "base": "评级增持家数",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "贝塔N日(000001,20)",
+      "base": "贝塔N日",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "SlopeXY(1日涨幅,指数涨幅({0}),{1})\n[模板参数] 参数名: 基准指数,N  默认值: 000001,-1,-1,250,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "slopexy"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "基准指数",
+        "指数涨幅",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "财报发布天数",
+      "base": "财报发布天数",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "资产回报率",
+      "base": "资产回报率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "TTM(净利润,0)/AvgQ(资产总计,4,1)",
+      "note": "过去12个月的净利润除以一季度前过去12个月的平均资产总计",
+      "src": "财务指标公式",
+      "dep_funcs": [
+        "avgq",
+        "ttm"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "资产总计"
+      ]
+    },
+    {
+      "token": "超速动比率",
+      "base": "超速动比率",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin",
+      "expr": "（货币资金+交易性金融资产+应收票据+应收帐款+其他应收款）／流动负债合计",
+      "note": "超速动比率，等于最近一季度的（货币资金+交易性金融资产+应收票据+应收帐款+其他应收款）／流动负债合计。 金融类公司此项为空值。",
+      "src": "财务指标公式",
+      "dep_funcs": [],
+      "dep_customs": [],
+      "dep_builtins": [],
+      "dep_fields": [
+        "交易性金融资产",
+        "其他应收款",
+        "应收帐款",
+        "应收票据",
+        "流动负债合计",
+        "货币资金"
+      ]
+    },
+    {
+      "token": "近期评级变化",
+      "base": "近期评级变化",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期BP1年",
+      "base": "预期BP1年",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期BP第2年",
+      "base": "预期BP第2年",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期DivAGrPY%",
+      "base": "预期DivAGrPY%",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "(ifnull(预期净利润1年,TTM(净利润(单季),0))*Div%NetInc-annual(分红总金额,1))/annual(分红总金额,1)",
+      "unit": "百分数  /  2 位小数",
+      "note": "分红总金额同比增长率",
+      "dep_funcs": [
+        "annual",
+        "ifnull",
+        "ttm"
+      ],
+      "dep_customs": [
+        "Div%NetInc"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "净利润",
+        "分红总金额",
+        "预期净利润1年"
+      ],
+      "expansion": [
+        {
+          "name": "Div%NetInc",
+          "expr": "Annual(分红总金额,0)/Annual(净利润(单季),0)"
+        }
+      ]
+    },
+    {
+      "token": "预期EP第2年",
+      "base": "预期EP第2年",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期PE",
+      "base": "预期PE",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "ifnull(总市值/预期净利润1年,动态市盈率)",
+      "unit": "无  /  2 位小数",
+      "note": "预期PE",
+      "dep_funcs": [
+        "ifnull"
+      ],
+      "dep_customs": [],
+      "dep_builtins": [
+        "动态市盈率"
+      ],
+      "dep_fields": [
+        "总市值",
+        "预期净利润1年"
+      ],
+      "expansion": []
+    },
+    {
+      "token": "预期ROE1年",
+      "base": "预期ROE1年",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "预期SP1年",
+      "base": "预期SP1年",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "builtin_prose_or_field"
+    },
+    {
+      "token": "高低振幅动量差(250,0.2)",
+      "base": "高低振幅动量差",
+      "count": 1,
+      "n_strategies": 1,
+      "kind": "custom",
+      "expr": "SUM(IF(RANK(股价振幅,{0},0)>{0}*(1-{1}-0.02),LOG(1+1日涨幅),0),{0})- SUM(IF(RANK(股价振幅,{0},0)<{0}*({1}+0.02),LOG(1+1日涨幅),0),{0})\n[模板参数] 参数名: N,振幅阈值  默认值: 250,-1,-1,0.2,-1,-1",
+      "unit": "无  /  2 位小数",
+      "note": "",
+      "dep_funcs": [
+        "if",
+        "log",
+        "rank",
+        "sum"
+      ],
+      "dep_customs": [
+        "股价振幅"
+      ],
+      "dep_builtins": [],
+      "dep_fields": [
+        "1日涨幅",
+        "N",
+        "参数名",
+        "振幅阈值",
+        "模板参数",
+        "默认值"
+      ],
+      "expansion": [
+        {
+          "name": "股价振幅",
+          "expr": "(最高价-最低价)/前日收盘价"
+        }
+      ]
+    }
+  ],
+  "unresolved_builtins": [
+    {
+      "token": "总市值",
+      "base": "总市值",
+      "count": 29
+    },
+    {
+      "token": "未来20日新增流通股占比",
+      "base": "未来20日新增流通股占比",
+      "count": 23
+    },
+    {
+      "token": "上市天数",
+      "base": "上市天数",
+      "count": 19
+    },
+    {
+      "token": "无",
+      "base": "无",
+      "count": 14
+    },
+    {
+      "token": "5日平均成交额",
+      "base": "5日平均成交额",
+      "count": 13
+    },
+    {
+      "token": "20日平均成交额",
+      "base": "20日平均成交额",
+      "count": 11
+    },
+    {
+      "token": "过去N日重大违规数量(30)",
+      "base": "过去N日重大违规数量",
+      "count": 11
+    },
+    {
+      "token": "真实负债资产率",
+      "base": "真实负债资产率",
+      "count": 8
+    },
+    {
+      "token": "流通市值",
+      "base": "流通市值",
+      "count": 6
+    },
+    {
+      "token": "ILLIQ(5)",
+      "base": "ILLIQ",
+      "count": 5
+    },
+    {
+      "token": "N日乖离率(120)",
+      "base": "N日乖离率",
+      "count": 5
+    },
+    {
+      "token": "评级调高家数",
+      "base": "评级调高家数",
+      "count": 5
+    },
+    {
+      "token": "250日涨幅",
+      "base": "250日涨幅",
+      "count": 4
+    },
+    {
+      "token": "中性N日波动率(120)",
+      "base": "中性N日波动率",
+      "count": 4
+    },
+    {
+      "token": "历史贝塔",
+      "base": "历史贝塔",
+      "count": 4
+    },
+    {
+      "token": "股息率TTM",
+      "base": "股息率TTM",
+      "count": 4
+    },
+    {
+      "token": "评级机构数",
+      "base": "评级机构数",
+      "count": 4
+    },
+    {
+      "token": "20日涨幅",
+      "base": "20日涨幅",
+      "count": 3
+    },
+    {
+      "token": "中性EP",
+      "base": "中性EP",
+      "count": 3
+    },
+    {
+      "token": "中性N日波动率(20)",
+      "base": "中性N日波动率",
+      "count": 3
+    },
+    {
+      "token": "中性N日波动率(5)",
+      "base": "中性N日波动率",
+      "count": 3
+    },
+    {
+      "token": "行业N日涨幅(20)",
+      "base": "行业N日涨幅",
+      "count": 3
+    },
+    {
+      "token": "行业净利润增长",
+      "base": "行业净利润增长",
+      "count": 3
+    },
+    {
+      "token": "行业净利润环比增长",
+      "base": "行业净利润环比增长",
+      "count": 3
+    },
+    {
+      "token": "财报预约公布天数",
+      "base": "财报预约公布天数",
+      "count": 3
+    },
+    {
+      "token": "10日融资偿还金额",
+      "base": "10日融资偿还金额",
+      "count": 2
+    },
+    {
+      "token": "20日换手率",
+      "base": "20日换手率",
+      "count": 2
+    },
+    {
+      "token": "5日平均溢价率",
+      "base": "5日平均溢价率",
+      "count": 2
+    },
+    {
+      "token": "N日均成交金额(20)",
+      "base": "N日均成交金额",
+      "count": 2
+    },
+    {
+      "token": "交易天数",
+      "base": "交易天数",
+      "count": 2
+    },
+    {
+      "token": "年内累计涨幅",
+      "base": "年内累计涨幅",
+      "count": 2
+    },
+    {
+      "token": "收盘价",
+      "base": "收盘价",
+      "count": 2
+    },
+    {
+      "token": "未来60日新增流通股数",
+      "base": "未来60日新增流通股数",
+      "count": 2
+    },
+    {
+      "token": "机构持股环比增长",
+      "base": "机构持股环比增长",
+      "count": 2
+    },
+    {
+      "token": "申万行业指数标记",
+      "base": "申万行业指数标记",
+      "count": 2
+    },
+    {
+      "token": "研发销售比率",
+      "base": "研发销售比率",
+      "count": 2
+    },
+    {
+      "token": "管理层持股比例",
+      "base": "管理层持股比例",
+      "count": 2
+    },
+    {
+      "token": "股东数60日变化率",
+      "base": "股东数60日变化率",
+      "count": 2
+    },
+    {
+      "token": "预期盈利2年复合增长",
+      "base": "预期盈利2年复合增长",
+      "count": 2
+    },
+    {
+      "token": "预期盈利增长率",
+      "base": "预期盈利增长率",
+      "count": 2
+    },
+    {
+      "token": "预期营收2年复合增长",
+      "base": "预期营收2年复合增长",
+      "count": 2
+    },
+    {
+      "token": "120日换手率",
+      "base": "120日换手率",
+      "count": 1
+    },
+    {
+      "token": "120日涨幅",
+      "base": "120日涨幅",
+      "count": 1
+    },
+    {
+      "token": "250日波动率",
+      "base": "250日波动率",
+      "count": 1
+    },
+    {
+      "token": "5日换手率",
+      "base": "5日换手率",
+      "count": 1
+    },
+    {
+      "token": "60日波动率",
+      "base": "60日波动率",
+      "count": 1
+    },
+    {
+      "token": "60日涨幅",
+      "base": "60日涨幅",
+      "count": 1
+    },
+    {
+      "token": "AH股溢价率",
+      "base": "AH股溢价率",
+      "count": 1
+    },
+    {
+      "token": "N日乖离率(60)",
+      "base": "N日乖离率",
+      "count": 1
+    },
+    {
+      "token": "N日涨幅(100)",
+      "base": "N日涨幅",
+      "count": 1
+    },
+    {
+      "token": "N日涨幅(120)",
+      "base": "N日涨幅",
+      "count": 1
+    },
+    {
+      "token": "N日涨幅(200)",
+      "base": "N日涨幅",
+      "count": 1
+    },
+    {
+      "token": "N日涨幅(250)",
+      "base": "N日涨幅",
+      "count": 1
+    },
+    {
+      "token": "RSI(14)",
+      "base": "RSI",
+      "count": 1
+    },
+    {
+      "token": "中性BP",
+      "base": "中性BP",
+      "count": 1
+    },
+    {
+      "token": "中性N日换手率(120)",
+      "base": "中性N日换手率",
+      "count": 1
+    },
+    {
+      "token": "中性N日换手率(20)",
+      "base": "中性N日换手率",
+      "count": 1
+    },
+    {
+      "token": "中性N日换手率(5)",
+      "base": "中性N日换手率",
+      "count": 1
+    },
+    {
+      "token": "中性N日换手率(50)",
+      "base": "中性N日换手率",
+      "count": 1
+    },
+    {
+      "token": "中性SP",
+      "base": "中性SP",
+      "count": 1
+    },
+    {
+      "token": "中性历史贝塔",
+      "base": "中性历史贝塔",
+      "count": 1
+    },
+    {
+      "token": "净利润(单季)",
+      "base": "净利润",
+      "count": 1
+    },
+    {
+      "token": "净利润环比增长",
+      "base": "净利润环比增长",
+      "count": 1
+    },
+    {
+      "token": "分析师评级分",
+      "base": "分析师评级分",
+      "count": 1
+    },
+    {
+      "token": "市净率B",
+      "base": "市净率B",
+      "count": 1
+    },
+    {
+      "token": "市研率",
+      "base": "市研率",
+      "count": 1
+    },
+    {
+      "token": "机构持股比例",
+      "base": "机构持股比例",
+      "count": 1
+    },
+    {
+      "token": "果仁风险预警25版",
+      "base": "果仁风险预警25版",
+      "count": 1
+    },
+    {
+      "token": "溢价率",
+      "base": "溢价率",
+      "count": 1
+    },
+    {
+      "token": "经营现金流量净额(单季)",
+      "base": "经营现金流量净额",
+      "count": 1
+    },
+    {
+      "token": "股权质押比例",
+      "base": "股权质押比例",
+      "count": 1
+    },
+    {
+      "token": "营业收入(单季)",
+      "base": "营业收入",
+      "count": 1
+    },
+    {
+      "token": "营业收入环比增长",
+      "base": "营业收入环比增长",
+      "count": 1
+    },
+    {
+      "token": "行业N日涨幅(200)",
+      "base": "行业N日涨幅",
+      "count": 1
+    },
+    {
+      "token": "评级增持家数",
+      "base": "评级增持家数",
+      "count": 1
+    },
+    {
+      "token": "财报发布天数",
+      "base": "财报发布天数",
+      "count": 1
+    },
+    {
+      "token": "近期评级变化",
+      "base": "近期评级变化",
+      "count": 1
+    },
+    {
+      "token": "预期BP1年",
+      "base": "预期BP1年",
+      "count": 1
+    },
+    {
+      "token": "预期BP第2年",
+      "base": "预期BP第2年",
+      "count": 1
+    },
+    {
+      "token": "预期EP第2年",
+      "base": "预期EP第2年",
+      "count": 1
+    },
+    {
+      "token": "预期ROE1年",
+      "base": "预期ROE1年",
+      "count": 1
+    },
+    {
+      "token": "预期SP1年",
+      "base": "预期SP1年",
+      "count": 1
+    }
+  ]
+}

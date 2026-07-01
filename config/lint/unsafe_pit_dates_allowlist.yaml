@@ -86,6 +86,22 @@
   permanent: true
   link: Knowledge/temp_plan/pit_lookahead_prevention_plan_2026-05-29_v5_FINAL.md
 
+- path: workspace/scripts/validate_pit_vs_vendor_q.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Independent-recompute parity oracle for the 2026-06-08 field-parity audit
+    (Part B): recomputes OUR pit_* single-quarter YoY from the income ledger's
+    final cumulative values using the deployed primitives and compares to
+    Tushare's vendor q_* from the indicators ledger. The q_* vendor fields are
+    INTENTIONALLY unregistered (the sanctioned loader refuses them), and the
+    comparison validates the computation math on FINAL values — reading the raw
+    ledgers directly is the point; routing through pit_research_loader would be
+    circular. Read-only, no mutation; results recorded in
+    workspace/research/data_audit/PIT_VS_VENDOR_Q_PARITY.md.
+  permanent: true
+  link: workspace/research/data_audit/PIT_VS_VENDOR_Q_PARITY.md
+
 - path: workspace/scripts/diag_report_rc_review.py
   rule: PIT002
   owner: alpha-research
@@ -100,3 +116,86 @@
     script_status: historical_investigation; formal_research_allowed: false.
   permanent: true
   link: config/field_registry/approvals/2026-06-09_report_rc_quarantine_to_approved.yaml
+
+- path: workspace/scripts/_phasec_profit_dedt_selfreview.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Phase-C self-review diagnostic: reads data/pit_ledger/indicators to count
+    profit_dedt non-null COVERAGE by fiscal quarter (is it quarterly vs
+    semi-annual?). Measuring the ledger's own coverage REQUIRES reading the raw
+    (qlib_code, end_date, profit_dedt) rows — the loader returns a PIT-aligned
+    panel, not the raw rows under audit. Read-only; no factor/serving; the PIT001
+    astype(str) is inline-noqa'd (end_date parsed only to bucket by quarter).
+  permanent: true
+  link: workspace/research/materialization_phase1/PHASE_B_DESIGN_PLAN.md
+
+- path: workspace/scripts/_phasec_profit_dedt_coverage_audit.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Phase-C coverage audit: reads data/pit_ledger/indicators to characterize
+    profit_dedt single-quarter derivability by board / listing-age / ST (the
+    coverage_tier=sub justification for $profit_dedt_sq_q0). Counting raw-row
+    coverage REQUIRES the direct read; the loader's PIT panel cannot express it.
+    Read-only; no factor/serving; PIT001 astype(str) inline-noqa'd.
+  permanent: true
+  link: config/field_registry/approvals/2026-06-24_profit_dedt_sq_to_approved.yaml
+
+- path: workspace/scripts/_rung5_materialization_audit.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Rung-5 materialization audit: reads data/pit_ledger/* to enumerate which raw
+    ledger fields are (not) materialized into the provider — a coverage/gap audit
+    that by definition compares the raw ledger against the provider bins, so the
+    raw read is the point. Read-only; no factor/serving.
+  permanent: true
+  link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md
+
+- path: workspace/scripts/_audit_forecast_registration.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Forecast-registration audit (2026-06-23): reads data/pit_ledger/forecast and
+    /income to verify the forecast endpoint's PIT anchors + coverage before
+    registration. Auditing the raw ledger's own anchors/coverage REQUIRES reading
+    it directly; the loader returns an aligned panel, not the raw rows under audit.
+    Read-only; no factor/serving.
+  permanent: true
+  link: config/field_registry/approvals/2026-06-23_forecast_np_q_yoy_to_approved.yaml
+
+- path: workspace/scripts/_provider_read_audit_forecast.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Forecast provider-read audit (2026-06-23): cross-checks the published provider
+    forecast bins against the raw data/pit_ledger/forecast + /income rows. The
+    raw-vs-provider comparison REQUIRES the direct raw read. Read-only; no
+    factor/serving.
+  permanent: true
+  link: config/field_registry/approvals/2026-06-23_forecast_np_q_yoy_to_approved.yaml
+
+- path: workspace/scripts/_validate_forecast_factor_vs_guorn.py
+  rule: PIT002
+  owner: alpha-research
+  reason: >-
+    Validates the forecast-derived factor against 果仁 (guorn) by reading raw
+    data/pit_ledger/forecast + /income to reconstruct the breadth signal for
+    cross-platform parity. The reconstruction-from-raw is the diagnostic's purpose.
+    Read-only; no factor promotion off this path.
+  permanent: true
+  link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md
+
+- path: workspace/scripts/_holder_grid_probe.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    果仁 parity rung-5 holder-grid diagnostic (2026-06-25): reads raw
+    data/pit_ledger/holder_number to characterize its disclosure cadence (58.6%
+    quarter-end / 41.4% irregular) and test 报告期-grid vs consecutive-disclosure
+    conventions against 果仁's 股东数下降率. Inspecting the RAW disclosure-level rows
+    IS the diagnostic's purpose (the loader returns an aligned panel, not the raw
+    cadence under study). Read-only; no factor/serving path.
+  permanent: true
+  link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md

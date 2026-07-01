@@ -1,0 +1,84 @@
+# 剩余中金路线图 Cross-Review 裁决(GPT 5.5 Pro → Rev2)
+
+> 2026-06-13。GPT 总判:CHANGES REQUIRED,6 项 minimum-change。本文逐条裁决;路线图据此升 Rev2。
+> 结论:**6 项全部 ACCEPT**(2 项是 brief 自曝盲区被坐实,1 项是未内化的尖锐发现)。零方向分歧,
+> 仅 1 处程度微调(rebuild 合并)。
+
+| # | GPT 发现 | 裁决 | Rev2 动作 |
+|---|---|---|---|
+| 1 | handbook 级多重检验:per-(factor,universe) 台账抓不住"复刻 N 个、过 M 个 = 手册有 M 个 alpha"的 garden-of-forking-paths;且"可复刻"本身是隐性筛选器 | **ACCEPT(本轮最强,brief §4.1 自曝)** | 新 §9:`CICCHandbookReplicationCohort` manifest(冻结全部手册因子+排除原因+tier+truth label window+OOS eligibility)+ cohort 级报告(denominator/family error/OOS attempts);"复刻通过率"任何陈述必须带分母;sealed OOS 不能无限替补 |
+| 1b | **真值表已泄漏 sealed OOS 标签**:D5 用 2010-2022×3域 truth table 做 parity → 2021-2022 表现已被观察 → 再把 2021-2026 当 sealed OOS 不干净 | **ACCEPT(critical,我未充分内化)** | 每个 truth table 记 `label_window_end`;中金复刻因子 sealed OOS 起点 = `max(system_oos_start, truth_label_end + horizon + embargo)`;价量动量(图表5/7/8/9 已转录到 2022.07)→ 其 OOS 起点 2022-07+embargo,可用窗缩到 ~3.5y |
+| 2 | P-OP 算子门太弱:PIT-lint+串锁证明无 lookahead/精确串,但不证明"中金公式正确";错算子静默产出看似对的 alpha(3 个失败场景:OLS off-by-one、影线复权错位、振幅 rank 截面vs时序混淆) | **ACCEPT(brief §4.2 自曝)** | 新 §10A:`OperatorCertification`(golden panel/property test/慢速参考实现对拍/truth parity/对齐+PIT 测试);未认证算子的因子只能 dev evidence(status_power=none),**阻断 formal IS gate**;算子版本变→下游 definition_hash 失效重算 |
+| 3 | 排序:不要用旧 univ_all 门做 status-bearing interim(制造 observed-domain taint+污染 lifecycle+算子 de-risk 不该靠 label);用 D-COMP/D4a(无新算子)做 P-GATE canary,E1 等 P-OP 认证 | **ACCEPT** | §6 执行顺序重写:D-COMP+D4a 作 P-GATE 首批 canary;E1 在 P-OP 认证后进门;算子 de-risk 靠 formula oracle/truth parity 不靠 label;**撤回"E1 小批走旧门"选项** |
+| 4 | D6 重建一致预期是 derived methodology 非 vendor consensus;重建规则(财年滚动/stale 剔除/券商去重/股本回溯/min-analyst 覆盖)决定因子值;level corr +0.997 必要不充分(因子靠横截面排序与变化,非水平) | **ACCEPT** | §10B:`DerivedConsensusCertification`(method hash+财年/stale/去重/股本/覆盖策略+rank/decile/coverage/delay 敏感性);D6 因子标 `replication_tier=reconstructed_consensus_proxy`;EEChange 财年映射错配失败场景记录 |
+| 5 | "~180 可复刻/100% 进 approved"口径过满:多数 truth table 待转录(未认证 exact)、价量/资金流/筹码/北向只能 proxy、北向同族 OOS 已花+2024-08 断点不能进 approved(与"100%"自相矛盾) | **ACCEPT(修内部矛盾)** | §7 重写:"~183 formalization candidates" 按 5 档 `replication_tier`(exact_certified/formula_equivalent_pending/proxy_approx/derived_methodology_proxy/not_replicable);删除"100% 进 approved 链路";OOS 已花/制度断点族单列 evidence/candidate ceiling |
+| 6 | 其他:6.1 D4 §3↔§8 文本冲突;6.2 三 rebuild 不该合成不可拆 publish;6.3 D7 PIT 成本低估(持仓三套时间/回填/薄窗);6.4 缺字段覆盖 gate(分析师只覆盖研报股→univ_all 实为 covered-subset);6.5 truth 转录无 QA | **ACCEPT 全部** | 见下 |
+
+## §6 子项裁决
+
+- **6.1**(D4 文本冲突):**ACCEPT**,§3 改为明确 D4a(q0-q4 已存→仅注册)/ D4b(q5-q7 缺→cashflow SLOT_DEPTH rebuild)拆分,与 §8 一致。
+- **6.2**(rebuild 合并):**ACCEPT 并修正我的过度优化**——改为"同一 release train 共享一次 final publish,但每 dataset 独立 materializer/parity log/PIT canary/rollback tag";不把未认证 D6 + 新端点 D7 塞进不可拆发布。我原"合并成一次构建"是为省 Windows copytree 时间过度优化了,撤回。
+- **6.3**(D7 PIT 成本):**ACCEPT**,D7 重定性为 data-PIT-certification project,排最后 + 默认 droppable;持仓/股东/薪酬类的 报告期/公告期/入库期三时间 + 回填/修订 + 薄 effective window 单独认证。
+- **6.4**(覆盖 gate):**ACCEPT**,把 §3.9 有效窗治理推广为通用 `availability_audit`(valid_value_ratio_by_year/effective_universe_size_p10/missingness_corr_with_size+liquidity/stale_ratio/first_usable_date/structural_break_dates);不满足覆盖地板的域只能 evidence-only。这正确推广了北向 2024-08 断点为通用规则。
+- **6.5**(truth QA):**ACCEPT**,truth table 转录加 `truth_table_manifest`(chart_id/source_page/reviewed_by/numeric_checksum/units/domain_mapping);无 QA 的因子不能标 exact_certified。
+
+## 无程度分歧
+
+本轮没有"方向对但程度过"的争议(不像 universe review 的 Bonferroni/airtight 两处)。唯一我主动修正的是自己的 rebuild-合并建议(6.2),GPT 更谨慎,采纳其版本。
+
+## Rev2 后的执行顺序(GPT 建议 + 采纳)
+
+```
+1. 冻结 CICC manifest + truth-table label_end/OOS taint + replication tier。
+2. P-GATE/F4:实装域门 + 导入已有 1,449 行证据 + dashboard 域维度可见。
+3. D-COMP + D4a(无新算子/低数据风险)作 P-GATE 首批 canary。
+4. P-OP OperatorCertification harness(不跑 status-bearing factor gate)。
+5. E1a 算子敏感小批 truth-parity dry-run(status_power=none)。
+6. P-CAL 可用后,E1a-h 分批进正式 IS。
+7. D6(DerivedConsensusCertification)、D7(data-PIT-cert)作独立认证项,最后进门。
+```
+
+**一句话**:数据工程拓扑基本正确,但"统计 cohort 治理"+"算子/方法学认证"未达批量正式评估强度。
+Rev2 补齐 6 项后,适合从"工程准备"转入"分批受控正式评估";仍不批准一次性大规模灌入
+draft→candidate→sealed OOS。
+
+---
+
+# Round-2 裁决(GPT 终判 APPROVE WITH CONDITIONS → Rev3)
+
+总判 APPROVE WITH CONDITIONS,5 项最小条件。**5/5 全 ACCEPT**(2 项是我 Round-2 prompt 主动交出的攻击点 B3/B4 被坐实),外加 §C 的 lazy-certification + 统一记录 ACCEPT;1 处 ACCEPT 带诚实 caveat(D6 vendor feed 可生产性)。6 项必改核销:②⑤ RESOLVED,①③④⑥ PARTIALLY → Rev3 补齐。
+
+| 条件 | 裁决 | Rev3 动作 |
+|---|---|---|
+| 1. 预冻结 denominator 层级(防 p-hacking 从挑因子转到挑分母)| **ACCEPT(B2 尖锐)** | §9.2 加 `cohort_denominators` 5 层(source/daily_replicability/formalization_candidate/exact_oos_eligible/sealed_attempt);任何通过率必须同报后三个;primary 在 manifest 冻结时声明,不得事后选 |
+| 2. 拆 OperatorCertification ↔ FactorReplicationCertification(破依赖环)| **ACCEPT(B3,我自曝)** | §10A 拆分:OperatorCertification 只用 synthetic golden/property/慢速参考/PIT 对齐,**不要求 truth parity**;truth parity 归 `FactorReplicationCertification`(exact-cert 专属,触发 OOS 隔离)。用 mmt_range 的因子可先以 `formula_equivalent_pending` 进 formal IS,升 exact 才转录真值表+吃 OOS 隔离 |
+| 3. 短 OOS status ceiling(隔离后窗太短不能自动 approved)| **ACCEPT(B1)** | 新 §9.4:OOS 隔离后剩余窗 < power floor(≥60 调仓周期/≥5 日历年/≥3 结构稳定年)→ `max_status=candidate_validated_short_oos`,approved 需 prospective fresh-window(对接方案 §3.6c);历史 truth-parity 仍作 exact-cert 证据但不冒充 sealed OOS |
+| 4. D6 vendor PIT consensus 作主路径 | **ACCEPT 原则,带 caveat** | §10B:vendor PIT 一致预期(JQ 朝阳永续)若**可生产化**(可入 ledger/provider + 许可/历史满足)则作 formal 主路径,report_rc 重建降为 `derived_methodology_proxy`/交叉验证/fallback。**诚实 caveat**:JQ 朝阳永续此前是云端研究 oracle(jqfactor 快照),能否落地为生产 PIT feed未核;若只能云端取,则 report_rc 重建仍是唯一生产路径,封顶 candidate(条件3),除非 rank/decile/coverage 与 oracle 强一致 + prospective OOS。**先核 feed 可生产性再定路径** |
+| 5. 清 §3 D4 旧文本冲突 | **ACCEPT** | §3 改为与 §8 一致的 D4a(q0-q4 已存仅注册)/ D4b(q5-q7 rebuild)拆分 |
+| §C lazy certification + 统一 ReplicationGovernanceRecord | **ACCEPT(防治理拖死)** | 新 §12:不为 183 个全量前置办证;统一 `ReplicationGovernanceRecord`(替 6 套账);每 gate 只问"status ceiling? 进下一状态缺哪些 cert?";触发式认证表(truth_manifest 仅 exact-cert 时/availability_audit 进 formal IS 自动/DerivedConsensus 仅 D6→candidate/D7 cert 仅非 droppable) |
+
+**前 3 高价值/成本比机制(GPT 给 + 采纳)**:① cohort manifest + truth_label_end/OOS 隔离 ② OperatorCertification 非真值表版 ③ P-GATE/F4 + availability_audit。
+
+**无方向分歧**;唯一附 caveat 的是条件 4(vendor feed 可生产性需先核,不盲目翻主路径)。Round-3 应收敛 APPROVE。
+
+---
+
+# Round-3 终验(GPT 终判 **APPROVE** → Rev4 收尾)
+
+6/6 RESOLVED,零 blocking。3 项非阻断实施收口建议全部 ACCEPT(GPT 已给修法),折进 Rev4。**设计评审三轮收官:CHANGES REQUIRED → APPROVE WITH CONDITIONS → APPROVE。**
+
+| B 项 | 裁决 | Rev4 动作 |
+|---|---|---|
+| B1 D6 缺默认回退→易无限挂起 | **ACCEPT** | §10B 加 `D6_path_state` 状态机:vendor 可生产性核查设 `exit_by`(首个 D6 sprint 末);**到期未过 → 自动转 report_rc_proxy_capped_at_candidate,不继续 pending**;不阻塞 D-COMP/D4a/E1 |
+| B2 power floor 是拍的/会否封死价量 approved | **ACCEPT(方向不松,文字校准)** | §9.4 改:60c/5y/3y 为**初始保守 floor,approved 前必须用历史 kill-rate + window-matched null 校准,未校准按保守执行**;新增 `truth_observed_replication_path`——short_oos ceiling 不是"准 approved",而是 ①复刻忠实度证明 ②prospective watchlist(2026+ 新标签滚动)③报告/cohort tracking 用,非生产 approved。**整本价量手册短期多停 candidate 是诚实代价,不放宽到"3.5y 也 approved"(否则回到 Round-1 漏洞)** |
+| B3 统一记录隐藏复杂度(ceiling 散在 5 cert) | **ACCEPT** | §12 加确定性 `status_ceiling_lattice`(blocked/dev_evidence_only/evidence_only/candidate_ceiling/eligible_for_oos/eligible_for_approved)+ 物化 reason codes;每 claim 页只显示一个 `current_status_ceiling` + `blocking_reasons` + `nonblocking_missing_certs` + `next_actions`——"为什么卡住"机器可解释 |
+
+## 可开工最小前置集(GPT 给 + 采纳,= 让 D-COMP/D4a 干净进正式评估的最小集)
+
+1. **治理骨架落库**:cohort manifest + 5 层 denominator + replication_tier + truth_label_end/oos_quarantine_start 字段 + ReplicationGovernanceRecord + status_ceiling resolver。
+2. **P-GATE/F4 + 现有证据入库**:FactorDomainClaim/TaintLedger 接入门 + 1,449 行 7 域矩阵入 registry/dashboard + 生产 resolver block evidence-only 域 + availability_audit 自动 + 短OOS/coverage fail 的 ceiling 可被 gate 读。
+3. **第一批最小工程资产**:D-COMP(成分冻结+taint 继承+交集有效窗+research_family+ceiling)/ D4a(field_status 注册+approval YAML+parity 0+log+表达式 hash+availability_audit+claim)。
+
+**P-OP / D6 / D7 不是 D-COMP/D4a 的前置;P-CAL 最低要求=tainted claim 用保守上界或 reviewer-block,不退回旧 univ_all 原 bar。**
+
+**评审关闭。下一步实现起点 = 上面三组最小前置 → 首批 D-COMP/D4a canary。**

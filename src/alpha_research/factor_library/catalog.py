@@ -75,6 +75,44 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # `get_industry_relative_defs()` + `operators.add_industry_relative_composites`
     # (Layer 2 post-processing — requires external SW2021 industry labels).
 
+    # ── CICC price-volume 系列7 图表4 — momentum replication (E1a) ──
+    # Genuinely-new constructions backed by P-OP-certified operators
+    # (path_adjusted_momentum / up_down_day_share / ts_rank / days_since_high).
+    # _M = 1 month (20d), _A = 1 year (250d). Linked into
+    # config/replication/cicc_price_volume_cohort_v2.yaml by catalog_factor_id.
+    # Dedup notes: mmt_normal_M≈mom_return_20d, mmt_normal_A≈mom_skip1m_252d,
+    # mmt_intraday_M≈mom_intraday_20d, mmt_overnight_M≈mom_overnight_20d (NOT registered);
+    # mmt_discrete_20d is rank-equivalent to rev_up_down_ratio_20d modulo flat-day handling
+    # (registered anyway — the gate's resid_ic_vs_controls adjudicates redundancy empirically).
+    catalog['mmt_route_20d'] = op.path_adjusted_momentum(20)        # mmt_route_M
+    catalog['mmt_route_250d'] = op.path_adjusted_momentum(250)      # mmt_route_A
+    catalog['mmt_discrete_20d'] = op.up_down_day_share(20)          # mmt_discrete_M
+    catalog['mmt_discrete_250d'] = op.up_down_day_share(250)        # mmt_discrete_A
+    catalog['mmt_time_rank_20d'] = f"Mean({op.ts_rank(250)}, 20)"   # mmt_time_rank_M: 20d-mean of 250d price rank
+    catalog['mmt_highest_days_250d'] = op.days_since_high(250)      # mmt_highest_days_A
+
+    # ── CICC price-volume 系列7 图表16 — volatility replication (E1b) ──
+    # 13 subtypes × {20,60,120}d (1M/3M/6M); 36 registered (vol_std == risk_vol_{20,60,120}d EXACT
+    # dedup, SKIPPED). vol_down/up_std = TRUE subset std (sign_conditional_std, limit-excluded via the
+    # certified $limit_status field) — distinct from the zero-fill risk_downvol proxy. vol_highlow =
+    # high/low (distinct from risk_range_ratio = (high-low)/close). Shadows via elementwise
+    # Greater/Less (adjustment cancels in the ratio). GPT 5.5 Pro E1b factor-logic review APPROVED
+    # (B1-B4 folded: full subset-std contract, $limit_status basis, 36-count, vol_std dedup lock).
+    # Linked into config/replication/cicc_price_volume_cohort_v2.yaml.
+    for w in [20, 60, 120]:
+        catalog[f'vol_down_std_{w}d'] = op.sign_conditional_std("down", w)
+        catalog[f'vol_up_std_{w}d'] = op.sign_conditional_std("up", w)
+        catalog[f'vol_highlow_avg_{w}d'] = f"Mean({op.intraday_highlow()}, {w})"
+        catalog[f'vol_highlow_std_{w}d'] = f"Std({op.intraday_highlow()}, {w})"
+        catalog[f'vol_upshadow_avg_{w}d'] = f"Mean({op.norm_upper_shadow()}, {w})"
+        catalog[f'vol_upshadow_std_{w}d'] = f"Std({op.norm_upper_shadow()}, {w})"
+        catalog[f'vol_downshadow_avg_{w}d'] = f"Mean({op.norm_lower_shadow()}, {w})"
+        catalog[f'vol_downshadow_std_{w}d'] = f"Std({op.norm_lower_shadow()}, {w})"
+        catalog[f'vol_w_upshadow_avg_{w}d'] = f"Mean({op.williams_upper_shadow()}, {w})"
+        catalog[f'vol_w_upshadow_std_{w}d'] = f"Std({op.williams_upper_shadow()}, {w})"
+        catalog[f'vol_w_downshadow_avg_{w}d'] = f"Mean({op.williams_lower_shadow()}, {w})"
+        catalog[f'vol_w_downshadow_std_{w}d'] = f"Std({op.williams_lower_shadow()}, {w})"
+
     # ═══════════════════════════════════════════════════════════════
     # 2. REVERSAL (短期反转) — 8 factors
     # ═══════════════════════════════════════════════════════════════
@@ -137,6 +175,199 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # PIT-correct, formal-eligible handles. Provenance: workspace/research/idea_sourcing/.
     catalog['qual_cash_to_assets'] = "Ref($money_cap_q0, 1) / Ref($total_assets_q0, 1)"
     catalog['qual_rd_to_assets'] = "Ref($rd_exp_sq_q0, 1) / Ref($total_assets_q0, 1)"
+    # SINGLE-QUARTER margins (2026-06-09). The PIT-correct alternative to Tushare's vendor
+    # q_netprofit_margin / q_gsprofit_margin single-quarter ratios: built from OUR single-quarter
+    # _sq_q0 derivation (derive_single_quarter_value), which was parity-validated against the
+    # vendor q_* (≈90% near-exact, Spearman 0.97-0.98 — see workspace/research/data_audit/
+    # PIT_VS_VENDOR_Q_PARITY.md). Single-quarter margins capture recent-quarter profitability
+    # shifts the cumulative grossprofit_margin/netprofit_margin smooth over. All fields are
+    # field-approved income _sq_q0 (revenue/n_income_attr_p/oper_cost/operate_profit); each $field
+    # is Ref(...,1)-wrapped for PIT safety. Draft factors.
+    catalog['qual_q_net_margin'] = "Ref($n_income_attr_p_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
+    catalog['qual_q_gross_margin'] = "(Ref($revenue_sq_q0, 1) - Ref($oper_cost_sq_q0, 1)) / Ref($revenue_sq_q0, 1)"
+    catalog['qual_q_op_margin'] = "Ref($operate_profit_sq_q0, 1) / Ref($revenue_sq_q0, 1)"
+
+    # ── Phase-B single-quarter factors (2026-06-24): PIT-correct OUR-_sq replacements for the vendor
+    # q_* fina_indicator fields (intentionally unregistered as PIT-uncertain). Each local expr was
+    # VALUE-PARITY-VALIDATED vs the materialized vendor q_* bin (≈150 stocks 2014-24,
+    # _phaseb_qstar_parity_audit.py: med rel-err ~0, 94-99% within-1%; official Tushare defs doc 79;
+    # GPT plan R1→R2 APPROVE-PLAN; Part-A code R1=REVISE folded below). All fields field-approved
+    # income/cashflow _sq + Ref(...,1) PIT-safe. Draft; a CORRELATED family — cohort
+    # phase_b_single_quarter_fina_indicator (NOT independent signals; select by marginal contribution;
+    # machine-readable cohort/replacement_for markers REQUIRED before screening/family-aware selection/
+    # promotion — GPT Part-A m1). Vendor distinctions vs the existing qual_q_*/grow_*_q_*:
+    # q_netprofit_margin/q_*_to_gr use 净利润(total)/营业总收入 (NOT 归母/营业收入); q_adminexp_to_gr =
+    # (管理费用 + 研发费用)/营业总收入 with 研发 ZERO-FILLED when missing (研发 split out of 管理费用 post-2018;
+    # pre-2018 rd_exp is NaN → must be 0 not NaN — GPT Part-A Major-1). CAVEAT (GPT Part-A R2 Minor):
+    # `If(rd>0,rd,0)` also zeros the RARE negative rd_exp rows (~105 parity rows) — not a pure NaN-fill;
+    # document/normalize to a strict missing-only fill before any PROMOTION of qual_q_adminexp_to_gr.
+    # GPT Part-A Major-2: every denominator GUARDED → NaN (not inf, not 0) when 0/NaN; positive
+    # denominators use `>0`, sign-ambiguous (total_profit / opincome) use `Abs(...)>0`. `earn_opincome_q`
+    # / `earn_q_eps` are LEVELS (not scale-free) — draft-only; pair with size/price before any promotion.
+    catalog['grow_rev_q_yoy'] = ("If(Abs(Ref($revenue_sq_q4, 1)) > 0,"
+                                 " (Ref($revenue_sq_q0, 1) - Ref($revenue_sq_q4, 1)) / Abs(Ref($revenue_sq_q4, 1)),"
+                                 " np.nan)")                                  # q_sales_yoy
+    catalog['grow_ni_q_yoy'] = ("If(Abs(Ref($n_income_sq_q4, 1)) > 0,"
+                                " (Ref($n_income_sq_q0, 1) - Ref($n_income_sq_q4, 1)) / Abs(Ref($n_income_sq_q4, 1)),"
+                                " np.nan)")                                   # q_profit_yoy (净利润 total)
+    catalog['grow_rev_q_qoq'] = ("If(Abs(Ref($revenue_sq_q1, 1)) > 0,"
+                                 " (Ref($revenue_sq_q0, 1) - Ref($revenue_sq_q1, 1)) / Abs(Ref($revenue_sq_q1, 1)),"
+                                 " np.nan)")                                  # q_sales_qoq
+    catalog['grow_or_q_qoq'] = ("If(Abs(Ref($total_revenue_sq_q1, 1)) > 0,"
+                                " (Ref($total_revenue_sq_q0, 1) - Ref($total_revenue_sq_q1, 1)) / Abs(Ref($total_revenue_sq_q1, 1)),"
+                                " np.nan)")                                   # q_gr_qoq (营业总收入)
+    catalog['grow_ni_attr_q_qoq'] = ("If(Abs(Ref($n_income_attr_p_sq_q1, 1)) > 0,"
+                                     " (Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q1, 1)) / Abs(Ref($n_income_attr_p_sq_q1, 1)),"
+                                     " np.nan)")                              # q_netprofit_qoq (归母)
+    # 利润率/费用率 single-quarter (净利润-total / 营业总收入 denominators — vendor q_*_to_gr family)
+    catalog['qual_q_sales_net_margin'] = ("If(Ref($revenue_sq_q0, 1) > 0,"
+                                          " Ref($n_income_sq_q0, 1) / Ref($revenue_sq_q0, 1), np.nan)")    # q_netprofit_margin
+    catalog['qual_q_op_to_gr'] = ("If(Ref($total_revenue_sq_q0, 1) > 0,"
+                                  " Ref($operate_profit_sq_q0, 1) / Ref($total_revenue_sq_q0, 1), np.nan)")  # q_op_to_gr
+    catalog['qual_q_np_to_gr'] = ("If(Ref($total_revenue_sq_q0, 1) > 0,"
+                                  " Ref($n_income_sq_q0, 1) / Ref($total_revenue_sq_q0, 1), np.nan)")      # q_profit_to_gr
+    # 管理费用 + 研发费用(zero-filled if missing) / 营业总收入
+    _admin_rd = "(Ref($admin_exp_sq_q0, 1) + If(Ref($rd_exp_sq_q0, 1) > 0, Ref($rd_exp_sq_q0, 1), 0))"
+    catalog['qual_q_adminexp_to_gr'] = (f"If(Ref($total_revenue_sq_q0, 1) > 0,"
+                                        f" {_admin_rd} / Ref($total_revenue_sq_q0, 1), np.nan)")           # q_adminexp_to_gr
+    catalog['qual_q_finaexp_to_gr'] = ("If(Ref($total_revenue_sq_q0, 1) > 0,"
+                                       " Ref($fin_exp_sq_q0, 1) / Ref($total_revenue_sq_q0, 1), np.nan)")  # q_finaexp_to_gr
+    catalog['qual_q_salescash_to_or'] = ("If(Ref($revenue_sq_q0, 1) > 0,"
+                                         " Ref($c_fr_sale_sg_sq_q0, 1) / Ref($revenue_sq_q0, 1), np.nan)")  # q_salescash_to_or
+    # 经营活动净收益 family (= 营业总收入 − 营业总成本; vendor q_opincome) + 单季 EPS
+    _opincome_q = "(Ref($total_revenue_sq_q0, 1) - Ref($total_cogs_sq_q0, 1))"
+    catalog['earn_opincome_q'] = _opincome_q                                  # q_opincome (LEVEL; no denominator)
+    catalog['qual_q_opincome_to_ebt'] = (f"If(Abs(Ref($total_profit_sq_q0, 1)) > 0,"
+                                         f" {_opincome_q} / Ref($total_profit_sq_q0, 1), np.nan)")         # q_opincome_to_ebt
+    catalog['qual_q_ocf_to_opincome'] = (f"If(Abs({_opincome_q}) > 0,"
+                                         f" Ref($n_cashflow_act_sq_q0, 1) / {_opincome_q}, np.nan)")       # q_ocf_to_or
+    catalog['earn_q_eps'] = ("If(Ref($total_share, 1) > 0,"
+                             " Ref($n_income_attr_p_sq_q0, 1) / Ref($total_share, 1), np.nan)")            # q_eps (LEVEL; EP=÷price)
+    # 单季 扣非归母净利润 / 归母净利润 (earnings quality; vendor q_dtprofit_to_profit). $profit_dedt_sq_q0 is
+    # DERIVED (Phase-C, 2026-06-24) from the indicators CUMULATIVE profit_dedt via derive_single_quarter_value.
+    # Denominator = 归母净利润 $n_income_attr_p_sq_q0 (NOT consolidated n_income, NOT 利润总额): a 254k-obs
+    # value-parity vs the vendor's OWN q_dtprofit_to_profit_q0 matched 归母 at 99.2% (med 0.000 pts) vs
+    # consolidated only 30% — accounting-consistent (扣非归母 ÷ 归母, both 归母-scope). GPT Plan-C Major-1 was
+    # directionally right (not 利润总额) but the build-phase probe corrected the variant to 归母 (rule #10).
+    # Abs()-guarded (net income can be negative). coverage_tier=sub (主板 84.6% -> 北证 27.0%); draft-only.
+    catalog['qual_dtprofit_to_profit_q'] = ("If(Abs(Ref($n_income_attr_p_sq_q0, 1)) > 0,"
+                                            " Ref($profit_dedt_sq_q0, 1) / Ref($n_income_attr_p_sq_q0, 1), np.nan)")  # q_dtprofit_to_profit
+
+    # ═══════════════════════════════════════════════════════════════
+    # CICC handbook replication batch (Phase D5, 2026-06-12) — 18 factors.
+    # Constructions truth-certified against the 中金基本面手册 published tables
+    # (exact-tier non-size IC 99% within tolerance over 2010-2022 × 3 domains;
+    # workspace/research/cicc_replication/PHASE_D_ROUND1_REPORT.md). These are PIT
+    # statement-slot TTM constructions — materially DIFFERENT from the vendor
+    # cumulative-period indicator factors already in the catalog (qual_roa, val_ep_ttm
+    # etc.): the Phase-C turnover fingerprint showed level constructions differ ~2× in
+    # cross-section refresh cadence. Dedup mapping (CICC code ↔ catalog id, incl. the
+    # 7 SKIPPED rank-identical codes): workspace/research/cicc_replication/D5_REGISTRATION_MAP.md.
+    # NI_TTM uses n_income (incl. minority — attr_p has no q1-q3 slots; recorded caveat).
+    # All claims on univ_all/csi300/csi500 are TAINTED post-hoc by construction (their
+    # 2010-2022 IS evidence was observed in the replication batch before registration —
+    # recorded in the TaintLedger; honest class per universe plan Draft-7).
+    _ni_ttm = ("(Ref($n_income_sq_q0, 1) + Ref($n_income_sq_q1, 1)"
+               " + Ref($n_income_sq_q2, 1) + Ref($n_income_sq_q3, 1))")
+    _ocf_ttm = ("(Ref($n_cashflow_act_sq_q0, 1) + Ref($n_cashflow_act_sq_q1, 1)"
+                " + Ref($n_cashflow_act_sq_q2, 1) + Ref($n_cashflow_act_sq_q3, 1))")
+    _rev_ttm = ("(Ref($total_revenue_sq_q0, 1) + Ref($total_revenue_sq_q1, 1)"
+                " + Ref($total_revenue_sq_q2, 1) + Ref($total_revenue_sq_q3, 1))")
+    _rev_ttm_prev = ("(Ref($total_revenue_sq_q1, 1) + Ref($total_revenue_sq_q2, 1)"
+                     " + Ref($total_revenue_sq_q3, 1) + Ref($total_revenue_sq_q4, 1))")
+    _cost_ttm = ("(Ref($oper_cost_sq_q0, 1) + Ref($oper_cost_sq_q1, 1)"
+                 " + Ref($oper_cost_sq_q2, 1) + Ref($oper_cost_sq_q3, 1))")
+    _cost_ttm_prev = ("(Ref($oper_cost_sq_q1, 1) + Ref($oper_cost_sq_q2, 1)"
+                      " + Ref($oper_cost_sq_q3, 1) + Ref($oper_cost_sq_q4, 1))")
+    _capex_ttm = ("(Ref($c_pay_acq_const_fiolta_sq_q0, 1) + Ref($c_pay_acq_const_fiolta_sq_q1, 1)"
+                  " + Ref($c_pay_acq_const_fiolta_sq_q2, 1) + Ref($c_pay_acq_const_fiolta_sq_q3, 1))")
+    _avg_assets = "((Ref($total_assets_q0, 1) + Ref($total_assets_q4, 1)) / 2)"
+    _mv_yuan = "(Ref($total_mv, 1) * 10000)"
+    # 盈利/营运 levels (CICC: CFOA, ROA_TTM, NPM_TTM, AT, INVT, RAT, GPMD)
+    catalog['qual_cfoa_ttm'] = f"{_ocf_ttm} / Ref($total_assets_q0, 1)"
+    catalog['qual_roa_ttm'] = f"{_ni_ttm} / Ref($total_assets_q0, 1)"
+    catalog['qual_npm_ttm'] = f"{_ni_ttm} / {_rev_ttm}"
+    catalog['qual_at_ttm'] = f"{_rev_ttm} / {_avg_assets}"
+    catalog['qual_invt_ttm'] = (f"{_cost_ttm} / ((Ref($inventories_q0, 1)"
+                                " + Ref($inventories_q4, 1)) / 2)")
+    catalog['qual_rat_ttm'] = (f"{_rev_ttm} / ((Ref($accounts_receiv_q0, 1)"
+                               " + Ref($accounts_receiv_q4, 1)) / 2)")
+    catalog['qual_gpmd_ttm'] = (f"(1 - {_cost_ttm}/{_rev_ttm})"
+                                f" - (1 - {_cost_ttm_prev}/{_rev_ttm_prev})")
+    # 盈余/安全 (CICC: CSR, CCR)
+    catalog['qual_csr'] = "Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
+    catalog['qual_ccr_ttm'] = f"{_ocf_ttm} / Ref($total_cur_liab_q0, 1)"
+    # 成长 single-quarter LEVELS (CICC: NP_Q_YOY/NP_QOQ/OP_Q_YOY/OR_Q_YOY/TA_YOY) — the
+    # catalog so far held only their ACCELERATIONS (grow_*_yoy_accel_q = Delta of these).
+    # Abs() denominators per the CICC convention (negative bases flip a plain ratio).
+    catalog['grow_ni_attr_q_yoy'] = ("(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1))"
+                                     " / Abs(Ref($n_income_attr_p_sq_q4, 1))")
+    catalog['grow_ni_q_qoq'] = ("(Ref($n_income_sq_q0, 1) - Ref($n_income_sq_q1, 1))"
+                                " / Abs(Ref($n_income_sq_q1, 1))")
+    catalog['grow_op_q_yoy'] = ("(Ref($operate_profit_sq_q0, 1) - Ref($operate_profit_sq_q4, 1))"
+                                " / Abs(Ref($operate_profit_sq_q4, 1))")
+    catalog['grow_or_q_yoy'] = ("(Ref($total_revenue_sq_q0, 1) - Ref($total_revenue_sq_q4, 1))"
+                                " / Abs(Ref($total_revenue_sq_q4, 1))")
+    catalog['grow_total_assets_yoy'] = ("(Ref($total_assets_q0, 1) - Ref($total_assets_q4, 1))"
+                                        " / Abs(Ref($total_assets_q4, 1))")
+    # 估值 PIT-TTM (CICC: EP_TTM/OCFP_TTM/FCFP_TTM) — keep loss-makers ranked lowest
+    # (1/pe_ttm drops them as NaN); TTM vs the vendor's cumulative-period basis.
+    catalog['val_ep_ttm_pit'] = f"{_ni_ttm} / {_mv_yuan}"
+    catalog['val_ocfp_ttm_pit'] = f"{_ocf_ttm} / {_mv_yuan}"
+    catalog['val_fcfp_ttm'] = f"({_ocf_ttm} - {_capex_ttm}) / {_mv_yuan}"
+    # 规模结构 (CICC: FC_MC 流通占比 — a bounded ratio, distinct from the ln-size levels)
+    catalog['size_float_ratio'] = "Ref($circ_mv, 1) / Ref($total_mv, 1)"
+    # CICC D4a — quarter-over-quarter TTM DIFFERENCE factors (Δ of the D5 levels = current-
+    # quarter TTM ratio minus prior-quarter TTM ratio). The prior-quarter TTM uses the q1..q4
+    # slots registered 2026-06-14 (register-only: bins materialized, same _sq/_q derivation as
+    # the approved q0..q3/q0+q4 siblings — see approvals/2026-06-14_*; positional parity q1=prior /
+    # q4=4th-prior + no-future-ann checked by workspace/scripts/canary_qslot_value_parity.py, R3).
+    # FIDELITY TIERS (factor-logic cross-review R3, 2026-06-14 — cohort manifest v2):
+    #   * CFOAD/ROAD/CCRD/CSRD/DAD/CURD — mechanically faithful (formula_equivalent_pending).
+    #   * ROED/DTED/QRD — PROXIES (proxy_approx, hard candidate ceiling): see per-factor notes.
+    #   * APRD — REMOVED (the prior qual_aprd was mis-built; see the batch-3 note below).
+    _ni_ttm_prev = ("(Ref($n_income_sq_q1, 1) + Ref($n_income_sq_q2, 1)"
+                    " + Ref($n_income_sq_q3, 1) + Ref($n_income_sq_q4, 1))")
+    _ocf_ttm_prev = ("(Ref($n_cashflow_act_sq_q1, 1) + Ref($n_cashflow_act_sq_q2, 1)"
+                     " + Ref($n_cashflow_act_sq_q3, 1) + Ref($n_cashflow_act_sq_q4, 1))")
+    catalog['qual_cfoad'] = (f"{_ocf_ttm} / Ref($total_assets_q0, 1)"
+                             f" - {_ocf_ttm_prev} / Ref($total_assets_q1, 1)")
+    catalog['qual_road'] = (f"{_ni_ttm} / Ref($total_assets_q0, 1)"
+                            f" - {_ni_ttm_prev} / Ref($total_assets_q1, 1)")
+    catalog['qual_ccrd'] = (f"{_ocf_ttm} / Ref($total_cur_liab_q0, 1)"
+                            f" - {_ocf_ttm_prev} / Ref($total_cur_liab_q1, 1)")
+    # CSRD (现金比率变动): money_cap (货币资金, balance-sheet) is a close proxy for CICC's CSR
+    # 现金及现金等价资产; its fidelity INHERITS the D5 CSR (qual_csr) source-line / truth-parity
+    # assumption (if CICC CSR means cash-flow-statement cash-and-equivalents, money_cap is near but
+    # not exact). Kept formula_equivalent_pending (per R3) contingent on that CSR=money_cap parity.
+    catalog['qual_csrd'] = ("Ref($money_cap_q0, 1) / Ref($total_cur_liab_q0, 1)"
+                            " - Ref($money_cap_q1, 1) / Ref($total_cur_liab_q1, 1)")
+    # D4a batch-2 — leverage/liquidity ratio differences (CICC DAD/CURD/QRD). q1 slots
+    # registered 2026-06-14 batch-2 (total_liab_q1 / total_cur_assets_q1 / inventories_q1).
+    # qual_qrd is a PROXY (proxy_approx): CICC 速动比率 subtracts more from current assets
+    # ((流动资产 − 存货 − 1年内到期非流动资产 − 待摊费用 − 预付款)/流动负债) than this
+    # inventory-only quick ratio; those extra balance-sheet lines have no registered q0/q1 slots,
+    # so this is the simplified inventory-only form, not the exact CICC quick ratio.
+    catalog['qual_dad'] = ("Ref($total_liab_q0, 1) / Ref($total_assets_q0, 1)"
+                           " - Ref($total_liab_q1, 1) / Ref($total_assets_q1, 1)")
+    catalog['qual_curd'] = ("Ref($total_cur_assets_q0, 1) / Ref($total_cur_liab_q0, 1)"
+                            " - Ref($total_cur_assets_q1, 1) / Ref($total_cur_liab_q1, 1)")
+    catalog['qual_qrd'] = ("(Ref($total_cur_assets_q0, 1) - Ref($inventories_q0, 1)) / Ref($total_cur_liab_q0, 1)"
+                           " - (Ref($total_cur_assets_q1, 1) - Ref($inventories_q1, 1)) / Ref($total_cur_liab_q1, 1)")
+    # D4a batch-3 — ROE / debt-to-equity differences (CICC ROED/DTED). Equity uses
+    # $total_hldr_eqy_inc_min_int (INCL-minority), matched to the incl-minority _ni_ttm numerator
+    # (mixing total NI with 归母 equity would overstate ROE — same documented basis as qual_roa_ttm).
+    # Both are PROXIES (proxy_approx): CICC ROE / 产权比率 are 归母 (exc-minority equity, and 归母
+    # net profit). The exc_min_int equity slots AND the 归母-NI single-quarter slots are unregistered,
+    # so the faithful 归母 form is not buildable yet — these are incl-minority approximations.
+    # (CICC APRD 应计利润占比变动 was REMOVED here 2026-06-14/R3: the prior qual_aprd computed
+    # payables turnover Δ(营业成本TTM / 应付账款), unrelated to the handbook's accruals ratio
+    # 应计利润TTM / 营业利润TTM. The faithful build needs operate_profit_sq q1-q3 — only q0/q4 are
+    # registered — plus a transcribed 应计利润 numerator; until then APRD stays un-built. The
+    # accounts_pay_q0/q1 slots registered for it are now unconsumed — see the approval YAML note.)
+    catalog['qual_roed'] = f"{_ni_ttm} / Ref($total_hldr_eqy_inc_min_int_q0, 1) - {_ni_ttm_prev} / Ref($total_hldr_eqy_inc_min_int_q1, 1)"
+    catalog['qual_dted'] = ("Ref($total_liab_q0, 1) / Ref($total_hldr_eqy_inc_min_int_q0, 1)"
+                            " - Ref($total_liab_q1, 1) / Ref($total_hldr_eqy_inc_min_int_q1, 1)")
     # qual_dupont, qual_operating_leverage → computed as Layer 2 composite
     # qual_ocf_to_ni → needs cashflow data
 
@@ -203,6 +434,32 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     catalog['liq_vol_ratio_ma5'] = op.volume_ratio_smoothed(5)
     catalog['liq_turnover_skew_20d'] = op.turnover_skew(20)
     catalog['liq_spread_proxy_20d'] = op.spread_proxy(20)
+
+    # CICC Wave E1c — liquidity手册 (图表28): 19 new (2 exact dedups: liq_turn_avg_{20,60} ==
+    # liq_turnover_{20,60}d). Guarded inline (GPT B1/B2: NaN not inf on a non-positive denom),
+    # adjusted-OHLC shortcut (B4). No custom operator. See E1c_factor_logic.md.
+    catalog['liq_turn_avg_120d'] = op.avg_turnover(120)            # 20/60 dedup to liq_turnover_{20,60}d
+    for w in (20, 60, 120):
+        catalog[f'liq_turn_std_{w}d'] = op.turnover_std(w)
+        catalog[f'liq_vstd_{w}d'] = op.liq_vstd(w)
+        catalog[f'liq_amihud_avg_{w}d'] = op.amihud_illiquidity_avg(w)   # guarded; 20d NEW (!= legacy liq_amihud_20d)
+        catalog[f'liq_amihud_std_{w}d'] = op.amihud_illiquidity_std(w)
+        catalog[f'liq_shortcut_avg_{w}d'] = op.shortcut_illiquidity_avg(w)
+        catalog[f'liq_shortcut_std_{w}d'] = op.shortcut_illiquidity_std(w)
+
+    # CICC Wave E1d — 量价相关性手册 (图表40): 8 new (0 dedup). Inline Corr+Ref, NO custom operator
+    # (GPT factor-logic APPROVE 2026-06-18; manifest drops the pre-registered lead_lag_corr). Single 20d
+    # window (handbook chart 40 is 1M only). lead_lag_semantics — _post = price/return POSTerior (t+1) ⇒
+    # TURNOVER leads; _prior = price/return PRIOR (t-1) ⇒ PRICE/RETURN leads (lead realized by shifting
+    # the LEADING series back, never a forward Ref). See E1d_factor_logic.md.
+    catalog['corr_price_turn_20d'] = op.corr_price_turn(20)               # sync: corr(turnover, adj close level)
+    catalog['corr_price_turn_post_20d'] = op.corr_price_turn_post(20)     # turnover leads price
+    catalog['corr_price_turn_prior_20d'] = op.corr_price_turn_prior(20)   # price leads turnover
+    catalog['corr_ret_turn_20d'] = op.corr_ret_turn(20)                   # sync: corr(turnover, ret)
+    catalog['corr_ret_turn_post_20d'] = op.corr_ret_turn_post(20)         # turnover leads return
+    catalog['corr_ret_turn_prior_20d'] = op.corr_ret_turn_prior(20)       # return leads turnover
+    catalog['corr_ret_turnd_20d'] = op.corr_ret_turnd(20)                 # sync: corr(Δturnover, ret)
+    catalog['corr_ret_turnd_prior_20d'] = op.corr_ret_turnd_prior(20)     # return leads Δturnover
 
     # ═══════════════════════════════════════════════════════════════
     # 9. TECHNICAL (技术指标) — 14 factors
@@ -288,6 +545,19 @@ def _add_capital_flow_factors(catalog):
         "Mean(Ref($buy_lg_amount, 1), 5) / Mean(Ref($amount, 1), 5)"
     )
 
+    # CICC Wave E1f — 资金流手册 (图表64): 9 FAITHFUL active-family factors (path A; GPT factor-logic
+    # CHANGES REQUIRED→APPROVE 2026-06-19). prop = ratio-of-sums (distinct from the mean-of-ratios
+    # flow_*_net_pct above); shift_dist = 位移路程比 (net/gross ∈[−1,1]). Guarded, no operator, all
+    # Ref(...,1) (moneyflow same-day outcome). DEFERRED: the "总买入含被动" buy family (buy_shift_dist =
+    # affine alias of act_buy_shift_dist; total-buy needs passive flow, unavailable) + the 开盘/尾盘 family
+    # (no intraday split in daily moneyflow). See E1f_factor_logic.md.
+    catalog['flow_act_buy_prop_20d'] = op.flow_act_buy_prop('total', 20)
+    for _tag, _sz in (('l', 'lg'), ('m', 'md'), ('s', 'sm')):
+        catalog[f'flow_act_buy_prop_{_tag}_20d'] = op.flow_act_buy_prop(_sz, 20)
+    catalog['flow_act_buy_shift_dist_20d'] = op.flow_act_buy_shift_dist('total', 20)
+    for _tag, _sz in (('xl', 'elg'), ('l', 'lg'), ('m', 'md'), ('s', 'sm')):
+        catalog[f'flow_act_buy_shift_dist_{_tag}_20d'] = op.flow_act_buy_shift_dist(_sz, 20)
+
 
 def _add_northbound_factors(catalog):
     """Category 12: Northbound Funds (北向资金) — requires hk_hold data."""
@@ -296,6 +566,30 @@ def _add_northbound_factors(catalog):
     catalog['north_hold_change_20d'] = "Ref($ratio, 1) - Ref($ratio, 21)"
     catalog['north_accumulation_20d'] = "Sum(Delta(Ref($ratio, 1), 1), 20)"
     catalog['north_flow_momentum'] = "Slope(Ref($ratio, 1), 20)"
+    # Within-coverage variants (arXiv D4, 2026-06-10): the provider zero-densifies
+    # $ratio for non-Connect names (~half the universe ties at 0), diluting the
+    # unmasked forms above (size-neut ICIR 0.20 -> 0.47 once masked). Mask to the
+    # held sub-universe via If(ratio>0, ..., np.nan); rank within-coverage is then
+    # automatic. Marginal increment +0.019 vs the 31-factor book (just under the
+    # +0.02 bar) -> drafts pending the IS lifecycle gate. Expected sign: + (foreign
+    # accumulation -> continuation). See idea_sourcing/knowledge/D1_D4_SCREEN_RESULTS.md.
+    catalog['north_hold_change_20d_cov'] = (
+        "If(Ref($ratio, 1) > 0, Ref($ratio, 1) - Ref($ratio, 21), np.nan)"
+    )
+    catalog['north_hold_change_60d_cov'] = (
+        "If(Ref($ratio, 1) > 0, Ref($ratio, 1) - Ref($ratio, 61), np.nan)"
+    )
+
+    # CICC Wave E1g — 北向资金手册 (图表76): 4 faithful per-instrument factors (GPT factor-logic
+    # CHANGES REQUIRED→path-C APPROVE 2026-06-20). All masked to the northbound-held sub-universe
+    # (If(ratio>0)); inline, no operator. north_hold_prop / prefer-family DEFERRED (dedup / cross-
+    # sectional rank-alias + not Qlib-expressible). VWAP holding-VALUE uses $north_hold_vol (faithful,
+    # registered 2026-06-20), NOT a ratio×VWAP proxy. CAVEATS: $ratio is issued-share % (doc 188, not
+    # CICC's free-float); OOS spent_same_family (arXiv D4 sign-flip); short IS 2017-2020. See E1g_factor_logic.md.
+    catalog['north_hold_prop_st_chg_20d'] = op.north_hold_prop_st_chg(20)   # ratio − mean(ratio,20)
+    catalog['north_inflow_shift_dist_20d'] = op.north_inflow_shift_dist(20)  # 位移路程比 ∈[−1,1]
+    catalog['north_excess_hold_st_20d'] = op.north_excess_hold_st(20)        # HV/mean(HV,20) − ret20
+    catalog['north_trade_prop_20d'] = op.north_trade_prop(20)                # (HV/mean(HV,20)) / Σamount
 
 
 def _add_margin_factors(catalog):
@@ -303,6 +597,19 @@ def _add_margin_factors(catalog):
     catalog['margin_balance_pct'] = "Ref($rzye, 1) / Ref($circ_mv, 1)"
     catalog['margin_net_buy_20d'] = "Mean(Ref(($rzmre - $rzche), 1), 20)"
     catalog['margin_sl_balance_change'] = "Delta(Ref($rqye, 1), 20)"
+
+    # CICC Wave E1h — 融资融券手册 (图表88): 5 faithful factors (GPT factor-logic CHANGES REQUIRED→
+    # APPROVE 2026-06-20). All masked to the margin-eligible sub-universe (any of the 4 approved fields
+    # >0) — unmasked zeros would inject a −ret20 reversal artifact. 融券 side NOW replicable ($rqye/$rqmcl
+    # approved 2026-06-04; only repayment $rzche/$rqchl quarantined → net_margin_*_shift_dist blocked).
+    # Dedup: margin_money_bal_prop≡margin_balance_pct above; margin_sec_avg deferred (ambiguous handbook
+    # formula — avg vs ratio-of-sums; NOT claimed as dedup). Unit-mixed → rank-valid, formula_equivalent_
+    # pending. Inline, no operator, Ref(...,1) (margin T-disclosed-after-close). See E1h_factor_logic.md.
+    catalog['margin_buy_money_prop_20d'] = op.margin_buy_money_prop(20)     # 融资买入占比
+    catalog['margin_money_bal_growth_20d'] = op.margin_money_bal_growth(20) # 融资增量增长率
+    catalog['margin_sell_sec_prop_20d'] = op.margin_sell_sec_prop(20)       # 融券卖出占比 (vol×VWAP)
+    catalog['margin_sec_bal_prop'] = op.margin_sec_bal_prop()               # 融券余额占比 (point ratio)
+    catalog['margin_sec_bal_growth_20d'] = op.margin_sec_bal_growth(20)     # 融券增量增长率
 
 
 def _report_rc_eps_diffusion(window, min_n=3, min_active=2):
@@ -338,6 +645,23 @@ def _add_earnings_event_factors(catalog):
     # ⚠ sealed-OOS (candidate→approved) is HARD-GATED behind the 2026-06-15 breadth canary.
     catalog['earn_eps_diffusion_60'] = _report_rc_eps_diffusion(60)
     catalog['earn_eps_diffusion_120'] = _report_rc_eps_diffusion(120)
+    # Scaled SUE / PEAD (arXiv D3, 2026-06-10): YoY change in single-quarter
+    # attributable net income scaled by market cap / total assets — the classic
+    # 8-quarter SUE is NOT buildable (income family serves n_income_sq only to q3;
+    # attr_p has exactly q0+q4). Strongest standalone of the D1-D4 run (size-neut
+    # ICIR 0.50/0.30, beats plain YoY growth by +0.20) BUT payoff-corr 0.92/0.95 to
+    # grow_netprofit_yoy -> explicitly a GROWTH-FAMILY REFINEMENT, not a new
+    # dimension (marginal increment +0.015/+0.020). Statement fields are
+    # PIT-anchored on max(ann_date, f_ann_date); Ref(...,1) on top per the registry
+    # contract. Expected sign: + (PEAD drift). See D1_D4_SCREEN_RESULTS.md.
+    catalog['earn_sue_ni_mcap'] = (
+        "(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1)) "
+        "/ Ref($total_mv, 1)"
+    )
+    catalog['earn_sue_ni_assets'] = (
+        "(Ref($n_income_attr_p_sq_q0, 1) - Ref($n_income_attr_p_sq_q4, 1)) "
+        "/ Ref($total_assets_q0, 1)"
+    )
 
 
 def _add_sealed_oos_winners(catalog):
@@ -528,6 +852,20 @@ def _add_alpha_endpoint_factors(catalog):
     # reduction on the already-dense cyq_perf field.
     catalog['alpha_chip_winner_rate_ema_10d'] = (
         "EMA(Ref($cyq_perf__winner_rate, 1), 10)"
+    )
+
+    # 20d-smoothed Grinblatt-Han Capital Gains Overhang (arXiv D1 winner,
+    # 2026-06-10): the smoothed variant of `alpha_chip_weight_avg_dev` above.
+    # The D1-D4 exploration's top result — marginal increment +0.047 vs the
+    # 31-factor book (2018-2020 overlap window; 2x the GP precedent), size-neut
+    # ICIR +0.35, Grinblatt-Han sign (+) confirms in A-shares. Caveats carried
+    # into the lifecycle: cyq_perf coverage floor makes IS 2018+ only, and the
+    # 0.88 payoff-corr to qual_roa is period-confounded (2018-2020 quality
+    # rally). Expected sign: + (gain overhang -> continuation). See
+    # idea_sourcing/knowledge/D1_D4_SCREEN_RESULTS.md.
+    catalog['alpha_chip_cgo_smooth_20d'] = (
+        "Mean((Ref($close, 1) - Ref($cyq_perf__weight_avg, 1)) "
+        "/ Ref($cyq_perf__weight_avg, 1), 20)"
     )
 
     # ── Insider / holder transactions (stk_holdertrade aggregates) ──────
@@ -727,6 +1065,19 @@ def get_composite_defs():
             'name': 'comp_52w_position',
             'components': ['tech_close_to_high_20d', 'tech_close_to_low_20d'],
             'weights': [0.5, 0.5],
+        },
+        # ── CICC handbook composite: Profit 综合盈利因子 = CFOA + ROE + ROIC 等权 (手册 §11) ──
+        # PROXY (proxy_approx — HARD candidate_ceiling cap in cohort manifest v2; factor-logic R3).
+        # This is NOT a faithful CICC Profit: it rank-combines a PIT-TTM CFOA (qual_cfoa_ttm) with the
+        # VENDOR cumulative-YTD ROE/ROIC (qual_roe/qual_roic = fina_indicator) — a time-basis mismatch
+        # (TTM vs YTD sawtooth). An exact TTM-ROIC is not cleanly buildable (handbook flags ROIC
+        # ⚠️投入资本口径). Do NOT trust this prose as "faithful"; the manifest tier is the source of truth.
+        # The other handbook composites are also not cleanly buildable yet — Growth needs OP_SD/QPT,
+        # Opt needs OCFA (regression operator), QQC needs all six; Acc/Safe are single-base
+        # (rank-equivalent to grow_profit_acceleration / qual_ccr_ttm → not registered, dedup discipline).
+        {
+            'name': 'comp_cicc_profit',
+            'components': ['qual_cfoa_ttm', 'qual_roe', 'qual_roic'],
         },
     ]
 

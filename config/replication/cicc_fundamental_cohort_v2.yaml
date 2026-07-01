@@ -1,0 +1,122 @@
+# CICC fundamental handbook — frozen replication cohort manifest v2 (roadmap Rev5 §9.1/§9.2)
+#
+# ░░ v1 → v2 FIDELITY CORRECTION (factor-logic cross-review R3, 2026-06-14) ░░
+# v1 (archive/cicc_fundamental_cohort_v1.yaml, sha 5d3f761498cbb36b) is preserved UNCHANGED as
+# the original pre-results declaration. v2 supersedes it after GPT 5.5 Pro's factor-LOGIC review
+# found that several D4a/D-COMP factors are NOT faithful CICC replications as built. Per the frozen
+# contract ("revise by bumping to a new version file, never silently edit"), the corrections live
+# here, NOT as an edit to v1. The DENOMINATORS are unchanged (no result was seen; this is a
+# conservative fidelity DOWNGRADE, the opposite of p-hacking). source_cohort_id is unchanged so the
+# ReplicationGovernanceRecords stay keyed to the same cohort. Changes vs v1:
+#   * Profit (comp_cicc_profit): formula_equivalent_pending → proxy_approx — the composite mixes a
+#       PIT-TTM CFOA with VENDOR cumulative-YTD ROE/ROIC (different time basis); exact TTM ROIC is
+#       not cleanly buildable (handbook itself flags ROIC ⚠️ 需投入资本口径).
+#   * ROED (qual_roed): → proxy_approx — uses INCL-minority equity + incl-minority NI; CICC ROE is
+#       归母 (exc-minority). 归母 equity slots + 归母-NI single-quarter slots are unregistered.
+#   * DTED (qual_dted): → proxy_approx — same 归母 vs incl-minority equity-basis deviation.
+#   * QRD (qual_qrd): → proxy_approx — inventory-only quick ratio; CICC subtracts more (1年内到期
+#       非流动资产 + 待摊费用 + 预付款), which have no registered q0/q1 slots.
+#   * APRD (F_APRD): catalog_factor_id UNLINKED (qual_aprd REMOVED from the catalog) — the prior
+#       qual_aprd computed payables-turnover Δ(营业成本TTM/应付账款), unrelated to the handbook's
+#       accruals ratio (应计利润TTM/营业利润TTM). Faithful build needs operate_profit_sq q1-q3
+#       (only q0/q4 registered) + a transcribed 应计利润 numerator → stays un-built.
+# proxy_approx is a HARD candidate_ceiling cap (resolve_replication_ceiling): these stay drafts at
+# candidate, never enter exact-tier CICC evaluation, until rebuilt faithfully (which removes the cap).
+# The 6 mechanically-faithful D4a (CFOAD/ROAD/CCRD/CSRD/DAD/CURD) keep formula_equivalent_pending.
+# ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+#
+# FROZEN governance artifact. Locked BEFORE batch registration so the denominators, replication
+# tiers, exclusion reasons, truth-table label window and OOS eligibility cannot be chosen AFTER
+# seeing results (§9.2 anti-p-hacking). Loaded + sha-verified by
+# src/alpha_research/factor_registry/replication_governance.py::load_cohort_manifest.
+#
+# Source handbook: Knowledge/AI量化增强/CICC_基本面因子定义.md ("105 因子 + 7 复合").
+# Truth observation: Phase-D batch evaluated the exact-tier factors against the handbook truth
+# tables across 2010-2022 × {univ_all, csi300, csi500} (PHASE_D_ROUND1_REPORT.md), so every
+# fundamental factor's univ_all/csi300/csi500 truth window is OBSERVED through 2022 →
+# handbook_label_window_end below drives the §9.3 OOS quarantine.
+
+source_cohort_id: cicc_fundamental_handbook_v1
+manifest_sha: "721e1be4c3fcd788"          # pins the frozen content; load_cohort_manifest raises on mismatch (excl. catalog_factor_id linkage)
+handbook_label_window_end: "2022-12-31"   # Phase-D observed 2010-2022; per-chart exact end refined at FactorReplicationCertification (§12.2 lazy)
+
+# --- the five pre-frozen denominators (§9.2). The first three are FROZEN here; ---
+# --- exact_oos_eligible / sealed_attempt are TRACKED downstream, never frozen.    ---
+denominators:
+  source: 112                  # authoritative: handbook header "105 因子 + 7 复合"
+  daily_replicability: 95      # handbook feasibility summary ✅(~83 immediate) + ⚠(~12 constructible from existing statement fields: ROIC/OCFA/LPNP/EV2EBITDA-partial); EXCLUDES ❌ new-endpoint (Comp_opt/TOP_MANA_INCOME/IHN_diff/Ln_IH) + rating/holdings (RatingChange/TargetReturn/LHRD). ESTIMATED from the handbook ✅/⚠/❌ buckets — tighten at full per-row enumeration.
+  formalization_candidate: 46  # = the 46 formalization-candidate factor_rows enumerated below (D5×18 + D-COMP×8 + D4a×10 + D4b×2 + D6×8), the fundamental factors we intend to bring to formal evaluation. Rank-equivalent dups (Ln_MC/BP_LR/DP/SP_TTM/CUR/QR/Debt_Asset/mmt_normal_M/OP_QOQ — already in catalog) and not-replicable (new-endpoint) factors are NOT formalization candidates. (APRD stays a candidate row — un-built, faithful build deferred — so the count is unchanged.)
+
+# rows_enumerated: formalization_candidates_only — the full 112-row enumeration with
+# per-row exclusion_reason is deferred (lazy, §12.2: transcribe a truth table only when a
+# factor claims exact_certified). This is EXPLICIT, not a silent gap (§11.1b): the source /
+# daily_replicability denominators above carry their provenance; the rows below are the
+# frozen formalization-candidate set whose membership the sha pins.
+denominator_provenance:
+  source: "Knowledge/AI量化增强/CICC_基本面因子定义.md header (105 base + 7 composite)"
+  daily_replicability: "handbook 复刻可行性汇总 ✅+⚠(existing-data) buckets; estimated"
+  formalization_candidate: "enumerated factor_rows (tier != not_replicable) below"
+  exact_oos_eligible: "TRACKED downstream (exact_certified ∧ post-quarantine power floor); not frozen"
+  sealed_attempt: "TRACKED downstream (attempts that spent sealed OOS); not frozen"
+
+factor_rows:
+  # ---- D5: 18 registered exact-tier factors (D5_REGISTRATION_MAP.md) ----
+  #   truth observed 2010-2022×3 domains → univ_all claim is post-hoc; OOS window post-2022 is short (§9.4)
+  - {factor_name_original: CFOA,     handbook_id: F_CFOA,     chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_cfoa_ttm,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: ROA_TTM,  handbook_id: F_ROA_TTM,  chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_roa_ttm,         truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: NPM_TTM,  handbook_id: F_NPM_TTM,  chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_npm_ttm,         truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: AT,       handbook_id: F_AT,       chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_at_ttm,          truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: INVT,     handbook_id: F_INVT,     chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_invt_ttm,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: RAT,      handbook_id: F_RAT,      chart_id: "",  replication_tier_planned: proxy_approx,    catalog_factor_id: qual_rat_ttm,         truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}   # 缺应收票据 caveat
+  - {factor_name_original: GPMD,     handbook_id: F_GPMD,     chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_gpmd_ttm,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: CSR,      handbook_id: F_CSR,      chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_csr,             truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: CCR,      handbook_id: F_CCR,      chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: qual_ccr_ttm,         truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: NP_Q_YOY, handbook_id: F_NP_Q_YOY, chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: grow_ni_attr_q_yoy,   truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: NP_QOQ,   handbook_id: F_NP_QOQ,   chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: grow_ni_q_qoq,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: OP_Q_YOY, handbook_id: F_OP_Q_YOY, chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: grow_op_q_yoy,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: OR_Q_YOY, handbook_id: F_OR_Q_YOY, chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: grow_or_q_yoy,        truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: TA_YOY,   handbook_id: F_TA_YOY,   chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: grow_total_assets_yoy, truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: EP_TTM,   handbook_id: F_EP_TTM,   chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: val_ep_ttm_pit,       truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: OCFP_TTM, handbook_id: F_OCFP_TTM, chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: val_ocfp_ttm_pit,     truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: FCFP_TTM, handbook_id: F_FCFP_TTM, chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: val_fcfp_ttm,         truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+  - {factor_name_original: FC_MC,    handbook_id: F_FC_MC,    chart_id: "",  replication_tier_planned: exact_certified, catalog_factor_id: size_float_ratio,     truth_table_label_end: "2022-12-31", oos_eligibility: short_window, primary_claim_universe: univ_all}
+
+  # ---- Wave D-COMP: fundamental composites + un-built approx (roadmap §2; components in catalog) ----
+  - {factor_name_original: QQC,    handbook_id: C_QQC,    replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: Growth, handbook_id: C_Growth, replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: Profit, handbook_id: C_Profit, replication_tier_planned: proxy_approx, required_operators: [add_composites], catalog_factor_id: comp_cicc_profit, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: PIT-TTM CFOA mixed with vendor cumulative-YTD ROE/ROIC; exact TTM ROIC not cleanly buildable (handbook ⚠️ 投入资本口径)
+  - {factor_name_original: Safe,   handbook_id: C_Safe,   replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: Acc,    handbook_id: C_Acc,    replication_tier_planned: formula_equivalent_pending, required_operators: [add_composites], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: QPT,    handbook_id: F_QPT,    replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # 业绩趋势分层打分
+  - {factor_name_original: NP_SD,  handbook_id: F_NP_SD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # 稳健加速度
+  - {factor_name_original: OP_SD,  handbook_id: F_OP_SD,  replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+
+  # ---- Wave D4a: D-suffix quarter-over-quarter TTM differences (bins materialized → register-only) ----
+  #   FIDELITY (R3): CFOAD/ROAD/CCRD/CSRD/DAD/CURD mechanically faithful (formula_equivalent_pending);
+  #   ROED/DTED/QRD downgraded to proxy_approx; APRD unlinked (qual_aprd removed). q1/q4 slot positional
+  #   parity (q1=prior, q4=4th-prior, no future-ann leak) verified by canary_qslot_value_parity.py.
+  - {factor_name_original: CFOAD, handbook_id: F_CFOAD, replication_tier_planned: formula_equivalent_pending, required_fields: ["$n_cashflow_act_sq_q0", "$total_assets_q0"], catalog_factor_id: qual_cfoad, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: ROAD,  handbook_id: F_ROAD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_road, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: ROED,  handbook_id: F_ROED,  replication_tier_planned: proxy_approx, catalog_factor_id: qual_roed, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: incl-minority equity+NI; CICC ROE is 归母 (exc-minority slots unregistered)
+  - {factor_name_original: CCRD,  handbook_id: F_CCRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_ccrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: CURD,  handbook_id: F_CURD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_curd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: DAD,   handbook_id: F_DAD,   replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_dad, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: DTED,  handbook_id: F_DTED,  replication_tier_planned: proxy_approx, catalog_factor_id: qual_dted, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: incl-minority equity; CICC 产权比率 is 归母
+  - {factor_name_original: QRD,   handbook_id: F_QRD,   replication_tier_planned: proxy_approx, catalog_factor_id: qual_qrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3: inventory-only quick ratio; CICC subtracts 1年内到期非流动资产+待摊费用+预付款 (no slots)
+  - {factor_name_original: CSRD,  handbook_id: F_CSRD,  replication_tier_planned: formula_equivalent_pending, catalog_factor_id: qual_csrd, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3 caveat: money_cap (货币资金) proxies CICC 现金及现金等价资产 — fidelity inherits the D5 CSR (qual_csr) source-line/truth-parity assumption
+  - {factor_name_original: APRD,  handbook_id: F_APRD,  replication_tier_planned: formula_unbuilt_pending_source_transcription, exclusion_reason: "R3_unbuilt_misbuilt_payables_turnover_removed; faithful build needs operate_profit_sq q1-q3 (only q0/q4 registered) + transcribed 应计利润 numerator", truth_table_label_end: "2022-12-31", oos_eligibility: short_window}   # R3-r2: unbuilt tier (not formula_equivalent_pending) so the unlinked row never reads as buildable
+
+  # ---- Wave D4b: OCF year-over-year (needs cashflow q5-q7 rebuild) ----
+  - {factor_name_original: OCF_YOY,   handbook_id: F_OCF_YOY,   replication_tier_planned: formula_equivalent_pending, required_fields: ["$n_cashflow_act_sq_q4"], truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+  - {factor_name_original: OCF_Q_YOY, handbook_id: F_OCF_Q_YOY, replication_tier_planned: formula_equivalent_pending, truth_table_label_end: "2022-12-31", oos_eligibility: short_window}
+
+  # ---- Wave D6: analyst consensus levels (report_rc PIT 2010+; reconstructed = derived methodology, §10B) ----
+  #   tier derived_methodology_proxy → status_ceiling capped at candidate until vendor-oracle strong-match + prospective OOS (§10B / D6_path_state)
+  - {factor_name_original: CAFR,     handbook_id: F_CAFR,     replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: EEP,      handbook_id: F_EEP,      replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: FORE_ROE, handbook_id: F_FORE_ROE, replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: FORE_NP,  handbook_id: F_FORE_NP,  replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: EEChange, handbook_id: F_EEChange, replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: EOPChange, handbook_id: F_EOPChange, replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: EINS_75D, handbook_id: F_EINS_75D, replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}
+  - {factor_name_original: RPP_75D,  handbook_id: F_RPP_75D,  replication_tier_planned: derived_methodology_proxy, required_fields: ["$report_rc__*"], truth_table_label_end: "2022-12-31", oos_eligibility: pending}

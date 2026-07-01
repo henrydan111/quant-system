@@ -1,0 +1,85 @@
+{
+  "hypothesis": {
+    "hypothesis_id": "hyp_arxiv_2311_10685_20260610_001",
+    "thesis_statement": "Paper 'High-Throughput Asset Pricing' (arXiv:2311.10685) proposes a signal in the 'behavioral_chips' dimension. Hypothesis: an A-share adaptation predicts the cross-section of forward returns. Test whether the published effect ports to A-shares.",
+    "mechanism": "Taxonomy dimension: behavioral_chips (FRONTIER_OPEN). Buildable on: chip_distribution(cyq_perf); price_ohlcv(market_daily). Abstract: We apply empirical Bayes (EB) to mine data on 136,000 long-short strategies constructed from accounting ratios, past returns, and ticker symbols. This ``high-throughput asset pricing'' matches the out-of-sample performance of top journals while eliminating look-ahead bias. Naively mining for the largest Sharpe ratios leads to similar performance, consistent with our theoretical results, though EB …",
+    "source": {
+      "source_type": "academic_paper",
+      "identifier": "arXiv:2311.10685",
+      "title": "High-Throughput Asset Pricing",
+      "authors": [],
+      "url": "https://arxiv.org/abs/2311.10685v3",
+      "publication_date": "2023",
+      "publisher": "arXiv preprint"
+    },
+    "factor_refs": [
+      {
+        "object_type": "composite_factor",
+        "object_name": "arxiv_behavioral_chips_2311_10685"
+      }
+    ],
+    "factor_yaml_hashes": [],
+    "universe": "csi_all",
+    "benchmark": "000905.SH",
+    "time_split": {
+      "is_start": "2015-01-01",
+      "is_end": "2021-12-31",
+      "oos_start": "2022-01-01",
+      "oos_end": "2024-12-31",
+      "walk_forward_config": {
+        "train_years": 3,
+        "validation_years": 1,
+        "test_years": 1,
+        "step_years": 1
+      }
+    },
+    "rebalance_frequency": "5d",
+    "neutralization": [
+      "size",
+      "industry"
+    ],
+    "expected_sign": 0,
+    "expected_effect": null,
+    "expected_decay_horizon_days": 20,
+    "success_criteria": {
+      "min_rank_icir": 0.025,
+      "min_deflated_sharpe": 0.6,
+      "min_cost_adjusted_sharpe": 0.4,
+      "max_drawdown": 0.35,
+      "max_annual_turnover": 4.0,
+      "min_monotonicity_pvalue": 0.1,
+      "max_correlation_to_approved": 0.8,
+      "effect_size_must_be_in_ci": true,
+      "custom_rules": []
+    },
+    "pre_registered_concerns": {
+      "most_likely_failure_mode": "[DRAFT] The paper's effect may not survive A-share microstructure (T+1, limit boards, retail flow) or may be subsumed by existing factors after neutralization.",
+      "weakest_assumption": "[DRAFT] That the paper's construction maps faithfully to Tushare A-share fields without definitional drift.",
+      "what_would_falsify_this": "[DRAFT] Sealed-OOS rank-ICIR below the committed band, or hard rules failing after realistic costs.",
+      "priors_on_cost_sensitivity": "[DRAFT] Review turnover at the chosen rebalance."
+    },
+    "pre_registered_at": "",
+    "registered_by": ""
+  },
+  "_draft_review": {
+    "GENERATED_BY": "build_research_map.py — DRAFT, not registerable as-is",
+    "taxonomy_dimension": "behavioral_chips",
+    "dim_status": "FRONTIER_OPEN",
+    "buildable_now": true,
+    "value_score": 0.4137,
+    "matched_dims": "behavioral_chips(1); factor_methodology(1)",
+    "arxiv_evidence_context_only": {
+      "abstract": "We apply empirical Bayes (EB) to mine data on 136,000 long-short strategies constructed from accounting ratios, past returns, and ticker symbols. This ``high-throughput asset pricing'' matches the out-of-sample performance of top journals while eliminating look-ahead bias. Naively mining for the largest Sharpe ratios leads to similar performance, consistent with our theoretical results, though EB uniquely provides unbiased predictions with transparent intuition. Predictability is concentrated in accounting strategies, small stocks, and pre-2004 periods, consistent with limited attention theories. Multiple testing methods popular in finance fail to identify most out-of-sample performers. High…",
+      "url": "https://arxiv.org/abs/2311.10685v3",
+      "citations_openalex": 2.0
+    },
+    "proposed_factor_name": "arxiv_behavioral_chips_2311_10685",
+    "todo_before_registering": [
+      "Read the full paper; extract the EXACT signal construction.",
+      "Implement 'arxiv_behavioral_chips_2311_10685' in factor_library mapping it to A-share Tushare/Qlib fields (PIT-safe Ref(...,1)); confirm fields are registered/approved.",
+      "Run the SANDBOX screen + size/industry-neutralized MARGINAL-contribution test vs the catalog (marginal IC × low correlation — the house rule), NOT standalone ICIR.",
+      "SET expected_effect = YOUR A-share prediction (point + CI + horizon).",
+      "CONFIRM the OOS window is unburned, then factor_lifecycle (draft→candidate) → sealed-OOS."
+    ]
+  }
+}

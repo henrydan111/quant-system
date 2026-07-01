@@ -1,0 +1,386 @@
+{
+  "summary": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
+  "agentCount": 127,
+  "logs": [
+    "Q: 评估方向：\"用AI（尤其LLM）从财经社交平台与新闻资讯中大规模提取大V/KOL与媒体观点，作为A股量化的另类数据源/因子\"。\n\n首要目标（决定综合权重）：为我…",
+    "Decomposed into 5 angles: academic/empirical efficacy & failure modes, practitioner & commercial data vendors (A-share coverage), open-source repos & pipeline architecture, A-share / Chinese-platform retail sentiment & KOL persistence, LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation)",
+    "academic/empirical efficacy & failure modes: 6 results",
+    "practitioner & commercial data vendors (A-share coverage): 6 results",
+    "open-source repos & pipeline architecture: 6 results",
+    "A-share / Chinese-platform retail sentiment & KOL persistence: 6 results",
+    "open-source repos & pipeline architecture: 3 novel (3 filtered)",
+    "A-share / Chinese-platform retail sentiment & KOL persistence: 5 novel (1 filtered)",
+    "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation): 6 results",
+    "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation): 4 novel (2 filtered)",
+    "Fetched 24 sources → 106 claims → verifying top 25",
+    "[v0:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:About one third of Twitter sentiment's r] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:News-sentiment alpha decays very fast an] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:About one third of Twitter sentiment's r] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:Firm-specific Twitter sentiment predicts] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:About one third of Twitter sentiment's r] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Firm-specific Twitter sentiment predicts] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:A supervised, return-prediction-tuned te] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:A supervised, return-prediction-tuned te] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:About one third of Twitter sentiment's r] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:News-sentiment alpha decays very fast an] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:About one third of Twitter sentiment's r] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:Firm-specific Twitter sentiment predicts] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Headline sentiment Sharpe ratios collaps] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "\"Headline sentiment Sharpe ratios collapse once rea…\": 0-0 (3 abstain) ✗",
+    "\"About one third of Twitter sentiment's return-pred…\": 1-0 (2 abstain) ✗",
+    "\"Firm-specific Twitter sentiment predicts subsequen…\": 1-2 ✗",
+    "\"A supervised, return-prediction-tuned text-sentime…\": 3-0 ✓",
+    "\"News-sentiment alpha decays very fast and is large…\": 1-2 ✗",
+    "[v1:RavenPack provides investment-grade news] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:RavenPack provides investment-grade news] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:RavenPack (a commercial news-analytics v] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:RavenPack provides investment-grade news] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v0:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:Raw social-media-sentiment/return correl] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "\"Raw social-media-sentiment/return correlations are…\": 0-0 (3 abstain) ✗",
+    "[v1:RavenPack provides investment-grade news] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v2:RavenPack provides investment-grade news] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:Social media (Twitter) sentiment leads/p] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "\"RavenPack provides investment-grade news/social-me…\": 1-0 (2 abstain) ✗",
+    "\"Social media (Twitter) sentiment leads/predicts fu…\": 1-1 (1 abstain) ✓",
+    "\"In China's retail-dominated A-share market (CSI in…\": 2-1 ✓",
+    "\"RavenPack (a commercial news-analytics vendor used…\": 2-0 (1 abstain) ✓",
+    "[v2:Analyst-research-report sentiment signal] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "[v1:RavenPack claims that more than 70% of t] failed: API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+    "\"RavenPack claims that more than 70% of the best-pe…\": 0-2 (1 abstain) ✗",
+    "\"Analyst estimate revisions still predict relative …\": 2-1 ✓",
+    "\"Analyst-research-report sentiment signals decay qu…\": 0-2 (1 abstain) ✗",
+    "\"The report-sentiment factor's predictive power is …\": 0-3 ✗",
+    "\"Sentiment extracted from A-share analyst research …\": 0-3 ✗",
+    "\"FinGPT is an open-source (MIT-licensed) financial …\": 3-0 ✓",
+    "\"The FinBen benchmark explicitly includes stock-mov…\": 3-0 ✓",
+    "\"PIXIU is an open-source academic framework providi…\": 3-0 ✓",
+    "\"The repository ships FinGPT-Forecaster as a price-…\": 3-0 ✓",
+    "\"A fine-tuned open LLM (FinGPT v3.3, Llama2-13B) be…\": 0-3 ✗",
+    "\"An off-the-shelf open-source scraper exists for 东方…\": 3-0 ✓",
+    "\"This repository covers only the data-collection st…\": 3-0 ✓",
+    "\"On Eastmoney (东方财富) guba, LOWER divergence of stoc…\": 3-0 ✓",
+    "\"Eastmoney guba comments are 'ambiguous information…\": 2-1 ✓",
+    "\"In China's retail-dominated A-share market, guba/雪…\": 1-2 ✗",
+    "Verify done: 25 claims → 13 confirmed, 12 killed"
+  ],
+  "result": {
+    "question": "评估方向：\"用AI（尤其LLM）从财经社交平台与新闻资讯中大规模提取大V/KOL与媒体观点，作为A股量化的另类数据源/因子\"。\n\n首要目标（决定综合权重）：为我自己的A股量化系统找alpha —— 把大V/资讯观点做成因子或信号，接入本地PIT回测引擎验证其alpha价值、PIT合规性与实现路径。不是搭建商业平台。输出以 Go/No-Go 可行性评估为主（给出是否值得投入的判断、关键风险与门槛、而非详细技术实现）。\n\n需要回答的子问题：\n1) 专业量化机构/对冲基金是否已在用社媒情感、新闻NLP、KOL/分析师观点挖掘？如何实现？核心发现与观点是什么——哪些信号有效、哪些是噪音、信号衰减速度、容量限制、拥挤度。社媒情感/新闻情感作为因子的实证有效性与已知失败模式。\n2) GitHub上是否有类似的开源repo？典型框架是什么（数据采集→NLP/LLM观点抽取→实体链接→情感→因子化→回测）？代表性项目。\n3) 现有可用的数据源/数据平台：社媒情感API、新闻情感数据（RavenPack/Bloomberg等）、雪球/东方财富股吧数据、Twitter/X金融数据(StockTwits/FinTwit)、Reddit、Seeking Alpha、研报consensus（朝阳永续等）。哪些可直接调用，覆盖A股的程度。\n4) \"大V观点\"作为A股这种散户主导市场的alpha来源，有何有效性证据？如何处理 selection bias / survivorship bias？大V过去胜率能否预测未来胜率（持续性证据）？散户情感/关注度因子在A股的已知研究结论。\n5) 放大AI/LLM相比传统词典法与统计NLP，在大规模信息检索、观点抽取、跨语料判断上的独特能力与前景，以及当前局限（幻觉、PIT时间戳泄露、对抗性操纵/水军）。\n\n重点信源生态（全部覆盖）：中文平台(雪球、东方财富股吧、微博、公众号、券商研报)、英文/全球(Twitter/X FinTwit、StockTwits、Reddit/wallstreetbets、Seeking Alpha)、学术界+专业机构方法论、开源repo+现成数据API。请尽量给出可引用来源。",
+    "summary": "Cautiously feasible as a RESEARCH factor source, but Go/No-Go leans toward a small, gated pilot rather than a major investment — and the headline KOL-opinion premise should be DOWNGRADED to \"text/news/analyst-sentiment factor\" before committing. The strongest evidence is methodological: the EXTRACTION method is the edge, not the text access — a supervised return-tuned NLP model (SESTM) beats both dictionary methods and the leading commercial vendor RavenPack on the same news stream (EW Sharpe 4.29 vs 3.24 vs 1.71, gross), and modern open-source LLM pipelines (FinGPT, PIXIU/FinMA) already operationalize sentiment/NER/relation-extraction/stock-movement-prediction end to end. The China-specific evidence is the major caution: in the retail-dominated A-share market, higher investor sentiment is associated with GREATER price delay (sentiment impairs efficiency rather than leading returns), and 东方财富股吧 text is peer-reviewed-documented \"ambiguous information\" structurally polluted by 水军/黑嘴, manipulation, and zero authenticity gatekeeping — adversarial contamination is a named, current (2025 CSRC) structural risk, now extending to poisoning LLMs themselves. The cleanest A-share alpha lane is analyst-revision/estimate sentiment (the analyst-revisions anomaly persists OOS — Mill Street top-vs-bottom-decile 7.6%/yr; this maps directly to the system's already-approved-then-revoked eps_diffusion line), not raw forum/大V scraping. Open-source data collection exists (东方财富股吧 scraper with full raw fields) but only covers the scrape→DB stage — every NLP/entity-linking/factorization/PIT layer must be built in-house, and no surveyed open-source forecaster ships any backtest/Sharpe evidence.",
+    "findings": [
+      {
+        "claim": "The extraction METHOD is the edge, not text access: a supervised return-prediction-tuned NLP model (SESTM) materially beats both dictionary methods (Loughran-McDonald) and the leading commercial vendor (RavenPack) on the SAME news stream — EW long-short Sharpe 4.29 vs 3.24 vs 1.71; VW 1.33 vs 1.14 vs 0.73 (gross, OOS 2004-2017). Modern open LLM pipelines (FinGPT, PIXIU/FinMA) confirm the full text-to-signal toolchain is mature. This is the core support for the 'use modern AI/LLM to extract opinion' thesis.",
+        "confidence": "high",
+        "vote": "3-0 (SESTM); 3-0 (FinGPT); 3-0 (PIXIU)",
+        "evidence": "NBER WP 26186 Table 4 verified verbatim from the primary PDF: EW Sharpe SESTM 4.29 / RavenPack 3.24 / LM 1.71; VW 1.33/1.14/0.73 — all three score the SAME Dow Jones stream, identical long-50/short-50 daily construction, OOS 2004-2017. Crucially the dominance holds NET (SESTM tops every turnover level; net Sharpe peaks ~2.3 at 10bps). FinGPT (MIT) ships trained sentiment, relation-extraction, headline-classification, NER, and FinGPT-Forecaster. PIXIU/FinMA (MIT, NeurIPS 2023) ships the FinMA LLM + FLARE/FinBen benchmark covering sentiment, NER, and stock-movement prediction.",
+        "sources": [
+          "https://www.nber.org/papers/w26186",
+          "https://github.com/AI4Finance-Foundation/FinGPT",
+          "https://github.com/The-FinAI/PIXIU"
+        ]
+      },
+      {
+        "claim": "Professional quant institutions already operationalize news/sentiment NLP as a priced alternative-data factor: RavenPack reports return predictability from a stock's exposure ('news beta') to a news-sentiment index after controlling for market/size/value/momentum, framing it as a distinct priced factor. This establishes the category as real and productized — but it is VENDOR research and the strong 'distinct priced factor' form is contested.",
+        "confidence": "medium",
+        "vote": "2-0",
+        "evidence": "Verified RavenPack 'Constructing a Sentiment Factor' (2012) defining 'news beta' = regression of stock returns on sentiment-index changes after controlling for the four standard factors; backed by SSRN white paper Hafez & Xie 'News Beta'. The phenomenon is independently established in peer-reviewed work (Tetlock 2007 J.Finance; Tetlock-Saar-Tsechansky-Macskassy 2008; Garcia 2013). CAVEATS: vendor (non-independent) research, 2012-vintage (14 yrs old in a fast-decaying field), and recent peer-reviewed work finds sentiment 'lacks robust predictive power' in some cross-sections; ~50% post-publication alpha decay (Engelberg-McLean-Pontiff) applies.",
+        "sources": [
+          "https://www.ravenpack.com/research/constructing-sentiment-factor"
+        ]
+      },
+      {
+        "claim": "Signal efficacy is MARKET-STRUCTURE-SPECIFIC, not universal: social-media (Twitter) sentiment leads returns more than news sentiment in the US, but news sentiment dominates in the UK / South Africa / Brazil. Therefore US/UK social-sentiment results do NOT transfer automatically to retail-dominated A-shares — transferability must be re-validated locally.",
+        "confidence": "medium",
+        "vote": "1-1 (verifier overrode to support: <2/3 refutation criteria met)",
+        "evidence": "Heliyon 2024 (Nyakurukwa & Seetharam), 4 markets / 82 stocks / 2016-2023, four converging methods (Granger, wavelet coherence, OOS VAR). US news-return corr 0.2615 vs social 0.1296; social dominant in US, news dominant elsewhere. Single-paper finding, not A-share-specific; relevant only as evidence that the social-vs-news ranking is market-dependent — so the retail structure of A-shares makes naive US-result transfer unsafe.",
+        "sources": [
+          "https://pmc.ncbi.nlm.nih.gov/articles/PMC11076966/"
+        ]
+      },
+      {
+        "claim": "MAJOR A-SHARE CAUTION: in the retail-dominated A-share market, higher investor sentiment is empirically associated with GREATER price delay — sentiment-driven trading SLOWS information incorporation and reduces informational efficiency, i.e. it behaves as noise/mispricing rather than a clean leading return signal. This directly undercuts the naive 'retail sentiment = alpha' premise for A-shares.",
+        "confidence": "medium",
+        "vote": "2-1",
+        "evidence": "JRFM 2026 (Liu, Shi, Zhang), monthly CSI-index panel 2008-2023, Hou-Moskowitz price-delay framework: heightened sentiment -> greater price delay -> impeded efficiency. Adversarial search for the OPPOSITE finding returned CONVERGENT support: firm-specific sentiment negatively affects price informativeness; Baidu/Guba A-share sentiment 'predicts return reversals' and is negatively correlated with contemporaneous returns. CAVEAT: JRFM is a lower-tier MDPI venue (direction corroborated by Wiley/ScienceDirect); finding is an efficiency-impairment ASSOCIATION, not a directly-tradable alpha (could still be exploited as a reversal/contrarian signal, but not as the naive 'follow sentiment' factor).",
+        "sources": [
+          "https://www.mdpi.com/1911-8074/19/4/257"
+        ]
+      },
+      {
+        "claim": "ADVERSARIAL MANIPULATION IS A DOCUMENTED, STRUCTURAL RISK for A-share forum-derived signals: 东方财富股吧 comments are peer-reviewed-characterized as 'ambiguous information' with a double-edged-sword effect, structurally polluted by large volumes of 水军 (paid posters) and 黑嘴 (smear actors), used as a tool for insider trading / stock manipulation, with NO self-correction mechanism and NO authenticity gatekeeping at posting. As of 2025 the CSRC documents 黑嘴 actively poisoning AI/LLM models via multi-account fake posts — the exact failure mode for an LLM-extraction pipeline.",
+        "confidence": "high",
+        "vote": "2-1 (primary source authenticated; verifier could not refute)",
+        "evidence": "SZSE-hosted CSSCI paper (证券市场导报 2020, 关静怡/朱恒/刘娥平) verified verbatim from the 778KB PDF: 股吧活跃着大量网络水军、黑嘴...成为...内幕交易、股价操纵...的工具...缺乏行之有效的自我纠正机制...平台并不(会)针对内容的真伪设定发帖门槛. Corroborated by an independent peer-reviewed paper on 黑嘴 manipulation (IRFA, SSRN 4286697) and Feb-2025 CSRC/financial-press reporting that 黑嘴 now poison AI models via fake multi-account posts. This is a Go/No-Go-level risk for raw-forum signals.",
+        "sources": [
+          "http://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020200407584016405398.pdf"
+        ]
+      },
+      {
+        "claim": "Forum-text signals CAN carry genuine A-share information when framed correctly (not as naive bullishness): LOWER divergence of 股吧 comments predicts HIGHER stock-price-crash risk — one-sided consensus (bullish OR bearish) commentary is a crash-risk signal. This is a concrete, statistically strong example of a tradable-direction A-share signal extractable from forum text, but it is a crash-RISK regression, not a deployable-alpha backtest.",
+        "confidence": "high",
+        "vote": "3-0",
+        "evidence": "Same SZSE CSSCI paper, Table 4 verified verbatim: agridx (higher = lower divergence) coef on NCSKEW = 1.531 (t=6.981) and on DUVOL = 1.365 (t=6.157), both significant at 1%, over 2012-2017 A-share, 14,496 firm-years. Mechanism: under low divergence investors believe consistent bad news is true / consistent good news is false -> sell-down -> crash risk. CAVEAT: a crash-risk academic regression, NOT a deployable long-short alpha backtest — it shows forum DIVERGENCE/dispersion (not raw sentiment level) is informative, which is a more defensible factor-construction angle.",
+        "sources": [
+          "http://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020200407584016405398.pdf"
+        ]
+      },
+      {
+        "claim": "The cleanest, most defensible A-share alpha lane in this family is ANALYST-REVISION / estimate sentiment, not raw forum/大V scraping: analyst estimate revisions still predict relative returns OUT-OF-SAMPLE — a ~6000-stock global universe ranked by revisions breadth/magnitude delivered a top-decile-vs-bottom-decile spread of 7.6%/yr (15.6% vs 8.0% CAGR) since 2003, with indicators built in 2012 (so much of the window is genuine OOS). This maps directly onto the system's existing (approved-then-revoked) eps_diffusion analyst-revision-breadth factor.",
+        "confidence": "high",
+        "vote": "2-1",
+        "evidence": "Mill Street Research primary page verified verbatim: top decile 15.6%/yr, bottom 8.0%/yr, 7.6% differential, >6000 listings, since Sept 2003, indicators built late-2012 (>half the window OOS), explicitly before costs and cross-sectional (relative). Corroborated by academic anomaly literature (revisions-breadth direction ~83% persistent vs ~50% for returns; ~74% of predictors retained OOS in a 97-predictor replication). CAVEATS: commercial vendor (Mill Street/Sam Burns) marketing its FactSet product; gross-of-cost decile spread, not a deployable net return — but magnitude is in line with academic literature and the claim is scoped to relative returns, not deployability.",
+        "sources": [
+          "https://www.millstreetresearch.com/do-analyst-estimate-revisions-still-help-forecast-relative-stock-returns/"
+        ]
+      },
+      {
+        "claim": "Open-source DATA COLLECTION for A-share retail sentiment exists with the right raw fields, but it covers ONLY the scrape->DB stage — every NLP/sentiment/entity-linking/factorization/PIT layer must be built in-house, and no surveyed open-source forecaster ships any backtest/Sharpe/trading-performance evidence. Implementation burden falls almost entirely on the in-house pipeline, and open-source 'forecasters' provide no validated alpha to borrow.",
+        "confidence": "high",
+        "vote": "3-0 (scraper exists); 3-0 (scrape-only); 3-0 (no backtest evidence); 3-0 (FinBen social-text operationalized)",
+        "evidence": "zcyeee/EastMoney_Crawler README verified verbatim (two independent fetches): per-post title/views/comments/link/post-time, per-comment content/level(1st-2nd)/likes/time. But source-code inventory confirms it is PURELY a scraper->MongoDB (parser.py = HTML extraction + trivial regex date-cleaning; no sentiment/NLP/model/factor files), with documented CAPTCHA/IP-block friction (so 'off-the-shelf' overstates readiness). FinGPT-Forecaster ships a price-movement predictor but the repo provides no backtest/Sharpe — an independent study (arXiv 2507.08015) found bullish directional bias and losses. FinBen operationalizes Twitter-text stock-movement prediction (BigData22/ACL18/CIKM18) in published research, confirming the input is real research-grade but says nothing about profitability.",
+        "sources": [
+          "https://github.com/zcyeee/EastMoney_Crawler",
+          "https://github.com/AI4Finance-Foundation/FinGPT",
+          "https://github.com/The-FinAI/PIXIU"
+        ]
+      }
+    ],
+    "caveats": "RECOMMENDATION FRAMING: This synthesis supports a small, gated PILOT (No to a major build; conditional-Go to a research pilot), with the scope shifted from the literal premise (大V/KOL opinion as alpha) toward the better-evidenced lanes (analyst-revision/estimate sentiment + forum DISPERSION/divergence as a risk/reversal signal), and run through the system's existing PIT backtest engine and sealed-OOS governance before any deployment claim.\n\nEVIDENCE-QUALITY CAVEATS: (1) The strongest US/global headline numbers (SESTM Sharpe 4.29; RavenPack news-beta; Mill Street 7.6%) are all GROSS of costs and largely non-China — net/A-share figures will be materially lower, and net-of-cost and capacity claims were specifically REFUTED in the source pool (the SESTM net-Sharpe-collapse, cost-concentration-in-small-illiquid-stocks, and the '70% of top quant funds use RavenPack' vendor claim all failed verification). (2) Two A-share-relevant findings rest on lower-tier or vendor sources: the sentiment->price-delay result is MDPI/JRFM (direction corroborated elsewhere but venue is weak), and the revisions result is vendor marketing. (3) The most decisive China evidence (forum manipulation, crash-risk divergence, sentiment-as-noise) comes from a SINGLE 2012-2017 CSSCI paper plus 2025 press — robust on the manipulation/structural-risk point but thin on a positive, current, deployable A-share alpha.\n\nTIME-SENSITIVITY: Sentiment/news alpha decays fast and post-publication (~50% per Engelberg-McLean-Pontiff); the RavenPack evidence is 2012-vintage; the A-share manipulation risk is INTENSIFYING (2025 CSRC: 黑嘴 now poisoning LLMs), so an adversarial-robustness/anti-水军 layer is a hard prerequisite, not optional. PIT/lookahead is the project's named historical failure mode for exactly this dataset family (the report_rc/eps_diffusion saga): any forum/news/research-report timestamp must anchor on visible-time (create_time/+buffer), never nominal date, and pass the sealed-OOS + restatement-canary gates — the eps_diffusion approval was already REVOKED once for a too-good LS Sharpe + restatement residual.\n\nREFUTED-CLAIM NOTE: Several attractive supporting claims did NOT survive verification and should NOT be relied on — including the analyst-report-RoBERTa 20%/7.19%-RankIC result (0-3), the FinGPT-beats-GPT4 sentiment-F1 figures (0-3), the 'guba sentiment > institutional proxies in A-shares' claim (1-2), and the Twitter-sentiment-no-reversal genuine-information claim (1-2).",
+    "findings_note_ignored": "N/A",
+    "openQuestions": [
+      "Net-of-cost A-share deployability: every headline number (SESTM 4.29, Mill Street 7.6%) is gross and mostly non-China — what is the NET, after-cost, after-capacity signal on the actual A-share liquid universe through the local PIT/event-driven engine? (The system's own eps_diffusion experience showed factor-level approval collapsing to an uninvestable -3.6%/+4.5% CAGR once restricted to the liquid universe, and that verdict is itself now stale under the 2026-06-22 fill-price-aware gate.)",
+      "PIT timestamp fidelity of Chinese forum/social text: do 东方财富股吧/雪球/微博 posts expose a reliable visible-time stamp (not just nominal post time, accounting for edits/backfill/vendor re-ingestion), and can it pass the same create_time/+buffer + restatement-canary discipline the report_rc saga imposed — or is the scrape-time the only trustworthy anchor?",
+      "Can an adversarial-robustness layer (水军/黑嘴 detection, account-quality weighting, dispersion-over-level construction) actually neutralize the documented manipulation enough to leave residual alpha, or does manipulation dominate the signal in precisely the high-attention names where it would be traded?",
+      "Selection/survivorship bias and persistence of '大V' skill: is there any A-share evidence that a KOL's past hit-rate predicts FUTURE hit-rate after correcting for survivorship and self-promotion bias? (No surviving claim in this pool addressed 大V-persistence directly — the verified A-share forum evidence points to divergence/crash-risk and manipulation, not to identifiable persistent-skill KOLs.)"
+    ],
+    "refuted": [
+      {
+        "claim": "News-sentiment alpha decays very fast and is largely impounded within one to a few days: the SESTM one-day long-short return averages 33 bps and the signal takes ~4 days to be fully incorporated, while RavenPack (18 bps) and LM (12 bps) are fully priced within ~2 days. This is direct empirical evidence on the SHORT signal-decay horizon of sentiment factors — a sentiment/KOL factor must be traded at near-daily frequency or the alpha is gone.",
+        "vote": "1-2",
+        "source": "https://www.nber.org/papers/w26186"
+      },
+      {
+        "claim": "Headline sentiment Sharpe ratios collapse once realistic trading costs and turnover constraints are applied, and the effect concentrates in small/illiquid and high-volatility stocks — evidence of severe capacity/cost limits. At 10bps daily cost the best turnover-controlled net Sharpe peaks at 2.30 (gamma=0.5) versus a gross 4.26, and the unconstrained EW gross strategy runs ~95% daily turnover. Small stocks react 52 bps in 15 minutes (nearly 5x the 11 bps for large stocks), so the raw signal lives where it is hardest to trade.",
+        "vote": "0-0",
+        "source": "https://www.nber.org/papers/w26186"
+      },
+      {
+        "claim": "Firm-specific Twitter sentiment predicts subsequent (next-day) stock returns, and crucially the predicted move does NOT reverse afterward, indicating the sentiment carries genuine information rather than transient price pressure/liquidity-driven noise.",
+        "vote": "1-2",
+        "source": "https://www.sciencedirect.com/science/article/abs/pii/S0378426620302314"
+      },
+      {
+        "claim": "About one third of Twitter sentiment's return-predictive ability is attributable to it carrying advance information about analyst recommendation changes, analyst price-target changes, and quarterly earnings (surprises) — meaning a large majority (~two thirds) of the predictive content is NOT explained by these fundamental-news channels.",
+        "vote": "1-0",
+        "source": "https://www.sciencedirect.com/science/article/abs/pii/S0378426620302314"
+      },
+      {
+        "claim": "Raw social-media-sentiment/return correlations are modest and roughly half is confounded by news sentiment: in the US the Twitter-returns correlation of 0.1296 drops to 0.0664 after partialling out news sentiment, meaning naive social-sentiment signals substantially overstate independent predictive content.",
+        "vote": "0-0",
+        "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11076966/"
+      },
+      {
+        "claim": "RavenPack provides investment-grade news/social-media sentiment analytics covering over 12 million named entities (including global public and private companies, executives, insiders, influencers, products) and 7,000+ event topics, sourced from 40,000+ news and social-media sources in 13 languages — establishing that large-scale NLP entity-linking + sentiment + event extraction is a mature, productized alternative-data category. (Note: the page does NOT explicitly confirm China A-share or Chinese-language coverage.)",
+        "vote": "1-0",
+        "source": "https://www.ravenpack.com/products/edge/data/news-analytics"
+      },
+      {
+        "claim": "RavenPack claims that more than 70% of the best-performing quantitative hedge funds and asset managers use its news analytics for alpha generation and risk management — direct (vendor-asserted) evidence that professional quant institutions already operationalize news/sentiment NLP as an alpha source.",
+        "vote": "0-2",
+        "source": "https://www.ravenpack.com/products/edge/data/news-analytics"
+      },
+      {
+        "claim": "Sentiment extracted from A-share analyst research reports via a transformer (RoBERTa) NLP model, converted into a quantitative factor, produces a tradable signal: the mean-combinatory strategy reaches 20% annualized return and 7.19% RankIC when selecting 8 stocks (2018-2020 backtest, Wind data, 369,581 reports).",
+        "vote": "0-3",
+        "source": "https://arxiv.org/pdf/2112.11444"
+      },
+      {
+        "claim": "Analyst-research-report sentiment signals decay quickly — within roughly one month — limiting them to short-horizon use; the paper states the factors decay in 1 month and thereafter barely affect the market.",
+        "vote": "0-2",
+        "source": "https://arxiv.org/pdf/2112.11444"
+      },
+      {
+        "claim": "The report-sentiment factor's predictive power is concentrated near-future and degrades sharply for far-future prediction; a single model's annualized return drops dramatically ~19 months past the training data, attributed to time-sensitive 'hot words' losing efficacy.",
+        "vote": "0-3",
+        "source": "https://arxiv.org/pdf/2112.11444"
+      },
+      {
+        "claim": "A fine-tuned open LLM (FinGPT v3.3, Llama2-13B) beats GPT-4 and BloombergGPT on financial sentiment benchmarks, scoring weighted F1 0.882 on FPB (vs GPT-4 0.833 and BloombergGPT 0.511) and 0.903 on TFNS — evidence that LLMs outperform prior NLP on opinion extraction.",
+        "vote": "0-3",
+        "source": "https://github.com/AI4Finance-Foundation/FinGPT"
+      },
+      {
+        "claim": "In China's retail-dominated A-share market, guba/雪球 investor attention and sentiment exert a LARGER influence on stock prices than do institutional proxies — news attention and news-sentiment indices have comparatively little effect — and high-popularity 大V (KOLs) have non-trivial power to mobilize forum users in shareholder votes (esp. cumulative voting / proxy avoidance), per the paper's review and conclusion.",
+        "vote": "1-2",
+        "source": "http://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020200407584016405398.pdf"
+      }
+    ],
+    "sources": [
+      {
+        "url": "https://www.nber.org/papers/w26186",
+        "quality": "primary",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 5
+      },
+      {
+        "url": "https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2007.01232.x",
+        "quality": "unreliable",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 0
+      },
+      {
+        "url": "https://www.sciencedirect.com/science/article/abs/pii/S0378426620302314",
+        "quality": "primary",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.mdpi.com/1911-8074/19/4/257",
+        "quality": "primary",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 4
+      },
+      {
+        "url": "https://www.ravenpack.com/research/constructing-sentiment-factor",
+        "quality": "primary",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 3
+      },
+      {
+        "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11076966/",
+        "quality": "primary",
+        "angle": "academic/empirical efficacy & failure modes",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.ravenpack.com/products/edge/data/news-analytics",
+        "quality": "primary",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 4
+      },
+      {
+        "url": "https://bigquant.com/wiki/doc/jnnQ2c9fIR",
+        "quality": "primary",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 3
+      },
+      {
+        "url": "https://arxiv.org/pdf/2512.11913",
+        "quality": "blog",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.millstreetresearch.com/do-analyst-estimate-revisions-still-help-forecast-relative-stock-returns/",
+        "quality": "primary",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.ravenpack.com/blog/quant-fundamental-convergence",
+        "quality": "blog",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 4
+      },
+      {
+        "url": "https://arxiv.org/pdf/2112.11444",
+        "quality": "primary",
+        "angle": "practitioner & commercial data vendors (A-share coverage)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/AI4Finance-Foundation/FinGPT",
+        "quality": "primary",
+        "angle": "open-source repos & pipeline architecture",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/The-FinAI/PIXIU",
+        "quality": "primary",
+        "angle": "open-source repos & pipeline architecture",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/zcyeee/EastMoney_Crawler",
+        "quality": "primary",
+        "angle": "open-source repos & pipeline architecture",
+        "claimCount": 5
+      },
+      {
+        "url": "https://zibs.zju.edu.cn/2026/0615/c81935a3178943/page.htm",
+        "quality": "secondary",
+        "angle": "A-share / Chinese-platform retail sentiment & KOL persistence",
+        "claimCount": 5
+      },
+      {
+        "url": "http://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020200407584016405398.pdf",
+        "quality": "primary",
+        "angle": "A-share / Chinese-platform retail sentiment & KOL persistence",
+        "claimCount": 5
+      },
+      {
+        "url": "https://cjis.sem.tsinghua.edu.cn/vol31-01.pdf",
+        "quality": "primary",
+        "angle": "A-share / Chinese-platform retail sentiment & KOL persistence",
+        "claimCount": 5
+      },
+      {
+        "url": "https://stcn.com/article/detail/938884.html",
+        "quality": "secondary",
+        "angle": "A-share / Chinese-platform retail sentiment & KOL persistence",
+        "claimCount": 4
+      },
+      {
+        "url": "https://www.atlantis-press.com/article/125907328.pdf",
+        "quality": "primary",
+        "angle": "A-share / Chinese-platform retail sentiment & KOL persistence",
+        "claimCount": 5
+      },
+      {
+        "url": "https://ssrn.com/abstract=4586726",
+        "quality": "primary",
+        "angle": "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation)",
+        "claimCount": 4
+      },
+      {
+        "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4412788",
+        "quality": "primary",
+        "angle": "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.thomas-renault.com/wp/market-manipulation-suspicious.pdf",
+        "quality": "primary",
+        "angle": "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://arxiv.org/pdf/2404.12001",
+        "quality": "primary",
+        "angle": "LLM-vs-classical NLP capabilities + skeptical risks (hallucination, lookahead, manipulation)",
+        "claimCount": 5
+      }
+    ],
+    "stats": {
+      "angles": 5,
+      "sourcesFetched": 24,
+      "claimsExtracted": 106,
+      "claimsVerified": 25,
+      "confirmed": 13,
+      "killed": 12,
+      "afterSynthesis": 8,
+      "urlDupes": 0,
+      "budgetDropped": 6,
+      "agentCalls": 106
+    }
+  }
+}

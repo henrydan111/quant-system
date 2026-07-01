@@ -1,0 +1,216 @@
+# Curated arXiv → A-share research directions — STRUCTURED single source of truth.
+#
+# Read by BOTH the dashboard knowledge layer (src/dashboard) AND the prose
+# companion knowledge/TOP_DIRECTIONS.md. Keep them in sync: edit here, the
+# dashboard reflects it on next build. EN structured fields here; the Chinese
+# one-liner per direction is Sonnet-generated into translations.json
+# (section `knowledge_directions`, keyed by id) so the board reads CN.
+#
+# A direction is a HYPOTHESIS, never evidence — any factor still runs the full
+# IS-only -> sealed-OOS lifecycle + the size/industry-neutralized marginal-
+# contribution test vs the catalog (CLAUDE.md §3.5, §7).
+
+meta:
+  generated: "2026-06-10"
+  corpus: "arXiv q-fin themed harvest (671 papers)"
+  ranked_source: "workspace/research/idea_sourcing/knowledge/ranked_papers.parquet"
+  prose_companion: "workspace/research/idea_sourcing/knowledge/TOP_DIRECTIONS.md"
+
+directions:
+  - id: D1
+    tier: 1
+    title: "Capital Gains Overhang / disposition effect from chip-distribution"
+    dimension: behavioral_chips
+    status: FRONTIER_OPEN
+    buildable: true
+    top_pick: true
+    source_arxiv: ["2505.20608"]
+    source_note: "Replication of Reference-Dependent Preferences (Chinese market, 1995-2024); Grinblatt-Han (2005)"
+    en: "Unrealized-gain overhang from cyq_perf cost basis predicts the cross-section; a new behavioral dimension."
+    idea: "Disposition effect: a stock where most holders sit on unrealized gains faces less overhang selling pressure -> predictable continuation. Reference point = aggregate cost basis."
+    fields: ["$cyq_perf__weight_avg", "$cyq_perf__winner_rate", "$cyq_perf__cost_50pct"]
+    factor_expr: "(Ref($close,1) - Ref($cyq_perf__weight_avg,1)) / Ref($cyq_perf__weight_avg,1)"
+    novelty: "Orthogonal — book has risk_/mom_/rev_/qual_ but no cost-basis/reference-price behavioral factor; cyq_perf used by zero factors."
+    validation: "sandbox (2018-2021 IS) -> size/industry-neutralized marginal test vs catalog -> factor_lifecycle -> single-shot sealed-OOS"
+    caveats: "cyq_perf coverage 2018+ (shorter IS); winner_rate bounded [0,100] (rank-transform); test base CGO->return before the risk interaction."
+
+  - id: D2
+    tier: 1
+    title: "Informed order-flow imbalance from moneyflow"
+    dimension: informed_flow
+    status: FRONTIER_OPEN
+    buildable: true
+    top_pick: false
+    source_arxiv: ["2603.20271", "2605.30672"]
+    source_note: "Transfer Entropy Networks across investor types (Korea); Residual Supply & the Price of Risk Absorption"
+    en: "Large/extra-large order net inflow proxies institutional/informed flow; the field doc itself suggests the form."
+    idea: "Large/extra-large orders proxy institutional/informed flow; persistent net institutional buying predicts continuation, one-sided retail pressure predicts reversal."
+    fields: ["$buy_lg_amount", "$buy_elg_amount", "$sell_lg_amount", "$sell_elg_amount", "$amount"]
+    factor_expr: "Mean(Ref(($buy_lg_amount+$buy_elg_amount-$sell_lg_amount-$sell_elg_amount),1),20) / Mean(Ref($amount,1),20)"
+    novelty: "Orthogonal — no flow/order-imbalance factor in the book. moneyflow approved, zero factors built."
+    validation: "sandbox -> marginal test vs catalog -> factor_lifecycle -> sealed-OOS"
+    caveats: "Same-day OUTCOME field -> MUST wrap every field in Ref(...,1). Daily flow noisy -> smooth 20d; short decay -> 5d rebalance. Avoid the opaque $net_mf_amount (does not reconcile)."
+
+  - id: D3
+    tier: 1
+    title: "Earnings surprise / PEAD"
+    dimension: earnings_events
+    status: FRONTIER_OPEN
+    buildable: true
+    top_pick: false
+    source_arxiv: ["2009.03094", "2604.13260"]
+    source_note: "PEAD via GA-optimised supervised learning; Which Voices Move Markets? (SUE-controlled drift)"
+    en: "Standardized unexpected earnings (SUE) drift — a robust anomaly not yet in our book; adjacent to eps_diffusion."
+    idea: "Prices under-react to earnings news; SUE predicts drift over 1-3 months (PEAD). Build SUE from single-quarter earnings standardized by trailing dispersion, anchored on the disclosure date (PIT via ledger)."
+    fields: ["$n_income_sq_q0", "$report_rc__* (consensus, partial)"]
+    factor_expr: "SUE = z(YoY change in $n_income_sq_q0) ; drift factor, disclosure-date anchored"
+    novelty: "Adjacent to earn_eps_diffusion (revision breadth) but a different signal — realized surprise + drift, not forecast revision."
+    validation: "sandbox -> marginal test vs catalog (esp. vs eps_diffusion) -> factor_lifecycle -> sealed-OOS"
+    caveats: "PEAD is well-known -> decay/crowding risk. Surprise-vs-consensus variant needs one more report_rc field (consensus EPS level) promoted; clean random-walk SUE is buildable now."
+
+  - id: D4
+    tier: 1
+    title: "Northbound / foreign-flow positioning from hk_hold"
+    dimension: ownership_holders
+    status: FRONTIER_OPEN
+    buildable: true
+    top_pick: false
+    source_arxiv: ["2504.07855", "2603.20271"]
+    source_note: "Foreign Signal Radar; investor-type flow networks"
+    en: "Change & acceleration of northbound (Stock-Connect) holdings — a relatively informed foreign clientele."
+    idea: "Foreign Stock-Connect investors are a relatively informed clientele in A-shares; changes/acceleration of northbound holdings predict the cross-section."
+    fields: ["$hk_hold__ratio (confirm served column)"]
+    factor_expr: "north_hold_chg_20 = Ref($hk_hold__ratio,1) - Ref($hk_hold__ratio,21)  (+ level + acceleration)"
+    novelty: "Orthogonal — no foreign-flow factor in the book. hk_hold approved, unmined."
+    validation: "sandbox -> marginal test vs catalog -> factor_lifecycle -> sealed-OOS"
+    caveats: "Northbound coverage skews to larger/connect-eligible names (sub-universe; size-neutralize). Confirm exact hk_hold served column first."
+
+  - id: M1
+    tier: 2
+    title: "Empirical-Bayes / FDR factor selection (methodology)"
+    dimension: factor_methodology
+    status: METHOD
+    buildable: true
+    top_pick: false
+    source_arxiv: ["2311.10685", "2303.13406"]
+    source_note: "High-Throughput Asset Pricing (empirical Bayes); Sequential Cauchy Combination Test"
+    en: "Empirical-Bayes shrinkage matches top-journal OOS while killing look-ahead bias — upgrade our screening/gates."
+    idea: "EB-shrunk IC as a screening statistic attacks our factor-zoo multiple-testing problem (the risk that burned the 87 oos_informed_backfill candidates). Strengthen deflated-Sharpe / FDR control under correlated tests."
+    fields: []
+    factor_expr: "(methodology — not a factor) EB shrinkage on cross-sectional IC; sequential Cauchy / FDR for dependent tests"
+    novelty: "Improves HOW we run the promotion gate + the marginal-contribution rule, not a new raw signal."
+    validation: "fold into sandbox screening + the promotion-gate statistics; not a sealed-OOS factor."
+    caveats: "Process change — validate it reproduces known verdicts before trusting it on new factors."
+
+  - id: B1
+    tier: 3
+    title: "Earnings-call / filing-text sentiment (BLOCKED — top data target)"
+    dimension: text_nlp
+    status: FRONTIER_BLOCKED
+    buildable: false
+    top_pick: false
+    source_arxiv: ["2604.13260"]
+    source_note: "Which Voices Move Markets? (FinBERT section-weighted earnings-call sentiment, OOS IC 0.142, LS alpha 2.03% t=6.49)"
+    en: "Speaker/section-weighted earnings-call sentiment — high alpha, but we have no transcript corpus yet."
+    idea: "FinBERT section-weighted sentiment over earnings-call transcripts predicts post-earnings returns and subsumes dictionary methods."
+    fields: []
+    factor_expr: "(blocked) needs a Chinese earnings-call / 公告 text corpus + FinBERT-zh"
+    novelty: "text_nlp is the single biggest blocked frontier (10 papers in the corpus). Highest-value data-acquisition target."
+    validation: "data acquisition first (build the text pipeline), then the usual factor gauntlet."
+    caveats: "No transcript/filing full-text ingested. Largest blocked frontier."
+
+  - id: B2
+    tier: 3
+    title: "Customer / supply-chain momentum (BLOCKED — needs graph)"
+    dimension: network_supplychain
+    status: FRONTIER_BLOCKED
+    buildable: false
+    top_pick: false
+    source_arxiv: ["2301.11394"]
+    source_note: "Customer Momentum (Cohen-Frazzini lead-lag)"
+    en: "A firm's return predicted by its customers' past returns — needs a customer-supplier graph we lack."
+    idea: "Lead-lag: customer returns predict supplier returns. Partial proxy: SW-industry lead-lag momentum (buildable now, weaker)."
+    fields: []
+    factor_expr: "(blocked) needs Tushare 产业链 customer-supplier links; industry lead-lag is a partial proxy"
+    novelty: "Network dimension. Paper notes post-discovery alpha decay."
+    validation: "industry lead-lag proxy buildable now; true customer-supplier needs the graph."
+    caveats: "No inter-firm graph ingested; alpha decays post-discovery."
+
+  - id: S1
+    tier: 4
+    title: "China holiday / Spring-Festival seasonality (low-priority)"
+    dimension: seasonality_calendar
+    status: FRONTIER_OPEN
+    buildable: true
+    top_pick: false
+    source_arxiv: ["2308.00702"]
+    source_note: "Holiday Effect of China's Time-Honored Companies"
+    en: "Pre-holiday (Spring Festival) calendar tilt — real but low-capacity, a market tilt not a stock selector."
+    idea: "Stocks show abnormal returns around festivals; buildable from trade_cal pre-holiday dummies."
+    fields: ["trade_cal"]
+    factor_expr: "pre-holiday calendar dummy (e.g. N trading days before Spring Festival)"
+    novelty: "Lightly covered. Low breadth / low capacity."
+    validation: "buildable but park it — a calendar tilt, not a cross-sectional selector."
+    caveats: "Low capacity; a timing tilt rather than a stock-selection factor."
+
+  # ======================================================================
+  # LIFECYCLE — every direction carries `lifecycle: planned | in_progress |
+  # completed` (D1-D8/M1/B*/S1 above omit it => planned by default). As a
+  # direction is started, set lifecycle: in_progress + a `progress` block;
+  # when it finishes the gauntlet, set lifecycle: completed + a `results`
+  # block (outcome / timeline / verdict / links). The dashboard 研究方向 page
+  # filters by lifecycle (计划 / 进行中 / 已完成). Keep appending here —
+  # this file is the single growing record of idea-sourced research arcs.
+  # Result prose is authored in 中文 directly (factual project records);
+  # the `en` one-liner is the only Sonnet-translated field per entry.
+  # ======================================================================
+
+  - id: C1
+    tier: 1
+    lifecycle: completed
+    outcome_kind: mixed
+    title: "Analyst EPS-revision breadth (eps_diffusion)"
+    dimension: analyst_expectations
+    status: FRONTIER_OPEN
+    source_kind: report_rc
+    source_arxiv: []
+    source_note: "report_rc 分析师预测修正事件流；合规复现此前 WAVE1A 手搓试点"
+    en: "Net % of analysts raising FY1 EPS — the first new-dimension idea-sourced factor to reach approved (provisional)."
+    factor_name: "earn_eps_diffusion_60 / earn_eps_diffusion_120"
+    fields: ["$report_rc__eps_up", "$report_rc__eps_dn", "$report_rc__eps_revision_count", "$report_rc__n_active_analysts"]
+    results:
+      outcome: "已批准（暂定）的横截面 alpha 因子 —— 但不是可部署的纯多头策略"
+      timeline:
+        - "构建 + IS 筛选：size-neut IS ICIR +0.55(60d)/+0.46(120d)；正交化到 ROE/增长后残差保留 ~100%（分析师信息超出已知基本面）"
+        - "factor_lifecycle（draft→candidate，IS-only）：留出 RankICIR 0.42/0.34，年度符号一致 1.00/0.86（远超 0.10/0.70 闸）"
+        - "sealed-OOS（2026-06-15 canary 被用户显式覆盖）：OOS RankICIR +0.131/+0.070，LS Sharpe 7.24/2.59（>1.0 闸）→ approved 6→8"
+        - "部署闸：宽分析师覆盖 top30 +20.8% CAGR/−34.5% MDD/Sharpe 0.87；限可部署流动域 top-300 → +4.5%(月)/+9.8%(季) CAGR，−62~−65% MDD（拥挤赛道动量）"
+      verdict: "真·因子级 alpha（首个新维度的 idea-sourced approved 因子），但流动域纯多头不可投资。暂定批准——2026-06-15 breadth canary 若失败则撤销并重新 quarantine report_rc。"
+      links:
+        - {title: "部署评估脚本", path: "workspace/research/idea_sourcing/build/eval_eps_diffusion_deployment.py"}
+        - {title: "容量评估脚本", path: "workspace/research/idea_sourcing/build/eval_eps_diffusion_capacity.py"}
+        - {title: "sealed-OOS 凭证", path: "workspace/research/idea_sourcing/eps_diffusion_sealed_oos_promotion.json"}
+
+  - id: C2
+    tier: 1
+    lifecycle: completed
+    outcome_kind: fail
+    title: "Gross profitability (Novy-Marx) port"
+    dimension: value_accounting
+    status: SATURATED
+    source_kind: osap
+    source_arxiv: []
+    source_note: "OSAP 美股异象移植（Novy-Marx 2013，gross-profits-to-assets）"
+    en: "Gross-profits-to-assets — OSAP US-anomaly port; IS-strong but sealed-OOS sign-flipped → not approved."
+    factor_name: "qual_gross_profitability"
+    fields: ["$grossprofit_margin", "$assets_turn"]
+    results:
+      outcome: "candidate，sealed-OOS 失败 —— 未批准（维持 candidate）"
+      timeline:
+        - "OSAP 筛选 + 边际贡献：边际增量 +0.022 vs 31-因子簿（PARTIAL）；残差探针存活（正交化后 ICIR 0.147→0.174 反而增强）"
+        - "factor_lifecycle（draft→candidate，IS-only）：留出 RankICIR 0.138，符号一致 0.71 → candidate"
+        - "sealed-OOS（确定性复现）：OOS RankICIR −0.123（符号相对 IS +0.138 翻转），LS Sharpe −0.66（<1.0 闸）→ 失败"
+      verdict: "教科书式 IS 强 / OOS 崩——过了筛选/边际/残差/IS-walkforward 每一关，却在封存窗反向。sealed-OOS 闸按设计正确拦截（IS 证据 ≠ 可部署）。"
+      links:
+        - {title: "促进驱动脚本", path: "workspace/scripts/promote_gp_sealed_oos.py"}
+        - {title: "残差探针脚本", path: "workspace/research/idea_sourcing/build/probe_gross_profitability_residual.py"}

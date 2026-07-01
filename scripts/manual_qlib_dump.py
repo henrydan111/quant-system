@@ -16,7 +16,7 @@ from logging.handlers import RotatingFileHandler
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from data_infra.pipeline.build_qlib_backend import _resolve_paths, build_unified_qlib
+from data_infra.pipeline.build_qlib_backend import SLOT_DEPTH_DEFAULT, _resolve_paths, build_unified_qlib
 
 
 log_dir = os.path.join(PROJECT_ROOT, "logs")
@@ -53,7 +53,8 @@ def main() -> None:
     parser.add_argument("--datasets", type=str, default=None, help="Comma-separated dataset subset")
     parser.add_argument("--fields", type=str, default=None, help="Comma-separated field subset")
     parser.add_argument("--touched-symbols", type=str, default=None, help="Comma-separated ts_codes")
-    parser.add_argument("--slot-depth", type=int, default=5, help="Quarter slot depth")
+    parser.add_argument("--slot-depth", type=int, default=SLOT_DEPTH_DEFAULT,
+                        help=f"Quarter slot depth (default: {SLOT_DEPTH_DEFAULT})")
     parser.add_argument("--publish", action="store_true", help="Promote the staged build into data/qlib_data")
     parser.add_argument("--exclude-phase3", action="store_true", help="Skip Phase 3 datasets")
     parser.add_argument("--skip-compat-aliases", action="store_true", help="Skip legacy alias writes")

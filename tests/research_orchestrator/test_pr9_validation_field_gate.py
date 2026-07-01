@@ -15,6 +15,7 @@ GPT 5.5 Pro's locked-in scope for PR 9:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,7 @@ import pytest
 from src.data_infra.field_registry import (
     FieldApprovalError,
     FieldStatusRegistry,
+    load_field_registry,
 )
 from src.research_orchestrator.release_gate import (
     assert_field_dependencies_eligible,
@@ -31,10 +33,17 @@ from src.research_orchestrator.release_gate import (
 )
 
 
-def _minimal_registry() -> FieldStatusRegistry:
-    """Standalone registry mirroring the committed seed: approved ohlcv +
-    quarantined moneyflow + pending_review event endpoint + conservative
-    unknown policy."""
+def _synthetic_registry(datasets: dict[str, Any]) -> FieldStatusRegistry:
+    """Build a self-contained registry with the canonical 3-status policy and
+    the given dataset entries.
+
+    Gate tests in this file MUST run against a synthetic registry, never the
+    committed ``field_status.yaml``: pinning a live dataset's status freezes a
+    moment in governance time, and every legitimate later approval breaks the
+    test (hk_hold's 2026-06-04 promotion did exactly that — twice, see the
+    e453597 skip-list resync). Fictional dataset ids keep the fixtures
+    permanently collision-free with real governance.
+    """
     return FieldStatusRegistry.from_dict(
         {
             "schema_version": 1,
@@ -67,20 +76,50 @@ def _minimal_registry() -> FieldStatusRegistry:
                     },
                 },
             },
-            "datasets": {
-                "ohlcv": {"status": "approved", "fields": ["$close", "$open"]},
-                "moneyflow": {"status": "quarantine", "field_prefixes": ["$moneyflow_"]},
-                "event_like": {
-                    "status": "pending_review",
-                    "field_prefixes": ["$top_list__"],
-                },
-            },
+            "datasets": datasets,
             "unknown_field_policy": {
                 "sandbox_screening": "warn",
                 "vectorized_screening": "warn",
                 "formal_validation": "fail",
                 "oos_test": "fail",
                 "registry_publish": "fail",
+            },
+        }
+    )
+
+
+def _minimal_registry() -> FieldStatusRegistry:
+    """Standalone registry mirroring the original committed seed: approved
+    ohlcv + quarantined moneyflow + pending_review event endpoint +
+    conservative unknown policy. (The LIVE registry has since approved
+    moneyflow/top_list — these fixtures deliberately do not track it.)"""
+    return _synthetic_registry(
+        {
+            "ohlcv": {"status": "approved", "fields": ["$close", "$open"]},
+            "moneyflow": {"status": "quarantine", "field_prefixes": ["$moneyflow_"]},
+            "event_like": {
+                "status": "pending_review",
+                "field_prefixes": ["$top_list__"],
+            },
+        }
+    )
+
+
+def _pr9b_universe_registry() -> FieldStatusRegistry:
+    """Fixture registry for the PR-9b universe-gate tests: the canonical 4
+    universe fields + $roe approved, $ratio quarantined (the hk_hold state
+    at the time PR 9b was written), $top_list__ pending_review."""
+    return _synthetic_registry(
+        {
+            "universe_canonical": {
+                "status": "approved",
+                "fields": ["$close", "$open", "$adj_factor", "$total_mv", "$amount"],
+            },
+            "indicators_fixture": {"status": "approved", "fields": ["$roe"]},
+            "hk_hold_fixture": {"status": "quarantine", "fields": ["$ratio"]},
+            "event_like_fixture": {
+                "status": "pending_review",
+                "field_prefixes": ["$top_list__"],
             },
         }
     )
@@ -1206,6 +1245,39 @@ class TestPR9bUniverseFieldGate:
         ):
             yield
 
+    @pytest.fixture(autouse=True)
+    def _pin_fixture_registry(self):
+        # Pin the gate to a synthetic registry instead of the committed
+        # field_status.yaml. These tests verify the GATE MECHANISM (a
+        # quarantined/pending_review field is refused through the universe
+        # path), not the current governance state of any live dataset; the
+        # hk_hold 2026-06-04 approval legitimately un-quarantined $ratio and
+        # broke the previous live-YAML pinning. Live-registry behavior is
+        # covered by TestLiveRegistryQuarantineSmoke below.
+        with patch(
+            "src.research_orchestrator.release_gate.load_field_registry",
+            return_value=_pr9b_universe_registry(),
+        ):
+            yield
+
+    def _patch_catalog_for_resolver(self):
+        # The resolver-handler integration tests route qual_roe through the
+        # FACTOR field gate before the universe gate. Under the fixture
+        # registry the live catalog's qual_roe expression would resolve to
+        # unknown fields and fail for the wrong reason — pin the catalog to a
+        # synthetic expression over the fixture-approved $roe (same idiom as
+        # TestHelperBehavior).
+        return (
+            patch(
+                "src.alpha_research.factor_library.catalog.get_factor_catalog",
+                return_value={"qual_roe": "Ref($roe, 1)"},
+            ),
+            patch(
+                "src.alpha_research.factor_library.catalog.get_industry_relative_defs",
+                return_value=[],
+            ),
+        )
+
     def _helper(self):
         from src.research_orchestrator.validation_steps import (
             _validate_prescription_universe_field_dependencies,
@@ -1370,10 +1442,11 @@ class TestPR9bUniverseFieldGate:
                 },
             ],
         }
+        catalog_patch, industry_patch = self._patch_catalog_for_resolver()
         with patch(
             "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
             return_value=resolver_payload,
-        ):
+        ), catalog_patch, industry_patch:
             with pytest.raises(FieldApprovalError, match=r"\$ratio"):
                 handle_validation_object_resolver(context)
 
@@ -1396,10 +1469,11 @@ class TestPR9bUniverseFieldGate:
                 },
             ],
         }
+        catalog_patch, industry_patch = self._patch_catalog_for_resolver()
         with patch(
             "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
             return_value=resolver_payload,
-        ):
+        ), catalog_patch, industry_patch:
             result = handle_validation_object_resolver(context)
 
         # Both reports persisted into outputs AND into registry_resolution.json.
@@ -1727,3 +1801,48 @@ class TestOOSHandlerSealClaimBehavior:
         run_mock.assert_not_called()
         # And the result indicates skip.
         assert result.outputs["decision"] == "skipped_due_to_is_gate"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Live-registry integration smoke — the ONE test in this file allowed to
+# read the committed config/field_registry/field_status.yaml.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestLiveRegistryQuarantineSmoke:
+    """End-to-end smoke against the LIVE committed registry.
+
+    The unit/gate tests above are pinned to synthetic fixture registries so
+    legitimate governance changes (field approvals) can never break them.
+    This single test keeps an integration anchor on reality: whatever the
+    registry currently quarantines must be refused at formal_validation.
+
+    Expectations are DERIVED from the live YAML at runtime — never pin a
+    specific dataset's status here. If governance ever empties the
+    quarantine set, this skips with a reason instead of failing.
+    """
+
+    def test_live_quarantined_field_blocked_at_formal_validation(self) -> None:
+        registry = load_field_registry()
+        quarantined_fields: list[str] = []
+        for dataset_id in registry.list_datasets_by_status("quarantine"):
+            entry = registry.datasets[dataset_id]
+            quarantined_fields.extend(entry.fields)
+            # Prefix-registered datasets quarantine every field under the
+            # prefix; a fabricated probe field exercises the same match.
+            quarantined_fields.extend(
+                f"{prefix}smoke_probe" for prefix in entry.field_prefixes
+            )
+        if not quarantined_fields:
+            pytest.skip(
+                "live field_status.yaml currently has no quarantined datasets "
+                "— nothing to smoke-test; the fixture-pinned gate tests above "
+                "still cover the refusal mechanism"
+            )
+        field = sorted(quarantined_fields)[0]
+        with pytest.raises(FieldApprovalError, match=re.escape(field)):
+            assert_field_dependencies_eligible(
+                expressions=[f"Ref({field}, 1)"],
+                stage="formal_validation",
+                artifact_label="live_registry_quarantine_smoke",
+            )

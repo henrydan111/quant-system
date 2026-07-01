@@ -2,15 +2,20 @@
 
 The strategy implements JoinQuant's ``filter_limitup`` pattern as a
 substitution mechanism: given a ranked candidate list per rebalance date,
-walk the list and pick the first ``topk`` that pass the buyability filter
-(not suspended today, not locked at limit yesterday). Currently-held names
-inside the top-``topk`` range are kept regardless of the filter.
+walk the list and pick the first ``topk`` that pass the buyability filter.
+
+2026-06-22: the buyability filter is SUSPENSION-only. Limit-up/down YESTERDAY no
+longer skips a candidate — the name is emitted and the ENGINE decides buyability
+at FILL time against TODAY's open (``can_buy(price_field='raw_open')``), which
+blocks only names LOCKED-UP at the open. The prior yesterday-based limit
+prediction wrongly skipped names that close limit-up but OPEN tradeable, causing
+bull-market adverse selection (果仁 sm_纯市值01 parity: 2015 +307% vs 果仁 +690%).
 
 These tests pin the substitution behavior on synthetic data without needing
 a full backtest. They cover:
 
   - All candidates buyable → returns first ``topk``.
-  - Top candidates locked at upper limit yesterday → substitutes to next-ranked.
+  - Limit-up/down yesterday → KEPT (emitted); engine decides at fill.
   - Top candidates suspended (via SuspensionLookup) → substitutes.
   - Currently-held names kept regardless of buyability.
   - Empty candidates → empty orders.
@@ -24,7 +29,11 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from src.backtest_engine.event_driven.strategies import RankedFallbackStrategy
+from src.backtest_engine.event_driven.portfolio import Portfolio, Position
+from src.backtest_engine.event_driven.strategies import (
+    RankedFallbackStrategy,
+    _emit_rebalance_orders,
+)
 from src.backtest_engine.event_driven.strategy import BacktestContext
 
 
@@ -145,9 +154,10 @@ class TestRankedFallbackStrategyHappyPath:
 class TestRankedFallbackSubstitution:
     """The core mechanism: skip primaries locked-yesterday, pick next-ranked."""
 
-    def test_top_locked_up_substitutes_to_next(self):
-        # Ranked: A,B,C,D,E,F,G  topk=3
-        # A and C locked up yesterday → expect target = B,D,E
+    def test_limit_up_yesterday_is_kept_not_skipped(self):
+        # 2026-06-22: limit-up YESTERDAY no longer skips — the name is emitted and
+        # the engine decides at fill vs today's open. A,C limit-up yesterday but
+        # topk=3 → still the first 3 (A,B,C), NOT substituted away.
         candidates = ["A.SZ", "B.SZ", "C.SZ", "D.SZ", "E.SZ", "F.SZ", "G.SZ"]
         strat = RankedFallbackStrategy(
             ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
@@ -160,9 +170,9 @@ class TestRankedFallbackSubstitution:
         )
         orders = strat.before_market_open(ctx)
         buy_codes = sorted(o.code for o in orders if o.direction == "buy")
-        assert buy_codes == ["B.SZ", "D.SZ", "E.SZ"]
+        assert buy_codes == ["A.SZ", "B.SZ", "C.SZ"]
 
-    def test_top_locked_down_substitutes_to_next(self):
+    def test_limit_down_yesterday_is_kept_not_skipped(self):
         candidates = ["A.SZ", "B.SZ", "C.SZ", "D.SZ"]
         strat = RankedFallbackStrategy(
             ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
@@ -175,7 +185,7 @@ class TestRankedFallbackSubstitution:
         )
         orders = strat.before_market_open(ctx)
         buy_codes = sorted(o.code for o in orders if o.direction == "buy")
-        assert buy_codes == ["B.SZ", "C.SZ"]
+        assert buy_codes == ["A.SZ", "B.SZ"]
 
     def test_suspended_substitutes_to_next(self):
         candidates = ["A.SZ", "B.SZ", "C.SZ", "D.SZ"]
@@ -193,7 +203,9 @@ class TestRankedFallbackSubstitution:
         assert buy_codes == ["A.SZ", "C.SZ"]
 
     def test_runs_out_of_candidates_emits_only_available(self):
-        # If after substitution we don't have topk, emit what we have, not pad with junk.
+        # topk=10 but only 3 candidates → emit the 3, don't pad with junk.
+        # (A limit-up yesterday is now KEPT, so all 3 emit; suspension would still
+        # substitute/drop — see test_suspended_substitutes_to_next.)
         candidates = ["A.SZ", "B.SZ", "C.SZ"]
         strat = RankedFallbackStrategy(
             ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
@@ -206,7 +218,7 @@ class TestRankedFallbackSubstitution:
         )
         orders = strat.before_market_open(ctx)
         buy_codes = sorted(o.code for o in orders if o.direction == "buy")
-        assert buy_codes == ["B.SZ", "C.SZ"]  # 2 picks, both that pass filter
+        assert buy_codes == ["A.SZ", "B.SZ", "C.SZ"]
 
 
 class TestRankedFallbackHeldKept:
@@ -242,8 +254,9 @@ class TestRankedFallbackHeldKept:
         assert "D.SZ" not in new_buy_codes
         assert "E.SZ" not in new_buy_codes
 
-    def test_unheld_locked_at_top_unchanged_when_locked_filter_drops_them(self):
-        # Tests that lock-prediction drops names properly when held set is empty.
+    def test_unheld_limit_up_at_top_is_kept(self):
+        # 2026-06-22: with held set empty, a limit-up-yesterday name at the top is
+        # KEPT (emitted), not dropped; the engine's open-based can_buy decides at fill.
         candidates = ["A.SZ", "B.SZ", "C.SZ"]
         strat = RankedFallbackStrategy(
             ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
@@ -256,7 +269,7 @@ class TestRankedFallbackHeldKept:
         )
         buy_codes = sorted(o.code for o in strat.before_market_open(ctx)
                           if o.direction == "buy")
-        assert buy_codes == ["B.SZ", "C.SZ"]
+        assert buy_codes == ["A.SZ", "B.SZ"]
 
 
 class TestRankedFallbackSuspensionRegression:
@@ -341,8 +354,9 @@ class TestRankedFallbackSuspensionRegression:
             f"A.SZ with vol=0 yesterday should be skipped (suspended). Got {buys}"
         )
 
-    def test_unheld_locked_at_top_skipped(self):
-        # Holding nothing. Top of rank is locked. Should skip and substitute.
+    def test_limit_up_at_top_not_treated_as_suspended(self):
+        # 2026-06-22: limit-up yesterday must NOT be conflated with suspension —
+        # it is KEPT (the engine decides at fill), unlike a truly-suspended name.
         candidates = ["A.SZ", "B.SZ", "C.SZ"]
         strat = RankedFallbackStrategy(
             ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
@@ -355,4 +369,114 @@ class TestRankedFallbackSuspensionRegression:
         )
         buy_codes = sorted(o.code for o in strat.before_market_open(ctx)
                           if o.direction == "buy")
-        assert buy_codes == ["B.SZ", "C.SZ"]
+        assert buy_codes == ["A.SZ", "B.SZ"]
+
+
+def _mk_real_portfolio(
+    holdings: dict[str, tuple[int, float]] | None = None,
+    cash: float = 0.0,
+) -> Portfolio:
+    """A real Portfolio (not a mock) seeded with `holdings = {code: (shares, avg_cost)}`.
+
+    Used by the NaN-price regression below: the real Portfolio's
+    ``market_value`` / ``total_value`` already fall back to ``avg_cost`` for a
+    NaN price (portfolio.py), so ``portfolio_value`` stays finite — exactly as
+    in production. This isolates the crash to the trim loop's ``int()`` call,
+    rather than masking it behind a NaN portfolio value from a naive mock.
+    """
+    holdings = holdings or {}
+    pf = Portfolio(initial_cash=max(cash, 1.0))
+    pf._cash = float(cash)  # test-only: set exact cash after construction
+    for code, (shares, avg_cost) in holdings.items():
+        pf._positions[code] = Position(
+            code=code,
+            shares=shares,
+            closeable_amount=shares,
+            avg_cost=avg_cost,
+        )
+    return pf
+
+
+class TestRankedFallbackNaNPriceCarry:
+    """Regression: a currently-HELD name that is suspended / has no price on the
+    rebalance day surfaces a NaN ``ref_price`` (prev-day close is NaN). Before the
+    fix, the trim loop computed ``int(max(diff, 0) / NaN / lot) * lot`` →
+    ``ValueError: cannot convert float NaN to integer``, crashing the entire
+    EventDrivenBacktester run (engine.py → strategies.py:245 → :76).
+
+    The fix skips the trim for any held name with a NaN / non-positive ref_price
+    and carries the position to the next rebalance. These tests pin: (1) no
+    crash, (2) the suspended held name emits NO sell order (carried), and
+    (3) the rest of the rebalance — a normally-priced, over-allocated held name —
+    is still trimmed, so the guard is surgical.
+    """
+
+    def test_held_suspended_nan_price_does_not_crash_and_is_carried(self):
+        # SUSP.SZ: held + target, suspended (prev close NaN) → must be carried.
+        # NORM.SZ: held + target, normally priced + over-allocated → still trimmed.
+        candidates = ["NORM.SZ", "SUSP.SZ"]
+        strat = RankedFallbackStrategy(
+            ranked_schedule={pd.Timestamp("2021-01-05"): candidates},
+            topk=2,
+        )
+        ctx = BacktestContext(
+            date=pd.Timestamp("2021-01-05"),
+            day_data=pd.DataFrame(),
+            day_data_indexed=pd.DataFrame(),
+            prev_day_data=_mk_prev_data([
+                _ohlcv("NORM.SZ", close=20.0),
+                _ohlcv("SUSP.SZ", close=float("nan"), vol=0),  # suspended → NaN price
+            ]),
+            # NORM over-allocated at target 0.5: 10k sh * 20 = 200k vs target 150k.
+            portfolio=_mk_real_portfolio(
+                holdings={"NORM.SZ": (10_000, 10.0), "SUSP.SZ": (10_000, 10.0)},
+                cash=0.0,
+            ),
+            exchange=_mk_exchange(),
+            feeder=MagicMock(),
+        )
+
+        # The crux: this used to raise ValueError on the NaN ref_price.
+        orders = strat.before_market_open(ctx)
+
+        susp_orders = [o for o in orders if o.code == "SUSP.SZ"]
+        assert susp_orders == [], (
+            "Suspended held name (NaN price) must emit NO order — carried to next "
+            f"rebalance. Got: {susp_orders}"
+        )
+        # The position itself is untouched by order emission (engine applies fills,
+        # not the strategy) — it remains held for the next rebalance.
+        assert ctx.portfolio.positions["SUSP.SZ"].shares == 10_000
+
+        # Surgical: the normally-priced, over-allocated held name is still trimmed.
+        norm_trims = [
+            o for o in orders
+            if o.code == "NORM.SZ" and o.direction == "sell" and o.reason == "rebalance_trim"
+        ]
+        assert len(norm_trims) == 1, (
+            f"Over-allocated NORM.SZ should still be trimmed; got {orders}"
+        )
+        # 200k current vs 150k target → trim ~50k / 20 = 2500 shares (lot 100).
+        assert norm_trims[0].target_shares == 2500
+
+    def test_emit_rebalance_orders_skips_nan_ref_price_directly(self):
+        # Unit-level pin on the helper that owns the bug.
+        ctx = BacktestContext(
+            date=pd.Timestamp("2021-01-05"),
+            day_data=pd.DataFrame(),
+            day_data_indexed=pd.DataFrame(),
+            prev_day_data=_mk_prev_data([
+                _ohlcv("SUSP.SZ", close=float("nan"), vol=0),
+            ]),
+            portfolio=_mk_real_portfolio(
+                holdings={"SUSP.SZ": (10_000, 10.0)},
+                cash=100_000.0,
+            ),
+            exchange=_mk_exchange(),
+            feeder=MagicMock(),
+        )
+        # SUSP held AND a target → hits the trim loop (the crash site).
+        orders = _emit_rebalance_orders({"SUSP.SZ": 0.5}, ctx)
+        assert all(o.code != "SUSP.SZ" or o.direction != "sell" for o in orders), (
+            f"NaN-priced held name must not be sold/trimmed; got {orders}"
+        )

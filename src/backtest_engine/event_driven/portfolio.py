@@ -308,6 +308,18 @@ class Portfolio:
         pos = self._positions.get(code)
         if pos is None:
             return
+        # Defense-in-depth: a NaN or negative price (e.g. the last in-universe
+        # bar before delisting was a NaN suspension row) must never poison the
+        # book — it would turn cash into NaN and silently corrupt every
+        # downstream metric. Floor to 0.0 (treat as a total loss). Callers
+        # should pass a real carried-forward price (see
+        # BacktestEngine._resolve_delist_price); this is the backstop.
+        if price is None or pd.isna(price) or price < 0:
+            logger.warning(
+                'Force-close of %s got invalid price %r; flooring to 0.0 '
+                '(total loss) to avoid NaN/negative cash.', code, price,
+            )
+            price = 0.0
         proceeds = pos.shares * price
         self._cash += proceeds
         logger.warning('Force-closed %s: %d shares @ %.2f = %.2f',

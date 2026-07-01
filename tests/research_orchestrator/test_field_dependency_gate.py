@@ -7,6 +7,7 @@ import pytest
 from src.data_infra.field_registry import (
     FieldApprovalError,
     FieldStatusRegistry,
+    load_field_registry,
 )
 from src.research_orchestrator.release_gate import (
     FieldDependencyGateResult,
@@ -141,31 +142,59 @@ class TestAssertFieldDependenciesEligible:
 
 
 class TestLiveGateWithCommittedRegistry:
-    """Integration smoke against the committed config/field_registry/field_status.yaml."""
+    """Integration smoke against the committed config/field_registry/field_status.yaml.
+
+    Expectations are DERIVED from the live registry at runtime — never pin a
+    specific dataset's governance status here. The original pinned tests
+    (moneyflow quarantined, top_list pending_review) broke when those datasets
+    were later legitimately approved (moneyflow/top_list 2026-06-05, hk_hold
+    2026-06-04); a legal approval must never fail the suite.
+    """
 
     def test_approved_close_passes_formal(self) -> None:
-        # No registry kwarg — loads the committed YAML
+        # No registry kwarg — loads the committed YAML. $close is an
+        # ENGINE_REQUIRED_FIELDS member; it staying approved IS an invariant.
         result = evaluate_field_dependencies(
             fields=["$close"], stage="formal_validation",
         )
         assert result.eligible is True
 
-    def test_live_moneyflow_blocks_formal(self) -> None:
+    @staticmethod
+    def _live_quarantined_fields() -> list[str]:
+        registry = load_field_registry()
+        fields: list[str] = []
+        for dataset_id in registry.list_datasets_by_status("quarantine"):
+            entry = registry.datasets[dataset_id]
+            fields.extend(entry.fields)
+            fields.extend(f"{prefix}smoke_probe" for prefix in entry.field_prefixes)
+        return sorted(fields)
+
+    def test_live_quarantined_field_blocks_formal(self) -> None:
+        quarantined = self._live_quarantined_fields()
+        if not quarantined:
+            pytest.skip(
+                "live field_status.yaml currently has no quarantined datasets "
+                "— nothing to smoke-test; the synthetic-registry tests above "
+                "still cover the refusal mechanism"
+            )
+        field = quarantined[0]
         result = evaluate_field_dependencies(
-            fields=["$moneyflow_buy_sm_vol"], stage="formal_validation",
+            fields=[field], stage="formal_validation",
         )
         assert result.eligible is False
-        assert "$moneyflow_buy_sm_vol" in result.disallowed_fields
+        assert field in result.disallowed_fields
 
-    def test_live_top_list_blocks_formal(self) -> None:
+    def test_live_quarantined_field_blocks_sandbox_too(self) -> None:
+        # Committed policy: quarantine disallows EVERY stage, sandbox included.
+        quarantined = self._live_quarantined_fields()
+        if not quarantined:
+            pytest.skip(
+                "live field_status.yaml currently has no quarantined datasets "
+                "— nothing to smoke-test"
+            )
+        field = quarantined[0]
         result = evaluate_field_dependencies(
-            fields=["$top_list__amount"], stage="formal_validation",
+            fields=[field], stage="sandbox_screening",
         )
         assert result.eligible is False
-        assert "$top_list__amount" in result.disallowed_fields
-
-    def test_live_top_list_allowed_at_sandbox(self) -> None:
-        result = evaluate_field_dependencies(
-            fields=["$top_list__amount"], stage="sandbox_screening",
-        )
-        assert result.eligible is True
+        assert field in result.disallowed_fields

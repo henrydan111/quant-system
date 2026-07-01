@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from glob import glob
@@ -37,11 +38,39 @@ from data_infra.provider_metadata import (
     ts_code_to_qlib,
     write_instruments_readme,
 )
-from data_infra.storage.qlib_bin_utils import get_bin_info, validate_stock_bins, write_qlib_bin
+from data_infra.storage.qlib_bin_utils import get_bin_info, read_qlib_bin, validate_stock_bins, write_qlib_bin
 
 logger = logging.getLogger(__name__)
 
-SLOT_DEPTH_DEFAULT = 5
+# Derived limit-day field: tri-state flag from RAW close vs RAW published limits (basis-safe — all
+# raw, same day). The half-fen tolerance separates an at-limit close from a 1-fen-below close
+# (A-share tick = 0.01) and is float32-robust. "Closed-at-limit" definition (handbook 涨跌停日).
+LIMIT_STATUS_TOL = 0.005
+LIMIT_STATUS_FIELD = "limit_status"
+
+
+def compute_limit_status(close, up_limit, down_limit, tol: float = LIMIT_STATUS_TOL) -> np.ndarray:
+    """Tri-state limit-day flag, float32: +1.0 closed at/above up_limit, -1.0 at/below down_limit,
+    0.0 normal trading day, NaN where any input is NaN (suspended / no published limit).
+
+    Basis contract: ``close``, ``up_limit``, ``down_limit`` are all RAW (unadjusted) same-day prices —
+    NEVER mix an adjusted price with a raw limit. Shared by the provider materializer and the backfill
+    script so the definition lives in exactly one place. PIT: the flag is same-day-close knowable (like
+    ``$close``); predictive factors apply their own ``Ref(...,1)`` lag."""
+    close = np.asarray(close, dtype=np.float64)
+    up = np.asarray(up_limit, dtype=np.float64)
+    dn = np.asarray(down_limit, dtype=np.float64)
+    status = np.full(close.shape, np.nan, dtype=np.float32)
+    valid = ~(np.isnan(close) | np.isnan(up) | np.isnan(dn))
+    status[valid] = 0.0
+    status[valid & (close >= up - tol)] = 1.0
+    status[valid & (close <= dn + tol)] = -1.0
+    return status
+
+SLOT_DEPTH_DEFAULT = 9  # q0..q8 — single-quarter (_sq_q*) AND level (_q*) slots. Upgraded 5→9 (2026-06-30)
+# so the year-ago TTM leg (q4..q7) and the begin/end balance endpoint (q8) are natively available to ALL
+# periodic factors (no transient deep-slot build needed). Additive: q0..q4 unchanged; q5..q8 added. Deepslot
+# special-cases (income growth path) keep their explicit slot_depth (12/16) and are unaffected by this default.
 CORE_METADATA_COLUMNS = {
     "ts_code",
     "qlib_code",
@@ -147,6 +176,83 @@ PRICE_REPAIR_OVERRIDES_FILE = "daily_price_repair_overrides.csv"
 # report_rc (analyst forecasts) event-flow materializer constants (P1, 2026-06-08).
 REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120  # a forecast counts as "live" for this many trading days
 EPS_REVISION_EPSILON = 1e-4           # |Δeps| <= ε -> "same" (vendor-rounding-dust guard)
+# Sell-side rating -> 5-point ordinal (for 评级调高家数 / 评级机构数 aggregates, 2026-06-26).
+# A higher ordinal = more bullish. Mixed CN/EN labels (raw report_rc.rating is ~30+ distinct
+# strings). Unknown labels map to NaN (fail-OPEN): the org still counts as rating-active
+# (n_active_orgs) but is SKIPPED from up/down detection (no ordinal to compare) — a new vendor
+# label can never silently fabricate an upgrade. Chinese matched exact (post-strip); English
+# matched case-insensitively.
+RATING_ORDINAL_CN: dict[str, int] = {
+    "买入": 5, "强烈推荐": 5, "强推": 5, "强烈买入": 5, "买进": 5, "强力买入": 5, "强力买进": 5,
+    "增持": 4, "推荐": 4, "谨慎推荐": 4, "审慎推荐": 4, "跑赢行业": 4, "优于大市": 4,
+    "强于大市": 4, "超配": 4, "看好": 4, "强烈增持": 4, "谨慎增持": 4, "审慎增持": 4,
+    "中性": 3, "持有": 3, "同步大市": 3, "区间操作": 3, "观望": 3, "标配": 3, "中立": 3,
+    "减持": 2, "审慎": 2, "弱于大市": 2, "跑输行业": 2, "低配": 2, "回避": 2, "谨慎": 2,
+    "卖出": 1, "强烈卖出": 1, "沽出": 1, "确信卖出": 1,
+}
+RATING_ORDINAL_EN: dict[str, int] = {
+    "buy": 5, "strong buy": 5, "strongbuy": 5,
+    "overweight": 4, "outperform": 4, "accumulate": 4, "add": 4, "market outperform": 4,
+    "neutral": 3, "hold": 3, "in-line": 3, "inline": 3, "equal-weight": 3, "equal weight": 3,
+    "market perform": 3, "market-perform": 3,
+    "underweight": 2, "underperform": 2, "reduce": 2, "market underperform": 2,
+    "sell": 1, "strong sell": 1,
+}
+# Explicit "no rating given" sentinels: NaN ordinal AND excluded from 评级机构数 (an org issuing a
+# report with no rating is not a rating agency for that period). Distinct from an UNKNOWN label
+# (which still counts toward coverage but can't be ordinal-compared).
+RATING_NON_LABELS: frozenset[str] = frozenset({"无", "无评级", "未评级", "暂无", "暂无评级", "-", "—", "none", ""})
+
+
+def normalize_rating_to_ordinal(rating) -> float:
+    """Map a raw sell-side rating string to a 5-point ordinal (NaN if unknown/blank/no-rating)."""
+    if rating is None:
+        return float("nan")
+    s = str(rating).strip()
+    if not s or s in RATING_NON_LABELS or s.lower() in RATING_NON_LABELS:
+        return float("nan")
+    if s in RATING_ORDINAL_CN:
+        return float(RATING_ORDINAL_CN[s])
+    return float(RATING_ORDINAL_EN.get(s.lower(), float("nan")))
+
+
+def is_real_rating(rating) -> bool:
+    """True if the report carries an actual sell-side rating (not blank / explicit no-rating).
+
+    Used by 评级机构数 (n_active_orgs) to count rating-issuing orgs, INDEPENDENT of whether the
+    label is ordinal-mappable (a rare unmapped-but-real label like '关注' still counts as coverage)."""
+    if rating is None:
+        return False
+    s = str(rating).strip()
+    return bool(s) and s not in RATING_NON_LABELS and s.lower() not in RATING_NON_LABELS
+
+
+# PRE-REGISTERED window for 评级调高家数 (report_rc rating_up/dn); a DIFFERENT window is a NEW field,
+# never a post-hoc 30/60/90 comparison (GPT §10 R3-M4). Equal to the forecast TTL today, but a distinct
+# named constant so the modelling choice is explicit + auditable.
+RATING_CHANGE_WINDOW_OPEN_DAYS = 120
+# Trailing legal-entity suffixes stripped by normalized_org_id. NOTE: NOT "证券股份..." — 证券 is part of
+# the firm name (中信证券 ≠ 中信), so only the pure legal tail is removed (中信证券股份有限公司 → 中信证券).
+_ORG_LEGAL_SUFFIXES = ("股份有限公司", "有限责任公司", "有限公司")
+
+
+def normalized_org_id(org) -> str:
+    """Stable broker-ORG identity for report_rc rating/consensus aggregates (GPT §10 R3-M3).
+
+    NFKC + trim + whitespace-collapse, then strip ONE trailing legal-entity suffix so alias/suffix
+    variants merge (中信证券股份有限公司 ≡ 中信证券) — but NOT ``(香港)`` (the HK research arm is a
+    distinct entity, R3-m2). A pre-publish collision audit + denylist catches any over-merge.
+    Empty / NaN → "" (the caller drops it)."""
+    import re
+    import unicodedata
+    if org is None or (isinstance(org, float) and pd.isna(org)):
+        return ""
+    s = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(org)).strip())
+    for suf in _ORG_LEGAL_SUFFIXES:
+        if s.endswith(suf) and len(s) > len(suf):
+            s = s[: -len(suf)]
+            break
+    return s.strip()
 # Conservative vendor-availability lag (in OPEN trading days) applied to report_rc
 # rows whose create_time is absent OR a bulk-backfill stamp (see below), so a row
 # dated T is not exposed at next_open(T). Fixed + non-tunable (data-infra constant,
@@ -811,6 +917,49 @@ def payload_numeric_columns(df: pd.DataFrame) -> list[str]:
     return [column for column in numeric if column not in CORE_METADATA_COLUMNS]
 
 
+def aggregate_directional_holdertrade(sub: pd.DataFrame, prefix: str) -> tuple[pd.DataFrame, list[str]]:
+    """Per-(qlib_code, effective_date) directional holder-trade aggregate for one
+    holder_type×direction subset of the stk_holdertrade ledger. Emits four columns
+    ``{prefix}_{vol,amount,ratio,events}``:
+
+      - ``vol``    = Σ|change_vol| (shares). ``abs`` is a no-op for Tushare's positive-magnitude
+                     ``change_vol`` feed (verified: 0 negatives) AND a guard if that ever changes —
+                     direction lives in ``in_de``/the subset, so a directional magnitude is wanted.
+      - ``amount`` = Σ(|change_vol|·avg_price) (元) with **min_count=1** → NaN (NOT 0) when EVERY
+                     event on the day lacks ``avg_price`` (~29% of rows are unpriced); a partial-priced
+                     day is a **priced-event lower bound**, not the full transaction value.
+      - ``ratio``  = Σ change_ratio (占流通 %).
+      - ``events`` = transaction count.
+
+    The caller reindexes to the trading calendar (non-event days → NaN), so a NaN-skipping window
+    ``Sum(...)`` reconstructs the 果仁 rolling signal exactly. Pure function → unit-testable
+    (tests/data_infra/test_holdertrade_directional.py).
+    """
+    fields = [f"{prefix}_vol", f"{prefix}_amount", f"{prefix}_ratio", f"{prefix}_events"]
+    if sub.empty:
+        return pd.DataFrame(columns=["qlib_code", "effective_date", *fields]), fields
+    cv = pd.to_numeric(sub["change_vol"], errors="coerce").abs()
+    work = pd.DataFrame({
+        "qlib_code": sub["qlib_code"].to_numpy(),
+        "effective_date": sub["effective_date"].to_numpy(),
+        "_vol": cv.to_numpy(),
+        "_amount": (cv * pd.to_numeric(sub["avg_price"], errors="coerce")).to_numpy(),
+        "_ratio": pd.to_numeric(sub["change_ratio"], errors="coerce").to_numpy(),
+        "_events": 1.0,
+    })
+    out = (
+        work.groupby(["qlib_code", "effective_date"], sort=False)
+        .agg(**{
+            f"{prefix}_vol": ("_vol", "sum"),
+            f"{prefix}_amount": ("_amount", lambda s: s.sum(min_count=1)),
+            f"{prefix}_ratio": ("_ratio", "sum"),
+            f"{prefix}_events": ("_events", "sum"),
+        })
+        .reset_index()
+    )
+    return out, fields
+
+
 def _coerce_update_priority(series: pd.Series) -> pd.Series:
     numeric = pd.to_numeric(series, errors="coerce")
     return numeric.fillna(-1)
@@ -1203,7 +1352,10 @@ def derive_single_quarter_value(
         return np.nan
     prior_end = previous_quarter_end(end_date)
     if prior_end is None:
-        return np.float32(current_value) if end_date.month == 3 else np.nan
+        # Q1 single-quarter == the cumulative, but ONLY for a genuine 03-31 fiscal end.
+        # An irregular March date (e.g. 2013-03-30 in the legacy feed) is NOT Q1 -> NaN
+        # (GPT Phase-C Minor: align the shared helper with the standard-fiscal-end invariant).
+        return np.float32(current_value) if (end_date.month, end_date.day) == (3, 31) else np.nan
     prior_row = cumulative_state.get(prior_end)
     if prior_row is None:
         return np.nan
@@ -2525,10 +2677,21 @@ class StagedQlibBackendBuilder:
           - ``holdertrade_net_ratio``  : signed sum of change_ratio
           - ``holdertrade_events``     : number of holder transactions
 
+        Plus 高管 (holder_type=G, 董监高) DIRECTIONAL per-day aggregates that
+        enable 果仁-style rolling insider signals via a NaN-skipping window sum
+        (``高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)``):
+          - ``holdertrade_mgr_in_{vol,amount,events,ratio}``  : 高管增持 (IN)
+          - ``holdertrade_mgr_de_{vol,amount,events,ratio}``  : 高管减持 (DE)
+        ``vol`` = Σ change_vol (shares), ``amount`` = Σ change_vol·avg_price
+        (元; partial — avg_price ~71% covered), ``ratio`` = Σ change_ratio,
+        ``events`` = transaction count. Each directional field is non-NaN ONLY
+        on a day carrying that direction's 高管 event (sparse), so the window
+        sum is exact.
+
         Days with no event stay NaN (same convention as moneyflow /
-        block_trade). Researchers who need per-holder detail can read the
-        ledger at ``data/pit_ledger/stk_holdertrade/stk_holdertrade.parquet``
-        directly.
+        block_trade). Researchers who need per-holder detail (or 大股东 C / 个人 P
+        splits) can read the ledger at
+        ``data/pit_ledger/stk_holdertrade/stk_holdertrade.parquet`` directly.
         """
         ledger_path = self.ledger_path("stk_holdertrade")
         if not os.path.exists(ledger_path):
@@ -2548,13 +2711,14 @@ class StagedQlibBackendBuilder:
         change_vol = pd.to_numeric(ledger.get("change_vol"), errors="coerce")
         change_ratio = pd.to_numeric(ledger.get("change_ratio"), errors="coerce")
         in_de = ledger.get("in_de", pd.Series("", index=ledger.index)).astype(str).str.upper()
+        holder_type = ledger.get("holder_type", pd.Series("", index=ledger.index)).astype(str).str.upper()
         sign = np.where(in_de == "DE", -1.0, 1.0)
         ledger["_signed_vol"] = change_vol * sign
         ledger["_abs_vol"] = change_vol.abs()
         ledger["_signed_ratio"] = change_ratio * sign
         ledger["_event_count"] = 1
 
-        agg = (
+        agg = (  # all-holder net/gross/net_ratio/events (unchanged contract)
             ledger.groupby(["qlib_code", "effective_date"], sort=False)
             .agg(
                 holdertrade_net_vol=("_signed_vol", "sum"),
@@ -2564,12 +2728,33 @@ class StagedQlibBackendBuilder:
             )
             .reset_index()
         )
-        fields = ["holdertrade_net_vol", "holdertrade_gross_vol", "holdertrade_net_ratio", "holdertrade_events"]
-        fields = self._apply_field_filter(fields)
-        if not fields:
+
+        # 高管(holder_type=G, 董监高) directional per-day aggregates (testable module fn
+        # aggregate_directional_holdertrade). Sparse: a field is non-NaN ONLY on a day carrying that
+        # direction's 高管 event, so 高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N) (NaN-skipping)
+        # is exact. amount uses min_count=1 → an all-unpriced day is NaN (not a false 0); a
+        # partial-priced day is a priced-event lower bound (avg_price ~71% covered).
+        is_mgr = holder_type == "G"
+        mgr_in_agg, mgr_in_fields = aggregate_directional_holdertrade(
+            ledger[is_mgr & (in_de == "IN")], "holdertrade_mgr_in")
+        mgr_de_agg, mgr_de_fields = aggregate_directional_holdertrade(
+            ledger[is_mgr & (in_de == "DE")], "holdertrade_mgr_de")
+
+        base_fields = ["holdertrade_net_vol", "holdertrade_gross_vol", "holdertrade_net_ratio", "holdertrade_events"]
+        all_fields = self._apply_field_filter(base_fields + mgr_in_fields + mgr_de_fields)
+        if not all_fields:
             return []
+
+        def _per_symbol(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+            if frame.empty:
+                return {}
+            return {code: g.drop(columns=["qlib_code"]).set_index("effective_date")
+                    for code, g in frame.groupby("qlib_code")}
+
+        sym_base = _per_symbol(agg)
+        sym_in = _per_symbol(mgr_in_agg)
+        sym_de = _per_symbol(mgr_de_agg)
         written: list[str] = []
-        per_symbol = {code: group.sort_values("effective_date") for code, group in agg.groupby("qlib_code")}
         for qlib_code, feature_dir in iter_progress(
             target_dirs.items(),
             total=len(target_dirs),
@@ -2577,12 +2762,14 @@ class StagedQlibBackendBuilder:
             unit="symbol",
             leave=False,
         ):
-            symbol_df = per_symbol.get(qlib_code)
-            if symbol_df is None or symbol_df.empty:
+            parts = [p.get(qlib_code) for p in (sym_base, sym_in, sym_de)]
+            if all(p is None or p.empty for p in parts):
                 continue
-            frame = symbol_df.set_index("effective_date")[fields].reindex(calendar).astype(np.float32, copy=False)
-            for field_name in fields:
-                self._write_feature_series(feature_dir, field_name, frame[field_name].to_numpy(dtype=np.float32))
+            merged = pd.concat([p for p in parts if p is not None and not p.empty], axis=1)
+            frame = merged.reindex(calendar)
+            for field_name in all_fields:
+                series = frame[field_name] if field_name in frame.columns else pd.Series(np.nan, index=calendar)
+                self._write_feature_series(feature_dir, field_name, series.to_numpy(dtype=np.float32))
                 written.append(field_name)
         return sorted(set(written))
 
@@ -2734,6 +2921,538 @@ class StagedQlibBackendBuilder:
                 written.append(field_name)
         return sorted(set(written))
 
+    def _materialize_report_rc_aggregates(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """report_rc analyst-CONSENSUS levels + RATING aggregates (果仁 预期净利润/营收 + 评级机构数/调高家数).
+
+        Per (qlib_code, day), written DIRECTLY in the ``report_rc__`` namespace (NOT via
+        EVENT_LIKE_DAILY_FIELD_PREFIX), like the existing 4 eps_diffusion primitives:
+          - ``report_rc__np_fy1`` / ``__op_rt_fy1``: MEDIAN over ``normalized_org_id`` of each org's LATEST
+            active forecast of net profit / revenue (万元) for FY1, among ANNUAL (quarter "YYYYQ4") forecasts.
+            FY1 = (latest income-ANNUAL fiscal year disclosed as-of the day) + 1 (income ledger
+            effective_date, STRICT PIT — an annual disclosed AFTER the day does NOT count). Recomputed at
+            forecast / income-roll / TTL-EXPIRY events, carried between (果仁 snapshot); NaN before first
+            computable / when no FY1 forecast is active (NEVER carried across an annual roll).
+          - ``report_rc__n_active_orgs``: # distinct ``normalized_org_id`` with a REAL (non-'无') rating
+            active within the TTL. NaN before first coverage.
+          - ``report_rc__rating_up`` / ``__rating_dn``: # distinct orgs whose CURRENT direction-state
+            (latest rating-change, supersede-on-EVERY-report) is an upgrade / downgrade, within
+            ``RATING_CHANGE_WINDOW_OPEN_DAYS``. Baseline 0 during rating coverage, NaN before.
+
+        TTL active window: ``0 <= p - effective_pos <= TTL`` (covers e..e+TTL, IDENTICAL to the existing
+        ``_materialize_report_rc_consensus`` sweep). report_rc is a DIFFERENT VENDOR than 果仁's 朝阳永续 ->
+        APPROXIMATE consensus, NOT bit-parity. PIT: reads ledger effective_date only (already create_time/+2
+        anchored); FY1 income test strict as-of d. Sub-universe (analyst-covered). The 5 fields are
+        QUARANTINE until the standing output canary passes (field_status.yaml). Predictive use MUST Ref(,1).
+        """
+        rc_path = self.ledger_path("report_rc")
+        if not os.path.exists(rc_path):
+            return []
+        fields = self._apply_field_filter([
+            "report_rc__np_fy1", "report_rc__op_rt_fy1",
+            "report_rc__n_active_orgs", "report_rc__rating_up", "report_rc__rating_dn",
+        ])
+        if not fields:
+            return []
+        rc = pd.read_parquet(rc_path)
+        if rc.empty:
+            return []
+        for _req in ("quarter", "rating", "np"):
+            if _req not in rc.columns:
+                logger.warning("report_rc aggregates: %r column absent — failing closed (no fields)", _req)
+                return []
+        target_codes = set(target_dirs)
+        if target_codes:
+            rc = rc[rc["qlib_code"].isin(target_codes)].copy()
+        if rc.empty:
+            return []
+        rc["effective_date"] = normalize_date_series(rc["effective_date"])
+        rc = rc.dropna(subset=["effective_date"]).copy()
+        rc["np"] = pd.to_numeric(rc.get("np"), errors="coerce")
+        rc["op_rt"] = pd.to_numeric(rc.get("op_rt"), errors="coerce")
+        rc["_org"] = (rc["org_name"].map(normalized_org_id) if "org_name" in rc.columns
+                      else pd.Series("", index=rc.index))
+        rc = rc[rc["_org"].astype(str).str.len() > 0].copy()
+        if rc.empty:
+            return []
+        rc["_ord"] = rc["rating"].map(normalize_rating_to_ordinal)
+        rc["_real"] = rc["rating"].map(is_real_rating)
+        _q = rc["quarter"].astype(str).str.strip()
+        rc["_fy"] = pd.to_numeric(_q.str[:4], errors="coerce")
+        rc["_annual"] = _q.str[-2:].str.upper().eq("Q4")
+        for _c in ("disclosure_date", "report_date", "create_time"):
+            if _c in rc.columns:
+                rc[_c] = normalize_date_series(rc[_c])
+        _sort = [c for c in ("qlib_code", "_org", "effective_date", "disclosure_date",
+                             "report_date", "create_time") if c in rc.columns]
+        rc = rc.sort_values(_sort, kind="mergesort")
+        rc_by = {k: g for k, g in rc.groupby("qlib_code")}
+
+        # income ANNUAL disclosure (end_date == YYYY-12-31) -> earliest effective per fiscal year (FY1 roll)
+        inc_annual_by: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        inc_path = self.ledger_path("income")
+        if inc_path and os.path.exists(inc_path):
+            inc = pd.read_parquet(inc_path, columns=["qlib_code", "end_date", "effective_date"])
+            if target_codes:
+                inc = inc[inc["qlib_code"].isin(target_codes)]
+            inc["end_date"] = normalize_date_series(inc["end_date"])
+            inc["effective_date"] = normalize_date_series(inc["effective_date"])
+            inc = inc.dropna(subset=["end_date", "effective_date"])
+            inc = inc[inc["end_date"].dt.month.eq(12) & inc["end_date"].dt.day.eq(31)]
+            for code, gg in inc.groupby("qlib_code"):
+                # FY -> earliest effective_date, then sort BY EFFECTIVE_DATE + carry a RUNNING-MAX fiscal
+                # year. GPT post-impl Major-1: annual effective dates are NON-monotonic in fiscal-year order
+                # for ~233 stocks (a delayed/restated OLDER annual can disclose AFTER a newer one) -> a
+                # fiscal-year-ordered searchsorted is unsorted-by-key and picks the wrong FY1. FY1(d) = the
+                # LARGEST annual fiscal year VISIBLE as-of d + 1 -> running-max over the date-sorted series.
+                fy_eff = (gg.groupby(gg["end_date"].dt.year)["effective_date"].min()
+                          .rename_axis("fy").reset_index(name="effective_date")
+                          .sort_values("effective_date", kind="mergesort"))
+                effs = fy_eff["effective_date"].values.astype("datetime64[ns]")
+                max_fys = np.maximum.accumulate(fy_eff["fy"].to_numpy(dtype=int))
+                inc_annual_by[code] = (effs, max_fys)
+
+        cal_arr = calendar.values.astype("datetime64[ns]")
+        n_cal = len(calendar)
+        ttl = REPORT_RC_ACTIVE_TTL_OPEN_DAYS
+        rwin = RATING_CHANGE_WINDOW_OPEN_DAYS
+        c0, cN = cal_arr[0], cal_arr[-1]
+
+        def _pos(ts64) -> int:
+            return int(np.searchsorted(cal_arr, ts64, side="left"))
+
+        def _org_intervals_count(intervals_by_org: dict) -> np.ndarray:
+            """Count DISTINCT orgs live per day. intervals_by_org: {org: [(a,b), ...]} half-open [a,b);
+            an org's overlapping intervals are merged so it is counted once."""
+            diff = np.zeros(n_cal + 1, dtype=np.float64)
+            for ivs in intervals_by_org.values():
+                merged: list[list[int]] = []
+                for a, b in sorted(ivs):
+                    if a >= b:
+                        continue
+                    if merged and a <= merged[-1][1]:
+                        merged[-1][1] = max(merged[-1][1], b)
+                    else:
+                        merged.append([a, b])
+                for a, b in merged:
+                    diff[a] += 1.0
+                    diff[min(b, n_cal)] -= 1.0
+            return np.cumsum(diff[:n_cal]).astype(np.float32)
+
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize report_rc aggregates", unit="symbol", leave=False,
+        ):
+            g = rc_by.get(qlib_code)
+            if g is None or g.empty:
+                continue
+            arrays = {f: np.full(n_cal, np.nan, dtype=np.float32) for f in (
+                "report_rc__np_fy1", "report_rc__op_rt_fy1", "report_rc__n_active_orgs",
+                "report_rc__rating_up", "report_rc__rating_dn")}
+
+            # ---- (B)+(C) unified per-org walk: EVERY later report supersedes the org's prior state ----
+            #   coverage  = the org's LATEST report (within TTL) carries a REAL rating (a '无'/blank report
+            #               supersedes -> ends coverage; M4 "no-rating excluded from coverage");
+            #   direction = UP/DN held RATING_CHANGE window, cut by the next report (any kind).
+            cov_ivs: dict = {}
+            up_ivs: dict = {}
+            dn_ivs: dict = {}
+            cov_first = n_cal
+            for org, og in g.groupby("_org"):
+                last_finite = float("nan")
+                recs: list[tuple[int, bool, int, int]] = []   # (pos, real, state{-1,0,1}, rating_expiry)
+                for e, o, rl in zip(og["effective_date"].values, og["_ord"].values, og["_real"].values):
+                    e64 = np.datetime64(e)
+                    if not (c0 <= e64 <= cN):
+                        if rl and np.isfinite(o):
+                            last_finite = float(o)
+                        continue
+                    p = _pos(e64)
+                    if (not rl) or (not np.isfinite(o)):
+                        st, exp_r = 0, p                                  # no-rating / unknown: CLEAR direction
+                    elif np.isnan(last_finite):
+                        st, exp_r = 0, p                                  # first finite: baseline, NONE
+                    elif o > last_finite:
+                        st, exp_r = 1, min(p + rwin + 1, n_cal)           # UPGRADE
+                    elif o < last_finite:
+                        st, exp_r = -1, min(p + rwin + 1, n_cal)          # DOWNGRADE
+                    else:                                                # reaffirm: hold PRIOR state to its expiry
+                        st, exp_r = (recs[-1][2], recs[-1][3]) if recs else (0, p)
+                    recs.append((p, bool(rl), st, exp_r))
+                    if rl and np.isfinite(o):
+                        last_finite = float(o)
+                for i, (p, real, st, exp_r) in enumerate(recs):
+                    nxt = recs[i + 1][0] if i + 1 < len(recs) else n_cal   # superseded by the next report
+                    if real:
+                        cend = min(p + ttl + 1, nxt)                      # covered e..e+ttl, cut at next report
+                        if cend > p:
+                            cov_ivs.setdefault(org, []).append((p, cend))
+                            cov_first = min(cov_first, p)
+                    if st != 0:
+                        rend = min(exp_r, nxt)
+                        if rend > p:
+                            (up_ivs if st == 1 else dn_ivs).setdefault(org, []).append((p, rend))
+            if cov_first < n_cal:
+                n_active = _org_intervals_count(cov_ivs); n_active[:cov_first] = np.nan
+                arrays["report_rc__n_active_orgs"] = n_active
+                up_cnt = _org_intervals_count(up_ivs); up_cnt[:cov_first] = np.nan   # 0 baseline during coverage
+                arrays["report_rc__rating_up"] = up_cnt
+                dn_cnt = _org_intervals_count(dn_ivs); dn_cnt[:cov_first] = np.nan
+                arrays["report_rc__rating_dn"] = dn_cnt
+
+            # ---- (A) np_fy1 / op_rt_fy1: FY1 = (latest disclosed annual FY)+1, event-driven ----
+            ann = g[g["_annual"] & g["_fy"].notna()]
+            if not ann.empty:
+                a_fy = ann["_fy"].to_numpy().astype(int)
+                a_pos = np.array([_pos(np.datetime64(e)) for e in ann["effective_date"].values])
+                a_org = ann["_org"].to_numpy()
+                a_np = ann["np"].to_numpy(dtype="float64")
+                a_op = ann["op_rt"].to_numpy(dtype="float64")
+                effs_tab, max_fys_tab = inc_annual_by.get(qlib_code, (None, None))
+
+                def _fy1(asof) -> int:
+                    # largest annual fiscal year VISIBLE as-of asof, + 1 (running-max over date-sorted effs;
+                    # a later-disclosed delayed OLDER annual never lowers FY1 — GPT post-impl Major-1).
+                    if effs_tab is not None:
+                        k = int(np.searchsorted(effs_tab, asof, side="right"))
+                        if k > 0:
+                            return int(max_fys_tab[k - 1]) + 1
+                    return int(pd.Timestamp(asof).year)
+
+                ev = set(int(p) for p in a_pos if 0 <= p < n_cal)
+                ev |= set(int(p + ttl + 1) for p in a_pos if 0 <= p + ttl + 1 < n_cal)   # TTL-expiry (M2)
+                if effs_tab is not None:
+                    ev |= set(_pos(e) for e in effs_tab if c0 <= e <= cN)
+                ev = sorted(e for e in ev if 0 <= e < n_cal)
+                for i, p in enumerate(ev):
+                    fy1 = _fy1(cal_arr[p])
+                    mask = (a_fy == fy1) & (a_pos <= p) & (a_pos >= p - ttl)   # 0 <= p - e <= ttl
+                    p1 = ev[i + 1] if i + 1 < len(ev) else n_cal
+                    if not mask.any():
+                        continue
+                    last_np: dict = {}
+                    last_op: dict = {}
+                    for o2, vn, vo in zip(a_org[mask], a_np[mask], a_op[mask]):
+                        last_np[o2] = vn   # chronological order -> latest-per-org wins
+                        last_op[o2] = vo
+                    np_vals = [v for v in last_np.values() if np.isfinite(v)]
+                    op_vals = [v for v in last_op.values() if np.isfinite(v)]
+                    if np_vals:
+                        arrays["report_rc__np_fy1"][p:p1] = float(np.median(np_vals))
+                    if op_vals:
+                        arrays["report_rc__op_rt_fy1"][p:p1] = float(np.median(op_vals))
+
+            for f in fields:
+                if np.isfinite(arrays[f]).any():
+                    self._write_feature_series(feature_dir, f, arrays[f])
+                    written.append(f)
+        return sorted(set(written))
+
+    def _materialize_forecast_growth(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """业绩预告 single-quarter net-profit YoY growth (果仁 业绩预告净利润QGr%PYQ_v1).
+
+        For each (code, day): the latest 业绩预告 (carried by effective_date) gives the
+        forecast cumulative net-profit MIDPOINT for period (fiscal-year FY, quarter Q). The
+        forecast's LAST single quarter = midpoint - actual_cumulative[FY, Q-1] visible as-of
+        the day (the full midpoint if Q==1). Growth = (single_q_forecast -
+        prior_year_same_single_quarter) / |prior_year_single_quarter|, where the prior-year
+        single quarter = income_cum[FY-1, Q] - income_cum[FY-1, Q-1]. All inputs PIT
+        (forecast + income effective_date = strict next-open after disclosure).
+
+        Validated vs 果仁 — raw-ledger: 38,252 holdings, median rel-err 4.4e-05, 93% within 1%
+        (_validate_forecast_factor_vs_guorn.py); full-market PROVIDER-READ at the EXACT decision
+        date (_provider_read_audit_forecast.py): 38,399 finite-served holdings match 果仁
+        (median rel-err 4.37e-05, 92.9% within 1%, 98.2% sign), plus a clean ~2.2% NaN coverage
+        gap where the latest forecast is not yet PIT-computable (NaN by design, NOT carried).
+
+        The factor is a STEP function — it can only change on a forecast or income event, so
+        it is recomputed as-of each such event and the ``[event, next_event)`` range is filled
+        with THAT computation. It carries the CURRENT latest forecast's finite value forward
+        with NO TTL (matches 果仁's snapshot carry; a consuming factor should gate on recency) —
+        BUT if a newer latest forecast is visible and cannot yet be computed from visible income
+        inputs, the field is NaN until those inputs become visible (it does NOT carry the prior
+        forecast's value across a newer-forecast event — GPT R1 Blocker-1). NaN before the first
+        computable value. Same-effective-date forecasts are tie-broken deterministically (Major-1).
+        Writes ``$forecast__np_q_yoy`` directly (NOT via EVENT_LIKE_DAILY_FIELD_PREFIX), like
+        report_rc. Sub-universe coverage (only forecast-issuing stocks); register accordingly.
+        """
+        fc_path = self.ledger_path("forecast")
+        inc_path = self.ledger_path("income")
+        if not (os.path.exists(fc_path) and os.path.exists(inc_path)):
+            return []
+        fields = self._apply_field_filter(["forecast__np_q_yoy"])
+        if not fields:
+            return []
+        # Read deterministic tie-break columns (GPT R1 Major-1): when two forecasts for a
+        # stock share an effective_date (e.g. a forecast + a same-window revision, or two
+        # disclosures mapping to the same next-open), raw row order must NOT decide which is
+        # "latest". Order by (effective_date, disclosure_date, ann_date, first_ann_date,
+        # end_date) so _factor_asof's "last row with effective_date<=e" is the most-recently
+        # disclosed / nearest-period forecast, reproducibly (mirrors report_rc's tie-break).
+        _fc_cols = ["qlib_code", "end_date", "effective_date", "net_profit_min", "net_profit_max"]
+        for _c in ("disclosure_date", "ann_date", "first_ann_date"):
+            _fc_cols.append(_c)
+        fc = pd.read_parquet(fc_path, columns=_fc_cols)
+        inc = pd.read_parquet(inc_path, columns=["qlib_code", "end_date", "effective_date", "n_income"])
+        target_codes = set(target_dirs)
+        if target_codes:
+            fc = fc[fc["qlib_code"].isin(target_codes)].copy()
+            inc = inc[inc["qlib_code"].isin(target_codes)].copy()
+        for c in ("end_date", "effective_date", "disclosure_date", "ann_date", "first_ann_date"):
+            if c in fc.columns:
+                fc[c] = normalize_date_series(fc[c])
+        for c in ("end_date", "effective_date"):
+            inc[c] = normalize_date_series(inc[c])
+        fc = fc.dropna(subset=["end_date", "effective_date"])
+        fc = fc[fc["net_profit_min"].notna() & fc["net_profit_max"].notna()]
+        _sort_keys = [k for k in ("effective_date", "disclosure_date", "ann_date", "first_ann_date", "end_date")
+                      if k in fc.columns]
+        fc = fc.sort_values(_sort_keys, kind="mergesort")
+        inc = inc.dropna(subset=["end_date", "effective_date", "n_income"]).sort_values("effective_date")
+        if fc.empty:
+            return []
+        fc_by = {k: g for k, g in fc.groupby("qlib_code")}
+        inc_by = {k: g for k, g in inc.groupby("qlib_code")}
+        _QMONTH = {3: 1, 6: 2, 9: 3, 12: 4}
+        _QEND = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+        def _qend(year: int, q: int) -> pd.Timestamp:
+            m, d = _QEND[q]
+            return pd.Timestamp(year, m, d)
+
+        cal_arr = calendar.values.astype("datetime64[ns]")
+        n_cal = len(calendar)
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize forecast_growth", unit="symbol", leave=False,
+        ):
+            fcg = fc_by.get(qlib_code)
+            if fcg is None or fcg.empty:
+                continue
+            incg = inc_by.get(qlib_code)
+            inc_tab: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]] = {}
+            if incg is not None:
+                for end, gg in incg.groupby("end_date"):
+                    inc_tab[end] = (gg["effective_date"].values.astype("datetime64[ns]"),
+                                    gg["n_income"].values.astype("float64"))
+
+            def _inc_asof(end: pd.Timestamp, asof: np.datetime64) -> float:
+                tab = inc_tab.get(end)
+                if tab is None:
+                    return float("nan")
+                effs, vals = tab
+                pos = int(np.searchsorted(effs, asof, side="right")) - 1
+                return vals[pos] / 1e4 if pos >= 0 else float("nan")  # 元 -> 万元 (match forecast units)
+
+            fc_eff = fcg["effective_date"].values.astype("datetime64[ns]")
+            fc_end = fcg["end_date"].values
+            fc_mid = (fcg["net_profit_min"].values + fcg["net_profit_max"].values) / 2.0  # 万元
+
+            def _factor_asof(e: np.datetime64) -> float:
+                pos = int(np.searchsorted(fc_eff, e, side="right")) - 1
+                if pos < 0:
+                    return float("nan")
+                end = pd.Timestamp(fc_end[pos])
+                q = _QMONTH.get(end.month)
+                if q is None:
+                    return float("nan")
+                fy, mid = end.year, fc_mid[pos]
+                prior_cum = 0.0 if q == 1 else _inc_asof(_qend(fy, q - 1), e)
+                py_cum_q = _inc_asof(_qend(fy - 1, q), e)
+                py_cum_qm1 = 0.0 if q == 1 else _inc_asof(_qend(fy - 1, q - 1), e)
+                if not (np.isfinite(mid) and np.isfinite(prior_cum)
+                        and np.isfinite(py_cum_q) and np.isfinite(py_cum_qm1)):
+                    return float("nan")
+                py_single = py_cum_q - py_cum_qm1
+                if py_single == 0:
+                    return float("nan")
+                return (mid - prior_cum - py_single) / abs(py_single)
+
+            ev_days = set(pd.Timestamp(x) for x in fc_eff)
+            if incg is not None:
+                ev_days |= set(pd.Timestamp(x) for x in incg["effective_date"].values)
+            ev_days = sorted(d for d in ev_days if d <= calendar[-1])
+            if not ev_days:
+                continue
+            # GPT R1 Blocker-1 fix: fill each event's [e, next_event) range with the factor
+            # computed FROM THE LATEST FORECAST VISIBLE AS-OF e — and NaN if that latest
+            # forecast is not yet computable (its required income inputs not visible). Do NOT
+            # carry a previous finite value across a newer-forecast event: that would publish a
+            # stale prior forecast-growth during the window where the newer forecast is active
+            # but incomputable, falsely appearing PIT-valid. The range-fill itself carries a
+            # computable value forward between events (the factor only changes at an event).
+            arr = np.full(n_cal, np.nan, dtype=np.float32)
+            for i, e in enumerate(ev_days):
+                v = _factor_asof(np.datetime64(e))
+                p0 = int(np.searchsorted(cal_arr, np.datetime64(e), side="left"))
+                p1 = int(np.searchsorted(cal_arr, np.datetime64(ev_days[i + 1]), side="left")) if i + 1 < len(ev_days) else n_cal
+                if p0 < n_cal:
+                    arr[max(p0, 0):p1] = v if np.isfinite(v) else np.nan
+            if np.isfinite(arr).any():
+                self._write_feature_series(feature_dir, "forecast__np_q_yoy", arr)
+                written.append("forecast__np_q_yoy")
+        return sorted(set(written))
+
+    def _materialize_quality_stability(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """果仁 #59 quality-stability factors `STDEVQ(RoeCoreQ,12)` / `STDEVQ(SalesQGr%PY,12)`.
+
+        RoeCoreQ(q) = CoreProfit_sq(q)/equity(q); CoreProfit_sq = revenue_sq − oper_cost_sq −
+        (admin+sell+fin)_sq − biz_tax_surchg_sq. SalesQGr%PY(q) = (revenue_sq(q) − revenue_sq(q−4))/
+        |revenue_sq(q)|. Each output = the cross-time POPULATION stdev (ddof=0, matching the rung-6
+        np.nanstd validation) over the N-th-most-recent REPORT-quarter slots known as-of the day
+        (slot-aligned: q−4 = 4 slots back, NOT a calendar year). Needs ≥8 FINITE slots of the 12.
+
+        Single-quarter slots come from the PROVEN kernel — `materialize_canonical_quarter_segments`
+        (direct-quarter precedence + cumulative fallback, restatement-safe via `derive_single_quarter_value`)
+        + `arrays_from_snapshot_segments` — the SAME path the `_sq_q*` slots and the deepslot f9/f10 use, so
+        no-lookahead, restatement-recompute, and same-effective-date dedup are inherited (GPT-R1 P2 + tail
+        fix: this REUSES the kernel rather than reinventing cum[q]−cum[q−1]). Equity is the snapshot
+        (`materialize_visibility_segments`). The stdev is then vectorized over the calendar. PREFILTERS to
+        standard fiscal quarter-ends (03-31/06-30/09-30/12-31) BEFORE the kernel so an irregular end_date
+        can't be mis-slotted (mirrors `_materialize_profit_dedt_sq`). `field_filter` is honored per output.
+        Writes `$roe_core_stab_12q` + `$sales_gr_stab_12q` (new `quality_stability` family; sub-universe —
+        needs ~3yr history; consumers Ref(...,1) + gate on non-null/recency). Canaries:
+        tests/data_infra/test_quality_stability_materializer.py. Validated vs the rung-6 deepslot f9/f10.
+        """
+        inc_path = self.ledger_path("income")
+        bs_path = self.ledger_path("balancesheet")
+        if not (os.path.exists(inc_path) and os.path.exists(bs_path)):
+            return []
+        out_fields = self._apply_field_filter(["roe_core_stab_12q", "sales_gr_stab_12q"])
+        if not out_fields:
+            return []
+        INC_F = ["revenue", "oper_cost", "admin_exp", "sell_exp", "fin_exp", "biz_tax_surchg"]
+        # Read the canonicalize_report_variants tie-break columns (those present) so same-(effective_date,
+        # end_date) restatement variants collapse to ONE canonical row deterministically — exactly like the
+        # normal statement path (GPT review P2; matches the deepslot truth the factor was validated against).
+        import pyarrow.parquet as _pq
+        _TIE = ["report_type", "update_flag", "disclosure_date", "f_ann_date", "ann_date",
+                _SRC_FILE_COLUMN, _SRC_ORDINAL_COLUMN]
+
+        def _read(path: str, payload: list[str]) -> pd.DataFrame:
+            have = set(_pq.ParquetFile(path).schema.names)
+            cols = [c for c in (["qlib_code", "end_date", "effective_date"] + payload + _TIE) if c in have]
+            return pd.read_parquet(path, columns=cols)
+
+        inc = _read(inc_path, INC_F)
+        bs = _read(bs_path, ["total_hldr_eqy_exc_min_int"])
+        # income_quarterly = Tushare DIRECT single-quarter income (the income family's quarterly_dataset).
+        # Feeding it as quarterly_df gives the kernel direct-quarter PRECEDENCE — matching the _sq_q* slots
+        # + the deepslot f9/f10 EXACTLY (the residual GPT-R1 tail = the cum-difference-only path missing it).
+        iq_path = self.ledger_path("income_quarterly")
+        iq = _read(iq_path, INC_F) if os.path.exists(iq_path) else pd.DataFrame()
+        for df in (inc, bs, iq):
+            if df.empty:
+                continue
+            for c in ("end_date", "effective_date"):
+                df[c] = normalize_date_series(df[c])
+        _QEND_DAY = {(3, 31), (6, 30), (9, 30), (12, 31)}
+
+        def _std_end(s: pd.Series) -> pd.Series:  # keep only standard fiscal quarter-ends
+            return s.apply(lambda d: pd.notna(d) and (d.month, d.day) in _QEND_DAY)
+
+        target_codes = set(target_dirs)
+
+        def _prep(df: pd.DataFrame) -> pd.DataFrame:
+            if df.empty:
+                return df
+            df = df[df["end_date"].notna() & df["effective_date"].notna() & _std_end(df["end_date"])]
+            df = df.sort_values("effective_date", kind="mergesort")
+            if target_codes:
+                df = df[df["qlib_code"].isin(target_codes)].copy()
+            return df
+
+        inc, bs, iq = _prep(inc), _prep(bs), _prep(iq)
+        if inc.empty:
+            return []
+        inc_by = {k: g for k, g in inc.groupby("qlib_code")}
+        bs_by = {k: g for k, g in bs.groupby("qlib_code")}
+        iq_by = {k: g for k, g in iq.groupby("qlib_code")} if not iq.empty else {}
+        cal_size = len(calendar)
+        want_roe = "roe_core_stab_12q" in out_fields
+        want_sal = "sales_gr_stab_12q" in out_fields
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize quality_stability", unit="symbol", leave=False,
+        ):
+            ig = inc_by.get(qlib_code)
+            if ig is None or ig.empty:
+                continue
+            bg = bs_by.get(qlib_code)
+            if bg is None or bg.empty:
+                continue
+            # Single-quarter income slots via the PROVEN kernel — the SAME path the _sq_q* slots + the
+            # deepslot f9/f10 use: canonicalize -> materialize_canonical_quarter_segments (direct-quarter
+            # precedence + cumulative fallback, restatement-safe via derive_single_quarter_value) ->
+            # per-slot single-quarter daily arrays. slot_depth=16 so SalesQGr%PY(q_t) can reach
+            # revenue_q{t+4} for t=0..11. (Reusing the kernel — NOT reinventing cum[q]-cum[q-1] — is the
+            # GPT-R1 tail fix; the standard-quarter-end prefilter above guards mis-slotting an irregular end.)
+            ig = canonicalize_report_variants(ig, "cumulative")
+            iqg = iq_by.get(qlib_code)
+            iqg = canonicalize_report_variants(iqg, "quarterly") if (iqg is not None and not iqg.empty) else None
+            q_segs = materialize_canonical_quarter_segments(ig, iqg, calendar, quarter_fields=INC_F, slot_depth=16)
+            q_arr = arrays_from_snapshot_segments(q_segs, INC_F, cal_size, 16)
+            eq_grp = canonicalize_report_variants(bg, "snapshot")
+            eq_segs = materialize_visibility_segments(eq_grp, calendar, slot_depth=12)
+            eq_arr = arrays_from_snapshot_segments(eq_segs, ["total_hldr_eqy_exc_min_int"], cal_size, 12)
+
+            def _slot(field, i):
+                return q_arr[f"{field}_q{i}"].astype(np.float64)
+
+            # Vectorized over the calendar: RoeCoreQ(q_i)=CoreProfit_sq(q_i)/equity(q_i) for the 12 most-
+            # recent slots; population stdev (ddof=0, matches the rung-6 np.nanstd) with ≥8 FINITE slots.
+            roe_arr = None
+            if want_roe:
+                roe_slots = np.empty((12, cal_size), dtype=np.float64)
+                for i in range(12):
+                    core = (_slot("revenue", i) - _slot("oper_cost", i)
+                            - (_slot("admin_exp", i) + _slot("sell_exp", i) + _slot("fin_exp", i))
+                            - _slot("biz_tax_surchg", i))
+                    eq = eq_arr[f"total_hldr_eqy_exc_min_int_q{i}"].astype(np.float64)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        roe_slots[i] = core / np.where(np.abs(eq) > 0, eq, np.nan)
+                cnt = np.sum(np.isfinite(roe_slots), axis=0)
+                with np.errstate(invalid="ignore"), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice -> NaN (masked by cnt<8)
+                    roe_arr = np.nanstd(roe_slots, axis=0).astype(np.float32)
+                roe_arr[cnt < 8] = np.nan
+            # SalesQGr%PY(q_i)=(revenue_sq(q_i)-revenue_sq(q_{i+4}))/|revenue_sq(q_i)| for the 12 most-recent.
+            sal_arr = None
+            if want_sal:
+                sal_slots = np.empty((12, cal_size), dtype=np.float64)
+                for i in range(12):
+                    rv, rv4 = _slot("revenue", i), _slot("revenue", i + 4)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        sal_slots[i] = (rv - rv4) / np.where(np.abs(rv) > 0, np.abs(rv), np.nan)
+                cnt = np.sum(np.isfinite(sal_slots), axis=0)
+                with np.errstate(invalid="ignore"), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice -> NaN (masked by cnt<8)
+                    sal_arr = np.nanstd(sal_slots, axis=0).astype(np.float32)
+                sal_arr[cnt < 8] = np.nan
+
+            # P1: honor field_filter — only write the requested field(s) (roe_arr/sal_arr are None if not wanted).
+            if want_roe and roe_arr is not None and np.isfinite(roe_arr).any():
+                self._write_feature_series(feature_dir, "roe_core_stab_12q", roe_arr)
+                written.append("roe_core_stab_12q")
+            if want_sal and sal_arr is not None and np.isfinite(sal_arr).any():
+                self._write_feature_series(feature_dir, "sales_gr_stab_12q", sal_arr)
+                written.append("sales_gr_stab_12q")
+        return sorted(set(written))
+
     def _materialize_snapshot_dataset(
         self,
         dataset_name: str,
@@ -2803,6 +3522,68 @@ class StagedQlibBackendBuilder:
                 self._write_feature_series(feature_dir, field_name, arrays[f"{field_name}_q0"])
                 written.append(field_name)
         return written
+
+    def _materialize_profit_dedt_sq(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """Single-quarter 扣非净利润 (`$profit_dedt_sq_q0..q4`) from the indicators-ledger CUMULATIVE.
+
+        `profit_dedt` (扣除非经常性损益后的归母净利润) is reported CUMULATIVE YTD in the fina_indicator
+        (indicators) ledger at ALL four fiscal quarters (Q1 94% / H1 96% / Q3 95% / FY 98% — verified
+        _phasec_profit_dedt_selfreview.py, NOT semi-annual like the cashflow 折旧摊销). It is not a
+        flow-family ledger field, so this custom materializer drives the SAME flow path the
+        income/cashflow families use: `materialize_canonical_quarter_segments` (cumulative ->
+        single-quarter via `derive_single_quarter_value`, restatement-safe) + `arrays_from_snapshot_segments`
+        on the DERIVED quarter values. It does NOT snapshot-expand the raw cumulative (GPT Plan-C Minor).
+
+        PIT: anchored on the indicators `ann_date -> effective_date` (strict next-open after disclosure,
+        §3.2), same anchor as the approved q_roe; restatement-safe (the single-quarter retroactively
+        updates at a restatement's effective_date). Served NaN where the consecutive cumulative chain is
+        not yet PIT-computable is meaningful — a SUB-UNIVERSE coverage gap vs the vendor q_dtprofit (which
+        reports the single-q DIRECTLY at higher coverage); that gap is the PIT cost (GPT Plan-C Major-2,
+        coverage_tier=sub). Consumers wrap in Ref(...,1).
+
+        GPT Plan-C Major-3: PREFILTERS to standard fiscal-quarter ends (03-31/06-30/09-30/12-31) so an
+        irregular end_date can never be mis-mapped to a quarter (a 03-30 row is dropped, not treated as Q1).
+        """
+        field = "profit_dedt"
+        slots = [f"{field}_sq_q{s}" for s in range(self.slot_depth)]
+        if self.field_filter and not any(s in self.field_filter for s in slots):
+            return []
+        ledger_path = self.ledger_path("indicators")
+        if not os.path.exists(ledger_path):
+            return []
+        ledger = pd.read_parquet(ledger_path)
+        if ledger.empty or field not in ledger.columns:
+            return []
+        keep = [c for c in ("qlib_code", "end_date", "ann_date", "f_ann_date", "disclosure_date",
+                            "effective_date", "report_type", "update_flag", field) if c in ledger.columns]
+        ledger = ledger[keep].dropna(subset=[field, "effective_date", "end_date"]).copy()
+        # GPT Plan-C Major-3: keep ONLY standard fiscal-quarter ends; irregular dates -> excluded.
+        ed = normalize_date_series(ledger["end_date"])
+        std = (((ed.dt.month == 3) & (ed.dt.day == 31)) | ((ed.dt.month == 6) & (ed.dt.day == 30))
+               | ((ed.dt.month == 9) & (ed.dt.day == 30)) | ((ed.dt.month == 12) & (ed.dt.day == 31)))
+        ledger = ledger.loc[std.to_numpy()].copy()
+        ledger = ledger[ledger["qlib_code"].isin(set(target_dirs))]
+        if ledger.empty:
+            return []
+        written: list[str] = []
+        groups = {code: g for code, g in ledger.groupby("qlib_code")}
+        for qlib_code in iter_progress(sorted(groups), total=len(groups),
+                                       desc="Materialize profit_dedt_sq", unit="symbol", leave=False):
+            feature_dir = target_dirs.get(qlib_code)
+            if feature_dir is None:
+                continue
+            segments = materialize_canonical_quarter_segments(
+                groups[qlib_code], None, calendar, quarter_fields=[field], slot_depth=self.slot_depth)
+            arrays = arrays_from_snapshot_segments(segments, [field], len(calendar), self.slot_depth)
+            for slot in range(self.slot_depth):
+                name = f"{field}_sq_q{slot}"
+                self._write_feature_series(feature_dir, name, arrays[f"{field}_q{slot}"])
+                written.append(name)
+        return sorted(set(written))
 
     def _materialize_flow_family(
         self,
@@ -2944,6 +3725,36 @@ class StagedQlibBackendBuilder:
             target_codes=target_codes,
         )
         return sorted(set(written)), parity_path
+
+    def _materialize_derived_limit_status(self, target_dirs: dict[str, str]) -> list[str]:
+        """Derive the tri-state ``limit_status`` field from each symbol's already-written,
+        calendar-aligned ``close`` / ``up_limit`` / ``down_limit`` bins (basis-safe: all raw). Runs
+        AFTER stk_limit + the kline are materialized (so the three bins exist + share close's
+        start_index/length — enforced by ``_write_feature_series`` + ``validate_stock_bins``). A symbol
+        missing any of the three bins (no published limit data) simply gets no ``limit_status`` → a
+        factor reads NaN there → that day is not excluded. Single source of the limit-day definition
+        (shared :func:`compute_limit_status`) so no factor re-derives the raw/adjusted basis inline."""
+        if self.field_filter and LIMIT_STATUS_FIELD not in self.field_filter:
+            return []
+        written: list[str] = []
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(), total=len(target_dirs),
+            desc="Materialize limit_status", unit="symbol", leave=False,
+        ):
+            paths = {k: os.path.join(feature_dir, f"{k}.day.bin") for k in ("close", "up_limit", "down_limit")}
+            if not all(os.path.exists(p) for p in paths.values()):
+                continue
+            si_c, close = read_qlib_bin(paths["close"])
+            si_u, up = read_qlib_bin(paths["up_limit"])
+            si_d, dn = read_qlib_bin(paths["down_limit"])
+            if not (si_c == si_u == si_d and len(close) == len(up) == len(dn)):
+                logger.warning("limit_status: %s bins misaligned (close=%d/%d up=%d/%d down=%d/%d) — skip",
+                               qlib_code, si_c, len(close), si_u, len(up), si_d, len(dn))
+                continue
+            status = compute_limit_status(close, up, dn)
+            write_qlib_bin(os.path.join(feature_dir, f"{LIMIT_STATUS_FIELD}.day.bin"), status, start_index=si_c)
+            written.append(LIMIT_STATUS_FIELD)
+        return sorted(set(written))
 
     def _materialize_daily_dataset(
         self,
@@ -3137,8 +3948,16 @@ class StagedQlibBackendBuilder:
                     family_audits[family.name] = parity_path
         if "indicators" in active_datasets and os.path.exists(self.ledger_path("indicators")):
             written["indicators"] = self._materialize_snapshot_dataset("indicators", calendar, target_dirs)
+            # Custom: single-quarter 扣非净利润 derived from the indicators-ledger CUMULATIVE profit_dedt
+            # (flow-state via materialize_canonical_quarter_segments, NOT snapshot-expanded). Writes
+            # $profit_dedt_sq_q0..q4 (sub-universe; the vendor q_dtprofit reports the single-q directly).
+            written["profit_dedt_sq"] = self._materialize_profit_dedt_sq(calendar, target_dirs)
         if "forecast" in active_datasets and os.path.exists(self.ledger_path("forecast")):
             written["forecast"] = self._materialize_snapshot_dataset("forecast", calendar, target_dirs)
+            # Custom: the derived single-quarter forecast-growth factor (业绩预告净利润QGr%PYQ_v1),
+            # which joins the income cumulative — not expressible from the raw snapshot fields.
+            # Writes $forecast__np_q_yoy directly; 果仁-validated (median rel-err 4.4e-05).
+            written["forecast_growth"] = self._materialize_forecast_growth(calendar, target_dirs)
         if "holder_number" in active_datasets and os.path.exists(self.ledger_path("holder_number")):
             written["holder_number"] = self._materialize_snapshot_dataset("holder_number", calendar, target_dirs)
         if "stk_holdertrade" in active_datasets and os.path.exists(self.ledger_path("stk_holdertrade")):
@@ -3150,8 +3969,19 @@ class StagedQlibBackendBuilder:
             # revision-direction primitives + active-analyst state (P1 subset).
             # Writes report_rc__* fields directly (NOT via the event-like prefix map).
             written["report_rc"] = self._materialize_report_rc_consensus(calendar, target_dirs)
+            # + CONSENSUS levels + RATING aggregates (np_fy1/op_rt_fy1/n_active_orgs/rating_up/rating_dn;
+            #   QUARANTINE until the standing output canary passes — field_status.yaml report_rc_* entries).
+            written["report_rc"] = sorted(set(written["report_rc"])
+                                          | set(self._materialize_report_rc_aggregates(calendar, target_dirs)))
         if "dividends" in active_datasets and os.path.exists(self.ledger_path("dividends")):
             written["dividends"] = self._materialize_dividend_compat(calendar, target_dirs)
+        if ({"income", "balancesheet"} <= active_datasets
+                and os.path.exists(self.ledger_path("income"))
+                and os.path.exists(self.ledger_path("balancesheet"))):
+            # Custom: 果仁 #59 quality-stability factors (trailing-12-quarter stdev of RoeCoreQ /
+            # SalesQGr%PY) — cross-quarter, not expressible from the q0..q4 _sq slots. Writes
+            # $roe_core_stab_12q / $sales_gr_stab_12q. Validated vs the rung-6 deepslot f9/f10.
+            written["quality_stability"] = self._materialize_quality_stability(calendar, target_dirs)
         for dataset_name in (
             "moneyflow", "northbound", "margin", "stk_limit",
             # New alpha endpoints (added 2026-04-16): daily-fact kind,
@@ -3160,6 +3990,13 @@ class StagedQlibBackendBuilder:
         ):
             if dataset_name in active_datasets:
                 written[dataset_name] = self._materialize_daily_dataset(dataset_name, calendar, target_dirs)
+
+        # Derived field: limit_status from close vs up_limit/down_limit. Runs AFTER stk_limit (writes
+        # the limit bins) + the kline (writes close) so all three input bins exist + are close-aligned.
+        if "stk_limit" in active_datasets:
+            derived = self._materialize_derived_limit_status(target_dirs)
+            if derived:
+                written[LIMIT_STATUS_FIELD] = derived
 
         sidecars = {"reused_existing_provider_sidecars": scoped_update}
         if not scoped_update:
@@ -3377,7 +4214,7 @@ class StagedQlibBackendBuilder:
         except (OSError, subprocess.CalledProcessError):
             source_commit = None
 
-        from src.data_infra.provider_manifest import emit_manifest_at_publish
+        from data_infra.provider_manifest import emit_manifest_at_publish
         try:
             emit_manifest_at_publish(
                 qlib_dir=self.paths.qlib_dir,

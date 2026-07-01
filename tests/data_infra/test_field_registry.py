@@ -368,6 +368,38 @@ class TestLiveRegistry:
         assert r.status_id == "approved"
         assert r.dataset_id == "hk_hold"
 
+    def test_report_rc_explicit_fields_no_prefix_auto_approval(self, reg) -> None:
+        # R3-B1 (2026-06-27, GPT §10): the report_rc block was converted from a
+        # $report_rc__ PREFIX approval to an EXPLICIT 4-field list, so a NEW
+        # $report_rc__* name can no longer be SILENTLY formal-approved by writing a
+        # bin. The 4 eps_diffusion primitives stay approved; an unlisted probe
+        # resolves unknown + fail-closed at formal_validation.
+        for f in ("$report_rc__eps_up", "$report_rc__n_active_analysts"):
+            r = reg.resolve_field(f, "formal_validation")
+            assert r.allowed is True and r.status_id == "approved", f
+        probe = reg.resolve_field("$report_rc__future_probe", "formal_validation")
+        assert probe.is_unknown is True
+        assert probe.allowed is False  # unknown_field_policy[formal_validation] = fail
+
+    def test_report_rc_consensus_fields_quarantine_not_formal(self, reg) -> None:
+        # The 5 NEW consensus/rating aggregates (2026-06-27, GPT §10 R1->R4 SHIP) are
+        # registered as 5 SEPARATE single-field QUARANTINE entries (R3-M2) until the
+        # standing field-level output canary passes -> NOT eligible at formal_validation.
+        for f in ("$report_rc__np_fy1", "$report_rc__op_rt_fy1", "$report_rc__n_active_orgs",
+                  "$report_rc__rating_up", "$report_rc__rating_dn"):
+            r = reg.resolve_field(f, "formal_validation")
+            assert r.status_id == "quarantine", f
+            assert r.allowed is False, f
+
+    def test_no_field_token_in_two_datasets(self, reg) -> None:
+        # R3-M2: the 5 consensus fields are per-field entries (DatasetEntry carries one
+        # status); guard that NO $field token appears in two dataset entries (which would
+        # make its resolved status order-dependent / ambiguous).
+        from collections import Counter
+        counts = Counter(fld for ds in reg.datasets.values() for fld in ds.fields)
+        dups = {k: v for k, v in counts.items() if v > 1}
+        assert not dups, f"duplicate field tokens across datasets: {dups}"
+
     def test_margin_detail_partial_promotion_for_formal(self, reg) -> None:
         # PARTIAL promotion 2026-06-04 (gated-dataset review; approvals/
         # 2026-06-04_margin_detail_partial_to_approved.yaml): the 5 CLEAN

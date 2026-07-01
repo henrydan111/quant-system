@@ -157,7 +157,7 @@ def reproduce_sealed_oos(
     profile_id: str = "promotion_evidence",
     step_id: str = "reproduce_sealed_oos",
     horizon: int = 20,
-    n_quantiles: int = 5,
+    n_quantiles: int = 10,
     claim_seal: bool = True,
     allow_same_run: bool = False,
     provider_provenance: Mapping | None = None,
@@ -245,8 +245,13 @@ def reproduce_sealed_oos(
     panel = build_is_windowed_panel(factors_df, apanel["adj_close"], is_end=oos_end,
                                     horizon=max(SCREENING_HORIZONS), trade_cal=trade_cal)
 
+    # n_quantiles wired through (2026-06-11 10-group unification). REPRODUCTION NOTE:
+    # evidence registered before that date (Round-6 winners, GP, arXiv D1-D4,
+    # eps_diffusion) was produced with the then-hardcoded quintiles — pass
+    # n_quantiles=5 to reproduce those runs bit-for-bit; decile ls_sharpe is NOT
+    # comparable to the historical quintile bar.
     screen = run_batch_screening(factors_df, fwd_df, horizons=tuple(SCREENING_HORIZONS),
-                                 engine="batch", progress_every=0)
+                                 engine="batch", progress_every=0, n_quantiles=n_quantiles)
     per_factor: dict[str, dict] = {}
     for name in factor_exprs:
         if name not in screen.index:

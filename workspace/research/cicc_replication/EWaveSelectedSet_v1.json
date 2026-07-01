@@ -1,0 +1,64 @@
+{
+  "set_id": "EWaveSelectedSet_v1",
+  "generated_from_commit": "12c753e",
+  "selection": "greedy marginal style-residual-IC x (1-maxcorr), family-capped (vol/liq/corr/flow<=2, mom<=1)",
+  "inputs": "2010-2020 univ_all matrix style_resid_ic (resid_ic_vs_style_controls_v1_oriented) + csi300 2018-2020 rank-exposure corr",
+  "oos_touched": false,
+  "pool_size": 69,
+  "reps": [
+    {
+      "family": "corr",
+      "factor_id": "corr_ret_turnd_20d",
+      "style_resid_ic": -0.782,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "liq",
+      "factor_id": "liq_vstd_20d",
+      "style_resid_ic": -0.557,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "vol",
+      "factor_id": "vol_highlow_std_20d",
+      "style_resid_ic": -0.57,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "liq",
+      "factor_id": "liq_shortcut_avg_20d",
+      "style_resid_ic": 0.528,
+      "expected_direction": "positive"
+    },
+    {
+      "family": "flow",
+      "factor_id": "flow_act_buy_shift_dist_xl_20d",
+      "style_resid_ic": -0.492,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "corr",
+      "factor_id": "corr_price_turn_post_20d",
+      "style_resid_ic": -0.517,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "mom",
+      "factor_id": "mmt_route_20d",
+      "style_resid_ic": -0.354,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "vol",
+      "factor_id": "vol_up_std_20d",
+      "style_resid_ic": -0.498,
+      "expected_direction": "inverse"
+    },
+    {
+      "family": "flow",
+      "factor_id": "flow_act_buy_prop_l_20d",
+      "style_resid_ic": 0.226,
+      "expected_direction": "positive"
+    }
+  ]
+}

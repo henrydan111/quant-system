@@ -567,6 +567,16 @@ Total Columns: 4
 | `trade_date` | Trade Date | 交易日期 |
 | `weight` | Weight | 权重 |
 
+**Vendor quirk (verified 2026-06-11)**: Tushare `index_weight` returns EMPTY for `000300.SH`
+before ~2016; the SZSE mirror code `399300.SZ` serves the SAME index (member sets and weights
+verified identical on 2024-01-31) back to 2008-01, with DAILY snapshots pre-2016 (monthly after).
+The 2008-01..2015-12 CSI300 hole was backfilled 2026-06-11 via
+`scripts/backfill_index_weights.py --index 399300.SZ --relabel-as 000300.SH` (rows stored under
+the canonical `000300.SH`). Snapshot cadence is otherwise monthly (doc_id=96) — daily constituent
+data does not exist upstream post-2016; consumers as-of carry-forward (see
+`src/data_infra/universe_membership.py` for the PIT semantics and the semi-annual-rebalance
+staleness note).
+
 ### industry_sw2021 (申万行业2021)
 Total Columns: 7
 
@@ -704,9 +714,11 @@ Storage: `data/market/northbound/YYYY/northbound_YYYYMMDD.parquet`
 | `ts_code` | TS Stock Code | TS代码 |
 | `trade_date` | Trade Date | 交易日期 |
 | `name` | Stock Name | 股票名称 |
-| `vol` | Holding Volume (shares) | 持股数量(股) |
-| `ratio` | Holding % of Free Float | 持股占比(%) |
+| `vol` | Holding Volume (shares) → provider `$north_hold_vol` | 持股数量(股) |
+| `ratio` | Holding % of **Issued** Shares (doc 188; NOT free-float) → provider `$ratio` | 持股占比(%，占已发行股份) |
 | `exchange` | Exchange (SH/SZ) | 交易所 |
+
+> **Provider fields (2026-06-20):** `$ratio` (issued-share %, approved 2026-06-05) + `$north_hold_vol` (holding shares, approved 2026-06-20 — raw `vol` renamed via `NORTHBOUND_RENAMES` to avoid the kline `$vol` collision; bin already materialized, registry flip only). ⚠ `$ratio` is **% of ISSUED shares** per Tushare doc 188 (the earlier "Free Float" label was wrong) — close to but not exact to CICC chart-76's `持仓量/流通股本` wording. Daily northbound disclosure **stopped 2024-08-20** (doc 188: switched to quarterly) → daily series effectively 2017..2024-08; PIT: end-of-day fact → `Ref(...,1)`.
 
 ### margin_detail (融资融券交易明细)
 Storage: `data/market/margin/YYYY/margin_YYYYMMDD.parquet`
@@ -846,26 +858,50 @@ Per-holder raw rows remain in the PIT ledger. The Qlib provider exposes
 per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 `$holdertrade_net_ratio`, and `$holdertrade_events`.
 
+> **高管 directional signals (added 2026-06-24, build `phase1_qfields_holdertrade_20260623`):**
+> `_materialize_stk_holdertrade` also emits per-day **高管 (holder_type=G, 董监高) DIRECTIONAL**
+> aggregates: `$holdertrade_mgr_in_{vol,amount,events,ratio}` (增持/IN) and
+> `$holdertrade_mgr_de_{vol,amount,events,ratio}` (减持/DE). `vol` = Σ|change_vol| (shares),
+> `ratio` = Σ change_ratio (占流通 %), `events` = transaction count — all COMPLETE for the event rows.
+> **`amount` = Σ(|change_vol|·avg_price) over PRICED events only (元)**: `avg_price` is ~71% covered, so
+> if some events on a day lack `avg_price` the amount is a **lower-bound priced-event sum** (vol/ratio/events
+> stay complete); if ALL same-day directional events lack `avg_price`, amount is served as **NaN, not 0.0**
+> (`min_count=1`). Each field is non-NaN ONLY on a day carrying that direction's 高管 event (sparse), so the
+> 果仁-style rolling signal **`高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N)`** (NaN-skipping window
+> sum) is exact. Predictive use → `Ref(...,1)`. 大股东(C)/个人(P) splits are NOT materialized — read the
+> ledger for those.
+
 | Column | English | Chinese |
 |--------|---------|---------|
 | `ts_code` | TS Stock Code | TS代码 |
 | `ann_date` | Announcement Date | 公告日期 |
 | `holder_name` | Holder Name | 股东名称 |
-| `in_de` | Increase / Decrease Direction | 增持/减持 |
+| `holder_type` | Holder Type (G高管 / P个人 / C公司) | 股东类型 |
+| `in_de` | Increase / Decrease Direction (IN/DE) | 增持/减持 |
 | `change_vol` | Changed Shares | 变动股数 |
-| `change_ratio` | Changed Share Ratio | 变动比例 |
+| `change_ratio` | Changed Share Ratio (% of float) | 占流通比例(%) |
 | `after_share` | Shares After Change | 变动后持股 |
-| `after_ratio` | Holding Ratio After Change | 变动后持股比例 |
+| `after_ratio` | Holding Ratio After Change | 变动后占流通比例(%) |
+| `avg_price` | Average Transaction Price | 平均价格 |
+| `total_share` | Total Holding Shares | 持股总数 |
 
 ## 8. Bucket A — 15000积分 Expansion (downloaded 2026-06-08, RAW)
 
 Eight deep-history endpoints from the Tushare 5000→15000积分 upgrade, fetched by
-[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py). RAW only — not yet normalized / PIT-aligned /
-in the Qlib provider. Coverage table + PIT notes: [data_tracker.md](data_tracker.md) §11.
+[scripts/fetch_bucket_a.py](../scripts/fetch_bucket_a.py). MOST remain RAW only — not yet normalized /
+PIT-aligned / in the Qlib provider. **EXCEPTION: `report_rc`** is fully PIT-ledger + Qlib-provider
+materialized (create_time/+2-open-day `effective_date` anchor) — 4 approved `$report_rc__eps_*` primitives
++ 5 quarantined consensus/rating aggregates `$report_rc__{np_fy1,op_rt_fy1,n_active_orgs,rating_up,rating_dn}`
+(see §report_rc below). Coverage table + PIT notes: [data_tracker.md](data_tracker.md) §11.
 
 ### report_rc (卖方盈利预测明细 — analyst forecasts)
 Total Columns: 21. `data/analyst/report_rc/report_rc_{YYYY}.parquet`. Each row = one analyst's forecast
-for one stock × one forecast `quarter`. Visibility anchor = `report_date` (PIT canary under test).
+for one stock × one forecast `quarter`. **PIT visibility anchor (resolved 2026-06-08)** = ledger
+`effective_date` = a CONTEMPORANEOUS `create_time` (gap ≤ 45 cal days → `max(report_date, create_time)`)
+else `report_date + 2 open days` (validated market-wide vs the JoinQuant 朝阳永续 oracle; breadth canary
+ran 2026-06-14). **Materialized** into the PIT ledger + Qlib provider: the 4 `$report_rc__eps_*` event-flow
+primitives (approved) + the 5 consensus/rating aggregates `$report_rc__{np_fy1, op_rt_fy1, n_active_orgs,
+rating_up, rating_dn}` (quarantine until the bound output canary passes). Predictive use MUST `Ref(...,1)`.
 Sparse fields (expected NaN): `tp`, `op_pr`, `rd`, `max_price`, `min_price`.
 
 | Column | English | Chinese |

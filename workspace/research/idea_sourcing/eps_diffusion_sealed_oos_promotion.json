@@ -1,0 +1,65 @@
+{
+  "promoted_at_oos_end": "2026-02-27",
+  "factors": [
+    "earn_eps_diffusion_60",
+    "earn_eps_diffusion_120"
+  ],
+  "frozen_set_hash": "c5335681f48732697db7af6635f3b57bacd5b0c8c298ea8f7309edf358becc30",
+  "git_sha": "9ad580d963f4f99e35edab6672752c673020fcff",
+  "provider_build_id": "report_rc_incr_20260608",
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "evidence_class": "single_shot_sealed_oos_CANARY_OVERRIDDEN",
+  "canary_overridden": true,
+  "canary_override_reason": "EXPLICIT user override 2026-06-09: spend the single-shot OOS BEFORE the 2026-06-15 breadth-restatement canary, risk (meaningless-if-contaminated verdict + permanent loss of the unburned OOS) acknowledged.",
+  "outstanding_canary": "report_rc_breadth_restatement_canary (2026-06-15) \u2014 NOT passed at approval time",
+  "promoted": [
+    {
+      "factor_id": "earn_eps_diffusion_60",
+      "oos_rank_icir": 0.13079256069926878,
+      "oos_ls_sharpe": 7.239926545057824
+    },
+    {
+      "factor_id": "earn_eps_diffusion_120",
+      "oos_rank_icir": 0.07016151923763692,
+      "oos_ls_sharpe": 2.5906457700906795
+    }
+  ],
+  "skipped": [],
+  "promotion_evidence": {
+    "independent_reproduction": {
+      "source": "qlib_windowed_features",
+      "provider_build_id": "report_rc_incr_20260608",
+      "calendar_policy_id": "frozen_20260227_system_build",
+      "frozen_set_hash": "c5335681f48732697db7af6635f3b57bacd5b0c8c298ea8f7309edf358becc30",
+      "oos_window": "2021-01-01..2026-02-27",
+      "horizon": 20,
+      "rank_icir_horizon": 20,
+      "ls_sharpe_horizon": 5,
+      "metric_note": "Approval bar reproduced exactly as the Round-6 screening defined it: rank_icir at 20d + run_batch_screening's primary-horizon ls_sharpe from horizons=(5, 10, 20) (i.e. 5d long-short Sharpe). This is the registration metric, not a horizon-consistent tradability metric; strategy-level deployment validation is a separate gate.",
+      "max_label_realization_date": "2026-02-27 00:00:00",
+      "per_factor": {
+        "earn_eps_diffusion_60": {
+          "oos_rank_icir": 0.13079256069926878,
+          "oos_ls_sharpe": 7.239926545057824,
+          "ls_sharpe_horizon": 5
+        },
+        "earn_eps_diffusion_120": {
+          "oos_rank_icir": 0.07016151923763692,
+          "oos_ls_sharpe": 2.5906457700906795,
+          "ls_sharpe_horizon": 5
+        }
+      }
+    },
+    "unsafe_pit_dates_lint": "passed",
+    "live_provider_parity": "passed",
+    "dirty_tree": false,
+    "promotion_status": "approved",
+    "synthetic_lookahead_canary": "passed",
+    "restatement_canary": "passed",
+    "q0_canary_multiperiod": "passed",
+    "q0_canary_stateful_restatement": "passed",
+    "q0_canary_missing_field": "passed",
+    "availability_assertion": "passed",
+    "git_sha": "9ad580d963f4f99e35edab6672752c673020fcff"
+  }
+}

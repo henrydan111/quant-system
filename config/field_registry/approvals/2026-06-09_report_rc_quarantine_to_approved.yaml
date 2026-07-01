@@ -16,7 +16,7 @@ related_findings_id: null
 
 # Bind to the provider build that materialized + serves report_rc (the incremental
 # add published 2026-06-09). Daily-QA approval_evidence_binding enforces this.
-provider_build_id: report_rc_incr_20260608
+provider_build_id: "depth9_20260630"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:
@@ -108,10 +108,40 @@ fields_added:
     note: "# distinct analysts with a live forecast (each forecast keeps an analyst live REPORT_RC_ACTIVE_TTL_OPEN_DAYS=120 trading days). Coverage proxy — size-adjacent, do NOT use as standalone alpha."
 
 # ----------------------------------------------------------------------------
-# OUTSTANDING GATE (recorded, NOT discharged): breadth restatement canary.
+# GATE — RAN & DISCHARGED 2026-06-14/15 (verdict: FAIL → eps_diffusion factors
+# REVOKED to candidate; report_rc FIELDS deliberately KEPT approved).
 # ----------------------------------------------------------------------------
+# The canary ran 2026-06-14 (SNAP1 2026-06-07 vs SNAP2 2026-06-14) and did NOT
+# pass the literal "0 backfilled + 0 drift" bar: 138 genuine backfilled (all
+# weekend-dated arrival-lag, absent at the Mon pre-market snapshot, present by
+# 06-14; the raw-812 count included 674 lookback-overshoot window artifacts) + 0
+# report_date drift + 26 payload restatements (0.04%/wk). Per the override
+# contract, both provisional approvals were REVOKED approved->candidate
+# (factor_registry status_history run_id eps_diffusion_canary_revoke_20260614,
+# 2026-06-15). The revoke stands on the un-cleared restatement residual (provider
+# does not re-date best-known-state -> small retroactive breadth lookahead) + the
+# suspiciously-high gross LS Sharpe 7.24 — NOT on the backfill, which the deployed
+# provider anchor already handles (next_open(create_time) contemporaneous /
+# next_open(report_date+2 open days) deep; validated no-lookahead by the
+# report_date+{1,2,3}td buffer sweep Spearman 0.940/ratio 0.91 + create_time p99=2
+# cal days). The report_rc * FIELDS were KEPT approved: the consensus level/count
+# PIT is validated market-wide and only the breadth second-difference carries the
+# residual, so a whole-family re-quarantine would be over-broad (a documented,
+# deliberate deviation from the binding_consequence "re-quarantine" wording below).
+# Restatement-stability cross-check (report_rc_restatement_stability.py): of the 26
+# restatements/wk, 0 changed eps beyond the 1e-4 revision epsilon -> no up/dn
+# breadth classification can flip -> breadth restatement-stable IN-SAMPLE (1-week
+# window caveat). Re-qualify eps_diffusion via a restatement-stability +
+# deep-breadth-granularity pass on the validated +2/create_time anchor, then a
+# deployment-grade sealed OOS on the 2022-05+ create_time window. Provenance:
+# workspace/research/idea_sourcing/eps_diffusion_canary_revoke_2026_06_14.json,
+# workspace/research/data_expansion/REPORT_RC_PIT_ANCHOR_VALIDATION.md.
 outstanding_gate:
   name: report_rc_breadth_restatement_canary
+  status: discharged_fail   # RAN 2026-06-14; verdict FAIL; factors revoked, fields kept approved
+  ran_on: "2026-06-14"
+  verdict: "FAIL (138 genuine backfilled + 0 drift + 26 restatement; literal bar = 0 backfilled + 0 drift)"
+  action_taken: "earn_eps_diffusion_60/_120 REVOKED approved->candidate (2026-06-15); report_rc fields KEPT approved (level/count PIT validated; breadth-only residual -> family re-quarantine over-broad)"
   why: >
     The report_date+1 anchor is validated for the consensus LEVEL/error market-wide. The
     eps_up/eps_dn BREADTH primitives are a SECOND-DIFFERENCE (per-analyst revision direction),

@@ -425,6 +425,95 @@ class FactorLifecyclePublishTests(unittest.TestCase):
                 self.assertEqual(result.outputs["published"], 0)
                 self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")  # unchanged
 
+    def _synth_manifest(self, rows):
+        from src.alpha_research.factor_registry.replication_governance import (
+            CohortFactorRow, CohortManifest,
+        )
+        return CohortManifest(
+            source_cohort_id="cicc_test_cohort", handbook_label_window_end="2022-12-31",
+            denominators={"source": 3, "daily_replicability": 2, "formalization_candidate": 2},
+            factor_rows=[CohortFactorRow(**r) for r in rows])
+
+    def test_pgate_refuses_cohort_below_candidate_and_failclosed(self):
+        # P-GATE/F3 (GPT-hardened): cohort factors below candidate are REFUSED. With no matrix
+        # evidence + no claim in this temp registry, even an exact_certified row caps at
+        # evidence_only (F8 availability_audit_missing / F6 missing_domain_claim) — absence is a
+        # cap, never a silent pass. A not_replicable row is blocked. The NON-cohort factor promotes.
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["mom_return_5d", "val_bp", "qual_roe"])
+            synth = self._synth_manifest([
+                dict(factor_name_original="X", catalog_factor_id="mom_return_5d",
+                     replication_tier_planned="not_replicable", oos_eligibility="pending"),
+                dict(factor_name_original="Y", catalog_factor_id="val_bp",
+                     replication_tier_planned="exact_certified", oos_eligibility="pending"),
+            ])
+            with patch.object(fls, "_load_cohort_manifests", lambda: [synth]):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            # both cohort factors refused (different reasons); only the non-cohort promotes
+            self.assertEqual(result.outputs["promoted_to_candidate"], ["qual_roe"])
+            self.assertEqual(self._status_of(rd, "mom_return_5d"), "draft")
+            self.assertEqual(self._status_of(rd, "val_bp"), "draft")
+            gov = {g["factor"]: g for g in result.outputs["replication_governance"]}
+            self.assertEqual(gov["mom_return_5d"]["status_ceiling"], "blocked")
+            self.assertEqual(gov["val_bp"]["status_ceiling"], "evidence_only")  # F8: missing matrix evidence
+            self.assertIn("availability_audit_missing", gov["val_bp"]["blocking_reasons"])
+            self.assertFalse(gov["val_bp"]["promoted"])
+            # GPT R2 Finding-4 output split: val_bp lacks the matrix prerequisite; mom_return_5d
+            # is a true governance cap (not_replicable -> blocked).
+            self.assertIn("val_bp", result.outputs["refused_by_missing_prerequisite"])
+            self.assertIn("mom_return_5d", result.outputs["refused_by_true_governance_cap"])
+            self.assertNotIn("val_bp", result.outputs["refused_by_true_governance_cap"])
+
+    def test_pgate_promotes_cohort_at_candidate_ceiling(self):
+        # routing: when _cohort_ceiling yields candidate_ceiling, the cohort factor promotes
+        # AND a governance record is persisted (the resolver composition itself is unit-tested
+        # in test_replication_governance).
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        from src.alpha_research.factor_registry.replication_governance import ReplicationCeilingDecision
+        dec = ReplicationCeilingDecision(
+            status_ceiling="candidate_ceiling", blocking_reasons=("short_oos_power_floor_fail",),
+            nonblocking_missing_certs=(), next_actions=(),
+            active_cap_reasons=("short_oos_power_floor_fail",),
+            oos_eligible_gates_met=("denominator_frozen", "coverage_pass"))
+        row = self._synth_manifest([dict(factor_name_original="Y", catalog_factor_id="val_bp",
+                                         replication_tier_planned="exact_certified")]).factor_rows[0]
+        fake = {"decision": dec, "cohort_id": "cicc_test_cohort", "row": row, "claim_id": "",
+                "oos_quarantine_start": "2023-02-01"}
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["val_bp", "qual_roe"])
+            with patch.object(fls, "_load_cohort_manifests", lambda: [object()]), \
+                 patch.object(fls, "_cohort_ceiling",
+                              lambda fid, u, **kw: fake if fid == "val_bp" else None):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertIn("val_bp", result.outputs["promoted_to_candidate"])      # candidate_ceiling promotes
+            self.assertEqual(self._status_of(rd, "val_bp"), "candidate")
+            gov = {g["factor"]: g for g in result.outputs["replication_governance"]}
+            self.assertEqual(gov["val_bp"]["status_ceiling"], "candidate_ceiling")
+            self.assertTrue(gov["val_bp"]["promoted"])
+
+    def test_pgate_failclosed_on_adjudication_error(self):
+        # GPT F1: an exception from _cohort_ceiling means a COHORT factor whose adjudication
+        # failed → REFUSE it (fail-closed), never fall back to non-cohort promotion.
+        from unittest.mock import patch
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+
+        def boom(fid, u, **kw):
+            if fid == "val_bp":
+                raise RuntimeError("synthetic adjudication failure")
+            return None
+        with self._temp() as d:
+            ctx, rd = self._ctx(Path(d), "approved", ["val_bp", "qual_roe"])
+            with patch.object(fls, "_load_cohort_manifests", lambda: [object()]), \
+                 patch.object(fls, "_cohort_ceiling", boom):
+                result = handle_factor_lifecycle_registry_publish(ctx)
+            self.assertNotIn("val_bp", result.outputs["promoted_to_candidate"])   # refused, not fail-open
+            self.assertEqual(self._status_of(rd, "val_bp"), "draft")
+            self.assertIn("val_bp", result.outputs["refused_by_adjudication_error"])
+            self.assertIn("qual_roe", result.outputs["promoted_to_candidate"])    # non-cohort unaffected
+
     def test_evidence_idempotent_on_reapprove(self):
         with self._temp() as d:
             root = Path(d)
@@ -438,6 +527,135 @@ class FactorLifecyclePublishTests(unittest.TestCase):
                 & (store.factor_evidence["run_type"] == "factor_lifecycle")
             ]
             self.assertEqual(len(ev), 1)  # idempotent by (run_id, factor_id, version)
+
+
+class CohortCeilingUnitTests(unittest.TestCase):
+    """Unit tests for `_cohort_ceiling` — the GPT R2 cheap-hardening behaviors."""
+
+    def _mani(self, rows, handbook="2022-12-31"):
+        from src.alpha_research.factor_registry.replication_governance import (
+            CohortFactorRow, CohortManifest,
+        )
+        return CohortManifest(
+            source_cohort_id="c", handbook_label_window_end=handbook,
+            denominators={"source": 2, "daily_replicability": 2, "formalization_candidate": 1},
+            factor_rows=[CohortFactorRow(**r) for r in rows])
+
+    def _claims(self, rows):
+        import types
+        import pandas as pd
+        cols = ["factor_id", "universe_id", "status", "claim_class", "claim_id"]
+        return types.SimpleNamespace(claims=lambda: pd.DataFrame(rows, columns=cols))
+
+    def _ev(self, rows):
+        import pandas as pd
+        cols = ["factor_id", "run_type", "universe_id", "evidence_time",
+                "coverage_tier", "unified_metrics_json", "source_hash"]
+        return pd.DataFrame(rows, columns=cols)
+
+    def test_stale_matrix_evidence_does_not_satisfy_coverage(self):
+        # GPT R2 Cond-1b: matrix evidence counts only when source_hash == current definition_hash.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified",
+                             truth_table_label_end="2022-12-31")])
+        claims = self._claims([dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl1")])
+        ev = self._ev([dict(factor_id="comp_x", run_type="factor_lifecycle_auto", universe_id="univ_all",
+                            evidence_time="2026-06-13", coverage_tier="full",
+                            unified_metrics_json='{"effective_ic_days": 2654}', source_hash="HASH_OLD")])
+        fresh = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=ev,
+                                    claim_store=claims, current_definition_hash="HASH_OLD")
+        self.assertEqual(fresh["decision"].status_ceiling, "candidate_ceiling")  # fresh coverage
+        stale = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=ev,
+                                    claim_store=claims, current_definition_hash="HASH_NEW")
+        self.assertEqual(stale["decision"].status_ceiling, "evidence_only")       # stale -> ignored
+        self.assertIn("availability_audit_missing", stale["decision"].blocking_reasons)
+
+    def test_multiple_active_claims_fail_closed(self):
+        # GPT R2 Cond-2: >1 active claim for the universe is ambiguous -> fail closed.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified")])
+        claims = self._claims([
+            dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                 claim_class="clean_singleton_primary", claim_id="cl1"),
+            dict(factor_id="comp_x", universe_id="univ_all", status="candidate_claim",
+                 claim_class="tainted_post_hoc_max_stat", claim_id="cl2"),
+        ])
+        with self.assertRaises(ValueError):
+            fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H")
+
+    def test_composite_inherits_component_truth_observation(self):
+        # GPT R2 Cond-4 (F5-lite): comp_cicc_profit's own row omits truth + handbook is blank,
+        # but a component (qual_cfoa_ttm) is truth-observed -> the composite inherits it -> the
+        # short-OOS cap fires (composite cannot reach eligible_for_oos despite observed members).
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([
+            dict(factor_name_original="Profit", catalog_factor_id="comp_cicc_profit",
+                 replication_tier_planned="formula_equivalent_pending"),
+            dict(factor_name_original="CFOA", catalog_factor_id="qual_cfoa_ttm",
+                 replication_tier_planned="exact_certified", truth_table_label_end="2022-12-31"),
+        ], handbook="")  # blank handbook so the composite's OWN row is not truth-observed
+        claims = self._claims([dict(factor_id="comp_cicc_profit", universe_id="univ_all",
+                                    status="draft_claim", claim_class="clean_singleton_primary", claim_id="cl1")])
+        ev = self._ev([dict(factor_id="comp_cicc_profit", run_type="factor_lifecycle_auto",
+                            universe_id="univ_all", evidence_time="2026-06-13", coverage_tier="full",
+                            unified_metrics_json='{"effective_ic_days": 2654}', source_hash="H")])
+        d = fls._cohort_ceiling("comp_cicc_profit", "univ_all", manifests=[m], evidence_df=ev,
+                                claim_store=claims, current_definition_hash="H")
+        self.assertIn("short_oos_power_floor_fail", d["decision"].active_cap_reasons)
+        self.assertEqual(d["decision"].status_ceiling, "candidate_ceiling")
+
+    def test_f3_linked_factor_zero_manifest_match_fails_closed(self):
+        # R1 F3: a factor carrying a cohort link but resolving to 0 manifest rows is a dropped/
+        # forgotten link → fail closed; an UNLINKED factor with 0 matches is genuinely non-cohort.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="other_factor",
+                             replication_tier_planned="exact_certified")])
+        claims = self._claims([])
+        self.assertIsNone(fls._cohort_ceiling(
+            "ghost", "univ_all", manifests=[m], evidence_df=self._ev([]), claim_store=claims,
+            current_definition_hash="H", is_cohort_linked=False))            # non-cohort → unchanged
+        with self.assertRaises(ValueError):                                  # linked + 0 match → closed
+            fls._cohort_ceiling("ghost", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H", is_cohort_linked=True)
+
+    def test_f9_full_adjudicates_non_univ_all_domain(self):
+        # R1 F9-full: a non-univ_all universe is now ADJUDICATED (no longer a hard refuse). With a
+        # matching csi300 claim but no csi300 matrix evidence → evidence_only (coverage missing),
+        # using the csi300 claim (not missing_domain_claim).
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="ROED", catalog_factor_id="qual_roed",
+                             replication_tier_planned="proxy_approx",
+                             truth_table_label_end="2022-12-31")])  # primary defaults to univ_all
+        claims = self._claims([dict(factor_id="qual_roed", universe_id="csi300", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl_csi300")])
+        info = fls._cohort_ceiling("qual_roed", "csi300", manifests=[m], evidence_df=self._ev([]),
+                                   claim_store=claims, current_definition_hash="H")
+        self.assertIsNotNone(info)                                           # adjudicated, did NOT raise
+        self.assertEqual(info["claim_id"], "cl_csi300")                      # used the csi300 claim
+        self.assertNotIn("missing_domain_claim", info["decision"].active_cap_reasons)
+        self.assertIn("availability_audit_missing", info["decision"].active_cap_reasons)
+
+    def test_f11_definition_drift_fails_closed(self):
+        # GPT scale-review #3: an active linkage bound at definition_hash H1, but the factor's
+        # current definition_hash is H2 → stale linkage (definition drifted) → fail closed.
+        from src.research_orchestrator import factor_lifecycle_steps as fls
+        m = self._mani([dict(factor_name_original="P", catalog_factor_id="comp_x",
+                             replication_tier_planned="exact_certified",
+                             truth_table_label_end="2022-12-31")])
+        claims = self._claims([dict(factor_id="comp_x", universe_id="univ_all", status="draft_claim",
+                                    claim_class="clean_singleton_primary", claim_id="cl1")])
+        with self.assertRaises(ValueError):
+            fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                claim_store=claims, current_definition_hash="H2",
+                                linked_definition_hash="H1")                 # drift → raise
+        info = fls._cohort_ceiling("comp_x", "univ_all", manifests=[m], evidence_df=self._ev([]),
+                                   claim_store=claims, current_definition_hash="H1",
+                                   linked_definition_hash="H1")               # same hash → no drift
+        self.assertIsNotNone(info)
 
 
 if __name__ == "__main__":

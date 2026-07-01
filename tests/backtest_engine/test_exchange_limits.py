@@ -77,6 +77,27 @@ class LimitPriceTests(unittest.TestCase):
             0.30,
         )
 
+    # ── R2 GPT Major-2: BSE detection hardened (.BJ suffix + 88/920 segments) ──
+    def test_bse_920_segment_limit_30pct(self):
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("920690.BJ", False, pd.Timestamp("2024-01-15")),
+            0.30,
+        )
+
+    def test_bse_88_segment_limit_30pct(self):
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("880001.BJ", False, pd.Timestamp("2024-01-15")),
+            0.30,
+        )
+
+    def test_b_share_conservative_10pct(self):
+        # B-share (200xxx) — genuinely ±10%; must NOT fall through to a 0.30 BSE
+        # band nor be mis-handled. Conservative main-board band is correct.
+        self.assertAlmostEqual(
+            self.ex.get_limit_pct("200625.SZ", False, pd.Timestamp("2024-01-15")),
+            0.10,
+        )
+
     def test_limit_price_rounding_half_up_boundary(self):
         """A pre_close that produces .xx5 midpoint should round up."""
         # pre_close=10.05, limit_pct=0.10
@@ -146,6 +167,70 @@ class ResolveLimitPricesTests(unittest.TestCase):
         row = self._row(raw_close=12.50, close=12.50, up_limit=13.48, down_limit=11.03)
         self.assertFalse(self.ex.is_limit_up(row, self.code, self.date))
         self.assertFalse(self.ex.is_limit_down(row, self.code, self.date))
+
+    # ── 2026-06-22: fill-price-aware gate (open-fill tests open, not close) ──
+    def test_is_limit_up_fill_price_aware_open_below_close_at(self):
+        # Opened BELOW the limit (buyable at 09:35) but CLOSED limit-up. The
+        # default/close gate flags it; the OPEN gate does NOT — you could buy at
+        # the open. This is the bull-market parity fix (果仁 sm_纯市值01).
+        row = self._row(raw_close=13.48, close=13.48, raw_open=12.80, open=12.80,
+                        up_limit=13.48, down_limit=11.03)
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date))                          # default raw_close
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_close"))
+        self.assertFalse(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_open"))
+
+    def test_is_limit_up_locked_at_open(self):
+        # 一字: opened AT the limit (locked) → still un-buyable on the open gate.
+        row = self._row(raw_close=13.48, close=13.48, raw_open=13.48, open=13.48,
+                        up_limit=13.48, down_limit=11.03)
+        self.assertTrue(self.ex.is_limit_up(row, self.code, self.date, price_field="raw_open"))
+
+    def test_can_buy_open_fill_allows_name_that_closes_limit_up(self):
+        # The core fix end-to-end: opens tradeable, closes limit-up → BUYABLE on an
+        # open fill, BLOCKED on a close fill.
+        row = self._row(raw_close=13.48, close=13.48, raw_open=12.80, open=12.80,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.can_buy(row, self.code, self.date, price_field="raw_open"))
+        self.assertFalse(self.ex.can_buy(row, self.code, self.date, price_field="raw_close"))
+
+    def test_can_sell_open_fill_allows_name_that_closes_limit_down(self):
+        # Symmetric: opens tradeable, closes limit-down → SELLABLE on an open fill,
+        # BLOCKED on a close fill.
+        row = self._row(raw_close=11.03, close=11.03, raw_open=11.80, open=11.80,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.can_sell(row, self.code, self.date, price_field="raw_open"))
+        self.assertFalse(self.ex.can_sell(row, self.code, self.date, price_field="raw_close"))
+
+    # ── 2026-06-22: all_day_lock gate (daily-AVERAGE fill mode) ──
+    def test_all_day_lock_buy_blocked_when_yizi(self):
+        # 一字涨停: high==low==up_limit -> unbuyable all day on the avg-fill gate.
+        row = self._row(raw_close=13.48, close=13.48, raw_high=13.48, raw_low=13.48,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.is_all_day_limit_up(row, self.code, self.date))
+        self.assertFalse(self.ex.can_buy(row, self.code, self.date,
+                                         price_field="raw_avg", limit_gate="all_day_lock"))
+
+    def test_all_day_lock_buy_allowed_when_traded(self):
+        # Opened AT the limit but traded down (low<up) -> NOT all-day-locked -> buyable.
+        row = self._row(raw_close=13.48, close=13.48, raw_open=13.48, raw_high=13.48, raw_low=12.00,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertFalse(self.ex.is_all_day_limit_up(row, self.code, self.date))
+        self.assertTrue(self.ex.can_buy(row, self.code, self.date,
+                                        price_field="raw_avg", limit_gate="all_day_lock"))
+
+    def test_all_day_lock_sell_blocked_when_yizi_down(self):
+        row = self._row(raw_close=11.03, close=11.03, raw_high=11.03, raw_low=11.03,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertTrue(self.ex.is_all_day_limit_down(row, self.code, self.date))
+        self.assertFalse(self.ex.can_sell(row, self.code, self.date,
+                                          price_field="raw_avg", limit_gate="all_day_lock"))
+
+    def test_all_day_lock_sell_allowed_when_traded(self):
+        row = self._row(raw_close=11.03, close=11.03, raw_high=12.00, raw_low=11.03,
+                        up_limit=13.48, down_limit=11.03, vol=100000)
+        self.assertFalse(self.ex.is_all_day_limit_down(row, self.code, self.date))
+        self.assertTrue(self.ex.can_sell(row, self.code, self.date,
+                                         price_field="raw_avg", limit_gate="all_day_lock"))
 
     # ── Fallback path: Tushare fields absent / NaN ────────────────────
     def test_fallback_when_fields_absent(self):
@@ -257,6 +342,213 @@ class ResolveLimitPricesTests(unittest.TestCase):
         up, down = self.ex.resolve_limit_prices(row, self.code, self.date)
         self.assertAlmostEqual(up, 1.00, places=2)   # Tushare, not 0.95×1.10=1.05
         self.assertAlmostEqual(down, 0.90, places=2)
+
+
+class _FakeFeeder:
+    """Minimal QlibDataFeeder stand-in for is_true_no_limit_day's regime branch.
+
+    Provides only the two methods the predicate calls: get_stock_basic()
+    (ts_code -> list_date) and count_trading_days(start, end) inclusive. Trading
+    days are approximated by a pure business-day calendar — sufficient because
+    every probed window is ≤6 days and the test dates avoid exchange holidays,
+    so business-day arithmetic equals the trading-day count exactly.
+    """
+
+    def __init__(self, list_dates: dict):
+        self._sb = pd.DataFrame(
+            [{"ts_code": c, "list_date": pd.Timestamp(d)} for c, d in list_dates.items()]
+        )
+
+    def get_stock_basic(self):
+        return self._sb
+
+    def count_trading_days(self, start, end):
+        if pd.isna(start) or pd.isna(end) or end < start:
+            return 0
+        return len(pd.bdate_range(start, end))  # inclusive both ends
+
+
+def _ipo_day(list_date, k):
+    """The k-th IPO trading day (k=1 == listing day), business-day basis."""
+    return pd.bdate_range(pd.Timestamp(list_date), periods=k)[-1]
+
+
+class IsTrueNoLimitDayTests(unittest.TestCase):
+    """2026-06-22 (GPT cross-review Major-2): can_buy's no-limit bypass now uses
+    is_true_no_limit_day, NOT is_ipo_period. is_ipo_period treated EVERY nominal
+    IPO-window first day as no-limit — including a pre-registration-reform
+    main-board first day capped at the old +44% / −36% rule (a REAL published
+    limit). These tests pin the corrected behavior: the sentinel branch, the
+    listing-date regime branch, the window boundaries, and the decisive
+    old-main-board-+44% case that must remain UN-buyable when locked."""
+
+    # Listing-date regimes spanning every board + reform boundary.
+    _LIST_DATES = {
+        "002728.SZ": "2014-07-31",  # old main board (pre-注册制) — +44% first day
+        "601001.SH": "2023-05-10",  # main board, post-2023-04-10 全面注册制 (no-limit 5d)
+        "300999.SZ": "2021-03-15",  # ChiNext, post-2020-08-24 reform (no-limit 5d)
+        "300100.SZ": "2019-05-10",  # ChiNext, PRE-reform — +44% first day
+        "688981.SH": "2020-07-16",  # STAR — registration-based (no-limit 5d)
+        "920690.BJ": "2023-09-01",  # BSE — listing day only
+        "200625.SZ": "2023-05-10",  # B-share — out-of-universe (fail-closed)
+    }
+
+    def setUp(self):
+        self.feeder = _FakeFeeder(self._LIST_DATES)
+        self.ex = Exchange(slippage_model=NoSlippage(), feeder=self.feeder)
+        self.date = pd.Timestamp("2024-01-15")
+
+    def _row(self, **kw):
+        base = {"raw_close": 11.0, "close": 11.0,
+                "raw_pre_close": 10.0, "pre_close": 10.0, "vol": 100000}
+        base.update(kw)
+        return pd.Series(base)
+
+    # ── Branch 1: published no-limit sentinel is definitive (no feeder needed) ──
+    def test_sentinel_is_no_limit_main_board(self):
+        # up_limit≈1e6 / down_limit≈0.01 → no-limit regardless of board/date.
+        row = self._row(up_limit=1000000.0, down_limit=0.01)
+        self.assertTrue(self.ex.is_true_no_limit_day("601001.SH", self.date, row))
+
+    def test_sentinel_is_no_limit_bse(self):
+        # BSE listing-day sentinel is 99999.99 — below the literal 100000 but
+        # above any real limit; the 99999.0 floor catches it.
+        row = self._row(up_limit=99999.99, down_limit=0.00)
+        self.assertTrue(self.ex.is_true_no_limit_day("920690.BJ", self.date, row))
+
+    def test_real_plus44_limit_is_not_sentinel(self):
+        # The +44% IPO limit (up_limit 20.16) is a REAL limit, not the sentinel.
+        row = self._row(raw_close=20.16, close=20.16, raw_pre_close=14.0,
+                        pre_close=14.0, up_limit=20.16, down_limit=8.96)
+        self.assertFalse(self.ex.is_true_no_limit_day("002728.SZ", self.date, row))
+
+    # ── REQUIRED CASE 1: old main-board IPO first day at +44% → can_buy False ──
+    def test_old_main_board_first_day_plus44_cannot_buy(self):
+        date = pd.Timestamp("2014-07-31")  # 002728.SZ listing day (day 1)
+        row = self._row(raw_close=20.16, close=20.16, raw_pre_close=14.0,
+                        pre_close=14.0, up_limit=20.16, down_limit=8.96)
+        # It IS inside the nominal IPO window (the old, buggy bypass said yes)...
+        self.assertTrue(self.ex.is_ipo_period("002728.SZ", date))
+        # ...but it is NOT a true no-limit day (the +44% cap is a real limit)...
+        self.assertFalse(self.ex.is_true_no_limit_day("002728.SZ", date, row))
+        # ...and it is locked at the up-limit → un-buyable.
+        self.assertTrue(self.ex.is_limit_up(row, "002728.SZ", date))
+        self.assertFalse(self.ex.can_buy(row, "002728.SZ", date))
+
+    # ── REQUIRED CASE 2: post-2023 main-board first-5-days no-limit → can_buy True ──
+    def test_post_2023_main_board_first5_no_limit_can_buy(self):
+        # Day 3, stk_limit coverage hole (no up/down fields). Close sits exactly
+        # at the steady-state +10% band, which WOULD flag limit-up — but the
+        # registration-regime bypass rescues the buy.
+        date = _ipo_day("2023-05-10", 3)
+        row = self._row(raw_close=11.0, close=11.0)  # 10.0 × 1.10, no fields
+        self.assertTrue(self.ex.is_limit_up(row, "601001.SH", date))      # computed band fires
+        self.assertTrue(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertTrue(self.ex.can_buy(row, "601001.SH", date))
+
+    def test_post_2023_main_board_window_closes_day6(self):
+        # Day 6 — window expired → a real +10% limit-up is genuinely un-buyable.
+        date = _ipo_day("2023-05-10", 6)
+        row = self._row(raw_close=11.0, close=11.0)
+        self.assertFalse(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertFalse(self.ex.can_buy(row, "601001.SH", date))
+
+    # ── REQUIRED CASE 3: ChiNext post-reform first-5-days → can_buy True ──
+    def test_chinext_post_reform_first5_no_limit_can_buy(self):
+        date = _ipo_day("2021-03-15", 3)
+        row = self._row(raw_close=12.0, close=12.0)  # 10.0 × 1.20 (ChiNext band)
+        self.assertTrue(self.ex.is_limit_up(row, "300999.SZ", date))
+        self.assertTrue(self.ex.is_true_no_limit_day("300999.SZ", date, row))
+        self.assertTrue(self.ex.can_buy(row, "300999.SZ", date))
+
+    def test_chinext_post_reform_window_closes_day6(self):
+        date = _ipo_day("2021-03-15", 6)
+        row = self._row(raw_close=12.0, close=12.0)
+        self.assertFalse(self.ex.is_true_no_limit_day("300999.SZ", date, row))
+        self.assertFalse(self.ex.can_buy(row, "300999.SZ", date))
+
+    # ── Pre-reform ChiNext first day is +44% → NOT no-limit ──
+    def test_pre_reform_chinext_first_day_not_no_limit(self):
+        date = pd.Timestamp("2019-05-10")  # 300100.SZ listing day, pre-reform
+        row = self._row(raw_close=20.16, close=20.16, raw_pre_close=14.0,
+                        pre_close=14.0, up_limit=20.16, down_limit=8.96)
+        self.assertFalse(self.ex.is_true_no_limit_day("300100.SZ", date, row))
+        self.assertFalse(self.ex.can_buy(row, "300100.SZ", date))
+
+    # ── STAR first 5 days are no-limit ──
+    def test_star_first5_no_limit(self):
+        d3 = _ipo_day("2020-07-16", 3)
+        self.assertTrue(self.ex.is_true_no_limit_day("688981.SH", d3, self._row()))
+        d6 = _ipo_day("2020-07-16", 6)
+        self.assertFalse(self.ex.is_true_no_limit_day("688981.SH", d6, self._row()))
+
+    # ── BSE: listing day only ──
+    def test_bse_listing_day_only(self):
+        d1 = pd.Timestamp("2023-09-01")          # listing day
+        d2 = _ipo_day("2023-09-01", 2)
+        self.assertTrue(self.ex.is_true_no_limit_day("920690.BJ", d1, self._row()))
+        self.assertFalse(self.ex.is_true_no_limit_day("920690.BJ", d2, self._row()))
+
+    # ── No feeder + no sentinel → conservative False (cannot confirm no-limit) ──
+    def test_no_feeder_no_sentinel_is_false(self):
+        ex = Exchange(slippage_model=NoSlippage())  # feeder=None
+        row = self._row(raw_close=20.16, close=20.16, up_limit=20.16, down_limit=8.96)
+        self.assertFalse(ex.is_true_no_limit_day("002728.SZ", self.date, row))
+
+    def test_no_feeder_sentinel_still_true(self):
+        # Even without a feeder, the published sentinel alone confirms no-limit.
+        ex = Exchange(slippage_model=NoSlippage())
+        row = self._row(up_limit=1000000.0, down_limit=0.01)
+        self.assertTrue(ex.is_true_no_limit_day("601001.SH", self.date, row))
+
+    # ── R2 GPT Major-1: can_sell shares the no-limit bypass (symmetry) ──
+    def test_post_2023_main_board_first5_no_limit_can_sell(self):
+        # Symmetric to the buy case: post-2023 main-board IPO day 3, stk_limit
+        # coverage hole, close at the computed −10% band → the fallback flags
+        # limit-DOWN, but the registration-regime bypass rescues the SELL (a
+        # synthetic band is not an enforceable "no buyers" condition on a true
+        # no-limit day).
+        date = _ipo_day("2023-05-10", 3)
+        row = self._row(raw_close=9.0, close=9.0)  # 10.0 × 0.90, no fields
+        self.assertTrue(self.ex.is_limit_down(row, "601001.SH", date))       # computed band fires
+        self.assertTrue(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertTrue(self.ex.can_sell(row, "601001.SH", date))
+
+    def test_post_2023_main_board_sell_blocked_after_window(self):
+        # Day 6 — window expired → a real −10% limit-down genuinely blocks a sell.
+        date = _ipo_day("2023-05-10", 6)
+        row = self._row(raw_close=9.0, close=9.0)
+        self.assertFalse(self.ex.is_true_no_limit_day("601001.SH", date, row))
+        self.assertFalse(self.ex.can_sell(row, "601001.SH", date))
+
+    def test_old_main_board_first_day_minus36_cannot_sell(self):
+        # The −36% leg of the old +44%/−36% first-day rule is a REAL limit-down
+        # (no buyers) → a sell stays blocked even on the IPO first day.
+        date = pd.Timestamp("2014-07-31")
+        row = self._row(raw_close=8.96, close=8.96, raw_pre_close=14.0,
+                        pre_close=14.0, up_limit=20.16, down_limit=8.96)
+        self.assertTrue(self.ex.is_limit_down(row, "002728.SZ", date))
+        self.assertFalse(self.ex.is_true_no_limit_day("002728.SZ", date, row))
+        self.assertFalse(self.ex.can_sell(row, "002728.SZ", date))
+
+    # ── R2 GPT Major-2: out-of-universe codes fail CLOSED (no main-board guess) ──
+    def test_b_share_post_reg_date_fails_closed(self):
+        # A B-share listed after 2023-04-10 must NOT be treated as a post-注册制
+        # main-board IPO. Without a sentinel the regime branch returns False.
+        date = _ipo_day("2023-05-10", 3)
+        self.assertFalse(self.ex.is_true_no_limit_day("200625.SZ", date, self._row()))
+
+    def test_out_of_universe_sentinel_still_honored(self):
+        # If the exchange DOES publish a no-limit sentinel for an out-of-universe
+        # code, branch 1 still honors it (sentinel is definitive, board-agnostic).
+        date = _ipo_day("2023-05-10", 3)
+        row = self._row(up_limit=1000000.0, down_limit=0.01)
+        self.assertTrue(self.ex.is_true_no_limit_day("200625.SZ", date, row))
+
+    def test_bse_920_suffix_detected_via_dot_bj(self):
+        # 920xxx is caught by the .BJ suffix (not just the '92' numeric prefix).
+        d1 = pd.Timestamp("2023-09-01")
+        self.assertTrue(self.ex.is_true_no_limit_day("920690.BJ", d1, self._row()))
 
 
 if __name__ == "__main__":

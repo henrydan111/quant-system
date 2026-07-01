@@ -1,0 +1,77 @@
+# Field-registry approval evidence (2026-06-24)
+#
+# Registers the 8 高管(holder_type=G, 董监高) DIRECTIONAL stk_holdertrade fields as "approved".
+# Enables 果仁-style insider signals: 高管过去N日增持股数 = Sum($holdertrade_mgr_in_vol, N).
+# Materialization-expansion Phase-1 (果仁 parity follow-up). GPT 5.5 Pro R1->R2 SHIP.
+
+approval_id: 2026-06-24_stk_holdertrade_mgr_directional_to_approved
+date: 2026-06-24
+dataset_id: stk_holdertrade
+source_endpoint: tushare.stk_holdertrade
+from_status: approved          # the dataset block was already approved (net/gross fields); this ADDS the 高管 fields
+to_status: approved
+reviewer: henrydan111
+related_pr: materialization-phase1 (report-rc-registration)
+related_findings_id: null
+
+# Bind to the provider build that materialized + serves the new fields (atomic swap published
+# 2026-06-24; old provider backed up at data/qlib_data.bak_phase1_qfields_holdertrade_v2_20260624).
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+fields:
+  - $holdertrade_mgr_in_vol
+  - $holdertrade_mgr_in_amount
+  - $holdertrade_mgr_in_ratio
+  - $holdertrade_mgr_in_events
+  - $holdertrade_mgr_de_vol
+  - $holdertrade_mgr_de_amount
+  - $holdertrade_mgr_de_ratio
+  - $holdertrade_mgr_de_events
+
+# ── Construction (pit_backend.aggregate_directional_holdertrade, called by _materialize_stk_holdertrade) ──
+# Per (qlib_code, effective_date), for the holder_type==G subset split by in_de (IN 增持 / DE 减持):
+#   vol    = Σ|change_vol| (shares; abs is a no-op for the positive-magnitude feed + a guard)
+#   amount = Σ(|change_vol|·avg_price) (元) with min_count=1 -> NaN (NOT 0) when ALL same-day events
+#            are unpriced; a PRICED-EVENT LOWER BOUND when only some are unpriced (avg_price ~71% cov)
+#   ratio  = Σ change_ratio (占流通 %)
+#   events = transaction count
+# Each field is non-NaN ONLY on a day carrying that direction's 高管 event (sparse), so a NaN-skipping
+# window Sum reconstructs the 果仁 rolling signal exactly. 大股东(C)/个人(P) splits NOT materialized.
+#
+# ── PIT / availability contract ──
+# - effective_date is the visibility anchor (the ledger carries ann_date + disclosure_date +
+#   effective_date). Predictive factors MUST wrap in Ref(...,1) AND apply staleness/decay (sparse).
+# - amount partial-coverage: see data/data_dictionary.md (stk_holdertrade section) — amount is a
+#   priced-event lower bound, NaN if all-unpriced; vol/ratio/events stay complete for the event rows.
+#
+# ── Data-audit canary (GPT R2 residual) ──
+# - change_vol / change_ratio are non-negative magnitudes (direction lives in in_de): verified
+#   0 negatives in all 168,024 ledger rows (change_vol min 1.0 / max 4e9; change_ratio min 0.0).
+#   `vol`/`amount` additionally abs() as a guard. If a future feed introduces a sign convention,
+#   re-audit before relying on the directional split.
+#
+# ── Correctness validation (NOT a 果仁 parity — 果仁's 高管增持 columns are platform-UI-only, absent
+#    from the exported backtest books) ──
+# - Unit canary tests/data_infra/test_holdertrade_directional.py: 6 passed (all-unpriced->NaN,
+#   partial-priced lower-bound, fully-priced full-sum, directional magnitude, grouping, empty-subset).
+# - Independent ledger re-aggregation == materialized bins: 600157_sh 高管-IN vol/amount/ratio/events
+#   MATCH (n=7 event-days); the basket carries 21 all-unpriced 高管-IN day-stocks exercising min_count=1.
+# - pre-publish integrity: close + q_roe + the EXISTING holdertrade_net_vol byte-identical staged<->live
+#   (the 高管 addition does NOT alter the existing all-holder aggregates); full build 0 validation warnings.
+#
+# ── Governance ──
+# GPT 5.5 Pro cross-review R1 = REVISE (Major: amount .sum() default min_count=0 served a false 0 on
+# all-unpriced days; M2 partial-coverage contract; m1/m2/m3) -> all folded (min_count=1, abs guard,
+# _per_symbol dedup, canary test) -> R2 = SHIP. Provider published 2026-06-24 (atomic swap; backup
+# .bak_phase1_qfields_holdertrade_v2_20260624); prior approvals re-bound to the new provider_build_id
+# (kline + existing approved fields verified byte-identical) — see 2026-06-24_rebind_to_phase1_publish.md.

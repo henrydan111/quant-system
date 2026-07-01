@@ -1,0 +1,64 @@
+# Field-registry approval evidence (2026-06-20) — hk_hold northbound $north_hold_vol.
+#
+# Registers the Tushare hk_hold holding VOLUME ($north_hold_vol = 持股数量/股) as approved,
+# alongside the already-approved $ratio (2026-06-05). The raw `vol` column is renamed
+# vol -> north_hold_vol by NORTHBOUND_RENAMES in pit_backend before materialization, so it
+# does NOT shadow the kline $vol bin (CANONICAL_KLINE_FIELDS guard). The bin is ALREADY on
+# disk (D.features($north_hold_vol) reads it) — this is a registry-status flip only, no rebuild.
+# Needed for the CICC E1g (chart 76) VWAP-based factors (holding-VALUE = $north_hold_vol * VWAP),
+# which GPT factor-logic review required over the ratio*VWAP proxy (the share-base does not cancel).
+
+approval_id: 2026-06-20_north_hold_vol_to_approved
+date: 2026-06-20
+dataset_id: hk_hold
+source_endpoint: tushare.hk_hold
+from_status: unregistered
+to_status: approved
+reviewer: henrydan111
+related_pr: cicc-e1g-northbound
+related_findings_id: null
+
+provider_build_id: "depth9_20260630"
+calendar_policy_id: frozen_20260227_system_build
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+# Northbound holding volume — end-of-day fact, same provenance/PIT as $ratio (same hk_hold
+# raw row, same A-share filter). Predictive factors MUST wrap $north_hold_vol in Ref(...,1).
+pit_contract:
+  availability_column: trade_date
+  knowable_at: session_close_day_T
+  expression_lag_required: true
+  same_day_raw_usage_allowed: false
+  provider_transform: raw_daily_fact_per_stock_day_bin_ashare_filtered_renamed_vol_to_north_hold_vol
+
+evidence:
+  materialization:
+    finding: "NORTHBOUND_RENAMES = {'vol': 'north_hold_vol'} (pit_backend.py:104) renames the raw hk_hold holding-shares column before the daily materializer, so it is written as $north_hold_vol.day.bin and never collides with the kline $vol (CANONICAL_KLINE_FIELDS guard). The bin already exists for the full instrument set — no rebuild."
+  value_sanity:
+    method: "D.features($north_hold_vol) over ~400 instruments x 2019, vs $ratio."
+    result: "non-null 99.2%; held (vol>0) 65.4% (the northbound-held sub-universe; ~35% = non-Connect/non-held, vol=0); 0 negatives; range [0, ~1.5e9] shares; corr(ratio, vol)=0.73 (related, not identical — ratio is %-of-issued-shares, vol is absolute shares)."
+  ratio_semantics_correction:
+    finding: "Tushare doc 188 defines `ratio` as '持股占比（%），占已发行股份百分比' = percentage of ISSUED shares, NOT free-float. The data_dictionary label 'Holding % of Free Float' is CORRECTED to issued-share % in this batch. Consequence: CICC chart-76 factors written on $ratio / $north_hold_vol are faithful to the Tushare ISSUED-share basis, close to but NOT exact to CICC's '持仓量/流通股本' (free-float) wording — recorded on the E1g manifest rows."
+  coverage_caveat: "Daily northbound disclosure STOPPED 2024-08-20 (doc 188: exchange switched to quarterly). Daily $north_hold_vol/$ratio effectively 2017 .. 2024-08; the 2010-2020 IS window has only 2017-2020 (~3.5y) — short-window, recorded for E1g."
+  tests:
+    - test_id: tests/data_infra/test_field_registry.py
+      asserts: "$north_hold_vol resolves to dataset_id=hk_hold, status=approved, allowed at formal_validation."
+
+fields_added:
+  - field: $north_hold_vol
+    note: "Northbound holding volume (持股数量, shares). A-share northbound only (southbound HK filtered). Renamed from raw `vol` to avoid the kline $vol collision."
+
+notes: |
+  Registry-status flip only — the bin is already materialized (NORTHBOUND_RENAMES has shipped it
+  all along; it was simply never registered). No on-disk / pipeline change. Registered for the CICC
+  E1g VWAP-based factors so holding-VALUE = $north_hold_vol * VWAP is faithful (GPT review: the
+  ratio*VWAP proxy assumed a constant share-base that does not always cancel). Same spent-OOS /
+  short-window caveats as the rest of the north family (oos_eligibility: spent_same_family).

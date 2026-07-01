@@ -1,0 +1,1363 @@
+[
+  {
+    "label": "股票数据",
+    "doc_id": "14",
+    "children": [
+      {
+        "label": "基础数据",
+        "doc_id": "24",
+        "children": [
+          {
+            "label": "股票列表",
+            "doc_id": "25",
+            "children": []
+          },
+          {
+            "label": "每日股本（盘前）",
+            "doc_id": "329",
+            "children": []
+          },
+          {
+            "label": "交易日历",
+            "doc_id": "26",
+            "children": []
+          },
+          {
+            "label": "ST股票列表",
+            "doc_id": "397",
+            "children": []
+          },
+          {
+            "label": "ST风险警示板股票",
+            "doc_id": "423",
+            "children": []
+          },
+          {
+            "label": "沪深港通股票列表",
+            "doc_id": "398",
+            "children": []
+          },
+          {
+            "label": "股票曾用名",
+            "doc_id": "100",
+            "children": []
+          },
+          {
+            "label": "上市公司基本信息",
+            "doc_id": "112",
+            "children": []
+          },
+          {
+            "label": "上市公司管理层",
+            "doc_id": "193",
+            "children": []
+          },
+          {
+            "label": "管理层薪酬和持股",
+            "doc_id": "194",
+            "children": []
+          },
+          {
+            "label": "北交所新旧代码对照",
+            "doc_id": "375",
+            "children": []
+          },
+          {
+            "label": "IPO新股上市",
+            "doc_id": "123",
+            "children": []
+          },
+          {
+            "label": "股票历史列表",
+            "doc_id": "262",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "行情数据",
+        "doc_id": "15",
+        "children": [
+          {
+            "label": "历史日线",
+            "doc_id": "27",
+            "children": []
+          },
+          {
+            "label": "实时日线",
+            "doc_id": "372",
+            "children": []
+          },
+          {
+            "label": "历史分钟",
+            "doc_id": "370",
+            "children": []
+          },
+          {
+            "label": "实时分钟",
+            "doc_id": "374",
+            "children": []
+          },
+          {
+            "label": "A股实时分钟-日累计",
+            "doc_id": "457",
+            "children": []
+          },
+          {
+            "label": "周线行情",
+            "doc_id": "144",
+            "children": []
+          },
+          {
+            "label": "月线行情",
+            "doc_id": "145",
+            "children": []
+          },
+          {
+            "label": "复权行情",
+            "doc_id": "146",
+            "children": []
+          },
+          {
+            "label": "周/月线行情(每日更新)",
+            "doc_id": "336",
+            "children": []
+          },
+          {
+            "label": "周/月线复权行情(每日更新)",
+            "doc_id": "365",
+            "children": []
+          },
+          {
+            "label": "复权因子",
+            "doc_id": "28",
+            "children": []
+          },
+          {
+            "label": "每日指标",
+            "doc_id": "32",
+            "children": []
+          },
+          {
+            "label": "通用行情接口",
+            "doc_id": "109",
+            "children": []
+          },
+          {
+            "label": "每日涨跌停价格",
+            "doc_id": "183",
+            "children": []
+          },
+          {
+            "label": "每日停复牌信息",
+            "doc_id": "214",
+            "children": []
+          },
+          {
+            "label": "沪深股通十大成交股",
+            "doc_id": "48",
+            "children": []
+          },
+          {
+            "label": "港股通十大成交股",
+            "doc_id": "49",
+            "children": []
+          },
+          {
+            "label": "港股通每日成交统计",
+            "doc_id": "196",
+            "children": []
+          },
+          {
+            "label": "备用行情",
+            "doc_id": "255",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "财务数据",
+        "doc_id": "16",
+        "children": [
+          {
+            "label": "利润表",
+            "doc_id": "33",
+            "children": []
+          },
+          {
+            "label": "资产负债表",
+            "doc_id": "36",
+            "children": []
+          },
+          {
+            "label": "现金流量表",
+            "doc_id": "44",
+            "children": []
+          },
+          {
+            "label": "业绩预告",
+            "doc_id": "45",
+            "children": []
+          },
+          {
+            "label": "业绩快报",
+            "doc_id": "46",
+            "children": []
+          },
+          {
+            "label": "分红送股数据",
+            "doc_id": "103",
+            "children": []
+          },
+          {
+            "label": "财务指标数据",
+            "doc_id": "79",
+            "children": []
+          },
+          {
+            "label": "财务审计意见",
+            "doc_id": "80",
+            "children": []
+          },
+          {
+            "label": "主营业务构成",
+            "doc_id": "81",
+            "children": []
+          },
+          {
+            "label": "财报披露日期表",
+            "doc_id": "162",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "参考数据",
+        "doc_id": "17",
+        "children": [
+          {
+            "label": "个股异常波动",
+            "doc_id": "451",
+            "children": []
+          },
+          {
+            "label": "个股严重异常波动",
+            "doc_id": "452",
+            "children": []
+          },
+          {
+            "label": "交易所重点提示证券",
+            "doc_id": "453",
+            "children": []
+          },
+          {
+            "label": "前十大股东",
+            "doc_id": "61",
+            "children": []
+          },
+          {
+            "label": "前十大流通股东",
+            "doc_id": "62",
+            "children": []
+          },
+          {
+            "label": "股权质押统计数据",
+            "doc_id": "110",
+            "children": []
+          },
+          {
+            "label": "股权质押明细数据",
+            "doc_id": "111",
+            "children": []
+          },
+          {
+            "label": "股票回购",
+            "doc_id": "124",
+            "children": []
+          },
+          {
+            "label": "限售股解禁",
+            "doc_id": "160",
+            "children": []
+          },
+          {
+            "label": "大宗交易",
+            "doc_id": "161",
+            "children": []
+          },
+          {
+            "label": "股票开户数据（停）",
+            "doc_id": "164",
+            "children": []
+          },
+          {
+            "label": "股票开户数据（旧）",
+            "doc_id": "165",
+            "children": []
+          },
+          {
+            "label": "股东人数",
+            "doc_id": "166",
+            "children": []
+          },
+          {
+            "label": "股东增减持",
+            "doc_id": "175",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "特色数据",
+        "doc_id": "291",
+        "children": [
+          {
+            "label": "券商盈利预测数据",
+            "doc_id": "292",
+            "children": []
+          },
+          {
+            "label": "每日筹码及胜率",
+            "doc_id": "293",
+            "children": []
+          },
+          {
+            "label": "每日筹码分布",
+            "doc_id": "294",
+            "children": []
+          },
+          {
+            "label": "股票技术面因子",
+            "doc_id": "296",
+            "children": []
+          },
+          {
+            "label": "股票技术面因子(专业版）",
+            "doc_id": "328",
+            "children": []
+          },
+          {
+            "label": "中央结算系统持股统计",
+            "doc_id": "295",
+            "children": []
+          },
+          {
+            "label": "中央结算系统持股明细",
+            "doc_id": "274",
+            "children": []
+          },
+          {
+            "label": "沪深股通持股明细",
+            "doc_id": "188",
+            "children": []
+          },
+          {
+            "label": "股票开盘集合竞价数据",
+            "doc_id": "353",
+            "children": []
+          },
+          {
+            "label": "股票收盘集合竞价数据",
+            "doc_id": "354",
+            "children": []
+          },
+          {
+            "label": "神奇九转指标",
+            "doc_id": "364",
+            "children": []
+          },
+          {
+            "label": "AH股比价",
+            "doc_id": "399",
+            "children": []
+          },
+          {
+            "label": "机构调研数据",
+            "doc_id": "275",
+            "children": []
+          },
+          {
+            "label": "券商月度金股",
+            "doc_id": "267",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "两融及转融通",
+        "doc_id": "330",
+        "children": [
+          {
+            "label": "融资融券交易汇总",
+            "doc_id": "58",
+            "children": []
+          },
+          {
+            "label": "融资融券交易明细",
+            "doc_id": "59",
+            "children": []
+          },
+          {
+            "label": "融资融券标的（盘前）",
+            "doc_id": "326",
+            "children": []
+          },
+          {
+            "label": "转融券交易汇总(停）",
+            "doc_id": "332",
+            "children": []
+          },
+          {
+            "label": "转融资交易汇总",
+            "doc_id": "331",
+            "children": []
+          },
+          {
+            "label": "转融券交易明细(停）",
+            "doc_id": "333",
+            "children": []
+          },
+          {
+            "label": "做市借券交易汇总(停）",
+            "doc_id": "334",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "资金流向数据",
+        "doc_id": "342",
+        "children": [
+          {
+            "label": "个股资金流向",
+            "doc_id": "170",
+            "children": []
+          },
+          {
+            "label": "个股资金流向（THS）",
+            "doc_id": "348",
+            "children": []
+          },
+          {
+            "label": "个股资金流向（DC）",
+            "doc_id": "349",
+            "children": []
+          },
+          {
+            "label": "板块资金流向（THS)",
+            "doc_id": "371",
+            "children": []
+          },
+          {
+            "label": "行业资金流向（THS）",
+            "doc_id": "343",
+            "children": []
+          },
+          {
+            "label": "板块资金流向（DC）",
+            "doc_id": "344",
+            "children": []
+          },
+          {
+            "label": "大盘资金流向（DC）",
+            "doc_id": "345",
+            "children": []
+          },
+          {
+            "label": "沪深港通资金流向",
+            "doc_id": "47",
+            "children": []
+          }
+        ]
+      },
+      {
+        "label": "打板专题数据",
+        "doc_id": "346",
+        "children": [
+          {
+            "label": "龙虎榜每日统计单",
+            "doc_id": "106",
+            "children": []
+          },
+          {
+            "label": "龙虎榜机构交易单",
+            "doc_id": "107",
+            "children": []
+          },
+          {
+            "label": "THS涨跌停榜单",
+            "doc_id": "355",
+            "children": []
+          },
+          {
+            "label": "涨跌停和炸板数据",
+            "doc_id": "298",
+            "children": []
+          },
+          {
+            "label": "涨停股票连板天梯",
+            "doc_id": "356",
+            "children": []
+          },
+          {
+            "label": "涨停最强板块统计",
+            "doc_id": "357",
+            "children": []
+          },
+          {
+            "label": "THS概念板块分类",
+            "doc_id": "259",
+            "children": []
+          },
+          {
+            "label": "THS概念板块行情",
+            "doc_id": "260",
+            "children": []
+          },
+          {
+            "label": "THS概念板块成分",
+            "doc_id": "261",
+            "children": []
+          },
+          {
+            "label": "DC概念板块分类",
+            "doc_id": "362",
+            "children": []
+          },
+          {
+            "label": "DC概念板块成分",
+            "doc_id": "363",
+            "children": []
+          },
+          {
+            "label": "DC概念板块行情",
+            "doc_id": "382",
+            "children": []
+          },
+          {
+            "label": "开盘竞价成交（当日）",
+            "doc_id": "369",
+            "children": []
+          },
+          {
+            "label": "市场游资最全名录",
+            "doc_id": "311",
+            "children": []
+          },
+          {
+            "label": "游资交易每日明细",
+            "doc_id": "312",
+            "children": []
+          },
+          {
+            "label": "THS热榜",
+            "doc_id": "320",
+            "children": []
+          },
+          {
+            "label": "DC热榜",
+            "doc_id": "321",
+            "children": []
+          },
+          {
+            "label": "TDX概念板块分类",
+            "doc_id": "376",
+            "children": []
+          },
+          {
+            "label": "TDX概念板块成分",
+            "doc_id": "377",
+            "children": []
+          },
+          {
+            "label": "TDX概念板块行情",
+            "doc_id": "378",
+            "children": []
+          },
+          {
+            "label": "榜单数据（KP）",
+            "doc_id": "347",
+            "children": []
+          },
+          {
+            "label": "题材成分（KP）",
+            "doc_id": "351",
+            "children": []
+          },
+          {
+            "label": "题材数据（DC）",
+            "doc_id": "421",
+            "children": []
+          },
+          {
+            "label": "题材成分（DC）",
+            "doc_id": "422",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "label": "ETF专题",
+    "doc_id": "384",
+    "children": [
+      {
+        "label": "ETF基本信息",
+        "doc_id": "385",
+        "children": []
+      },
+      {
+        "label": "ETF跟踪指数",
+        "doc_id": "386",
+        "children": []
+      },
+      {
+        "label": "ETF实时分钟",
+        "doc_id": "416",
+        "children": []
+      },
+      {
+        "label": "ETF历史分钟",
+        "doc_id": "387",
+        "children": []
+      },
+      {
+        "label": "ETF实时日线",
+        "doc_id": "400",
+        "children": []
+      },
+      {
+        "label": "ETF日线行情",
+        "doc_id": "127",
+        "children": []
+      },
+      {
+        "label": "ETF复权因子",
+        "doc_id": "199",
+        "children": []
+      },
+      {
+        "label": "ETF份额规模",
+        "doc_id": "408",
+        "children": []
+      },
+      {
+        "label": "ETF实时参考",
+        "doc_id": "454",
+        "children": []
+      },
+      {
+        "label": "指数公司公告",
+        "doc_id": "460",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "指数专题",
+    "doc_id": "93",
+    "children": [
+      {
+        "label": "指数基本信息",
+        "doc_id": "94",
+        "children": []
+      },
+      {
+        "label": "指数日线行情",
+        "doc_id": "95",
+        "children": []
+      },
+      {
+        "label": "指数实时日线",
+        "doc_id": "403",
+        "children": []
+      },
+      {
+        "label": "指数实时分钟",
+        "doc_id": "420",
+        "children": []
+      },
+      {
+        "label": "指数周线行情",
+        "doc_id": "171",
+        "children": []
+      },
+      {
+        "label": "指数历史分钟",
+        "doc_id": "419",
+        "children": []
+      },
+      {
+        "label": "指数月线行情",
+        "doc_id": "172",
+        "children": []
+      },
+      {
+        "label": "指数成分和权重",
+        "doc_id": "96",
+        "children": []
+      },
+      {
+        "label": "大盘指数每日指标",
+        "doc_id": "128",
+        "children": []
+      },
+      {
+        "label": "申万行业分类",
+        "doc_id": "181",
+        "children": []
+      },
+      {
+        "label": "申万行业成分（分级）",
+        "doc_id": "335",
+        "children": []
+      },
+      {
+        "label": "申万日线行情",
+        "doc_id": "327",
+        "children": []
+      },
+      {
+        "label": "申万实时行情",
+        "doc_id": "417",
+        "children": []
+      },
+      {
+        "label": "SW历史分钟",
+        "doc_id": "469",
+        "children": []
+      },
+      {
+        "label": "中信行业成分",
+        "doc_id": "373",
+        "children": []
+      },
+      {
+        "label": "中信行业指数日行情",
+        "doc_id": "308",
+        "children": []
+      },
+      {
+        "label": "国际主要指数",
+        "doc_id": "211",
+        "children": []
+      },
+      {
+        "label": "指数技术面因子(专业版)",
+        "doc_id": "358",
+        "children": []
+      },
+      {
+        "label": "沪深市场每日交易统计",
+        "doc_id": "215",
+        "children": []
+      },
+      {
+        "label": "深圳市场每日交易情况",
+        "doc_id": "268",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "公募基金",
+    "doc_id": "18",
+    "children": [
+      {
+        "label": "基金列表",
+        "doc_id": "19",
+        "children": []
+      },
+      {
+        "label": "基金管理人",
+        "doc_id": "118",
+        "children": []
+      },
+      {
+        "label": "基金经理",
+        "doc_id": "208",
+        "children": []
+      },
+      {
+        "label": "基金业绩基准",
+        "doc_id": "462",
+        "children": []
+      },
+      {
+        "label": "基金规模",
+        "doc_id": "207",
+        "children": []
+      },
+      {
+        "label": "基金净值",
+        "doc_id": "119",
+        "children": []
+      },
+      {
+        "label": "基金分红",
+        "doc_id": "120",
+        "children": []
+      },
+      {
+        "label": "基金持仓",
+        "doc_id": "121",
+        "children": []
+      },
+      {
+        "label": "基金技术面因子(专业版)",
+        "doc_id": "359",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "期货数据",
+    "doc_id": "134",
+    "children": [
+      {
+        "label": "合约信息",
+        "doc_id": "135",
+        "children": []
+      },
+      {
+        "label": "期货交易日历",
+        "doc_id": "467",
+        "children": []
+      },
+      {
+        "label": "日线行情",
+        "doc_id": "138",
+        "children": []
+      },
+      {
+        "label": "期货周/月线行情(每日更新)",
+        "doc_id": "337",
+        "children": []
+      },
+      {
+        "label": "历史分钟行情",
+        "doc_id": "313",
+        "children": []
+      },
+      {
+        "label": "实时分钟行情",
+        "doc_id": "340",
+        "children": []
+      },
+      {
+        "label": "仓单日报",
+        "doc_id": "140",
+        "children": []
+      },
+      {
+        "label": "每日结算参数",
+        "doc_id": "141",
+        "children": []
+      },
+      {
+        "label": "历史Tick行情",
+        "doc_id": "314",
+        "children": []
+      },
+      {
+        "label": "每日持仓排名",
+        "doc_id": "139",
+        "children": []
+      },
+      {
+        "label": "南华期货指数日线行情",
+        "doc_id": "468",
+        "children": []
+      },
+      {
+        "label": "期货主力与连续合约",
+        "doc_id": "189",
+        "children": []
+      },
+      {
+        "label": "期货主要品种交易周报",
+        "doc_id": "216",
+        "children": []
+      },
+      {
+        "label": "期货合约涨跌停价格",
+        "doc_id": "368",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "现货数据",
+    "doc_id": "283",
+    "children": [
+      {
+        "label": "上海黄金基础信息",
+        "doc_id": "284",
+        "children": []
+      },
+      {
+        "label": "上海黄金现货日行情",
+        "doc_id": "285",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "期权数据",
+    "doc_id": "157",
+    "children": [
+      {
+        "label": "期权合约信息",
+        "doc_id": "158",
+        "children": []
+      },
+      {
+        "label": "期权日线行情",
+        "doc_id": "159",
+        "children": []
+      },
+      {
+        "label": "期权分钟行情",
+        "doc_id": "341",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "债券专题",
+    "doc_id": "184",
+    "children": [
+      {
+        "label": "可转债基础信息",
+        "doc_id": "185",
+        "children": []
+      },
+      {
+        "label": "可转债发行",
+        "doc_id": "186",
+        "children": []
+      },
+      {
+        "label": "可转债赎回信息",
+        "doc_id": "269",
+        "children": []
+      },
+      {
+        "label": "可转债票面利率",
+        "doc_id": "305",
+        "children": []
+      },
+      {
+        "label": "可转债行情",
+        "doc_id": "187",
+        "children": []
+      },
+      {
+        "label": "可转债十大持有人",
+        "doc_id": "459",
+        "children": []
+      },
+      {
+        "label": "可转债技术面因子(专业版)",
+        "doc_id": "392",
+        "children": []
+      },
+      {
+        "label": "可转债转股价变动",
+        "doc_id": "246",
+        "children": []
+      },
+      {
+        "label": "可转债转股结果",
+        "doc_id": "247",
+        "children": []
+      },
+      {
+        "label": "可转债债券评级",
+        "doc_id": "458",
+        "children": []
+      },
+      {
+        "label": "债券回购日行情",
+        "doc_id": "256",
+        "children": []
+      },
+      {
+        "label": "柜台流通式债券报价",
+        "doc_id": "322",
+        "children": []
+      },
+      {
+        "label": "柜台流通式债券最优报价",
+        "doc_id": "323",
+        "children": []
+      },
+      {
+        "label": "大宗交易",
+        "doc_id": "271",
+        "children": []
+      },
+      {
+        "label": "大宗交易明细",
+        "doc_id": "272",
+        "children": []
+      },
+      {
+        "label": "国债收益率曲线",
+        "doc_id": "201",
+        "children": []
+      },
+      {
+        "label": "全球财经事件",
+        "doc_id": "233",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "外汇数据",
+    "doc_id": "177",
+    "children": [
+      {
+        "label": "外汇基础信息（海外）",
+        "doc_id": "178",
+        "children": []
+      },
+      {
+        "label": "外汇日线行情",
+        "doc_id": "179",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "港股数据",
+    "doc_id": "190",
+    "children": [
+      {
+        "label": "港股基础信息",
+        "doc_id": "191",
+        "children": []
+      },
+      {
+        "label": "港股交易日历",
+        "doc_id": "250",
+        "children": []
+      },
+      {
+        "label": "港股日线行情",
+        "doc_id": "192",
+        "children": []
+      },
+      {
+        "label": "港股复权行情",
+        "doc_id": "339",
+        "children": []
+      },
+      {
+        "label": "港股复权因子",
+        "doc_id": "401",
+        "children": []
+      },
+      {
+        "label": "港股分钟行情",
+        "doc_id": "304",
+        "children": []
+      },
+      {
+        "label": "港股实时日线",
+        "doc_id": "383",
+        "children": []
+      },
+      {
+        "label": "港股利润表",
+        "doc_id": "389",
+        "children": []
+      },
+      {
+        "label": "港股资产负债表",
+        "doc_id": "390",
+        "children": []
+      },
+      {
+        "label": "港股现金流量表",
+        "doc_id": "391",
+        "children": []
+      },
+      {
+        "label": "港股财务指标数据",
+        "doc_id": "388",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "美股数据",
+    "doc_id": "251",
+    "children": [
+      {
+        "label": "美股基础信息",
+        "doc_id": "252",
+        "children": []
+      },
+      {
+        "label": "美股交易日历",
+        "doc_id": "253",
+        "children": []
+      },
+      {
+        "label": "美股日线行情",
+        "doc_id": "254",
+        "children": []
+      },
+      {
+        "label": "美股复权行情",
+        "doc_id": "338",
+        "children": []
+      },
+      {
+        "label": "美股复权因子",
+        "doc_id": "402",
+        "children": []
+      },
+      {
+        "label": "美股利润表",
+        "doc_id": "394",
+        "children": []
+      },
+      {
+        "label": "美股资产负债表",
+        "doc_id": "395",
+        "children": []
+      },
+      {
+        "label": "美股现金流量表",
+        "doc_id": "396",
+        "children": []
+      },
+      {
+        "label": "美股财务指标数据",
+        "doc_id": "393",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "宏观经济",
+    "doc_id": "147",
+    "children": [
+      {
+        "label": "国内宏观",
+        "doc_id": "224",
+        "children": [
+          {
+            "label": "中国经济数据发布日程",
+            "doc_id": "461",
+            "children": []
+          },
+          {
+            "label": "利率数据",
+            "doc_id": "148",
+            "children": [
+              {
+                "label": "Shibor利率",
+                "doc_id": "149",
+                "children": []
+              },
+              {
+                "label": "Shibor报价数据",
+                "doc_id": "150",
+                "children": []
+              },
+              {
+                "label": "LPR贷款基础利率",
+                "doc_id": "151",
+                "children": []
+              },
+              {
+                "label": "Libor利率",
+                "doc_id": "152",
+                "children": []
+              },
+              {
+                "label": "Hibor利率",
+                "doc_id": "153",
+                "children": []
+              },
+              {
+                "label": "温州民间借贷利率",
+                "doc_id": "173",
+                "children": []
+              },
+              {
+                "label": "广州民间借贷利率",
+                "doc_id": "174",
+                "children": []
+              }
+            ]
+          },
+          {
+            "label": "国民经济",
+            "doc_id": "225",
+            "children": [
+              {
+                "label": "国内生产总值（GDP）",
+                "doc_id": "227",
+                "children": []
+              }
+            ]
+          },
+          {
+            "label": "价格指数",
+            "doc_id": "226",
+            "children": [
+              {
+                "label": "居民消费价格指数（CPI）",
+                "doc_id": "228",
+                "children": []
+              },
+              {
+                "label": "工业生产者出厂价格指数（PPI）",
+                "doc_id": "245",
+                "children": []
+              }
+            ]
+          },
+          {
+            "label": "金融",
+            "doc_id": "240",
+            "children": [
+              {
+                "label": "货币供应量",
+                "doc_id": "241",
+                "children": [
+                  {
+                    "label": "货币供应量（月）",
+                    "doc_id": "242",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "label": "社会融资",
+                "doc_id": "309",
+                "children": [
+                  {
+                    "label": "社融增量（月度）",
+                    "doc_id": "310",
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "景气度",
+            "doc_id": "324",
+            "children": [
+              {
+                "label": "采购经理指数（PMI）",
+                "doc_id": "325",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "label": "国际宏观",
+        "doc_id": "217",
+        "children": [
+          {
+            "label": "美国利率",
+            "doc_id": "218",
+            "children": [
+              {
+                "label": "国债收益率曲线利率",
+                "doc_id": "219",
+                "children": []
+              },
+              {
+                "label": "国债实际收益率曲线利率",
+                "doc_id": "220",
+                "children": []
+              },
+              {
+                "label": "短期国债利率",
+                "doc_id": "221",
+                "children": []
+              },
+              {
+                "label": "国债长期利率",
+                "doc_id": "222",
+                "children": []
+              },
+              {
+                "label": "国债长期利率平均值",
+                "doc_id": "223",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "label": "大模型语料专题数据",
+    "doc_id": "142",
+    "children": [
+      {
+        "label": "国家政策库",
+        "doc_id": "406",
+        "children": []
+      },
+      {
+        "label": "券商研究报告",
+        "doc_id": "415",
+        "children": []
+      },
+      {
+        "label": "央行货币政策执行报告",
+        "doc_id": "465",
+        "children": []
+      },
+      {
+        "label": "新闻快讯（短讯）",
+        "doc_id": "143",
+        "children": []
+      },
+      {
+        "label": "新闻通讯（长篇）",
+        "doc_id": "195",
+        "children": []
+      },
+      {
+        "label": "新闻联播文字稿",
+        "doc_id": "154",
+        "children": []
+      },
+      {
+        "label": "上市公司公告",
+        "doc_id": "176",
+        "children": []
+      },
+      {
+        "label": "上证e互动问答",
+        "doc_id": "366",
+        "children": []
+      },
+      {
+        "label": "深证易互动问答",
+        "doc_id": "367",
+        "children": []
+      }
+    ]
+  },
+  {
+    "label": "数据索引",
+    "doc_id": "209",
+    "children": []
+  }
+]

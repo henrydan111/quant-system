@@ -1059,6 +1059,11 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
         raise ValueError("handle_validation_event_backtest_oos requires hypothesis.prescription")
     prescription = hypothesis.prescription
 
+    # OOS-quarantine enforcement now lives at the UNIVERSAL seal-claim chokepoint
+    # (steps._claim_holdout_access_if_needed → _assert_cicc_oos_quarantine), so every sealed-OOS
+    # path (event-driven here, vectorized, promotion-evidence) is covered, not just this handler
+    # (GPT scale-review #2). No per-handler call needed.
+
     # PR 8d Blocker 1: claim the holdout seal BEFORE invoking
     # run_event_driven_window. The claim uses hypothesis.design_hash() +
     # context.run_dir + context.step.step_id, which is exactly what the
@@ -1169,7 +1174,7 @@ def _compute_extended_metrics(
         from src.alpha_research.factor_eval.quantile_analysis import (
             compute_quantile_returns, test_monotonicity,
         )
-        q_returns = compute_quantile_returns(composite_signal, forward_returns, n_quantiles=5)
+        q_returns = compute_quantile_returns(composite_signal, forward_returns, n_quantiles=10)
         mono = test_monotonicity(q_returns)
         metrics["monotonicity_pvalue"] = float(mono.get("p_value", float("nan")))
     except Exception as exc:  # noqa: BLE001
