@@ -30,7 +30,7 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 22 | 评级机构数 | validated | ◑ vendor-approx **rank-faithful** vs 果仁  | 2 | ✅ done | ◑ vendor-approx rank-faithful + TOP-K CO |
 | 23 | 贝塔N日(000001,250) | doable | — derive — | 2 | 🔴 blocked | 🔴 BLOCKED — SlopeXY(1日涨幅, 指数涨幅(000001),  |
 | 24 | 研发销售比率 | doable | (Σrd_exp_sq_q0..3)/(Σrevenue_sq_q0..3) | 2 | ✅ done | ✅ penny-exact + TOP-K STRONG: top-5/10/2 |
-| 25 | AssetTurnoverDiffPY | doable | — derive — | 2 | 🔴 blocked | 🔴 BLOCKED — 总资产周转率 at q4 = TTM(revenue)  |
+| 25 | AssetTurnoverDiffPY | doable | ATO(0)-ATO(4); ATO=Σ总营收_sq[k..k+3]/AvgQ4(总资产) | 2 | ✅ done | ✅ VERIFIED (depth-9 q0..q8 unlock): penny-exact + TOP-K 100/100/100 (cov 98%, Spearman 0.98); cand-A 4q-avg denom; 果仁_20251231_排除ST排除科创_排名-AssetTurnoverDiffPY.xlsx |
 | 26 | 财报预约公布天数 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — 预约披露 disclosure-schedule cal |
 | 27 | 20日涨幅 | doable | ($close*$adj_factor)/Ref(,20)-1 | 1 | ✅ done | ✅ 后复权 ratio (close*adj)/Ref(,20)-1, lag- |
 | 28 | CoreProfitQ | validated | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($a | 1 | ✅ done | ✅ value penny-exact (Spearman 1.000, Pea |
@@ -48,7 +48,7 @@ Procedure per factor: 1. 果仁 web: rank-ONLY on this single indicator, univers
 | 40 | 财报发布天数 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — 财报发布-date schedule NOT inges |
 | 41 | 机构持股比例 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — institution holding % NOT ma |
 | 42 | RoeQ | doable | ifnull($profit_dedt_sq_q0,$n_income_sq_q | 1 | ✅ done | ✅ 扣非单季/总资产(ROA-like, stable denom). top5 |
-| 43 | RnDTTMGr%PY | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED — needs rd_exp q4..q7 (8 quart |
+| 43 | RnDTTMGr%PY | doable | (Σrd_exp_sq_q0..3 - Σq4..7)/abs(Σq4..7) | 1 | ◑ diverged | ◑ VALUE penny-exact (depth-9; Spearman 0.98, med relerr 0.015%) but TOP-K DIVERGED 40/60/65 — year-ago R&D coverage gap (annual-only reporters, 7/20 top NaN local); 4 caliber variants (raw/symmetric/floor/NaN-tol) tried, NONE close it → unstable-denom family; 果仁_20251231_排除ST排除科创_排名-RnDTTMGrPY.xlsx |
 | 44 | Div%NetIncY2 | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED(comparator) — annual(分红)/annua |
 | 45 | DivAGrPY% | doable | — derive — | 1 | 🔴 blocked | 🔴 BLOCKED(comparator) — annual(分红 0)/ann |
 | 46 | 市研率 | doable | $total_mv/TTM($rd_exp_sq) (~2× R&D-basis | 1 | ✅ done | ◑ rank-faithful (Spearman 0.998, Pearson |
