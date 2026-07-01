@@ -261,11 +261,34 @@ def report(g: pd.DataFrame, lv: pd.Series, kind: str, gscale: float, min_coverag
     print("   localize before calling it a local bug. Match the lag: most factors are T−1, PIT-gated are lag-0.)")
 
 
+def load_local_series(path: str, code6_set: set[str]) -> pd.Series:
+    """Load a PRE-COMPUTED local factor series for factors that are NOT a single qlib expr
+    (上市天数 / beta / dividend aggregates). File = csv/parquet with a 6-digit code column + a value
+    column (named 'code'/'value', else the first two columns). Zero-pads codes (int-truncation trap),
+    restricts to the export codes, drops duplicate codes. Named 'lval' for report()'s join."""
+    p = Path(path) if Path(path).is_absolute() else (ROOT / path)
+    df = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+    code_col = "code" if "code" in df.columns else df.columns[0]
+    val_col = "value" if "value" in df.columns else df.columns[1]
+    df = df.copy()
+    df["_c6"] = df[code_col].map(_code6)
+    s = df.dropna(subset=["_c6"]).set_index("_c6")[val_col].astype(float)
+    s = s[s.index.isin(code6_set)]
+    s = s[~s.index.duplicated(keep="first")]
+    s.name = "lval"
+    print(f"[local-series] loaded {len(s)} codes from {p.name} (of {len(df)} rows)", flush=True)
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser(description="果仁 web-export ↔ local factor parity")
     ap.add_argument("--xlsx", required=True, help="path to the 果仁 每日选股 export")
     ap.add_argument("--date", required=True, help="选股日期 YYYY-MM-DD; a trading day ≤ the local provider calendar max (printed at runtime)")
-    ap.add_argument("--local-expr", required=True, help="POINTWISE qlib expression, e.g. '$total_mv/1e4' (no cross-sectional/composite)")
+    ap.add_argument("--local-expr", default=None, help="POINTWISE qlib expression, e.g. '$total_mv/1e4' (no cross-sectional/composite). OR use --local-series.")
+    ap.add_argument("--local-series", default=None,
+                    help="pre-computed local series (csv/parquet with code + value columns) for factors that are "
+                         "NOT a single qlib expr (上市天数 / beta / dividend aggregates). Bypasses the qlib compute; "
+                         "--lag / --provider-uri are ignored. Mutually exclusive with --local-expr.")
     ap.add_argument("--guorn-col", default=None, help="export column holding 果仁's value (header or 0-based idx)")
     ap.add_argument("--code-col", default=None, help="export code column (default col 0)")
     ap.add_argument("--lag", type=int, default=1, help="1=T−1 display lag (default); 0=lag-0 PIT fundamentals")
@@ -281,15 +304,22 @@ def main():
     ap.add_argument("--min-top10", type=float, default=0.8, help="machine-gate: min top-10 selection overlap (M3)")
     ap.add_argument("--min-top20", type=float, default=0.8, help="machine-gate: min top-20 selection overlap (M3)")
     a = ap.parse_args()
+    if not (a.local_expr or a.local_series) or (a.local_expr and a.local_series):
+        ap.error("provide EXACTLY ONE of --local-expr / --local-series")
 
-    assert_pointwise(a.local_expr)                                    # B2: refuse cross-sectional/composite
     cal = _trading_days()
     print(f"[cal] local provider calendar max = {cal.max().date()}", flush=True)
     validate_trading_date(a.date, cal)                               # Minor 1+2: trading-day ≤ calendar max
     xlsx = (ROOT / a.xlsx) if not Path(a.xlsx).is_absolute() else Path(a.xlsx)
     g = load_guorn_export(xlsx, a.code_col, a.guorn_col)
-    lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index), provider_uri=a.provider_uri)
-    report(g, lv, a.kind, a.guorn_scale, a.min_coverage, f"{a.local_expr}  @ {a.date} (lag {a.lag})",
+    if a.local_series:
+        lv = load_local_series(a.local_series, set(g.index))
+        label = f"{Path(a.local_series).name}  @ {a.date} (pre-computed series)"
+    else:
+        assert_pointwise(a.local_expr)                               # B2: refuse cross-sectional/composite
+        lv = load_local_factor(a.local_expr, a.date, a.lag, set(g.index), provider_uri=a.provider_uri)
+        label = f"{a.local_expr}  @ {a.date} (lag {a.lag})"
+    report(g, lv, a.kind, a.guorn_scale, a.min_coverage, label,
            rank_desc=not a.select_asc, min_topk={5: a.min_top5, 10: a.min_top10, 20: a.min_top20})
 
 

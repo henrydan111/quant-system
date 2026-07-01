@@ -4144,6 +4144,15 @@ class StagedQlibBackendBuilder:
         refused with remediation guidance. See CLAUDE.md §6.3 "Backend Rebuild
         Discipline" for the full contract.
 
+        The swap uses a STAGED-FIRST ordering (staged->adjacent, then live->backup,
+        then adjacent->live) with rollback at each step, so any SINGLE rename
+        failure leaves ``qlib_dir`` as the old live provider (a catastrophic double
+        rename failure raises a loud BuildGateError with the one-move recovery, never
+        leaving it silently missing). This replaced a backup-first order that left a
+        persistent broken window. NOTE: a two-rename swap has a sub-ms window between
+        renames 2 and 3 where a NEW open of ``qlib_dir`` could see it absent (Windows
+        has no atomic whole-directory exchange); existing open handles survive.
+
         After the atomic swap, a ``provider_build.json`` manifest is emitted
         under ``<qlib_dir>/metadata/`` so every formal artifact downstream can
         record ``provider_build_id``. Disable with ``emit_manifest=False`` only
@@ -4173,13 +4182,55 @@ class StagedQlibBackendBuilder:
                 f"on the same drive as the staged build."
             )
 
+        # Safe STAGED-FIRST ordering (2026-07-01): a SINGLE rename failure never leaves ``qlib_dir``
+        # missing (a catastrophic DOUBLE failure raises a loud, recoverable error — see step (3) below).
+        # The old backup-first order (live->backup, THEN staged->live) left a broken window:
+        # if the 2nd rename failed (e.g. a Windows directory handle on the freshly-built staged
+        # tree — the depth9_20260630 publish hit exactly this, WinError 5), the live provider was
+        # already moved to backup and ``qlib_dir`` was GONE. Instead:
+        #   (1) move the staged provider ADJACENT to the target first — if the staged tree is locked
+        #       this raises BEFORE ``qlib_dir`` is touched (no broken window);
+        #   (2) back up the live provider;  (3) promote the staged provider into place.
+        # Each step rolls back on failure: after any SINGLE rename failure ``qlib_dir`` is the OLD live
+        # provider (on success it is the NEW one), and provider_dir/staging are restored for a clean retry.
+        # A catastrophic DOUBLE failure (step-3 rename + the live-restore both fail) raises a loud
+        # BuildGateError naming the one-move manual recovery — state stays RECOVERABLE (backup + staging both
+        # present), never silently missing. All renames are same-volume (guarded above) so each is atomic.
         backup_dir = f"{self.paths.qlib_dir}.bak_{self.build_id}"
+        staging_dir = f"{self.paths.qlib_dir}.new_{self.build_id}"
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+        os.replace(self.paths.provider_dir, staging_dir)  # (1) staged -> adjacent; qlib_dir untouched if this raises
         if os.path.exists(backup_dir):
             shutil.rmtree(backup_dir)
         if os.path.isdir(self.paths.qlib_dir):
-            os.replace(self.paths.qlib_dir, backup_dir)
-        os.replace(self.paths.provider_dir, self.paths.qlib_dir)
-        logger.info("Published staged provider to %s", self.paths.qlib_dir)
+            try:
+                os.replace(self.paths.qlib_dir, backup_dir)  # (2) live -> backup
+            except OSError:
+                os.replace(staging_dir, self.paths.provider_dir)  # rollback (1); qlib_dir stays live
+                raise
+        # (3) promote. NOTE: between (2) and (3) there is a sub-millisecond window where qlib_dir does not
+        # exist — inherent to a two-rename swap (Windows has no atomic whole-directory exchange). Existing open
+        # handles survive; only a NEW open in that window sees it absent. (2)/(3) are back-to-back to minimize it.
+        try:
+            os.replace(staging_dir, self.paths.qlib_dir)  # (3) staged -> live
+        except OSError:
+            # FULL rollback to the pre-publish state so a same-build retry is clean:
+            if os.path.isdir(backup_dir):
+                try:
+                    os.replace(backup_dir, self.paths.qlib_dir)  # (a) restore live — CRITICAL
+                except OSError as restore_exc:
+                    raise BuildGateError(  # double failure: qlib_dir absent but RECOVERABLE (loud, not silent)
+                        f"publish() step-3 rename failed AND restoring the live provider failed: "
+                        f"{self.paths.qlib_dir} is MISSING. Recover manually: move {backup_dir!r} -> "
+                        f"{self.paths.qlib_dir!r} (the new provider is at {staging_dir!r}).") from restore_exc
+            if os.path.isdir(staging_dir):
+                try:
+                    os.replace(staging_dir, self.paths.provider_dir)  # (b) staged back to provider_dir — best-effort
+                except OSError:
+                    pass  # non-critical: live is already restored; staged recoverable at staging_dir
+            raise
+        logger.info("Published staged provider to %s (safe staged-first swap)", self.paths.qlib_dir)
 
         if emit_manifest:
             self._emit_provider_manifest_at_publish(calendar_policy_id=calendar_policy_id)
