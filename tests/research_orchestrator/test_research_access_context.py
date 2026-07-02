@@ -276,9 +276,20 @@ class TestQlibWindowedFeaturesEnforcement:
         )
         # B1 generation pin: the live ids must equal the context's pinned ids
         # for the read to proceed (this context uses the test id "prod_test").
+        # R2-M2: an active-context read also requires a PROVEN live Qlib
+        # binding — stub the probe conclusive-and-matching.
+        from pathlib import Path as _Path
+
+        _same = _Path("E:/live_provider")
         with patch("qlib.data.D") as mock_d, patch(
             "src.data_infra.provider_context.live_provider_ids",
             return_value=("prod_test", "frozen_20260227_system_build"),
+        ), patch(
+            "src.data_infra.provider_context.qlib_bound_provider_dir",
+            return_value=_same,
+        ), patch(
+            "src.data_infra.provider_context.live_qlib_provider_dir",
+            return_value=_same,
         ):
             mock_d.features.return_value = mock_frame
             with research_access_context(ctx):

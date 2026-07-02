@@ -49,6 +49,9 @@ from src.research_orchestrator.research_access_context import (
     ResearchAccessContext,
     research_access_context,
 )
+# Module-level: pulls real qlib transitively (data_feeder), so it must import
+# BEFORE the autouse fixture swaps sys.modules["qlib"] for the stub.
+from src.research_orchestrator.sealed_backtest_runner import SealedBacktestRunner
 
 BOUNDARY = pd.Timestamp("2026-02-27")
 LIVE_BUILD = "depth9_new_build"
@@ -166,12 +169,24 @@ def _pin_ctx(build_id: str, policy_id: str) -> ResearchAccessContext:
     )
 
 
+def _stub_conclusive_live_binding(monkeypatch) -> None:
+    """R2-M2: an active-context read requires a PROVEN live Qlib binding —
+    stub the probe conclusive-and-matching for tests that exercise layers
+    behind it."""
+    import src.data_infra.provider_context as ctx_mod
+
+    same = Path("E:/live_provider")
+    monkeypatch.setattr(ctx_mod, "qlib_bound_provider_dir", lambda: same)
+    monkeypatch.setattr(ctx_mod, "live_qlib_provider_dir", lambda: same)
+
+
 class TestFormalRunGenerationPin:
     """GPT B1: an active ResearchAccessContext pins the run's provider
     generation — a live rotation while the context is active hard-fails
     BEFORE D.features, with the base class (not swallowable)."""
 
-    def test_mid_run_rotation_hard_fails_before_dfeatures(self, tmp_path):
+    def test_mid_run_rotation_hard_fails_before_dfeatures(self, tmp_path, monkeypatch):
+        _stub_conclusive_live_binding(monkeypatch)
         # Run started under ctx_build; live has rotated to LIVE_BUILD.
         manifest = _seed_row(tmp_path, build_id="ctx_build", policy_id=LIVE_POLICY)
         calls = {"n": 0}
@@ -190,8 +205,9 @@ class TestFormalRunGenerationPin:
         assert len(manifest.list_events(cache_key=_cache_key())) == 1
 
     def test_formal_context_under_current_generation_still_heals_stale_rows(
-        self, tmp_path, caplog
+        self, tmp_path, caplog, monkeypatch
     ):
+        _stub_conclusive_live_binding(monkeypatch)
         # Run started AFTER the rotation: the context pins the live
         # generation, so a PRE-run stale row self-heals (GPT answer 4c: formal
         # runs may self-heal only when the context was built under the new
@@ -204,6 +220,68 @@ class TestFormalRunGenerationPin:
         rows = manifest.list_events(cache_key=_cache_key())
         assert len(rows) == 2
         assert rows.iloc[-1]["provider_build_id"] == LIVE_BUILD
+
+
+class TestToctouPostReadPin:
+    """GPT R2-M1: the live provider may rotate AFTER the pre-read pin and
+    BEFORE/DURING D.features — the read must be DISCARDED (no manifest row
+    under possibly-stale ids), sandbox path included."""
+
+    def test_live_rotation_after_dfeatures_before_record_hard_fails_without_append(
+        self, tmp_path, monkeypatch
+    ):
+        import src.data_infra.provider_context as ctx_mod
+
+        calls = {"ids": 0, "d": 0}
+
+        def flipping_ids():
+            calls["ids"] += 1
+            if calls["ids"] == 1:  # pre-read pin
+                return (LIVE_BUILD, LIVE_POLICY)
+            return ("rotated_mid_read", LIVE_POLICY)  # post-read re-check
+
+        monkeypatch.setattr(ctx_mod, "live_provider_ids", flipping_ids)
+
+        def counting_features(*a, **k):
+            calls["d"] += 1
+            return pd.DataFrame()
+
+        sys.modules["qlib.data"].D = types.SimpleNamespace(features=counting_features)
+        with pytest.raises(
+            CacheKeyMismatchError, match="changed during qlib_windowed_features"
+        ) as ei:
+            _call(tmp_path)
+        assert not isinstance(ei.value, ProviderGenerationMismatchError)
+        assert calls["d"] == 1  # the read happened, then was discarded
+        # No row recorded under the stale binding ids.
+        assert CacheManifestStore(tmp_path).list_events(cache_key=_cache_key()).empty
+
+    def test_stable_generation_across_read_records_normally(self, tmp_path):
+        _call(tmp_path)
+        rows = CacheManifestStore(tmp_path).list_events(cache_key=_cache_key())
+        assert len(rows) == 1
+        assert rows.iloc[-1]["provider_build_id"] == LIVE_BUILD
+
+
+class TestRunWorkspacePipelineBlankIds:
+    """GPT R2-m1: a formal (ctx-bearing) run_workspace_pipeline call with
+    blank provider ids fails at construction — BEFORE the spend-on-attempt
+    seal claim, and with a message naming the real defect."""
+
+    def test_blank_ids_raise_before_seal_claim(self):
+        runner = SealedBacktestRunner.__new__(SealedBacktestRunner)
+        runner._ctx = object()  # non-None sentinel: the guard fires before any use
+
+        def _boom(*a, **k):
+            raise AssertionError("seal must NOT be claimed on a malformed call")
+
+        runner._claim_if_oos = _boom
+        with pytest.raises(ValueError, match="non-blank"):
+            runner.run_workspace_pipeline(
+                pipeline_fn=lambda **k: None,
+                time_split={},
+                pipeline_args={},
+            )
 
 
 class TestLatestRowAppendOrder:
@@ -259,12 +337,37 @@ class TestLiveBindingGuard:
         assert _call(tmp_path).empty
 
     def test_inconclusive_probe_proceeds(self, tmp_path):
+        # (= GPT's test_no_context_inconclusive_qlib_binding_still_proceeds.)
         # The autouse qlib stub has no qlib.config submodule → probe is
-        # inconclusive → the read proceeds (not evidence of a wrong binding).
+        # inconclusive → a NO-CONTEXT sandbox read proceeds (not evidence of
+        # a wrong binding; R2-M2 keeps fail-open only here).
         import src.data_infra.provider_context as ctx_mod
 
         assert ctx_mod.qlib_bound_provider_dir() is None
         assert _call(tmp_path).empty
+
+    def test_active_context_inconclusive_qlib_binding_fails_before_dfeatures(
+        self, tmp_path
+    ):
+        # R2-M2 escalation: under an active ResearchAccessContext the binding
+        # must be PROVEN — an inconclusive probe hard-fails before D.features
+        # and before any manifest write.
+        import src.data_infra.provider_context as ctx_mod
+
+        assert ctx_mod.qlib_bound_provider_dir() is None  # stub qlib: no config
+        calls = {"d": 0}
+
+        def counting_features(*a, **k):
+            calls["d"] += 1
+            return pd.DataFrame()
+
+        sys.modules["qlib.data"].D = types.SimpleNamespace(features=counting_features)
+        with research_access_context(_pin_ctx(LIVE_BUILD, LIVE_POLICY)):
+            with pytest.raises(CacheKeyMismatchError, match="could not be proven") as ei:
+                _call(tmp_path)
+        assert not isinstance(ei.value, ProviderGenerationMismatchError)
+        assert calls["d"] == 0
+        assert CacheManifestStore(tmp_path).list_events(cache_key=_cache_key()).empty
 
     def test_probe_reads_dpm_provider_uri_dict(self, tmp_path, monkeypatch):
         import src.data_infra.provider_context as ctx_mod

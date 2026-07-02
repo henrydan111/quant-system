@@ -114,14 +114,24 @@ def qlib_windowed_features(
     # provider build/policy (incl. legacy ""-rows) never validates reuse.
     live_build_id, live_policy_id = live_provider_ids()
 
-    # M4 self-heal review, GPT M2: this is a LIVE-provider door — manifest
-    # rows are stamped with live ids, so a process whose in-process Qlib
-    # binding provably points elsewhere (staged/archived provider) must not
-    # read or write here. A POSITIVE probe mismatch fails closed; an
-    # inconclusive probe (qlib stubbed / not yet initialized / config API
-    # drift) is not evidence and proceeds.
+    # M4 self-heal review, GPT M2 (+ R2 escalation): this is a LIVE-provider
+    # door — manifest rows are stamped with live ids, so a process whose
+    # in-process Qlib binding provably points elsewhere (staged/archived
+    # provider) must not read or write here. A POSITIVE probe mismatch fails
+    # closed for everyone. An INCONCLUSIVE probe (qlib stubbed / not yet
+    # initialized / config API drift) is tolerated only for no-context
+    # sandbox liveness; under an active ResearchAccessContext the binding
+    # must be PROVEN before a formal read is stamped (R2-M2).
     bound_dir = qlib_bound_provider_dir()
-    if bound_dir is not None:
+    if bound_dir is None:
+        if research_ctx is not None:
+            raise CacheKeyMismatchError(
+                "qlib_windowed_features is a live-provider door under an active "
+                "ResearchAccessContext, but the in-process Qlib provider binding "
+                "could not be proven. Refusing to stamp formal reads with live "
+                "provider ids on an inconclusive probe."
+            )
+    else:
         live_dir = live_qlib_provider_dir()
         if bound_dir != live_dir:
             raise CacheKeyMismatchError(
@@ -197,6 +207,21 @@ def qlib_windowed_features(
         date_values = pd.to_datetime(frame.index.get_level_values("datetime"))
         mask = (date_values >= pd.Timestamp(start_time)) & (date_values <= pd.Timestamp(end_time))
         frame = frame[mask].copy()
+    # R2-M1 (TOCTOU): the live provider may rotate AFTER the pre-read pin and
+    # BEFORE/DURING D.features — the frame could then hold rotated-provider
+    # bytes while the manifest row would stamp the pre-rotation binding ids.
+    # Re-check and DISCARD the read instead of recording it (applies to the
+    # no-context sandbox path too — never write a row under possibly-stale
+    # ids). The next call re-pins under the new generation (no context) or
+    # hard-fails at the pre-read pin (active context).
+    current_build_id, current_policy_id = live_provider_ids()
+    if (current_build_id, current_policy_id) != (binding_build_id, binding_policy_id):
+        raise CacheKeyMismatchError(
+            "Live provider generation changed during qlib_windowed_features "
+            f"read: live=({current_build_id}, {current_policy_id}) "
+            f"!= bound=({binding_build_id}, {binding_policy_id}). "
+            "Discarding this read; restart under a single provider generation."
+        )
     manifest.record_cache_write(
         cache_type="qlib_features",
         cache_key=cache_key,
