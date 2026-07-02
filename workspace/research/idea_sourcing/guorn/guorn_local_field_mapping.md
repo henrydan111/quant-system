@@ -94,6 +94,21 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > 3. **连续N年分红(3)** = `annual(分红,0/1/2)>0` on **FY{2024,2023,2022}** (FY{25,24,23} scores 62.5% — ruled out) + a
 >    **whole-FY listing gate** (`list_date ≤ 2021-12-31`, i.e. listed for ALL of FY2022; Dec-2022 IPOs paying an FY2022
 >    dividend are NOT counted by 果仁) → 95.97% exact; residual ~4% undecoded (boolean filter, top-K degenerate).
+>
+> **⚠ AvgQ(总股本,4,k) window semantics — pinned via TEMP-INDICATOR ATOM EXPORT (2026-07-01).** Exporting a temp custom
+> indicator `AvgQ(总股本,4,0)` (deleted after) pinned the window: **4 CALENDAR quarters INCLUDING the current unreported
+> one** — `AvgQ(总股本,4,0)` = mean{当日总股本, 期末总股本 of the prior 3 reported quarters} = local
+> `mean{$total_share, $total_share_q0, _q1, _q2}` (matches the atom **0.0000%** on event names: 比亚迪 6.078132e9 =
+> {9.117,9.117,3.039,3.039}/4, 成飞 2.674437e9, 步步高, 国联民生); `AvgQ(,4,4)` = {q3..q6}. **Residual (~7% of names >1%)**
+> = share-event TIMING in 果仁's vendor share history vs both local sources — provider bins are REPORT-anchored, raw
+> daily_basic is effective-date but lags some events; not fully locally reproducible. SharesAvgGr%PY rank build =
+> `(Σ$total_share_q0..3)/(Σq4..7)-1` (official top-K 100/90/85 — rank-usable, value vendor-capped).
+>
+> **⚠ Provider `$total_share` bin is REPORT-anchored and LAGS effective share changes** (found 2026-07-01): BYD 002594
+> shows 3.039e9 through 2025-10-31 and steps to 9.117e9 only by 11-28, while **raw** `data/market/daily/` total_share
+> already shows 9.117e9 at 2025-09-30 (effective-date). **`$total_mv` matches raw EXACTLY** (size factors safe). For any
+> share-count-sensitive parity/factor, read the raw daily column or the `_qN` report values knowingly — and see the
+> re-materialization task flagged for data_infra.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
