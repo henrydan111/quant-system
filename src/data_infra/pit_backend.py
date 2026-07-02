@@ -107,6 +107,21 @@ CORE_METADATA_COLUMNS = {
 }
 NORTHBOUND_RENAMES = {"vol": "north_hold_vol"}
 DIVIDEND_COMPAT_FIELDS = {"stk_div", "stk_bo_rate", "stk_co_rate", "cash_div", "cash_div_tax"}
+# Bare share-capital daily bins: EFFECTIVE-DATE anchored from the raw market/daily columns
+# (Tushare daily_basic merge, unit 万股). The balancesheet snapshot family carries a same-named
+# report-period `total_share` payload whose bare compat alias used to CLOBBER the daily bin with
+# the report-anchored q0 series — 1-2 months late vs real share changes and internally
+# inconsistent with $total_mv (2026-07-01 果仁-parity finding, BYD 002594 / 成飞 302132).
+# `_materialize_share_capital_daily` owns these bare bins; `_materialize_snapshot_dataset` /
+# `_materialize_flow_family` skip the colliding bare alias (the report-anchored series stays
+# available as `{field}_q0..qN`). Values are the multiplier × the raw 万股 column, preserving each
+# bin's LEGACY unit so consumers stay calibrated: `total_share` in 股 (earn_q_eps divides 元 by
+# it), `float_share`/`free_share` in 万股 (size_ln_free_float et al.).
+SHARE_CAPITAL_DAILY_FIELDS: dict[str, float] = {
+    "total_share": 1e4,
+    "float_share": 1.0,
+    "free_share": 1.0,
+}
 KNOWN_INDEX_CODES = {"000001.SH", "000300.SH", "000688.SH", "000852.SH", "000905.SH"}
 PHASE3_DATASETS = {
     "cashflow", "cashflow_quarterly", "forecast", "holder_number",
@@ -915,6 +930,76 @@ def payload_numeric_columns(df: pd.DataFrame) -> list[str]:
     """Return numeric payload columns excluding metadata keys."""
     numeric = df.select_dtypes(include=[np.number]).columns.tolist()
     return [column for column in numeric if column not in CORE_METADATA_COLUMNS]
+
+
+def load_share_capital_daily_frame(data_root: str, fields: Iterable[str] | None = None) -> pd.DataFrame:
+    """Column-projected load of the raw market/daily share-capital columns.
+
+    Reads the SAME files the kline dump consumes (``DATASET_SPECS['daily']``) but only
+    ``ts_code`` / ``trade_date`` + the requested ``SHARE_CAPITAL_DAILY_FIELDS`` columns
+    (unit 万股, verbatim from Tushare daily_basic). Tolerant of per-file schema gaps —
+    a file carrying none of the requested share columns is skipped. Shared by the
+    provider build step and ``scripts/fix_share_capital_bins.py`` so the source of the
+    bare share-capital bins lives in exactly one place.
+    """
+    selected = [name for name in (fields or SHARE_CAPITAL_DAILY_FIELDS) if name in SHARE_CAPITAL_DAILY_FIELDS]
+    if not selected:
+        return pd.DataFrame(columns=["ts_code", "trade_date"])
+    spec = DATASET_SPECS["daily"]
+    paths = sorted(glob(os.path.join(data_root, spec.raw_pattern), recursive=True))
+    if not paths:
+        raise BuildGateError("No market daily Parquet files found for share-capital materialization")
+    wanted = ["ts_code", "trade_date", *selected]
+    frames: list[pd.DataFrame] = []
+    for path in iter_progress(paths, total=len(paths), desc="Load share-capital raw", unit="file", leave=False):
+        try:
+            frame = pd.read_parquet(path, columns=wanted)
+        except (KeyError, ValueError):
+            frame = pd.read_parquet(path)
+            keep = [column for column in wanted if column in frame.columns]
+            if not set(keep) & set(selected):
+                continue
+            frame = frame[keep]
+        frames.append(frame)
+    out = pd.concat(frames, ignore_index=True)
+    out["ts_code"] = out["ts_code"].astype(str).str.upper()
+    out["trade_date"] = normalize_date_series(out["trade_date"])
+    return out.dropna(subset=["trade_date"])
+
+
+def share_capital_daily_arrays(
+    symbol_daily: pd.DataFrame,
+    calendar: pd.DatetimeIndex,
+    fields: Iterable[str] | None = None,
+) -> dict[str, np.ndarray]:
+    """Full-calendar effective-date-anchored share-capital arrays for ONE symbol.
+
+    ``symbol_daily`` holds the symbol's raw market/daily rows (``trade_date`` + 万股-unit
+    share columns). Each field is scaled by its ``SHARE_CAPITAL_DAILY_FIELDS`` multiplier
+    (legacy bin units), reindexed to the provider calendar, then FORWARD-FILLED from the
+    first observation: share capital is a state variable, so a suspension gap keeps the
+    last known share count (the §8.1 ranking-context contract — suspended-but-listed
+    names still need a denominator). No back-fill — days before the first observation
+    stay NaN. PIT: the value on trade day T is the same-day EOD daily_basic state (same
+    class as $total_mv/$pe); predictive factors apply their own ``Ref(..., 1)`` lag.
+    """
+    selected = {
+        name: SHARE_CAPITAL_DAILY_FIELDS[name]
+        for name in (fields or SHARE_CAPITAL_DAILY_FIELDS)
+        if name in SHARE_CAPITAL_DAILY_FIELDS
+    }
+    work = (
+        symbol_daily.sort_values("trade_date")
+        .drop_duplicates(subset=["trade_date"], keep="last")
+        .set_index("trade_date")
+    )
+    arrays: dict[str, np.ndarray] = {}
+    for field_name, multiplier in selected.items():
+        if field_name not in work.columns:
+            continue
+        series = pd.to_numeric(work[field_name], errors="coerce") * multiplier
+        arrays[field_name] = series.reindex(calendar).ffill().to_numpy(dtype=np.float32)
+    return arrays
 
 
 def aggregate_directional_holdertrade(sub: pd.DataFrame, prefix: str) -> tuple[pd.DataFrame, list[str]]:
@@ -3488,6 +3573,11 @@ class StagedQlibBackendBuilder:
                 written_fields.append(name)
             if self.write_compat_aliases:
                 for field_name in numeric_fields:
+                    if field_name in SHARE_CAPITAL_DAILY_FIELDS:
+                        # The bare bin is EFFECTIVE-DATE anchored and owned by
+                        # _materialize_share_capital_daily; the report-anchored
+                        # series stays available as {field}_q0..qN.
+                        continue
                     self._write_feature_series(feature_dir, field_name, arrays[f"{field_name}_q0"])
                     written_fields.append(field_name)
         return sorted(set(written_fields))
@@ -3709,6 +3799,10 @@ class StagedQlibBackendBuilder:
 
             if self.write_compat_aliases:
                 for field_name in raw_cumulative_fields:
+                    if field_name in SHARE_CAPITAL_DAILY_FIELDS:
+                        # Defensive: no flow family carries these names today, but a bare
+                        # share-capital bin must never be clobbered by a report-anchored alias.
+                        continue
                     self._write_feature_series(feature_dir, field_name, cumulative_arrays[f"{field_name}_cum_q0"])
                     written.append(field_name)
                 for field_name in quarter_fields:
@@ -3754,6 +3848,46 @@ class StagedQlibBackendBuilder:
             status = compute_limit_status(close, up, dn)
             write_qlib_bin(os.path.join(feature_dir, f"{LIMIT_STATUS_FIELD}.day.bin"), status, start_index=si_c)
             written.append(LIMIT_STATUS_FIELD)
+        return sorted(set(written))
+
+    def _materialize_share_capital_daily(
+        self,
+        calendar: pd.DatetimeIndex,
+        target_dirs: dict[str, str],
+    ) -> list[str]:
+        """Bare share-capital bins from the raw market/daily columns (EFFECTIVE-DATE anchor).
+
+        Owns the bare ``total_share`` / ``float_share`` / ``free_share`` day bins (see
+        ``SHARE_CAPITAL_DAILY_FIELDS`` for the collision story and the legacy unit contract).
+        The kline dump already stages these columns from raw daily, but this step re-writes
+        them explicitly AFTER every family materialization so the bare bins are
+        effective-date-anchored in every build mode — full ``all``, non-scoped ``update``
+        (kline dump only appends), and scoped ``--touched-symbols`` updates (no kline dump at
+        all). Symbols with no raw daily rows (index codes) keep their existing bins untouched.
+        """
+        fields = self._apply_field_filter(list(SHARE_CAPITAL_DAILY_FIELDS))
+        if not fields:
+            return []
+        frame = load_share_capital_daily_frame(self.paths.data_root, fields=fields)
+        available = [name for name in fields if name in frame.columns]
+        if not available:
+            return []
+        written: list[str] = []
+        groups = {ts_code: group for ts_code, group in frame.groupby("ts_code")}
+        for qlib_code, feature_dir in iter_progress(
+            target_dirs.items(),
+            total=len(target_dirs),
+            desc="Materialize share capital",
+            unit="symbol",
+            leave=False,
+        ):
+            symbol_df = groups.get(qlib_code.replace("_", ".").upper())
+            if symbol_df is None:
+                continue
+            arrays = share_capital_daily_arrays(symbol_df, calendar, fields=available)
+            for field_name, values in arrays.items():
+                self._write_feature_series(feature_dir, field_name, values)
+                written.append(field_name)
         return sorted(set(written))
 
     def _materialize_daily_dataset(
@@ -3982,6 +4116,14 @@ class StagedQlibBackendBuilder:
             # SalesQGr%PY) — cross-quarter, not expressible from the q0..q4 _sq slots. Writes
             # $roe_core_stab_12q / $sales_gr_stab_12q. Validated vs the rung-6 deepslot f9/f10.
             written["quality_stability"] = self._materialize_quality_stability(calendar, target_dirs)
+        # Bare share-capital bins (total_share/float_share/free_share): effective-date
+        # anchor from raw daily. Runs AFTER the statement families so a colliding
+        # report-anchored compat alias can never be the last writer (the alias loops
+        # also skip these names — defense in depth). UNCONDITIONAL like the kline dump
+        # (NOT gated on active_datasets): a datasets-subset update still re-dumps the
+        # kline CSVs, which would append raw 万股 values to the total_share tail — this
+        # step must always follow to restore the ×1e4 股-unit contract.
+        written["share_capital_daily"] = self._materialize_share_capital_daily(calendar, target_dirs)
         for dataset_name in (
             "moneyflow", "northbound", "margin", "stk_limit",
             # New alpha endpoints (added 2026-04-16): daily-fact kind,

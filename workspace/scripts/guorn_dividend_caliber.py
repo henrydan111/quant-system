@@ -110,7 +110,7 @@ def _declared_events(signal_date: str, *, pretax: bool = True, drop_stale_plans:
     if drop_stale_plans:
         stale = (ev["best"] != "实施") & (ev["last_ann"] < sig - pd.Timedelta(days=stale_days))
         ev = ev[~stale]
-    ev["ed"] = ev["end_date"].astype(str)
+    ev["ed"] = ev["end_date"].astype(str)  # noqa: unsafe-pit-dates[PIT001] reason: end_date is a fiscal-period LABEL here; visibility already PIT-gated by the ann<=sig filter above
     ev["fy"] = ev["ed"].str[:4].astype(int)
     return ev
 

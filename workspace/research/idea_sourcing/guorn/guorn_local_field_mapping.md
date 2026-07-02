@@ -104,11 +104,16 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > daily_basic is effective-date but lags some events; not fully locally reproducible. SharesAvgGr%PY rank build =
 > `(Σ$total_share_q0..3)/(Σq4..7)-1` (official top-K 100/90/85 — rank-usable, value vendor-capped).
 >
-> **⚠ Provider `$total_share` bin is REPORT-anchored and LAGS effective share changes** (found 2026-07-01): BYD 002594
-> shows 3.039e9 through 2025-10-31 and steps to 9.117e9 only by 11-28, while **raw** `data/market/daily/` total_share
-> already shows 9.117e9 at 2025-09-30 (effective-date). **`$total_mv` matches raw EXACTLY** (size factors safe). For any
-> share-count-sensitive parity/factor, read the raw daily column or the `_qN` report values knowingly — and see the
-> re-materialization task flagged for data_infra.
+> **✅ FIXED 2026-07-01 (same day): provider `$total_share` bin is now EFFECTIVE-DATE anchored.** The bug found in the
+> morning battle (bare bin was the balancesheet compat alias — report-anchored, 1-2 months late: BYD stuck at 3.039e9
+> through 2025-10-31 while raw daily already showed 9.117e9) was root-caused and re-materialized the same day:
+> `PITBackend._materialize_share_capital_daily` + in-place `scripts/fix_share_capital_bins.py` now source the bare
+> `total_share`/`float_share`/`free_share` bins from the raw `data/market/daily/` columns (total_share ×1e4 → 股;
+> float/free verbatim 万股; ffill across suspensions). Post-fix: BYD/成飞 bin step-dates == raw column step-dates
+> (BYD now shows BOTH real 2025 steps: 2025-06-11 → 5.495e9 and 2025-07-29 → 9.117e9, which the report-anchored bin
+> never saw), and `$total_share × $close ≈ $total_mv` violations dropped 9.23% → 0.0003% of stock-days. `$total_share`
+> is again first-choice for share-count parity; the AvgQ residual note above (vendor share-history timing) still
+> applies to the `_qN` legs.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
