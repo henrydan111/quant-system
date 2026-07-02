@@ -49,6 +49,7 @@ edit into `CLAUDE.md §3` in the same pass (§6.2).
 - **ST authoritative source**: `data/qlib_data/instruments/st_stocks.txt` (range form; covers the 2020-01-02 gap).
 - **Delist / IPO-lag contract**: enforced at the instruments sidecar (`all_stocks.txt` via `provider_metadata.build_all_stocks_universe()`). `D.features()` consumers inherit it; direct `data/pit_ledger/*.parquet` readers MUST filter via `provider_metadata.stock_basic_bounds(ts_code)`. Enforced: `tests/data_infra/test_provider_boundary.py`.
 - **MultiIndex order**: `D.features()` returns `MultiIndex(instrument, datetime)`, NOT `(datetime, instrument)`. Be explicit in raw pandas; `groupby(level=0)` is per-instrument only when levels are not swapped.
+- **Bare share-capital bins are EFFECTIVE-DATE anchored, legacy-unit asymmetric**: `$total_share` (股, raw daily 万股 ×1e4) / `$float_share` / `$free_share` (万股 verbatim) come from the raw `market/daily` columns via `_materialize_share_capital_daily` (force=True, ffill across suspensions); the balancesheet compat alias must NEVER clobber them (the report-anchored series stays `$total_share_q0..qN`, correctly report-anchored — do not "fix" it). An in-place correction of approved field values requires provider-id rotation + `provider_patches.jsonl` lineage + an `approved_field_value_correction` log entry + a `data_correction_replay` for consuming approved factors. Enforced: `tests/data_infra/test_share_capital_daily.py`.
 
 #### 2a.2 PIT correctness (any lookahead invalidates the research)
 

@@ -32,8 +32,10 @@ def main() -> None:
     sb = sb.dropna(subset=["ld"])
     sb = sb[sb["ld"] <= d]  # listed on/before the signal date
 
-    # calendar days since listing
-    sb["cal"] = (d - sb["ld"]).dt.days
+    # calendar days since listing — INCLUSIVE of the listing day (果仁 caliber: a stock listed on the signal
+    # date is 上市天数=1, not 0). Proven against the 2025-12-31 排除ST排除科创 export: elapsed-days = 果仁−1 for
+    # ALL 4412 names (std=0), so +1 lands value-exact. The trading-day branch below is already inclusive.
+    sb["cal"] = (d - sb["ld"]).dt.days + 1
 
     # trading days since listing (from the provider calendar, inclusive of both ends <= d)
     cal_days = pd.to_datetime([l.strip() for l in open(ROOT / "data" / "qlib_data" / "calendars" / "day.txt")])

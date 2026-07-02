@@ -57,6 +57,7 @@ def build_unified_qlib(
     allow_exceptions: bool = False,
     write_compat_aliases: bool = True,
     stage: str = "full",
+    calendar_policy_id: str | None = None,
 ):
     """Backward-compatible wrapper over the staged PIT builder."""
     return build_qlib_backend(
@@ -73,6 +74,7 @@ def build_unified_qlib(
         allow_exceptions=allow_exceptions,
         write_compat_aliases=write_compat_aliases,
         stage=stage,
+        calendar_policy_id=calendar_policy_id,
     )
 
 
@@ -93,6 +95,13 @@ def main() -> None:
     parser.add_argument("--slot-depth", type=int, default=SLOT_DEPTH_DEFAULT,
                         help=f"Quarter slot depth (default: {SLOT_DEPTH_DEFAULT})")
     parser.add_argument("--publish", action="store_true", help="Promote the staged build into data/qlib_data")
+    parser.add_argument(
+        "--calendar-policy",
+        type=str,
+        default=None,
+        help="Calendar policy id stamped into the published manifest "
+             "(config/calendar_policies/<id>.yaml). REQUIRED with --publish — no default.",
+    )
     parser.add_argument("--exclude-phase3", action="store_true", help="Skip Phase 3 datasets")
     parser.add_argument(
         "--touched-symbols",
@@ -137,6 +146,7 @@ def main() -> None:
             allow_exceptions=args.allow_exceptions,
             write_compat_aliases=not args.skip_compat_aliases,
             stage=args.stage,
+            calendar_policy_id=args.calendar_policy,
         )
     except BuildGateError as exc:
         logger.error("PIT backend build blocked by integrity gates:\n%s", exc)

@@ -1186,6 +1186,11 @@ class PrescriptionSchemaTests(unittest.TestCase):
             topk=50,
             rebalance_days=10,
             neutralization=("size", "industry"),
+            # R4-M2: formal steps fail closed without a prescription-pinned
+            # policy id. Deliberately NOT part of normalized_dict()/design_hash
+            # (execution-environment binding, not design identity) — legacy
+            # fixture literal keeps the simulated flows semantically unchanged.
+            calendar_policy_id="frozen_20260227_system_build",
         )
         defaults.update(overrides)
         return PrescribedRecipe(**defaults)
@@ -1375,6 +1380,8 @@ class HypothesisValidationProfileShellTests(unittest.TestCase):
             topk=50,
             rebalance_days=10,
             neutralization=("size", "industry"),
+            # R4-M2: formal steps require the prescription-pinned policy id.
+            calendar_policy_id="frozen_20260227_system_build",
         )
 
     def _build_validation_request(self, *, with_prescription: bool = True):
@@ -2126,6 +2133,9 @@ class ValidationOOSEventBacktestSkipTests(unittest.TestCase):
             topk=10,
             rebalance_days=5,
             portfolio=PortfolioConstruction(target_gross_exposure=1.0, max_position_weight=0.20),
+            # R4-M2: the pin must survive to_dict/from_dict (exercises the
+            # round-trip path formal request files take).
+            calendar_policy_id="frozen_20260227_system_build",
         )
         h = build_hypothesis()
         h_with = Hypothesis.from_dict({**h.to_dict(), "prescription": recipe.to_dict()})

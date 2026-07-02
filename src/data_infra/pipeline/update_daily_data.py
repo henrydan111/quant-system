@@ -465,11 +465,27 @@ class DailyDataUpdater:
         return True
 
 
+def _live_calendar_policy_id(qlib_dir: str) -> str:
+    """Read the calendar_policy_id RECORDED by the live provider manifest.
+
+    A daily update republishes the same provider under the same policy — the
+    manifest is the artifact-recorded source (UNFREEZE_PLAN.md D1: publish
+    requires an explicit policy id; the live manifest's own record is the
+    correct one for an in-place refresh, never a module default).
+    """
+    from data_infra.provider_manifest import load_provider_manifest
+
+    return load_provider_manifest(qlib_dir).calendar_policy_id
+
+
 def trigger_qlib_rebuild():
     """Trigger the full Qlib backend rebuild via build_qlib_backend.py."""
     logger.info("Triggering full Qlib backend rebuild...")
     data_root, qlib_dir = _resolve_paths()
-    build_unified_qlib(data_root, qlib_dir, mode="all", publish=True)
+    build_unified_qlib(
+        data_root, qlib_dir, mode="all", publish=True,
+        calendar_policy_id=_live_calendar_policy_id(qlib_dir),
+    )
 
 
 def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
@@ -486,6 +502,7 @@ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
             datasets=sorted(affected_datasets) if affected_datasets else None,
             include_phase3=True,
             allow_exceptions=True,
+            calendar_policy_id=_live_calendar_policy_id(qlib_dir),
         )
     except Exception as e:
         logger.error(f"Incremental Qlib update failed: {e}")

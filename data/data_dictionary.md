@@ -147,6 +147,19 @@ Total Columns: 27
 | `circ_mv` | Circulating Market Value (10k) | 流通市值(万元) |
 | `adj_factor` | Adjustment Factor | 复权因子 |
 
+> **Provider bare share-capital bins (`$total_share` / `$float_share` / `$free_share`) — EFFECTIVE-DATE anchored
+> from THESE daily columns (fixed 2026-07-01).** Materialized by `PITBackend._materialize_share_capital_daily`
+> (shared kernel `share_capital_daily_arrays`; one-time in-place fix `scripts/fix_share_capital_bins.py`).
+> Before the fix, the balancesheet snapshot family's bare compat alias clobbered `$total_share` with the
+> REPORT-anchored q0 series — 1-2 months late vs real share changes and inconsistent with `$total_mv`
+> (found in the 果仁 parity battle; BYD 002594's 2025 3× change was in raw daily from 2025-07-29 but in the
+> bin only from 2025-11-03). Units are LEGACY-preserving and deliberately asymmetric: **`$total_share` is in
+> 股** (raw 万股 × 1e4 — `earn_q_eps` divides 元 by it), **`$float_share`/`$free_share` stay in 万股** (raw
+> verbatim). Values forward-fill across suspension gaps (share capital is a state variable) but are NaN
+> before the first daily_basic observation — notably BSE names' pre-listing NEEQ era, where the whole
+> daily_basic block (incl. `$total_mv`) has no coverage. The report-period balance-sheet series remains
+> available as `$total_share_q0..qN` (that family is CORRECTLY report-anchored — do not "fix" it).
+
 ### index (指数行情)
 Total Columns: 11
 
@@ -884,6 +897,37 @@ per-day aggregates as `$holdertrade_net_vol`, `$holdertrade_gross_vol`,
 | `after_ratio` | Holding Ratio After Change | 变动后占流通比例(%) |
 | `avg_price` | Average Transaction Price | 平均价格 |
 | `total_share` | Total Holding Shares | 持股总数 |
+
+### broker_recommend (券商月度金股)
+Storage: `data/analyst/broker_recommend/broker_recommend_{YYYYMM}.parquet` (one file per month).
+Endpoint `broker_recommend` (doc_id=267), 6000积分, queried per-month. Ingested by
+[scripts/fetch_broker_recommend_historical.py](../scripts/fetch_broker_recommend_historical.py).
+
+> **Status (2026-06-28): RAW, validation-stage.** NOT normalized, NOT in the PIT ledger, NOT in the
+> Qlib provider, NOT in `field_status.yaml`. Being validated as the Option-A "券商金股 mother signal"
+> ([workspace/research/broker_recommend_alpha/](../workspace/research/broker_recommend_alpha/)). Formal
+> materialization (as an **as-of monthly membership table**, NOT a daily bin / statement ledger) is gated
+> on the validation result + GPT cross-review.
+
+> **PIT (CRITICAL — no per-row disclosure date):** the ONLY date is `month` (YYYYMM) = the
+> **recommendation** month, NOT a visible-at timestamp. Tushare populates month M within its first
+> **1–3 days** ("一般1日~3日内更新当月数据"), so a month-M list must be anchored to the first trading day
+> **on/after ~day 4 of month M** — never month start (that would be lookahead). No `ann_date`/`f_ann_date`,
+> no restatement.
+
+> **Coverage / quality:** history effectively **starts 2020-07** (earlier months return empty). 72 months
+> (2020-07..2026-06), 16,706 rows, 2,236 distinct stocks, 80 distinct brokers. **Broker coverage is
+> unstable month-to-month (10–44 brokers, 78–335 stocks; median 22 brokers)** → conviction is comparable
+> only **cross-sectionally within a month**, never across months. **Conviction is sparse**: mean 1.30
+> brokers/stock-month, **81% of picks are single-broker**, max 13 → the signal is closer to *membership*
+> than graded conviction. `ts_code` is **Tushare format** (`000001.SZ`) → `.`→`_` before any Qlib join.
+
+| Column | English | Chinese |
+|--------|---------|---------|
+| `month` | Recommendation Month (YYYYMM) | 推荐月度 |
+| `broker` | Broker Name | 券商名称 |
+| `ts_code` | TS Stock Code | TS股票代码 |
+| `name` | Stock Short Name | 股票简称 |
 
 ## 8. Bucket A — 15000积分 Expansion (downloaded 2026-06-08, RAW)
 

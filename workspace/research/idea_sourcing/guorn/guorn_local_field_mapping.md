@@ -66,6 +66,87 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 | **ROETTMDiffPQ** | REFQ(净资产收益率,0)−REFQ(净资产收益率,1) | RefQ diff of RoeTTM above | ✗ **DIFF fragile at selection (NOT a data gap):** level reproducible (0.96) but 果仁 median \|val\|=**0.01 (1pp)** → the QoQ diff is a tiny signal swamped by per-leg level residual + **negative-equity instability** (果仁 #1=000692 eq −1.29亿). ALL builds give top-5 0-20% / top-20 ≤40%. Factor-design fragility | — |
 | **RnDQGR%PY** | (研发费用单季−refq(,4))/refq(研发费用单季,4) | `($rd_exp_sq_q0 − $rd_exp_sq_q4) / $rd_exp_sq_q4` (lag 0) | ✅ 0.63% med (85% w/5%, sign 97.9%, n=67k) | 5 |
 | **CoreProfitQ** | 营收单季−营业成本单季−(管理+销售+财务费用)单季−营业税金及附加单季 | `$revenue_sq_q0 − $oper_cost_sq_q0 − ($admin_exp_sq_q0+$sell_exp_sq_q0+$fin_exp_sq_q0) − $biz_tax_surchg_sq_q0` (lag 0) | ✅ **penny-exact** (med 0.0, 93.8% w/1%, sign 99%, n=18k) — validates ALL expense lines at once | 5 |
+| **每股收益** (财务指标--每股指标) | 每股收益 TTM (滚动 4 单季) | `Σ$basic_eps_sq_q[0..3]` (lag 0) | ◑ structure-exact (1.39% med, Spearman 0.9975, sign 98.7%, n=4.4k @2025-12-31; value-confirmed 茅台 71.75 vs 果仁 71.89, 万科A −5.02 vs −4.99); residual = TTM 单季求和 vs 累计差分 + 重述时点 | field-probe 2026-07-01 |
+| **基本每股收益(单季)** (财报条目--收益利润) | 基本每股收益 单季 | `$basic_eps_sq_q0` (lag 0) | ✅ penny-exact (0.00% med, Spearman 0.9996, n=4.4k @2025-12-31) | field-probe 2026-07-01 |
+| **总股本(亿)** (行情--股本和市值) | 总股本 | `$total_share / 1e8` (lag 0) | ✅ penny/display-exact (0.037% med, Spearman/Pearson 1.000, top-K 100%, n=4.4k @2025-12-31); residual = 亿 2-dec display-round | T1-decomp 2026-07-01 |
+| **营业利润TTM(万)** (财务指标--最近一年合计TTM) | TTM(营业利润,0) | `Σ$operate_profit_sq_q[0..3] / 1e4` (lag 0) | ✅ penny-exact (0.0000% med, Pearson 1.000, Spearman 0.997, n=4.4k @2025-12-31) | T1-decomp 2026-07-01 |
+
+> **⚠ 分红总金额 caliber — REPORT-PERIOD, not ann-date (pinned 2026-07-01, T1 raw-primitive decomposition).** 果仁's
+> `分红总金额` is a **季报指标** attributed to the dividend's REPORT PERIOD (`end_date` fiscal quarter); `sumq(分红总金额,4,0)`
+> sums the last **4 FISCAL QUARTERS** (`{2024Q4,2025Q1,Q2,Q3}` as-of 2025-12-31), and `annual(分红总金额,k)` = FY(end_date year).
+> This is **NOT** the ann-date trailing-365-day window (`declared_dividend_ttm`, which is the **股息率TTM** caliber): a 2024-interim
+> dividend (end_date 2024Q3, announced 2025-01) is *inside* a 365-day ann-window but *outside* the last-4 fiscal quarters. Using the
+> wrong window silently breaks `sumq(分红)`-based factors (建发股份: ann-window 0.7 vs report-period 0.3 → DivOP% 0.235 vs 果仁 0.102).
+> **Helpers:** `guorn_dividend_caliber.declared_dividend_by_quarter` (report-period, for 分红总金额 sumq) · `declared_dividend_by_fy`
+> (per-FY, for `annual(分红)`) · `declared_dividend_ttm` (ann-date-365d, for **股息率TTM only**). After the fix DivOP% top-5 = 100%
+> (was 40%), Pearson 1.000 — the earlier "top-K fragile" was a caliber artifact, not an unstable denominator.
+>
+> **⚠ Three more dividend-family calibers (pinned 2026-07-01 v4, raw-primitive decomposition round 2):**
+> 1. **Stale-预案 phantoms** — Tushare keeps superseded plan rows: 正丹股份's FY2024 interim was 预案'd at end_date 20240630
+>    (0.4, never implemented) then re-dated + 实施'd at 20240930 (0.4). Summing both gave 1.10 vs 果仁 0.70 (DivAGrPY% 54 vs 34).
+>    Rule (in `_declared_events`, default on): drop an event whose best state ≠ 实施 AND latest ann > **240 days** before signal;
+>    keep recently-declared pending 预案 (果仁 counts those, cf. 股息率 600329). Fixed DivAGrPY% top-K to **100/100/100**, left
+>    DivOP% intact (100/90/95). 实施-only is WRONG (drops pending declareds; broke DivOP%).
+> 2. **Div%NetIncY2** = `ifnull((A0/N0+A1/N1)/2, A0/N0)`: **净利润 = TOTAL `n_income`** (incl minority — the formula says
+>    净利润(单季), NOT 归母); **A=0-fill semantics** — a no-dividend FY contributes 0/N (HALVES the average), null only when the
+>    FY's NI is missing (悦达投资 22.05→11.03 = 果仁 exact). NI_FY via `$n_income_cum_q3` (FY2024) / `_q7` (FY2023). Was the
+>    family's weakest (Spearman 0.877, top-5 1/5) → **verified** (0.985, top-5 100%).
+> 3. **连续N年分红(3)** = `annual(分红,0/1/2)>0` on **FY{2024,2023,2022}** (FY{25,24,23} scores 62.5% — ruled out) + a
+>    **whole-FY listing gate** (`list_date ≤ 2021-12-31`, i.e. listed for ALL of FY2022; Dec-2022 IPOs paying an FY2022
+>    dividend are NOT counted by 果仁) → 95.97% exact; residual ~4% undecoded (boolean filter, top-K degenerate).
+>
+> **⚠ AvgQ(总股本,4,k) window semantics — pinned via TEMP-INDICATOR ATOM EXPORT (2026-07-01).** Exporting a temp custom
+> indicator `AvgQ(总股本,4,0)` (deleted after) pinned the window: **4 CALENDAR quarters INCLUDING the current unreported
+> one** — `AvgQ(总股本,4,0)` = mean{当日总股本, 期末总股本 of the prior 3 reported quarters} = local
+> `mean{$total_share, $total_share_q0, _q1, _q2}` (matches the atom **0.0000%** on event names: 比亚迪 6.078132e9 =
+> {9.117,9.117,3.039,3.039}/4, 成飞 2.674437e9, 步步高, 国联民生); `AvgQ(,4,4)` = {q3..q6}. **Residual (~7% of names >1%)**
+> = share-event TIMING in 果仁's vendor share history vs both local sources — provider bins are REPORT-anchored, raw
+> daily_basic is effective-date but lags some events; not fully locally reproducible. SharesAvgGr%PY rank build =
+> `(Σ$total_share_q0..3)/(Σq4..7)-1` (official top-K 100/90/85 — rank-usable, value vendor-capped).
+>
+> **✅ FIXED 2026-07-01 (same day): provider `$total_share` bin is now EFFECTIVE-DATE anchored.** The bug found in the
+> morning battle (bare bin was the balancesheet compat alias — report-anchored, 1-2 months late: BYD stuck at 3.039e9
+> through 2025-10-31 while raw daily already showed 9.117e9) was root-caused and re-materialized the same day:
+> `PITBackend._materialize_share_capital_daily` + in-place `scripts/fix_share_capital_bins.py` now source the bare
+> `total_share`/`float_share`/`free_share` bins from the raw `data/market/daily/` columns (total_share ×1e4 → 股;
+> float/free verbatim 万股; ffill across suspensions). Post-fix: BYD/成飞 bin step-dates == raw column step-dates
+> (BYD now shows BOTH real 2025 steps: 2025-06-11 → 5.495e9 and 2025-07-29 → 9.117e9, which the report-anchored bin
+> never saw), and `$total_share × $close ≈ $total_mv` violations dropped 9.23% → 0.0003% of stock-days. `$total_share`
+> is again first-choice for share-count parity; the AvgQ residual note above (vendor share-history timing) still
+> applies to the `_qN` legs.
+>
+> **AUDIT (2026-07-01 evening): the $total_share lag had ZERO impact on the campaign verifications.** Cross-section
+> provider-vs-raw at 2025-12-31 = **0 of 4399 names stale** (>0.1%) — year-end was fully caught up even pre-fix, and all
+> campaign verifications ran at 2025-12-31. The two verified factors that multiply by `$total_share` at the signal date
+> (DivOP%, Div%NetIncY2) have 0 stale names in their top-20 selection zones; the per-share dividend ratios
+> (DivGrPY%/DivAGrPY%/连续N年分红) cancel 总股本 entirely; 总市值/市研率 use `$total_mv` (always raw-exact). The historical
+> mid-quarter inconsistency (9.23% of stock-days pre-fix) mattered only for through-time backtests, now fixed above.
+
+> **⚠ BOOK-REPLICATION platform semantics (pinned 2026-07-02, the 成长簇 v3/v4 campaign — #2 headline-matched
+> CAGR +58.59% vs 果仁 +58.20%). Four semantics EVERY book replication must honor:**
+> 1. **`排名%区间 X%-100%` drops the TOP (100−X)% — rank runs 从大到小 (rank 1 = largest).** The old harness
+>    dropped the BOTTOM decile (inverted) → 30% of 果仁-held names screen-missed in 2015/2018. Decisive
+>    evidence: held names sit in the bottom decile 11-16% of the time, in the top decile ~0-5% (p99≈0.86-0.92).
+> 2. **筛选 上市天数>N = CALENDAR days since listing** (the verified 上市天数 caliber), NOT local bar counts —
+>    a bar proxy over-excludes 次新 (359 misses in 2015 alone).
+> 3. **`SUM(x,N)` (and window funcs) sum AVAILABLE bars for young stocks** — do NOT NaN-out names with
+>    < N bars (min_periods=1, not N/2): 果仁 ranks partial sums; NaN→bottom mis-ranks hot 次新
+>    (#1's 2015 gap −56pp → −5pp on this fix alone).
+> 4. **ROETTMDiffPQ legs use 加权平均净资产** (time-weighted proxy `(0.5·q4+q3+q2+q1+0.5·q0)/4`), not period-end
+>    equity — the end-equity version's values disagree with 果仁's own xlsx (sign 57-65%).
+> **Method that found them (reusable order): replay 果仁's holdings through the engine (splits selection vs
+> execution) → miss-diagnosis vs 持仓详单 (screen-miss vs rank-miss, per-screen/per-factor) → held-name
+> percentile distributions (pin screen semantics) → per-factor value agreement vs the xlsx's own factor columns.**
+> 5. **EVENT factors (业绩预告/快报 terms) have an ALIVE WINDOW: [event ann, corresponding report pub).** 果仁's
+>    业绩预告净利润QGr%PYQ_v1 dies when the real report lands (monthly coverage: Feb-Mar 81% → May-Jun 15% →
+>    Jul-Aug 42% → Sep 17%); an infinite ffill over-covers 2-4× and mis-ranks the NaN→bottom term
+>    (#1: coverage agreement 44%→91.5% with the mask; CAGR +51.5%→+54.7%).
+> 6. **果仁 `LOG()` = log10** (ours ln; ratio 2.3026) — rank-invariant inside a single term, but any VALUE
+>    comparison must descale (onmom agreed 2-13%/sign 94-100% only after ÷ln10).
+> Books: #2 v4 +58.59% (果仁 +58.20%, in25 0.906) · #6 v3 +57.78% (+60.32%) · #1 v5 +54.73% (+57.21%, in25 0.888;
+> the onmom limit-flag era hypothesis was REFUTED by the descaled value agreement — the 2020+ residual was the
+> forecast alive-window). Harnesses: guorn_verify_02b_calibers.py / _verify_v3_propagate.py /
+> _verify02_miss_diag.py / _replay_guorn_05_growth.py.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 

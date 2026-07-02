@@ -8,9 +8,12 @@ mis-registered under income (GPT R2 Major-2).
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from data_infra.field_registry import load_field_registry
 

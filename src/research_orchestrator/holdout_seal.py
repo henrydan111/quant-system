@@ -24,6 +24,10 @@ SEAL_COLUMNS = [
     "run_dir",
     "step_id",
     "stage",
+    # R4/D3.4 (calendar unfreeze): provider-generation binding of the spend.
+    # Legacy rows backfill "" via the _load column loop.
+    "provider_build_id",
+    "calendar_policy_id",
 ]
 
 SEAL_SCHEMA = {
@@ -40,6 +44,8 @@ SEAL_SCHEMA = {
     "run_dir": "string",
     "step_id": "string",
     "stage": "string",
+    "provider_build_id": "string",
+    "calendar_policy_id": "string",
 }
 
 
@@ -116,6 +122,8 @@ class HoldoutSealStore:
         stage: str = "oos_test",
         allow_same_run: bool = False,
         seal_key: str | None = None,
+        provider_build_id: str = "",
+        calendar_policy_id: str = "",
     ) -> dict[str, Any]:
         """Claim OOS access for a seal_key (defaults to design_hash); raise if sealed.
 
@@ -141,6 +149,23 @@ class HoldoutSealStore:
                     and str(first_row.get("step_id", "")) == str(step_id)
                 )
                 if allow_same_run and same_run:
+                    # R4 (calendar unfreeze, D3.4): a crash-resume must not
+                    # silently continue under a DIFFERENT provider generation —
+                    # the claim was spent against specific data. Enforced when
+                    # the resuming caller supplies its ids; a legacy recorded
+                    # "" mismatching a real id fails closed too.
+                    for column, current in (
+                        ("provider_build_id", provider_build_id),
+                        ("calendar_policy_id", calendar_policy_id),
+                    ):
+                        recorded = str(first_row.get(column, "") or "")
+                        if current and recorded != str(current):
+                            raise ValueError(
+                                f"Holdout seal recovery refused: claim for seal_key "
+                                f"{effective_seal_key} was spent under {column}="
+                                f"{recorded!r} but the resume runs under {current!r} "
+                                "(provider generation changed — UNFREEZE_PLAN.md D3.4)."
+                            )
                     return first_row
                 raise ValueError(
                     "Holdout sealed for seal_key "
@@ -162,6 +187,9 @@ class HoldoutSealStore:
                 "run_dir": normalized_run_dir,
                 "step_id": str(step_id),
                 "stage": str(stage),
+                # R4/D3.4 generation binding ("" = legacy caller, unset sentinel)
+                "provider_build_id": str(provider_build_id),
+                "calendar_policy_id": str(calendar_policy_id),
             }
             frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
             _atomic_write_dataframe(frame, self.log_path)

@@ -36,7 +36,15 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SRC = str(_PROJECT_ROOT / "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
-OOS_END = "2026-02-27"
+# UNFREEZE_PLAN.md Phase 2.2a (GPT R2-M7): no executable hardcoded window
+# constant — the spent-OOS boundary resolves lazily from the live manifest's
+# declared policy (legacy frozen fallback = that policy's calendar end =
+# 2026-02-27, bit-identical pre-thaw). Callers may still pass an explicit
+# oos_end; the calendar_end guard cross-checks it against the boundary.
+def _default_oos_end() -> str:
+    from src.data_infra.pit_research_loader import live_spent_oos_end
+
+    return live_spent_oos_end().strftime("%Y-%m-%d")
 PASSED = "passed"
 FAILED = "failed"
 # The screening's horizon set, mirroring workspace/scripts/run_sealed_oos.py::HORIZONS.
@@ -147,7 +155,7 @@ def reproduce_sealed_oos(
     frozen_set,
     factor_exprs: Mapping[str, str],
     oos_start: str,
-    oos_end: str = OOS_END,
+    oos_end: str | None = None,
     qlib_dir: str | Path,
     seal_root: str | Path,
     run_dir: str,
@@ -179,12 +187,63 @@ def reproduce_sealed_oos(
     metrics GOVERN approval. Injectable deps for tests; live by default."""
     from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
 
+    oos_end = oos_end or _default_oos_end()
     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
-    if str(prov.get("calendar_end")) != str(oos_end):
-        raise PromotionEvidenceError(
-            f"provider calendar end {prov.get('calendar_end')!r} != OOS_END {oos_end!r}; "
-            "refusing the reproduction (a calendar advance would change the OOS labels)"
-        )
+    calendar_end = str(prov.get("calendar_end"))
+    if calendar_end != str(oos_end):
+        # UNFREEZE_PLAN.md D3 item 5: after the calendar thaw the provider end
+        # may legitimately exceed OOS_END — but ONLY when oos_end is exactly the
+        # policy-recorded spent-OOS boundary (the explicit window binding). Any
+        # other mismatch stays fail-closed; we NEVER default to the live end.
+        # Label leak-freedom then rests on the retained Phase-4 belt
+        # (build_is_windowed_panel(is_end=oos_end) raises IsEndLeakageError on
+        # any label realizing past oos_end) + the D3 door clamps.
+        if calendar_end < str(oos_end):
+            raise PromotionEvidenceError(
+                f"provider calendar end {calendar_end!r} is SHORTER than OOS_END "
+                f"{oos_end!r}; refusing the reproduction (labels cannot realize)."
+            )
+        # calendar_end > oos_end: allowed under EXACTLY two bindings (D3.5 /
+        # GPT R4-M1 contract) — never inferred from the live end:
+        #   1. spent-OOS replay: oos_end IS the policy-recorded spent boundary;
+        #   2. sealed fresh-window evaluation: an ACTIVE ResearchAccessContext
+        #      with a CLAIMED holdout seal whose window covers [oos_start,
+        #      oos_end] and whose provider/policy binding matches the live
+        #      provenance this reproduction runs against.
+        spent_boundary = None
+        try:
+            from src.data_infra.provider_context import live_spent_oos_end
+
+            spent_boundary = live_spent_oos_end().strftime("%Y-%m-%d")
+        except Exception:
+            spent_boundary = None  # unresolvable → only the seal branch can allow
+        spent_replay_ok = spent_boundary is not None and str(oos_end) == spent_boundary
+
+        sealed_ok = False
+        if not spent_replay_ok:
+            from src.research_orchestrator.research_access_context import (
+                get_research_access_context,
+            )
+
+            ctx = get_research_access_context()
+            if ctx is not None and getattr(ctx, "holdout_seal_claimed", False):
+                import pandas as _pd
+
+                sealed_ok = (
+                    _pd.Timestamp(ctx.allowed_start) <= _pd.Timestamp(oos_start)
+                    and _pd.Timestamp(ctx.allowed_end) >= _pd.Timestamp(oos_end)
+                    and str(ctx.provider_build_id) == str(prov.get("provider_build_id"))
+                    and str(ctx.calendar_policy_id) == str(prov.get("calendar_policy_id"))
+                )
+
+        if not (spent_replay_ok or sealed_ok):
+            raise PromotionEvidenceError(
+                f"provider calendar end {calendar_end!r} > OOS_END {oos_end!r}, and the "
+                f"window is neither the policy-recorded spent-OOS boundary "
+                f"({spent_boundary!r}) nor covered by an ACTIVE claimed holdout seal "
+                "bound to this provider/policy; refusing the reproduction (an unbound "
+                "calendar advance would change the OOS labels)."
+            )
 
     seal_hash = frozen_set.frozen_set_hash
     if claim_seal:

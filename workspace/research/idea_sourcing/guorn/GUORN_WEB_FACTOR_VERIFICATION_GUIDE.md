@@ -220,6 +220,7 @@ claim. (The #18 lesson: prove a field by this DIRECT comparison, never by a book
 - Batch predictable click→type→screenshot sequences with `browser_batch`. The viewport can resize between
   calls (a coordinate from an earlier screenshot may miss) — screenshot fresh before a precise click.
 - The 导出 download is silent (no dialog) → confirm by `ls -lt Knowledge/果仁验证因子/` and rename.
+- **导出 is async + can be flaky (observed 2026-07-01):** the click fires `POST /stock/export/screen` → `GET /file/<hash>.xlsx`; that GET may **503 (not ready) → briefly 200 → 404**. The browser's own GET often loses the race, but **the file still lands in `Knowledge/果仁验证因子/` as `<hash>.xlsx`** — just re-click 导出 and re-check `ls -t`. A real file is **~300KB+**; a 69-byte file is the 404-HTML stub (discard). Do NOT try to blob-fetch `/file/<hash>` in JS (same race/expiry) — read the saved `.xlsx` from disk. Fire 导出 with a full `mousedown→mouseup→click` MouseEvent sequence (a bare `.click()` may not fire the handler).
 
 ## Caveats
 - 果仁 web uses its OWN data/vendor (朝阳永续 for 评级/预期; its own 复权/calendar). A local↔果仁 value gap can

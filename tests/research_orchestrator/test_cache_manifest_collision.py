@@ -56,6 +56,9 @@ def _seed_collision(manifest_dir: Path, *, design_hash: str, stage: str) -> dict
     Mirrors what ``qlib_windowed_features`` would have written under a prior
     run with a different design_hash. Returns the recorded row.
     """
+    from src.data_infra.provider_context import live_provider_ids
+
+    build_id, policy_id = live_provider_ids()
     cache_key = _deterministic_cache_path(FREQ, OHLCV_FIELDS, START, END)
     manifest = CacheManifestStore(manifest_dir)
     row = manifest.record_cache_write(
@@ -66,6 +69,8 @@ def _seed_collision(manifest_dir: Path, *, design_hash: str, stage: str) -> dict
         stage=stage,
         window_start=START,
         window_end=END,
+        provider_build_id=build_id,
+        calendar_policy_id=policy_id,
     )
     return row
 

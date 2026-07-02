@@ -34,6 +34,31 @@ class FactorDefinitionDriftError(RuntimeError):
     no longer attest."""
 
 
+def _formal_calendar_policy_id(context: StepExecutionContext) -> str:
+    """Resolve the calendar policy id for a formal IS/OOS backtest step.
+
+    UNFREEZE_PLAN.md D1 (GPT R2-M7 + R4-M2): the policy id flows from the
+    ARTIFACT record — the hypothesis prescription — and from nowhere else.
+    Unset/blank fails closed. There is deliberately NO fallback to the live
+    provider manifest here: a formal run substituting the live policy for the
+    prescription-recorded one is exactly the no-global-policy violation
+    (manifest equality is separately enforced downstream by
+    ``_validate_provider_at_runtime``, which will reject a prescription
+    pinned to a policy the live provider does not declare).
+    """
+    hypothesis = getattr(getattr(context, "request", None), "hypothesis", None)
+    prescription = getattr(hypothesis, "prescription", None)
+    pinned = getattr(prescription, "calendar_policy_id", None)
+    if pinned and str(pinned).strip():
+        return str(pinned).strip()
+    raise ValueError(
+        "Formal backtest step requires hypothesis.prescription.calendar_policy_id "
+        "to be set (a committed config/calendar_policies/<id>.yaml id). It is "
+        "unset/blank — failing closed (UNFREEZE_PLAN.md D1: no live-manifest "
+        "fallback in formal runs)."
+    )
+
+
 def _stub_outputs(context: StepExecutionContext, **extras: Any) -> StepExecutionResult:
     """Shared stub helper: write a small status JSON in the step dir and
     emit a StepExecutionResult with status='completed'."""
@@ -953,7 +978,7 @@ def handle_validation_event_backtest_is(context: StepExecutionContext) -> StepEx
         instrumentation_path=instrumentation_path,
         # PR 8c Blocker 2: formal runtime contract enabled.
         execution_profile="joinquant_daily_sim",
-        calendar_policy_id="frozen_20260227_system_build",
+        calendar_policy_id=_formal_calendar_policy_id(context),
         run_mode="formal",
         preload_required=True,
         require_provider_manifest=True,
@@ -1109,7 +1134,7 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
         instrumentation_path=instrumentation_path,
         # PR 8c Blocker 2: formal runtime contract enabled.
         execution_profile="joinquant_daily_sim",
-        calendar_policy_id="frozen_20260227_system_build",
+        calendar_policy_id=_formal_calendar_policy_id(context),
         run_mode="oos_test",
         preload_required=True,
         require_provider_manifest=True,

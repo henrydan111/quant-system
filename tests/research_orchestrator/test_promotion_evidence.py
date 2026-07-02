@@ -152,7 +152,8 @@ class ReproduceSealedOosTests(unittest.TestCase):
     def test_full_reproduction_claims_seal_and_computes_leakfree_metrics(self):
         import tempfile
         from pathlib import Path as _P
-        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+        OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
         from src.research_orchestrator.holdout_seal import HoldoutSealStore
         fs = self._frozen_set()
         cal, cf = self._fake_cf()
@@ -184,7 +185,8 @@ class ReproduceSealedOosTests(unittest.TestCase):
         # instead of relying solely on the calendar_end == OOS_END boundary.
         import tempfile
         from pathlib import Path as _P
-        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+        OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
         from src.research_orchestrator.holdout_seal import HoldoutSealStore
         from src.research_orchestrator.research_access_context import get_research_access_context
         fs = self._frozen_set()

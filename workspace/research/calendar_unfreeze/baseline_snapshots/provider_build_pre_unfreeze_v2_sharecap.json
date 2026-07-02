@@ -1,0 +1,42 @@
+{
+  "builder": {
+    "builder_version": null,
+    "entrypoint": "src/data_infra/pipeline/build_qlib_backend.py",
+    "mode": "all",
+    "stage": "full"
+  },
+  "calendar_policy_id": "frozen_20260227_system_build",
+  "canonical_kline_hash": null,
+  "downstream_revalidated_at": null,
+  "event_endpoint_namespacing": {
+    "affected_datasets": [
+      "top_list",
+      "top_inst",
+      "block_trade",
+      "cyq_perf"
+    ],
+    "canonical_kline_fields_protected": [
+      "$open",
+      "$high",
+      "$low",
+      "$close",
+      "$vol",
+      "$amount"
+    ],
+    "prefix_rule": "{dataset}__{column}",
+    "status": "enforced"
+  },
+  "provider": {
+    "calendar_end_date": "2026-02-27",
+    "calendar_start_date": "2008-01-02",
+    "data_end_date": "2026-02-27",
+    "path": "E:/量化系统/data/qlib_data",
+    "region": "REG_CN"
+  },
+  "provider_build_id": "depth9_20260630_sharecap_reanchor_20260701",
+  "provider_published_at": "2026-07-01T22:50:21",
+  "retroactive_manifest": false,
+  "schema_version": 1,
+  "source_git_commit": "e3ea7c4144efebd2a6bbd2136a3452b8c4390a6c",
+  "validation": null
+}

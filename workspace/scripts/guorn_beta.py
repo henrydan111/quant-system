@@ -19,14 +19,34 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "workspace" / "scripts"))
 
 
+# Index codes collide on 6-digit with real stocks (000001_SH 上证指数 vs 000001_SZ 平安银行; 000852/000905 _SH
+# indices vs their _SZ stocks). board_of() buckets by 6-digit prefix only, so a main-prefix index leaks into the
+# EXCL_STAR universe and — since '_SH' sorts before '_SZ' — would win the loader's keep-first join and poison the
+# stock's beta. Drop any instrument whose prefix↔exchange-suffix is not a valid A-share listing.
+_SH_PREFIXES = ("600", "601", "603", "605", "688", "689", "900")
+_SZ_PREFIXES = ("000", "001", "002", "003", "200", "300", "301")
+
+
+def _is_ashare_stock(code: str) -> bool:
+    num, _, suf = code.partition("_")
+    if suf.upper() == "SH":
+        return num.startswith(_SH_PREFIXES)
+    if suf.upper() == "SZ":
+        return num.startswith(_SZ_PREFIXES)
+    return True  # BJ / other handled by the board filter
+
+
 def _index_returns(index_code: str, start: str, end: str, n: int) -> pd.Series:
+    # 果仁 caliber = SIMPLE daily returns (1日涨幅 / 指数涨幅), not log. Validated 2025-12-31: simple-后复权
+    # beta lands medRelErr 0.19% vs 果仁 贝塔N日(000001,250) (log-raw was 1.52%). An index carries no
+    # dividends so raw close = 后复权 for the index leg.
     from qlib.data import D
     for form in (index_code, index_code.upper(), index_code.replace("_sh", "_SH")):
         try:
             df = D.features([form], ["$close"], start_time=start, end_time=end)
             if len(df):
                 s = df.reset_index(level=0, drop=True)["$close"].sort_index()
-                r = np.log(s / s.shift(1)).dropna()
+                r = s.pct_change(fill_method=None).dropna()
                 return r.iloc[-n:], form
         except Exception:
             continue
@@ -54,12 +74,15 @@ def main() -> None:
     var_idx = float(r_idx.var())
     print(f"[beta] index={idx_form}  n={a.n}  var_idx={var_idx:.3e}  idx window {r_idx.index.min().date()}..{r_idx.index.max().date()}", flush=True)
 
-    univ = [c for c in D.list_instruments(D.instruments("all"), as_list=True) if in_guorn_universe(c, boards=EXCL_STAR)]
+    univ = [c for c in D.list_instruments(D.instruments("all"), as_list=True)
+            if in_guorn_universe(c, boards=EXCL_STAR) and _is_ashare_stock(c)]
     if a.limit:
         univ = univ[:a.limit]
-    px = D.features(univ, ["$close"], start_time=start, end_time=a.date)["$close"].unstack(level=0)
-    px = px.sort_index()
-    rets = np.log(px / px.shift(1))
+    # 后复权 close ($close × $adj_factor) + SIMPLE daily returns = 果仁's 1日涨幅 caliber (validated:
+    # simple-后复权 → medRelErr 0.19% vs 果仁 贝塔N日; raw/log leaves a ~1.5% dividend/return-convention residual).
+    feat = D.features(univ, ["$close", "$adj_factor"], start_time=start, end_time=a.date)
+    adjc = (feat["$close"] * feat["$adj_factor"]).unstack(level=0).sort_index()
+    rets = adjc.pct_change(fill_method=None)
     idx_win = r_idx.index
     rows = []
     for code in rets.columns:

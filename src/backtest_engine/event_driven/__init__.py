@@ -486,8 +486,9 @@ class EventDrivenBacktester:
         if effective_require_provider_manifest and not calendar_policy_id:
             raise RuntimeError(
                 "Formal run requires calendar_policy_id but received None. "
-                "Pass calendar_policy_id='frozen_20260227_system_build' "
-                "(or another committed policy) explicitly. The policy is "
+                "Pass a committed policy id from config/calendar_policies/ "
+                "explicitly (for a live-provider run, the manifest-recorded "
+                "provider_build.json calendar_policy_id). The policy is "
                 "what authorizes a formal run to operate against the current "
                 "calendar window; without it the manifest validator cannot "
                 "run and the artifact cannot be formally attested."

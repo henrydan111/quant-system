@@ -108,8 +108,12 @@ def main():
     for i, r in enumerate(rows, 1):
         st = {"pending": "⬜ pending", "done": "✅ done", "diverged": "✗ diverged",
               "blocked": "🔴 blocked", "skipped": "⏭ skipped"}.get(r["status"], r["status"])
-        L.append(f"| {i} | {r['guorn_indicator']} | {r['bucket']} | {(r['local_expr'] or '— derive —')[:40]} | "
-                 f"{r['n_deployed_books']} | {st} | {(r['verdict'] or '')[:40]} |")
+        # full (un-truncated) verdict/local_expr; escape pipes + flatten newlines so the MD stays a faithful,
+        # table-safe render of the JSON store (prevents the MD↔JSON drift that hand-editing full verdicts caused).
+        expr_cell = (r["local_expr"] or "— derive —").replace("|", "\\|").replace("\n", " ")
+        verdict_cell = (r["verdict"] or "").replace("|", "\\|").replace("\n", " ")
+        L.append(f"| {i} | {r['guorn_indicator']} | {r['bucket']} | {expr_cell} | "
+                 f"{r['n_deployed_books']} | {st} | {verdict_cell} |")
     LOG_MD.write_text("\n".join(L), encoding="utf-8")
     print(f"[campaign] deployed-20 web-validatable factors: {len(rows)} ({done} done, {len(rows)-done} pending)")
     print(f"[campaign] wrote {LOG_JSON.name} + {LOG_MD.name}")

@@ -80,6 +80,29 @@ def _ledger_path(ledger: str) -> Path:
     return _data_root() / "pit_ledger" / ledger / f"{ledger}.parquet"
 
 
+def _spent_oos_end_timestamp() -> pd.Timestamp:
+    """D3 born-sealed clamp source (UNFREEZE_PLAN.md, GPT Round-1 B1 / Round-2 M6).
+
+    Delegates to the neutral :mod:`src.data_infra.provider_context` (R4-m2) —
+    rotation-safe (manifest-stat keyed, R4-M3) and fail-closed. Reading the
+    live policy is the documented exception to the no-global-policy invariant:
+    the clamp's subject IS the live provider.
+    """
+    from src.data_infra.provider_context import ProviderContextError, live_spent_oos_end as _live
+
+    try:
+        return _live()
+    except ProviderContextError as exc:
+        raise PitResearchLoaderError(
+            f"{exc} — the sandbox loader fails closed (UNFREEZE_PLAN.md D3)."
+        ) from exc
+
+
+def live_spent_oos_end() -> pd.Timestamp:
+    """Back-compat delegate — canonical home is provider_context (R4-m2)."""
+    return _spent_oos_end_timestamp()
+
+
 @functools.lru_cache(maxsize=1)
 def _trading_calendar() -> pd.DatetimeIndex:
     cal = pd.read_parquet(_data_root() / "reference" / "trade_cal.parquet",
@@ -195,6 +218,20 @@ def _load(
     calendar = _trading_calendar()
     sim_idx = _validate_sim_dates(sim_dates, calendar)
     _validate_fields(fields, stage)
+
+    # D3 born-sealed clamp (UNFREEZE_PLAN.md): the sandbox door NEVER serves
+    # dates beyond the live policy's spent-OOS boundary — deliberately with NO
+    # seal escape here. The only seal-authorized door into the fresh window is
+    # the formal qlib_windowed_features path under a ResearchAccessContext.
+    spent_end = _spent_oos_end_timestamp()
+    over = sim_idx[sim_idx > spent_end]
+    if len(over):
+        raise PitResearchLoaderError(
+            f"sim_dates extend past the spent-OOS boundary {spent_end.date()} "
+            f"({len(over)} date(s), first {over[0].date()}): the post-boundary window "
+            "is born-sealed (UNFREEZE_PLAN.md D3). Sandbox research cannot touch it; "
+            "fresh-window access goes ONLY through the sealed-OOS formal path."
+        )
 
     path = _ledger_path(ledger)
     if not path.exists():

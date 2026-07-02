@@ -43,7 +43,7 @@ from src.data_infra.provider_manifest import (  # noqa: E402
 )
 
 DEFAULT_QLIB_DIR = PROJECT_ROOT / "data" / "qlib_data"
-CALENDAR_POLICY_ID = "frozen_20260227_system_build"
+CALENDAR_POLICY_ID = "frozen_20260227_system_build"  # noqa: global-calendar-policy — retroactive-manifest tool: stamping the LEGACY id on the pre-attestation provider IS its purpose (D1 old-artifact exemption)
 
 EVIDENCE = (
     "README.md status snapshot (line 13): 'Live Qlib provider rebuilt 2026-04-21.'",

@@ -272,6 +272,19 @@ def _audit_daily_files_inprocess() -> dict:
         import pandas as pd
         cal = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet")
         cal = cal[cal["is_open"] == 1].sort_values("cal_date")
+        # trade_cal now extends into the FUTURE (is_open schedule headroom for
+        # next_open_trade_day) — cap the expected-data window at the last
+        # CLOSED session: before ~16:00 CST today's bar cannot exist yet, so a
+        # same-day expectation would false-fail every intraday QA run
+        # (calendar-unfreeze Phase 1 latent-assumption fix, 2026-07-02).
+        # R4-m1 note: the hour>=16 heuristic is a TEMPORARY CONSERVATIVE CAP,
+        # not the formal definition of "last complete trading day" — the
+        # steady-state anchor (UNFREEZE_PLAN Phase 5) is
+        # min(provider_calendar_end, last_complete_trade_date, endpoint-ready
+        # date), owned by the monthly bump driver's readiness check.
+        now = pd.Timestamp.now()
+        cutoff = now.strftime("%Y%m%d") if now.hour >= 16 else (now - pd.Timedelta(days=1)).strftime("%Y%m%d")
+        cal = cal[cal["cal_date"].astype(str) <= cutoff]
         end_date = str(cal["cal_date"].iloc[-1])
         start_date = str(cal["cal_date"].iloc[-30])
         result = auditor.audit_daily_files(start_date=start_date, end_date=end_date)
@@ -312,6 +325,16 @@ def main() -> int:
         _run(
             [python, "scripts/lint_no_bare_qlib_features.py", "src/"],
             "no_bare_qlib_features_lint",
+        )
+    )
+
+    # 0a1b. No-global-calendar-policy lint (POLICY001, UNFREEZE_PLAN.md D1) —
+    # the legacy policy id must not appear as an executable literal, and no
+    # calendar_policy_id parameter may default to a named policy.
+    checks.append(
+        _run(
+            [python, "scripts/lint_no_global_calendar_policy.py", "src/", "scripts/"],
+            "no_global_calendar_policy_lint",
         )
     )
 

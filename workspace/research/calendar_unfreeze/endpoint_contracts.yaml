@@ -1,0 +1,125 @@
+# Endpoint PIT catch-up contracts — UNFREEZE_PLAN.md Phase 1.4 (Round-1 M1)
+# Scope: the calendar-unfreeze gap re-pull (ann_date window 2026-02-28 .. 2026-06-30).
+# Serving-side visibility semantics are implemented and test-locked in DATASET_SPECS +
+# the PIT ledger (CLAUDE.md §3.2); these contracts assert the FETCH side: query fields,
+# visibility anchor per endpoint, pagination/completeness, dedup, revision handling.
+#
+# Shared facts (all endpoints below):
+#   pagination_rule: TushareFetcher._fetch_paginated — offset loop until short page
+#     (page < limit) => structural completeness; silent truncation impossible at the
+#     fetcher layer. Completeness assertion = driver logs rows per chunk; verify gate
+#     = verify_database.py after the sweep.
+#   fetch_mode: ann_date WINDOW (not report-period) — captures gap-period restatement
+#     announcements for older periods (plan Phase 1.4 hard rule).
+#   dedup: raw layer preserves ALL rows (report_type/update_flag/revision fields kept);
+#     version collapse happens ONLY in the ledger (deterministic P0-4 tie-break).
+
+income:
+  query_date_fields: [start_date, end_date]          # ann_date range (production daily path)
+  visibility_date_field: max(ann_date, f_ann_date)   # statement family, DATASET_SPECS
+  natural_key: [ts_code, ann_date, f_ann_date, end_date, report_type]
+  revision_fields: [update_flag, report_type]
+  fetcher: fetch_income_vip(report_type='1')
+  storage: insert_fundamental_data('income')
+
+income_quarterly:
+  query_date_fields: [start_date, end_date]
+  visibility_date_field: ann_date
+  natural_key: [ts_code, ann_date, end_date]
+  fetcher: fetch_income_quarterly_vip
+  storage: insert_fundamental_data('income_quarterly')
+
+balancesheet:
+  query_date_fields: [start_date, end_date]
+  visibility_date_field: max(ann_date, f_ann_date)
+  natural_key: [ts_code, ann_date, f_ann_date, end_date, report_type]
+  revision_fields: [update_flag, report_type]
+  fetcher: fetch_balancesheet_vip(report_type='1')
+  storage: insert_fundamental_data('balancesheet')
+
+cashflow:
+  query_date_fields: [start_date, end_date]
+  visibility_date_field: max(ann_date, f_ann_date)
+  natural_key: [ts_code, ann_date, f_ann_date, end_date, report_type]
+  revision_fields: [update_flag, report_type]
+  fetcher: fetch_cashflow_vip(report_type='1')
+  storage: insert_fundamental_data('cashflow')
+
+cashflow_quarterly:
+  query_date_fields: [start_date, end_date]
+  visibility_date_field: ann_date
+  natural_key: [ts_code, ann_date, end_date]
+  fetcher: fetch_cashflow_quarterly_vip
+  storage: insert_fundamental_data('cashflow_quarterly')
+
+indicators:
+  query_date_fields: [start_date, end_date]          # ann_date window = production daily path
+  visibility_date_field: ann_date
+  natural_key: [ts_code, ann_date, end_date, update_flag]
+  revision_fields: [update_flag]
+  revision_caveat: >
+    Vendor rows whose update_flag flips WITHOUT a new ann_date do not surface in an
+    ann_date-window query (same limitation as the production daily path). Follow-up:
+    staged refresh_indicator_history.py run for periods 20251231 + 20260331 after the
+    sweep (the sanctioned tool for silent-revision capture; UNFREEZE_PLAN Phase 1.4).
+  fetcher: fetch_fina_indicator_vip
+  storage: insert_fundamental_data('indicators')
+
+dividends:
+  query_date_fields: [ann_date]                      # NO range support -> per-day loop
+  visibility_date_field: ann_date                    # event family (no f_ann_date)
+  status_fields: [div_proc]                          # 预案/股东大会通过/实施 NOT collapsed;
+  natural_key: [ts_code, ann_date, end_date, div_proc]
+  fetcher: fetch_dividend(ann_date=D)
+  storage: insert_corporate_data('dividends')
+
+forecast:
+  query_date_fields: [ann_date]                      # per-day loop (production path shape)
+  visibility_date_field: ann_date
+  natural_key: [ts_code, ann_date, end_date, type]
+  fetcher: fetch_forecast(ann_date=D)
+  storage: insert_fundamental_data('forecast')
+
+holder_number:
+  query_date_fields: [start_date, end_date]          # ann_date range
+  visibility_date_field: ann_date
+  natural_key: [ts_code, ann_date, end_date]
+  fetcher: fetch_stk_holdernumber
+  storage: insert_corporate_data('holder_number')
+
+stk_holdertrade:
+  query_date_fields: [start_date, end_date]          # ann_date range
+  visibility_date_field: ann_date
+  natural_key: full-row (per-holder events; multiple rows per ts_code+ann_date legal)
+  dedup: full-row drop_duplicates on merge into data/corporate/stk_holdertrade/stk_holdertrade_2026.parquet
+  fetcher: fetch_stk_holdertrade
+  storage: direct year-file merge (bootstrap layout, no StorageManager category)
+
+cyq_perf:
+  query_date_fields: [ts_code + start_date/end_date] # per-SYMBOL API (5000积分)
+  visibility_date_field: trade_date (session-derived daily metric; Ref(...,1) at factor layer)
+  raw_layout: data/market/cyq_perf/YYYY/cyq_perf_YYYYMMDD.parquet (re-partitioned by trade_date)
+  coverage_note: raw already extends to 20260415; catch-up = last_date+1 .. target_end
+  fetcher: fetch_cyq_perf(ts_code, start_date, end_date)
+
+report_rc:
+  query_date_fields: [start_date, end_date]          # report_date range, month-chunked
+  visibility_date_field: create_time (+2td deep-history buffer)   # NOT report_date/ann_date
+  natural_key: full-row dedup on merge (vendor revisions keep distinct create_time)
+  revision_caveat: >
+    Refetch from 202602 (not 202603) — overlap month catches create_time-late rows near
+    the freeze boundary (plan Phase 1.4: overlap/revision scan for create_time anchors).
+  raw_layout: data/analyst/report_rc/report_rc_2026.parquet (year file, merged)
+  fetcher: pro.report_rc via fetch_bucket_a-style paginated month chunks
+
+index_weights:
+  query_date_fields: [index_code, start_date, end_date]  # explicit months 202603..202606
+  visibility_date_field: trade_date (monthly snapshots)
+  fetcher: fetch_index_weight per index per month
+  storage: insert_universe_data('index_weights')
+
+namechange:
+  tool: scripts/refresh_namechange.py (existing idempotent refresh — run as-is)
+  note: also the gap-window ST authority (stock_st_daily has NO fetcher; ends 2026-03-23;
+    st_stocks.txt builder merges namechange + stock_st_daily, so ST transitions in the
+    gap flow in via namechange ranges — recorded data fact, UNFREEZE_PLAN Phase 1.5)
