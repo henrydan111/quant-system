@@ -4289,7 +4289,7 @@ class StagedQlibBackendBuilder:
     def publish(
         self,
         *,
-        calendar_policy_id: str = "frozen_20260227_system_build",
+        calendar_policy_id: str,
         emit_manifest: bool = True,
     ) -> None:
         """Atomically promote the staged provider into ``data/qlib_data``.
@@ -4448,10 +4448,20 @@ class StagedQlibBackendBuilder:
         datasets: Iterable[str] | None = None,
         touched_symbols: Iterable[str] | None = None,
         stage: Literal["full", "upstream-only", "provider-only"] = "full",
+        calendar_policy_id: str | None = None,
     ) -> BuildResult:
         """Run the full staged build."""
         if publish and stage == "upstream-only":
             raise BuildGateError("Cannot publish an upstream-only staged build")
+        # UNFREEZE_PLAN.md D1 no-global-policy invariant: a publish stamps the
+        # manifest's calendar_policy_id — it must be an explicit caller decision,
+        # never a module default (the old hard default silently pinned every
+        # publish to frozen_20260227_system_build).
+        if publish and not calendar_policy_id:
+            raise BuildGateError(
+                "publish=True requires an explicit calendar_policy_id "
+                "(config/calendar_policies/<id>.yaml). There is no default."
+            )
 
         if stage == "provider-only":
             profiled = self.collect_profiles(datasets=datasets, use_persisted=True)
@@ -4483,7 +4493,7 @@ class StagedQlibBackendBuilder:
             raise BuildGateError("Staged PIT build failed validation:\n- " + "\n- ".join(validation_errors[:20]))
 
         if publish:
-            self.publish()
+            self.publish(calendar_policy_id=calendar_policy_id)
 
         return BuildResult(
             build_id=self.build_id,
@@ -4511,6 +4521,7 @@ def build_qlib_backend(
     allow_exceptions: bool = False,
     write_compat_aliases: bool = True,
     stage: Literal["full", "upstream-only", "provider-only"] = "full",
+    calendar_policy_id: str | None = None,
 ) -> BuildResult:
     """Public helper used by the pipeline entrypoints."""
     builder = StagedQlibBackendBuilder(
@@ -4529,4 +4540,5 @@ def build_qlib_backend(
         datasets=datasets,
         touched_symbols=touched_symbols,
         stage=stage,
+        calendar_policy_id=calendar_policy_id,
     )

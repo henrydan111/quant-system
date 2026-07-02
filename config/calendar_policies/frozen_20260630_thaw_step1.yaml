@@ -1,0 +1,45 @@
+# Calendar policy: thaw step 1 — frozen at 2026-06-30 with a born-sealed
+# fresh-holdout window.
+#
+# First calendar-unfreeze bump (UNFREEZE_PLAN.md, GPT §10 3-round SHIP).
+# The predecessor frozen_20260227_system_build.yaml is append-only history —
+# NEVER edit it; artifacts that recorded it replay against it as-is.
+#
+# D3 semantics: discovery/sandbox research reads clamp to spent_oos_end by
+# default; dates in [fresh_holdout_start, calendar_end_date] are born-sealed
+# and reachable ONLY through a holdout-seal claim (resolve_spent_oos_boundary
+# + the loader clamps enforce this mechanically; the resolver is a clamp, NOT
+# a publish validator).
+
+policy_id: frozen_20260630_thaw_step1
+policy_schema_version: 1
+
+calendar_start_date: 2008-01-02
+calendar_end_date: 2026-06-30
+data_end_date: 2026-06-30
+
+frozen: true
+reason: thaw_step1_monthly_freeze_bump
+established_at: 2026-07-02
+
+# The spent-OOS boundary (D3): every sealed-OOS window consumed to date ends
+# at 2026-02-27; the window from 2026-02-28 onward is genuinely unseen by all
+# registry factors and is born-sealed.
+spent_oos_end: 2026-02-27
+fresh_holdout_start: 2026-02-28
+
+allowed_modes:
+  - sandbox
+  - joinquant_replication
+  - formal_research_with_explicit_freeze
+  - joinquant_daily
+  - joinquant_open_close_replica
+  - formal
+  - oos_test
+
+default_formal_behavior: require_explicit_policy
+
+notes:
+  - "Thaw step 1 of the calendar unfreeze; parent provider build = depth9_20260630_sharecap_reanchor_20260701."
+  - "Raw layer caught up 2026-03-02..2026-06-30 on 2026-07-02 (82 trading days, verify_database green)."
+  - "Provider rebuild against this policy is UNFREEZE_PLAN Phase 3; publish is gated on the Phase-2 pre-publish wall."

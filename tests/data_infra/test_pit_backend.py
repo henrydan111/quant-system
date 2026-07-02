@@ -673,7 +673,7 @@ def test_publish_refuses_cross_volume_atomic_replace():
 
         with patch("data_infra.pit_backend.os.stat", side_effect=_fake_stat):
             try:
-                builder.publish()
+                builder.publish(calendar_policy_id="frozen_20260227_system_build")
             except BuildGateError as exc:
                 message = str(exc)
                 assert "cross-volume" in message.lower()
@@ -702,7 +702,7 @@ def test_publish_staged_first_swap_success(tmp_path):
         build_root = str(tmp_path / "swaptest")
 
     builder.paths = _P()
-    builder.publish(emit_manifest=False)
+    builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
 
     assert (target / "marker.txt").read_text(encoding="utf-8") == "NEW"  # staged promoted
     backup = tmp_path / "qlib_data.bak_swaptest"
@@ -744,7 +744,7 @@ def test_publish_staged_first_no_broken_window(tmp_path):
 
     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_staged_move):
         with _pytest.raises(PermissionError):
-            builder.publish(emit_manifest=False)
+            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
 
     # broken-window check: live provider still present + unchanged
     assert target.is_dir() and (target / "marker.txt").read_text(encoding="utf-8") == "OLD"
@@ -781,7 +781,7 @@ def test_publish_staged_first_step3_failure_full_rollback(tmp_path):
 
     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_step3):
         with _pytest.raises(OSError):
-            builder.publish(emit_manifest=False)
+            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
 
     assert target.is_dir() and (target / "m.txt").read_text(encoding="utf-8") == "OLD"   # live restored
     assert staged.is_dir() and (staged / "m.txt").read_text(encoding="utf-8") == "NEW"   # staged restored (clean retry)
@@ -817,7 +817,7 @@ def test_publish_staged_first_double_failure_loud_recoverable(tmp_path):
 
     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_into_qlib):
         with _pytest.raises(BuildGateError) as exc:
-            builder.publish(emit_manifest=False)
+            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
 
     assert "MISSING" in str(exc.value) and "recover manually" in str(exc.value).lower()
     assert not target.exists()                                # qlib_dir missing (double failure)

@@ -219,16 +219,18 @@ class StorageManager:
             written_files.append(file_path)
         self._record_ingest_manifest(category, written_files, len(df))
 
-    def export_to_qlib(self, dest_dir: str, mode="all"):
+    def export_to_qlib(self, dest_dir: str, mode="all", *, calendar_policy_id: str):
         """
         Export local parquet raw data into Qlib-compatible binary format.
-        
-        Reads all daily parquet files, converts them to intermediate CSVs, 
+
+        Reads all daily parquet files, converts them to intermediate CSVs,
         and invokes the Qlib `dump_bin.py` script to generate `.bin` files.
-        
+
         Args:
             dest_dir (str): Target directory where Qlib binary data will be stored.
             mode (str, optional): Dump mode. 'all' for initialization, 'update' for daily appends. Defaults to 'all'.
+            calendar_policy_id (str): Calendar policy stamped into the published
+                manifest — REQUIRED, no default (UNFREEZE_PLAN.md D1).
         """
         from data_infra.pit_backend import build_qlib_backend
 
@@ -239,4 +241,5 @@ class StorageManager:
             include_phase3=True,
             publish=True,
             allow_exceptions=True,
+            calendar_policy_id=calendar_policy_id,
         )
