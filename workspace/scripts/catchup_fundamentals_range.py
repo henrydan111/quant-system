@@ -171,6 +171,13 @@ class Runner:
             new = pd.concat(frames, ignore_index=True)
             old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
             before = len(old)
+            # The bootstrap year file stores date columns as datetime64; the live API
+            # returns YYYYMMDD strings — normalize the NEW side to the OLD file's
+            # datetime64 convention (downstream ledger readers keep their dtype
+            # contract; mixed object columns fail the parquet write — 2026-07-02).
+            for col in ("ann_date", "in_date", "close_date", "begin_date", "end_date"):
+                if col in new.columns and col in old.columns and pd.api.types.is_datetime64_any_dtype(old[col]):
+                    new[col] = pd.to_datetime(new[col].astype(str), format="%Y%m%d", errors="coerce")
             merged = pd.concat([old, new], ignore_index=True).drop_duplicates()
             tmp = out_path + ".tmp"
             merged.to_parquet(tmp, index=False)
