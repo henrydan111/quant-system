@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pandas as pd
 from src.research_orchestrator.cache_manifest import (
     CacheContext,
     CacheManifestStore,
+    ProviderGenerationMismatchError,
     get_cache_context,
 )
 from src.research_orchestrator.research_access_context import (
@@ -17,6 +19,8 @@ from src.research_orchestrator.research_access_context import (
     HoldoutWindowViolation,
     get_research_access_context,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _deterministic_cache_path(freq: str, fields: list[str], start: str, end: str) -> str:
@@ -100,20 +104,38 @@ def qlib_windowed_features(
     manifest = CacheManifestStore(cache_manifest_dir)
     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)
     cache_path = cache_key
-    # M4 provider-generation binding: cache rows written under another provider
-    # build/policy are refused (legacy ""-rows mismatch -> safe invalidation).
+    # M4 provider-generation binding: a manifest row written under another
+    # provider build/policy (incl. legacy ""-rows) never validates reuse.
     live_build_id, live_policy_id = live_provider_ids()
-    manifest.assert_cache_reusable(
-        cache_key=cache_key,
-        cache_path=cache_path,
-        cache_context=effective_context,
-        stage=stage,
-        window_start=start_time,
-        window_end=end_time,
-        cache_type="qlib_features",
-        provider_build_id=live_build_id,
-        calendar_policy_id=live_policy_id,
-    )
+    try:
+        manifest.assert_cache_reusable(
+            cache_key=cache_key,
+            cache_path=cache_path,
+            cache_context=effective_context,
+            stage=stage,
+            window_start=start_time,
+            window_end=end_time,
+            cache_type="qlib_features",
+            provider_build_id=live_build_id,
+            calendar_policy_id=live_policy_id,
+        )
+    except ProviderGenerationMismatchError as exc:
+        # Provider rotated since this key's latest manifest row. This door
+        # holds no cached artifact — D.features below always recomputes from
+        # the live provider — so a stale-generation row must not brick the key
+        # permanently: proceed, and record_cache_write below appends a fresh
+        # row under the live generation (the next read then passes; the stale
+        # row stays behind as the rotation audit trail). The subclass is
+        # raised only after design_hash/stage/window all matched — those
+        # violations still propagate.
+        logger.warning(
+            "cache generation rotated for %s — recomputing from the live "
+            "provider and re-binding to (%s, %s); refused stale row: %s",
+            cache_key,
+            live_build_id,
+            live_policy_id,
+            exc,
+        )
     frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
         instruments,
         list(fields),
