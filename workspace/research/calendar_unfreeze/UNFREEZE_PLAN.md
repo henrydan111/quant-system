@@ -226,6 +226,23 @@ Round-2 逐条判定：B2/M1/M3/M4/m1/m2/m3/m4 = **RESOLVED**；B1、M2 = PARTIA
 
 **附带发现**：seal 的 crash-resume（allow_same_run）在 provider 轮换后会静默对不同数据恢复——超出 GPT 清单的自发现洞，已补：申领记录世代绑定 + 恢复路径世代不符即拒（holdout_seal.py）。
 
+## 7c. GPT Round-5（R4-fix delta 审查，2026-07-02，verdict = REVISE→单点收敛）处置表
+
+逐条判定：M2 / M4 / M5 / m1 / m2 + 三个自查项 = **RESOLVED/APPROVED**（含设计裁定：`calendar_policy_id` **排除**在 `design_hash` 之外是正确的——政策 id 是执行/出处环境而非设计身份；同一因子设计在两个日历政策下 design_hash 不变，绑定由 artifact/manifest/seal/evidence 各自携带）；M1 / M3 / M6 = PARTIALLY，缺口具体化如下：
+
+| # | Finding | 处置 | 落点 |
+|---|---------|------|------|
+| **M7**（新 Major，唯一 Phase-3 阻塞） | `provider_context` 缓存键仅 `(mtime_ns,size)`——同尺寸/保留 mtime 的重写（Windows 粗粒度时间戳/拷贝/原子发布文件系统）可让长命进程漏检轮换，用陈旧 id 盖章 cache/seal/promotion 出处 | **接受并已实施**：缓存键改为 `(path, mtime_ns, size, sha256(provider_build.json))`，每次调用哈希 manifest 内容（~1KB，可忽略）；缺失/畸形/解析失败 fail-closed；`refresh_live_provider_context()` 保留为发布仪式 belt 而非唯一防线 | provider_context.py |
+| M6-test-1（Phase-3 前置） | 同尺寸/同 mtime 轮换重解析测试缺失 | **接受并已实施**：重写 manifest（等长 id）+ `os.utime` 精确还原 mtime_ns → 断言 `live_provider_ids()` 重解析 + 旧世代缓存行对新 id 拒绝 | test_r4_wall_hardening.py（22 过） |
+| M1 残留（**Phase-6 门槛**，非 Phase-3 阻塞——GPT 明示裁定） | seal **记录级**字段绑定未实现（candidate/factor id、purpose、code_hash、config_hash、data_snapshot_hash、记录级 one-shot 校验） | **接受-延期**：context 级绑定足够守发布前墙（Phase 3 不开放新鲜研究面）；记录级绑定必须在 **Phase 6 / 任何新鲜 holdout promotion/revalidation 证据**之前落地 | Phase 6 前置清单（见下） |
+| M6-test-2（Phase-6 门槛） | 无记录级绑定时新鲜 sealed promotion 必须失败的测试 | **接受-延期**：与 M1 残留同批落地 | 同上 |
+| m3 | promotion sealed 分支用环境 context 查询而非入口快照 | **接受-延期**（GPT 允许与 seal-record 后续同批）：正式入口捕获不可变 ResearchAccessContextSnapshot 并显式传递到读数/缓存/守卫，证据快照与物化快照不一致即拒 | 同上 |
+| m4 | 既有 `test_direct_d_features_calls_are_confined_to_wrapper` 失败（provider_manifest 特权哨兵调用）需显式豁免或修复，才能宣称 Phase-3 全绿 | **接受-进行中**：已由独立会话处理（后台任务 task_94159a87"调和 D.features 限制测试与特权哨兵调用"），其落地/豁免是 Phase-3 绿灯声明的前置之一 | 独立会话 |
+
+**Phase 6 前置清单（拦截任何新鲜窗口证据，非 Phase-3 阻塞）**：① seal 记录级字段绑定（candidate/factor id + purpose + code_hash + config_hash + data_snapshot_hash + 记录级 one-shot）；② M6-test-2；③ m3 context 快照规则。
+
+Round-5 残余风险原文：长命进程漏检轮换用陈旧 id 盖章出处——已由 M7 内容身份键 + 同尺寸/同 mtime CI 测试关闭，待 Round-6 清场确认。
+
 ## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
 
 M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：

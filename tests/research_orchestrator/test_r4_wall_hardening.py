@@ -147,6 +147,57 @@ class TestProviderRotationInvalidation:
         with pytest.raises(ctx_mod.ProviderContextError, match="fail closed"):
             ctx_mod.live_provider_ids()
 
+    def test_same_size_same_mtime_rotation_still_reresolves(self, tmp_path, monkeypatch):
+        """R5-M7: a manifest rewrite that preserves BOTH byte length and
+        st_mtime_ns (Windows coarse timestamps / copied / atomic-publish
+        filesystems) must STILL invalidate the context cache — content
+        identity (sha256), not stat identity. Then: cache rows recorded under
+        the pre-rotation generation are refused against the new ids."""
+        import os
+
+        import src.data_infra.provider_context as ctx_mod
+
+        qlib_dir = tmp_path / "qlib_data"
+        self._write_provider(qlib_dir, "gen_AAAA")
+        manifest = qlib_dir / "metadata" / "provider_build.json"
+        monkeypatch.setattr(ctx_mod, "_qlib_dir", lambda: qlib_dir)
+        ctx_mod.refresh_live_provider_context()
+        assert ctx_mod.live_provider_ids()[0] == "gen_AAAA"
+        before = manifest.stat()
+
+        # Rotate with an id of IDENTICAL length, then restore mtime exactly.
+        self._write_provider(qlib_dir, "gen_BBBB")
+        os.utime(manifest, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = manifest.stat()
+        assert after.st_size == before.st_size
+        assert after.st_mtime_ns == before.st_mtime_ns
+
+        assert ctx_mod.live_provider_ids()[0] == "gen_BBBB"
+        assert ctx_mod.live_spent_oos_end() == pd.Timestamp("2026-02-27")
+
+        # Old-generation cache writes are refused after the rotation.
+        from src.research_orchestrator.cache_manifest import (
+            CacheContext,
+            CacheKeyMismatchError,
+            CacheManifestStore,
+        )
+
+        store = CacheManifestStore(tmp_path / "cache_manifest")
+        store.record_cache_write(
+            cache_type="qlib_features", cache_key="k", cache_path="k",
+            cache_context=CacheContext(), stage="s",
+            window_start="2026-01-05", window_end="2026-02-27",
+            provider_build_id="gen_AAAA", calendar_policy_id=LEGACY_POLICY,
+        )
+        new_build, new_policy = ctx_mod.live_provider_ids()
+        with pytest.raises(CacheKeyMismatchError, match="provider_build_id"):
+            store.assert_cache_reusable(
+                cache_key="k", cache_path="k", cache_context=CacheContext(),
+                stage="s", window_start="2026-01-05", window_end="2026-02-27",
+                cache_type="qlib_features",
+                provider_build_id=new_build, calendar_policy_id=new_policy,
+            )
+
 
 # ── M6.6 promotion guard binding branches (R4-M1) ────────────────────────────
 

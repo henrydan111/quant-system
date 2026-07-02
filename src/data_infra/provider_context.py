@@ -11,14 +11,19 @@ no-global-policy invariant (D1): the subject of these helpers IS the live
 provider (D3 clamps + cache generation binding). Formal artifact replay must
 NEVER route through these helpers — it uses the artifact-recorded ids.
 
-Rotation safety (R4-M3): results are cached keyed by the provider manifest
-file's ``(st_mtime_ns, st_size)`` — a provider rotation rewrites
-``provider_build.json``, so the next call in ANY long-lived process (dashboard
-task, orchestrator daemon) re-resolves instead of serving the pre-rotation
-identity. Resolution failures always fail closed (raise).
+Rotation safety (R4-M3, hardened by R5-M7 to CONTENT identity): results are
+cached keyed by the provider manifest file's
+``(path, st_mtime_ns, st_size, sha256(provider_build.json))``. The sha256 is
+over the manifest file only (~1KB — negligible), computed on EVERY call, so a
+rotation is detected even when a rewrite preserves size and coarse-granularity
+mtime (Windows / copied / atomic-publish filesystems) — without this, a
+long-lived process (dashboard task, orchestrator daemon) could stamp
+cache/seal/promotion provenance with stale ids. Resolution failures always
+fail closed (raise).
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -44,8 +49,9 @@ def _qlib_dir() -> Path:
     return _data_root() / "qlib_data"
 
 
-# (manifest_stat_key) -> (build_id, policy_id, spent_oos_end_ts, fresh_holdout_start)
-_CACHE: dict[tuple[int, int], tuple[str, str, pd.Timestamp, Optional[str]]] = {}
+# (path, st_mtime_ns, st_size, manifest_sha256)
+#   -> (build_id, policy_id, spent_oos_end_ts, fresh_holdout_start)
+_CACHE: dict[tuple[str, int, int, str], tuple[str, str, pd.Timestamp, Optional[str]]] = {}
 
 
 def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
@@ -59,10 +65,14 @@ def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
     try:
         manifest_file = Path(manifest_path_for(qlib_dir))
         stat = manifest_file.stat()
-        key = (stat.st_mtime_ns, stat.st_size)
+        # R5-M7: content identity, not only (mtime, size) — hash the manifest
+        # bytes on every call so a same-size / preserved-mtime rewrite still
+        # invalidates the cache.
+        digest = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+        key = (str(manifest_file), stat.st_mtime_ns, stat.st_size, digest)
     except Exception as exc:
         raise ProviderContextError(
-            f"cannot stat the live provider manifest under {qlib_dir}: {exc} — fail closed."
+            f"cannot stat/read the live provider manifest under {qlib_dir}: {exc} — fail closed."
         ) from exc
 
     cached = _CACHE.get(key)
