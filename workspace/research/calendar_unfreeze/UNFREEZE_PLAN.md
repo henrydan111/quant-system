@@ -264,6 +264,14 @@ m5 = **RESOLVED**（stat 三明治 + 解析后 re-hash 获认可，无需 from-b
 
 **解锁条件 ③ 的电池证据（2026-07-02 实测）**：墙电池 53 过（轮换/钳制/seal/边界/缓存绑定五个文件）、`POLICY001: clean.`、`run_daily_qa` **Overall PASS**（`logs/qa_phase2_battery_20260702.log`）。Phase-3 解锁仅剩：**m4 修复或显式豁免**（独立会话 task_94159a87）+ Round-8 清场确认。
 
+## 7f. GPT Round-8 终审（2026-07-02，verdict = **SHIP**）— Phase-2 墙实现 arc 闭合
+
+M9 = **RESOLVED**（政策 YAML 承载 `spent_oos_end` 被裁定为"correct provenance model"，测试因走生产形状链条而"更强"）；新 issue：Blocker / Major / Minor 全空。**实现审查 arc：R4 REVISE（M1-M6+m1-m2）→ R5 REVISE（M7+m3/m4 定级）→ R6 REVISE（M8+m5）→ R7 REVISE（M9）→ R8 SHIP，全程零拒绝项。**
+
+**GPT 终审 Phase-3 解锁条件（原文）**：① m4 修复或显式豁免（direct-D.features 特权哨兵，独立会话处理中）；② 其后 Phase-2 电池复跑全绿（墙测试 + POLICY001 + run_daily_qa Overall PASS + 钳制/seal + 轮换 + 世代绑定 + D.features 约束检查或获批豁免）。解锁后 Phase 3 按既定序列：mode=all 重建 → 冻结段字节审计 → 侧车成员审计 → dry-run 评审 → `frozen_20260630_thaw_step1` 下安全发布。
+
+终审残余风险 = m4 在本 delta 之外——m4 未落地前不得宣称 Phase-3 全绿。
+
 ## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
 
 M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：
