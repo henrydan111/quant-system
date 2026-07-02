@@ -11,12 +11,12 @@
 # + the loader clamps enforce this mechanically; the resolver is a clamp, NOT
 # a publish validator).
 
-policy_id: frozen_20260630_thaw_step1
+policy_id: frozen_20260701_thaw_step1
 policy_schema_version: 1
 
 calendar_start_date: 2008-01-02
-calendar_end_date: 2026-06-30
-data_end_date: 2026-06-30
+calendar_end_date: 2026-07-01
+data_end_date: 2026-07-01
 
 frozen: true
 reason: thaw_step1_monthly_freeze_bump
@@ -41,5 +41,5 @@ default_formal_behavior: require_explicit_policy
 
 notes:
   - "Thaw step 1 of the calendar unfreeze; parent provider build = depth9_20260630_sharecap_reanchor_20260701."
-  - "Raw layer caught up 2026-03-02..2026-06-30 on 2026-07-02 (82 trading days, verify_database green)."
+  - "Raw layer caught up 2026-03-02..2026-06-30 on 2026-07-02 (82 trading days, verify_database green); 2026-07-01 completed same day (parallel-session daily sync + cyq backfill + verified HK non-connect northbound), so target_end moved 0630->0701 pre-activation (policy renamed before first use — never activated under the 0630 id)."
   - "Provider rebuild against this policy is UNFREEZE_PLAN Phase 3; publish is gated on the Phase-2 pre-publish wall."

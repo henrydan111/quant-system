@@ -55,7 +55,7 @@ from src.research_orchestrator.sealed_backtest_runner import SealedBacktestRunne
 
 BOUNDARY = pd.Timestamp("2026-02-27")
 LIVE_BUILD = "depth9_new_build"
-LIVE_POLICY = "frozen_20260630_thaw_step1"
+LIVE_POLICY = "frozen_20260701_thaw_step1"
 FIELDS = ["$close"]
 START = "2021-01-04"
 END = "2021-01-08"

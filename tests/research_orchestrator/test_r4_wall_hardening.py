@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # convention (same as tests/data_infra/test_pit_backend.py).
 sys.path.insert(0, str(REPO_ROOT / "src"))
 LEGACY_POLICY = "frozen_20260227_system_build"
-THAW_POLICY = "frozen_20260630_thaw_step1"
+THAW_POLICY = "frozen_20260701_thaw_step1"
 
 
 # ── M6.1 publish id validation ───────────────────────────────────────────────

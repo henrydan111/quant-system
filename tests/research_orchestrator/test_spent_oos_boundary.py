@@ -60,7 +60,7 @@ class TestRequiredCiCases:
 
     def test_thaw_policy_clamps_default_reads_to_spent_even_with_longer_calendar(self):
         # M6 required test 2 — the REAL thaw_step1 file from the repo.
-        policy = load_calendar_policy("frozen_20260630_thaw_step1", root=REPO_POLICY_DIR)
+        policy = load_calendar_policy("frozen_20260701_thaw_step1", root=REPO_POLICY_DIR)
         boundary = resolve_spent_oos_boundary(policy, provider_calendar_end="2026-06-30")
         assert boundary.spent_oos_end == "2026-02-27"
         assert boundary.fresh_holdout_start == "2026-02-28"
@@ -112,8 +112,8 @@ class TestBoundaryValidation:
             resolve_spent_oos_boundary(policy, provider_calendar_end="2026-01-30")
 
     def test_repo_thaw_policy_parses_with_boundary_fields(self):
-        policy = load_calendar_policy("frozen_20260630_thaw_step1", root=REPO_POLICY_DIR)
+        policy = load_calendar_policy("frozen_20260701_thaw_step1", root=REPO_POLICY_DIR)
         assert policy.frozen is True
-        assert policy.calendar_end_date == "2026-06-30"
+        assert policy.calendar_end_date == "2026-07-01"
         assert policy.spent_oos_end == "2026-02-27"
         assert policy.fresh_holdout_start == "2026-02-28"

@@ -33,6 +33,8 @@
 - **`update_daily_data.py` 只支持单日**，没有多日追赶循环。
 - 非 scoped `mode=update` 的全树拷贝 = 已知磁盘隐患（约 241GB / 2300 万文件）。
 
+> **执行期注记 2（2026-07-02 晚，target_end 0630→0701）**：首次 staged 重建（`thaw_step1_20260702`，exit 0）的日历末端落在 **2026-07-01**——并行会话已在 07-02 凌晨把 0701 的行情类 raw 补齐（builder 无末端截断，吃进了最新 kline）。核实后采取**前移收敛**而非裁剪：0701 完整度仅缺 cyq_perf（已补抓）+ northbound（核实为香港回归纪念日休市 → curated 登记）；0701 公告的基本面 T+1 生效在 0702、不影响 0701 末端账本完备性。政策**激活前改名** `frozen_20260630_thaw_step1` → [frozen_20260701_thaw_step1.yaml](../../../config/calendar_policies/frozen_20260701_thaw_step1.yaml)（从未被任何 manifest/artifact 引用，不违反 append-only）。**结构性修复**：builder 新增 `--calendar-end` 截断（`calendar_end_cut` 过滤价格帧，+2 单元测试）——staged 构建从此可钉死在政策 target_end，不再被并发日更挪动（月度 bump driver 的永久确定性保障）。重建以 `--calendar-end 20260701` 重跑。
+
 > **执行期注记（2026-07-02）**：并行的 share-capital 治理会话已把 live provider 身份轮换为 `depth9_20260630_sharecap_reanchor_20260701`（日历/边界不变，仅 3 个股本 bin 修正 + patches sidecar）。**Phase 3 的父 build 与 Phase 4 换绑的"旧 id"以该轮换后身份为准**；冻结段字节审计的基线 = 当前 live（含修正后的股本 bin，与本分支已含的 `_materialize_share_capital_daily` 重建代码一致）。快照 `baseline_snapshots/provider_build_pre_unfreeze_v2_sharecap.json`。
 
 ### 0.3 数据现状与缺口体量

@@ -934,3 +934,36 @@ def test_canonicalize_tie_break_fallback_to_content_hash_when_src_columns_absent
         f"canonicalize_report_variants fallback hash tie-break reproducibility "
         f"violated: {len(hashes)} distinct outputs"
     )
+
+
+def _cut_builder(tmp_path, cut):
+    """Calendar-unfreeze target_end determinism fixture (synthetic price frame)."""
+    from data_infra.pit_backend import StagedQlibBackendBuilder
+
+    builder = StagedQlibBackendBuilder(
+        data_root=str(tmp_path / "data"), qlib_dir=str(tmp_path / "qlib"),
+        build_id="cut_test", calendar_end_cut=cut,
+    )
+    frame = pd.DataFrame({
+        "ts_code": ["000001.SZ"] * 3,
+        "symbol": ["000001.SZ"] * 3,
+        "date": pd.to_datetime(["2026-06-30", "2026-07-01", "2026-07-02"]),
+        "close": [1.0, 2.0, 3.0],
+    })
+    builder._load_price_frame = lambda: frame.copy()
+    builder._load_index_frame = lambda: pd.DataFrame()
+    return builder
+
+
+def test_calendar_end_cut_excludes_newer_bars(tmp_path):
+    builder = _cut_builder(tmp_path, "20260701")
+    ranges = builder._build_price_csvs(str(tmp_path / "csv"))
+    assert str(ranges["price_end"].max().date()) == "2026-07-01"
+    csv = pd.read_csv(tmp_path / "csv" / "000001_sz.csv")
+    assert csv["date"].max() == "2026-07-01"
+
+
+def test_no_calendar_end_cut_keeps_all_bars(tmp_path):
+    builder = _cut_builder(tmp_path, None)
+    ranges = builder._build_price_csvs(str(tmp_path / "csv"))
+    assert str(ranges["price_end"].max().date()) == "2026-07-02"

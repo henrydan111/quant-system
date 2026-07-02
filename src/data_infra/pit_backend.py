@@ -1745,6 +1745,7 @@ class StagedQlibBackendBuilder:
         field_filter: list[str] | None = None,
         allow_exceptions: bool = False,
         write_compat_aliases: bool = True,
+        calendar_end_cut: str | None = None,
     ) -> None:
         self.paths = resolve_build_paths(data_root=data_root, qlib_dir=qlib_dir, build_id=build_id)
         self.include_phase3 = include_phase3
@@ -1752,6 +1753,14 @@ class StagedQlibBackendBuilder:
         self.field_filter = set(field_filter or [])
         self.allow_exceptions = allow_exceptions
         self.write_compat_aliases = write_compat_aliases
+        # Calendar-unfreeze target_end determinism: the raw layer legitimately
+        # LEADS the provider (daily syncs land while a staged build runs), so a
+        # build must be pinnable to its policy's calendar_end_date instead of
+        # inheriting whatever the newest raw kline happens to be. YYYYMMDD or
+        # YYYY-MM-DD; None = legacy behavior (calendar ends at newest raw bar).
+        self.calendar_end_cut = (
+            pd.Timestamp(str(calendar_end_cut)) if calendar_end_cut else None
+        )
         ensure_directory(self.paths.build_root)
         ensure_directory(self.paths.workspace_profiles_root)
         ensure_directory(self.paths.normalized_root)
@@ -2578,6 +2587,9 @@ class StagedQlibBackendBuilder:
 
         if target_symbols is not None:
             price = price[price["ts_code"].isin(target_symbols)].copy()
+
+        if self.calendar_end_cut is not None:
+            price = price[price["date"] <= self.calendar_end_cut].copy()
 
         price = price.sort_values(["symbol", "date"])
         numeric_fields = price.select_dtypes(include=[np.number]).columns.tolist()
@@ -4542,6 +4554,7 @@ def build_qlib_backend(
     write_compat_aliases: bool = True,
     stage: Literal["full", "upstream-only", "provider-only"] = "full",
     calendar_policy_id: str | None = None,
+    calendar_end_cut: str | None = None,
 ) -> BuildResult:
     """Public helper used by the pipeline entrypoints."""
     builder = StagedQlibBackendBuilder(
@@ -4553,6 +4566,7 @@ def build_qlib_backend(
         field_filter=field_filter,
         allow_exceptions=allow_exceptions,
         write_compat_aliases=write_compat_aliases,
+        calendar_end_cut=calendar_end_cut,
     )
     return builder.run(
         mode=mode,

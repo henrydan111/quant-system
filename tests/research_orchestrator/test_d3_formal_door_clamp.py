@@ -35,7 +35,7 @@ def _stub_boundary_and_qlib(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ctx_mod, "live_spent_oos_end", lambda: BOUNDARY)
     monkeypatch.setattr(
-        ctx_mod, "live_provider_ids", lambda: ("test_build", "frozen_20260630_thaw_step1")
+        ctx_mod, "live_provider_ids", lambda: ("test_build", "frozen_20260701_thaw_step1")
     )
     # R2-M2: active-context reads require a PROVEN live Qlib binding — stub
     # the probe conclusive-and-matching so the clamp layers under test are
@@ -79,7 +79,7 @@ def _ctx(seal_claimed: bool) -> ResearchAccessContext:
         allowed_start=pd.Timestamp("2026-02-28"),
         allowed_end=pd.Timestamp("2026-06-30"),
         provider_build_id="test_build",
-        calendar_policy_id="frozen_20260630_thaw_step1",
+        calendar_policy_id="frozen_20260701_thaw_step1",
         holdout_context_id="run_dir",
         holdout_seal_claimed=seal_claimed,
     )
@@ -104,7 +104,7 @@ class TestFormalDoorClamp:
         ctx = ResearchAccessContext(
             run_id="r1", step_id="s1", stage="is_validation", design_hash="d" * 8,
             allowed_start=pd.Timestamp("2026-01-05"), allowed_end=pd.Timestamp("2026-06-30"),
-            provider_build_id="test_build", calendar_policy_id="frozen_20260630_thaw_step1",
+            provider_build_id="test_build", calendar_policy_id="frozen_20260701_thaw_step1",
         )
         with research_access_context(ctx):
             with pytest.raises(HoldoutSealViolation, match="born-sealed fresh window"):
