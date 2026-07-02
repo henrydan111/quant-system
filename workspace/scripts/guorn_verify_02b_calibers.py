@@ -127,12 +127,150 @@ def compare_vs_holdings(end="2026-02-27"):
     df.to_parquet(OUT / "verify02b_holdcmp.parquet")
 
 
+SCHED_V3 = OUT / "verify02c_schedule.json"
+
+
+def build_schedule_v3(start, end, headroom=30):
+    """v3 = v1 construction + the miss-diagnosis fixes (2026-07-02):
+      1. BOTH rank-band screens FLIPPED: 果仁 排名%区间 10%-100% ranks 从大到小 (rank1 = largest) → it drops
+         the TOP decile (highest 负债率 / highest 乖离率). v1/v2 dropped the BOTTOM decile — inverted; the
+         held-name percentile check is decisive (held names sit in my bottom decile 11-16% of the time,
+         in the top decile ~0-5%; held p99 ≈ 0.86-0.92).
+      2. The debt screen uses the VERIFIED 真实 caliber (e_zsfz), matching the book's 真实负债资产率.
+      3. 上市天数>20 = CALENDAR days since listing (verified campaign caliber), not 20 local bars
+         (the bar proxy over-excluded 次新 names 果仁 held — 359 misses in 2015 alone).
+    Composite terms/weights = v1 canonical (full-precision ILLIQ: the v2 quantization was negative)."""
+    import json as _json
+    g1.WEIGHTS = WEIGHTS
+    g1.TOTAL_W = sum(w for w, _ in WEIGHTS.values())
+    f, ind, e = _orig_load()
+    zsfz = pd.read_parquet(CACHE / "e_zsfz.parquet")
+    cal = ru.trading_calendar()
+    cal = cal[(cal >= pd.Timestamp(start)) & (cal <= pd.Timestamp(end))]
+    close_raw, amt = e["close_raw"], e["amt"]
+    amt5 = amt.rolling(5, min_periods=1).mean()
+    amt20 = amt.rolling(20, min_periods=1).mean()
+    insts = close_raw.columns
+    bounds = g1.LISTED_BOUNDS
+    list0 = {c: (bounds.get(str(c).upper())[0] if bounds.get(str(c).upper()) else pd.NaT) for c in insts}
+    list0 = pd.Series(list0)
+    grid = close_raw.index
+    sched = {}
+    for d in cal:
+        d = pd.Timestamp(d)
+        pos = grid.searchsorted(d)
+        if pos == 0:
+            sched[d] = []
+            continue
+        pday = grid[pos - 1]
+        st = ru.st_codes_on(d)
+        cr = close_raw.loc[pday]
+        keep = cr.notna() & (cr >= 2.0)
+        keep &= (amt5.loc[pday] > 5000.0) & (amt20.loc[pday] > 5000.0)
+        cald = (pday - list0).dt.days + 1                             # 上市天数 (calendar, inclusive — verified)
+        keep &= (cald > 20).fillna(False)
+        listed = pd.Series([(bounds.get(str(c).upper()) is not None
+                             and bounds[str(c).upper()][0] <= pday <= bounds[str(c).upper()][1]) for c in insts],
+                           index=insts)
+        keep &= listed
+        keep &= pd.Series([str(c).upper() not in st for c in insts], index=insts)
+        da = zsfz.loc[pday]
+        bz = e["bias120"].loc[pday]
+        keep &= ~(da.rank(pct=True) > 0.90).fillna(False)             # drop TOP decile 真实负债率 (flip + NaN keep)
+        keep &= ~(bz.rank(pct=True) > 0.90).fillna(False)             # drop TOP decile 乖离率120 (flip)
+        elig = keep[keep].index
+        if len(elig) < headroom:
+            sched[d] = []
+            continue
+        comp = g1._composite_row(f, ind, pday, elig).dropna()
+        top = comp.sort_values(ascending=False).head(headroom)
+        sched[d] = [str(c).upper().replace("_", ".") for c in top.index]
+    SCHED_V3.write_text(_json.dumps({str(k.date()): v for k, v in sched.items()}, ensure_ascii=False),
+                        encoding="utf-8")
+    nonempty = sum(1 for v in sched.values() if v)
+    print(f"[sched-v3] {nonempty}/{len(cal)} non-empty; saved {SCHED_V3.name}", flush=True)
+
+
+def compare_v3(end="2026-02-27"):
+    """Holdings tracking: v1 vs v3 (same metric as compare_vs_holdings)."""
+    hold = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
+    hold["start"] = pd.to_datetime(hold["开始日期"], errors="coerce")
+    hold["code"] = hold["股票代码"].astype(str).str.zfill(6)
+    hold = hold[(hold["start"].notna()) & (hold["start"] <= pd.Timestamp(end))]
+    s1 = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V1.read_text(encoding="utf-8")).items()}
+    s3 = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V3.read_text(encoding="utf-8")).items()}
+
+    def code6(inst):
+        return str(inst).split("_")[0].split(".")[0].zfill(6)
+
+    rows = []
+    for d, grp in hold.groupby("start"):
+        held = set(grp["code"])
+        for tag, s in (("v1", s1), ("v3", s3)):
+            lst = s.get(d)
+            if lst is None:
+                continue
+            order = {code6(c): i + 1 for i, c in enumerate(lst)}
+            rks = [order.get(c, 999) for c in held]
+            rows.append(dict(date=d, tag=tag, in25=float(np.mean([r <= 25 for r in rks]))))
+    df = pd.DataFrame(rows)
+    df["year"] = df["date"].dt.year
+    piv = df.pivot_table(index="year", columns="tag", values="in25", aggfunc="mean")
+    print("\nin25 by year (v1 vs v3):")
+    print(piv.to_string(float_format=lambda x: f"{x:.3f}"))
+    print("\noverall:", df.groupby("tag")["in25"].mean().round(3).to_dict())
+
+
+def run_v3(start="2014-01-01", end="2026-02-27"):
+    from src.backtest_engine.event_driven import EventDrivenBacktester, CostConfig
+    from src.backtest_engine.event_driven.exchange import FixedSlippage
+    from guorn_parity_rung2_posprofit import ModelIIPosProfitStrategy
+    sched = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V3.read_text(encoding="utf-8")).items()}
+    strat = ModelIIPosProfitStrategy(sched, buy_rank=20, sell_rank=25, target_n=10, pos_max=0.13,
+                                     max_holds=15, use_exits=False, rebuy_cooldown=0)
+    cost = CostConfig(buy_commission=0.002, sell_commission=0.002, stamp_tax=0.0, min_commission=0.0,
+                      transfer_fee=0.0)
+    bt = EventDrivenBacktester(data_dir=str(ROOT / "data"))
+    res = bt.run(strategy=strat, start_time=start, end_time=end, benchmark="000300.SH", account=1_000_000.0,
+                 exchange_config=cost, slippage=FixedSlippage(0.0), volume_limit=0.10, hold_on_limit_up=True,
+                 preload_fields=["$open", "$close", "$high", "$low", "$vol", "$amount", "$pre_close",
+                                 "$adj_factor", "$up_limit", "$down_limit"])
+    rep = res.report.copy()
+    if "date" in rep.columns:
+        rep = rep.set_index(pd.to_datetime(rep["date"]))
+    net = rep["return"].astype(float)
+    net.to_frame("net").to_parquet(OUT / "verify02c_net.parquet")
+    m = ru.goal_metrics(net)
+    yr = net.groupby(net.index.year).apply(lambda r: (1 + r).prod() - 1)
+    gdf = pd.read_excel(XLSX, sheet_name="年度收益统计", header=0)
+    gy = {}
+    for _, r in gdf.iterrows():
+        try:
+            y = int(str(r.iloc[0])[:4])
+        except Exception:
+            continue
+        v = pd.to_numeric(r.iloc[1], errors="coerce")
+        if pd.notna(v):
+            gy[int(y)] = float(v)
+    print("\n" + "=" * 74)
+    print(f"  #2 v3 (screen fixes)  CAGR={m['cagr']:+.2%}  MDD={m['mdd']:+.2%}")
+    print("  year     v3-LOCAL     果仁      diff")
+    for y in sorted(yr.index):
+        g = gy.get(int(y))
+        gt = f"{g:+8.1%}" if g is not None else "   n/a "
+        dt = f"{float(yr[y]) - g:+7.1%}" if g is not None else ""
+        print(f"  {int(y)}   {float(yr[y]):+8.1%}  {gt}  {dt}")
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--build-zsfz", action="store_true")
     ap.add_argument("--schedule", action="store_true")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--schedule-v3", action="store_true")
+    ap.add_argument("--compare-v3", action="store_true")
+    ap.add_argument("--run-v3", action="store_true")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2026-02-27")
     a = ap.parse_args()
@@ -142,6 +280,12 @@ def main():
         build_schedule_v2(a.start, a.end)
     if a.compare:
         compare_vs_holdings(a.end)
+    if a.schedule_v3:
+        build_schedule_v3(a.start, a.end)
+    if a.compare_v3:
+        compare_v3(a.end)
+    if a.run_v3:
+        run_v3(a.start, a.end)
 
 
 if __name__ == "__main__":
