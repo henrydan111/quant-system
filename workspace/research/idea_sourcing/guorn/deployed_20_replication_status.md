@@ -35,6 +35,25 @@ Residual characterization (all diagnosed, diminishing returns):
 | 7 | 果仁 **LOG() = log10** (ours ln) | — | descale ÷ln(10)=2.3026 for VALUE comparisons (rank-invariant) | constant 130% rel err, sign 97% | diagnosis tool, no selection effect |
 | — | ILLIQ 2dp quantization (v2) | — | **NEGATIVE result — do not apply**: 果仁's internal tie-break order unobservable; full precision tracks holdings marginally better | in25 0.733→0.727 | factor-standalone fidelity ≠ book fidelity |
 
+## In progress
+
+**#7 value_红利低波_v2 (nn=19, xlsx 19) — STARTED 2026-07-02.** Recipe read; key facts for the build:
+- 投资域: **主板 ONLY** (no 创业板 — differs from 成长簇), 申万**2021**, 排除ST/科创.
+- 9 screens incl 3 NEW semantics: `排名%最小 X%` (keep the smallest X% — a DIFFERENT operator from 排名%区间),
+  one **二级行业内** grouped screen (真实负债资产率, needs $sw2021_l2), and 公式(股息率TTM−10年国债收益率)>0.02.
+- **The treasury screen is UNBLOCKED without any ingest**: yc_cb is permission-denied (separate-tier endpoint), but
+  the xlsx 持仓详单 carries BOTH 股息率TTM and the formula column → 果仁's own 10Y yield series RECOVERED by
+  subtraction (per-date cross-stock dispersion ≤7e-05 — one macro number/date; 578 dates 2014-2026, yearly means
+  = the real CGB history 4.15%→1.74%). Saved: workspace/outputs/guorn_parity/guorn_cgb10y_recovered.parquet.
+- rankings (8, w=11): 股息率TTM w3 (ann-date declared caliber ✅) · CoreProfitQGr%PY w2 ✅ · 总市值 w1 **从大到小**
+  (large-cap!) · ROETTMDiffPQ w1 (use v2 weighted-eq) · 中性N日换手率(50) w1 (industry-neutralized turnover — new)
+  · BP筹资市值比调整 w1 (cross-sectional composite) · Div%NetIncY2 w1 ✅ · 近三年分红之和 w1 (annual atoms ✅).
+- trade model: **Model I** (NOT II): 5-day rebalance, 10:00 fill, max 10 holds, weights = **sqrt(总市值)**.
+- The xlsx carries ground-truth values for ALL ranking factors → per-factor validation from day one.
+- Build TODOs: dividend-family DAILY frames (vectorize declared_dividend_* over ~590 rebalance dates), beta frame
+  (rolling 250d vs 000300), $sw2021_l2 fetch, 中性换手率 + BP筹资 composites, Model-I runner. 未来20日新增流通股
+  omitted (share_float not ingested — same documented omission as the 成长簇).
+
 ## Queue (next books, by coverage × caliber reuse)
 
 1. **#7 value_红利低波_v2 / #8 央企** — reuse the campaign-validated declared-dividend calibers (股息率TTM ann-date,
