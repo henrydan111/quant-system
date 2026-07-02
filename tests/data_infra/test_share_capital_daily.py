@@ -205,3 +205,35 @@ def test_materialize_share_capital_force_bypasses_unrelated_field_filter(tmp_pat
     forced = builder._materialize_share_capital_daily(_CAL, {"000001_sz": "/fake/dir"}, force=True)
     assert forced == sorted(SHARE_CAPITAL_DAILY_FIELDS)
     assert set(captured) == set(SHARE_CAPITAL_DAILY_FIELDS)
+
+
+def test_validate_provider_covers_forced_fields_under_field_filter(tmp_path, monkeypatch):
+    """GPT re-review #2 minor m1: a field-scoped build still force-writes the share-capital
+    bins, so validate_provider's bin-alignment check must include them even when field_filter
+    names something else entirely."""
+    import data_infra.pit_backend as pb
+    from data_infra.storage.qlib_bin_utils import write_qlib_bin
+
+    builder = StagedQlibBackendBuilder(
+        data_root=str(tmp_path / "data"),
+        qlib_dir=str(tmp_path / "qlib"),
+        build_id="unit_validate_forced",
+        field_filter=["report_rc__eps_up"],
+        allow_exceptions=True,
+    )
+    feature_dir = os.path.join(builder.paths.provider_dir, "features", "000001_sz")
+    os.makedirs(feature_dir)
+    for name in ("close", "total_share", "float_share", "free_share", "pe_ttm"):
+        write_qlib_bin(os.path.join(feature_dir, f"{name}.day.bin"), np.array([1.0, 2.0]), start_index=0)
+
+    seen: dict[str, list[str]] = {}
+
+    def _capture(dir_path, field_names, reference_field="close"):  # noqa: ANN001
+        seen["fields"] = list(field_names)
+        return []
+
+    monkeypatch.setattr(pb, "validate_stock_bins", _capture, raising=True)
+    builder.validate_provider({})
+
+    assert set(SHARE_CAPITAL_DAILY_FIELDS) <= set(seen["fields"])  # forced bins validated
+    assert "pe_ttm" not in seen["fields"]  # unrelated non-filter fields still excluded

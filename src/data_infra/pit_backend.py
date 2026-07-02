@@ -4203,7 +4203,14 @@ class StagedQlibBackendBuilder:
                 continue
             field_names = [path.replace(".day.bin", "") for path in files if path != "close.day.bin"]
             if self.field_filter:
-                field_names = [name for name in field_names if name in self.field_filter]
+                # The share-capital rewrite runs force=True regardless of field_filter
+                # (see materialize_provider), so a field-scoped build's validation must
+                # cover those forced bins too (GPT re-review #2 minor m1).
+                forced_validation_fields = set(SHARE_CAPITAL_DAILY_FIELDS)
+                field_names = [
+                    name for name in field_names
+                    if name in self.field_filter or name in forced_validation_fields
+                ]
             else:
                 field_names = field_names[:200]
             if not field_names:
