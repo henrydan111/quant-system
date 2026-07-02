@@ -13,6 +13,8 @@ from src.research_orchestrator.cache_manifest import (
     get_cache_context,
 )
 from src.research_orchestrator.research_access_context import (
+    HoldoutSealViolation,
+    HoldoutWindowViolation,
     get_research_access_context,
 )
 
@@ -68,6 +70,32 @@ def qlib_windowed_features(
             end_time=end_time,
             fields=list(fields),
         )
+
+    # D3 born-sealed clamp (UNFREEZE_PLAN.md, GPT Round-1 B1): dates beyond the
+    # live policy's spent-OOS boundary are reachable ONLY under an active
+    # ResearchAccessContext that has actually claimed the holdout seal. A
+    # no-context (discovery) read past the boundary fails closed — the old
+    # "sandbox/no-context calls skip this check" behavior is exactly the leak
+    # the pre-publish wall exists to close. Boundary resolution failure fails
+    # closed too (the resolver raises).
+    from src.data_infra.pit_research_loader import live_spent_oos_end
+
+    boundary_end = live_spent_oos_end()
+    if pd.Timestamp(end_time) > boundary_end:
+        if research_ctx is None:
+            raise HoldoutWindowViolation(
+                f"read end_time={end_time} exceeds the spent-OOS boundary "
+                f"{boundary_end.date()} with NO active ResearchAccessContext — "
+                "the post-boundary window is born-sealed (UNFREEZE_PLAN.md D3); "
+                "it is reachable only through the sealed-OOS formal path."
+            )
+        if not getattr(research_ctx, "holdout_seal_claimed", False):
+            raise HoldoutSealViolation(
+                f"read end_time={end_time} exceeds the spent-OOS boundary "
+                f"{boundary_end.date()} but the active ResearchAccessContext has "
+                "holdout_seal_claimed=False — claim the holdout seal before touching "
+                "the born-sealed fresh window (UNFREEZE_PLAN.md D3)."
+            )
 
     manifest = CacheManifestStore(cache_manifest_dir)
     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)

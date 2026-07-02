@@ -25,11 +25,22 @@ from . import metrics
 from .status_rules import assign_historical_status
 
 # Canonical revalidation window (frozen, from the legacy scripts).
+# START/IS_END/OOS_START are HISTORICAL split facts. The window END is the
+# spent-OOS boundary and is resolved LAZILY from the live manifest's declared
+# policy (UNFREEZE_PLAN.md Phase 2.2a / GPT R2-M7: no executable hardcoded
+# window constant). Under the legacy frozen policy the resolver falls back to
+# that policy's own calendar end = 2026-02-27, so pre-thaw behavior is
+# bit-identical.
 START = "2014-01-01"
-END = "2026-02-27"
 IS_END = "2020-12-31"
 OOS_START = "2021-01-01"
 HORIZON = 20
+
+
+def _spent_end() -> str:
+    from src.data_infra.pit_research_loader import live_spent_oos_end
+
+    return live_spent_oos_end().strftime("%Y-%m-%d")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_FIELD_STATUS = _PROJECT_ROOT / "config" / "field_registry" / "field_status.yaml"
@@ -113,7 +124,7 @@ def revalidate_panel(
 
 def run_historical_catalog_revalidation(
     *,
-    start: str = START, end: str = END, is_end: str = IS_END, oos_start: str = OOS_START,
+    start: str = START, end: str | None = None, is_end: str = IS_END, oos_start: str = OOS_START,
     horizon: int = HORIZON, qlib_dir: str | Path | None = None,
     registry_path: str | Path | None = None,
     compute_factors_fn=None,
@@ -127,6 +138,7 @@ def run_historical_catalog_revalidation(
     from src.alpha_research.factor_library.catalog import get_factor_catalog
     from src.data_infra.field_registry import load_field_registry
 
+    end = end or _spent_end()
     catalog = dict(get_factor_catalog(include_new_data=True))
     registry = load_field_registry(str(registry_path or _DEFAULT_FIELD_STATUS))
     cf = compute_factors_fn or operators.compute_factors
@@ -145,7 +157,7 @@ def run_historical_catalog_revalidation(
 
 def run_historical_derived_revalidation(
     *,
-    start: str = START, end: str = END, is_end: str = IS_END, oos_start: str = OOS_START,
+    start: str = START, end: str | None = None, is_end: str = IS_END, oos_start: str = OOS_START,
     horizon: int = HORIZON, qlib_dir: str | Path | None = None,
 ) -> pd.DataFrame:
     """Mode-2 port of ``revalidate_derived_factors.main`` — 20 composite + 4 industry-
@@ -158,6 +170,7 @@ def run_historical_derived_revalidation(
     )
     from src.data_infra.provider_metadata import build_industry_series_asof
 
+    end = end or _spent_end()
     full_catalog = get_factor_catalog(include_new_data=True)
     comp_defs = get_composite_defs()
     ind_defs = get_industry_relative_defs()

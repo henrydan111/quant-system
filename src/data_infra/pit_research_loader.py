@@ -119,6 +119,13 @@ def _spent_oos_end_timestamp() -> pd.Timestamp:
     return pd.Timestamp(boundary.spent_oos_end)
 
 
+def live_spent_oos_end() -> pd.Timestamp:
+    """Public D3 clamp source shared by BOTH sanctioned doors (this sandbox
+    loader and the formal ``qlib_windowed_features``). See
+    :func:`_spent_oos_end_timestamp` for semantics; failures fail closed."""
+    return _spent_oos_end_timestamp()
+
+
 @functools.lru_cache(maxsize=1)
 def _trading_calendar() -> pd.DatetimeIndex:
     cal = pd.read_parquet(_data_root() / "reference" / "trade_cal.parquet",
