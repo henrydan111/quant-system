@@ -110,19 +110,25 @@ class TestFormalPolicyProvenance:
 # ── M6.5 in-process provider rotation invalidates the context cache ──────────
 
 class TestProviderRotationInvalidation:
-    def _write_provider(self, qlib_dir: Path, build_id: str) -> None:
+    def _write_provider(
+        self,
+        qlib_dir: Path,
+        build_id: str,
+        calendar_policy_id: str = LEGACY_POLICY,
+        calendar_end: str = "2026-02-27",
+    ) -> None:
         live = json.loads(
             (REPO_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json")
             .read_text(encoding="utf-8")
         )
         live["provider_build_id"] = build_id
-        live["calendar_policy_id"] = LEGACY_POLICY
+        live["calendar_policy_id"] = calendar_policy_id
         (qlib_dir / "metadata").mkdir(parents=True, exist_ok=True)
         (qlib_dir / "metadata" / "provider_build.json").write_text(
             json.dumps(live), encoding="utf-8"
         )
         (qlib_dir / "calendars").mkdir(parents=True, exist_ok=True)
-        (qlib_dir / "calendars" / "day.txt").write_text("2026-02-27\n", encoding="utf-8")
+        (qlib_dir / "calendars" / "day.txt").write_text(f"{calendar_end}\n", encoding="utf-8")
 
     def test_rotation_reresolves_ids_and_boundary(self, tmp_path, monkeypatch):
         import src.data_infra.provider_context as ctx_mod
@@ -253,6 +259,62 @@ class TestProviderRotationInvalidation:
         assert row["provider_build_id"] == "gen_BBBB"
         assert row["calendar_policy_id"] == LEGACY_POLICY
         assert row["provider_build_id"] != "gen_AAAA"
+
+    def test_rotation_formal_cache_write_stamps_new_policy_id(self, tmp_path, monkeypatch):
+        """R7-M9: the Phase-3 publish rotates BOTH ids (legacy frozen ->
+        thaw_step1). The sanctioned door's cache write must stamp the NEW
+        calendar_policy_id, not only the new build id. (No size/mtime
+        preservation needed here — content-hash invalidation is proven by the
+        preceding test; this one locks the policy-stamping half.)"""
+        import sys
+        import types
+
+        import src.data_infra.provider_context as ctx_mod
+        from src.research_orchestrator import qlib_windowed_features as qwf_mod
+        from src.research_orchestrator.cache_manifest import CacheContext, CacheManifestStore
+
+        qlib_dir = tmp_path / "qlib_data"
+        self._write_provider(
+            qlib_dir, "gen_AAAA",
+            calendar_policy_id=LEGACY_POLICY, calendar_end="2026-02-27",
+        )
+        monkeypatch.setattr(ctx_mod, "_qlib_dir", lambda: qlib_dir)
+        ctx_mod.refresh_live_provider_context()
+        assert ctx_mod.live_provider_ids() == ("gen_AAAA", LEGACY_POLICY)
+
+        # Phase-3-shaped rotation: new build id + thaw policy + longer calendar.
+        self._write_provider(
+            qlib_dir, "gen_BBBB",
+            calendar_policy_id=THAW_POLICY, calendar_end="2026-06-30",
+        )
+        assert ctx_mod.live_provider_ids() == ("gen_BBBB", THAW_POLICY)
+        # The thaw policy pins spent_oos_end=2026-02-27 (policy_fields branch).
+        assert ctx_mod.live_spent_oos_end() == pd.Timestamp("2026-02-27")
+
+        fake_frame = pd.DataFrame()
+        d_stub = types.SimpleNamespace(features=lambda *a, **k: fake_frame)
+        qlib_data_mod = types.ModuleType("qlib.data")
+        qlib_data_mod.D = d_stub
+        qlib_mod = types.ModuleType("qlib")
+        qlib_mod.data = qlib_data_mod
+        monkeypatch.setitem(sys.modules, "qlib", qlib_mod)
+        monkeypatch.setitem(sys.modules, "qlib.data", qlib_data_mod)
+
+        store_dir = tmp_path / "cache_manifest"
+        qwf_mod.qlib_windowed_features(
+            instruments=["000001_SZ"],
+            fields=["$close"],
+            start_time="2026-01-05",
+            end_time="2026-02-27",
+            cache_context=CacheContext(),
+            stage="sandbox_screening",
+            cache_manifest_dir=store_dir,
+        )
+
+        row = CacheManifestStore(store_dir).list_events().sort_values("recorded_at").iloc[-1]
+        assert row["provider_build_id"] == "gen_BBBB"
+        assert row["calendar_policy_id"] == THAW_POLICY
+        assert row["calendar_policy_id"] != LEGACY_POLICY
 
 
 # ── M6.6 promotion guard binding branches (R4-M1) ────────────────────────────

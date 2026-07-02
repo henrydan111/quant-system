@@ -170,3 +170,13 @@
 - 无新增可执行常量；无对冲措辞问题。
 
 **Round-7 结论：clean for GPT clearing re-review（范围仅 M8 + m5）。**
+
+---
+
+# Round-8 自审（R7-M9 修复后）— 2026-07-02
+
+- **M9 忠实性**：与 GPT 替换文本对齐——`_write_provider` 扩展 `calendar_policy_id`/`calendar_end` 参数（既有调用不变）；新测试 Phase-3 形状轮换（legacy→thaw_step1、日历 02-27→06-30，无需保尺寸/mtime——内容哈希失效已由前一测试锁定）；断言写入行政策 id == THAW ≠ LEGACY + build id == 新世代 + thaw 长日历下边界仍钳 02-27。GPT 片段里的 `spent_oos_end` 参数未采用——该字段属政策 YAML（真实 repo 文件已含），manifest 不携带，语义等价。✔
+- **电池证据**：53 过（五个墙文件）+ POLICY001 clean + run_daily_qa Overall PASS——GPT 解锁条件 ③ 全项实测留档。
+- 回归：24/24 墙 hardening 文件；无新增可执行常量。
+
+**Round-8 结论：clean for GPT clearing re-review（范围仅 M9 + 解锁条件确认）。**

@@ -254,6 +254,16 @@ M7 = **RESOLVED**（每次调用 sha256 进键被裁定为规格的"更强可接
 
 **GPT 显式 Phase-3 解锁条件（原文归纳）**：① M7 内容哈希缓存已合并（✔）；② M8 生产路径轮换写测试落地（✔ 本轮）；③ m4 direct-D.features 特权哨兵问题修复或显式豁免（独立会话 task_94159a87 进行中）；④ Phase-2 墙电池全绿——含 POLICY001 lint、`run_daily_qa` Overall PASS、provider_context 轮换测试、缓存世代绑定测试、正式门钳制/seal 测试。Phase 3 安全发布另需既定的 mode=all 重建 + 冻结段字节审计 + 侧车成员审计 + dry-run 评审 + 安全发布程序。
 
+## 7e. GPT Round-7（M8/m5 清场，2026-07-02，verdict = REVISE→仅剩 M9）处置表
+
+m5 = **RESOLVED**（stat 三明治 + 解析后 re-hash 获认可，无需 from-bytes API）；M8 = PARTIALLY——build id 半边已证，**政策 id 半边未证**（Phase 3 发布同时轮换两个 id）→ 新 M9；sandbox/无 context 调用被裁定为可接受的写路径证明（盖章代码跨 stage 同一段），Phase 3 **不要求** context-active 变体。
+
+| # | Finding | 处置 | 落点 |
+|---|---------|------|------|
+| **M9**（新 Major，唯一残留） | M8 测试保持政策 id 不变，未证明轮换后的 `calendar_policy_id` 被盖章 | **接受并已实施**：`_write_provider` 扩展政策/日历端参数；新测试做 **Phase-3 形状**的轮换（legacy→`frozen_20260630_thaw_step1` + 日历 02-27→06-30）→ 断言门写入行 `calendar_policy_id == THAW ≠ LEGACY`，且 thaw 政策下 `live_spent_oos_end()` 仍 = 2026-02-27（policy_fields 分支）——**顺带构成 Phase-3 目标态的首次全链条演练**（manifest→政策→解析器→门→缓存章） | test_r4_wall_hardening.py（24 过） |
+
+**解锁条件 ③ 的电池证据（2026-07-02 实测）**：墙电池 53 过（轮换/钳制/seal/边界/缓存绑定五个文件）、`POLICY001: clean.`、`run_daily_qa` **Overall PASS**（`logs/qa_phase2_battery_20260702.log`）。Phase-3 解锁仅剩：**m4 修复或显式豁免**（独立会话 task_94159a87）+ Round-8 清场确认。
+
 ## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
 
 M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：
