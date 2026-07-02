@@ -114,6 +114,13 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > never saw), and `$total_share × $close ≈ $total_mv` violations dropped 9.23% → 0.0003% of stock-days. `$total_share`
 > is again first-choice for share-count parity; the AvgQ residual note above (vendor share-history timing) still
 > applies to the `_qN` legs.
+>
+> **AUDIT (2026-07-01 evening): the $total_share lag had ZERO impact on the campaign verifications.** Cross-section
+> provider-vs-raw at 2025-12-31 = **0 of 4399 names stale** (>0.1%) — year-end was fully caught up even pre-fix, and all
+> campaign verifications ran at 2025-12-31. The two verified factors that multiply by `$total_share` at the signal date
+> (DivOP%, Div%NetIncY2) have 0 stale names in their top-20 selection zones; the per-share dividend ratios
+> (DivGrPY%/DivAGrPY%/连续N年分红) cancel 总股本 entirely; 总市值/市研率 use `$total_mv` (always raw-exact). The historical
+> mid-quarter inconsistency (9.23% of stock-days pre-fix) mattered only for through-time backtests, now fixed above.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
