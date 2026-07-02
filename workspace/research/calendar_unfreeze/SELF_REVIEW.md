@@ -44,3 +44,28 @@
 - 耦合面清单（8 个执行点 + 18 个测试文件 132 处日期）是否有遗漏。
 
 **结论：clean for GPT。**
+
+---
+
+# Round-2 自审（v2 修订后，re-review 前置）— 2026-07-01
+
+**背景**：GPT Round-1 verdict = **REVISE**（B1 D3 机械闸缺失且次序颠倒、B2 侧车成员前缀审计缺失、M1-M4、m1-m4）。全部 10 条接受，无拒绝项；处置表 = UNFREEZE_PLAN.md §6。
+
+## 修订忠实性核对（逐条 vs GPT 原文）
+
+- **B1**：D3 重写为 7 条机械闸（政策字段 / loader 默认钳制 / fail-closed / seal 记录 / promotion 绑定语义 / lint+测试 / **发布前次序硬性化**）；新增 Phase 2"发布前墙"，Phase 3.4 安全发布以 Phase 2 全绿为硬前置。✔ 与 GPT 替换文本逐项对应。
+- **B2**：Phase 3.2 增加侧车**逐日成员矩阵**前缀等值断言（行字节等值不要求、成员漂移即阻断）+ 审计工件持久化清单。✔
+- **M1**：endpoint_contracts.yaml 合同字段照单全收；**适配声明**（已在 §6 注明）：serving 侧可见性语义（`max(ann_date,f_ann_date)` 5 statement families / ann_date-only 4 event families、update_flag 去重）已由既有 `DATASET_SPECS` + ledger 机制实现并有测试锁定——合同的净新增约束是 **fetch 侧**（分页/截断/递归二分/字段保全/逐端点可见性锚显式声明）。该适配不削弱 GPT 要求，只是避免重复实现。
+- **M2**：政策参数改**必填无默认**（比 GPT 要求更严：直接删默认值）+ 三类 lint + 回放用记录政策。✔
+- **M3**：引用型保留 + 回放核验包 + 父 build 元数据（月度 driver 写入）。✔
+- **M4**：并入 Phase 2.3 发布前耦合审计，路径清单与测试要求照单。✔
+- **m1-m4**：Phase 5.4 / 1.2 / 1.1 / 3.3 落点。✔
+
+## v2 新引入内容的自查
+
+- loader 钳制读 **live manifest 政策** 与 D1"无全局政策"不变量的张力：已在 D1 显式豁免（live-provider 检查场景——daily QA 与 D3 钳制，其对象本来就是当前 live provider；artifact 回放仍用记录政策）。无矛盾。
+- `spent_oos_end`/`fresh_holdout_start` 以 additive 可选字段进政策 YAML：`CalendarPolicy.from_dict` 需扩展 dataclass 可选字段（实现细节，Phase 2.1 覆盖），不动 schema_version=1 必填集。
+- 工作量 3-4 → **5-6 工作日**（Phase 2 墙 +1.5-2 天），如实上调。
+- 无对冲措辞检查：v2 新增文字中的量化断言均有 file:line 或标注"实现细节/估计"。
+
+**Round-2 结论：clean for GPT re-review。**
