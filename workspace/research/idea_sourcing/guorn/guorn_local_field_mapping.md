@@ -95,6 +95,20 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 >    **whole-FY listing gate** (`list_date ≤ 2021-12-31`, i.e. listed for ALL of FY2022; Dec-2022 IPOs paying an FY2022
 >    dividend are NOT counted by 果仁) → 95.97% exact; residual ~4% undecoded (boolean filter, top-K degenerate).
 >
+> **⚠ Two window ANCHORS for the 分红/annual family (pinned 2026-07-02, #7 build — through-time, not just year-end):**
+> 1. **`sumq(分红总金额,4,k)` anchors on the stock's REPORTED-quarter grid** — q0 = the latest DISCLOSED quarter
+>    (per-stock; locate via the cum==sq Q1-identity detector on `$n_income_cum/_sq` slots), NOT the calendar
+>    quarter. 建行@2014-01-08 (reported q0=2013Q3): window {2013Q3..2012Q4}/{2012Q3..2011Q4} → DivGrPY%
+>    0.133192 = xlsx 0.1332 EXACT; a calendar-quarter window ({2013Q4..2013Q1}) gives −1 (FY2013 div not yet
+>    declared). At year-end signals the two coincide for on-time reporters — the 2026-07-01 pins above were
+>    year-end-only and did not expose this.
+> 2. **`annual(x,k)` FY anchor = the stock's latest VISIBLE annual report** (最近年报, per-stock): annual slot
+>    = (k_Q1+1)%4 in the reported sequence; fy0 = that slot's FY. 建行@2014-01-08 → FY2012 (NOT FY2013):
+>    近三年分红之和 = (FY2012+11+10 dps)×当日$total_share = 1.79183e11 = xlsx EXACT; Div%NetIncY2 penny
+>    (0.347523 vs 0.3475). Applies to BOTH the dividend leg and the `Annual(净利润(单季),k)` denominator
+>    (= `$n_income_cum` at the annual slots — TOTAL n_income).
+>    Implementation: `guorn_verify_07_divlowvol.py build_fin/build_div` (e_q0quarter / e_ni_fy0 / e_ni_fy1).
+>
 > **⚠ AvgQ(总股本,4,k) window semantics — pinned via TEMP-INDICATOR ATOM EXPORT (2026-07-01).** Exporting a temp custom
 > indicator `AvgQ(总股本,4,0)` (deleted after) pinned the window: **4 CALENDAR quarters INCLUDING the current unreported
 > one** — `AvgQ(总股本,4,0)` = mean{当日总股本, 期末总股本 of the prior 3 reported quarters} = local

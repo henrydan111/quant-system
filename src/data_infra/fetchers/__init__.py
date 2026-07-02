@@ -840,3 +840,31 @@ class TushareFetcher:
             self.pro.cyq_perf, ts_code=ts_code,
             start_date=start_date, end_date=end_date
         )
+
+    def fetch_broker_recommend(self, month: str) -> pd.DataFrame:
+        """Fetch 券商月度金股 (broker monthly golden-stock recommendations).
+
+        Endpoint: broker_recommend (doc_id=267). Requires 6000积分.
+        Monthly frequency, queried per-month. Tushare updates the CURRENT
+        month's list within 1-3 days of month start ("一般1日~3日内更新当月数据").
+
+        PIT / visibility (CRITICAL — there is NO per-row disclosure date):
+            The only date field is `month` (YYYYMM), which is the RECOMMENDATION
+            month, not a visible-at timestamp. Because the list is populated
+            within the first 1-3 days of month M, a month-M list must NOT be
+            treated as tradable before that window closes. Consumers must anchor
+            visibility on the first trading day on/after ~day 4 of month M
+            (see the as-of membership builder), never on month start.
+
+        Coverage: history effectively starts 2020-07 (earlier months return
+            empty). Broker coverage is unstable month-to-month (~10-44 brokers,
+            ~88-260 stocks), so conviction (broker count) is comparable only
+            cross-sectionally WITHIN a month, never across months.
+
+        Args:
+            month: Recommendation month (YYYYMM, required).
+
+        Returns:
+            DataFrame with columns [month, broker, ts_code, name].
+        """
+        return self._safe_api_call(self.pro.broker_recommend, month=month)

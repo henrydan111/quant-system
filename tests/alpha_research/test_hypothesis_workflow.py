@@ -4,6 +4,7 @@ import ast
 import json
 import shutil
 import subprocess
+import sys
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -54,7 +55,11 @@ from workspace.research.alpha_mining.audit_benchmark_index import BenchmarkAudit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_OUTPUTS = PROJECT_ROOT / "workspace" / "outputs"
+# venv/ is gitignored and exists only in the main checkout; in a git worktree
+# fall back to the interpreter running the tests (the venv python anyway).
 VENV_PYTHON = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
+if not VENV_PYTHON.exists():
+    VENV_PYTHON = Path(sys.executable)
 
 
 def build_hypothesis(

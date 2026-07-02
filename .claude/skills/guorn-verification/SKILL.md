@@ -32,3 +32,5 @@ Quick rules (detail in reference.md): signal lag **T−1** display / lag-0 PIT-g
 ## Start here
 
 **Read [reference.md](reference.md)** — doc/tool index (收口), comparator CLI + examples, 投资域 checklist, book-reproduction recipe, residual/gap discipline.
+
+**果仁's OFFICIAL platform help docs — [Knowledge/果仁帮助文档/](Knowledge/果仁帮助文档/) — are a REQUIRED reference when replicating a 果仁 自定义指标** (custom-composed indicator). They are 果仁's own ground truth for operator semantics (`Ref`/`BarRef`/`RefQ`/`TTM`/`MA`/`EMA`/`Level`/`KLast`/`hSum`/`dayslast`…) and financial-ratio definitions (市盈率 / 净资产收益率 / RefQ-growth …). Resolve every operator + ratio from 果仁's own definition BEFORE writing the local qlib expr — do NOT guess 果仁's function behavior (its gotchas bite: `Ref` counts 停牌 days but `BarRef` skips them; `RefQ(x,4)` = same quarter a year ago; TTM ratios divide by `AvgQ(…,4,1)`). Key files + the full list are in reference.md.

@@ -24,6 +24,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Paths
+# venv/ is gitignored and exists only in the main checkout; in a git worktree
+# fall back to the interpreter running the harness (the venv python anyway).
+VENV_PYTHON = os.path.join(project_root, 'venv', 'Scripts', 'python.exe')
+if not os.path.exists(VENV_PYTHON):
+    VENV_PYTHON = sys.executable
+
 PROD_DATA = os.path.join(project_root, 'data')
 PROD_QLIB = os.path.join(project_root, 'data', 'qlib_data')
 TEST_DATA = os.path.join(project_root, 'workspace', 'outputs', 'pipeline_integration_harness', 'data_test')
@@ -118,7 +124,7 @@ def test_init_dry_run():
 
     import subprocess
     cmd = [
-        os.path.join(project_root, 'venv', 'Scripts', 'python.exe'),
+        VENV_PYTHON,
         os.path.join(project_root, 'src', 'data_infra', 'pipeline', 'init_market_data.py'),
         '--dry-run', '--data-root', TEST_DATA
     ]

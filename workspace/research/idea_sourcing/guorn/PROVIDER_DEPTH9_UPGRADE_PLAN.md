@@ -143,6 +143,24 @@ fixed; everything else cleared.**
 - **Non-blocking (post-publish cleanup):** several workspace docs/scripts still say provider depth = q0..q4 / q5
   unmaterialized — stale after publish, update in the governance pass.
 
+## Post-publish: 果仁 factor unlock CONFIRMED (2026-07-01, local compute)
+
+Depth-9 is live, so the two Route-A factors (campaign #25 AssetTurnoverDiffPY, #43 RnDTTMGr%PY — both were
+🔴 BLOCKED on q5..q8) now compute natively against `data/qlib_data`. Local sanity (`D.features`, lag-1,
+broad main+chinext universe 4848, @ 2026-02-27; `scratchpad/depth9_factor_sanity.py`):
+
+| Factor (pre-registered) | cov | p05 / med / p95 | key slot |
+|---|---|---|---|
+| `RnDTTMGr%PY = (Σrd_exp_sq_q0..3 − Σrd_exp_sq_q4..7)/\|Σq4..7\|` | 83.5% | −0.457 / +0.014 / +0.600 | q4..q7 (89% cov) |
+| `AssetTurnoverDiffPY_A` (ATO(k)=ΣtotRev_sq[k..k+3]/mean(assets_q[k..k+3])) | 92.5% | −0.168 / −0.004 / +0.153 | q0..q7 |
+| `AssetTurnoverDiffPY_B` (ATO(k)=…/((assets_q[k]+assets_q[k+4])/2)) | 92.4% | −0.183 / −0.004 / +0.159 | **q8 (98.5% cov)** |
+
+Sensible distributions; **q8 populated (98.5%) and feeding candidate B** — confirms depth-9 (not just 8) was
+needed and delivered. A ≈ B (med −0.004 both) → denominator choice is minor; 果仁 parity picks the exact one.
+Revenue caliber pre-registered as `total_revenue_sq` (营业总收入); `revenue_sq` (营业收入) is the fallback if
+parity favors it. **STILL PENDING: the 果仁 web top-K export** (broad 排除ST排除科创, ONE rank condition each,
+选股日期 aligned) → comparator top-K → flip campaign #25/#43 to verified. NON-FORMAL parity (q5..q8 unregistered).
+
 ## Review questions for GPT
 
 1. **PIT:** Is upgrading `SLOT_DEPTH_DEFAULT` 5→9 + full re-materialization PIT-safe for ALL periodic families
