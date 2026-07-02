@@ -82,52 +82,64 @@ def dividend_yield_ttm(signal_date: str, close_by_code6: pd.Series, *, pretax: b
     return (dps.reindex(close_by_code6.index) / close_by_code6).rename("dv_ttm_guorn")
 
 
-def declared_dividend_by_quarter(signal_date: str, *, pretax: bool = True) -> pd.DataFrame:
-    """Per-fiscal-QUARTER declared dividend PER SHARE (for 果仁's `sumq(分红总金额, N, M)`), PIT ann_date ≤ signal,
-    most-finalized per (ts_code, end_date). Returns a DataFrame indexed by 6-digit code, columns = fiscal-period
-    end_date string (e.g. '20241231'), values = that period's declared dividend/share.
+def _declared_events(signal_date: str, *, pretax: bool = True, drop_stale_plans: bool = True,
+                     stale_days: int = 240) -> pd.DataFrame:
+    """Shared event kernel for the REPORT-PERIOD (分红总金额) calibers: one row per (code6, end_date) at the
+    most-finalized amount KNOWN by `signal` (实施 > 股东大会通过 > 预案), PIT ann_date ≤ signal.
+
+    ⚠ STALE-预案 rule (2026-07-01, pinned via 正丹股份 300641): Tushare keeps SUPERSEDED plan rows — 正丹's FY2024
+    interim was 预案'd at end_date 20240630 (0.4, ann 2024-08) then re-dated and IMPLEMENTED at end_date 20240930
+    (0.4). Summing both double-counts (my 1.10 vs 果仁 0.70 → DivAGrPY% 54 vs 34). 果仁 does NOT count such
+    phantoms, but DOES count recently-declared not-yet-implemented dividends (same as 股息率TTM's 600329 case).
+    So: drop an event whose best state is still not 实施 AND whose latest announcement is older than `stale_days`
+    (~8 months) before signal — old enough that a genuine plan would have implemented. Validated: fixes DivAGrPY%
+    top-5 to 100% while leaving DivOP%'s declared-pending recent quarters intact (top-5 stays 100%)."""
+    sig = pd.Timestamp(signal_date)
+    amount_col = "cash_div_tax" if pretax else "cash_div"
+    frames = [pd.read_parquet(f) for f in glob.glob(DIV_GLOB)]
+    d = pd.concat(frames, ignore_index=True)
+    d["proc"] = d["div_proc"].map(_decode_gbk)
+    d["ann"] = pd.to_datetime(d["ann_date"], format="%Y%m%d", errors="coerce")
+    d = d[(d[amount_col].fillna(0) > 0) & (d["ann"].notna()) & (d["ann"] <= sig)].copy()  # PIT
+    d["prio"] = d["proc"].map(_PROC_PRIORITY).fillna(0)
+    d["c6"] = d["ts_code"].str.split(".").str[0]
+    ev = (d.sort_values(["prio", "ann"])
+            .groupby(["c6", "end_date"])
+            .agg(dps=(amount_col, "last"), best=("proc", "last"), last_ann=("ann", "max"))
+            .reset_index())
+    if drop_stale_plans:
+        stale = (ev["best"] != "实施") & (ev["last_ann"] < sig - pd.Timedelta(days=stale_days))
+        ev = ev[~stale]
+    ev["ed"] = ev["end_date"].astype(str)
+    ev["fy"] = ev["ed"].str[:4].astype(int)
+    return ev
+
+
+def declared_dividend_by_quarter(signal_date: str, *, pretax: bool = True,
+                                 drop_stale_plans: bool = True) -> pd.DataFrame:
+    """Per-fiscal-QUARTER declared dividend PER SHARE (for 果仁's `sumq(分红总金额, N, M)`). Returns a DataFrame
+    indexed by 6-digit code, columns = fiscal-period end_date string (e.g. '20241231').
 
     ⚠ CALIBER (2026-07-01, pinned via 建发股份 decomposition): 果仁's `分红总金额` is a 季报指标 attributed to the
     dividend's REPORT PERIOD (`end_date`), and `sumq(分红总金额,4,0)` sums the last 4 FISCAL QUARTERS. This is NOT
     the same as the ann-date trailing-365-day window (`declared_dividend_ttm`, which is the 股息率TTM caliber): a
     2024-interim dividend (end_date 2024Q3, announced 2025-01) is INSIDE a 365-day ann-window but OUTSIDE the last-4
     fiscal quarters {2024Q4,2025Q1,Q2,Q3}. Use THIS (report-period) for 分红总金额 sumq/annual factors
-    (DivOP%/DivGrPY%/…); use `declared_dividend_ttm` only for 股息率TTM. (建发: ann-window 0.7 vs report-period 0.3.)"""
-    sig = pd.Timestamp(signal_date)
-    amount_col = "cash_div_tax" if pretax else "cash_div"
-    frames = [pd.read_parquet(f) for f in glob.glob(DIV_GLOB)]
-    d = pd.concat(frames, ignore_index=True)
-    d["proc"] = d["div_proc"].map(_decode_gbk)
-    d["ann"] = pd.to_datetime(d["ann_date"], format="%Y%m%d", errors="coerce")
-    d = d[(d[amount_col].fillna(0) > 0) & (d["ann"].notna()) & (d["ann"] <= sig)].copy()  # PIT
-    d["prio"] = d["proc"].map(_PROC_PRIORITY).fillna(0)
-    ev = (d.sort_values("prio")
-            .groupby(["ts_code", "end_date"])
-            .agg(dps=(amount_col, "last")).reset_index())
-    ev["code6"] = ev["ts_code"].str.split(".").str[0]
-    ev["ed"] = ev["end_date"].astype(str)
-    return ev.groupby(["code6", "ed"])["dps"].sum().unstack("ed")
+    (DivOP%/DivGrPY%/…); use `declared_dividend_ttm` only for 股息率TTM. (建发: ann-window 0.7 vs report-period 0.3.)
+    Stale-预案 phantoms are dropped by default (see `_declared_events`)."""
+    ev = _declared_events(signal_date, pretax=pretax, drop_stale_plans=drop_stale_plans)
+    return ev.groupby(["c6", "ed"])["dps"].sum().unstack("ed")
 
 
-def declared_dividend_by_fy(signal_date: str, *, pretax: bool = True) -> pd.DataFrame:
-    """Per-FISCAL-YEAR declared dividend PER SHARE (for 果仁's `annual(分红总金额, k)`), PIT ann_date ≤ signal,
-    most-finalized amount per (ts_code, end_date) event. Returns a DataFrame indexed by 6-digit code, columns =
-    fiscal_year int (from end_date), values = that FY's total declared dividend/share (interim+final summed; NaN
-    if the firm declared no dividend for that FY). `annual(分红,k)` as-of a year-end signal Y = column (Y-1-k)."""
-    sig = pd.Timestamp(signal_date)
-    amount_col = "cash_div_tax" if pretax else "cash_div"
-    frames = [pd.read_parquet(f) for f in glob.glob(DIV_GLOB)]
-    d = pd.concat(frames, ignore_index=True)
-    d["proc"] = d["div_proc"].map(_decode_gbk)
-    d["ann"] = pd.to_datetime(d["ann_date"], format="%Y%m%d", errors="coerce")
-    d = d[(d[amount_col].fillna(0) > 0) & (d["ann"].notna()) & (d["ann"] <= sig)].copy()  # PIT
-    d["prio"] = d["proc"].map(_PROC_PRIORITY).fillna(0)
-    d["fy"] = pd.to_datetime(d["end_date"], format="%Y%m%d", errors="coerce").dt.year
-    ev = (d.sort_values("prio")
-            .groupby(["ts_code", "end_date"])
-            .agg(dps=(amount_col, "last"), fy=("fy", "first")).reset_index())
-    ev["code6"] = ev["ts_code"].str.split(".").str[0]
-    return ev.groupby(["code6", "fy"])["dps"].sum().unstack("fy")
+def declared_dividend_by_fy(signal_date: str, *, pretax: bool = True,
+                            drop_stale_plans: bool = True) -> pd.DataFrame:
+    """Per-FISCAL-YEAR declared dividend PER SHARE (for 果仁's `annual(分红总金额, k)`). Returns a DataFrame indexed
+    by 6-digit code, columns = fiscal_year int (from end_date), values = that FY's total declared dividend/share
+    (interim+final summed; NaN if none). As-of a signal in year Y with only quarterly reports out, `annual(分红,0)`
+    = FY(Y-1) (最近年报 convention — e.g. FY2024 as-of 2025-12-31). Stale-预案 phantoms dropped by default
+    (正丹股份: FY2024 1.10→0.70, the 果仁 value — see `_declared_events`)."""
+    ev = _declared_events(signal_date, pretax=pretax, drop_stale_plans=drop_stale_plans)
+    return ev.groupby(["c6", "fy"])["dps"].sum().unstack("fy")
 
 
 if __name__ == "__main__":  # quick self-check against the 2025-12-31 export

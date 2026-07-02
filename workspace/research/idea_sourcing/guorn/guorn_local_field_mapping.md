@@ -80,6 +80,20 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > **Helpers:** `guorn_dividend_caliber.declared_dividend_by_quarter` (report-period, for 分红总金额 sumq) · `declared_dividend_by_fy`
 > (per-FY, for `annual(分红)`) · `declared_dividend_ttm` (ann-date-365d, for **股息率TTM only**). After the fix DivOP% top-5 = 100%
 > (was 40%), Pearson 1.000 — the earlier "top-K fragile" was a caliber artifact, not an unstable denominator.
+>
+> **⚠ Three more dividend-family calibers (pinned 2026-07-01 v4, raw-primitive decomposition round 2):**
+> 1. **Stale-预案 phantoms** — Tushare keeps superseded plan rows: 正丹股份's FY2024 interim was 预案'd at end_date 20240630
+>    (0.4, never implemented) then re-dated + 实施'd at 20240930 (0.4). Summing both gave 1.10 vs 果仁 0.70 (DivAGrPY% 54 vs 34).
+>    Rule (in `_declared_events`, default on): drop an event whose best state ≠ 实施 AND latest ann > **240 days** before signal;
+>    keep recently-declared pending 预案 (果仁 counts those, cf. 股息率 600329). Fixed DivAGrPY% top-K to **100/100/100**, left
+>    DivOP% intact (100/90/95). 实施-only is WRONG (drops pending declareds; broke DivOP%).
+> 2. **Div%NetIncY2** = `ifnull((A0/N0+A1/N1)/2, A0/N0)`: **净利润 = TOTAL `n_income`** (incl minority — the formula says
+>    净利润(单季), NOT 归母); **A=0-fill semantics** — a no-dividend FY contributes 0/N (HALVES the average), null only when the
+>    FY's NI is missing (悦达投资 22.05→11.03 = 果仁 exact). NI_FY via `$n_income_cum_q3` (FY2024) / `_q7` (FY2023). Was the
+>    family's weakest (Spearman 0.877, top-5 1/5) → **verified** (0.985, top-5 100%).
+> 3. **连续N年分红(3)** = `annual(分红,0/1/2)>0` on **FY{2024,2023,2022}** (FY{25,24,23} scores 62.5% — ruled out) + a
+>    **whole-FY listing gate** (`list_date ≤ 2021-12-31`, i.e. listed for ALL of FY2022; Dec-2022 IPOs paying an FY2022
+>    dividend are NOT counted by 果仁) → 95.97% exact; residual ~4% undecoded (boolean filter, top-K degenerate).
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
