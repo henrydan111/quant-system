@@ -20,6 +20,7 @@ from src.research_orchestrator.cache_manifest import (
     CacheContext,
     CacheKeyMismatchError,
     CacheManifestStore,
+    ProviderGenerationMismatchError,
 )
 
 
@@ -182,17 +183,20 @@ class TestGenerationBindingFailClosed:
     def test_record_with_blank_ids_fails(self, tmp_path: Path):
         manifest = CacheManifestStore(tmp_path)
         for bad in ("", "   "):
-            with pytest.raises(CacheKeyMismatchError, match="non-blank provider_build_id"):
+            with pytest.raises(CacheKeyMismatchError, match="non-blank provider_build_id") as ei:
                 manifest.record_cache_write(
                     cache_type="qlib_features", cache_key=CACHE_KEY, cache_path=CACHE_KEY,
                     cache_context=CacheContext(design_hash="h"), stage="is_only",
                     window_start=WINDOW_START, window_end=WINDOW_END,
                     provider_build_id=bad, calendar_policy_id=POLICY_ID,
                 )
+            # Caller-contract violation, NOT a rotation: must not be the
+            # subclass, or the recompute door's self-heal could swallow it.
+            assert not isinstance(ei.value, ProviderGenerationMismatchError)
 
     def test_assert_with_blank_ids_fails(self, tmp_path: Path):
         manifest = _seed_row(tmp_path, cache_type="qlib_features", design_hash="h")
-        with pytest.raises(CacheKeyMismatchError, match="non-blank calendar_policy_id"):
+        with pytest.raises(CacheKeyMismatchError, match="non-blank calendar_policy_id") as ei:
             manifest.assert_cache_reusable(
                 cache_key=CACHE_KEY, cache_path=CACHE_KEY,
                 cache_context=CacheContext(design_hash="h"), stage="is_only",
@@ -200,10 +204,11 @@ class TestGenerationBindingFailClosed:
                 cache_type="qlib_features",
                 provider_build_id=BUILD_ID, calendar_policy_id="",
             )
+        assert not isinstance(ei.value, ProviderGenerationMismatchError)
 
     def test_cross_generation_reuse_refused(self, tmp_path: Path):
         manifest = _seed_row(tmp_path, cache_type="qlib_features", design_hash="h")
-        with pytest.raises(CacheKeyMismatchError, match="provider rotation"):
+        with pytest.raises(ProviderGenerationMismatchError, match="provider rotation"):
             manifest.assert_cache_reusable(
                 cache_key=CACHE_KEY, cache_path=CACHE_KEY,
                 cache_context=CacheContext(design_hash="h"), stage="is_only",
@@ -221,10 +226,26 @@ class TestGenerationBindingFailClosed:
         frame["provider_build_id"] = ""
         frame["calendar_policy_id"] = ""
         frame.to_parquet(manifest.log_path, index=False)
-        with pytest.raises(CacheKeyMismatchError, match="provider rotation"):
+        with pytest.raises(ProviderGenerationMismatchError, match="provider rotation"):
             manifest.assert_cache_reusable(
                 cache_key=CACHE_KEY, cache_path=CACHE_KEY,
                 cache_context=CacheContext(design_hash="h"), stage="is_only",
                 window_start=WINDOW_START, window_end=WINDOW_END,
                 cache_type="qlib_features", **GEN,
             )
+
+    def test_stage_mismatch_beats_generation_mismatch(self, tmp_path: Path):
+        """Ordering pin: when BOTH stage and generation mismatch, the stage
+        check fires first with the BASE class — the subclass can only ever
+        mean 'everything else matched, only the generation rotated'."""
+        manifest = _seed_row(tmp_path, cache_type="qlib_features", design_hash="h",
+                             stage="is_only")
+        with pytest.raises(CacheKeyMismatchError, match="stage") as ei:
+            manifest.assert_cache_reusable(
+                cache_key=CACHE_KEY, cache_path=CACHE_KEY,
+                cache_context=CacheContext(design_hash="h"), stage="oos_test",
+                window_start=WINDOW_START, window_end=WINDOW_END,
+                cache_type="qlib_features",
+                provider_build_id="rotated_build", calendar_policy_id=POLICY_ID,
+            )
+        assert not isinstance(ei.value, ProviderGenerationMismatchError)

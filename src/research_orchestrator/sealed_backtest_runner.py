@@ -95,6 +95,18 @@ class SealedBacktestRunner:
         ``pipeline_args`` is a dict, or
         ``pipeline_fn(time_split, self._ctx, pipeline_args)`` otherwise.
         """
+        # R2-m1 (M4 self-heal review): a formal context without provider
+        # provenance would only fail at the FIRST read (B1 pin) with a
+        # confusing "generation changed" message — fail at construction
+        # instead, and BEFORE _claim_if_oos so a malformed call cannot burn
+        # a spend-on-attempt seal slot.
+        if self._ctx is not None and (
+            not str(provider_build_id).strip() or not str(calendar_policy_id).strip()
+        ):
+            raise ValueError(
+                "run_workspace_pipeline formal context requires non-blank "
+                "provider_build_id and calendar_policy_id."
+            )
         self._claim_if_oos(time_split)
 
         if self._ctx is None:

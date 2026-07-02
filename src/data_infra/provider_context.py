@@ -147,3 +147,45 @@ def refresh_live_provider_context() -> None:
     """Explicit invalidation hook for the safe-publish ceremony (R4-M3 option C
     belt — the stat-key mechanism already invalidates on manifest rewrite)."""
     _CACHE.clear()
+
+
+def live_qlib_provider_dir() -> Path:
+    """The live provider directory these helpers describe, resolved."""
+    return _qlib_dir().resolve()
+
+
+def qlib_bound_provider_dir() -> Optional[Path]:
+    """Best-effort probe of the IN-PROCESS Qlib provider binding.
+
+    Returns the resolved directory Qlib was ``init``-ed against, or ``None``
+    when the probe is inconclusive (qlib absent/stubbed, not yet initialized,
+    or config API drift). Never raises. Consumers treat a POSITIVE mismatch
+    against ``live_qlib_provider_dir()`` as fail-closed evidence that the
+    process is reading a staged/archived provider while stamping live ids
+    (M4 self-heal review, GPT M2); an inconclusive probe is NOT evidence.
+    """
+    try:
+        from qlib.config import C  # probe only, never at import time
+    except Exception:
+        return None
+    candidates: list[object] = []
+    try:
+        dpm = getattr(C, "dpm", None)
+        if dpm is not None:
+            candidates.append(getattr(dpm, "provider_uri", None))
+    except Exception:
+        pass
+    try:
+        candidates.append(C.get("provider_uri", None))
+    except Exception:
+        pass
+    for cand in candidates:
+        if isinstance(cand, dict):
+            cand = cand.get("__DEFAULT_FREQ") or next(iter(cand.values()), None)
+        if not cand:
+            continue
+        try:
+            return Path(str(cand)).expanduser().resolve()
+        except Exception:
+            continue
+    return None

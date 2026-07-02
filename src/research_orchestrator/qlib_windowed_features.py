@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,9 @@ import pandas as pd
 
 from src.research_orchestrator.cache_manifest import (
     CacheContext,
+    CacheKeyMismatchError,
     CacheManifestStore,
+    ProviderGenerationMismatchError,
     get_cache_context,
 )
 from src.research_orchestrator.research_access_context import (
@@ -17,6 +20,8 @@ from src.research_orchestrator.research_access_context import (
     HoldoutWindowViolation,
     get_research_access_context,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _deterministic_cache_path(freq: str, fields: list[str], start: str, end: str) -> str:
@@ -78,7 +83,12 @@ def qlib_windowed_features(
     # "sandbox/no-context calls skip this check" behavior is exactly the leak
     # the pre-publish wall exists to close. Boundary resolution failure fails
     # closed too (the resolver raises).
-    from src.data_infra.provider_context import live_provider_ids, live_spent_oos_end
+    from src.data_infra.provider_context import (
+        live_provider_ids,
+        live_qlib_provider_dir,
+        live_spent_oos_end,
+        qlib_bound_provider_dir,
+    )
 
     boundary_end = live_spent_oos_end()
     if pd.Timestamp(end_time) > boundary_end:
@@ -100,20 +110,93 @@ def qlib_windowed_features(
     manifest = CacheManifestStore(cache_manifest_dir)
     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)
     cache_path = cache_key
-    # M4 provider-generation binding: cache rows written under another provider
-    # build/policy are refused (legacy ""-rows mismatch -> safe invalidation).
+    # M4 provider-generation binding: a manifest row written under another
+    # provider build/policy (incl. legacy ""-rows) never validates reuse.
     live_build_id, live_policy_id = live_provider_ids()
-    manifest.assert_cache_reusable(
-        cache_key=cache_key,
-        cache_path=cache_path,
-        cache_context=effective_context,
-        stage=stage,
-        window_start=start_time,
-        window_end=end_time,
-        cache_type="qlib_features",
-        provider_build_id=live_build_id,
-        calendar_policy_id=live_policy_id,
-    )
+
+    # M4 self-heal review, GPT M2 (+ R2 escalation): this is a LIVE-provider
+    # door — manifest rows are stamped with live ids, so a process whose
+    # in-process Qlib binding provably points elsewhere (staged/archived
+    # provider) must not read or write here. A POSITIVE probe mismatch fails
+    # closed for everyone. An INCONCLUSIVE probe (qlib stubbed / not yet
+    # initialized / config API drift) is tolerated only for no-context
+    # sandbox liveness; under an active ResearchAccessContext the binding
+    # must be PROVEN before a formal read is stamped (R2-M2).
+    bound_dir = qlib_bound_provider_dir()
+    if bound_dir is None:
+        if research_ctx is not None:
+            raise CacheKeyMismatchError(
+                "qlib_windowed_features is a live-provider door under an active "
+                "ResearchAccessContext, but the in-process Qlib provider binding "
+                "could not be proven. Refusing to stamp formal reads with live "
+                "provider ids on an inconclusive probe."
+            )
+    else:
+        live_dir = live_qlib_provider_dir()
+        if bound_dir != live_dir:
+            raise CacheKeyMismatchError(
+                "qlib_windowed_features is a live-provider door: the in-process "
+                f"Qlib binding {bound_dir} != live provider {live_dir}. Reads "
+                "against staged/archived providers must not stamp live ids — "
+                "use a non-formal parity helper instead."
+            )
+
+    # M4 self-heal review, GPT B1: a formal run pins its provider generation
+    # in the ResearchAccessContext at run start. If the live provider rotates
+    # WHILE the context is active, every later read hard-fails (base class —
+    # the self-heal catch below cannot swallow it): one evidence artifact must
+    # never mix provider generations. With no active context (sandbox live
+    # reads), the live ids are the binding.
+    if research_ctx is not None:
+        expected_build_id = str(research_ctx.provider_build_id)
+        expected_policy_id = str(research_ctx.calendar_policy_id)
+        if (live_build_id, live_policy_id) != (expected_build_id, expected_policy_id):
+            raise CacheKeyMismatchError(
+                "Live provider generation changed during an active "
+                f"ResearchAccessContext: live=({live_build_id}, {live_policy_id}) "
+                f"!= context=({expected_build_id}, {expected_policy_id}). "
+                "Abort this formal run and restart under a single provider generation."
+            )
+        binding_build_id = expected_build_id
+        binding_policy_id = expected_policy_id
+    else:
+        binding_build_id = live_build_id
+        binding_policy_id = live_policy_id
+
+    try:
+        manifest.assert_cache_reusable(
+            cache_key=cache_key,
+            cache_path=cache_path,
+            cache_context=effective_context,
+            stage=stage,
+            window_start=start_time,
+            window_end=end_time,
+            cache_type="qlib_features",
+            provider_build_id=binding_build_id,
+            calendar_policy_id=binding_policy_id,
+        )
+    except ProviderGenerationMismatchError as exc:
+        # Provider rotated since this key's latest manifest row (BEFORE this
+        # run/context started — a mid-run rotation is caught above). This door
+        # holds no cached artifact — D.features below always recomputes from
+        # the live provider — so a stale-generation row must not brick the key
+        # permanently: proceed, and record_cache_write below appends a fresh
+        # row under the live generation (the next read then passes; the stale
+        # row stays behind as the rotation audit trail). The subclass is
+        # raised only after design_hash/stage/window all matched — those
+        # violations still propagate.
+        logger.warning(
+            "cache generation rotated for %s — recomputing from the live "
+            "provider and re-binding to (%s, %s); stage=%s run_id=%s "
+            "step_id=%s; refused stale row: %s",
+            cache_key,
+            binding_build_id,
+            binding_policy_id,
+            stage,
+            getattr(research_ctx, "run_id", ""),
+            getattr(research_ctx, "step_id", ""),
+            exc,
+        )
     frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
         instruments,
         list(fields),
@@ -124,6 +207,21 @@ def qlib_windowed_features(
         date_values = pd.to_datetime(frame.index.get_level_values("datetime"))
         mask = (date_values >= pd.Timestamp(start_time)) & (date_values <= pd.Timestamp(end_time))
         frame = frame[mask].copy()
+    # R2-M1 (TOCTOU): the live provider may rotate AFTER the pre-read pin and
+    # BEFORE/DURING D.features — the frame could then hold rotated-provider
+    # bytes while the manifest row would stamp the pre-rotation binding ids.
+    # Re-check and DISCARD the read instead of recording it (applies to the
+    # no-context sandbox path too — never write a row under possibly-stale
+    # ids). The next call re-pins under the new generation (no context) or
+    # hard-fails at the pre-read pin (active context).
+    current_build_id, current_policy_id = live_provider_ids()
+    if (current_build_id, current_policy_id) != (binding_build_id, binding_policy_id):
+        raise CacheKeyMismatchError(
+            "Live provider generation changed during qlib_windowed_features "
+            f"read: live=({current_build_id}, {current_policy_id}) "
+            f"!= bound=({binding_build_id}, {binding_policy_id}). "
+            "Discarding this read; restart under a single provider generation."
+        )
     manifest.record_cache_write(
         cache_type="qlib_features",
         cache_key=cache_key,
@@ -132,7 +230,7 @@ def qlib_windowed_features(
         stage=stage,
         window_start=start_time,
         window_end=end_time,
-        provider_build_id=live_build_id,
-        calendar_policy_id=live_policy_id,
+        provider_build_id=binding_build_id,
+        calendar_policy_id=binding_policy_id,
     )
     return frame

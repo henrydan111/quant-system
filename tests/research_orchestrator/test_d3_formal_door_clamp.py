@@ -37,6 +37,14 @@ def _stub_boundary_and_qlib(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ctx_mod, "live_provider_ids", lambda: ("test_build", "frozen_20260630_thaw_step1")
     )
+    # R2-M2: active-context reads require a PROVEN live Qlib binding — stub
+    # the probe conclusive-and-matching so the clamp layers under test are
+    # reachable with the stubbed qlib below.
+    from pathlib import Path as _Path
+
+    _same = _Path("E:/live_provider")
+    monkeypatch.setattr(ctx_mod, "qlib_bound_provider_dir", lambda: _same)
+    monkeypatch.setattr(ctx_mod, "live_qlib_provider_dir", lambda: _same)
 
     # Stub qlib.data.D.features so no provider is touched.
     fake_frame = pd.DataFrame()

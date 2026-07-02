@@ -34,7 +34,9 @@ CACHE_MANIFEST_COLUMNS = (
     # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding — a
     # cache written under one provider build/policy must not be reused under
     # another. Legacy rows backfill "" and therefore fail the reuse check
-    # against a real id (one-time safe invalidation after a rotation).
+    # against a real id. The refusal is typed (ProviderGenerationMismatchError)
+    # so the recompute-only door can self-heal by appending a fresh row under
+    # the live generation — the check reads only the latest row per key.
     "provider_build_id",
     "calendar_policy_id",
 )
@@ -96,6 +98,19 @@ def _append_row(frame: pd.DataFrame, row: dict[str, Any]) -> pd.DataFrame:
 
 class CacheKeyMismatchError(ValueError):
     """Raised when a cached artifact is reused across the wrong hypothesis window or stage."""
+
+
+class ProviderGenerationMismatchError(CacheKeyMismatchError):
+    """The manifest's latest row for this key was written under another provider
+    generation (build/policy rotation, incl. legacy ``""`` rows).
+
+    Raised ONLY by the generation-binding branch of ``assert_cache_reusable``,
+    which runs strictly AFTER the design_hash/stage/window checks — so a caller
+    that catches this subclass can never mask one of those violations. A door
+    that holds NO cached artifact and always recomputes from the live provider
+    (today: ``qlib_windowed_features``) may catch it, recompute, and re-record
+    under the live generation; every other caller must let it propagate
+    (fail-closed default unchanged)."""
 
 
 @dataclass(frozen=True)
@@ -241,9 +256,15 @@ class CacheManifestStore:
 
         R4-M4: the provider-generation ids are REQUIRED non-blank; a legacy
         manifest row (recorded "" before the generation-binding rule) then
-        mismatches the real ids and is REFUSED — refusal is the deliberate
-        legacy-invalidation path (the monthly bump ceremony archives the cache
-        manifest; no silent migration mode is reachable from research doors).
+        mismatches the real ids and is REFUSED (``ProviderGenerationMismatchError``)
+        — stale-generation rows never validate reuse. The refusal is NOT
+        permanent for the one recompute-only door: ``qlib_windowed_features``
+        catches the typed subclass, recomputes from the live provider, and
+        appends a fresh row under the live generation (the manifest is
+        append-only and this check reads only the latest row, so the append
+        self-heals the key; the stale row stays behind as the rotation audit
+        trail). Every other caller lets it propagate — there is still no
+        silent path that ACCEPTS a stale row as valid.
 
         ``cache_type`` controls the design_hash check (Part B, plan
         ``snappy-buzzing-meerkat`` v5):
@@ -270,7 +291,12 @@ class CacheManifestStore:
         events = self.list_events(cache_key=cache_key, cache_path=cache_path)
         if events.empty:
             return
-        latest = events.sort_values("recorded_at").iloc[-1]
+        # GPT M1 (M4 self-heal review): "latest" = APPEND order, not the
+        # second-precision recorded_at (ambiguous for same-second rows, wrong
+        # under clock skew). record_cache_write appends under file_lock and
+        # list_events preserves parquet row order, so iloc[-1] is the last
+        # write.
+        latest = events.iloc[-1]
         if cache_type != "qlib_features":
             if str(latest["design_hash"]) != str(cache_context.design_hash):
                 raise CacheKeyMismatchError(
@@ -288,13 +314,17 @@ class CacheManifestStore:
         # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding.
         # Enforced only when the caller supplies the current ids; a legacy row
         # (backfilled "") then mismatches a real id and the cache is refused —
-        # a one-time safe invalidation after any provider rotation.
+        # a one-time safe invalidation after any provider rotation. Raised as
+        # the typed subclass so the recompute-only door can self-heal (append a
+        # fresh row under the live generation) WITHOUT weakening the checks
+        # above: this branch is reached only after design_hash/stage/window all
+        # matched, so catching the subclass can never mask those violations.
         for column, current in (
             ("provider_build_id", provider_build_id),
             ("calendar_policy_id", calendar_policy_id),
         ):
             if current and str(latest.get(column, "")) != str(current):
-                raise CacheKeyMismatchError(
+                raise ProviderGenerationMismatchError(
                     f"Cache manifest mismatch for {cache_path}: {column} "
                     f"{latest.get(column, '')!r} != {current!r} — caches do not "
                     "survive a provider rotation (UNFREEZE_PLAN.md M4 binding)."
