@@ -10,14 +10,20 @@ You are a senior reviewer for an A-share quantitative research system where RESE
 
 REPO (public — fetch any file to verify against the live code)
 https://github.com/henrydan111/quant-system   (branch: claude/confident-jemison-48b622)
-Raw links (substitute the path):
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/src/research_orchestrator/qlib_windowed_features.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/src/research_orchestrator/cache_manifest.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/src/data_infra/provider_context.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/tests/research_orchestrator/test_cache_generation_self_heal.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/tests/research_orchestrator/test_research_access_context.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/src/research_orchestrator/sealed_backtest_runner.py
-- https://raw.githubusercontent.com/henrydan111/quant-system/claude/confident-jemison-48b622/src/research_orchestrator/promotion_evidence.py
+Review THIS immutable commit: d100d769a0a65ba601f61703bb64a5c66fb1fefc — all raw links below are SHA-pinned so a stale branch cache cannot serve you pre-fold code.
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/src/research_orchestrator/qlib_windowed_features.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/src/research_orchestrator/cache_manifest.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/src/data_infra/provider_context.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/tests/research_orchestrator/test_cache_generation_self_heal.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/tests/research_orchestrator/test_research_access_context.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/src/research_orchestrator/sealed_backtest_runner.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/d100d769a0a65ba601f61703bb64a5c66fb1fefc/src/research_orchestrator/promotion_evidence.py
+
+FRESHNESS CANARY — do this FIRST, before any review judgment. Your previous R2 response re-issued the R1 findings verbatim against PRE-fold code (it quoted `latest = events.sort_values("recorded_at").iloc[-1]` and a door without the context pin — neither exists at this commit). Fetch qlib_windowed_features.py and cache_manifest.py via the SHA links above and confirm ALL THREE markers before proceeding:
+1. qlib_windowed_features.py contains "Live provider generation changed during an active" (the B1 pin);
+2. qlib_windowed_features.py contains "binding_build_id" used in BOTH assert_cache_reusable and record_cache_write;
+3. cache_manifest.py contains "latest = events.iloc[-1]" and does NOT contain "sort_values(\"recorded_at\")".
+If any marker is missing you are reading a stale snapshot — refetch by SHA. State in your response that the canary passed.
 
 SELF-REVIEW PREFLIGHT — completed before this re-review: verdict = clean for GPT. Full tests/research_orchestrator 292 passed 0 failed (R1 state: 285; +7 = the new B1/M1/M2 pins); preload_hardening + pr8_runtime_enforcement + provider_manifest 51 passed. Residual concerns are listed per finding below — the most substantive is the archived-provider replay consequence under DISPOSITION B1/M2.
 
