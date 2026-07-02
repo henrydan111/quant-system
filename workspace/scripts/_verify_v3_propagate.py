@@ -62,13 +62,48 @@ def _base_screens(e, zsfz, pday, d, insts, bounds):
     return keep
 
 
-def build_schedule(book, start, end):
+
+
+def build_onmom_v2():
+    """onmom250/120 v2: min_periods=1 on all rolling sums (果仁 SUM(x,N) sums AVAILABLE bars for young
+    stocks; the v1 frames' min_periods 120/60/10 NaN-ed 次新 names (21-119 bars) that the v3 calendar
+    screen now admits -> they bottom-ranked locally while 果仁 ranks their partial sums normally)."""
+    out250 = CACHE / "f_onmom250_v2.parquet"
+    out120 = CACHE / "f_onmom120_v2.parquet"
+    if out250.exists() and out120.exists():
+        print("[onmomv2] cached — reuse", flush=True)
+        return
+    import qlib
+    from qlib.config import REG_CN
+    from qlib.data import D
+    qlib.init(provider_uri=str(ROOT / "data" / "qlib_data"), region=REG_CN, kernels=1)
+    grid = pd.read_parquet(CACHE / "e_close_raw.parquet").index
+    insts = list(pd.read_parquet(CACHE / "e_close_raw.parquet").columns)
+    fields = ["$open", "$close", "$adj_factor", "$limit_status"]
+    df = D.features(insts, fields, start_time=str(grid[0].date()), end_time=str(grid[-1].date()), freq="day")
+    P = {c.replace("$", ""): df[c].unstack(level=0).sort_index().reindex(grid) for c in fields}
+    adjc = P["close"] * P["adj_factor"]
+    adjo = P["open"] * P["adj_factor"]
+    onret = np.log((adjo / adjc.shift(1)).where(lambda x: x > 0))
+    onret = onret.where(P["limit_status"] != 1, 0.0)
+    s20 = onret.rolling(20, min_periods=1).sum()
+    (onret.rolling(250, min_periods=1).sum() - s20).astype("float32").to_parquet(out250)
+    (onret.rolling(120, min_periods=1).sum() - s20).astype("float32").to_parquet(out120)
+    print("[onmomv2] saved f_onmom250_v2 + f_onmom120_v2", flush=True)
+
+def build_schedule(book, start, end, variant="v3"):
     if book == 1:
         f, ind, e = g1._load()                                       # g1 default 9-term WEIGHTS
         comp_row, weights_mod = g1._composite_row, g1
         zsfz = pd.read_parquet(CACHE / "e_zsfz.parquet")
         bias = e["bias120"]
-        headroom, sched_path = 30, OUT / "verify01c_schedule.json"
+        headroom = 30
+        sched_path = OUT / ("verify01d_schedule.json" if variant == "v4" else "verify01c_schedule.json")
+        if variant == "v4":
+            f = dict(f)
+            f["ROETTMDiff"] = pd.read_parquet(CACHE / "f_ROETTMDiff_v2.parquet")
+            f["onmom250"] = pd.read_parquet(CACHE / "f_onmom250_v2.parquet")
+            f["onmom120"] = pd.read_parquet(CACHE / "f_onmom120_v2.parquet")
         tmt = None
     else:
         f, ind, e = g6._load()
@@ -114,17 +149,21 @@ def build_schedule(book, start, end):
     print(f"[sched-v3 #{book}] {nonempty}/{len(cal)} non-empty; saved {sched_path.name}", flush=True)
 
 
-def run(book, start, end):
+def run(book, start, end, variant="v3"):
     from src.backtest_engine.event_driven import EventDrivenBacktester, CostConfig
     from src.backtest_engine.event_driven.exchange import FixedSlippage
     if book == 1:
-        sched_path, net_name = OUT / "verify01c_schedule.json", "verify01c_net.parquet"
+        if variant == "v4":
+            sched_path, net_name, label = OUT / "verify01d_schedule.json", "verify01d_net.parquet", "#1 sm_01_成长动量 v4(roev2+onmom)"
+        else:
+            sched_path, net_name, label = OUT / "verify01c_schedule.json", "verify01c_net.parquet", "#1 sm_01_成长动量 v3"
         params = dict(buy_rank=20, sell_rank=25, target_n=10, pos_max=0.13, max_holds=15)
-        xlsx, label = g1.XLSX, "#1 sm_01_成长动量 v3"
+        xlsx = g1.XLSX
     else:
         sched_path, net_name = OUT / "verify06c_schedule.json", "verify06c_net.parquet"
         params = dict(buy_rank=20, sell_rank=15, target_n=7, pos_max=0.225, max_holds=13)
         xlsx, label = g6.XLSX, "#6 sm_01_成长高贝塔@TMT v3"
+        _ = variant
     sched = {pd.Timestamp(k): v for k, v in json.loads(sched_path.read_text(encoding="utf-8")).items()}
     strat = ModelIIPosProfitStrategy(sched, use_exits=False, rebuy_cooldown=0, **params)
     cost = CostConfig(buy_commission=0.002, sell_commission=0.002, stamp_tax=0.0, min_commission=0.0,
@@ -157,13 +196,17 @@ def main():
     ap.add_argument("--book", type=int, choices=(1, 6), required=True)
     ap.add_argument("--schedule", action="store_true")
     ap.add_argument("--run", action="store_true")
+    ap.add_argument("--variant", default="v3", choices=("v3", "v4"))
+    ap.add_argument("--build-onmom-v2", action="store_true")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2026-02-27")
     a = ap.parse_args()
+    if a.build_onmom_v2:
+        build_onmom_v2()
     if a.schedule:
-        build_schedule(a.book, a.start, a.end)
+        build_schedule(a.book, a.start, a.end, a.variant)
     if a.run:
-        run(a.book, a.start, a.end)
+        run(a.book, a.start, a.end, a.variant)
 
 
 if __name__ == "__main__":
