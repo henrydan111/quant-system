@@ -78,7 +78,7 @@ def qlib_windowed_features(
     # "sandbox/no-context calls skip this check" behavior is exactly the leak
     # the pre-publish wall exists to close. Boundary resolution failure fails
     # closed too (the resolver raises).
-    from src.data_infra.pit_research_loader import live_provider_ids, live_spent_oos_end
+    from src.data_infra.provider_context import live_provider_ids, live_spent_oos_end
 
     boundary_end = live_spent_oos_end()
     if pd.Timestamp(end_time) > boundary_end:

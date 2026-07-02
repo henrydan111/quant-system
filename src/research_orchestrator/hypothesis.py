@@ -416,6 +416,11 @@ class PrescribedRecipe:
     portfolio: PortfolioConstruction = field(default_factory=PortfolioConstruction)
     cost_model: CostModel = field(default_factory=CostModel)
     allow_candidate_components: bool = False
+    # UNFREEZE_PLAN.md D1 / GPT R4-M2: the calendar policy this prescription is
+    # pinned to. REQUIRED for formal backtest steps — _formal_calendar_policy_id
+    # fails closed when unset and NEVER falls back to the live provider
+    # manifest. None (not "") is the unset sentinel per POLICY001b.
+    calendar_policy_id: str | None = None
 
     def validate(self) -> None:
         self.universe.validate()
@@ -481,10 +486,16 @@ class PrescribedRecipe:
             "portfolio": self.portfolio.to_dict(),
             "cost_model": self.cost_model.to_dict(),
             "allow_candidate_components": bool(self.allow_candidate_components),
+            # R4-M2: the pin must survive the request-file round trip
+            # (to_dict/from_dict is the NORMAL formal-run path). Deliberately
+            # NOT in normalized_dict()/design_hash — execution-environment
+            # binding, not design identity.
+            "calendar_policy_id": self.calendar_policy_id,
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PrescribedRecipe":
+        raw_policy = payload.get("calendar_policy_id")
         return cls(
             universe=UniverseSpec.from_dict(payload["universe"]),
             components=tuple(PrescribedComponent.from_dict(c) for c in payload.get("components", [])),
@@ -495,6 +506,7 @@ class PrescribedRecipe:
             portfolio=PortfolioConstruction.from_dict(payload.get("portfolio", {})),
             cost_model=CostModel.from_dict(payload.get("cost_model", {})),
             allow_candidate_components=bool(payload.get("allow_candidate_components", False)),
+            calendar_policy_id=str(raw_policy) if raw_policy is not None else None,
         )
 
 

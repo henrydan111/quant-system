@@ -277,6 +277,11 @@ def _audit_daily_files_inprocess() -> dict:
         # CLOSED session: before ~16:00 CST today's bar cannot exist yet, so a
         # same-day expectation would false-fail every intraday QA run
         # (calendar-unfreeze Phase 1 latent-assumption fix, 2026-07-02).
+        # R4-m1 note: the hour>=16 heuristic is a TEMPORARY CONSERVATIVE CAP,
+        # not the formal definition of "last complete trading day" — the
+        # steady-state anchor (UNFREEZE_PLAN Phase 5) is
+        # min(provider_calendar_end, last_complete_trade_date, endpoint-ready
+        # date), owned by the monthly bump driver's readiness check.
         now = pd.Timestamp.now()
         cutoff = now.strftime("%Y%m%d") if now.hour >= 16 else (now - pd.Timedelta(days=1)).strftime("%Y%m%d")
         cal = cal[cal["cal_date"].astype(str) <= cutoff]

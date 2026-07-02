@@ -56,7 +56,7 @@ def _seed_collision(manifest_dir: Path, *, design_hash: str, stage: str) -> dict
     Mirrors what ``qlib_windowed_features`` would have written under a prior
     run with a different design_hash. Returns the recorded row.
     """
-    from src.data_infra.pit_research_loader import live_provider_ids
+    from src.data_infra.provider_context import live_provider_ids
 
     build_id, policy_id = live_provider_ids()
     cache_key = _deterministic_cache_path(FREQ, OHLCV_FIELDS, START, END)

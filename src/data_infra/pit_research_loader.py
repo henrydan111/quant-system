@@ -80,67 +80,27 @@ def _ledger_path(ledger: str) -> Path:
     return _data_root() / "pit_ledger" / ledger / f"{ledger}.parquet"
 
 
-@functools.lru_cache(maxsize=1)
 def _spent_oos_end_timestamp() -> pd.Timestamp:
     """D3 born-sealed clamp source (UNFREEZE_PLAN.md, GPT Round-1 B1 / Round-2 M6).
 
-    Reads the LIVE provider manifest's declared calendar policy and resolves the
-    spent-OOS boundary through ``resolve_spent_oos_boundary`` (legacy frozen
-    policies without the boundary fields fall back to their own calendar end —
-    exactly the status quo). Reading the live policy here is the documented
-    exception to the no-global-policy invariant: the clamp's subject IS the
-    live provider. ANY resolution failure fails closed.
+    Delegates to the neutral :mod:`src.data_infra.provider_context` (R4-m2) —
+    rotation-safe (manifest-stat keyed, R4-M3) and fail-closed. Reading the
+    live policy is the documented exception to the no-global-policy invariant:
+    the clamp's subject IS the live provider.
     """
-    from src.data_infra.provider_manifest import load_provider_manifest
-    from src.research_orchestrator.calendar_policy import (
-        load_calendar_policy,
-        resolve_spent_oos_boundary,
-    )
+    from src.data_infra.provider_context import ProviderContextError, live_spent_oos_end as _live
 
-    qlib_dir = _data_root() / "qlib_data"
     try:
-        manifest = load_provider_manifest(qlib_dir)
-        cal_lines = [
-            ln.strip()
-            for ln in (qlib_dir / "calendars" / "day.txt").read_text(encoding="utf-8").splitlines()
-            if ln.strip()
-        ]
-        policy = load_calendar_policy(
-            manifest.calendar_policy_id,
-            root=_PROJECT_ROOT / "config" / "calendar_policies",
-        )
-        boundary = resolve_spent_oos_boundary(policy, cal_lines[-1])
-    except Exception as exc:
+        return _live()
+    except ProviderContextError as exc:
         raise PitResearchLoaderError(
-            "cannot resolve the spent-OOS boundary from the live provider "
-            f"(manifest/policy/calendar): {exc} — the sandbox loader fails closed "
-            "(UNFREEZE_PLAN.md D3)."
+            f"{exc} — the sandbox loader fails closed (UNFREEZE_PLAN.md D3)."
         ) from exc
-    return pd.Timestamp(boundary.spent_oos_end)
 
 
 def live_spent_oos_end() -> pd.Timestamp:
-    """Public D3 clamp source shared by BOTH sanctioned doors (this sandbox
-    loader and the formal ``qlib_windowed_features``). See
-    :func:`_spent_oos_end_timestamp` for semantics; failures fail closed."""
+    """Back-compat delegate — canonical home is provider_context (R4-m2)."""
     return _spent_oos_end_timestamp()
-
-
-@functools.lru_cache(maxsize=1)
-def live_provider_ids() -> tuple[str, str]:
-    """(provider_build_id, calendar_policy_id) RECORDED by the live manifest.
-
-    Used by the formal door to bind cache-manifest rows to the provider
-    generation (UNFREEZE_PLAN.md Phase 2 / GPT R2-M4). Failure fails closed."""
-    from src.data_infra.provider_manifest import load_provider_manifest
-
-    try:
-        manifest = load_provider_manifest(_data_root() / "qlib_data")
-    except Exception as exc:
-        raise PitResearchLoaderError(
-            f"cannot resolve live provider identity (manifest): {exc} — fail closed."
-        ) from exc
-    return str(manifest.provider_build_id), str(manifest.calendar_policy_id)
 
 
 @functools.lru_cache(maxsize=1)

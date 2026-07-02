@@ -159,10 +159,14 @@ class CacheManifestStore:
         stage: str,
         window_start: str,
         window_end: str,
-        provider_build_id: str = "",
-        calendar_policy_id: str = "",
+        provider_build_id: str,
+        calendar_policy_id: str,
     ) -> dict[str, Any]:
         """Append a cache-write event to the manifest.
+
+        R4-M4/M5: the provider-generation ids are REQUIRED non-blank — no new
+        cache row may record an empty generation (legacy rows written before
+        this rule carry "" and are refused on reuse).
 
         PR 4 of the 2026-05-26 freeze plan: the entire read-append-write
         sequence runs inside ``file_lock`` so concurrent processes do not
@@ -173,6 +177,15 @@ class CacheManifestStore:
 
         Lock file: ``<root_dir>/cache_events.lock``.
         """
+        for _name, _value in (
+            ("provider_build_id", provider_build_id),
+            ("calendar_policy_id", calendar_policy_id),
+        ):
+            if not _value or not str(_value).strip():
+                raise CacheKeyMismatchError(
+                    f"record_cache_write requires a non-blank {_name} "
+                    "(R4-M4: no new cache row without a provider generation)."
+                )
         recorded_at = _now_str()
         row = {
             "manifest_id": hashlib.sha256(
@@ -221,10 +234,16 @@ class CacheManifestStore:
         window_start: str,
         window_end: str,
         cache_type: str = "",
-        provider_build_id: str = "",
-        calendar_policy_id: str = "",
+        provider_build_id: str,
+        calendar_policy_id: str,
     ) -> None:
         """Verify a cached artifact is reusable under the current context.
+
+        R4-M4: the provider-generation ids are REQUIRED non-blank; a legacy
+        manifest row (recorded "" before the generation-binding rule) then
+        mismatches the real ids and is REFUSED — refusal is the deliberate
+        legacy-invalidation path (the monthly bump ceremony archives the cache
+        manifest; no silent migration mode is reachable from research doors).
 
         ``cache_type`` controls the design_hash check (Part B, plan
         ``snappy-buzzing-meerkat`` v5):
@@ -239,6 +258,15 @@ class CacheManifestStore:
           hypothesis-isolated caches (factor-screening intermediate results,
           ML model checkpoints, etc.) that may be added later.
         """
+        for _name, _value in (
+            ("provider_build_id", provider_build_id),
+            ("calendar_policy_id", calendar_policy_id),
+        ):
+            if not _value or not str(_value).strip():
+                raise CacheKeyMismatchError(
+                    f"assert_cache_reusable requires a non-blank {_name} "
+                    "(R4-M4: generation binding is mandatory on every reuse check)."
+                )
         events = self.list_events(cache_key=cache_key, cache_path=cache_path)
         if events.empty:
             return

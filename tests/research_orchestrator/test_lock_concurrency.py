@@ -85,6 +85,8 @@ def _cache_worker(args: tuple[str, str, int]) -> tuple[int, str, str | None]:
             stage="is_only",
             window_start="2024-01-01",
             window_end="2024-12-31",
+            provider_build_id="test_build",
+            calendar_policy_id="test_policy",
         )
         return (worker_id, "success", row.get("manifest_id"))
     except Exception as exc:  # noqa: BLE001
@@ -315,6 +317,8 @@ class TestSingleProcessRegression:
             stage="is_only",
             window_start="2024-01-01",
             window_end="2024-12-31",
+            provider_build_id="test_build",
+            calendar_policy_id="test_policy",
         )
         events = store.list_events(cache_key="k")
         assert len(events) == 1

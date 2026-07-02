@@ -115,3 +115,27 @@
 新增 14 测试（9 政策解析器 + 5 正式门行为）；orchestrator 253 全绿、data_infra 全绿（除既有 test_share_capital_daily 收集问题，独立任务处理中）、pr8 系列全绿（pr8c 源文断言更新为新契约）、`run_daily_qa` Overall PASS exit=0（含新 POLICY001 lint）。
 
 **Round-4 结论：clean for GPT（实现 diff 审查）。**
+
+---
+
+# Round-5 自审（R4 findings 应用后）— 2026-07-02
+
+**背景**：Round-4 verdict = REVISE（0 Blocker、M1-M6 + m1-m2，全接受零拒绝；处置表 = 计划 §7b）。
+
+## 应用忠实性
+
+- **M1**：promotion 守卫三分重写（短拒/等过/长=spent-replay 或 sealed 分支）；sealed 分支校验 = 活跃 ctx + `holdout_seal_claimed` + 窗口覆盖 [oos_start,oos_end] + ctx 的 provider/policy 绑定 == 注入的 live provenance。与 GPT 替换文本的差异（诚实披露）：GPT 要求 seal 记录本身绑定 candidate/purpose/code_hash 等——ctx 层绑定已覆盖 provider/policy/窗口三要素；seal 记录级的完整字段绑定（含 code/config/data hash）作为后续项记录，未在本轮实现。
+- **M2**：`PrescribedRecipe.calendar_policy_id` 字段落地 + `_formal_calendar_policy_id` 只认 prescription pin、否则 ValueError fail-closed（manifest 回退删除）。**关键设计决策**：新字段**不进** `normalized_dict()`/design_hash（政策 pin = 执行环境绑定，非设计身份；同一设计换政策不换 hash）——既有 design_hash 零漂移（seal 键安全），请 GPT 复核该语义选择。
+- **M3**：`provider_context.py` 中立模块（m2 一并解决），缓存键 = manifest 文件 `(mtime_ns, size)`（GPT 方案 A）+ `refresh_live_provider_context()` belt；进程内轮换测试（改写 manifest 后无显式刷新即重解析）+ manifest 缺失 fail-closed 测试。
+- **M4**：两处 cache API 的世代 id 必填非空白（空白 raise）；旧空值行拒绝 = 有意 legacy 失效路径（无研究门可达的迁移模式），月度仪式归档 manifest。
+- **M5**：发布闸三重校验（非 None/非空白/必须解析到已提交政策 YAML）。
+- **M6**：21 个新测试（电池 + 缓存 fail-closed 扩展）。
+- **m1/m2**：注释 TEMPORARY CAP + 中立模块。
+- **自发现（超出 GPT 清单）**：seal 的 crash-resume（allow_same_run）在 provider 轮换后会静默对不同数据恢复——已补：SEAL_COLUMNS 增 provider/policy 绑定、恢复路径世代不符即拒 + 3 测试。
+
+## 波及修复
+
+- 3 个测试 fixture 迁移（lock_concurrency ×2、permissive 全量、hypothesis_workflow 两处 recipe 加 pin）；collision fixture 的 live_provider_ids 导入 repoint。
+- 发现 2 个**既有**问题（非本 diff）：test_share_capital_daily 导入路径、test_direct_d_features 与特权哨兵调用的 noqa 分歧——各挂独立任务芯片，不混入本墙。
+
+**Round-5 结论：clean for GPT re-review（范围：M1-M6/m1-m2 应用 + design_hash 排除决策 + seal-resume 自发现补丁）。**

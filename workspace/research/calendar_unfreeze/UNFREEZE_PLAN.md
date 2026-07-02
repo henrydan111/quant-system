@@ -209,6 +209,23 @@ Round-2 逐条判定：B2/M1/M3/M4/m1/m2/m3/m4 = **RESOLVED**；B1、M2 = PARTIA
 
 **拒绝项：无。**
 
+## 7b. GPT Round-4（Phase 2 实现 diff 审查，2026-07-02，verdict = REVISE）处置表
+
+无 Blocker；6 Major + 2 minor 全部接受，零拒绝。核心批评 = 正式出处链未端到端机械钉死。
+
+| # | Finding | 处置 | 落点 |
+|---|---------|------|------|
+| M1 | promotion/revalidation 缺显式 seal 分支（D3.5 只实现了 spent-replay 支） | **接受**：守卫三分（短日历拒 / 等值过 / 长日历仅 spent-replay 或 活跃已申领 seal 且窗口覆盖 + provider/policy 绑定匹配）；绝不从 live 末端推断 | promotion_evidence 守卫重写 + 4 分支测试 |
+| M2 | `_formal_calendar_policy_id` 回退 live manifest = 用 live 政策顶替 artifact 政策 | **接受**：`PrescribedRecipe.calendar_policy_id` 字段落地；helper 只认 prescription pin，未设/空白 **fail-closed，无 manifest 回退**（manifest 等值由运行时校验器另行执行） | hypothesis.py + validation_steps + 测试 |
+| M3 | 进程级 `lru_cache` 跨轮换读旧身份 = 出处/绑定风险 | **接受**（方案 A）：中立模块 `provider_context` 以 manifest 文件 `(mtime_ns,size)` 为缓存键——轮换重写 manifest 即自动失效；另暴露 `refresh_live_provider_context()`（发布仪式 belt）；进程内轮换测试 | src/data_infra/provider_context.py |
+| M4 | 缓存世代绑定"传了才校验"≠强制 | **接受**：`record_cache_write`/`assert_cache_reusable` 的两 id **必填非空白**（空白即 raise）；旧空值行失配即拒 = 有意的 legacy 失效路径（月度仪式归档 cache manifest，研究门无静默迁移模式） | cache_manifest + 测试 |
+| M5 | 空串政策 id 必须在 legacy 迁移外非法 | **接受**：发布链校验非空白 + **必须解析到已提交政策 YAML**（加载即存在性校验）；formal helper 空白 fail-closed；缓存写空白 fail-closed | pit_backend run() 闸强化 |
+| M6 | 测试不足 | **接受**：R4 电池（发布闸 None/空/空白/未知 id；增量 republish 保 manifest 记录政策；formal 出处 fail-closed；进程内轮换失效 + manifest 缺失 fail-closed；promotion 守卫 5 分支；seal 恢复世代绑定 3 例）+ 缓存世代 fail-closed 4 例 | test_r4_wall_hardening.py + permissive 扩展 |
+| m1 | 16 点启发式不可成为"最后完整交易日"正式定义 | **接受**：注释明确 TEMPORARY CONSERVATIVE CAP，稳态锚归月度 driver 就绪检查 | run_daily_qa 注释 |
+| m2 | 跨模块导入应归中立模块 | **接受**：`provider_context.py`（无副作用，不导入任何 door；两 door 都依赖它） | 新模块 + repoint |
+
+**附带发现**：seal 的 crash-resume（allow_same_run）在 provider 轮换后会静默对不同数据恢复——超出 GPT 清单的自发现洞，已补：申领记录世代绑定 + 恢复路径世代不符即拒（holdout_seal.py）。
+
 ## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
 
 M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：

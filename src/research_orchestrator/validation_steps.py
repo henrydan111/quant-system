@@ -37,34 +37,26 @@ class FactorDefinitionDriftError(RuntimeError):
 def _formal_calendar_policy_id(context: StepExecutionContext) -> str:
     """Resolve the calendar policy id for a formal IS/OOS backtest step.
 
-    UNFREEZE_PLAN.md Phase 2.2a (GPT Round-2 M7): no executable hardcoded
-    policy id. Preference order:
-      1. an explicit ``calendar_policy_id`` on the hypothesis prescription
-         (the artifact-recorded form, when a request pins one);
-      2. the calendar_policy_id RECORDED by the live provider manifest — the
-         provider self-attestation the runtime validator will cross-check the
-         run against anyway (equality is enforced in
-         ``_validate_provider_at_runtime``, so this cannot drift silently).
+    UNFREEZE_PLAN.md D1 (GPT R2-M7 + R4-M2): the policy id flows from the
+    ARTIFACT record — the hypothesis prescription — and from nowhere else.
+    Unset/blank fails closed. There is deliberately NO fallback to the live
+    provider manifest here: a formal run substituting the live policy for the
+    prescription-recorded one is exactly the no-global-policy violation
+    (manifest equality is separately enforced downstream by
+    ``_validate_provider_at_runtime``, which will reject a prescription
+    pinned to a policy the live provider does not declare).
     """
-    prescription = getattr(getattr(context, "hypothesis", None), "prescription", None)
+    hypothesis = getattr(getattr(context, "request", None), "hypothesis", None)
+    prescription = getattr(hypothesis, "prescription", None)
     pinned = getattr(prescription, "calendar_policy_id", None)
-    if pinned:
-        return str(pinned)
-
-    from pathlib import Path
-
-    import yaml
-
-    from src.data_infra.provider_manifest import load_provider_manifest
-
-    project_root = Path(__file__).resolve().parents[2]
-    with open(project_root / "config.yaml", "r", encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh) or {}
-    raw = ((cfg.get("storage") or {}).get("qlib_data_dir")) or cfg.get("qlib_data_dir") or "./data/qlib_data"
-    qlib_dir = Path(raw)
-    if not qlib_dir.is_absolute():
-        qlib_dir = (project_root / qlib_dir).resolve()
-    return load_provider_manifest(qlib_dir).calendar_policy_id
+    if pinned and str(pinned).strip():
+        return str(pinned).strip()
+    raise ValueError(
+        "Formal backtest step requires hypothesis.prescription.calendar_policy_id "
+        "to be set (a committed config/calendar_policies/<id>.yaml id). It is "
+        "unset/blank — failing closed (UNFREEZE_PLAN.md D1: no live-manifest "
+        "fallback in formal runs)."
+    )
 
 
 def _stub_outputs(context: StepExecutionContext, **extras: Any) -> StepExecutionResult:

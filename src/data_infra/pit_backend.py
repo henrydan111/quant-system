@@ -4456,12 +4456,32 @@ class StagedQlibBackendBuilder:
         # UNFREEZE_PLAN.md D1 no-global-policy invariant: a publish stamps the
         # manifest's calendar_policy_id — it must be an explicit caller decision,
         # never a module default (the old hard default silently pinned every
-        # publish to frozen_20260227_system_build).
-        if publish and not calendar_policy_id:
-            raise BuildGateError(
-                "publish=True requires an explicit calendar_policy_id "
-                "(config/calendar_policies/<id>.yaml). There is no default."
+        # publish to frozen_20260227_system_build). R4-M5: blank/whitespace ids
+        # are rejected exactly like missing ones, and the id must resolve to a
+        # committed policy YAML (loading it IS the existence + schema check).
+        if publish:
+            if not calendar_policy_id or not str(calendar_policy_id).strip():
+                raise BuildGateError(
+                    "publish=True requires an explicit non-blank calendar_policy_id "
+                    "(config/calendar_policies/<id>.yaml). There is no default."
+                )
+            from pathlib import Path as _Path
+
+            from src.research_orchestrator.calendar_policy import (
+                CalendarPolicyError,
+                load_calendar_policy,
             )
+
+            try:
+                load_calendar_policy(
+                    str(calendar_policy_id).strip(),
+                    root=_Path(self.paths.project_root) / "config" / "calendar_policies",
+                )
+            except CalendarPolicyError as exc:
+                raise BuildGateError(
+                    f"publish=True got calendar_policy_id={calendar_policy_id!r} which does "
+                    f"not resolve to a committed policy: {exc}"
+                ) from exc
 
         if stage == "provider-only":
             profiled = self.collect_profiles(datasets=datasets, use_persisted=True)

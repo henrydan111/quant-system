@@ -29,11 +29,14 @@ BOUNDARY = pd.Timestamp("2026-02-27")
 
 @pytest.fixture(autouse=True)
 def _stub_boundary_and_qlib(monkeypatch, tmp_path):
-    # Pin the boundary (unit isolation; the resolver itself is covered by
-    # test_spent_oos_boundary.py against the real policy files).
-    import src.data_infra.pit_research_loader as loader_mod
+    # Pin the boundary + generation ids (unit isolation; the resolver itself is
+    # covered by test_spent_oos_boundary.py against the real policy files).
+    import src.data_infra.provider_context as ctx_mod
 
-    monkeypatch.setattr(loader_mod, "live_spent_oos_end", lambda: BOUNDARY)
+    monkeypatch.setattr(ctx_mod, "live_spent_oos_end", lambda: BOUNDARY)
+    monkeypatch.setattr(
+        ctx_mod, "live_provider_ids", lambda: ("test_build", "frozen_20260630_thaw_step1")
+    )
 
     # Stub qlib.data.D.features so no provider is touched.
     fake_frame = pd.DataFrame()
