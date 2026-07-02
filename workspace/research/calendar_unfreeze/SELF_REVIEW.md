@@ -139,3 +139,23 @@
 - 发现 2 个**既有**问题（非本 diff）：test_share_capital_daily 导入路径、test_direct_d_features 与特权哨兵调用的 noqa 分歧——各挂独立任务芯片，不混入本墙。
 
 **Round-5 结论：clean for GPT re-review（范围：M1-M6/m1-m2 应用 + design_hash 排除决策 + seal-resume 自发现补丁）。**
+
+---
+
+# Round-6 自审（R5-M7 修复后，清场 re-review 前置）— 2026-07-02
+
+**背景**：Round-5 verdict = REVISE，单点收敛——唯一 Phase-3 阻塞 = M7（provider_context 内容身份）；M1 残留/M6-test-2/m3 被 GPT 明示裁定为 **Phase-6 门槛**；m4 由独立会话处理中（task_94159a87）。
+
+## 修订忠实性核对
+
+- **M7**：缓存键 `(path, st_mtime_ns, st_size, sha256(provider_build.json))`，**每次调用**读 manifest 字节并哈希（≈1KB）。与 GPT 替换文本的差异声明：GPT 写的是"mtime/size 匹配时再比对 sha256"两段式；我实现为 sha256 直接进键（每次都算）——**严格更强且更简单**，成本相同（GPT 的规格在 stat 匹配路径上同样要求每次算当前 sha256）。缺失/畸形/解析失败 fail-closed 不变；`refresh_live_provider_context()` 保留为 belt。✔
+- **M6-test-1**：等长 id 重写 + `os.utime(ns=...)` 精确还原 → 断言 `st_size`/`st_mtime_ns` 双等 → `live_provider_ids()` 返回新 id + 边界重解析 + 旧世代缓存行对新 id 拒绝（`CacheKeyMismatchError`）。两半都覆盖。✔
+- **处置表**：计划 §7c 落 R5 全部 rulings（含 design_hash 排除 APPROVED、Phase-6 前置清单三项、m4 独立会话进行中）。✔
+
+## 新引入内容自查
+
+- 每次调用多一次 ~1KB 文件读 + sha256：两 door 每次读数一次，微秒级，无性能顾虑。
+- 键含 path：防 monkeypatch/多 provider 根间的键碰撞（测试环境即受益）。
+- 回归面：600 passed / 9 skipped（research_orchestrator + data_infra 全量，仅排除既有损坏的 test_share_capital_daily 收集问题——独立芯片处理中）。
+
+**Round-6 结论：clean for GPT clearing re-review（范围：M7 + M6-test-1 的解决；Phase-6 门槛清单与 m4 状态确认）。**
