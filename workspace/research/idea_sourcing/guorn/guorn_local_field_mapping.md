@@ -122,6 +122,25 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > (DivGrPY%/DivAGrPY%/连续N年分红) cancel 总股本 entirely; 总市值/市研率 use `$total_mv` (always raw-exact). The historical
 > mid-quarter inconsistency (9.23% of stock-days pre-fix) mattered only for through-time backtests, now fixed above.
 
+> **⚠ BOOK-REPLICATION platform semantics (pinned 2026-07-02, the 成长簇 v3/v4 campaign — #2 headline-matched
+> CAGR +58.59% vs 果仁 +58.20%). Four semantics EVERY book replication must honor:**
+> 1. **`排名%区间 X%-100%` drops the TOP (100−X)% — rank runs 从大到小 (rank 1 = largest).** The old harness
+>    dropped the BOTTOM decile (inverted) → 30% of 果仁-held names screen-missed in 2015/2018. Decisive
+>    evidence: held names sit in the bottom decile 11-16% of the time, in the top decile ~0-5% (p99≈0.86-0.92).
+> 2. **筛选 上市天数>N = CALENDAR days since listing** (the verified 上市天数 caliber), NOT local bar counts —
+>    a bar proxy over-excludes 次新 (359 misses in 2015 alone).
+> 3. **`SUM(x,N)` (and window funcs) sum AVAILABLE bars for young stocks** — do NOT NaN-out names with
+>    < N bars (min_periods=1, not N/2): 果仁 ranks partial sums; NaN→bottom mis-ranks hot 次新
+>    (#1's 2015 gap −56pp → −5pp on this fix alone).
+> 4. **ROETTMDiffPQ legs use 加权平均净资产** (time-weighted proxy `(0.5·q4+q3+q2+q1+0.5·q0)/4`), not period-end
+>    equity — the end-equity version's values disagree with 果仁's own xlsx (sign 57-65%).
+> **Method that found them (reusable order): replay 果仁's holdings through the engine (splits selection vs
+> execution) → miss-diagnosis vs 持仓详单 (screen-miss vs rank-miss, per-screen/per-factor) → held-name
+> percentile distributions (pin screen semantics) → per-factor value agreement vs the xlsx's own factor columns.**
+> Books: #2 v4 +58.59% (果仁 +58.20%, in25 0.906) · #6 v3 +57.78% (+60.32%) · #1 v4 +51.49% (+57.21%, in25 0.793;
+> residual = 2020+ 注册制/20cm era, 涨停标记-in-onmom hypothesis). Harnesses: guorn_verify_02b_calibers.py /
+> _verify_v3_propagate.py / _verify02_miss_diag.py / _replay_guorn_05_growth.py.
+
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 
 Validated at holding level (signal-date lag, scale-detect) for the first formal StrategyCandidate.
