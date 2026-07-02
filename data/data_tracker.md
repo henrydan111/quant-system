@@ -43,6 +43,12 @@ The core daily historical records for quantitative analysis. Each file represent
 | **Capitalization** | `total_share`, `float_share`, `free_share`, `total_mv`, `circ_mv` |
 | **Adjustments** | `adj_factor` |
 
+> **2026-07-01 provider maintenance:** the bare `$total_share`/`$float_share`/`$free_share` Qlib bins were
+> re-materialized IN PLACE from these daily columns (effective-date anchor) via `scripts/fix_share_capital_bins.py`
+> — 5,748 symbols × 3 bins rewritten, pre-fix bins backed up under `data/backups/share_capital_bins_20260701_221439/`
+> (172MB, prunable after the next full rebuild). Raw parquet untouched. See `data_dictionary.md` (daily section note)
+> for the anchoring/unit contract.
+
 ## 3. Index Data (`data/market/index/`)
 Historical tracking for major market indices.
 
@@ -234,6 +240,28 @@ normalize → PIT ledger → Qlib materialization → field-registry promotion. 
 - `pledge_stat` carries ONLY `end_date` (a weekly exchange statistic date, NOT a disclosure date) → visibility-date semantics + publication-lag need a check before formal use.
 - `express` / `disclosure_date` / `fina_audit` / `repurchase` / `top10_floatholders` carry `ann_date` → disclosure-anchored (standard `max(ann_date, f_ann_date)` / `ann_date` handling).
 - `fina_mainbz` segment rows anchor on the owning report's disclosure (join `ann_date` from the statement).
+
+---
+
+## broker_recommend (券商月度金股) — newly ingested 2026-06-28, RAW
+
+| Dataset | Path | API / mode | Files | Rows | Stocks | Span | Brokers |
+|---|---|---|---|---|---|---|---|
+| `broker_recommend` | `data/analyst/broker_recommend/broker_recommend_{YYYYMM}.parquet` | `broker_recommend` per-month (doc_id=267, 6000积分), idempotent, `--dry-run` | 72 | 16,706 | 2,236 | 2020-07..2026-06 | 80 |
+
+Ingested by [scripts/fetch_broker_recommend_historical.py](../scripts/fetch_broker_recommend_historical.py)
+for the Option-A "券商金股 mother signal" validation
+([workspace/research/broker_recommend_alpha/](../workspace/research/broker_recommend_alpha/)).
+**Status: RAW only** — NOT normalized, NOT in the PIT ledger, NOT in the Qlib provider, NOT in
+`field_status.yaml`. Formal materialization (as an **as-of monthly membership table**) is gated on the
+validation result + GPT cross-review.
+
+**PIT note:** the only date is `month` (= recommendation month, NOT visible-at). Tushare populates month M
+within its first 1–3 days → visibility must anchor on the first trading day **on/after ~day 4 of month M**,
+never month start. History starts 2020-07 (earlier empty). Broker coverage is unstable (10–44/month) →
+conviction comparable only **within-month**; 81% of picks are single-broker (mean 1.30, max 13) → closer to
+membership than graded conviction. Full field list + quality notes: [data_dictionary.md](data_dictionary.md)
+§broker_recommend.
 
 ---
 
