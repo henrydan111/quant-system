@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 import subprocess
@@ -55,11 +54,6 @@ from workspace.research.alpha_mining.audit_benchmark_index import BenchmarkAudit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_OUTPUTS = PROJECT_ROOT / "workspace" / "outputs"
-# venv/ is gitignored and exists only in the main checkout; in a git worktree
-# fall back to the interpreter running the tests (the venv python anyway).
-VENV_PYTHON = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
-if not VENV_PYTHON.exists():
-    VENV_PYTHON = Path(sys.executable)
 
 
 def build_hypothesis(
@@ -143,34 +137,6 @@ def build_request(hypothesis: Hypothesis | None) -> ResearchRequest:
         run_context={},
         hypothesis=hypothesis,
     )
-
-
-# Per-line opt-out marker shared with scripts/lint_no_bare_qlib_features.py
-# (NOQA_MARKER there). A `D.features` call carrying this marker is a privileged
-# call already reviewed and exempted by the AST lint (e.g. the provider
-# attestation sentinel read in src/data_infra/provider_manifest.py, which runs
-# at manifest-emit time outside any research stage); this scan must honor the
-# same semantics instead of re-flagging it.
-BARE_QLIB_FEATURES_NOQA = "noqa: bare-qlib-features"
-
-
-class DFeaturesVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, int]] = []
-
-    def visit_Call(self, node: ast.Call) -> None:
-        func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "features":
-            if isinstance(func.value, ast.Name) and func.value.id == "D":
-                self.calls.append((node.lineno, node.col_offset))
-            elif (
-                isinstance(func.value, ast.Attribute)
-                and func.value.attr == "D"
-                and isinstance(func.value.value, ast.Attribute)
-                and func.value.value.attr == "data"
-            ):
-                self.calls.append((node.lineno, node.col_offset))
-        self.generic_visit(node)
 
 
 class HypothesisWorkflowTests(unittest.TestCase):
@@ -1136,7 +1102,7 @@ class HypothesisWorkflowTests(unittest.TestCase):
     def test_deterministic_cache_path_is_stable_across_subprocess(self):
         here_value = _deterministic_cache_path("day", ["$close", "$open"], "2020-01-01", "2020-12-31")
         command = [
-            str(VENV_PYTHON),
+            sys.executable,
             "-c",
             (
                 "from src.research_orchestrator.qlib_windowed_features import _deterministic_cache_path; "
@@ -1147,28 +1113,22 @@ class HypothesisWorkflowTests(unittest.TestCase):
         self.assertEqual(here_value, result.stdout.strip())
 
     def test_direct_d_features_calls_are_confined_to_wrapper(self):
-        allowed = (PROJECT_ROOT / "src" / "research_orchestrator" / "qlib_windowed_features.py").resolve()
-        offenders: list[str] = []
-        for path in (PROJECT_ROOT / "src").rglob("*.py"):
-            try:
-                source = path.read_text(encoding="utf-8")
-                tree = ast.parse(source)
-            except Exception:
-                continue
-            visitor = DFeaturesVisitor()
-            visitor.visit(tree)
-            source_lines = source.splitlines()
-            flagged = [
-                (lineno, col)
-                for lineno, col in visitor.calls
-                if not (
-                    0 <= lineno - 1 < len(source_lines)
-                    and BARE_QLIB_FEATURES_NOQA in source_lines[lineno - 1]
-                )
-            ]
-            if flagged and path.resolve() != allowed:
-                offenders.append(f"{path}:{flagged}")
-        self.assertEqual(offenders, [])
+        # Delegate to the canonical AST lint so there is a single source of
+        # truth for detection patterns, the wrapper allowlist, and the
+        # `# noqa: bare-qlib-features` per-line opt-out (e.g. the privileged
+        # provider-attestation sentinel read in src/data_infra/provider_manifest.py).
+        lint_script = PROJECT_ROOT / "scripts" / "lint_no_bare_qlib_features.py"
+        result = subprocess.run(
+            [sys.executable, str(lint_script), str(PROJECT_ROOT / "src")],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"bare D.features lint violations in src/:\n{result.stdout}\n{result.stderr}",
+        )
 
 
 class PrescriptionSchemaTests(unittest.TestCase):
