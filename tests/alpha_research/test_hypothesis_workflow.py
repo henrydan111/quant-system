@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 import subprocess
+import sys
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -54,7 +54,6 @@ from workspace.research.alpha_mining.audit_benchmark_index import BenchmarkAudit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_OUTPUTS = PROJECT_ROOT / "workspace" / "outputs"
-VENV_PYTHON = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
 
 
 def build_hypothesis(
@@ -138,25 +137,6 @@ def build_request(hypothesis: Hypothesis | None) -> ResearchRequest:
         run_context={},
         hypothesis=hypothesis,
     )
-
-
-class DFeaturesVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, int]] = []
-
-    def visit_Call(self, node: ast.Call) -> None:
-        func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "features":
-            if isinstance(func.value, ast.Name) and func.value.id == "D":
-                self.calls.append((node.lineno, node.col_offset))
-            elif (
-                isinstance(func.value, ast.Attribute)
-                and func.value.attr == "D"
-                and isinstance(func.value.value, ast.Attribute)
-                and func.value.value.attr == "data"
-            ):
-                self.calls.append((node.lineno, node.col_offset))
-        self.generic_visit(node)
 
 
 class HypothesisWorkflowTests(unittest.TestCase):
@@ -1122,7 +1102,7 @@ class HypothesisWorkflowTests(unittest.TestCase):
     def test_deterministic_cache_path_is_stable_across_subprocess(self):
         here_value = _deterministic_cache_path("day", ["$close", "$open"], "2020-01-01", "2020-12-31")
         command = [
-            str(VENV_PYTHON),
+            sys.executable,
             "-c",
             (
                 "from src.research_orchestrator.qlib_windowed_features import _deterministic_cache_path; "
@@ -1133,18 +1113,22 @@ class HypothesisWorkflowTests(unittest.TestCase):
         self.assertEqual(here_value, result.stdout.strip())
 
     def test_direct_d_features_calls_are_confined_to_wrapper(self):
-        allowed = (PROJECT_ROOT / "src" / "research_orchestrator" / "qlib_windowed_features.py").resolve()
-        offenders: list[str] = []
-        for path in (PROJECT_ROOT / "src").rglob("*.py"):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            visitor = DFeaturesVisitor()
-            visitor.visit(tree)
-            if visitor.calls and path.resolve() != allowed:
-                offenders.append(f"{path}:{visitor.calls}")
-        self.assertEqual(offenders, [])
+        # Delegate to the canonical AST lint so there is a single source of
+        # truth for detection patterns, the wrapper allowlist, and the
+        # `# noqa: bare-qlib-features` per-line opt-out (e.g. the privileged
+        # provider-attestation sentinel read in src/data_infra/provider_manifest.py).
+        lint_script = PROJECT_ROOT / "scripts" / "lint_no_bare_qlib_features.py"
+        result = subprocess.run(
+            [sys.executable, str(lint_script), str(PROJECT_ROOT / "src")],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"bare D.features lint violations in src/:\n{result.stdout}\n{result.stderr}",
+        )
 
 
 class PrescriptionSchemaTests(unittest.TestCase):
