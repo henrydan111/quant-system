@@ -128,9 +128,48 @@ def compare_vs_holdings(end="2026-02-27"):
 
 
 SCHED_V3 = OUT / "verify02c_schedule.json"
+SCHED_V4 = OUT / "verify02d_schedule.json"
 
 
-def build_schedule_v3(start, end, headroom=30):
+def build_roev2_frame():
+    """ROETTMDiff v2 = the PINNED 净资产收益率 caliber (mapping doc 2026-06-28): RoeTTM = TTM归母 / 加权平均净资产,
+    quarterly proxy = time-weighted equity (0.5·eq_q4 + eq_q3 + eq_q2 + eq_q1 + 0.5·eq_q0)/4; the 1q-lagged leg
+    analogous with q1..q5. v1 used period-END equity (q0/q1) — its values disagree with 果仁's xlsx per-holding
+    ROETTMDiffPQ (sign 57-65%), the #1 rank-miss drag term."""
+    out_p = CACHE / "f_ROETTMDiff_v2.parquet"
+    if out_p.exists():
+        print("[roev2] cached — reuse", flush=True)
+        return
+    import qlib
+    from qlib.config import REG_CN
+    from qlib.data import D
+    qlib.init(provider_uri=str(ROOT / "data" / "qlib_data"), region=REG_CN, kernels=1)
+    grid = pd.read_parquet(CACHE / "e_close_raw.parquet").index
+    insts = list(pd.read_parquet(CACHE / "e_close_raw.parquet").columns)
+    ni_f = [f"$n_income_attr_p_sq_q{q}" for q in range(5)]
+    eq_f = [f"$total_hldr_eqy_exc_min_int_q{q}" for q in range(6)]
+    fields = ni_f + eq_f
+    P = {}
+    for k in range(0, len(fields), 6):
+        batch = fields[k:k + 6]
+        print(f"[roev2] fetch {k + len(batch)}/{len(fields)}", flush=True)
+        df = D.features(insts, batch, start_time=str(grid[0].date()), end_time=str(grid[-1].date()), freq="day")
+        for c in batch:
+            P[c.replace("$", "")] = df[c].unstack(level=0).sort_index().reindex(grid).ffill()
+        del df
+    ni = {q: P[f"n_income_attr_p_sq_q{q}"] for q in range(5)}
+    eq = {q: P[f"total_hldr_eqy_exc_min_int_q{q}"] for q in range(6)}
+    weq0 = (0.5 * eq[4] + eq[3] + eq[2] + eq[1] + 0.5 * eq[0]) / 4.0
+    weq1 = (0.5 * eq[5] + eq[4] + eq[3] + eq[2] + 0.5 * eq[1]) / 4.0
+    EPS = 1e-9
+    roe0 = (ni[0] + ni[1] + ni[2] + ni[3]) / weq0.where(weq0.abs() > EPS)
+    roe1 = (ni[1] + ni[2] + ni[3] + ni[4]) / weq1.where(weq1.abs() > EPS)
+    v2 = (roe0 - roe1).replace([np.inf, -np.inf], np.nan)
+    v2.astype("float32").to_parquet(out_p)
+    print(f"[roev2] saved  cov={v2.notna().mean().mean():.3f}", flush=True)
+
+
+def build_schedule_v3(start, end, headroom=30, roev2=False):
     """v3 = v1 construction + the miss-diagnosis fixes (2026-07-02):
       1. BOTH rank-band screens FLIPPED: 果仁 排名%区间 10%-100% ranks 从大到小 (rank1 = largest) → it drops
          the TOP decile (highest 负债率 / highest 乖离率). v1/v2 dropped the BOTTOM decile — inverted; the
@@ -144,6 +183,9 @@ def build_schedule_v3(start, end, headroom=30):
     g1.WEIGHTS = WEIGHTS
     g1.TOTAL_W = sum(w for w, _ in WEIGHTS.values())
     f, ind, e = _orig_load()
+    if roev2:
+        f = dict(f)
+        f["ROETTMDiff"] = pd.read_parquet(CACHE / "f_ROETTMDiff_v2.parquet")
     zsfz = pd.read_parquet(CACHE / "e_zsfz.parquet")
     cal = ru.trading_calendar()
     cal = cal[(cal >= pd.Timestamp(start)) & (cal <= pd.Timestamp(end))]
@@ -185,20 +227,21 @@ def build_schedule_v3(start, end, headroom=30):
         comp = g1._composite_row(f, ind, pday, elig).dropna()
         top = comp.sort_values(ascending=False).head(headroom)
         sched[d] = [str(c).upper().replace("_", ".") for c in top.index]
-    SCHED_V3.write_text(_json.dumps({str(k.date()): v for k, v in sched.items()}, ensure_ascii=False),
-                        encoding="utf-8")
+    sp = SCHED_V4 if roev2 else SCHED_V3
+    sp.write_text(_json.dumps({str(k.date()): v for k, v in sched.items()}, ensure_ascii=False),
+                  encoding="utf-8")
     nonempty = sum(1 for v in sched.values() if v)
-    print(f"[sched-v3] {nonempty}/{len(cal)} non-empty; saved {SCHED_V3.name}", flush=True)
+    print(f"[sched-{'v4' if roev2 else 'v3'}] {nonempty}/{len(cal)} non-empty; saved {sp.name}", flush=True)
 
 
-def compare_v3(end="2026-02-27"):
+def compare_v3(end="2026-02-27", sched_path=None, tag2="v3"):
     """Holdings tracking: v1 vs v3 (same metric as compare_vs_holdings)."""
     hold = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
     hold["start"] = pd.to_datetime(hold["开始日期"], errors="coerce")
     hold["code"] = hold["股票代码"].astype(str).str.zfill(6)
     hold = hold[(hold["start"].notna()) & (hold["start"] <= pd.Timestamp(end))]
     s1 = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V1.read_text(encoding="utf-8")).items()}
-    s3 = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V3.read_text(encoding="utf-8")).items()}
+    s3 = {pd.Timestamp(k): v for k, v in json.loads((sched_path or SCHED_V3).read_text(encoding="utf-8")).items()}
 
     def code6(inst):
         return str(inst).split("_")[0].split(".")[0].zfill(6)
@@ -206,7 +249,7 @@ def compare_v3(end="2026-02-27"):
     rows = []
     for d, grp in hold.groupby("start"):
         held = set(grp["code"])
-        for tag, s in (("v1", s1), ("v3", s3)):
+        for tag, s in (("v1", s1), (tag2, s3)):
             lst = s.get(d)
             if lst is None:
                 continue
@@ -221,11 +264,11 @@ def compare_v3(end="2026-02-27"):
     print("\noverall:", df.groupby("tag")["in25"].mean().round(3).to_dict())
 
 
-def run_v3(start="2014-01-01", end="2026-02-27"):
+def run_v3(start="2014-01-01", end="2026-02-27", sched_path=None, net_name="verify02c_net.parquet", label="v3 (screen fixes)"):
     from src.backtest_engine.event_driven import EventDrivenBacktester, CostConfig
     from src.backtest_engine.event_driven.exchange import FixedSlippage
     from guorn_parity_rung2_posprofit import ModelIIPosProfitStrategy
-    sched = {pd.Timestamp(k): v for k, v in json.loads(SCHED_V3.read_text(encoding="utf-8")).items()}
+    sched = {pd.Timestamp(k): v for k, v in json.loads((sched_path or SCHED_V3).read_text(encoding="utf-8")).items()}
     strat = ModelIIPosProfitStrategy(sched, buy_rank=20, sell_rank=25, target_n=10, pos_max=0.13,
                                      max_holds=15, use_exits=False, rebuy_cooldown=0)
     cost = CostConfig(buy_commission=0.002, sell_commission=0.002, stamp_tax=0.0, min_commission=0.0,
@@ -239,7 +282,7 @@ def run_v3(start="2014-01-01", end="2026-02-27"):
     if "date" in rep.columns:
         rep = rep.set_index(pd.to_datetime(rep["date"]))
     net = rep["return"].astype(float)
-    net.to_frame("net").to_parquet(OUT / "verify02c_net.parquet")
+    net.to_frame("net").to_parquet(OUT / net_name)
     m = ru.goal_metrics(net)
     yr = net.groupby(net.index.year).apply(lambda r: (1 + r).prod() - 1)
     gdf = pd.read_excel(XLSX, sheet_name="年度收益统计", header=0)
@@ -253,7 +296,7 @@ def run_v3(start="2014-01-01", end="2026-02-27"):
         if pd.notna(v):
             gy[int(y)] = float(v)
     print("\n" + "=" * 74)
-    print(f"  #2 v3 (screen fixes)  CAGR={m['cagr']:+.2%}  MDD={m['mdd']:+.2%}")
+    print(f"  #2 {label}  CAGR={m['cagr']:+.2%}  MDD={m['mdd']:+.2%}")
     print("  year     v3-LOCAL     果仁      diff")
     for y in sorted(yr.index):
         g = gy.get(int(y))
@@ -271,6 +314,10 @@ def main():
     ap.add_argument("--schedule-v3", action="store_true")
     ap.add_argument("--compare-v3", action="store_true")
     ap.add_argument("--run-v3", action="store_true")
+    ap.add_argument("--build-roev2", action="store_true")
+    ap.add_argument("--schedule-v4", action="store_true")
+    ap.add_argument("--compare-v4", action="store_true")
+    ap.add_argument("--run-v4", action="store_true")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2026-02-27")
     a = ap.parse_args()
@@ -286,6 +333,14 @@ def main():
         compare_v3(a.end)
     if a.run_v3:
         run_v3(a.start, a.end)
+    if a.build_roev2:
+        build_roev2_frame()
+    if a.schedule_v4:
+        build_schedule_v3(a.start, a.end, roev2=True)
+    if a.compare_v4:
+        compare_v3(a.end, sched_path=SCHED_V4, tag2="v4")
+    if a.run_v4:
+        run_v3(a.start, a.end, sched_path=SCHED_V4, net_name="verify02d_net.parquet", label="v4 (v3+ROETTMDiff加权净资产)")
 
 
 if __name__ == "__main__":
