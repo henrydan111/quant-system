@@ -159,3 +159,14 @@
 - 回归面：600 passed / 9 skipped（research_orchestrator + data_infra 全量，仅排除既有损坏的 test_share_capital_daily 收集问题——独立芯片处理中）。
 
 **Round-6 结论：clean for GPT clearing re-review（范围：M7 + M6-test-1 的解决；Phase-6 门槛清单与 m4 状态确认）。**
+
+---
+
+# Round-7 自审（R6 M8/m5 修复后）— 2026-07-02
+
+- **M8 忠实性**：照 GPT 替换文本双动作——旧断言改标签（读侧失效）+ 新增生产路径测试：轮换后经 `qlib_windowed_features`（stub qlib、tmp cache manifest dir）真实写入，断言行内 `provider_build_id == 新世代`、`calendar_policy_id == 政策` 且 ≠ 旧世代。走的是正式门自己的 `live_provider_ids()` 取数路径，非调用方喂 id。✔
+- **m5 忠实性**：stat-before/read/stat-after（不等即 fail-closed"changed during read"）+ miss 路径解析完成后再哈希与键内 digest 比对（不等即 fail-closed"rotated during resolution"）。与 GPT 替换文本的差异：未新增 `load_provider_manifest_from_bytes` API，采用其允许的替代路径（load 后 re-hash 校验）。✔
+- 回归：601 passed / 9 skipped（全量 sweep）；墙电池 28/28。
+- 无新增可执行常量；无对冲措辞问题。
+
+**Round-7 结论：clean for GPT clearing re-review（范围仅 M8 + m5）。**

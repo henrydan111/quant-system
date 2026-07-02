@@ -243,6 +243,17 @@ Round-2 逐条判定：B2/M1/M3/M4/m1/m2/m3/m4 = **RESOLVED**；B1、M2 = PARTIA
 
 Round-5 残余风险原文：长命进程漏检轮换用陈旧 id 盖章出处——已由 M7 内容身份键 + 同尺寸/同 mtime CI 测试关闭，待 Round-6 清场确认。
 
+## 7d. GPT Round-6（M7 清场，2026-07-02，verdict = REVISE→再收敛）处置表
+
+M7 = **RESOLVED**（每次调用 sha256 进键被裁定为规格的"更强可接受读法"）；M6-test-1 = PARTIALLY——缓存半边只证明了**读侧**拒绝（旧行对新 id 不可复用），未证明**写侧**生产路径在轮换后盖新章 → 新 M8；Phase-6 门槛框架获确认；**Phase-3 解锁条件被 GPT 显式陈述**（见下）。
+
+| # | Finding | 处置 | 落点 |
+|---|---------|------|------|
+| **M8**（新 Major） | 现有测试用直接 `record_cache_write(旧 id)` 模拟，未走受认可写路径；残余风险 = 长命正式进程轮换后写缓存仍盖旧章 | **接受并已实施**：既有断言改标签（"旧世代行在新世代下失效"）+ 新增生产路径测试——同尺寸/同 mtime 轮换后调用 `qlib_windowed_features`（stub qlib），断言其写入的 manifest 行 `provider_build_id == gen_BBBB`（新世代）且 ≠ 旧世代 | test_r4_wall_hardening.py（28 过） |
+| m5（Minor） | manifest 哈希与 miss 路径重载之间的 TOCTOU | **接受并已实施**：stat-before / read / stat-after 双 stat 等值否则 fail-closed（mid-publish 重试）；miss 路径完成全部解析后**再次哈希** manifest，与键内 digest 不符即 fail-closed（防解析中途轮换缓存出"键值来自两份 manifest"） | provider_context.py |
+
+**GPT 显式 Phase-3 解锁条件（原文归纳）**：① M7 内容哈希缓存已合并（✔）；② M8 生产路径轮换写测试落地（✔ 本轮）；③ m4 direct-D.features 特权哨兵问题修复或显式豁免（独立会话 task_94159a87 进行中）；④ Phase-2 墙电池全绿——含 POLICY001 lint、`run_daily_qa` Overall PASS、provider_context 轮换测试、缓存世代绑定测试、正式门钳制/seal 测试。Phase 3 安全发布另需既定的 mode=all 重建 + 冻结段字节审计 + 侧车成员审计 + dry-run 评审 + 安全发布程序。
+
 ## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
 
 M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：

@@ -64,16 +64,23 @@ def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
     qlib_dir = _qlib_dir()
     try:
         manifest_file = Path(manifest_path_for(qlib_dir))
-        stat = manifest_file.stat()
         # R5-M7: content identity, not only (mtime, size) — hash the manifest
         # bytes on every call so a same-size / preserved-mtime rewrite still
-        # invalidates the cache.
+        # invalidates the cache. R6-m5 TOCTOU hardening: stat-before / read /
+        # stat-after — a manifest mutated mid-read fails closed (retry).
+        stat_before = manifest_file.stat()
         digest = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
-        key = (str(manifest_file), stat.st_mtime_ns, stat.st_size, digest)
+        stat = manifest_file.stat()
     except Exception as exc:
         raise ProviderContextError(
             f"cannot stat/read the live provider manifest under {qlib_dir}: {exc} — fail closed."
         ) from exc
+    if (stat_before.st_mtime_ns, stat_before.st_size) != (stat.st_mtime_ns, stat.st_size):
+        raise ProviderContextError(
+            f"live provider manifest under {qlib_dir} changed during read — "
+            "fail closed (mid-publish; retry)."
+        )
+    key = (str(manifest_file), stat.st_mtime_ns, stat.st_size, digest)
 
     cached = _CACHE.get(key)
     if cached is not None:
@@ -96,6 +103,22 @@ def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
             f"cannot resolve live provider identity/boundary (manifest/policy/calendar): "
             f"{exc} — fail closed."
         ) from exc
+
+    # R6-m5: the miss path re-reads the manifest inside load_provider_manifest;
+    # re-hash after the full resolution and require the content identity to be
+    # UNCHANGED vs the key — a rotation landing mid-resolution fails closed
+    # instead of caching a key/value pair built from two different manifests.
+    try:
+        post_digest = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+    except Exception as exc:
+        raise ProviderContextError(
+            f"cannot re-verify the live provider manifest under {qlib_dir}: {exc} — fail closed."
+        ) from exc
+    if post_digest != digest:
+        raise ProviderContextError(
+            f"live provider manifest under {qlib_dir} rotated during resolution — "
+            "fail closed (retry)."
+        )
 
     result = (
         str(manifest.provider_build_id),

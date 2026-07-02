@@ -175,7 +175,9 @@ class TestProviderRotationInvalidation:
         assert ctx_mod.live_provider_ids()[0] == "gen_BBBB"
         assert ctx_mod.live_spent_oos_end() == pd.Timestamp("2026-02-27")
 
-        # Old-generation cache writes are refused after the rotation.
+        # Old-generation cache ROWS are invalidated under the new generation
+        # (read-side refusal; the write-side production-path proof is the
+        # separate R6-M8 test below).
         from src.research_orchestrator.cache_manifest import (
             CacheContext,
             CacheKeyMismatchError,
@@ -197,6 +199,60 @@ class TestProviderRotationInvalidation:
                 cache_type="qlib_features",
                 provider_build_id=new_build, calendar_policy_id=new_policy,
             )
+
+    def test_same_size_same_mtime_rotation_formal_cache_write_stamps_new_generation(
+        self, tmp_path, monkeypatch
+    ):
+        """R6-M8: after a same-size/same-mtime rotation, the SANCTIONED formal
+        door (qlib_windowed_features) must stamp its cache write with the
+        CURRENT live generation — proven through the production write path,
+        not a direct CacheManifestStore call with caller-supplied ids."""
+        import os
+        import sys
+        import types
+
+        import src.data_infra.provider_context as ctx_mod
+        from src.research_orchestrator import qlib_windowed_features as qwf_mod
+        from src.research_orchestrator.cache_manifest import CacheContext, CacheManifestStore
+
+        qlib_dir = tmp_path / "qlib_data"
+        self._write_provider(qlib_dir, "gen_AAAA")
+        manifest = qlib_dir / "metadata" / "provider_build.json"
+        monkeypatch.setattr(ctx_mod, "_qlib_dir", lambda: qlib_dir)
+        ctx_mod.refresh_live_provider_context()
+        assert ctx_mod.live_provider_ids()[0] == "gen_AAAA"
+        before = manifest.stat()
+
+        self._write_provider(qlib_dir, "gen_BBBB")
+        os.utime(manifest, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        # Stub qlib so the formal-door read needs no provider tree.
+        fake_frame = pd.DataFrame()
+        d_stub = types.SimpleNamespace(features=lambda *a, **k: fake_frame)
+        qlib_data_mod = types.ModuleType("qlib.data")
+        qlib_data_mod.D = d_stub
+        qlib_mod = types.ModuleType("qlib")
+        qlib_mod.data = qlib_data_mod
+        monkeypatch.setitem(sys.modules, "qlib", qlib_mod)
+        monkeypatch.setitem(sys.modules, "qlib.data", qlib_data_mod)
+
+        store_dir = tmp_path / "cache_manifest"
+        qwf_mod.qlib_windowed_features(
+            instruments=["000001_SZ"],
+            fields=["$close"],
+            start_time="2026-01-05",
+            end_time="2026-02-27",
+            cache_context=CacheContext(),
+            stage="sandbox_screening",
+            cache_manifest_dir=store_dir,
+        )
+
+        events = CacheManifestStore(store_dir).list_events()
+        assert not events.empty
+        row = events.sort_values("recorded_at").iloc[-1]
+        assert row["provider_build_id"] == "gen_BBBB"
+        assert row["calendar_policy_id"] == LEGACY_POLICY
+        assert row["provider_build_id"] != "gen_AAAA"
 
 
 # ── M6.6 promotion guard binding branches (R4-M1) ────────────────────────────
