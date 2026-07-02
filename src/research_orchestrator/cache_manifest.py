@@ -31,6 +31,12 @@ CACHE_MANIFEST_COLUMNS = (
     "stage",
     "window_start",
     "window_end",
+    # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding — a
+    # cache written under one provider build/policy must not be reused under
+    # another. Legacy rows backfill "" and therefore fail the reuse check
+    # against a real id (one-time safe invalidation after a rotation).
+    "provider_build_id",
+    "calendar_policy_id",
 )
 
 CACHE_MANIFEST_SCHEMA = {
@@ -48,6 +54,8 @@ CACHE_MANIFEST_SCHEMA = {
     "stage": "string",
     "window_start": "string",
     "window_end": "string",
+    "provider_build_id": "string",
+    "calendar_policy_id": "string",
 }
 
 
@@ -151,6 +159,8 @@ class CacheManifestStore:
         stage: str,
         window_start: str,
         window_end: str,
+        provider_build_id: str = "",
+        calendar_policy_id: str = "",
     ) -> dict[str, Any]:
         """Append a cache-write event to the manifest.
 
@@ -193,6 +203,8 @@ class CacheManifestStore:
             "stage": str(stage),
             "window_start": str(window_start),
             "window_end": str(window_end),
+            "provider_build_id": str(provider_build_id),
+            "calendar_policy_id": str(calendar_policy_id),
         }
         with file_lock(self.root_dir / "cache_events.lock"):
             frame = _append_row(self._load(), row)
@@ -209,6 +221,8 @@ class CacheManifestStore:
         window_start: str,
         window_end: str,
         cache_type: str = "",
+        provider_build_id: str = "",
+        calendar_policy_id: str = "",
     ) -> None:
         """Verify a cached artifact is reusable under the current context.
 
@@ -243,3 +257,17 @@ class CacheManifestStore:
                 f"Cache manifest mismatch for {cache_path}: window "
                 f"{latest['window_start']}..{latest['window_end']} != {window_start}..{window_end}"
             )
+        # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding.
+        # Enforced only when the caller supplies the current ids; a legacy row
+        # (backfilled "") then mismatches a real id and the cache is refused —
+        # a one-time safe invalidation after any provider rotation.
+        for column, current in (
+            ("provider_build_id", provider_build_id),
+            ("calendar_policy_id", calendar_policy_id),
+        ):
+            if current and str(latest.get(column, "")) != str(current):
+                raise CacheKeyMismatchError(
+                    f"Cache manifest mismatch for {cache_path}: {column} "
+                    f"{latest.get(column, '')!r} != {current!r} — caches do not "
+                    "survive a provider rotation (UNFREEZE_PLAN.md M4 binding)."
+                )

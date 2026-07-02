@@ -161,7 +161,7 @@ class TestBlocker2ValidationStepsWiring:
         # All five formal kwargs must appear in the IS handler body.
         for kwarg in (
             'execution_profile="joinquant_daily_sim"',
-            'calendar_policy_id="frozen_20260227_system_build"',
+            'calendar_policy_id=_formal_calendar_policy_id(context)',
             'run_mode="formal"',
             "preload_required=True",
             "require_provider_manifest=True",
@@ -178,7 +178,7 @@ class TestBlocker2ValidationStepsWiring:
         oos_body = src[oos_start:next_def_idx if next_def_idx > 0 else len(src)]
         for kwarg in (
             'execution_profile="joinquant_daily_sim"',
-            'calendar_policy_id="frozen_20260227_system_build"',
+            'calendar_policy_id=_formal_calendar_policy_id(context)',
             'run_mode="oos_test"',
             "preload_required=True",
             "require_provider_manifest=True",

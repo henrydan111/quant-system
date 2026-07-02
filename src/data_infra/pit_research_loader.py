@@ -127,6 +127,23 @@ def live_spent_oos_end() -> pd.Timestamp:
 
 
 @functools.lru_cache(maxsize=1)
+def live_provider_ids() -> tuple[str, str]:
+    """(provider_build_id, calendar_policy_id) RECORDED by the live manifest.
+
+    Used by the formal door to bind cache-manifest rows to the provider
+    generation (UNFREEZE_PLAN.md Phase 2 / GPT R2-M4). Failure fails closed."""
+    from src.data_infra.provider_manifest import load_provider_manifest
+
+    try:
+        manifest = load_provider_manifest(_data_root() / "qlib_data")
+    except Exception as exc:
+        raise PitResearchLoaderError(
+            f"cannot resolve live provider identity (manifest): {exc} — fail closed."
+        ) from exc
+    return str(manifest.provider_build_id), str(manifest.calendar_policy_id)
+
+
+@functools.lru_cache(maxsize=1)
 def _trading_calendar() -> pd.DatetimeIndex:
     cal = pd.read_parquet(_data_root() / "reference" / "trade_cal.parquet",
                           columns=["cal_date", "is_open"])

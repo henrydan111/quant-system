@@ -78,7 +78,7 @@ def qlib_windowed_features(
     # "sandbox/no-context calls skip this check" behavior is exactly the leak
     # the pre-publish wall exists to close. Boundary resolution failure fails
     # closed too (the resolver raises).
-    from src.data_infra.pit_research_loader import live_spent_oos_end
+    from src.data_infra.pit_research_loader import live_provider_ids, live_spent_oos_end
 
     boundary_end = live_spent_oos_end()
     if pd.Timestamp(end_time) > boundary_end:
@@ -100,6 +100,9 @@ def qlib_windowed_features(
     manifest = CacheManifestStore(cache_manifest_dir)
     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)
     cache_path = cache_key
+    # M4 provider-generation binding: cache rows written under another provider
+    # build/policy are refused (legacy ""-rows mismatch -> safe invalidation).
+    live_build_id, live_policy_id = live_provider_ids()
     manifest.assert_cache_reusable(
         cache_key=cache_key,
         cache_path=cache_path,
@@ -108,6 +111,8 @@ def qlib_windowed_features(
         window_start=start_time,
         window_end=end_time,
         cache_type="qlib_features",
+        provider_build_id=live_build_id,
+        calendar_policy_id=live_policy_id,
     )
     frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
         instruments,
@@ -127,5 +132,7 @@ def qlib_windowed_features(
         stage=stage,
         window_start=start_time,
         window_end=end_time,
+        provider_build_id=live_build_id,
+        calendar_policy_id=live_policy_id,
     )
     return frame

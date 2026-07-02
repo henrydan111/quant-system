@@ -176,7 +176,7 @@ class TestFromSplit:
 class TestQlibWindowedFeaturesEnforcement:
     """qlib_windowed_features must invoke validate_read when context is active."""
 
-    def test_no_context_skips_validation(self) -> None:
+    def test_no_context_skips_validation(self, tmp_path) -> None:
         # When no context is set, qlib_windowed_features behaves exactly as
         # before — it calls D.features and the cache manifest without
         # invoking ResearchAccessContext.validate_read.
@@ -197,7 +197,10 @@ class TestQlibWindowedFeaturesEnforcement:
                 end_time="2020-02-01",
                 cache_context=CacheContext(),
                 stage="is_only",
-                cache_manifest_dir="data/_test_cache",
+                # tmp dir, NOT the persistent data/_test_cache: rows recorded
+                # there before the M4 provider-generation binding carry "" ids
+                # and are (correctly) refused against the live ids.
+                cache_manifest_dir=tmp_path / "manifest",
             )
 
     def test_window_violation_raises_before_d_features(self, tmp_path: Path) -> None:
