@@ -69,3 +69,23 @@
 - 无对冲措辞检查：v2 新增文字中的量化断言均有 file:line 或标注"实现细节/估计"。
 
 **Round-2 结论：clean for GPT re-review。**
+
+---
+
+# Round-3 自审（v3 修订后）— 2026-07-01
+
+**背景**：Round-2 verdict = REVISE，收敛中（8/10 RESOLVED，无新 Blocker；B1/M2 = PARTIALLY，缺口具体化为新 M6/M7 + 3 条附加要求）。5 条全部接受，无拒绝项；处置表 = 计划 §7。
+
+## 修订忠实性核对
+
+- **M6**：D3 新增条目 8 `resolve_spent_oos_boundary` 三分支解析器，与 GPT 替换文本逐分支对应（含字段→用之并与日历互验；frozen 无字段→`calendar_end_date` 回退 + 老冻结态无新鲜窗口全部 fail-closed；`frozen:false`/非法→fail-closed）；三条 CI 必测照单（老政策钳 2026-02-27 / 新政策在 live 末端更长时仍钳 spent_oos_end / 缺失非法 fail-closed）。✔
+- **M7**：`validation_steps.py:956/1112` + promotion/revalidation 窗口读取全部前移 Phase 2（新 2a），并加"Phase 2 后不得残留可执行政策/窗口常量"硬规则；Phase 4 降为验证性质（残留断言 + 老/新双政策 smoke + 仅非执行文本清理）。消除次序矛盾。✔
+- **附加 1-3**：侧车枚举发现（Phase 3.2c）、Phase 1.7 运行纪律（追平 raw 非研究面）、引用扫描不完整即修剪 fail-closed（Phase 5.3）。✔
+
+## v3 新引入内容自查
+
+- 条目 8 解析器的 frozen-无字段回退（钳到 `calendar_end_date`）与既有 frozen 等值校验语义一致（老政策下 live 末端 == calendar_end_date，回退等价于现状，不放松任何约束）。
+- Phase 2.2 引用改为"条目 1-6 + 条目 8"，交叉引用一致；风险表新增"脑裂过渡态"与"Phase 1-2 间隙"两行，对策均指向已定义机制。
+- 无新的量化断言；无对冲措辞问题。
+
+**Round-3 结论：clean for GPT re-review（范围：M6/M7 + 3 附加项的解决 + 新引入内容扫描）。**

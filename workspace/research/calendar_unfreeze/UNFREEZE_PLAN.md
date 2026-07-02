@@ -1,6 +1,6 @@
-# 日历解冻计划（Calendar Unfreeze Plan）— v2
+# 日历解冻计划（Calendar Unfreeze Plan）— v3
 
-*起草 2026-07-01 · v2 修订 2026-07-01：GPT 5.5 Pro Round-1 跨审判定 **REVISE**（2 Blocker + 4 Major + 4 Minor，全部接受，无拒绝项；处置表见 §6）· 状态：待 re-review*
+*起草 2026-07-01 · v2：Round-1 判定 REVISE（10 findings 全部接受，处置表 §6）· v3 修订 2026-07-01：Round-2 判定 **REVISE**（8/10 RESOLVED、无新 Blocker；新增 M6 政策解析器 + M7 次序矛盾 + 3 条附加要求，全部接受，处置表 §7）· 状态：待 Round-3 re-review*
 *目标：把冻结在 2026-02-27 的本地数据日历稳定、高效地推进到当前，并建立可持续的更新机制。*
 
 **v2 相对 v1 的两个结构性变化（来自 Blocker）：**
@@ -77,6 +77,11 @@
 5. **promotion/revalidation 语义**：`OOS_END`/`END` 从模块常量改为政策驱动（`spent_oos_end`），允许 `provider_calendar_end ≥ OOS_END` **仅当**评估窗口显式绑定 seal 或既有 spent-OOS 窗口；**绝不默认取 live provider 末端**。
 6. **CI/lint/测试**：新增测试与 lint 覆盖——默认探索读取在 live 末端 > 2026-02-27 时钳到 2026-02-27；无 seal 的越界读取失败；有 seal 的越界读取只在 sealed 窗口内成功；cache manifest 不得跨 `allowed_end`/`provider_build_id`/`calendar_policy_id` 复用；研究域直读 raw/pit_ledger/裸 D.features 继续由既有 lint（PIT002、`lint_no_bare_qlib_features`）封死，白名单仅限基础设施。
 7. **次序（硬性）**：**上述闸 + 测试合并且全绿，才允许 Phase 3.4 安全发布**。先发布、后补闸（v1 的次序）不允许。
+8. **政策边界解析器（Round-2 M6）**：钳制代码统一调用 `resolve_spent_oos_boundary(policy, calendar)`，解决"闸代码已合并、live 还是不含新字段的老冻结政策"的过渡态：
+   - policy 含 `spent_oos_end` → 直接使用（并与 provider 日历互验；`fresh_holdout_start` 同）；
+   - policy 缺该字段且 `frozen == true` → `spent_oos_end = policy.calendar_end_date`，`fresh_holdout_start = 其后第一个交易日`；若 provider 日历恰止于 `spent_oos_end`（老冻结态），则不存在新鲜 holdout 窗口，一切 post-spent 读取 fail-closed；
+   - `frozen == false` 或字段缺失/非法的其他情形 → fail-closed（直到 `max_calendar_lag_days` 强制检查落地且测试绿）。
+   **CI 必测**：老 `frozen_20260227_system_build`（无新字段）默认读钳到 2026-02-27；新 thaw_step1 政策在 `provider_calendar_end > spent_oos_end` 时默认读仍钳到 `spent_oos_end`；解冻政策的 `spent_oos_end` 缺失/非法 → fail-closed。
 
 ---
 
@@ -102,10 +107,12 @@
    - `verify_database.py` 断言：无端点缺合同、无未解决的截断/重复键/缺可见日警告。
 5. **事件/另类端点增量**：stk_holdertrade、suspend_d、namechange、stock_st_daily、index_weights（3-6 月各月）。
 6. **完整性闸**：`verify_database.py` + 更新 `data/data_tracker.md`。
+7. **运行纪律（Round-2 附加要求）**：**在 Phase 2 闸全绿之前，追平后的原始层不是研究面**——期间禁止任何研究 notebook / dashboard 刷新 / 因子扫描 / 临时 raw·PIT 读取触碰 2026-02-27 之后的新数据；追赶分支仅作运维用途。
 
-### Phase 2 — 发布前墙：D3 机械闸 + 政策贯通 + 耦合审计（新增，B1/M2/M4；1-2 天代码 + 评审）
+### Phase 2 — 发布前墙：D3 机械闸 + 政策贯通 + 耦合审计（新增，B1/M2/M4/M6/M7；1-2 天代码 + 评审）
 1. **政策贯通（M2）**：`calendar_policy_id` 参数贯通 `build_qlib_backend()` → `run()` → `publish(...)` + CLI `--calendar-policy`，参数**必填无默认**；新政策 YAML `frozen_<target_end>_thaw_step1.yaml`（含 `spent_oos_end`/`fresh_holdout_start`）。
-2. **D3 机械闸落地**（§1-D3 条目 1-6 的实现 + 测试）。
+2. **D3 机械闸落地**（§1-D3 条目 1-6 + 条目 8 解析器的实现 + 测试）。
+2a. **可执行硬编码全部在本阶段清除（Round-2 M7）**：`validation_steps.py:956/1112` 的 `calendar_policy_id` 改为从 prescription/配置/artifact 记录流入；`promotion_evidence`/`revalidation` 的窗口末端改为从记录的 `calendar_policy_id`（经条目 8 解析器）或显式 seal 读取。**Phase 2 完成后，不得残留任何可执行的政策/窗口常量**（仅报错文案等非执行文本可留待 Phase 4）。
 3. **D3 访问耦合审计（M4）**：对所有能物化/缓存研究数据的路径逐一审计并加测试——`pit_research_loader`、`qlib_windowed_features`、`ResearchAccessContext`、`cache_manifest`/factor cache、`HoldoutSealStore` + seal 校验器、`promotion_evidence`、`revalidation`、`validation_steps`、回测引擎正式运行时、dashboard、workspace 脚本、notebook helper、`.claude` skills 文档、一切直连 qlib provider / raw pit_ledger 的 helper。要求测试：默认探索读钳制；无 seal 越界失败；有 seal 只在窗口内成功；cache manifest 不跨 `allowed_end`/build/policy 复用；直读继续被 lint 封死。
 4. **"无全局政策" lint（D1）** 上线。
 5. **本阶段全部合并 + 全绿是 Phase 3.4 发布的硬前置。**
@@ -115,21 +122,21 @@
 2. **发布前审计（B2 扩展版）**，全部通过才可发布：
    - **bin 前缀**：每个 bin 文件 ≤2026-02-27 的日期段与旧 live **逐字节一致**（全量 size 审计 + 确定性抽样 SHA；例外仅限单独批准的 provenance-breaking 迁移，本次预期为零）；
    - **日历**：`calendars/day.txt` = 旧 4,410 天 + **仅追加**尾部；
-   - **侧车成员矩阵（B2 核心新增）**：对 `all_stocks` / `st_stocks` / `csi300/500/1000` 及一切 universe/tradability 侧车，把区间表物化为旧日历上的**逐日成员矩阵**，断言 ≤2026-02-27 每一天与旧 live 完全相等。行级字节等值不要求（end date 延长属正常），但 **spent 窗口内成员漂移 = 发布阻断**（侧车由刷新后的 raw 再生——`pit_backend.py:3852-3872`——namechange/ST/权重的历史修正必须被显式发现并走批准流程，不允许静默漂移）；
+   - **侧车成员矩阵（B2 核心新增）**：对 `all_stocks` / `st_stocks` / `csi300/500/1000` 及一切 universe/tradability 侧车——**侧车集合由 provider 树/manifest 枚举发现，不允许仅按硬编码清单**（Round-2 附加要求）——把区间表物化为旧日历上的**逐日成员矩阵**，断言 ≤2026-02-27 每一天与旧 live 完全相等。行级字节等值不要求（end date 延长属正常），但 **spent 窗口内成员漂移 = 发布阻断**（侧车由刷新后的 raw 再生——`pit_backend.py:3852-3872`——namechange/ST/权重的历史修正必须被显式发现并走批准流程，不允许静默漂移）；
    - **审计工件持久化**：`prefix_bin_hashes`、`calendar_append_proof`、`sidecar_membership_hashes`、新旧 `provider_build_id`/`calendar_policy_id`、`audit_script_hash`。
 3. **解冻 dry-run 报告（m4）**：发布前产出并人工过目——计划 target_end、新政策 id、staged build id、磁盘前后估计、将交换的文件、将保留的备份、前缀审计摘要、侧车成员审计摘要、待换绑 approval 清单。
 4. **安全发布**：复用 `_depth9_safe_publish.py` 三步原子交换（同卷 `st_dev` 闸内建），旧 live 保留为 `.bak`（受 D2 引用型保留规则管理）。
 
-### Phase 4 — 发布后换绑与全面验证（0.5 天）
+### Phase 4 — 发布后换绑与验证（验证性质，不再含可执行常量清理；0.5 天）
 1. **Approvals 换绑**：约 25 个 YAML 同换 `provider_build_id` + `calendar_policy_id`（driver 照 `_rebind_approvals_depth9.py`），审计 md 的证据 = Phase 3.2 全套审计工件；`evaluate_approval_evidence_bindings()` → 0 drift。
-2. **残余常量清理**：`validation_steps.py:956,1112`（政策 id 从配置/prescription 流入）、`event_driven/__init__.py:489` 报错文案（`promotion_evidence.OOS_END`/`revalidation.END` 已在 Phase 2 政策化）。
+2. **硬编码残留断言（M7 后 Phase 4 仅做验证）**：断言 legacy fixture / 显式旧-artifact 回放测试之外**无任何可执行的** `frozen_20260227_system_build` 残留（可执行清理已全部在 Phase 2 完成）；仅清理非执行文本（如 `event_driven/__init__.py:489` 报错文案）；对**老 artifact 政策**与**新 thaw_step1 政策**各跑一次正式验证 smoke。
 3. **测试全扫**：18 个测试文件 132 处钉死日期逐一核（fixture 自包含的预期不红）；`run_daily_qa` / `audit_qlib.py` / `qlib_smoke.py` / `test_pit_live_provider.py` + Phase 2 新增闸测试全绿。
 4. **文档同步（§11.2 同批）**：CLAUDE.md §3.4/§6.2a、AGENTS.md、`project_state.md`（含跨审 verdict 记录）、`data_tracker.md`/`data_dictionary.md`。
 
 ### Phase 5 — 稳态更新机制
 1. **每日**：计划任务收盘后跑 `update_daily_data.py --no-qlib`（原始层 + 日频集）；`run_daily_qa` 随后跑并失败告警（冻结期"故意不调度"注释同步移除）。
 2. **每月**：一键 driver（`scripts/monthly_calendar_bump.py`，`--dry-run` 必备）串起：磁盘检查 → 端点就绪检查定 target_end → 全量重建 → 前缀+侧车审计 → dry-run 报告 → 安全发布 → 换绑 → QA → 父 build 元数据 + 文档 stub。
-3. **保留策略（M3）**：只修剪**无引用** build；引用型 build 保留全树或回放核验包（见 D2）。
+3. **保留策略（M3）**：只修剪**无引用** build；引用型 build 保留全树或回放核验包（见 D2）。**修剪前必须完成对全部引用存储（approvals / 五注册表 evidence / seal store / frozen selection / deployment-gate 记录）的完整扫描；扫描无法枚举任一引用源时，修剪 fail-closed**（Round-2 附加要求）。
 4. **滚动政策守护规则（m1）**：在 `max_calendar_lag_days` 的运行时 + daily QA 强制检查落地并测试全绿之前，**任何 `frozen:false` 政策不得被 live provider / 正式验证 / daily QA / promotion / revalidation / 月度 driver 选用**；QA 增加检查：`active_policy.frozen == false` 时要求 lag 强制测试绿 + `live_calendar_end ≥ last_complete_trade_date − lag`。
 5. **后续演进（不在关键路径）**：滚动政策；真·追加式增量物化器（仅当月度全量重建时长不可接受时立项）。
 
@@ -145,6 +152,8 @@
 | 风险 | 对策 |
 |------|------|
 | **新 OOS 窗口物理暴露于 live provider（Round-1 首要残余风险）** | D3 机械闸（loader 钳制 + seal + lint + cache 绑定）**发布前**就位（Phase 2 硬前置 Phase 3.4） |
+| **政策"脑裂"过渡态（Round-2 首要残余风险）：闸读 live 政策但新旧政策字段/硬编码未解析齐** | D3 条目 8 解析器（老政策无新字段 → 钳到其 calendar_end_date；非法即 fail-closed）+ M7 可执行硬编码全部于 Phase 2 清除 + 双政策 smoke（Phase 4.2） |
+| Phase 1-2 间隙：raw 已追平、闸未绿、老 provider 仍 live | Phase 1.7 运行纪律：追平后的原始层非研究面（受认可 door 读的仍是老 provider，直读被既有 lint 封死） |
 | 侧车再生静默改写冻结段 universe/ST/指数成员 | Phase 3.2 成员矩阵前缀审计，漂移即阻断 |
 | Tushare 限流/封锁 | 严格串行单 fetcher；财报季批量放夜间；断点续跑；429 加睡 |
 | 抓取静默截断/漏 restatement | M1 端点合同 + 递归二分 + verify_database 断言；ann_date 窗口法 |
@@ -178,5 +187,19 @@
 | m2 | "至今"改确定性 target_end | **接受** | Phase 1.2 |
 | m3 | stock_basic 显式 L/D/P | **接受** | Phase 1.1 |
 | m4 | 解冻 dry-run 报告 | **接受** | Phase 3.3 |
+
+**拒绝项：无。**
+
+## 7. GPT Round-2 findings 处置表（2026-07-01，verdict = REVISE，无新 Blocker）
+
+Round-2 逐条判定：B2/M1/M3/M4/m1/m2/m3/m4 = **RESOLVED**；B1、M2 = PARTIALLY RESOLVED（缺口即新 M6/M7）。
+
+| # | Finding | 处置 | 落点 |
+|---|---------|------|------|
+| M6 | D3 钳制读 live 政策，但过渡期 live 还是不含 `spent_oos_end` 的老政策——缺失字段的解析器未指定 | **接受**：`resolve_spent_oos_boundary` 三分支解析器（含字段→用之；frozen 无字段→钳到 `calendar_end_date`；其余→fail-closed）+ 三条 CI 必测 | §1-D3 条目 8 |
+| M7 | `validation_steps.py:956/1112` 硬编码清理排在发布后，与"发布前无全局政策"墙自相矛盾 | **接受**：可执行硬编码全部前移 Phase 2（2a）；Phase 4 降为纯验证（残留断言 + 双政策 smoke），仅非执行文本可留 Phase 4 | Phase 2.2a、Phase 4.2 |
+| 附加 1 | 侧车集合应从 manifest/树枚举发现，不允许仅硬编码清单 | **接受** | Phase 3.2(c) |
+| 附加 2 | Phase 1 追平后的 raw 在 Phase 2 绿前不是研究面 | **接受** | Phase 1.7 + 风险表 |
+| 附加 3 | 引用扫描无法枚举任一引用源时修剪 fail-closed | **接受** | Phase 5.3 |
 
 **拒绝项：无。**
