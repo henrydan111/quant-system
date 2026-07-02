@@ -173,3 +173,35 @@ def test_materialize_share_capital_respects_field_filter(tmp_path, monkeypatch):
     written = builder._materialize_share_capital_daily(_CAL, {"000001_sz": "/fake/dir"})
     assert written == ["total_share"]
     assert set(captured) == {"total_share"}
+
+
+def test_materialize_share_capital_force_bypasses_unrelated_field_filter(tmp_path, monkeypatch):
+    """GPT cross-review M2: a field-scoped update still re-dumps the kline CSVs (which ignore
+    field_filter), so the provider-maintenance call must force the corrective rewrite even
+    when field_filter names something else entirely."""
+    data_root = tmp_path / "data"
+    daily_dir = data_root / "market" / "daily" / "2023"
+    daily_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": ["20230103"],
+            "total_share": [100.0],
+            "float_share": [80.0],
+            "free_share": [60.0],
+        }
+    ).to_parquet(daily_dir / "daily_20230103.parquet")
+
+    builder = StagedQlibBackendBuilder(
+        data_root=str(data_root),
+        qlib_dir=str(tmp_path / "qlib"),
+        build_id="unit_share_capital_force",
+        field_filter=["report_rc__eps_up"],
+        allow_exceptions=True,
+    )
+    captured = _capture_writes(monkeypatch)
+    filtered = builder._materialize_share_capital_daily(_CAL, {"000001_sz": "/fake/dir"})
+    assert filtered == []  # non-forced: unrelated filter suppresses the step
+    forced = builder._materialize_share_capital_daily(_CAL, {"000001_sz": "/fake/dir"}, force=True)
+    assert forced == sorted(SHARE_CAPITAL_DAILY_FIELDS)
+    assert set(captured) == set(SHARE_CAPITAL_DAILY_FIELDS)

@@ -16,7 +16,7 @@ related_findings_id: null
 
 # Bind to the provider build that materialized + serves report_rc (the incremental
 # add published 2026-06-09). Daily-QA approval_evidence_binding enforces this.
-provider_build_id: "depth9_20260630"
+provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

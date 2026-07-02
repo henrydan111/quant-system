@@ -16,7 +16,7 @@ reviewer: henrydan111
 related_pr: osap-tier1-factor-expansion
 related_findings_id: null
 
-provider_build_id: "depth9_20260630"
+provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:

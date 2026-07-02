@@ -3854,6 +3854,8 @@ class StagedQlibBackendBuilder:
         self,
         calendar: pd.DatetimeIndex,
         target_dirs: dict[str, str],
+        *,
+        force: bool = False,
     ) -> list[str]:
         """Bare share-capital bins from the raw market/daily columns (EFFECTIVE-DATE anchor).
 
@@ -3864,8 +3866,16 @@ class StagedQlibBackendBuilder:
         effective-date-anchored in every build mode — full ``all``, non-scoped ``update``
         (kline dump only appends), and scoped ``--touched-symbols`` updates (no kline dump at
         all). Symbols with no raw daily rows (index codes) keep their existing bins untouched.
+
+        ``force=True`` (the ``materialize_provider`` call) bypasses ``field_filter``: the
+        kline dump ignores ``field_filter`` too, so a field-scoped update would otherwise
+        re-dump a raw 万股 ``total_share`` tail and then SKIP the ×1e4 corrective rewrite
+        (GPT cross-review M2). Sandbox callers that genuinely want a scoped write pass
+        ``force=False``.
         """
-        fields = self._apply_field_filter(list(SHARE_CAPITAL_DAILY_FIELDS))
+        fields = list(SHARE_CAPITAL_DAILY_FIELDS)
+        if not force:
+            fields = self._apply_field_filter(fields)
         if not fields:
             return []
         frame = load_share_capital_daily_frame(self.paths.data_root, fields=fields)
@@ -4122,8 +4132,9 @@ class StagedQlibBackendBuilder:
         # also skip these names — defense in depth). UNCONDITIONAL like the kline dump
         # (NOT gated on active_datasets): a datasets-subset update still re-dumps the
         # kline CSVs, which would append raw 万股 values to the total_share tail — this
-        # step must always follow to restore the ×1e4 股-unit contract.
-        written["share_capital_daily"] = self._materialize_share_capital_daily(calendar, target_dirs)
+        # step must always follow to restore the ×1e4 股-unit contract. force=True also
+        # bypasses field_filter (the kline dump ignores it, so the corrective rewrite must too).
+        written["share_capital_daily"] = self._materialize_share_capital_daily(calendar, target_dirs, force=True)
         for dataset_name in (
             "moneyflow", "northbound", "margin", "stk_limit",
             # New alpha endpoints (added 2026-04-16): daily-fact kind,

@@ -1,0 +1,60 @@
+{
+  "artifact_class": "data_correction_replay",
+  "date": "2026-07-01",
+  "reason": "The 2026-07-01 share-capital anchoring correction rewrote the bare $total_share bin (balancesheet report-anchored compat alias -> raw daily effective-date anchor). The approved factor qual_piotroski_fscore_9pt consumes Ref($total_share,1)/Ref($total_share,251) (anti-dilution term), so its prior approval evidence was not bit-reproducible against the corrected provider (GPT cross-review Blocker B1). This replay re-runs the EXACT frozen approved design on the corrected provider to replace the invalidated evidence. It is NOT a fresh OOS attempt: the 2021-2026 window remains spent for FrozenSelectionSet 5a8d601a...; the replay uses the promotion driver's deterministic dryrun reproduction (promote_sealed_oos_winners.py --mode dryrun: temp seal claim, NO real seal spend, NO registry writes) and the frozen design was not altered.",
+  "frozen_set_hash": "5a8d601a6a06bbc9e536562bd3d728237910683e9346409476ea9ccafff078c3",
+  "definition_binding": {"bound": true, "mismatched": []},
+  "provider_build_id": "depth9_20260630_sharecap_reanchor_20260701",
+  "base_provider_build_id": "depth9_20260630",
+  "original_evidence": {
+    "artifact": "workspace/research/factor_expansion/sealed_oos_winners_promotion.json",
+    "provider_build_id": "prod_full_20260421_namespace_v1"
+  },
+  "oos_window": "2021-01-01..2026-02-27",
+  "horizon": 20,
+  "n_quantiles": 5,
+  "bar": "oos_rank_icir > 0 (sign-stable) AND oos_ls_sharpe(5d) > 1.0",
+  "replay_git_sha": "c6e0b85604e73fb86d5f1c84867c0c17fde46eac",
+  "self_verify": "promotion_evidence gate PASSED (all 6 PIT canaries + lint + live-provider parity + availability assertion)",
+  "per_factor": {
+    "qual_piotroski_fscore_9pt": {
+      "consumes_corrected_field": true,
+      "original": {"oos_rank_icir": 0.20894171439099019, "oos_ls_sharpe": 1.2029280792030757},
+      "replay":   {"oos_rank_icir": 0.2156, "oos_ls_sharpe": 1.6342},
+      "verdict": "PASS — clears the original approval bar on the corrected provider; metrics IMPROVED (the report-anchored $total_share had been mistiming the anti-dilution term). Approval evidence REPLACED by this replay; status stays approved."
+    },
+    "liq_zero_ret_days_10d": {
+      "consumes_corrected_field": false,
+      "original": {"oos_rank_icir": 0.41086330127062803, "oos_ls_sharpe": 2.1431121334513468},
+      "replay":   {"oos_rank_icir": 0.4109, "oos_ls_sharpe": 2.1431},
+      "verdict": "EXACT reproduction (control)"
+    },
+    "rev_turnover_spike_5d": {
+      "consumes_corrected_field": false,
+      "original": {"oos_rank_icir": 0.27585909981966567, "oos_ls_sharpe": 2.6817727487602516},
+      "replay":   {"oos_rank_icir": 0.2759, "oos_ls_sharpe": 2.6818},
+      "verdict": "EXACT reproduction (control)"
+    },
+    "grow_total_revenue_yoy_accel_q": {
+      "consumes_corrected_field": false,
+      "original": {"oos_rank_icir": 0.2565027227006839, "oos_ls_sharpe": 3.444084254398133},
+      "replay":   {"oos_rank_icir": 0.2565, "oos_ls_sharpe": 3.4441},
+      "verdict": "EXACT reproduction (control)"
+    },
+    "grow_n_income_attr_p_yoy_accel_q": {
+      "consumes_corrected_field": false,
+      "original": {"oos_rank_icir": 0.24985640733436865, "oos_ls_sharpe": 1.9560115570102816},
+      "replay":   {"oos_rank_icir": 0.2499, "oos_ls_sharpe": 1.9560},
+      "verdict": "EXACT reproduction (control)"
+    },
+    "grow_operate_profit_yoy_accel_q": {
+      "consumes_corrected_field": false,
+      "original": {"oos_rank_icir": 0.19658662575033042, "oos_ls_sharpe": 1.4924218626315495},
+      "replay":   {"oos_rank_icir": 0.1966, "oos_ls_sharpe": 1.4924},
+      "verdict": "EXACT reproduction (control)"
+    }
+  },
+  "attribution_note": "The 5 non-consuming winners reproduce their April-provider evidence EXACTLY (4-dp match on both metrics), so the Piotroski delta (rank_icir 0.2089->0.2156, ls_sharpe 1.2029->1.6342) is isolated to the share-capital correction — no other provider drift confounds it.",
+  "overall_verdict": "PASS 6/6 — no downgrade required; qual_piotroski_fscore_9pt approval evidence replaced by this data_correction_replay.",
+  "log": "background task output 2026-07-01 22:53-23:0x, driver workspace/scripts/promote_sealed_oos_winners.py --mode dryrun"
+}

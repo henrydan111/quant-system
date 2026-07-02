@@ -19,7 +19,7 @@ related_findings_id: null
 # Bind to the provider build that materialized + serves $forecast__np_q_yoy (the
 # incremental forecast add published 2026-06-23 by atomic swap; old provider backed up
 # at data/qlib_data.bak_20260623_004545). Daily-QA approval_evidence_binding enforces this.
-provider_build_id: "depth9_20260630"
+provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
 calendar_policy_id: frozen_20260227_system_build
 
 approval_scope:
