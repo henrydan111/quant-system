@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.research_orchestrator.cache_manifest import (
     CacheContext,
+    CacheKeyMismatchError,
     CacheManifestStore,
     ProviderGenerationMismatchError,
     get_cache_context,
@@ -82,7 +83,12 @@ def qlib_windowed_features(
     # "sandbox/no-context calls skip this check" behavior is exactly the leak
     # the pre-publish wall exists to close. Boundary resolution failure fails
     # closed too (the resolver raises).
-    from src.data_infra.provider_context import live_provider_ids, live_spent_oos_end
+    from src.data_infra.provider_context import (
+        live_provider_ids,
+        live_qlib_provider_dir,
+        live_spent_oos_end,
+        qlib_bound_provider_dir,
+    )
 
     boundary_end = live_spent_oos_end()
     if pd.Timestamp(end_time) > boundary_end:
@@ -107,6 +113,46 @@ def qlib_windowed_features(
     # M4 provider-generation binding: a manifest row written under another
     # provider build/policy (incl. legacy ""-rows) never validates reuse.
     live_build_id, live_policy_id = live_provider_ids()
+
+    # M4 self-heal review, GPT M2: this is a LIVE-provider door — manifest
+    # rows are stamped with live ids, so a process whose in-process Qlib
+    # binding provably points elsewhere (staged/archived provider) must not
+    # read or write here. A POSITIVE probe mismatch fails closed; an
+    # inconclusive probe (qlib stubbed / not yet initialized / config API
+    # drift) is not evidence and proceeds.
+    bound_dir = qlib_bound_provider_dir()
+    if bound_dir is not None:
+        live_dir = live_qlib_provider_dir()
+        if bound_dir != live_dir:
+            raise CacheKeyMismatchError(
+                "qlib_windowed_features is a live-provider door: the in-process "
+                f"Qlib binding {bound_dir} != live provider {live_dir}. Reads "
+                "against staged/archived providers must not stamp live ids — "
+                "use a non-formal parity helper instead."
+            )
+
+    # M4 self-heal review, GPT B1: a formal run pins its provider generation
+    # in the ResearchAccessContext at run start. If the live provider rotates
+    # WHILE the context is active, every later read hard-fails (base class —
+    # the self-heal catch below cannot swallow it): one evidence artifact must
+    # never mix provider generations. With no active context (sandbox live
+    # reads), the live ids are the binding.
+    if research_ctx is not None:
+        expected_build_id = str(research_ctx.provider_build_id)
+        expected_policy_id = str(research_ctx.calendar_policy_id)
+        if (live_build_id, live_policy_id) != (expected_build_id, expected_policy_id):
+            raise CacheKeyMismatchError(
+                "Live provider generation changed during an active "
+                f"ResearchAccessContext: live=({live_build_id}, {live_policy_id}) "
+                f"!= context=({expected_build_id}, {expected_policy_id}). "
+                "Abort this formal run and restart under a single provider generation."
+            )
+        binding_build_id = expected_build_id
+        binding_policy_id = expected_policy_id
+    else:
+        binding_build_id = live_build_id
+        binding_policy_id = live_policy_id
+
     try:
         manifest.assert_cache_reusable(
             cache_key=cache_key,
@@ -116,11 +162,12 @@ def qlib_windowed_features(
             window_start=start_time,
             window_end=end_time,
             cache_type="qlib_features",
-            provider_build_id=live_build_id,
-            calendar_policy_id=live_policy_id,
+            provider_build_id=binding_build_id,
+            calendar_policy_id=binding_policy_id,
         )
     except ProviderGenerationMismatchError as exc:
-        # Provider rotated since this key's latest manifest row. This door
+        # Provider rotated since this key's latest manifest row (BEFORE this
+        # run/context started — a mid-run rotation is caught above). This door
         # holds no cached artifact — D.features below always recomputes from
         # the live provider — so a stale-generation row must not brick the key
         # permanently: proceed, and record_cache_write below appends a fresh
@@ -130,10 +177,14 @@ def qlib_windowed_features(
         # violations still propagate.
         logger.warning(
             "cache generation rotated for %s — recomputing from the live "
-            "provider and re-binding to (%s, %s); refused stale row: %s",
+            "provider and re-binding to (%s, %s); stage=%s run_id=%s "
+            "step_id=%s; refused stale row: %s",
             cache_key,
-            live_build_id,
-            live_policy_id,
+            binding_build_id,
+            binding_policy_id,
+            stage,
+            getattr(research_ctx, "run_id", ""),
+            getattr(research_ctx, "step_id", ""),
             exc,
         )
     frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
@@ -154,7 +205,7 @@ def qlib_windowed_features(
         stage=stage,
         window_start=start_time,
         window_end=end_time,
-        provider_build_id=live_build_id,
-        calendar_policy_id=live_policy_id,
+        provider_build_id=binding_build_id,
+        calendar_policy_id=binding_policy_id,
     )
     return frame

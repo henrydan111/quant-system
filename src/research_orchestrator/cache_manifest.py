@@ -291,7 +291,12 @@ class CacheManifestStore:
         events = self.list_events(cache_key=cache_key, cache_path=cache_path)
         if events.empty:
             return
-        latest = events.sort_values("recorded_at").iloc[-1]
+        # GPT M1 (M4 self-heal review): "latest" = APPEND order, not the
+        # second-precision recorded_at (ambiguous for same-second rows, wrong
+        # under clock skew). record_cache_write appends under file_lock and
+        # list_events preserves parquet row order, so iloc[-1] is the last
+        # write.
+        latest = events.iloc[-1]
         if cache_type != "qlib_features":
             if str(latest["design_hash"]) != str(cache_context.design_hash):
                 raise CacheKeyMismatchError(

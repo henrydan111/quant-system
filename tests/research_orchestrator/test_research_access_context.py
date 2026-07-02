@@ -274,7 +274,12 @@ class TestQlibWindowedFeaturesEnforcement:
                 names=["instrument", "datetime"],
             ),
         )
-        with patch("qlib.data.D") as mock_d:
+        # B1 generation pin: the live ids must equal the context's pinned ids
+        # for the read to proceed (this context uses the test id "prod_test").
+        with patch("qlib.data.D") as mock_d, patch(
+            "src.data_infra.provider_context.live_provider_ids",
+            return_value=("prod_test", "frozen_20260227_system_build"),
+        ):
             mock_d.features.return_value = mock_frame
             with research_access_context(ctx):
                 out = qwf.qlib_windowed_features(
