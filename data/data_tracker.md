@@ -1,6 +1,6 @@
 # Quantitative Data Infrastructure Tracker
 
-*Last Updated: 2026-06-08 (added §11 Bucket A 15000积分 expansion: 8 new raw endpoints downloaded — report_rc analyst forecasts + express/disclosure_date/fina_mainbz/fina_audit fundamentals + repurchase/pledge_stat/top10_floatholders governance; ~10M rows, RAW-only pending normalize→PIT→provider→registry **EXCEPT `report_rc` — now fully PIT-ledger + Qlib-provider materialized (create_time/+2 anchor; 4 approved `$report_rc__eps_*` + 5 quarantined consensus/rating fields; see §11)**. ALSO: field-parity audit vs official Tushare specs (`workspace/research/data_audit/`) + 3 fixes — stock_basic now 5,852 rows / 17 cols (+act_name/act_ent_type), income_quarterly dropped 100%-null ebit/ebitda → 21 cols, fina_indicator re-fetched with ALL 167 fields (raw 109→167 cols, 58 indicators backfilled; RAW-ONLY, pending ledger/provider/field-registry))*
+*Last Updated: 2026-07-02 (**calendar-unfreeze Phase 1 raw catch-up COMPLETE — every trade_date-partitioned and ann_date-anchored dataset extended from the 2026-02-27 freeze to `target_end = 2026-06-30`** [82 trading days, spanning the FY2025 annual + 2026Q1 report season]. Per UNFREEZE_PLAN.md Phase 1 + endpoint_contracts.yaml, ann_date-WINDOW fetch [never report-period]: §2 daily/index + moneyflow/hk_hold/margin/stk_limit/top_list/top_inst/block_trade + suspend_d → 2026-06-30 [driver `catchup_daily_range.py`, 82/82 days, 0 failed]; income/income_quarterly/balancesheet/cashflow/cashflow_quarterly/indicators/holder_number ann_date sweep 20260228-20260630 = 96,946 rows; forecast+dividends per-day = 14,530 rows; indicators staged refresh 20251231+20260331 = +14,245 rows [update_flag silent-revision capture]; stk_holdertrade_2026 → 5,774 rows; cyq_perf → complete through 2026-06-30; report_rc_2026 73,119→143,617 rows [202602 overlap refetch]; index_weights 202603-202606 × 7 indices; namechange refreshed; trade_cal now 1990-12-19→2026-12-31 [8,797 rows, verified superset of old 4,410 with 0 flag mismatches]; stock_basic 5,861 rows [L 5,534 / D 327]. **⚠ Qlib provider + PIT ledger + all §7 table end-dates below still reflect the 2026-02-27 freeze — provider rebuild is UNFREEZE_PLAN Phase 3 [pre-publish wall Phase 2 first]. stock_st_daily has no fetcher [ends 2026-03-23]; gap-window ST authority = namechange ranges. Catch-up raw data is NOT a research surface until the Phase-2 gates are green [plan Phase 1.7].** Prior update: 2026-06-08 (added §11 Bucket A 15000积分 expansion: 8 new raw endpoints downloaded — report_rc analyst forecasts + express/disclosure_date/fina_mainbz/fina_audit fundamentals + repurchase/pledge_stat/top10_floatholders governance; ~10M rows, RAW-only pending normalize→PIT→provider→registry **EXCEPT `report_rc` — now fully PIT-ledger + Qlib-provider materialized (create_time/+2 anchor; 4 approved `$report_rc__eps_*` + 5 quarantined consensus/rating fields; see §11)**. ALSO: field-parity audit vs official Tushare specs (`workspace/research/data_audit/`) + 3 fixes — stock_basic now 5,852 rows / 17 cols (+act_name/act_ent_type), income_quarterly dropped 100%-null ebit/ebitda → 21 cols, fina_indicator re-fetched with ALL 167 fields (raw 109→167 cols, 58 indicators backfilled; RAW-ONLY, pending ledger/provider/field-registry))*
 
 This document tracks all the data currently downloaded from Tushare into the local Parquet cache (`e:\量化系统\data\`). It should be regularly updated after mass data acquisitions.
 
@@ -27,11 +27,12 @@ Contains basic metadata and trading calendars for the market.
 The core daily historical records for quantitative analysis. Each file represents one trading day containing OHLCV, valuation metrics, and adjustment factors.
 
 - **Start Date:** `2008-01-02`
-- **End Date:** `2026-02-27`
-- **Total Trading Days:** 4,410
+- **End Date:** `2026-06-30` (extended from the 2026-02-27 freeze on 2026-07-02, calendar-unfreeze Phase 1)
+- **Total Trading Days:** 4,492
 - **Daily Stock Count Progression:**
   - *2008-01-02*: 1,371 stocks
   - *2026-02-27*: 5,471 stocks
+  - *2026-06-30*: 5,508 stocks
 
 ### Available Columns per Record
 | Category | Columns |
