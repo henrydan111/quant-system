@@ -819,14 +819,14 @@ def run(start="2014-01-02", end="2026-02-27", cost_side=0.002, net_name="verify0
     cost = CostConfig(buy_commission=cost_side, sell_commission=cost_side, stamp_tax=0.0,
                       min_commission=0.0, transfer_fee=0.0)
     bt = EventDrivenBacktester(data_dir=str(ROOT / "data"))
-    # $limit_status added as a benign EXTRA preload field: it rotates the deterministic cache_key so the
-    # M4 manifest binding sees a FRESH key (the legacy pre-rotation ''-row key is permanently refused —
-    # spawned fix task_5a0289dc) and preload works instead of the 10-60x slower per-day fallback.
+    # The $limit_status cache-key-rotation workaround (task_5a0289dc) is REMOVED:
+    # the M4 rotation self-heal (GPT 3-round SHIP 2026-07-02) lets the door
+    # recompute + re-bind a stale-generation key, so the natural field set works.
     res = bt.run(strategy=strat, start_time=start, end_time=end, benchmark="000300.SH",
                  account=1_000_000.0, exchange_config=cost, slippage=FixedSlippage(0.0),
                  volume_limit=0.10, hold_on_limit_up=True,
                  preload_fields=["$open", "$close", "$high", "$low", "$vol", "$amount", "$pre_close",
-                                 "$adj_factor", "$up_limit", "$down_limit", "$limit_status"])
+                                 "$adj_factor", "$up_limit", "$down_limit"])
     rep = res.report.copy()
     if "date" in rep.columns:
         rep = rep.set_index(pd.to_datetime(rep["date"]))
