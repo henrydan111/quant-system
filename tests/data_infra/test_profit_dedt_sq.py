@@ -28,8 +28,13 @@ Plan-canary -> coverage map (9 items):
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from data_infra.pit_backend import StagedQlibBackendBuilder
 

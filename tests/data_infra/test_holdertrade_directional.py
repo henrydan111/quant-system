@@ -4,9 +4,14 @@ Pins the GPT-review M1/m2 contract: amount uses min_count=1 (all-unpriced day â†
 partial-priced day â†’ priced-event lower bound), vol/ratio/events stay complete, and directional vol
 is a positive magnitude. See src/data_infra/pit_backend.py::aggregate_directional_holdertrade.
 """
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from data_infra.pit_backend import aggregate_directional_holdertrade
 
