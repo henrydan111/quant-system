@@ -1,6 +1,8 @@
-# 日历解冻计划（Calendar Unfreeze Plan）— v3
+# 日历解冻计划（Calendar Unfreeze Plan）— v3 定稿
 
-*起草 2026-07-01 · v2：Round-1 判定 REVISE（10 findings 全部接受，处置表 §6）· v3 修订 2026-07-01：Round-2 判定 **REVISE**（8/10 RESOLVED、无新 Blocker；新增 M6 政策解析器 + M7 次序矛盾 + 3 条附加要求，全部接受，处置表 §7）· 状态：待 Round-3 re-review*
+*起草 2026-07-01 · GPT 5.5 Pro §10 跨审三轮：Round-1 REVISE（10 findings 全接受→v2）→ Round-2 REVISE（M6/M7+3 附加全接受→v3）→ **Round-3 SHIP**（M6/M7/附加 1-3 全 RESOLVED，0 新 issue；处置表 §6/§7/§8）· 状态：**定稿，可执行***
+
+**⚠ GPT 终审残余风险（实现纪律，执行时必须遵守）**：M6 解析器（D3 条目 8）**不是发布校验器**——它只管钳制；解冻 provider 上线前仍必须同时满足 manifest-政策等值/兼容校验 + Phase 2 无硬编码闸全绿，不得把"解析器能兜底"当作放行理由。
 *目标：把冻结在 2026-02-27 的本地数据日历稳定、高效地推进到当前，并建立可持续的更新机制。*
 
 **v2 相对 v1 的两个结构性变化（来自 Blocker）：**
@@ -81,7 +83,8 @@
    - policy 含 `spent_oos_end` → 直接使用（并与 provider 日历互验；`fresh_holdout_start` 同）；
    - policy 缺该字段且 `frozen == true` → `spent_oos_end = policy.calendar_end_date`，`fresh_holdout_start = 其后第一个交易日`；若 provider 日历恰止于 `spent_oos_end`（老冻结态），则不存在新鲜 holdout 窗口，一切 post-spent 读取 fail-closed；
    - `frozen == false` 或字段缺失/非法的其他情形 → fail-closed（直到 `max_calendar_lag_days` 强制检查落地且测试绿）。
-   **CI 必测**：老 `frozen_20260227_system_build`（无新字段）默认读钳到 2026-02-27；新 thaw_step1 政策在 `provider_calendar_end > spent_oos_end` 时默认读仍钳到 `spent_oos_end`；解冻政策的 `spent_oos_end` 缺失/非法 → fail-closed。
+   **CI 必测**：老 `frozen_20260227_system_build`（无新字段）默认读钳到 2026-02-27；新 thaw_step1 政策在 `provider_calendar_end > spent_oos_end` 时默认读仍钳到 `spent_oos_end`；解冻政策的 `spent_oos_end` 缺失/非法 → fail-closed，**且该测试必须走 manifest 声明新政策的完整路径（manifest 指向 thaw 政策 id 但 YAML 缺/坏字段），不能只用手工构造的 policy 对象**（Round-3 实现注记，测试标题点名该子情形）。
+   **定位注记（Round-3 终审）**：本解析器只负责钳制语义，**不是发布校验器**——"解冻 provider + 老格式政策"的配对必须由 manifest-政策等值校验与 Phase 2 闸在 publish/QA 层拒绝，解析器的钳制兜底不构成对该配对的放行。
 
 ---
 
@@ -136,7 +139,7 @@
 ### Phase 5 — 稳态更新机制
 1. **每日**：计划任务收盘后跑 `update_daily_data.py --no-qlib`（原始层 + 日频集）；`run_daily_qa` 随后跑并失败告警（冻结期"故意不调度"注释同步移除）。
 2. **每月**：一键 driver（`scripts/monthly_calendar_bump.py`，`--dry-run` 必备）串起：磁盘检查 → 端点就绪检查定 target_end → 全量重建 → 前缀+侧车审计 → dry-run 报告 → 安全发布 → 换绑 → QA → 父 build 元数据 + 文档 stub。
-3. **保留策略（M3）**：只修剪**无引用** build；引用型 build 保留全树或回放核验包（见 D2）。**修剪前必须完成对全部引用存储（approvals / 五注册表 evidence / seal store / frozen selection / deployment-gate 记录）的完整扫描；扫描无法枚举任一引用源时，修剪 fail-closed**（Round-2 附加要求）。
+3. **保留策略（M3）**：只修剪**无引用** build；引用型 build 保留全树或回放核验包（见 D2）。**修剪前必须完成对全部引用存储（approvals / 五注册表 evidence / seal store / frozen selection / deployment-gate 记录——此列表是示例不是穷尽白名单，"全部引用存储"按字面执行，未来新增证据存储自动纳入）的完整扫描；扫描无法枚举任一引用源时，修剪 fail-closed**（Round-2 附加要求 + Round-3 实现注记）。
 4. **滚动政策守护规则（m1）**：在 `max_calendar_lag_days` 的运行时 + daily QA 强制检查落地并测试全绿之前，**任何 `frozen:false` 政策不得被 live provider / 正式验证 / daily QA / promotion / revalidation / 月度 driver 选用**；QA 增加检查：`active_policy.frozen == false` 时要求 lag 强制测试绿 + `live_calendar_end ≥ last_complete_trade_date − lag`。
 5. **后续演进（不在关键路径）**：滚动政策；真·追加式增量物化器（仅当月度全量重建时长不可接受时立项）。
 
@@ -203,3 +206,13 @@ Round-2 逐条判定：B2/M1/M3/M4/m1/m2/m3/m4 = **RESOLVED**；B1、M2 = PARTIA
 | 附加 3 | 引用扫描无法枚举任一引用源时修剪 fail-closed | **接受** | Phase 5.3 |
 
 **拒绝项：无。**
+
+## 8. GPT Round-3 终审（2026-07-01，verdict = **SHIP**）
+
+M6 / M7 / 附加 1 / 附加 2 / 附加 3 = **全部 RESOLVED**；新 issue：Blocker / Major / Minor 均为空。三条实现注记已折入正文：
+
+1. M6 的"缺失/非法字段"CI 测试必须走 manifest 声明新政策的完整路径（D3 条目 8）；
+2. 解析器不是发布校验器——manifest-政策等值 + Phase 2 闸仍是上线前置（文档头 + D3 条目 8 定位注记）；
+3. 引用存储列表按字面"全部"执行、非穷尽白名单（Phase 5.3）。
+
+终审残余风险 = **实现漂移**（把解析器兜底误当发布校验）。跨审 arc：REVISE → REVISE → SHIP，三轮共 15 findings + 3 实现注记，全部接受，**零拒绝项**。计划就此定稿。
