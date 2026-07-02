@@ -137,9 +137,16 @@ All parity = holding-level value vs 果仁's displayed factor across the 65 book
 > **Method that found them (reusable order): replay 果仁's holdings through the engine (splits selection vs
 > execution) → miss-diagnosis vs 持仓详单 (screen-miss vs rank-miss, per-screen/per-factor) → held-name
 > percentile distributions (pin screen semantics) → per-factor value agreement vs the xlsx's own factor columns.**
-> Books: #2 v4 +58.59% (果仁 +58.20%, in25 0.906) · #6 v3 +57.78% (+60.32%) · #1 v4 +51.49% (+57.21%, in25 0.793;
-> residual = 2020+ 注册制/20cm era, 涨停标记-in-onmom hypothesis). Harnesses: guorn_verify_02b_calibers.py /
-> _verify_v3_propagate.py / _verify02_miss_diag.py / _replay_guorn_05_growth.py.
+> 5. **EVENT factors (业绩预告/快报 terms) have an ALIVE WINDOW: [event ann, corresponding report pub).** 果仁's
+>    业绩预告净利润QGr%PYQ_v1 dies when the real report lands (monthly coverage: Feb-Mar 81% → May-Jun 15% →
+>    Jul-Aug 42% → Sep 17%); an infinite ffill over-covers 2-4× and mis-ranks the NaN→bottom term
+>    (#1: coverage agreement 44%→91.5% with the mask; CAGR +51.5%→+54.7%).
+> 6. **果仁 `LOG()` = log10** (ours ln; ratio 2.3026) — rank-invariant inside a single term, but any VALUE
+>    comparison must descale (onmom agreed 2-13%/sign 94-100% only after ÷ln10).
+> Books: #2 v4 +58.59% (果仁 +58.20%, in25 0.906) · #6 v3 +57.78% (+60.32%) · #1 v5 +54.73% (+57.21%, in25 0.888;
+> the onmom limit-flag era hypothesis was REFUTED by the descaled value agreement — the 2020+ residual was the
+> forecast alive-window). Harnesses: guorn_verify_02b_calibers.py / _verify_v3_propagate.py /
+> _verify02_miss_diag.py / _replay_guorn_05_growth.py.
 
 ### 1b. #59 Comp_Core_Quality batch (rung-6, 2026-06-24) — strategy-harness factor sweep
 

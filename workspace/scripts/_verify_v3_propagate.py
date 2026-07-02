@@ -98,12 +98,14 @@ def build_schedule(book, start, end, variant="v3"):
         zsfz = pd.read_parquet(CACHE / "e_zsfz.parquet")
         bias = e["bias120"]
         headroom = 30
-        sched_path = OUT / ("verify01d_schedule.json" if variant == "v4" else "verify01c_schedule.json")
-        if variant == "v4":
+        sched_path = OUT / {"v4": "verify01d_schedule.json", "v5": "verify01e_schedule.json"}.get(variant, "verify01c_schedule.json")
+        if variant in ("v4", "v5"):
             f = dict(f)
             f["ROETTMDiff"] = pd.read_parquet(CACHE / "f_ROETTMDiff_v2.parquet")
             f["onmom250"] = pd.read_parquet(CACHE / "f_onmom250_v2.parquet")
             f["onmom120"] = pd.read_parquet(CACHE / "f_onmom120_v2.parquet")
+        if variant == "v5":
+            f["forecast"] = pd.read_parquet(CACHE / "f_forecast_v2.parquet")   # alive-window mask (预告存活到财报发布)
         tmt = None
     else:
         f, ind, e = g6._load()
@@ -153,7 +155,9 @@ def run(book, start, end, variant="v3"):
     from src.backtest_engine.event_driven import EventDrivenBacktester, CostConfig
     from src.backtest_engine.event_driven.exchange import FixedSlippage
     if book == 1:
-        if variant == "v4":
+        if variant == "v5":
+            sched_path, net_name, label = OUT / "verify01e_schedule.json", "verify01e_net.parquet", "#1 sm_01_成长动量 v5(+forecast存活窗)"
+        elif variant == "v4":
             sched_path, net_name, label = OUT / "verify01d_schedule.json", "verify01d_net.parquet", "#1 sm_01_成长动量 v4(roev2+onmom)"
         else:
             sched_path, net_name, label = OUT / "verify01c_schedule.json", "verify01c_net.parquet", "#1 sm_01_成长动量 v3"
@@ -196,7 +200,7 @@ def main():
     ap.add_argument("--book", type=int, choices=(1, 6), required=True)
     ap.add_argument("--schedule", action="store_true")
     ap.add_argument("--run", action="store_true")
-    ap.add_argument("--variant", default="v3", choices=("v3", "v4"))
+    ap.add_argument("--variant", default="v3", choices=("v3", "v4", "v5"))
     ap.add_argument("--build-onmom-v2", action="store_true")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2026-02-27")
