@@ -33,6 +33,8 @@
 - **`update_daily_data.py` 只支持单日**，没有多日追赶循环。
 - 非 scoped `mode=update` 的全树拷贝 = 已知磁盘隐患（约 241GB / 2300 万文件）。
 
+> **执行期注记（2026-07-02）**：并行的 share-capital 治理会话已把 live provider 身份轮换为 `depth9_20260630_sharecap_reanchor_20260701`（日历/边界不变，仅 3 个股本 bin 修正 + patches sidecar）。**Phase 3 的父 build 与 Phase 4 换绑的"旧 id"以该轮换后身份为准**；冻结段字节审计的基线 = 当前 live（含修正后的股本 bin，与本分支已含的 `_materialize_share_capital_daily` 重建代码一致）。快照 `baseline_snapshots/provider_build_pre_unfreeze_v2_sharecap.json`。
+
 ### 0.3 数据现状与缺口体量
 
 - 全部核心数据末端 = 2026-02-27（daily/index/trade_cal 各 4,410 个交易日；`data/data_tracker.md`）。
