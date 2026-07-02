@@ -89,3 +89,29 @@
 - 无新的量化断言；无对冲措辞问题。
 
 **Round-3 结论：clean for GPT re-review（范围：M6/M7 + 3 附加项的解决 + 新引入内容扫描）。**
+
+---
+
+# Round-4 自审（Phase 2 发布前墙**实现** diff）— 2026-07-02
+
+**对象**：`phase2_wall.diff`（23 文件 / +798 −33；提交 81680fb / 3f1cec8 / cb2c8d0）。设计已 SHIP（Round 1-3）；本轮审的是实现忠实性 + 实现引入的新风险。
+
+## 一、§3 不变量核对
+
+- **3.2 PIT**：全部改动只做**收窄**（钳制/拒绝），无任何路径放宽数据可见性。promotion 守卫放宽是唯一"允许更多"的语义变更——但仅接受 `oos_end == 政策记录 spent 边界` 且 Phase-4 belt（`IsEndLeakageError`）保留；`calendar_end < oos_end` 的短日历情形仍走拒绝分支（fail-closed 全覆盖，已逐分支核）。✔
+- **3.4 治理**：publish 政策参数必填化没有旁路（`run()` 在 publish 且无 id 时 `BuildGateError`）；manifest-记录 id 的读取点（update_daily_data / validation_steps / 缓存绑定 / 钳制）全部属于 D1 的 live-provider/artifact-记录例外。✔
+- **3.5 seal**：正式门钳制与既有 oos_test `validate_read` seal 检查形成双层；沙盒门无 seal 逃逸（设计加严）。✔
+
+## 二、实现自查发现（已知权衡，留给 GPT 裁决）
+
+1. **`lru_cache` 进程级缓存**（`_spent_oos_end_timestamp` / `live_provider_ids`）：进程存活期间 provider 轮换会读到旧边界/旧 id。权衡理由：研究/正式运行都是每-run 进程；轮换发生在发布仪式中（无并存长进程假设）。风险=长驻进程（dashboard？）跨轮换。
+2. **缓存世代绑定只在调用方传 id 时执行**：今天唯一调用方是正式门（总传）；未来新调用方漏传则不受绑定。lint 未覆盖该情形。
+3. **QA 审计锚 16:00 启发式**：硬编码小时数（非交易日历收盘语义），文档已注明用途（防盘中假红）。
+4. **`_formal_calendar_policy_id` 的 prescription 优先**：`PrescribedRecipe` 尚无该字段（getattr→None→manifest 路径）——前向兼容设计，字段落地属后续。
+5. **诚实更正已入库**：Phase 1 后 QA "全绿"误报（audit 未来锚点 + echo 链吞退出码）——修正 + 复验（exit=0 + Overall PASS 双检）。
+
+## 三、测试证据
+
+新增 14 测试（9 政策解析器 + 5 正式门行为）；orchestrator 253 全绿、data_infra 全绿（除既有 test_share_capital_daily 收集问题，独立任务处理中）、pr8 系列全绿（pr8c 源文断言更新为新契约）、`run_daily_qa` Overall PASS exit=0（含新 POLICY001 lint）。
+
+**Round-4 结论：clean for GPT（实现 diff 审查）。**

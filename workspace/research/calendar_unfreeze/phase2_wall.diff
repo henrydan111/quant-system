@@ -1,0 +1,1342 @@
+diff --git a/config/calendar_policies/frozen_20260630_thaw_step1.yaml b/config/calendar_policies/frozen_20260630_thaw_step1.yaml
+new file mode 100644
+index 0000000..88053f6
+--- /dev/null
++++ b/config/calendar_policies/frozen_20260630_thaw_step1.yaml
+@@ -0,0 +1,45 @@
++# Calendar policy: thaw step 1 — frozen at 2026-06-30 with a born-sealed
++# fresh-holdout window.
++#
++# First calendar-unfreeze bump (UNFREEZE_PLAN.md, GPT §10 3-round SHIP).
++# The predecessor frozen_20260227_system_build.yaml is append-only history —
++# NEVER edit it; artifacts that recorded it replay against it as-is.
++#
++# D3 semantics: discovery/sandbox research reads clamp to spent_oos_end by
++# default; dates in [fresh_holdout_start, calendar_end_date] are born-sealed
++# and reachable ONLY through a holdout-seal claim (resolve_spent_oos_boundary
++# + the loader clamps enforce this mechanically; the resolver is a clamp, NOT
++# a publish validator).
++
++policy_id: frozen_20260630_thaw_step1
++policy_schema_version: 1
++
++calendar_start_date: 2008-01-02
++calendar_end_date: 2026-06-30
++data_end_date: 2026-06-30
++
++frozen: true
++reason: thaw_step1_monthly_freeze_bump
++established_at: 2026-07-02
++
++# The spent-OOS boundary (D3): every sealed-OOS window consumed to date ends
++# at 2026-02-27; the window from 2026-02-28 onward is genuinely unseen by all
++# registry factors and is born-sealed.
++spent_oos_end: 2026-02-27
++fresh_holdout_start: 2026-02-28
++
++allowed_modes:
++  - sandbox
++  - joinquant_replication
++  - formal_research_with_explicit_freeze
++  - joinquant_daily
++  - joinquant_open_close_replica
++  - formal
++  - oos_test
++
++default_formal_behavior: require_explicit_policy
++
++notes:
++  - "Thaw step 1 of the calendar unfreeze; parent provider build = depth9_20260630_sharecap_reanchor_20260701."
++  - "Raw layer caught up 2026-03-02..2026-06-30 on 2026-07-02 (82 trading days, verify_database green)."
++  - "Provider rebuild against this policy is UNFREEZE_PLAN Phase 3; publish is gated on the Phase-2 pre-publish wall."
+diff --git a/scripts/emit_retroactive_provider_manifest.py b/scripts/emit_retroactive_provider_manifest.py
+index 482b388..8483119 100644
+--- a/scripts/emit_retroactive_provider_manifest.py
++++ b/scripts/emit_retroactive_provider_manifest.py
+@@ -43,7 +43,7 @@ from src.data_infra.provider_manifest import (  # noqa: E402
+ )
+ 
+ DEFAULT_QLIB_DIR = PROJECT_ROOT / "data" / "qlib_data"
+-CALENDAR_POLICY_ID = "frozen_20260227_system_build"
++CALENDAR_POLICY_ID = "frozen_20260227_system_build"  # noqa: global-calendar-policy — retroactive-manifest tool: stamping the LEGACY id on the pre-attestation provider IS its purpose (D1 old-artifact exemption)
+ 
+ EVIDENCE = (
+     "README.md status snapshot (line 13): 'Live Qlib provider rebuilt 2026-04-21.'",
+diff --git a/scripts/lint_no_global_calendar_policy.py b/scripts/lint_no_global_calendar_policy.py
+new file mode 100644
+index 0000000..6114c31
+--- /dev/null
++++ b/scripts/lint_no_global_calendar_policy.py
+@@ -0,0 +1,116 @@
++"""AST lint enforcing the no-global-calendar-policy invariant (POLICY001).
++
++UNFREEZE_PLAN.md D1 (GPT Round-1 M2 / Round-2 M7): after the calendar thaw,
++no code path may resolve "the" calendar policy globally. Two mechanical rules
++over ``src/`` and ``scripts/``:
++
++POLICY001a — the legacy policy id ``frozen_20260227_system_build`` must not
++    appear as a STRING LITERAL in executable code (docstrings and comments are
++    fine — they are historical references). Legacy fixtures live under
++    ``tests/`` which is outside the lint scope by design.
++
++POLICY001b — a function/method parameter named ``calendar_policy_id`` must not
++    carry a default that NAMES a policy. ``None`` and ``""`` are permitted
++    unset sentinels (the callee records "no policy pinned"); any other default
++    silently re-creates the global policy. The policy id is an explicit caller
++    decision (prescription pin or manifest-recorded value).
++
++Per-line opt-out: append ``# noqa: global-calendar-policy`` to the line.
++
++Usage::
++
++    venv/Scripts/python.exe scripts/lint_no_global_calendar_policy.py src/ scripts/
++
++Exit codes: 0 — clean; 1 — violations; 2 — usage/parse error.
++"""
++from __future__ import annotations
++
++import ast
++import sys
++from pathlib import Path
++
++LEGACY_POLICY_ID = "frozen_20260227_system_build"
++NOQA_TOKEN = "noqa: global-calendar-policy"
++SELF_NAME = Path(__file__).name
++
++
++def _docstring_nodes(tree: ast.AST) -> set[int]:
++    """Line numbers of every docstring constant (module/class/def first-stmt)."""
++    lines: set[int] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
++            body = getattr(node, "body", [])
++            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
++                    and isinstance(body[0].value.value, str):
++                start = body[0].value.lineno
++                end = getattr(body[0].value, "end_lineno", start)
++                lines.update(range(start, end + 1))
++    return lines
++
++
++def lint_file(path: Path) -> list[str]:
++    src = path.read_text(encoding="utf-8", errors="replace")
++    try:
++        tree = ast.parse(src)
++    except SyntaxError as exc:
++        return [f"{path}:{exc.lineno}: POLICY001 parse error: {exc.msg}"]
++    src_lines = src.splitlines()
++
++    def _noqa(lineno: int) -> bool:
++        return 0 < lineno <= len(src_lines) and NOQA_TOKEN in src_lines[lineno - 1]
++
++    violations: list[str] = []
++    doc_lines = _docstring_nodes(tree)
++
++    for node in ast.walk(tree):
++        # POLICY001a: legacy id as an executable string literal.
++        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
++                and LEGACY_POLICY_ID in node.value \
++                and node.lineno not in doc_lines and not _noqa(node.lineno):
++            violations.append(
++                f"{path}:{node.lineno}: POLICY001a legacy policy id "
++                f"'{LEGACY_POLICY_ID}' as an executable string literal — pass the "
++                "prescription-pinned or manifest-recorded policy id instead."
++            )
++        # POLICY001b: calendar_policy_id parameter with a non-None default.
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++            args = node.args
++            all_args = list(args.posonlyargs) + list(args.args)
++            defaults = list(args.defaults)
++            offset = len(all_args) - len(defaults)
++            pairs = [(all_args[offset + i], d) for i, d in enumerate(defaults)]
++            pairs += [
++                (a, d) for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is not None
++            ]
++            for arg, default in pairs:
++                if arg.arg == "calendar_policy_id" \
++                        and not (isinstance(default, ast.Constant) and default.value in (None, "")) \
++                        and not _noqa(node.lineno):
++                    violations.append(
++                        f"{path}:{node.lineno}: POLICY001b function "
++                        f"'{node.name}' gives calendar_policy_id a non-None default — "
++                        "the policy id must be an explicit caller decision."
++                    )
++    return violations
++
++
++def main(argv: list[str]) -> int:
++    roots = [Path(p) for p in (argv or ["src/", "scripts/"])]
++    violations: list[str] = []
++    for root in roots:
++        files = [root] if root.is_file() else sorted(root.rglob("*.py"))
++        for f in files:
++            if f.name == SELF_NAME:
++                continue
++            violations.extend(lint_file(f))
++    for v in violations:
++        print(v)
++    if violations:
++        print(f"POLICY001: {len(violations)} violation(s).")
++        return 1
++    print("POLICY001: clean.")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+diff --git a/scripts/run_daily_qa.py b/scripts/run_daily_qa.py
+index fa9bc13..1a6fa39 100644
+--- a/scripts/run_daily_qa.py
++++ b/scripts/run_daily_qa.py
+@@ -272,6 +272,14 @@ def _audit_daily_files_inprocess() -> dict:
+         import pandas as pd
+         cal = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet")
+         cal = cal[cal["is_open"] == 1].sort_values("cal_date")
++        # trade_cal now extends into the FUTURE (is_open schedule headroom for
++        # next_open_trade_day) — cap the expected-data window at the last
++        # CLOSED session: before ~16:00 CST today's bar cannot exist yet, so a
++        # same-day expectation would false-fail every intraday QA run
++        # (calendar-unfreeze Phase 1 latent-assumption fix, 2026-07-02).
++        now = pd.Timestamp.now()
++        cutoff = now.strftime("%Y%m%d") if now.hour >= 16 else (now - pd.Timedelta(days=1)).strftime("%Y%m%d")
++        cal = cal[cal["cal_date"].astype(str) <= cutoff]
+         end_date = str(cal["cal_date"].iloc[-1])
+         start_date = str(cal["cal_date"].iloc[-30])
+         result = auditor.audit_daily_files(start_date=start_date, end_date=end_date)
+@@ -315,6 +323,16 @@ def main() -> int:
+         )
+     )
+ 
++    # 0a1b. No-global-calendar-policy lint (POLICY001, UNFREEZE_PLAN.md D1) —
++    # the legacy policy id must not appear as an executable literal, and no
++    # calendar_policy_id parameter may default to a named policy.
++    checks.append(
++        _run(
++            [python, "scripts/lint_no_global_calendar_policy.py", "src/", "scripts/"],
++            "no_global_calendar_policy_lint",
++        )
++    )
++
+     # 0a2. Unsafe-PIT-dates lint (PIT-lookahead prevention, step 10) — bans raw
+     # data/pit_ledger reads (PIT002) outside the sanctioned pit_research_loader.
+     # Now a HARD gate: the invalidated build_pit_pivot sandbox lineage has been
+diff --git a/src/alpha_research/factor_lifecycle/revalidation.py b/src/alpha_research/factor_lifecycle/revalidation.py
+index 43638c2..a8e2228 100644
+--- a/src/alpha_research/factor_lifecycle/revalidation.py
++++ b/src/alpha_research/factor_lifecycle/revalidation.py
+@@ -25,12 +25,23 @@ from . import metrics
+ from .status_rules import assign_historical_status
+ 
+ # Canonical revalidation window (frozen, from the legacy scripts).
++# START/IS_END/OOS_START are HISTORICAL split facts. The window END is the
++# spent-OOS boundary and is resolved LAZILY from the live manifest's declared
++# policy (UNFREEZE_PLAN.md Phase 2.2a / GPT R2-M7: no executable hardcoded
++# window constant). Under the legacy frozen policy the resolver falls back to
++# that policy's own calendar end = 2026-02-27, so pre-thaw behavior is
++# bit-identical.
+ START = "2014-01-01"
+-END = "2026-02-27"
+ IS_END = "2020-12-31"
+ OOS_START = "2021-01-01"
+ HORIZON = 20
+ 
++
++def _spent_end() -> str:
++    from src.data_infra.pit_research_loader import live_spent_oos_end
++
++    return live_spent_oos_end().strftime("%Y-%m-%d")
++
+ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+ _DEFAULT_FIELD_STATUS = _PROJECT_ROOT / "config" / "field_registry" / "field_status.yaml"
+ _DEFAULT_QLIB_DIR = _PROJECT_ROOT / "data" / "qlib_data"
+@@ -113,7 +124,7 @@ def revalidate_panel(
+ 
+ def run_historical_catalog_revalidation(
+     *,
+-    start: str = START, end: str = END, is_end: str = IS_END, oos_start: str = OOS_START,
++    start: str = START, end: str | None = None, is_end: str = IS_END, oos_start: str = OOS_START,
+     horizon: int = HORIZON, qlib_dir: str | Path | None = None,
+     registry_path: str | Path | None = None,
+     compute_factors_fn=None,
+@@ -127,6 +138,7 @@ def run_historical_catalog_revalidation(
+     from src.alpha_research.factor_library.catalog import get_factor_catalog
+     from src.data_infra.field_registry import load_field_registry
+ 
++    end = end or _spent_end()
+     catalog = dict(get_factor_catalog(include_new_data=True))
+     registry = load_field_registry(str(registry_path or _DEFAULT_FIELD_STATUS))
+     cf = compute_factors_fn or operators.compute_factors
+@@ -145,7 +157,7 @@ def run_historical_catalog_revalidation(
+ 
+ def run_historical_derived_revalidation(
+     *,
+-    start: str = START, end: str = END, is_end: str = IS_END, oos_start: str = OOS_START,
++    start: str = START, end: str | None = None, is_end: str = IS_END, oos_start: str = OOS_START,
+     horizon: int = HORIZON, qlib_dir: str | Path | None = None,
+ ) -> pd.DataFrame:
+     """Mode-2 port of ``revalidate_derived_factors.main`` — 20 composite + 4 industry-
+@@ -158,6 +170,7 @@ def run_historical_derived_revalidation(
+     )
+     from src.data_infra.provider_metadata import build_industry_series_asof
+ 
++    end = end or _spent_end()
+     full_catalog = get_factor_catalog(include_new_data=True)
+     comp_defs = get_composite_defs()
+     ind_defs = get_industry_relative_defs()
+diff --git a/src/backtest_engine/event_driven/__init__.py b/src/backtest_engine/event_driven/__init__.py
+index 83c9670..2a4772f 100644
+--- a/src/backtest_engine/event_driven/__init__.py
++++ b/src/backtest_engine/event_driven/__init__.py
+@@ -486,8 +486,9 @@ class EventDrivenBacktester:
+         if effective_require_provider_manifest and not calendar_policy_id:
+             raise RuntimeError(
+                 "Formal run requires calendar_policy_id but received None. "
+-                "Pass calendar_policy_id='frozen_20260227_system_build' "
+-                "(or another committed policy) explicitly. The policy is "
++                "Pass a committed policy id from config/calendar_policies/ "
++                "explicitly (for a live-provider run, the manifest-recorded "
++                "provider_build.json calendar_policy_id). The policy is "
+                 "what authorizes a formal run to operate against the current "
+                 "calendar window; without it the manifest validator cannot "
+                 "run and the artifact cannot be formally attested."
+diff --git a/src/data_infra/pipeline/build_qlib_backend.py b/src/data_infra/pipeline/build_qlib_backend.py
+index 0aaf753..0c63b59 100644
+--- a/src/data_infra/pipeline/build_qlib_backend.py
++++ b/src/data_infra/pipeline/build_qlib_backend.py
+@@ -57,6 +57,7 @@ def build_unified_qlib(
+     allow_exceptions: bool = False,
+     write_compat_aliases: bool = True,
+     stage: str = "full",
++    calendar_policy_id: str | None = None,
+ ):
+     """Backward-compatible wrapper over the staged PIT builder."""
+     return build_qlib_backend(
+@@ -73,6 +74,7 @@ def build_unified_qlib(
+         allow_exceptions=allow_exceptions,
+         write_compat_aliases=write_compat_aliases,
+         stage=stage,
++        calendar_policy_id=calendar_policy_id,
+     )
+ 
+ 
+@@ -93,6 +95,13 @@ def main() -> None:
+     parser.add_argument("--slot-depth", type=int, default=SLOT_DEPTH_DEFAULT,
+                         help=f"Quarter slot depth (default: {SLOT_DEPTH_DEFAULT})")
+     parser.add_argument("--publish", action="store_true", help="Promote the staged build into data/qlib_data")
++    parser.add_argument(
++        "--calendar-policy",
++        type=str,
++        default=None,
++        help="Calendar policy id stamped into the published manifest "
++             "(config/calendar_policies/<id>.yaml). REQUIRED with --publish — no default.",
++    )
+     parser.add_argument("--exclude-phase3", action="store_true", help="Skip Phase 3 datasets")
+     parser.add_argument(
+         "--touched-symbols",
+@@ -137,6 +146,7 @@ def main() -> None:
+             allow_exceptions=args.allow_exceptions,
+             write_compat_aliases=not args.skip_compat_aliases,
+             stage=args.stage,
++            calendar_policy_id=args.calendar_policy,
+         )
+     except BuildGateError as exc:
+         logger.error("PIT backend build blocked by integrity gates:\n%s", exc)
+diff --git a/src/data_infra/pipeline/update_daily_data.py b/src/data_infra/pipeline/update_daily_data.py
+index 69a96eb..5654bda 100644
+--- a/src/data_infra/pipeline/update_daily_data.py
++++ b/src/data_infra/pipeline/update_daily_data.py
+@@ -465,11 +465,27 @@ class DailyDataUpdater:
+         return True
+ 
+ 
++def _live_calendar_policy_id(qlib_dir: str) -> str:
++    """Read the calendar_policy_id RECORDED by the live provider manifest.
++
++    A daily update republishes the same provider under the same policy — the
++    manifest is the artifact-recorded source (UNFREEZE_PLAN.md D1: publish
++    requires an explicit policy id; the live manifest's own record is the
++    correct one for an in-place refresh, never a module default).
++    """
++    from data_infra.provider_manifest import load_provider_manifest
++
++    return load_provider_manifest(qlib_dir).calendar_policy_id
++
++
+ def trigger_qlib_rebuild():
+     """Trigger the full Qlib backend rebuild via build_qlib_backend.py."""
+     logger.info("Triggering full Qlib backend rebuild...")
+     data_root, qlib_dir = _resolve_paths()
+-    build_unified_qlib(data_root, qlib_dir, mode="all", publish=True)
++    build_unified_qlib(
++        data_root, qlib_dir, mode="all", publish=True,
++        calendar_policy_id=_live_calendar_policy_id(qlib_dir),
++    )
+ 
+ 
+ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
+@@ -486,6 +502,7 @@ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
+             datasets=sorted(affected_datasets) if affected_datasets else None,
+             include_phase3=True,
+             allow_exceptions=True,
++            calendar_policy_id=_live_calendar_policy_id(qlib_dir),
+         )
+     except Exception as e:
+         logger.error(f"Incremental Qlib update failed: {e}")
+diff --git a/src/data_infra/pit_backend.py b/src/data_infra/pit_backend.py
+index 9620c47..b33f21e 100644
+--- a/src/data_infra/pit_backend.py
++++ b/src/data_infra/pit_backend.py
+@@ -4289,7 +4289,7 @@ class StagedQlibBackendBuilder:
+     def publish(
+         self,
+         *,
+-        calendar_policy_id: str = "frozen_20260227_system_build",
++        calendar_policy_id: str,
+         emit_manifest: bool = True,
+     ) -> None:
+         """Atomically promote the staged provider into ``data/qlib_data``.
+@@ -4448,10 +4448,20 @@ class StagedQlibBackendBuilder:
+         datasets: Iterable[str] | None = None,
+         touched_symbols: Iterable[str] | None = None,
+         stage: Literal["full", "upstream-only", "provider-only"] = "full",
++        calendar_policy_id: str | None = None,
+     ) -> BuildResult:
+         """Run the full staged build."""
+         if publish and stage == "upstream-only":
+             raise BuildGateError("Cannot publish an upstream-only staged build")
++        # UNFREEZE_PLAN.md D1 no-global-policy invariant: a publish stamps the
++        # manifest's calendar_policy_id — it must be an explicit caller decision,
++        # never a module default (the old hard default silently pinned every
++        # publish to frozen_20260227_system_build).
++        if publish and not calendar_policy_id:
++            raise BuildGateError(
++                "publish=True requires an explicit calendar_policy_id "
++                "(config/calendar_policies/<id>.yaml). There is no default."
++            )
+ 
+         if stage == "provider-only":
+             profiled = self.collect_profiles(datasets=datasets, use_persisted=True)
+@@ -4483,7 +4493,7 @@ class StagedQlibBackendBuilder:
+             raise BuildGateError("Staged PIT build failed validation:\n- " + "\n- ".join(validation_errors[:20]))
+ 
+         if publish:
+-            self.publish()
++            self.publish(calendar_policy_id=calendar_policy_id)
+ 
+         return BuildResult(
+             build_id=self.build_id,
+@@ -4511,6 +4521,7 @@ def build_qlib_backend(
+     allow_exceptions: bool = False,
+     write_compat_aliases: bool = True,
+     stage: Literal["full", "upstream-only", "provider-only"] = "full",
++    calendar_policy_id: str | None = None,
+ ) -> BuildResult:
+     """Public helper used by the pipeline entrypoints."""
+     builder = StagedQlibBackendBuilder(
+@@ -4529,4 +4540,5 @@ def build_qlib_backend(
+         datasets=datasets,
+         touched_symbols=touched_symbols,
+         stage=stage,
++        calendar_policy_id=calendar_policy_id,
+     )
+diff --git a/src/data_infra/pit_research_loader.py b/src/data_infra/pit_research_loader.py
+index 3d70291..08c4d38 100644
+--- a/src/data_infra/pit_research_loader.py
++++ b/src/data_infra/pit_research_loader.py
+@@ -80,6 +80,69 @@ def _ledger_path(ledger: str) -> Path:
+     return _data_root() / "pit_ledger" / ledger / f"{ledger}.parquet"
+ 
+ 
++@functools.lru_cache(maxsize=1)
++def _spent_oos_end_timestamp() -> pd.Timestamp:
++    """D3 born-sealed clamp source (UNFREEZE_PLAN.md, GPT Round-1 B1 / Round-2 M6).
++
++    Reads the LIVE provider manifest's declared calendar policy and resolves the
++    spent-OOS boundary through ``resolve_spent_oos_boundary`` (legacy frozen
++    policies without the boundary fields fall back to their own calendar end —
++    exactly the status quo). Reading the live policy here is the documented
++    exception to the no-global-policy invariant: the clamp's subject IS the
++    live provider. ANY resolution failure fails closed.
++    """
++    from src.data_infra.provider_manifest import load_provider_manifest
++    from src.research_orchestrator.calendar_policy import (
++        load_calendar_policy,
++        resolve_spent_oos_boundary,
++    )
++
++    qlib_dir = _data_root() / "qlib_data"
++    try:
++        manifest = load_provider_manifest(qlib_dir)
++        cal_lines = [
++            ln.strip()
++            for ln in (qlib_dir / "calendars" / "day.txt").read_text(encoding="utf-8").splitlines()
++            if ln.strip()
++        ]
++        policy = load_calendar_policy(
++            manifest.calendar_policy_id,
++            root=_PROJECT_ROOT / "config" / "calendar_policies",
++        )
++        boundary = resolve_spent_oos_boundary(policy, cal_lines[-1])
++    except Exception as exc:
++        raise PitResearchLoaderError(
++            "cannot resolve the spent-OOS boundary from the live provider "
++            f"(manifest/policy/calendar): {exc} — the sandbox loader fails closed "
++            "(UNFREEZE_PLAN.md D3)."
++        ) from exc
++    return pd.Timestamp(boundary.spent_oos_end)
++
++
++def live_spent_oos_end() -> pd.Timestamp:
++    """Public D3 clamp source shared by BOTH sanctioned doors (this sandbox
++    loader and the formal ``qlib_windowed_features``). See
++    :func:`_spent_oos_end_timestamp` for semantics; failures fail closed."""
++    return _spent_oos_end_timestamp()
++
++
++@functools.lru_cache(maxsize=1)
++def live_provider_ids() -> tuple[str, str]:
++    """(provider_build_id, calendar_policy_id) RECORDED by the live manifest.
++
++    Used by the formal door to bind cache-manifest rows to the provider
++    generation (UNFREEZE_PLAN.md Phase 2 / GPT R2-M4). Failure fails closed."""
++    from src.data_infra.provider_manifest import load_provider_manifest
++
++    try:
++        manifest = load_provider_manifest(_data_root() / "qlib_data")
++    except Exception as exc:
++        raise PitResearchLoaderError(
++            f"cannot resolve live provider identity (manifest): {exc} — fail closed."
++        ) from exc
++    return str(manifest.provider_build_id), str(manifest.calendar_policy_id)
++
++
+ @functools.lru_cache(maxsize=1)
+ def _trading_calendar() -> pd.DatetimeIndex:
+     cal = pd.read_parquet(_data_root() / "reference" / "trade_cal.parquet",
+@@ -196,6 +259,20 @@ def _load(
+     sim_idx = _validate_sim_dates(sim_dates, calendar)
+     _validate_fields(fields, stage)
+ 
++    # D3 born-sealed clamp (UNFREEZE_PLAN.md): the sandbox door NEVER serves
++    # dates beyond the live policy's spent-OOS boundary — deliberately with NO
++    # seal escape here. The only seal-authorized door into the fresh window is
++    # the formal qlib_windowed_features path under a ResearchAccessContext.
++    spent_end = _spent_oos_end_timestamp()
++    over = sim_idx[sim_idx > spent_end]
++    if len(over):
++        raise PitResearchLoaderError(
++            f"sim_dates extend past the spent-OOS boundary {spent_end.date()} "
++            f"({len(over)} date(s), first {over[0].date()}): the post-boundary window "
++            "is born-sealed (UNFREEZE_PLAN.md D3). Sandbox research cannot touch it; "
++            "fresh-window access goes ONLY through the sealed-OOS formal path."
++        )
++
+     path = _ledger_path(ledger)
+     if not path.exists():
+         raise PitResearchLoaderError(f"unknown/absent ledger {ledger!r}: {path}")
+diff --git a/src/data_infra/storage/__init__.py b/src/data_infra/storage/__init__.py
+index 639dd3f..aaecbf0 100644
+--- a/src/data_infra/storage/__init__.py
++++ b/src/data_infra/storage/__init__.py
+@@ -219,16 +219,18 @@ class StorageManager:
+             written_files.append(file_path)
+         self._record_ingest_manifest(category, written_files, len(df))
+ 
+-    def export_to_qlib(self, dest_dir: str, mode="all"):
++    def export_to_qlib(self, dest_dir: str, mode="all", *, calendar_policy_id: str):
+         """
+         Export local parquet raw data into Qlib-compatible binary format.
+-        
+-        Reads all daily parquet files, converts them to intermediate CSVs, 
++
++        Reads all daily parquet files, converts them to intermediate CSVs,
+         and invokes the Qlib `dump_bin.py` script to generate `.bin` files.
+-        
++
+         Args:
+             dest_dir (str): Target directory where Qlib binary data will be stored.
+             mode (str, optional): Dump mode. 'all' for initialization, 'update' for daily appends. Defaults to 'all'.
++            calendar_policy_id (str): Calendar policy stamped into the published
++                manifest — REQUIRED, no default (UNFREEZE_PLAN.md D1).
+         """
+         from data_infra.pit_backend import build_qlib_backend
+ 
+@@ -239,4 +241,5 @@ class StorageManager:
+             include_phase3=True,
+             publish=True,
+             allow_exceptions=True,
++            calendar_policy_id=calendar_policy_id,
+         )
+diff --git a/src/research_orchestrator/cache_manifest.py b/src/research_orchestrator/cache_manifest.py
+index 864c5a7..af33469 100644
+--- a/src/research_orchestrator/cache_manifest.py
++++ b/src/research_orchestrator/cache_manifest.py
+@@ -31,6 +31,12 @@ CACHE_MANIFEST_COLUMNS = (
+     "stage",
+     "window_start",
+     "window_end",
++    # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding — a
++    # cache written under one provider build/policy must not be reused under
++    # another. Legacy rows backfill "" and therefore fail the reuse check
++    # against a real id (one-time safe invalidation after a rotation).
++    "provider_build_id",
++    "calendar_policy_id",
+ )
+ 
+ CACHE_MANIFEST_SCHEMA = {
+@@ -48,6 +54,8 @@ CACHE_MANIFEST_SCHEMA = {
+     "stage": "string",
+     "window_start": "string",
+     "window_end": "string",
++    "provider_build_id": "string",
++    "calendar_policy_id": "string",
+ }
+ 
+ 
+@@ -151,6 +159,8 @@ class CacheManifestStore:
+         stage: str,
+         window_start: str,
+         window_end: str,
++        provider_build_id: str = "",
++        calendar_policy_id: str = "",
+     ) -> dict[str, Any]:
+         """Append a cache-write event to the manifest.
+ 
+@@ -193,6 +203,8 @@ class CacheManifestStore:
+             "stage": str(stage),
+             "window_start": str(window_start),
+             "window_end": str(window_end),
++            "provider_build_id": str(provider_build_id),
++            "calendar_policy_id": str(calendar_policy_id),
+         }
+         with file_lock(self.root_dir / "cache_events.lock"):
+             frame = _append_row(self._load(), row)
+@@ -209,6 +221,8 @@ class CacheManifestStore:
+         window_start: str,
+         window_end: str,
+         cache_type: str = "",
++        provider_build_id: str = "",
++        calendar_policy_id: str = "",
+     ) -> None:
+         """Verify a cached artifact is reusable under the current context.
+ 
+@@ -243,3 +257,17 @@ class CacheManifestStore:
+                 f"Cache manifest mismatch for {cache_path}: window "
+                 f"{latest['window_start']}..{latest['window_end']} != {window_start}..{window_end}"
+             )
++        # UNFREEZE_PLAN.md Phase 2 (GPT R2-M4): provider-generation binding.
++        # Enforced only when the caller supplies the current ids; a legacy row
++        # (backfilled "") then mismatches a real id and the cache is refused —
++        # a one-time safe invalidation after any provider rotation.
++        for column, current in (
++            ("provider_build_id", provider_build_id),
++            ("calendar_policy_id", calendar_policy_id),
++        ):
++            if current and str(latest.get(column, "")) != str(current):
++                raise CacheKeyMismatchError(
++                    f"Cache manifest mismatch for {cache_path}: {column} "
++                    f"{latest.get(column, '')!r} != {current!r} — caches do not "
++                    "survive a provider rotation (UNFREEZE_PLAN.md M4 binding)."
++                )
+diff --git a/src/research_orchestrator/calendar_policy.py b/src/research_orchestrator/calendar_policy.py
+index 4f305e2..d0126ca 100644
+--- a/src/research_orchestrator/calendar_policy.py
++++ b/src/research_orchestrator/calendar_policy.py
+@@ -42,6 +42,11 @@ class CalendarPolicy:
+     default_formal_behavior: str
+     max_calendar_lag_days: Optional[int] = None
+     notes: tuple[str, ...] = field(default_factory=tuple)
++    # Calendar-unfreeze D3 (UNFREEZE_PLAN.md): the spent-OOS boundary. Additive,
++    # optional — legacy policies without them resolve through the frozen
++    # fallback in resolve_spent_oos_boundary(). When present, BOTH must be set.
++    spent_oos_end: Optional[str] = None
++    fresh_holdout_start: Optional[str] = None
+ 
+     @classmethod
+     def from_dict(cls, payload: dict[str, Any]) -> "CalendarPolicy":
+@@ -82,6 +87,14 @@ class CalendarPolicy:
+                 "the policy must specify a maximum lag (days)."
+             )
+ 
++        spent = payload.get("spent_oos_end")
++        fresh = payload.get("fresh_holdout_start")
++        if (spent is None) != (fresh is None):
++            raise CalendarPolicyError(
++                f"Calendar policy {payload['policy_id']!r} sets exactly one of "
++                "spent_oos_end / fresh_holdout_start — both or neither."
++            )
++
+         return cls(
+             policy_id=str(payload["policy_id"]),
+             policy_schema_version=schema_version,
+@@ -95,6 +108,8 @@ class CalendarPolicy:
+             default_formal_behavior=str(payload["default_formal_behavior"]),
+             max_calendar_lag_days=int(max_lag) if max_lag is not None else None,
+             notes=tuple(str(n) for n in payload.get("notes", ())),
++            spent_oos_end=str(spent) if spent is not None else None,
++            fresh_holdout_start=str(fresh) if fresh is not None else None,
+         )
+ 
+     def permits_calendar_mismatch(self, run_mode: str) -> bool:
+@@ -146,3 +161,79 @@ def load_calendar_policy(policy_id: str, *, root: Path | None = None) -> Calenda
+             f"Calendar policy file {path} did not parse to a YAML mapping."
+         )
+     return CalendarPolicy.from_dict(payload)
++
++
++@dataclass(frozen=True)
++class SpentOosBoundary:
++    """Resolved spent-OOS clamp for research access (UNFREEZE_PLAN.md D3 item 8).
++
++    ``spent_oos_end`` is the DEFAULT upper bound for discovery/sandbox reads.
++    ``fresh_holdout_start`` is the first date of the born-sealed fresh window,
++    or ``None`` when the policy declares no fresh window (legacy frozen state)
++    — in that case every post-spent read fails closed, seal or not.
++    """
++
++    spent_oos_end: str
++    fresh_holdout_start: Optional[str]
++    source: str  # "policy_fields" | "frozen_calendar_end_fallback"
++
++
++def resolve_spent_oos_boundary(
++    policy: CalendarPolicy,
++    provider_calendar_end: str,
++) -> SpentOosBoundary:
++    """Resolve the spent-OOS boundary for the LIVE provider's declared policy.
++
++    Three branches (GPT Round-2 M6, verbatim contract):
++
++    1. Policy carries ``spent_oos_end`` → use it (cross-validated against the
++       provider calendar end).
++    2. Policy lacks it and ``frozen == true`` → legacy fallback: clamp to the
++       policy's own ``calendar_end_date``; no fresh holdout window exists, so
++       all post-spent reads fail closed. (Under the legacy frozen policy the
++       live calendar end equals ``calendar_end_date``, so this is exactly the
++       status quo. If a longer provider is ever paired with a legacy policy —
++       an invalid publish state — the clamp still holds; see the positioning
++       note below.)
++    3. ``frozen == false`` or missing/invalid fields in any other combination
++       → raise (fail closed) until max_calendar_lag_days enforcement exists.
++
++    POSITIONING (GPT Round-3 note): this resolver is a CLAMP, not a publish
++    validator. Manifest-vs-policy equality and the Phase-2 no-hardcode gates
++    are what reject an invalid provider/policy pairing at publish/QA time;
++    the clamp merely guarantees such a pairing cannot leak post-spent data.
++    """
++    if policy.spent_oos_end is not None:
++        spent = policy.spent_oos_end
++        fresh = policy.fresh_holdout_start
++        if fresh is None or fresh <= spent:
++            raise CalendarPolicyError(
++                f"Policy {policy.policy_id!r}: fresh_holdout_start ({fresh}) must be "
++                f"strictly after spent_oos_end ({spent})."
++            )
++        if spent > policy.calendar_end_date:
++            raise CalendarPolicyError(
++                f"Policy {policy.policy_id!r}: spent_oos_end ({spent}) exceeds the "
++                f"policy calendar_end_date ({policy.calendar_end_date})."
++            )
++        if spent > provider_calendar_end:
++            raise CalendarPolicyError(
++                f"Policy {policy.policy_id!r}: spent_oos_end ({spent}) exceeds the "
++                f"live provider calendar end ({provider_calendar_end}) — the "
++                "boundary must lie inside the provider calendar."
++            )
++        return SpentOosBoundary(spent_oos_end=spent, fresh_holdout_start=fresh,
++                                source="policy_fields")
++
++    if policy.frozen:
++        return SpentOosBoundary(
++            spent_oos_end=policy.calendar_end_date,
++            fresh_holdout_start=None,
++            source="frozen_calendar_end_fallback",
++        )
++
++    raise CalendarPolicyError(
++        f"Policy {policy.policy_id!r} is frozen=false without spent_oos_end — "
++        "post-spent access resolution fails closed until max_calendar_lag_days "
++        "enforcement lands (UNFREEZE_PLAN.md Phase 5.4)."
++    )
+diff --git a/src/research_orchestrator/promotion_evidence.py b/src/research_orchestrator/promotion_evidence.py
+index 6a1e099..2c97188 100644
+--- a/src/research_orchestrator/promotion_evidence.py
++++ b/src/research_orchestrator/promotion_evidence.py
+@@ -36,7 +36,15 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ _SRC = str(_PROJECT_ROOT / "src")
+ if _SRC not in sys.path:
+     sys.path.insert(0, _SRC)
+-OOS_END = "2026-02-27"
++# UNFREEZE_PLAN.md Phase 2.2a (GPT R2-M7): no executable hardcoded window
++# constant — the spent-OOS boundary resolves lazily from the live manifest's
++# declared policy (legacy frozen fallback = that policy's calendar end =
++# 2026-02-27, bit-identical pre-thaw). Callers may still pass an explicit
++# oos_end; the calendar_end guard cross-checks it against the boundary.
++def _default_oos_end() -> str:
++    from src.data_infra.pit_research_loader import live_spent_oos_end
++
++    return live_spent_oos_end().strftime("%Y-%m-%d")
+ PASSED = "passed"
+ FAILED = "failed"
+ # The screening's horizon set, mirroring workspace/scripts/run_sealed_oos.py::HORIZONS.
+@@ -147,7 +155,7 @@ def reproduce_sealed_oos(
+     frozen_set,
+     factor_exprs: Mapping[str, str],
+     oos_start: str,
+-    oos_end: str = OOS_END,
++    oos_end: str | None = None,
+     qlib_dir: str | Path,
+     seal_root: str | Path,
+     run_dir: str,
+@@ -179,12 +187,32 @@ def reproduce_sealed_oos(
+     metrics GOVERN approval. Injectable deps for tests; live by default."""
+     from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
+ 
++    oos_end = oos_end or _default_oos_end()
+     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
+-    if str(prov.get("calendar_end")) != str(oos_end):
+-        raise PromotionEvidenceError(
+-            f"provider calendar end {prov.get('calendar_end')!r} != OOS_END {oos_end!r}; "
+-            "refusing the reproduction (a calendar advance would change the OOS labels)"
+-        )
++    calendar_end = str(prov.get("calendar_end"))
++    if calendar_end != str(oos_end):
++        # UNFREEZE_PLAN.md D3 item 5: after the calendar thaw the provider end
++        # may legitimately exceed OOS_END — but ONLY when oos_end is exactly the
++        # policy-recorded spent-OOS boundary (the explicit window binding). Any
++        # other mismatch stays fail-closed; we NEVER default to the live end.
++        # Label leak-freedom then rests on the retained Phase-4 belt
++        # (build_is_windowed_panel(is_end=oos_end) raises IsEndLeakageError on
++        # any label realizing past oos_end) + the D3 door clamps.
++        spent_boundary = None
++        if calendar_end > str(oos_end):
++            try:
++                from src.data_infra.pit_research_loader import live_spent_oos_end
++
++                spent_boundary = live_spent_oos_end().strftime("%Y-%m-%d")
++            except Exception:
++                spent_boundary = None  # unresolvable → fall through to refusal
++        if spent_boundary is None or str(oos_end) != spent_boundary:
++            raise PromotionEvidenceError(
++                f"provider calendar end {calendar_end!r} != OOS_END {oos_end!r}, and "
++                f"oos_end is not the policy-recorded spent-OOS boundary "
++                f"({spent_boundary!r}); refusing the reproduction (an unbound "
++                "calendar advance would change the OOS labels)"
++            )
+ 
+     seal_hash = frozen_set.frozen_set_hash
+     if claim_seal:
+diff --git a/src/research_orchestrator/qlib_windowed_features.py b/src/research_orchestrator/qlib_windowed_features.py
+index bc08890..395eac2 100644
+--- a/src/research_orchestrator/qlib_windowed_features.py
++++ b/src/research_orchestrator/qlib_windowed_features.py
+@@ -13,6 +13,8 @@ from src.research_orchestrator.cache_manifest import (
+     get_cache_context,
+ )
+ from src.research_orchestrator.research_access_context import (
++    HoldoutSealViolation,
++    HoldoutWindowViolation,
+     get_research_access_context,
+ )
+ 
+@@ -69,9 +71,38 @@ def qlib_windowed_features(
+             fields=list(fields),
+         )
+ 
++    # D3 born-sealed clamp (UNFREEZE_PLAN.md, GPT Round-1 B1): dates beyond the
++    # live policy's spent-OOS boundary are reachable ONLY under an active
++    # ResearchAccessContext that has actually claimed the holdout seal. A
++    # no-context (discovery) read past the boundary fails closed — the old
++    # "sandbox/no-context calls skip this check" behavior is exactly the leak
++    # the pre-publish wall exists to close. Boundary resolution failure fails
++    # closed too (the resolver raises).
++    from src.data_infra.pit_research_loader import live_provider_ids, live_spent_oos_end
++
++    boundary_end = live_spent_oos_end()
++    if pd.Timestamp(end_time) > boundary_end:
++        if research_ctx is None:
++            raise HoldoutWindowViolation(
++                f"read end_time={end_time} exceeds the spent-OOS boundary "
++                f"{boundary_end.date()} with NO active ResearchAccessContext — "
++                "the post-boundary window is born-sealed (UNFREEZE_PLAN.md D3); "
++                "it is reachable only through the sealed-OOS formal path."
++            )
++        if not getattr(research_ctx, "holdout_seal_claimed", False):
++            raise HoldoutSealViolation(
++                f"read end_time={end_time} exceeds the spent-OOS boundary "
++                f"{boundary_end.date()} but the active ResearchAccessContext has "
++                "holdout_seal_claimed=False — claim the holdout seal before touching "
++                "the born-sealed fresh window (UNFREEZE_PLAN.md D3)."
++            )
++
+     manifest = CacheManifestStore(cache_manifest_dir)
+     cache_key = _deterministic_cache_path(freq, fields, start_time, end_time)
+     cache_path = cache_key
++    # M4 provider-generation binding: cache rows written under another provider
++    # build/policy are refused (legacy ""-rows mismatch -> safe invalidation).
++    live_build_id, live_policy_id = live_provider_ids()
+     manifest.assert_cache_reusable(
+         cache_key=cache_key,
+         cache_path=cache_path,
+@@ -80,6 +111,8 @@ def qlib_windowed_features(
+         window_start=start_time,
+         window_end=end_time,
+         cache_type="qlib_features",
++        provider_build_id=live_build_id,
++        calendar_policy_id=live_policy_id,
+     )
+     frame = D.features(  # noqa: bare-qlib-features  (canonical chokepoint)
+         instruments,
+@@ -99,5 +132,7 @@ def qlib_windowed_features(
+         stage=stage,
+         window_start=start_time,
+         window_end=end_time,
++        provider_build_id=live_build_id,
++        calendar_policy_id=live_policy_id,
+     )
+     return frame
+diff --git a/src/research_orchestrator/validation_steps.py b/src/research_orchestrator/validation_steps.py
+index 0a55ab4..7a0a680 100644
+--- a/src/research_orchestrator/validation_steps.py
++++ b/src/research_orchestrator/validation_steps.py
+@@ -34,6 +34,39 @@ class FactorDefinitionDriftError(RuntimeError):
+     no longer attest."""
+ 
+ 
++def _formal_calendar_policy_id(context: StepExecutionContext) -> str:
++    """Resolve the calendar policy id for a formal IS/OOS backtest step.
++
++    UNFREEZE_PLAN.md Phase 2.2a (GPT Round-2 M7): no executable hardcoded
++    policy id. Preference order:
++      1. an explicit ``calendar_policy_id`` on the hypothesis prescription
++         (the artifact-recorded form, when a request pins one);
++      2. the calendar_policy_id RECORDED by the live provider manifest — the
++         provider self-attestation the runtime validator will cross-check the
++         run against anyway (equality is enforced in
++         ``_validate_provider_at_runtime``, so this cannot drift silently).
++    """
++    prescription = getattr(getattr(context, "hypothesis", None), "prescription", None)
++    pinned = getattr(prescription, "calendar_policy_id", None)
++    if pinned:
++        return str(pinned)
++
++    from pathlib import Path
++
++    import yaml
++
++    from src.data_infra.provider_manifest import load_provider_manifest
++
++    project_root = Path(__file__).resolve().parents[2]
++    with open(project_root / "config.yaml", "r", encoding="utf-8") as fh:
++        cfg = yaml.safe_load(fh) or {}
++    raw = ((cfg.get("storage") or {}).get("qlib_data_dir")) or cfg.get("qlib_data_dir") or "./data/qlib_data"
++    qlib_dir = Path(raw)
++    if not qlib_dir.is_absolute():
++        qlib_dir = (project_root / qlib_dir).resolve()
++    return load_provider_manifest(qlib_dir).calendar_policy_id
++
++
+ def _stub_outputs(context: StepExecutionContext, **extras: Any) -> StepExecutionResult:
+     """Shared stub helper: write a small status JSON in the step dir and
+     emit a StepExecutionResult with status='completed'."""
+@@ -953,7 +986,7 @@ def handle_validation_event_backtest_is(context: StepExecutionContext) -> StepEx
+         instrumentation_path=instrumentation_path,
+         # PR 8c Blocker 2: formal runtime contract enabled.
+         execution_profile="joinquant_daily_sim",
+-        calendar_policy_id="frozen_20260227_system_build",
++        calendar_policy_id=_formal_calendar_policy_id(context),
+         run_mode="formal",
+         preload_required=True,
+         require_provider_manifest=True,
+@@ -1109,7 +1142,7 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
+         instrumentation_path=instrumentation_path,
+         # PR 8c Blocker 2: formal runtime contract enabled.
+         execution_profile="joinquant_daily_sim",
+-        calendar_policy_id="frozen_20260227_system_build",
++        calendar_policy_id=_formal_calendar_policy_id(context),
+         run_mode="oos_test",
+         preload_required=True,
+         require_provider_manifest=True,
+diff --git a/tests/backtest_engine/test_pr8c_validation_wiring.py b/tests/backtest_engine/test_pr8c_validation_wiring.py
+index a2e3a73..069d791 100644
+--- a/tests/backtest_engine/test_pr8c_validation_wiring.py
++++ b/tests/backtest_engine/test_pr8c_validation_wiring.py
+@@ -161,7 +161,7 @@ class TestBlocker2ValidationStepsWiring:
+         # All five formal kwargs must appear in the IS handler body.
+         for kwarg in (
+             'execution_profile="joinquant_daily_sim"',
+-            'calendar_policy_id="frozen_20260227_system_build"',
++            'calendar_policy_id=_formal_calendar_policy_id(context)',
+             'run_mode="formal"',
+             "preload_required=True",
+             "require_provider_manifest=True",
+@@ -178,7 +178,7 @@ class TestBlocker2ValidationStepsWiring:
+         oos_body = src[oos_start:next_def_idx if next_def_idx > 0 else len(src)]
+         for kwarg in (
+             'execution_profile="joinquant_daily_sim"',
+-            'calendar_policy_id="frozen_20260227_system_build"',
++            'calendar_policy_id=_formal_calendar_policy_id(context)',
+             'run_mode="oos_test"',
+             "preload_required=True",
+             "require_provider_manifest=True",
+diff --git a/tests/data_infra/test_pit_backend.py b/tests/data_infra/test_pit_backend.py
+index a4fe0d2..886a4e8 100644
+--- a/tests/data_infra/test_pit_backend.py
++++ b/tests/data_infra/test_pit_backend.py
+@@ -673,7 +673,7 @@ def test_publish_refuses_cross_volume_atomic_replace():
+ 
+         with patch("data_infra.pit_backend.os.stat", side_effect=_fake_stat):
+             try:
+-                builder.publish()
++                builder.publish(calendar_policy_id="frozen_20260227_system_build")
+             except BuildGateError as exc:
+                 message = str(exc)
+                 assert "cross-volume" in message.lower()
+@@ -702,7 +702,7 @@ def test_publish_staged_first_swap_success(tmp_path):
+         build_root = str(tmp_path / "swaptest")
+ 
+     builder.paths = _P()
+-    builder.publish(emit_manifest=False)
++    builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
+ 
+     assert (target / "marker.txt").read_text(encoding="utf-8") == "NEW"  # staged promoted
+     backup = tmp_path / "qlib_data.bak_swaptest"
+@@ -744,7 +744,7 @@ def test_publish_staged_first_no_broken_window(tmp_path):
+ 
+     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_staged_move):
+         with _pytest.raises(PermissionError):
+-            builder.publish(emit_manifest=False)
++            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
+ 
+     # broken-window check: live provider still present + unchanged
+     assert target.is_dir() and (target / "marker.txt").read_text(encoding="utf-8") == "OLD"
+@@ -781,7 +781,7 @@ def test_publish_staged_first_step3_failure_full_rollback(tmp_path):
+ 
+     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_step3):
+         with _pytest.raises(OSError):
+-            builder.publish(emit_manifest=False)
++            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
+ 
+     assert target.is_dir() and (target / "m.txt").read_text(encoding="utf-8") == "OLD"   # live restored
+     assert staged.is_dir() and (staged / "m.txt").read_text(encoding="utf-8") == "NEW"   # staged restored (clean retry)
+@@ -817,7 +817,7 @@ def test_publish_staged_first_double_failure_loud_recoverable(tmp_path):
+ 
+     with patch("data_infra.pit_backend.os.replace", side_effect=_fail_into_qlib):
+         with _pytest.raises(BuildGateError) as exc:
+-            builder.publish(emit_manifest=False)
++            builder.publish(calendar_policy_id="frozen_20260227_system_build", emit_manifest=False)
+ 
+     assert "MISSING" in str(exc.value) and "recover manually" in str(exc.value).lower()
+     assert not target.exists()                                # qlib_dir missing (double failure)
+diff --git a/tests/research_orchestrator/test_cache_manifest_collision.py b/tests/research_orchestrator/test_cache_manifest_collision.py
+index c67bee6..75efecf 100644
+--- a/tests/research_orchestrator/test_cache_manifest_collision.py
++++ b/tests/research_orchestrator/test_cache_manifest_collision.py
+@@ -56,6 +56,9 @@ def _seed_collision(manifest_dir: Path, *, design_hash: str, stage: str) -> dict
+     Mirrors what ``qlib_windowed_features`` would have written under a prior
+     run with a different design_hash. Returns the recorded row.
+     """
++    from src.data_infra.pit_research_loader import live_provider_ids
++
++    build_id, policy_id = live_provider_ids()
+     cache_key = _deterministic_cache_path(FREQ, OHLCV_FIELDS, START, END)
+     manifest = CacheManifestStore(manifest_dir)
+     row = manifest.record_cache_write(
+@@ -66,6 +69,8 @@ def _seed_collision(manifest_dir: Path, *, design_hash: str, stage: str) -> dict
+         stage=stage,
+         window_start=START,
+         window_end=END,
++        provider_build_id=build_id,
++        calendar_policy_id=policy_id,
+     )
+     return row
+ 
+diff --git a/tests/research_orchestrator/test_d3_formal_door_clamp.py b/tests/research_orchestrator/test_d3_formal_door_clamp.py
+new file mode 100644
+index 0000000..df23841
+--- /dev/null
++++ b/tests/research_orchestrator/test_d3_formal_door_clamp.py
+@@ -0,0 +1,109 @@
++"""D3 born-sealed clamp at the FORMAL door (UNFREEZE_PLAN.md Phase 2, GPT R1-B1).
++
++Three contract paths through qlib_windowed_features when the read window
++crosses the live spent-OOS boundary:
++  1. no active ResearchAccessContext        -> HoldoutWindowViolation
++  2. active context, seal NOT claimed       -> HoldoutSealViolation
++  3. active context, seal claimed, in-window-> clamp passes (read proceeds)
++Plus: reads ending at/before the boundary are untouched (status quo).
++"""
++from __future__ import annotations
++
++import sys
++import types
++
++import pandas as pd
++import pytest
++
++from src.research_orchestrator import qlib_windowed_features as qwf_mod
++from src.research_orchestrator.cache_manifest import CacheContext
++from src.research_orchestrator.research_access_context import (
++    HoldoutSealViolation,
++    HoldoutWindowViolation,
++    ResearchAccessContext,
++    research_access_context,
++)
++
++BOUNDARY = pd.Timestamp("2026-02-27")
++
++
++@pytest.fixture(autouse=True)
++def _stub_boundary_and_qlib(monkeypatch, tmp_path):
++    # Pin the boundary (unit isolation; the resolver itself is covered by
++    # test_spent_oos_boundary.py against the real policy files).
++    import src.data_infra.pit_research_loader as loader_mod
++
++    monkeypatch.setattr(loader_mod, "live_spent_oos_end", lambda: BOUNDARY)
++
++    # Stub qlib.data.D.features so no provider is touched.
++    fake_frame = pd.DataFrame()
++    d_stub = types.SimpleNamespace(features=lambda *a, **k: fake_frame)
++    qlib_data_mod = types.ModuleType("qlib.data")
++    qlib_data_mod.D = d_stub
++    qlib_mod = types.ModuleType("qlib")
++    qlib_mod.data = qlib_data_mod
++    monkeypatch.setitem(sys.modules, "qlib", qlib_mod)
++    monkeypatch.setitem(sys.modules, "qlib.data", qlib_data_mod)
++    yield
++
++
++def _call(end_time: str, tmp_path, start_time: str = "2026-01-05"):
++    return qwf_mod.qlib_windowed_features(
++        instruments=["000001_SZ"],
++        fields=["$close"],
++        start_time=start_time,
++        end_time=end_time,
++        cache_context=CacheContext(),
++        stage="sandbox_screening",
++        cache_manifest_dir=tmp_path / "manifest",
++    )
++
++
++def _ctx(seal_claimed: bool) -> ResearchAccessContext:
++    return ResearchAccessContext(
++        run_id="r1",
++        step_id="s1",
++        stage="oos_test",
++        design_hash="d" * 8,
++        allowed_start=pd.Timestamp("2026-02-28"),
++        allowed_end=pd.Timestamp("2026-06-30"),
++        provider_build_id="test_build",
++        calendar_policy_id="frozen_20260630_thaw_step1",
++        holdout_context_id="run_dir",
++        holdout_seal_claimed=seal_claimed,
++    )
++
++
++class TestFormalDoorClamp:
++    def test_no_context_read_past_boundary_fails_closed(self, tmp_path):
++        with pytest.raises(HoldoutWindowViolation, match="born-sealed"):
++            _call("2026-03-02", tmp_path)
++
++    def test_context_without_seal_past_boundary_fails_closed(self, tmp_path):
++        # Either layer may fire first: the pre-existing validate_read seal check
++        # (oos_test stage) or the new D3 boundary clamp — both are
++        # HoldoutSealViolation and both name the missing claim.
++        with research_access_context(_ctx(seal_claimed=False)):
++            with pytest.raises(HoldoutSealViolation, match="holdout_seal_claimed"):
++                _call("2026-06-30", tmp_path, start_time="2026-02-28")
++
++    def test_non_oos_context_without_seal_past_boundary_hits_the_d3_clamp(self, tmp_path):
++        # A NON-oos stage context (validate_read's seal check does not fire)
++        # crossing the boundary without a seal is exactly the D3 clamp's job.
++        ctx = ResearchAccessContext(
++            run_id="r1", step_id="s1", stage="is_validation", design_hash="d" * 8,
++            allowed_start=pd.Timestamp("2026-01-05"), allowed_end=pd.Timestamp("2026-06-30"),
++            provider_build_id="test_build", calendar_policy_id="frozen_20260630_thaw_step1",
++        )
++        with research_access_context(ctx):
++            with pytest.raises(HoldoutSealViolation, match="born-sealed fresh window"):
++                _call("2026-06-30", tmp_path)
++
++    def test_context_with_claimed_seal_passes_the_clamp(self, tmp_path):
++        with research_access_context(_ctx(seal_claimed=True)):
++            frame = _call("2026-06-30", tmp_path, start_time="2026-02-28")
++        assert frame.empty  # stubbed read proceeded — clamp did not block
++
++    def test_read_at_or_before_boundary_is_untouched(self, tmp_path):
++        frame = _call("2026-02-27", tmp_path)
++        assert frame.empty
+diff --git a/tests/research_orchestrator/test_promotion_evidence.py b/tests/research_orchestrator/test_promotion_evidence.py
+index c8fc962..4a3e0e6 100644
+--- a/tests/research_orchestrator/test_promotion_evidence.py
++++ b/tests/research_orchestrator/test_promotion_evidence.py
+@@ -152,7 +152,8 @@ class ReproduceSealedOosTests(unittest.TestCase):
+     def test_full_reproduction_claims_seal_and_computes_leakfree_metrics(self):
+         import tempfile
+         from pathlib import Path as _P
+-        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
++        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
++        OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
+         from src.research_orchestrator.holdout_seal import HoldoutSealStore
+         fs = self._frozen_set()
+         cal, cf = self._fake_cf()
+@@ -184,7 +185,8 @@ class ReproduceSealedOosTests(unittest.TestCase):
+         # instead of relying solely on the calendar_end == OOS_END boundary.
+         import tempfile
+         from pathlib import Path as _P
+-        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos, OOS_END
++        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
++        OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
+         from src.research_orchestrator.holdout_seal import HoldoutSealStore
+         from src.research_orchestrator.research_access_context import get_research_access_context
+         fs = self._frozen_set()
+diff --git a/tests/research_orchestrator/test_research_access_context.py b/tests/research_orchestrator/test_research_access_context.py
+index 36acc1f..57e97ae 100644
+--- a/tests/research_orchestrator/test_research_access_context.py
++++ b/tests/research_orchestrator/test_research_access_context.py
+@@ -176,7 +176,7 @@ class TestFromSplit:
+ class TestQlibWindowedFeaturesEnforcement:
+     """qlib_windowed_features must invoke validate_read when context is active."""
+ 
+-    def test_no_context_skips_validation(self) -> None:
++    def test_no_context_skips_validation(self, tmp_path) -> None:
+         # When no context is set, qlib_windowed_features behaves exactly as
+         # before — it calls D.features and the cache manifest without
+         # invoking ResearchAccessContext.validate_read.
+@@ -197,7 +197,10 @@ class TestQlibWindowedFeaturesEnforcement:
+                 end_time="2020-02-01",
+                 cache_context=CacheContext(),
+                 stage="is_only",
+-                cache_manifest_dir="data/_test_cache",
++                # tmp dir, NOT the persistent data/_test_cache: rows recorded
++                # there before the M4 provider-generation binding carry "" ids
++                # and are (correctly) refused against the live ids.
++                cache_manifest_dir=tmp_path / "manifest",
+             )
+ 
+     def test_window_violation_raises_before_d_features(self, tmp_path: Path) -> None:
+diff --git a/tests/research_orchestrator/test_spent_oos_boundary.py b/tests/research_orchestrator/test_spent_oos_boundary.py
+new file mode 100644
+index 0000000..33de6cb
+--- /dev/null
++++ b/tests/research_orchestrator/test_spent_oos_boundary.py
+@@ -0,0 +1,119 @@
++"""D3 spent-OOS boundary resolver tests (UNFREEZE_PLAN.md item 8, GPT Round-2 M6).
++
++The three contract-required CI tests, exercised through the REAL policy files
++under config/calendar_policies/ (the "manifest-declared new policy" path —
++Round-3 note: not only hand-constructed policy objects) plus temp-file
++variants for the missing/invalid cases.
++"""
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from src.research_orchestrator.calendar_policy import (
++    CalendarPolicy,
++    CalendarPolicyError,
++    load_calendar_policy,
++    resolve_spent_oos_boundary,
++)
++
++REPO_POLICY_DIR = Path(__file__).resolve().parents[2] / "config" / "calendar_policies"
++
++
++def _write_policy(tmp_path: Path, policy_id: str, body: str) -> Path:
++    path = tmp_path / f"{policy_id}.yaml"
++    path.write_text(body, encoding="utf-8")
++    return tmp_path
++
++
++BASE_FIELDS = """
++policy_id: {pid}
++policy_schema_version: 1
++calendar_start_date: 2008-01-02
++calendar_end_date: {cal_end}
++data_end_date: {cal_end}
++frozen: {frozen}
++reason: test
++established_at: 2026-07-02
++allowed_modes: [sandbox, formal]
++default_formal_behavior: require_explicit_policy
++"""
++
++
++class TestRequiredCiCases:
++    def test_legacy_frozen_policy_without_fields_clamps_to_its_calendar_end(self):
++        # M6 required test 1 — the REAL legacy file from the repo.
++        policy = load_calendar_policy("frozen_20260227_system_build", root=REPO_POLICY_DIR)
++        assert policy.spent_oos_end is None
++        boundary = resolve_spent_oos_boundary(policy, provider_calendar_end="2026-02-27")
++        assert boundary.spent_oos_end == "2026-02-27"
++        assert boundary.fresh_holdout_start is None  # no fresh window: post-spent fails closed
++        assert boundary.source == "frozen_calendar_end_fallback"
++
++    def test_legacy_fallback_still_clamps_under_longer_provider(self):
++        # Invalid pairing (thawed provider + legacy policy) must CLAMP, not open.
++        policy = load_calendar_policy("frozen_20260227_system_build", root=REPO_POLICY_DIR)
++        boundary = resolve_spent_oos_boundary(policy, provider_calendar_end="2026-06-30")
++        assert boundary.spent_oos_end == "2026-02-27"
++        assert boundary.fresh_holdout_start is None
++
++    def test_thaw_policy_clamps_default_reads_to_spent_even_with_longer_calendar(self):
++        # M6 required test 2 — the REAL thaw_step1 file from the repo.
++        policy = load_calendar_policy("frozen_20260630_thaw_step1", root=REPO_POLICY_DIR)
++        boundary = resolve_spent_oos_boundary(policy, provider_calendar_end="2026-06-30")
++        assert boundary.spent_oos_end == "2026-02-27"
++        assert boundary.fresh_holdout_start == "2026-02-28"
++        assert boundary.source == "policy_fields"
++
++    def test_thaw_policy_with_only_one_boundary_field_fails_closed_via_file_path(self, tmp_path):
++        # M6 required test 3 — exercised through the manifest-declared-policy
++        # path (load_calendar_policy on a real file), not a hand-built object.
++        body = BASE_FIELDS.format(pid="thaw_bad", cal_end="2026-06-30", frozen="true")
++        body += "spent_oos_end: 2026-02-27\n"  # fresh_holdout_start missing
++        root = _write_policy(tmp_path, "thaw_bad", body)
++        with pytest.raises(CalendarPolicyError, match="both or neither"):
++            load_calendar_policy("thaw_bad", root=root)
++
++    def test_nonfrozen_policy_without_boundary_fields_fails_closed(self, tmp_path):
++        body = BASE_FIELDS.format(pid="rolling_bad", cal_end="2026-06-30", frozen="false")
++        body += "max_calendar_lag_days: 5\n"
++        root = _write_policy(tmp_path, "rolling_bad", body)
++        policy = load_calendar_policy("rolling_bad", root=root)
++        with pytest.raises(CalendarPolicyError, match="fails closed"):
++            resolve_spent_oos_boundary(policy, provider_calendar_end="2026-06-30")
++
++
++class TestBoundaryValidation:
++    def _policy(self, **overrides) -> CalendarPolicy:
++        payload = {
++            "policy_id": "t", "policy_schema_version": 1,
++            "calendar_start_date": "2008-01-02", "calendar_end_date": "2026-06-30",
++            "data_end_date": "2026-06-30", "frozen": True, "reason": "t",
++            "established_at": "2026-07-02", "allowed_modes": ["sandbox"],
++            "default_formal_behavior": "require_explicit_policy",
++        }
++        payload.update(overrides)
++        return CalendarPolicy.from_dict(payload)
++
++    def test_fresh_not_after_spent_raises(self):
++        policy = self._policy(spent_oos_end="2026-02-27", fresh_holdout_start="2026-02-27")
++        with pytest.raises(CalendarPolicyError, match="strictly after"):
++            resolve_spent_oos_boundary(policy, provider_calendar_end="2026-06-30")
++
++    def test_spent_beyond_policy_calendar_end_raises(self):
++        policy = self._policy(spent_oos_end="2026-07-31", fresh_holdout_start="2026-08-01")
++        with pytest.raises(CalendarPolicyError, match="exceeds the policy calendar_end_date"):
++            resolve_spent_oos_boundary(policy, provider_calendar_end="2026-08-31")
++
++    def test_spent_beyond_live_provider_calendar_raises(self):
++        policy = self._policy(spent_oos_end="2026-02-27", fresh_holdout_start="2026-02-28")
++        with pytest.raises(CalendarPolicyError, match="live provider calendar end"):
++            resolve_spent_oos_boundary(policy, provider_calendar_end="2026-01-30")
++
++    def test_repo_thaw_policy_parses_with_boundary_fields(self):
++        policy = load_calendar_policy("frozen_20260630_thaw_step1", root=REPO_POLICY_DIR)
++        assert policy.frozen is True
++        assert policy.calendar_end_date == "2026-06-30"
++        assert policy.spent_oos_end == "2026-02-27"
++        assert policy.fresh_holdout_start == "2026-02-28"
