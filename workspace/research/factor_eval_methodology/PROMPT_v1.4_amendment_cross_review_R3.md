@@ -1,3 +1,36 @@
+# GPT 5.5 Pro cross-review prompt — v1.4 amendment, ROUND 3 (re-review after round-2 REVISE)
+
+> Round-2 verdict: REVISE — 9/12 round-1 findings RESOLVED; B1/B2/M1 PARTIAL, refined into new
+> findings N1 (Blocker) / N2 / N3 (Majors). All three ACCEPTED and folded into revision 3.
+> Branch `calendar-unfreeze` is pushed. Copy the block below into GPT 5.5 Pro verbatim.
+
+```text
+ROLE
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. This is ROUND 3 of a design-stage review. Round 1: REVISE (B1-B3, M1-M6, m1-m3 — all accepted). Round 2: you confirmed 9/12 RESOLVED and refined the 3 PARTIALs into N1 (Blocker: migration alias understates TUD identity), N2 (Major: plan_hash lacks spend-differentiating fields), N3 (Major: bare claim_seal=False is not a seal-reuse path). All three were accepted and folded into revision 3, embedded below. Verify the three resolutions are faithful and normatively sufficient, scan for regressions, and give a final verdict. Do not rubber-stamp.
+
+REPO (public — fetch any file to verify against the live code)
+https://github.com/henrydan111/quant-system   (branch: calendar-unfreeze)
+Raw file form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
+
+CONTEXT (unchanged from rounds 1-2; the three most relevant for this round):
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_eval_skill/identity.py   (TUD fields :52-72; DeploymentFrozenPlan payload :200-210; EvalProtocolSpec :218)
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/research_orchestrator/promotion_evidence.py   (context install :286; frozen_set_hash keying :248)
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_eval_skill/sealed_oos.py
+- Full context set from round 1 (CLAUDE.md, FACTOR_EVAL_METHODOLOGY_v1.3.md, STRATEGY_LAYER_BUILD_PLAN_v1.md, store.py, release_gate.py, validation_steps.py, resolver.py, multiplicity.py, factor_status_ladder.md) — same raw-link pattern.
+- The revised amendment (revision 3, also embedded in full below):
+  https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md
+
+SELF-REVIEW PREFLIGHT — completed before this round-3 request: verdict "clean for GPT round-3"; all three round-2 findings folded with none declined; live-code verification performed before writing the fixes: identity.py:200-210 payload inventory + :218 EvalProtocolSpec (N2), identity.py:52-72 TUD identity fields (N1), promotion_evidence.py:286 holdout_seal_claimed=bool(claim_seal) + :248 frozen_set_hash keying (N3). Consistency sweep completed: every seal-key reference now reads book_seal_key (plan_hash retained only as plan identity / evidence-row provenance / disclosure grouping); the A6 budget and §5 test names updated to the seal-key unit. Residual concerns: none.
+
+ROUND-2 → REVISION-3 DISPOSITION:
+- N1 (Blocker) → A7 migration note replaced with your exact requirement: hash-bound alias payload (alias_id, alias_version, created_at, recorded_before_stage7_freeze, factor identity + definition_hash, source_evidence_id/run_id, Stage-5 methodology/protocol hash, evidence window, target_universe_id, canonicalized universe_definition_filters, eligibility_policy, asof_policy, data/calendar policy ids); acceptance requires EXACT equality vs the current TUD on the 4 TUD-identity fields; any absent/stale/non-canonical/mismatched field → candidate_scope_mismatch refusal before dataset build and holdout access + target-scoped IS re-audition; explicit sentence that universe-id equality alone is never sufficient and that the 7-universe matrix feeds the re-audition, never the alias.
+- N2 (Major) → A2 seal identity rewritten as "hash material, not audit-only payload": book_seal_key = hash_canonical({plan_hash, frozen_set_hash, selected_set_hash, target_universe_declaration_hash, execution_envelope_hash, eval_protocol_hash, oos_window_id, pre_declared_bar_hash}); book seals keyed by book_seal_key with no design_hash/frozen_set_hash fallback; verified rationale inlined (plan_hash payload gap at identity.py:200-210); test renamed/extended to test_book_seal_key_distinctness (construction / envelope / protocol / window / bar each produce distinct keys); A6 budget + PR3 clause updated to the book_seal_key unit.
+- N3 (Major) → A2(b) rewritten: run_component_diagnostics_in_book_context(...) is the ONLY sanctioned path; a direct run_sealed_oos(..., claim_seal=False) is disallowed unless refactored to accept and REUSE an active BookHoldoutSealContext/ResearchAccessContext with holdout_seal_claimed=True and seal_key=book_seal_key and to refuse nested no-seal contexts; verified rationale inlined (promotion_evidence.py:286 fails closed); your two named tests added to §5 (test_component_diagnostics_preserves_active_book_research_access_context, test_component_diagnostics_refuses_bare_claim_false_without_book_context).
+
+WHAT CHANGED (authoritative — the full revision-3 amendment; treat this text as the source of truth):
+
+<<<BEGIN REVISED AMENDMENT DOC (revision 3) — workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md (byte-identical to the committed file at the raw link above)>>>
+
 # v1.4 AMENDMENT PROPOSAL — retire the factor-level `approved` mint; one seal per book
 
 > **Status: REVISION 3 — round-2 re-review returned REVISE (9/12 RESOLVED; B1/B2/M1 PARTIAL →
@@ -443,3 +476,19 @@ at identity.py:52-72). **Verdict: clean for GPT round-3.**
 | N1 (Blocker) | A7 migration alias understated TUD identity (universe-id equality admits evidence produced under different filters/as-of/eligibility) | ACCEPTED → full hash-bound alias payload; exact equality on `target_universe_id` + `universe_definition_filters` + `eligibility_policy` + `asof_policy`; anything less → `candidate_scope_mismatch` + IS re-audition |
 | N2 (Major) | `plan_hash` payload lacks spend-differentiating fields (verified identity.py:200-210) | ACCEPTED → derived `book_seal_key` over {plan, frozen set, selected set, TUD, execution envelope, eval protocol, OOS window, bar}; no field payload-only; `test_book_seal_key_distinctness` |
 | N3 (Major) | bare `run_sealed_oos(claim_seal=False)` is not a seal-reuse path under live context behavior (verified promotion_evidence.py:286) | ACCEPTED → `run_component_diagnostics_in_book_context(...)` is the only sanctioned path; bare call disallowed unless refactored to reuse the active book context; 2 new tests |
+
+<<<END REVISED AMENDMENT DOC>>>
+
+QUANTITATIVE-RESEARCH PRINCIPLES — same nine as rounds 1-2 (PIT; OOS sacred/sealed; survivorship; factor-eval standard; execution/cost realism; no leverage; no hedge words; four-layer pipeline; multiple testing). A violation is a Blocker.
+
+REVIEW QUESTIONS (round 3)
+1. N1/N2/N3 resolution fidelity — for each: RESOLVED / PARTIAL / NOT RESOLVED, with the offending line quoted if not fully resolved.
+2. Regression scan — did the revision-3 edits introduce any internal inconsistency (e.g. remaining seal-key references that should read book_seal_key; the A6 counting unit vs the disclosure grouping; the §5 test list vs the normative clauses)?
+3. Completeness — with N1-N3 resolved, is any guardrail still implicit rather than normative? If yes, name it with an exact replacement; if no, say so explicitly.
+4. Final — SHIP / REVISE / REWORK, plus the single most important residual risk to carry into implementation pass 1.
+
+OUTPUT FORMAT
+- Per-finding table (N1, N2, N3: RESOLVED / PARTIAL / NOT RESOLVED, one line each).
+- Any NEW issues ranked Blocker / Major / Minor with offending line quoted + exact replacement.
+- Final line: SHIP / REVISE / REWORK + the single most important residual risk.
+```
