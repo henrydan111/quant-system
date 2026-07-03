@@ -379,3 +379,67 @@ class TestA8SealedBacktestRunner:
         with pytest.raises(RuntimeError, match=r"unable_to_determine_oos_end"):
             runner._claim_if_oos({"stage": "oos_test"})
         assert self._no_seal_written(tmp_path)
+
+    # ── round-3 Blocker 1: the claim decision is CONTEXT-driven, not payload-driven ──
+
+    def test_runner_oos_context_missing_stage_still_claims_or_refuses_virgin_window(
+        self, tmp_path: Path
+    ):
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+        # ctx.stage == "oos_test" + a payload WITHOUT "stage": previously this skipped
+        # claim AND guard entirely (the round-3 bypass). Now: virgin window -> A8 refusal…
+        runner = self._runner(tmp_path)
+        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            runner._claim_if_oos({"oos_start": "2026-03-01", "oos_end": "2026-09-30"})
+        assert self._no_seal_written(tmp_path)
+        # …and a burned window CLAIMS (the seal is spent, not silently skipped).
+        runner._claim_if_oos({"oos_start": "2021-01-01", "oos_end": "2026-02-27"})
+        assert not HoldoutSealStore(tmp_path / "seals").list_events().empty
+
+    def test_runner_stage_mismatch_refuses_before_claim(self, tmp_path: Path):
+        runner = self._runner(tmp_path)
+        with pytest.raises(ValueError, match=r"stage mismatch"):
+            runner._claim_if_oos({"stage": "is_only", "oos_start": "2021-01-01",
+                                  "oos_end": "2026-02-27"})
+        assert self._no_seal_written(tmp_path)
+
+    def test_workspace_pipeline_oos_context_missing_stage_cannot_install_claimed_context_without_claim(
+        self, tmp_path: Path
+    ):
+        from unittest.mock import MagicMock
+
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+        # Virgin window + stage-less payload through the PUBLIC pipeline entry: the A8
+        # guard fires via the context-driven claim path — the pipeline never runs and no
+        # ResearchAccessContext with holdout_seal_claimed=True can be installed.
+        runner = self._runner(tmp_path)
+        pipeline_fn = MagicMock(return_value="ok")
+        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            runner.run_workspace_pipeline(
+                pipeline_fn=pipeline_fn,
+                time_split={"oos_start": "2026-03-01", "oos_end": "2026-09-30"},
+                pipeline_args={},
+                provider_build_id="pb_test",
+                calendar_policy_id="cp_test",
+            )
+        pipeline_fn.assert_not_called()
+        assert self._no_seal_written(tmp_path)
+        # Burned window: the claim happens BEFORE the claimed-context install — the seal
+        # event must exist by the time the pipeline runs (the flag is now truthful).
+        seen = {}
+
+        def probe(*args, **kwargs):
+            seen["seal_recorded"] = not HoldoutSealStore(tmp_path / "seals").list_events().empty
+            return "ok"
+
+        runner.run_workspace_pipeline(
+            pipeline_fn=probe,
+            time_split={"is_start": "2014-01-01", "is_end": "2020-12-31",
+                        "oos_start": "2021-01-01", "oos_end": "2026-02-27"},
+            pipeline_args={},
+            provider_build_id="pb_test",
+            calendar_policy_id="cp_test",
+        )
+        assert seen.get("seal_recorded") is True

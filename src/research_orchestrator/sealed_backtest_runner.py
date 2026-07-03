@@ -38,7 +38,23 @@ class SealedBacktestRunner:
         self._ctx = holdout_context
 
     def _claim_if_oos(self, time_split: dict | None) -> None:
-        stage = str((time_split or {}).get("stage", "") or "")
+        # v1.4 A8 round-3 Blocker 1 (2026-07-03): the claim decision must NOT be
+        # payload-controlled. Deciding from time_split["stage"] alone let an OOS
+        # HoldoutContext skip BOTH the claim and the virgin-window guard by passing a
+        # payload that omits/mislabels "stage" — after which run_workspace_pipeline would
+        # install a ResearchAccessContext asserting holdout_seal_claimed=True that the
+        # data layer trusts. Source of truth = HoldoutContext.stage; a contradictory
+        # payload stage fails closed.
+        payload_stage = str((time_split or {}).get("stage", "") or "").strip()
+        ctx_stage = str(getattr(self._ctx, "stage", "") or "").strip()
+        if ctx_stage and payload_stage and ctx_stage != payload_stage:
+            raise ValueError(
+                "SealedBacktestRunner._claim_if_oos stage mismatch: "
+                f"HoldoutContext.stage={ctx_stage!r} but time_split['stage']={payload_stage!r}. "
+                "Refusing because an OOS payload must not be able to downgrade or bypass "
+                "the legacy seal claim."
+            )
+        stage = ctx_stage or payload_stage
         if stage != "oos_test":
             return
         if self._ctx is None:
