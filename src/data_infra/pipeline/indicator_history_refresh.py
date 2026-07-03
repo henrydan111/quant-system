@@ -227,6 +227,23 @@ class IndicatorVipHistoryRefresher:
         if self.archive_dir.exists():
             raise FileExistsError(f"Archive directory already exists: {self.archive_dir}")
         original_exists = self.live_dir.exists()
+        # Partial-range MERGE guard (2026-07-03 incident): a --start/--end-period
+        # subset refresh must merge, never amputate — before the swap, carry every
+        # live period file the stage does NOT have into the stage dir (refreshed
+        # periods win). Without this, a 2-period refresh replaced the ~557k-row
+        # store with 14k rows; recovered same day from the archive dir.
+        if original_exists:
+            staged_names = {p.name for p in self.stage_dir.glob("*.parquet")}
+            carried = 0
+            for source in self.live_dir.glob("*.parquet"):
+                if source.name not in staged_names:
+                    shutil.copy2(source, self.stage_dir / source.name)
+                    carried += 1
+            if carried:
+                self.logger.info(
+                    "partial refresh: carried %d untouched period file(s) into the staged store "
+                    "(refreshed: %d)", carried, len(staged_names),
+                )
         if original_exists:
             os.rename(self.live_dir, self.archive_dir)
         try:

@@ -115,3 +115,43 @@ def test_indicator_refresh_validate_only_checks_live_directory(tmp_path):
 
     assert len(summaries) == 1
     assert summaries[0].has_update_flag is True
+
+
+def test_partial_refresh_swap_merges_untouched_periods(tmp_path, monkeypatch):
+    """2026-07-03 incident regression: a subset-period refresh must CARRY the
+    untouched live period files into the promoted store (merge, not amputate)."""
+    import pandas as pd
+
+    from src.data_infra.pipeline.indicator_history_refresh import IndicatorVipHistoryRefresher
+
+    refresher = IndicatorVipHistoryRefresher.__new__(IndicatorVipHistoryRefresher)
+    refresher.logger = __import__("logging").getLogger("t")
+    refresher.live_dir = tmp_path / "indicators"
+    refresher.stage_dir = tmp_path / "stage"
+    refresher.archive_dir = tmp_path / "_archive" / "indicators_pre_t"
+    refresher.storage = type("S", (), {"_record_ingest_manifest": lambda *a, **k: None})()
+    refresher.build_id = "t"
+
+    refresher.live_dir.mkdir()
+    refresher.stage_dir.mkdir()
+    for period in ("20240630", "20240930", "20251231"):
+        pd.DataFrame({"ts_code": ["000001.SZ"], "end_date": [period]}).to_parquet(
+            refresher.live_dir / f"indicators_{period}.parquet"
+        )
+    # staged refresh covers ONLY 20251231 (a revised version)
+    pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"], "end_date": ["20251231"] * 2}).to_parquet(
+        refresher.stage_dir / "indicators_20251231.parquet"
+    )
+
+    refresher._swap_live_directory(summaries=[])
+
+    live_files = sorted(p.name for p in refresher.live_dir.glob("*.parquet"))
+    assert live_files == [
+        "indicators_20240630.parquet",
+        "indicators_20240930.parquet",
+        "indicators_20251231.parquet",
+    ]
+    # the refreshed version won for the covered period
+    assert len(pd.read_parquet(refresher.live_dir / "indicators_20251231.parquet")) == 2
+    # the pre-swap store is archived intact
+    assert len(list(refresher.archive_dir.glob("*.parquet"))) == 3
