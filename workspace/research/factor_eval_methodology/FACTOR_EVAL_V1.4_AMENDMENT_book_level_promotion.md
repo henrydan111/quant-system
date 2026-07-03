@@ -1,8 +1,8 @@
 # v1.4 AMENDMENT PROPOSAL — retire the factor-level `approved` mint; one seal per book
 
-> **Status: REVISION 3 — round-2 re-review returned REVISE (9/12 RESOLVED; B1/B2/M1 PARTIAL →
-> 1 new Blocker N1 + 2 Majors N2/N3, ALL ACCEPTED — disposition §9); pending round-3 re-review.
-> Not yet operative.**
+> **Status: REVISION 4 — round-3 re-review: N1/N3 RESOLVED, N2 PARTIAL on stale wording only
+> (R3-M1/M2/m1 = 4 wording fixes, ALL APPLIED — disposition §9); reviewer confirmed no remaining
+> implicit guardrails. Pending round-4 confirmation. Not yet operative.**
 > Amends [FACTOR_EVAL_METHODOLOGY_v1.3.md](FACTOR_EVAL_METHODOLOGY_v1.3.md) (the operative methodology)
 > and [STRATEGY_LAYER_BUILD_PLAN_v1.md](../capital_allocation_buildout/STRATEGY_LAYER_BUILD_PLAN_v1.md) §1.1.
 > If approved, folds into a consolidated v1.4 per the v1.3 precedence discipline.
@@ -107,7 +107,7 @@ unit we deploy, and keeps the factor-level measurement as no-seal diagnostics in
 render `Stage 7 — freeze-only, no OOS observation` and `Stage 8 — sole sealed book evaluation`; any
 unqualified "Stage 7 OOS" reference is invalid.**
 
-**A2. One seal per book, keyed by `book_plan_hash`; the spend reports two layers.**
+**A2. One seal per book, keyed by `book_seal_key`; the spend reports two layers.**
   - **Seal identity — hash material, not audit-only payload (round-1 M1 + round-2 N2).**
     `book_plan_hash = DeploymentFrozenPlan.plan_hash` names the plan; the **seal key** is the derived
     `book_seal_key = hash_canonical({plan_hash, frozen_set_hash, selected_set_hash,
@@ -205,9 +205,10 @@ accruals are spendable **only** by book-level seals (A2) or an A5 override study
 count, per OOS window: distinct `book_seal_key` spends (grouped by `book_plan_hash` for disclosure),
 recipe families, overlapping component sets, and A5 component-study spends — not merely distinct
 frozen sets (the current counter's unit). Default
-budget for virgin windows: **warn at 3 book plans per window, hard stop at 5** unless a user-signed
-multiplicity override is recorded **before** the spend and the artifact reports adjusted
-max-stat/FDR/DSR/PSR where applicable. PR5 recipe-search deflation is required but is **not a
+budget for virgin windows: **warn at 3 distinct `book_seal_key` spends per OOS window, hard stop at 5
+distinct `book_seal_key` spends per OOS window**, with `book_plan_hash` used only for disclosure
+grouping, unless a user-signed multiplicity override is recorded **before** the spend and the
+artifact reports adjusted max-stat/FDR/DSR/PSR where applicable. PR5 recipe-search deflation is required but is **not a
 substitute** for the hard per-window budget. Every spend is recorded in the window ledger with its
 spending-unit type.
 
@@ -365,8 +366,8 @@ planned.
 - **Q4 (diagnostics contamination):** RESOLVED — consistent iff labeled `spent_in_book_context=True`,
   `fresh_oos_eligible=False`, `promotion_eligible=False`, non-gating, no second claim (B2+m3 adopted).
 - **Q5 (book-level multiplicity):** RESOLVED — warn-5/hard-10 frozen-set counting is NOT sufficient;
-  virgin windows get plan-hash counting with warn 3 / hard 5 + recipe-family and A5-overlap
-  accounting (M3 adopted).
+  virgin windows get `book_seal_key` spend counting, grouped by `book_plan_hash` only for disclosure,
+  with warn 3 / hard 5 + recipe-family and A5-overlap accounting (M3 adopted, unit per round-2 N2).
 
 ## §7a — Round-2 resolutions
 
@@ -396,8 +397,9 @@ Checked against §3 hard invariants + the canonical template's quantitative-rese
 7. **No hedge words:** every §1 number now carries an exact artifact path, or is explicitly marked
    unverified-at-source with the named resolving script (the greedy pair). PASS.
 8. **Four-layer pipeline:** untouched. PASS.
-9. **Multiple testing:** materially strengthened — plan-hash-unit counting, virgin-window warn-3/
-   hard-5, A5 spends folded into the same budget. PASS.
+9. **Multiple testing:** materially strengthened — `book_seal_key` spend counting grouped by
+   `book_plan_hash` for disclosure, virgin-window warn-3/hard-5, A5 spends folded into the same
+   budget. PASS.
 
 Verification performed for this revision (against live code): sealed_oos.py:116 default
 `claim_seal=True` (B2 confirmed); store.py:1582 `set_approval_validity` refusal + store.py:801
@@ -418,6 +420,12 @@ lacks selected-set / protocol / window / execution-profile identity → adopted 
 reuse path → diagnostics constrained to the dedicated helper + 2 new tests); replaced the A7 alias
 with the full TUD-payload binding and exact 4-field equality (N1 — the TUD identity fields verified
 at identity.py:52-72). **Verdict: clean for GPT round-3.**
+
+**Revision-4 additions (round-3 findings folded):** the four stale-wording fixes (R3-M1 heading,
+R3-M2 threshold unit, R3-m1 two summaries) applied verbatim; grep sweep confirms the only remaining
+"book plans"/"plan-hash counting" strings are the §9 historical disposition rows describing the
+defects themselves. No normative content changed in revision 4 — wording alignment only.
+**Verdict: clean for GPT round-4 (confirmation).**
 
 ## §9 — Round-1 disposition table (verdict REVISE; all findings ACCEPTED, none declined)
 
@@ -443,3 +451,15 @@ at identity.py:52-72). **Verdict: clean for GPT round-3.**
 | N1 (Blocker) | A7 migration alias understated TUD identity (universe-id equality admits evidence produced under different filters/as-of/eligibility) | ACCEPTED → full hash-bound alias payload; exact equality on `target_universe_id` + `universe_definition_filters` + `eligibility_policy` + `asof_policy`; anything less → `candidate_scope_mismatch` + IS re-audition |
 | N2 (Major) | `plan_hash` payload lacks spend-differentiating fields (verified identity.py:200-210) | ACCEPTED → derived `book_seal_key` over {plan, frozen set, selected set, TUD, execution envelope, eval protocol, OOS window, bar}; no field payload-only; `test_book_seal_key_distinctness` |
 | N3 (Major) | bare `run_sealed_oos(claim_seal=False)` is not a seal-reuse path under live context behavior (verified promotion_evidence.py:286) | ACCEPTED → `run_component_diagnostics_in_book_context(...)` is the only sanctioned path; bare call disallowed unless refactored to reuse the active book context; 2 new tests |
+
+### Round-3 disposition (verdict REVISE; N1/N3 RESOLVED, N2 PARTIAL on wording; ALL APPLIED)
+
+| # | Finding | Disposition |
+|---|---|---|
+| R3-M1 (Major) | A2 heading still said "keyed by `book_plan_hash`" | APPLIED → heading now "keyed by `book_seal_key`" |
+| R3-M2 (Major) | A6 threshold sentence said "3/5 book plans" (unit confusion) | APPLIED → "3/5 distinct `book_seal_key` spends per OOS window, `book_plan_hash` for disclosure grouping only" |
+| R3-m1 (Minor) | §7 Q5 + §8 summaries said "plan-hash counting" | APPLIED → both rewritten to the `book_seal_key` spend unit |
+
+Round-3 completeness statement (reviewer): after these wording corrections, no guardrail remains
+merely implicit — A7 target-scope admission, A2 derived seal key, A2(b) active-context diagnostics,
+A6 multiplicity budget, and A8 no-virgin-spend-before-strategy-registry are all normative.
