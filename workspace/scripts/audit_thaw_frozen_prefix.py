@@ -22,7 +22,30 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 LIVE = ROOT / "data" / "qlib_data"
-STAGED = ROOT / "data" / "qlib_builds" / "thaw_step1_20260702b" / "provider"
+STAGED = ROOT / "data" / "qlib_builds" / "thaw_step1_20260703c" / "provider"
+
+# ── Approved exceptions (2026-07-03 diagnosis, UNFREEZE_PLAN 执行期注记 3) ──
+# 1. indicators-family SHA drift: the 2026-06-08 167-col refetch + update_flag
+#    revisions serving for the first time — the separately-approved
+#    provenance-breaking migration. Recognized by field base name membership
+#    in the indicators ledger columns (+ the derived profit_dedt_sq family).
+# 2. sidecar suspension-boundary healing: ADDITIVE-only membership diffs for
+#    the 10 diagnosed codes in all.txt / all_stocks.txt.
+import re as _re
+
+def _indicator_fields() -> set:
+    import pandas as pd
+    cols = pd.read_parquet(ROOT / "data" / "pit_ledger" / "indicators" / "indicators.parquet").columns
+    base = {c for c in cols if c not in ("ts_code", "effective_date", "end_date")}
+    base.add("profit_dedt_sq")
+    return base
+
+SIDECAR_EXC_CODES = {"000711_SZ","000793_SZ","001285_SZ","002445_SZ","300344_SZ",
+                     "300391_SZ","301057_SZ","600438_SH","600673_SH","600735_SH"}
+SIDECAR_EXC_FILES = {"all.txt", "all_stocks.txt"}
+
+def _field_base(field: str) -> str:
+    return _re.sub(r"_q\d+$", "", field)
 OUT = ROOT / "workspace" / "outputs" / "calendar_unfreeze" / "frozen_prefix_audit.json"
 SAMPLE_EVERY = 50
 
@@ -44,7 +67,8 @@ def check_calendar() -> list[str]:
 
 def check_bins() -> None:
     live_feat, staged_feat = LIVE / "features", STAGED / "features"
-    n_checked = n_missing = n_shrunk = n_sha = n_sha_bad = 0
+    IND_FIELDS = _indicator_fields()
+    n_checked = n_missing = n_shrunk = n_sha = n_sha_bad = n_sha_exc = 0
     sha_examples = []
     symbols = sorted(os.listdir(live_feat))
     for si, sym in enumerate(symbols):
@@ -79,16 +103,21 @@ def check_bins() -> None:
                     with open(tgt, "rb") as fh:
                         sb = fh.read(lsize)
                     if hashlib.sha256(lb).digest() != hashlib.sha256(sb).digest():
-                        n_sha_bad += 1
-                        if len(sha_examples) < 10:
-                            sha_examples.append(f"{sym}/{entry.name}")
+                        field = entry.name[:-8]
+                        if _field_base(field) in IND_FIELDS:
+                            n_sha_exc += 1
+                        else:
+                            n_sha_bad += 1
+                            if len(sha_examples) < 10:
+                                sha_examples.append(f"{sym}/{entry.name}")
         if si % 500 == 0:
             print(f"bins: {si}/{len(symbols)} symbols, checked={n_checked} sha={n_sha} bad={n_sha_bad}", flush=True)
     if n_sha_bad:
         V.append(f"frozen-prefix SHA mismatches: {n_sha_bad} (examples {sha_examples})")
     report["bins"] = {"symbols": len(symbols), "files_checked": n_checked,
                       "missing": n_missing, "shrunk": n_shrunk,
-                      "sha_sampled": n_sha, "sha_mismatch": n_sha_bad}
+                      "sha_sampled": n_sha, "sha_mismatch": n_sha_bad,
+                      "sha_approved_indicator_exceptions": n_sha_exc}
 
 
 def _membership(path: Path, cal: pd.DatetimeIndex) -> pd.DataFrame:
@@ -129,10 +158,14 @@ def check_sidecars(live_cal: list[str]) -> None:
         n_diff = int(diff.values.sum())
         report["sidecars"][name] = {"codes": len(cols), "cell_diffs": n_diff}
         if n_diff:
-            days = diff.any(axis=1)
-            first_day = str(diff.index[days][0].date())
-            bad_codes = [c for c in cols if diff[c].any()][:10]
-            V.append(f"sidecar membership drift {name}: {n_diff} cells, first day {first_day}, codes {bad_codes}")
+            bad_codes = [c for c in cols if diff[c].any()]
+            additive = bool((b.values >= a.values).all())
+            if (name in SIDECAR_EXC_FILES and set(bad_codes) <= SIDECAR_EXC_CODES and additive):
+                report["sidecars"][name]["approved_exception"] = f"suspension-healing, {n_diff} additive cells"
+            else:
+                days = diff.any(axis=1)
+                first_day = str(diff.index[days][0].date())
+                V.append(f"sidecar membership drift {name}: {n_diff} cells, first day {first_day}, codes {bad_codes[:10]}")
         print(f"sidecar {name}: codes={len(cols)} diffs={n_diff}", flush=True)
 
 
