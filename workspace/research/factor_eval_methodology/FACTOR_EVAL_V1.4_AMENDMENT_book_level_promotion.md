@@ -1,12 +1,15 @@
 # v1.4 AMENDMENT PROPOSAL — retire the factor-level `approved` mint; one seal per book
 
-> **Status: DESIGN SHIPPED — round-4 GPT 5.5 Pro verdict SHIP (2026-07-03; all four wording fixes
-> CONFIRMED; N2 fully RESOLVED). 4-round arc REVISE×3→SHIP; 18 findings, all accepted, none
-> declined. Round-4 residual risk for implementation pass 1: wiring the ledger/seal API against
-> `book_plan_hash` instead of the derived `book_seal_key`, especially in resume/backstop paths.
-> ⚠ NOT YET OPERATIVE — the governance takes effect only when implementation pass 1 (§5) lands
-> with its acceptance tests + the burned-window dry-run pilot; until then CLAUDE.md §3.5 remains
-> the live contract.**
+> **Status: DESIGN SHIPPED (4-round GPT arc, 2026-07-03) + IMPLEMENTATION PASS 1 SHIPPED (its own
+> 4-round GPT arc REVISE×3→SHIP, commits 91b4a99→2e22b6b, same day). The pass-1 governance is
+> LIVE: A3 writer gate, A7 target-scope gate, A6 D6 extension + virgin budget, `BookSealIdentity`,
+> and the A8 virgin-window guard on BOTH legacy claim sites (orchestrator chokepoint +
+> `SealedBacktestRunner._claim_if_oos`, now context-driven). CLAUDE.md §3.5 reflects the live
+> contract. PR3 carries the named residuals: the `book_seal_key` claim path,
+> `run_component_diagnostics_in_book_context` + its 2 context tests, cmd_seal's A5 fresh-window
+> override-id enforcement (the final residual-risk line), and the burned-window dry-run pilot.
+> Total arc: 8 GPT rounds, every finding accepted, none declined — dispositions in §9 +
+> project_state 2026-07-03h/i/k.**
 > Amends [FACTOR_EVAL_METHODOLOGY_v1.3.md](FACTOR_EVAL_METHODOLOGY_v1.3.md) (the operative methodology)
 > and [STRATEGY_LAYER_BUILD_PLAN_v1.md](../capital_allocation_buildout/STRATEGY_LAYER_BUILD_PLAN_v1.md) §1.1.
 > If approved, folds into a consolidated v1.4 per the v1.3 precedence discipline.
