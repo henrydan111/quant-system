@@ -804,9 +804,16 @@ def _add_guorn_replication_factors(catalog):
              " + Ref($n_income_attr_p_sq_q2, 1) + Ref($n_income_attr_p_sq_q3, 1))")
     _ni14 = ("(Ref($n_income_attr_p_sq_q1, 1) + Ref($n_income_attr_p_sq_q2, 1)"
              " + Ref($n_income_attr_p_sq_q3, 1) + Ref($n_income_attr_p_sq_q4, 1))")
+    # ROE legs: numerator (归母 income) and denominator (equity, balancesheet) are CROSS-DATASET.
+    # A stock with income bins but empty balancesheet bins over the window makes the denom sum an
+    # EMPTY series while the numerator is full-length → a denom-guard If broadcasts (0,) vs (N,) and
+    # crashes native qlib eval. Guard on the RATIO instead (length-consistent): |ratio| finite kills
+    # both the tiny-equity inf AND the empty-denom NaN; negative-equity ROE stays finite → KEPT
+    # (the documented top-K fragility source). Ceiling 1e6 ≫ any real |ROE|.
+    _r0 = f"({_ni03} / {_weq0})"
+    _r1 = f"({_ni14} / {_weq1})"
     catalog['grn_roe_ttm_diff_q'] = (
-        f"If(Abs({_weq0}) > 1, {_ni03} / {_weq0}, np.nan)"
-        f" - If(Abs({_weq1}) > 1, {_ni14} / {_weq1}, np.nan)"
+        f"If(Abs({_r0}) < 1000000, {_r0}, np.nan) - If(Abs({_r1}) < 1000000, {_r1}, np.nan)"
     )  # ROETTMDiffPQ — 加权平均净资产 time-weighted proxy legs (registry fix; mapping-doc pinned
     #    0.22pp med). KNOWN-FRAGILE at top-K selection (tiny QoQ diff vs per-leg residual) — a
     #    ranking/composite term, documented in the deployed books
@@ -825,9 +832,14 @@ def _add_guorn_replication_factors(catalog):
               " + Ref($total_assets_q2, 1) + Ref($total_assets_q3, 1)) / 4)")
     _avga4 = ("((Ref($total_assets_q4, 1) + Ref($total_assets_q5, 1)"
               " + Ref($total_assets_q6, 1) + Ref($total_assets_q7, 1)) / 4)")
+    # ATO legs: numerator (revenue TTM, income) / denominator (avg assets, balancesheet) — CROSS-DATASET,
+    # same empty-slot broadcast crash as ROE. Guard on the RATIO (length-consistent); assets are always
+    # positive so |ratio| finite is equivalent to the denom>0 guard, and empty-balancesheet → NaN.
+    _ato0 = f"({_ttmrev0} / {_avga0})"
+    _ato4 = f"({_ttmrev4} / {_avga4})"
     catalog['grn_ato_diff_py'] = (
-        f"If({_avga0} > 0, {_ttmrev0} / {_avga0}, np.nan)"
-        f" - If({_avga4} > 0, {_ttmrev4} / {_avga4}, np.nan)"
+        f"If(Abs({_ato0}) < 1000000000000, {_ato0}, np.nan)"
+        f" - If(Abs({_ato4}) < 1000000000000, {_ato4}, np.nan)"
     )  # AssetTurnoverDiffPY — caliber A (4-quarter AVERAGE assets) pinned by #16 xlsx parity
     #    (registry fix #13: penny 0.0005 / sp 0.983; begin+end/2 caliber B REFUTED at 0.879)
 
@@ -842,15 +854,24 @@ def _add_guorn_replication_factors(catalog):
            f" + {_grn_zf('Ref($st_borr_q0, 1)')} + {_grn_zf('Ref($bond_payable_q0, 1)')}"
            f" + {_grn_zf('Ref($minority_int_q0, 1)')} - {_grn_zf('Ref($money_cap_q0, 1)')}"
            f" - {_grn_zf('Ref($money_cap_q0, 1)')} - {_grn_zf('Ref($trad_asset_q0, 1)')})")
+    # GP/EV: numerator (营收−营业成本, income) / EV (总市值 + balancesheet legs) — CROSS-DATASET; a stock
+    # with income but empty balancesheet makes EV empty → denom-guard broadcast crash. Guard on the RATIO
+    # (length-consistent): |ratio| finite kills tiny-EV inf AND empty-balancesheet NaN. Ceiling 1e9 ≫ any
+    # real |GP/EV| (~O(1)); a genuinely EV≈0 name (all-cash) is correctly NaN'd.
+    _gpev = (f"((Ref($revenue_sq_q0, 1) - {_grn_zf('Ref($oper_cost_sq_q0, 1)')}) / {_ev})")
     catalog['grn_gp_ev'] = (
-        f"If(Abs({_ev}) > {EPS},"
-        f" (Ref($revenue_sq_q0, 1) - {_grn_zf('Ref($oper_cost_sq_q0, 1)')}) / {_ev}, np.nan)"
+        f"If(Abs({_gpev}) < 1000000000, {_gpev}, np.nan)"
     )  # (营收单季−营业成本单季)/EV — EV replicates the 果仁 author formula VERBATIM incl the DOUBLE
     #    货币资金 subtraction (a deployed-book author bug kept for fidelity — #4 xlsx sp 0.981 proves
     #    the doubled form is what the books trade on). $total_mv is 万元 → ×1e4 to 元
 
     # ── Overnight momentum (limit-excluded window-diff; #1/#16 validated construction) ──
-    _onret = ("If(Eq(Ref($limit_status, 1), 1), 0,"
+    # $limit_status (cross-dataset) is empty for some instruments in early history (2010-11) → a bare
+    # If(Eq($limit_status,1),...) broadcasts (0,) vs the price branch (N,) and crashes native qlib eval.
+    # Anchor $limit_status to the price length with "+ Ref($close,1)*0" (NaN where limit_status absent →
+    # Eq False → takes the Log branch = NO exclusion where the flag is unavailable; full exclusion where
+    # it IS present). Same length-safe principle as the cross-dataset ratio guards above.
+    _onret = ("If(Eq(Ref($limit_status, 1) + Ref($close, 1) * 0, 1), 0,"
               " Log(Ref(($open * $adj_factor), 1) / Ref(($close * $adj_factor), 2)))")
     for w in (250, 120):
         catalog[f'grn_onmom_{w}_20'] = (
