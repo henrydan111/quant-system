@@ -1,0 +1,69 @@
+{
+ "run_id": "grn_is_candidate_2010_2020",
+ "generated_at": "2026-07-03T14:18:33",
+ "live": true,
+ "evidence_class": "a_priori",
+ "evidence_kind": "a_priori",
+ "is_window": [
+  "2010-01-01",
+  "2020-12-31"
+ ],
+ "horizon": 20,
+ "mechanism": "FRESH run_is_walk_forward(factor_origin='a_priori') over 2010-2020 full universe (_grn_formal_is_gate.py, bit-identical to orchestrator handle_factor_lifecycle_walk_forward); verdicts re-verified via assign_candidate_status(field_ok,...).",
+ "gate_authorization": "User authorized 'promote the 门1 IS-passers' (2026-07-03, option (a)) after GPT §10 APPROVE of the compute-safety fix. Writing formal IS evidence + set_status(candidate) IS the human gate.",
+ "oos_status": "a_priori IS-selection on 2010-2020 only; 2021+ UNBURNED/sealed. Under v1.4, candidate is TERMINAL (factor-level approved retired); official book = book-level seal (v1.4 PR3).",
+ "compute_safety": "v2 cross-dataset broadcast fix (commit 34de062) verified compute-clean on the 2011-H1 young-stock window; grn_roe/grn_ato promoted here are v2.",
+ "hardening_guards": [
+  "re-verify assign_candidate_status(field_ok)",
+  "all-or-none attach",
+  "record_lifecycle_evidence definition-drift fail-closed",
+  "pre-status==draft",
+  "saved-candidate-set == FACTORS"
+ ],
+ "promoted": [
+  "grn_core_profit_qgr",
+  "grn_dedt_qgr",
+  "grn_roe_ttm_diff_q",
+  "grn_ato_diff_py"
+ ],
+ "verdicts": [
+  {
+   "factor": "grn_core_profit_qgr",
+   "heldout_rank_icir": 0.5465338685149311,
+   "sign_consistency": 0.9090909090909091,
+   "expected_direction": "positive",
+   "field_ok": true
+  },
+  {
+   "factor": "grn_dedt_qgr",
+   "heldout_rank_icir": 0.480181860319265,
+   "sign_consistency": 0.9090909090909091,
+   "expected_direction": "positive",
+   "field_ok": true
+  },
+  {
+   "factor": "grn_roe_ttm_diff_q",
+   "heldout_rank_icir": 0.5622518883648507,
+   "sign_consistency": 1.0,
+   "expected_direction": "positive",
+   "field_ok": true
+  },
+  {
+   "factor": "grn_ato_diff_py",
+   "heldout_rank_icir": 0.37689729134110295,
+   "sign_consistency": 1.0,
+   "expected_direction": "positive",
+   "field_ok": true
+  }
+ ],
+ "recorder_result": {
+  "attached": [
+   "grn_ato_diff_py",
+   "grn_core_profit_qgr",
+   "grn_dedt_qgr",
+   "grn_roe_ttm_diff_q"
+  ],
+  "skipped_drift": [],
+  "skipped_unknown": []
+ }
+}
