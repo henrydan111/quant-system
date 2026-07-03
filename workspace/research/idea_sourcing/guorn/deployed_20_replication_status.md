@@ -1,5 +1,9 @@
 # Deployed-20 book replication status (策略级台账)
 
+> **战役总结(2026-07-03 收官)**: [DEPLOYED20_REPLICATION_REPORT.md](DEPLOYED20_REPLICATION_REPORT.md) —
+> 结论/13 条口径 registry/教训/处置总表。交接 prompt: [深槽16构建](PROMPT_deepslot16_build.md) ·
+> [因子入 catalog](PROMPT_catalog_integration.md)。
+
 > Book-level replication ledger for the 20 deployed 果仁 books. Per-factor parity lives in
 > [guorn_web_validation_campaign.md](guorn_web_validation_campaign.md); calibers/semantics in
 > [guorn_local_field_mapping.md](guorn_local_field_mapping.md) (§ platform semantics). NON-FORMAL parity work.
@@ -16,7 +20,14 @@
 | **#1 sm_01_成长动量** (nn=1) | **v5** | **+54.73% vs +57.21%** (−2.5pp) | −51.0 vs −47.9 | 0.639→**0.888** | _verify_v3_propagate.py --book 1 --variant v5; verify01_result.json |
 | **#6 成长高贝塔@TMT** (nn=6) | **v3** | **+57.78% vs +60.32%** (−2.5pp) | −50.6 vs −51.9 | — | _verify_v3_propagate.py --book 6; verify06_result.json |
 | #18 ST_大市值_v3 | done 2026-06 | validated earlier (yearly + holdings overlap) | — | — | guorn_verify_18_stbigcap.py |
-| **#7 value_红利低波_v2** (nn=19) | **v4** | **+21.45% vs +29.73%** (−8.3pp; REPLAY +26.07% → selection −4.6/execution −3.7 pp/yr) | −25.1 vs −21.0 | in10 0.668 / in20 0.777 / prec 0.585 | guorn_verify_07_divlowvol.py; verify07_result.json / verify07_replay_result.json |
+| **#7 value_红利低波_v2** (nn=19) | **v5** | **+21.67% vs +29.73%** (−8.1pp; REPLAY +26.07%; fix-11 0-fill lifted 2024 −25.0→−9.7pp) | −25.1 vs −21.0 | in10 0.699 / in20 0.800 / prec 0.616 | guorn_verify_07_divlowvol.py; verify07_result.json / verify07_replay_result.json |
+| **#8 value_红利低波_央企_v1** (nn=20) | **v3** | **+26.09% vs +32.07%** (−6.0pp; **REPLAY +34.47% / MDD −21.64 vs −21.68 = 4bp** — strongest engine validation) | −44.0 vs −21.7 (5-hold composition var) | in5 0.597 / in10 0.790 / prec 0.606 | guorn_verify_08_divlowvol_soe.py; verify08_result.json / verify08_replay_result.json |
+| **#9 value_红利低波_重股息_v1** (nn=21) | **v2** | **+26.10% vs +33.25%** (−7.2pp; **REPLAY +33.34% = +0.09pp**, yearly ±5pp — 3rd consecutive exact execution validation) | −41.7 vs −33.0 | in10 0.684 / in20 0.883 / prec 0.641 | guorn_verify_09_divheavy.py; verify09_result.json / verify09_replay_result.json |
+| **#4 sm_GARP_illiq** (nn=9) | **v1 CANONICAL** (upgrade = NEGATIVE result) | **+32.24% vs +49.59%**; REPLAY **+55.28%** (engine generous on microcaps) — selection −23pp/yr, **selection-IRREPRODUCIBLE at current calibers** (in10 ~0.19 ALL variants; v2-22/25w +15.09 / v3-17/25w-penny-only +24.16 both DEGRADE — style-beta dilution) | −40.6 vs −42.5 | in10 0.194 / in20 0.315 | guorn_verify_04_garp.py (v1) + _verify04_upgrade.py (v2/v3 negative); verify04{,b,c}_result.json |
+| **#12 value_创业板sm_v1** (nn=24) | **v1** (8/9w, Day-0 — ZERO new builds, all #4-arc frames) | **+39.45% vs +41.75% (−2.3pp — best selection replication of the program**; 2019-22/25 within ±3.4pp); REPLAY +43.79% (+2.0pp; 6th execution validation) | −45.3 vs −43.1 | in10 0.473 / in20 0.707 | guorn_verify_12_chinext_value.py; verify12_result.json / verify12_replay_result.json. KEY: same value-composite class as #4 BUT 创业板-only (~800 names) → the SAME caliber fidelity yields 0.47/0.71 tracking (vs #4's 0.19 on 4800) — universe SIZE is the composition-noise denominator. mi_rndqp w1 omitted |
+| **#15 成长_双创_GARP@周期** (nn=44) | v1 (成长簇-era, 10/24w) | **+15.82% vs +43.39%**; REPLAY **+46.54% / MDD −47.8 vs −46.6** (5th execution validation; microcap-generous like #4) — #4-class selection wall, NO further investment per the fix-#11-arc negative result | −70.3 vs −46.6 | — | guorn_verify_15_garp_cycle.py (verify04_cache reuse) |
+| **#17 成长_高波@周期** (nn=48) | **v1** (8/9w) | **+17.43% vs +29.46%**; **REPLAY +29.34% = −0.12pp CAGR / MDD −64.8 vs −65.5 — 7th consecutive exact execution validation** (12/13 years ±8.6pp, most ±2pp) | −70.4 vs −65.5 | in10 0.251 / in20 0.393 | guorn_verify_17_highvol.py; verify17_result.json / verify17_replay_result.json. High-beta top-30% pool + report_rc-heavy w1 terms → composition-noise class; selection −11.9pp/yr (2021/2025/2026 concentrated) |
+| **#16 成长_隔夜动量@周期** (nn=45) | **v1** (12/13w) | **+18.08% vs +27.76%**; **REPLAY +27.56% = −0.2pp CAGR / −53.77 vs −53.97 MDD — 4th consecutive exact execution validation (ST-inclusive momentum book; 11 of 13 years ±2.3pp)** | −61.2 vs −54.0 | in10 0.267 / in20 0.401 / prec 0.276 | guorn_verify_16_onmom.py; verify16_result.json / verify16_replay_result.json. Panel: ato_diff_a penny 0.983 (registry #13) · onmom 0.972/0.943 (log10 const ✓#7) · forecast penny · ind_ret20 0.913; weak w1s: rating_up 0.408, ind_np_yoy/qoq 0.51/0.30, orgchg 0.725; 净利润−预期净利润Q OMITTED (no quarterly consensus). Selection −9.5pp/yr concentrated 2021 −59pp/2026 −39pp — composition-noise class (top-10 of ~4800), between GARP (0.19) and 红利 (0.6-0.9) |
 
 Residual characterization (all diagnosed, diminishing returns):
 - #2: 2023/2025 ≈ −34pp each (residual ~9% name mismatch × microcap idiosyncratic returns, net-cancels over 12y).
@@ -47,6 +58,9 @@ Residual characterization (all diagnosed, diminishing returns):
 | 8 | **sumq(分红总金额,4,k) window** | calendar quarters (q0 = last quarter-end < signal) | **the stock's REPORTED-quarter grid** (q0 = latest disclosed quarter via the cum==sq Q1-identity detector) | 建行@2014-01-08: DivGrPY% 0.133192 = xlsx 0.1332 EXACT (calendar gives −1) | dividend-family sumq factors through-time correct |
 | 9 | **annual(x,k) FY anchor** | calendar year−1 | **the stock's latest VISIBLE annual report** (annual slot = (k_Q1+1)%4) | 近三年分红之和 1.79183e11 = xlsx exact; Div%NetIncY2 0.347523 vs 0.3475 | 近三年分红之和/Div%NetIncY2 penny |
 | 10 | **组内 排名%最小X% boundary** | rank-pct ≤ X (odd small groups lose a slot) | **rank_asc ≤ ceil(X·N)** | held pcts cluster at 2/3, 4/7, 6/11 = exactly ceil points; zsfz held-pass 84.4%→87.7% | #7 in10 0.632→0.663 |
+| 11 | **CoreProfitQ on FINANCIALS** | strict-NaN expense legs (banks/insurers lack oper_cost/sell/fin lines → factor NaN → rank-bottom) | **expense legs NaN→0 (果仁-vendor 0-fill), revenue REQUIRED** | #8 term-drag autopsy 2014: CoreProfitQGr drag +0.315 (dominant); 0-fill 建行@2014-01-08 = 0.0971 vs xlsx 0.0993 structure-exact; coverage 13667→16351 | **cross-book**: #8 in10 0.707→0.790 / in5 0.566→0.597; #7 in10 0.668→0.699 / prec 0.585→0.616 |
+| 12 | **TTM(x,N)'s N = 前移季度数 (SHIFT), not window** | read TTM(COREPROFITQ,4) as current TTM | **TTM(x,4) = the YEAR-AGO 4-quarter sum (q4..q7)** — 果仁-official 自定义函数列表 L610: "TTM(营业收入,4)返回1年前的4个季报营业收入之和" | #9 coreyield (w3 main term): sp 0.572→**0.874**, medRel 0.2513→**0.0095 penny**; tracking in10 0.603→0.684 / in20 0.785→0.883 / prec 0.560→0.641 | applies to every TTM/SumQ/AvgQ/RefQ 前移 arg (GARP-family EBITDA composites next) |
+| 13 | **总资产周转率 denominator (AssetTurnoverDiffPY)** | UNVERIFIED — two pre-registered calibers (UNLOCK_8Q GPT-M5) | **caliber A: ATO(k) = Σrev_sq[k..k+3] / mean(total_assets_q[k..k+3]) (4-quarter AVERAGE assets)** | #16 xlsx truth column: A medRel **0.0005/sp 0.983 penny** vs B (begin+end/2) 0.19/0.879 | the depth-9-unlocked factor's caliber question CLOSED by parity |
 | — | ILLIQ 2dp quantization (v2) | — | **NEGATIVE result — do not apply**: 果仁's internal tie-break order unobservable; full precision tracks holdings marginally better | in25 0.733→0.727 | factor-standalone fidelity ≠ book fidelity |
 
 ## In progress
@@ -167,9 +181,82 @@ Harness `guorn_verify_08_divlowvol_soe.py` (imports #7 kernels). v2 state:
   be normalized** — when few names qualify the book holds partial exposure + CASH (#8 n=1 periods carry
   Σw≈0.19); normalizing to 100% quintupled crash exposure (replay v1 MDD −49.9%, 2016 −32pp artifact).
   The ±1-day paired diffs in per-period joins = 果仁 fill-to-fill accounting boundary (reporting noise,
-  cancels annually). ⇒ #8's remaining gap is PURELY the selection layer: LOCAL vs REPLAY = −8.4pp/yr
-  (in5 0.566; weakest 2014-15 ~0.37). Next: 2014 selection autopsy (military-SOE rally year).
+  cancels annually). ⇒ #8's remaining gap is PURELY the selection layer: LOCAL vs REPLAY = −8.4pp/yr.
+- **Term-drag autopsy (v3) → registry fix #11 (CoreProfit 0-fill on FINANCIALS)**: 2014 drag was
+  CoreProfitQGr +0.315 (banks strict-NaN → rank-bottom on a book whose CORE holdings are banks/insurers);
+  after 0-fill: drag +0.040, coverage full, **in5 0.566→0.597 / in10 0.707→0.790 / precision 0.557→0.606**
+  (every year improved; 2014 in10 +21pp).
+- **Model-II run v2: CAGR +26.09% (vs v1 +26.03 — tracking +8pp did NOT move the return); MDD −44.0.**
+  Post-fix drag profile is FLAT (volneut +0.07, ROETTMDiff +0.06, rest ≤0.04) — no single culprit left;
+  with 5 holds on a ~360-name elig set, exact top-5 membership rides sub-percent rank noise across 9 terms
+  (volneut sp 0.870 / ROETTMDiff 0.911 are the softest). Same precision-floor class as #7's dy-threshold:
+  in5 0.597 ⇒ ~2 of 5 names differ on a typical day ⇒ ±15pp/yr idiosyncratic year noise (2015/18/23/24
+  local WINS, 2016/17/19-22/25 lose) that nets to −6pp CAGR. Return convergence needs in5 ≳0.85 — beyond
+  the current term-noise floor. STATUS: replay-validated (engine exact to 4bp MDD); selection
+  band-faithful (in10 0.79) but 5-name composition at precision floor — candidate for closure next round
+  unless a volneut caliber breakthrough appears.
+
+## #9 value_红利低波_重股息_v1 — DAY 1 (2026-07-02, 红利族 third book, ~90% reuse)
+
+Harness `guorn_verify_09_divheavy.py` (v7/v8 kernels). Iteration: v1 coreyield (w3 main term) sp 0.572 →
+**registry fix #12 (TTM(x,4) = YEAR-AGO 4q sum, 前移季度数)** → v2 penny (0.0095/sp 0.874); tracking
+in10 0.603→0.684 / in20 0.883 / prec 0.641. divvol720 caliber: AMOUNT variant (dps×总股本) sp 0.839 wins
+(per-share 0.008 — dead); scale medRel 0.55 = 果仁 daily-serving convention residual (rank-usable).
+divop/divagr/sharesgr penny; expdivagr 6.9% (consensus vendor class). Universe lesson: `D.list_instruments`
+leaks INDEX codes colliding on 6-digit (000001_SH 上证指数) — filtered via guorn_beta._is_ashare_stock
+(#7/#8 were shielded by the all_stocks.txt bounds mask; v9's listing-gate comprehension crashed on dup
+labels). **LOCAL +26.10% / MDD −41.7 vs 果仁 +33.25% / −33.0; REPLAY +33.34% / −33.9 (+0.09pp CAGR — 3rd
+consecutive exact execution validation).** Selection residual −7.2pp/yr concentrated 2017/19/20/21/24/25
+(−18~−35pp; 2014/15/26 local WINS) — top-10 composition noise, same class as #7/#8. Open levers: divvol
+daily-serving convention, empty-period mismatch (8 vs 9, overlap 0), expdivagr pre-2022 consensus fallback.
 
 ## Queue (next books, by coverage × caliber reuse)
-2. #3 sm_大制造GARP_v3 / #4 GARP_illiq / #15 双创GARP — GARP family, shares CoreProfit/EBITDA composites.
+2. **#4 GARP_illiq UPGRADE — CLOSED 2026-07-03 as a MEASURED NEGATIVE RESULT.** Outcome: 4 of the
+   unlocked terms landed penny/structure-exact on first build (**express_gr 0.0000/sp 0.990** — flash-quarter
+   + alive-window; **core_qoq_ttm 0.0000/0.945** — depth-9+fix-12; **gp_ev 0.0107/0.981** — the EV
+   construction incl the verbatim 货币资金×2 bug is CORRECT; bpfin 0.982), 4 landed rank-approximate
+   (fcf_mv 0.843 / fcf_gr 0.780 / ep_core_neut 0.776 / ebitda_ev 0.714 — D&A cum-differencing works), 1
+   wrong-semantics (mi_rndqp sp −0.18, HneutralizeMI internals unresolved — forum answer login-gated).
+   BUT at BOOK level every upgrade DEGRADES: v1-13/25w +32.24% / v2-22/25w +15.09% / v3-17/25w-penny-only
+   +24.16% (vs 果仁 +49.59%; REPLAY +55.28%); holdings tracking ~0.17-0.19 in ALL variants. Diagnosis:
+   v1's return was microcap style-beta, NOT fidelity — extra weight units (even penny-faithful) dilute the
+   总市值 microcap tilt share and drift the style. **The microcap-GARP family (top-10 of ~3000 with 23
+   sub-percent-noise-sensitive terms) is selection-IRREPRODUCIBLE at current calibers** — the extreme end
+   of the #8 composition-noise class (contrast 红利族 tracking 0.6-0.9). v1 stays canonical; the 4 penny
+   frames + calibers feed forward to #3/#15. ⚠ do NOT re-attempt without a new fidelity lever (e.g. 果仁
+   web-export per-factor re-verification of the noisy terms at multiple dates).
+   (guorn_verify_04_garp.py, baseline +32.24% vs 果仁 +49.59% at 13/25 weight) omitted 12 weight-units
+   whose blockers are now MOSTLY STALE. Unlock ledger (per-term):
+   ✓ BP筹资市值比调整 w1 — the v7/v8-validated pctrank-OLS composite (sp 0.973-0.976), drop-in.
+   ✓ 中性化(EPCOREPROFITQ,总市值,0) w1 — same HNeutralize(x, ln(mv), 0) machinery.
+   ✓ EBITDAQ%EV w1 + (rev−cost)/EV w1 — EV NOW CONSTRUCTIBLE: 总市值+lt_borr+st_borr+bond_payable+
+     minority_int **−money_cap−money_cap**(果仁 formula subtracts 货币资金 TWICE — author bug, replicate
+     VERBATIM)−trad_asset (indicator_reference_auto L78); EBITDAQ = ni_attr_sq + fin_exp_sq(0-fill #11)
+     + 折旧和摊销 sq (D&A cadence re-probe needed: semi-annual disclosure → if 果仁's own xlsx column also
+     refreshes semi-annually, ffill replicates).
+   ✓ 公式(COREPROFITQGr%PQ−COREPROFITTTMGr%PY) w1 — needs core TTM(0)+TTM(4)=q0..q7: **depth-9 unlocked**
+     (+ fix-12 TTM-shift semantics + fix-11 0-fill).
+   ✓ 业绩快报归母净利QGr%PY w1 — express raw parquet direct-read (dividends-caliber precedent, ann_date
+     PIT clamp; accuQ leg from provider cum slots).
+   ✓ FCFQ_重算Gr w1 + FCFQ%总市值 w1 — **处置FIOLTA sq re-probed = 100% (old "absent" verdict STALE)**;
+     n_cashflow_act_sq / c_pay_acq_const_fiolta_sq = 100%. D&A leg: sq slots unmaterialized but
+     **`_cum_q0..q8` bins EXIST** → derive sq via within-FY consecutive-cum differencing (FY-anchor
+     machinery); raw cadence is SEMI-ANNUAL (Q1 file coverage 0.7%) → ffill + calibrate the refresh
+     rhythm against the #4 xlsx's own EBITDAQ%EV / FCF truth columns.
+   ? HneutralizeMI(Hwinsorize(CoreProfitQGr,5%,5%)) w1 — official docs point to a forum post
+     (果仁常见问题 Q17 → guorn.com/forum/post/p.779893…); one WebFetch attempt, else stays omitted.
+   NOTE: EV partial-coverage legs (lt_borr 0.75/st_borr 0.75/bond_payable 0.63 = genuinely-absent lines,
+     e.g. 茅台 no borrowings) take the 0-fill treatment (fix-11 class).
+   ✗ 波动率_季度指标(CoreProfitQGr,12) w1 — needs sq q0..q15 (depth 9 insufficient; rung-6 deepslot
+     transient-build precedent exists but expensive; stay omitted).
+   ✗ 营收3年复合 diffs (2 terms) — need 12+ quarters back, stay omitted.
+   Potential KEEP lift: 13/25 → 21-22/25 weight. #15 双创GARP inherits everything (same cache).
+3. #17 成长_高波@周期 — NEXT buildable (reuses #16 report_rc/ATO/行业 frames + beta builder; new:
+   np_fy1 60d-change filter, 高beta 区间 0-30% screen, CoreProfitQGr on the #16 universe).
+4. DEFERRED with documented blockers: #11 value_FCF_非金sm (w3 main term = 12q StdevQ depth-blocked +
+   机构持股环比 not ingested); #13 成长_机构预期@周期 (signature consensus-2Y-CAGR terms ride on
+   report_rc pre-2022 vendor BACKFILL — not PIT; 果仁 uses genuinely-PIT 朝阳永续 → capped fidelity);
+   #14 净利润断层 (PEAD gap-entry buy_limit needs engine fill-step surgery); #3 sm_大制造GARP
+   (申万2014 行业 universe vintage + 壳价值 + #4-class microcap wall).
+5. BLOCKED on data: #10 AH_GARP (hk_daily); #19/#20 MultiA (fund/ETF quotes).
 3. #10 AH_GARP — blocked on hk_daily ingest (AH溢价率 w4/21). #19/#20 MultiA — needs fund/ETF data.

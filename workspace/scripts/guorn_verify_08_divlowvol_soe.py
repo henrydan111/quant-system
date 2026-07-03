@@ -154,9 +154,13 @@ def build_fin():
         del df
     EPS = 1e-9
     safe = lambda n, d: (n / d.where(d.abs() > EPS)).replace([np.inf, -np.inf], np.nan)  # noqa: E731
-    core = lambda qq: (P[f"revenue_sq_q{qq}"] - P[f"oper_cost_sq_q{qq}"]  # noqa: E731
-                       - (P[f"admin_exp_sq_q{qq}"] + P[f"sell_exp_sq_q{qq}"] + P[f"fin_exp_sq_q{qq}"])
-                       - P[f"biz_tax_surchg_sq_q{qq}"])
+    # CoreProfitQ expense legs NaN→0 (果仁-vendor 0-fill; FINANCIALS lack oper_cost/sell/fin lines —
+    # strict-NaN crushed 建行/交行/人寿 to rank-bottom on this term, the 2014 term-drag +0.315 culprit;
+    # 0-fill 建行@2014-01-08 = 0.0971 vs xlsx 0.0993 structure-exact). Revenue stays REQUIRED.
+    z = lambda fr: fr.fillna(0.0)  # noqa: E731
+    core = lambda qq: (P[f"revenue_sq_q{qq}"] - z(P[f"oper_cost_sq_q{qq}"])  # noqa: E731
+                       - (z(P[f"admin_exp_sq_q{qq}"]) + z(P[f"sell_exp_sq_q{qq}"]) + z(P[f"fin_exp_sq_q{qq}"]))
+                       - z(P[f"biz_tax_surchg_sq_q{qq}"]))
     c0, c4 = core(0), core(4)
     safe(c0 - c4, c4.abs()).astype("float32").to_parquet(CACHE / "f_CoreProfitQGr.parquet")
     ni = {i: P[f"n_income_attr_p_sq_q{i}"] for i in range(5)}
@@ -468,7 +472,7 @@ def run(start="2014-01-02", end="2026-02-27", cost_side=0.002):
                  account=1_000_000.0, exchange_config=cost, slippage=FixedSlippage(0.0),
                  volume_limit=0.10, hold_on_limit_up=True,
                  preload_fields=["$open", "$close", "$high", "$low", "$vol", "$amount", "$pre_close",
-                                 "$adj_factor", "$up_limit", "$down_limit", "$limit_status"])
+                                 "$adj_factor", "$up_limit", "$down_limit"])
     rep = res.report.copy()
     if "date" in rep.columns:
         rep = rep.set_index(pd.to_datetime(rep["date"]))
@@ -529,7 +533,7 @@ def replay(start="2014-01-02", end="2026-02-27", cost_side=0.002):
                  account=1_000_000.0, exchange_config=cost, slippage=FixedSlippage(0.0),
                  volume_limit=0.10, hold_on_limit_up=True,
                  preload_fields=["$open", "$close", "$high", "$low", "$vol", "$amount", "$pre_close",
-                                 "$adj_factor", "$up_limit", "$down_limit", "$limit_status"])
+                                 "$adj_factor", "$up_limit", "$down_limit"])
     rep = res.report.copy()
     if "date" in rep.columns:
         rep = rep.set_index(pd.to_datetime(rep["date"]))
@@ -557,6 +561,77 @@ def replay(start="2014-01-02", end="2026-02-27", cost_side=0.002):
     json.dump({"cagr": m["cagr"], "mdd": m["mdd"], "yearly": {int(k): float(v) for k, v in yr.items()},
                "guorn_yearly": gy}, open(OUT / "verify08_replay_result.json", "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)
+
+
+def autopsy(year: int, end="2026-02-27"):
+    """Term-drag diagnostic for one YEAR (rank-dominated book): per composite term, the mean rank-pct
+    (0=best in the term's preferred direction) of 果仁-HELD names vs MY top-5 names, within my elig set.
+    A term where held names rank BADLY in my data (high pct) while 果仁 still picked them = the term
+    whose local ordering diverges from 果仁's — the composite-drag culprit."""
+    f, e = _load_frames()
+    close = e["close_raw"]
+    grid = close.index
+    insts = close.columns
+    bounds = v7._bounds()
+    h = pd.read_excel(XLSX, sheet_name="各阶段持仓详单")
+    h["start"] = pd.to_datetime(h["开始日期"], errors="coerce")
+    h["code"] = h["股票代码"].astype(str).str.zfill(6)
+    h = h[h["start"].notna() & (h["start"] <= pd.Timestamp(end))]
+    held_by_d = {d: set(g["code"]) for d, g in h.groupby("start")}
+    s = {pd.Timestamp(k): v for k, v in json.loads(SCHED.read_text(encoding="utf-8")).items()}
+    up = {str(c).split("_")[0]: c for c in insts}
+    code6 = lambda c: str(c).split("_")[0].split(".")[0].zfill(6)  # noqa: E731
+    drag_held = {k: [] for k in WEIGHTS}
+    drag_mine = {k: [] for k in WEIGHTS}
+    comp_rank_held = []
+    n_per = 0
+    for d in sorted(s):
+        if d.year != year or not s[d]:
+            continue
+        held = held_by_d.get(d)
+        if not held:
+            continue
+        pos = grid.searchsorted(d)
+        if pos == 0:
+            continue
+        pday = grid[pos - 1]
+        st = ru.st_codes_on(d)
+        cr = close.loc[pday]
+        not_st = pd.Series([str(c).upper() not in st for c in insts], index=insts)
+        listed = pd.Series([(bounds.get(str(c).upper()) is not None
+                             and bounds[str(c).upper()][0] <= pday <= bounds[str(c).upper()][1])
+                            for c in insts], index=insts)
+        rank_base = listed & cr.notna() & not_st
+        keep = rank_base & (cr >= 2.0).fillna(False)
+        rpct = e["ret250"].loc[pday].where(rank_base).rank(pct=True)
+        keep &= ~(rpct > 0.90).fillna(False)
+        keep &= v7._row(e["idxflag"], pday).fillna(0).astype(int) == 0
+        elig = keep[keep].index
+        if len(elig) < 10:
+            continue
+        n_per += 1
+        held_inst = [up[c] for c in held if c in up and up[c] in set(elig)]
+        my5 = [up[code6(c)] for c in s[d][:5] if code6(c) in up]
+        parts = {}
+        for name, (w, di) in WEIGHTS.items():
+            row = v7._row(f[name], pday).reindex(elig)
+            rnk = row.rank(method="min", ascending=(di < 0), na_option="bottom", pct=True)
+            parts[name] = rnk
+            drag_held[name].extend([float(rnk.get(i, np.nan)) for i in held_inst])
+            drag_mine[name].extend([float(rnk.get(i, np.nan)) for i in my5 if i in rnk.index])
+        N = len(elig)
+        comp = sum(((1 - parts[n2]) * w) for n2, (w, _) in WEIGHTS.items())
+        crk = comp.rank(ascending=False, method="min")
+        comp_rank_held.extend([float(crk.get(i, np.nan)) for i in held_inst])
+    print(f"\n=== #8 term-drag autopsy {year} ({n_per} periods; rank-pct 0=best) ===")
+    print(f"{'term':16}{'held-mean':>10}{'held-med':>10}{'my5-mean':>10}  drag = held − my5")
+    for k in WEIGHTS:
+        hh = pd.Series(drag_held[k]).dropna()
+        mm = pd.Series(drag_mine[k]).dropna()
+        print(f"{k:16}{hh.mean():>10.3f}{hh.median():>10.3f}{mm.mean():>10.3f}   {hh.mean()-mm.mean():+.3f}")
+    cr_ = pd.Series(comp_rank_held).dropna()
+    print(f"held composite rank: med {cr_.median():.0f}  p25 {cr_.quantile(.25):.0f}  p75 {cr_.quantile(.75):.0f}"
+          f"  in-top5 {(cr_ <= 5).mean():.2%}  (elig~360)")
 
 
 def replay_diag(end="2026-02-27", top=25):
@@ -635,7 +710,10 @@ def main():
         ap.add_argument(f"--{flag}", action="store_true")
     ap.add_argument("--end", default="2026-02-27")
     ap.add_argument("--cost", type=float, default=0.002)
+    ap.add_argument("--autopsy", type=int, default=0, metavar="YEAR")
     a = ap.parse_args()
+    if a.autopsy:
+        autopsy(a.autopsy, a.end)
     if a.build_pool:
         build_pool_series()
     if a.build_base:

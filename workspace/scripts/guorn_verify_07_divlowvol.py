@@ -172,9 +172,13 @@ def build_fin():
     EPS = 1e-9
     safe = lambda n, d: (n / d.where(d.abs() > EPS)).replace([np.inf, -np.inf], np.nan)  # noqa: E731
 
-    core = lambda qq: (P[f"revenue_sq_q{qq}"] - P[f"oper_cost_sq_q{qq}"]  # noqa: E731
-                       - (P[f"admin_exp_sq_q{qq}"] + P[f"sell_exp_sq_q{qq}"] + P[f"fin_exp_sq_q{qq}"])
-                       - P[f"biz_tax_surchg_sq_q{qq}"])
+    # CoreProfitQ expense legs NaN→0 (果仁-vendor 0-fill; FINANCIALS lack oper_cost/sell/fin lines and
+    # strict-NaN rank-bottomed 建行 etc on the w2 term — found via the #8 term-drag autopsy 2026-07-02;
+    # 0-fill 建行@2014-01-08 = 0.0971 vs xlsx 0.0993 structure-exact). Revenue stays REQUIRED.
+    zc = lambda fr: fr.fillna(0.0)  # noqa: E731
+    core = lambda qq: (P[f"revenue_sq_q{qq}"] - zc(P[f"oper_cost_sq_q{qq}"])  # noqa: E731
+                       - (zc(P[f"admin_exp_sq_q{qq}"]) + zc(P[f"sell_exp_sq_q{qq}"]) + zc(P[f"fin_exp_sq_q{qq}"]))
+                       - zc(P[f"biz_tax_surchg_sq_q{qq}"]))
     c0, c4 = core(0), core(4)
     safe(c0 - c4, c4.abs()).astype("float32").to_parquet(CACHE / "f_CoreProfitQGr.parquet")
 
