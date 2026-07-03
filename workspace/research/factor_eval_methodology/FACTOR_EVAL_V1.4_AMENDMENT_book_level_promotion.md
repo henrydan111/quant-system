@@ -8,8 +8,8 @@
 > If approved, folds into a consolidated v1.4 per the v1.3 precedence discipline.
 >
 > **中文摘要:** 因子状态阶梯改为 `candidate` 封顶(因子层不再新铸 `approved`);sealed-OOS 预算收敛为
-> **每个策略(book)恰好一次**,seal 以 `plan_hash` 为键,一次消费同时产出账本级判定 + 成分因子 OOS
-> 诊断(无第二次 claim)。第 1 轮 GPT 跨审 12 条意见全部采纳:candidate 准入必须目标域匹配、
+> **每个策略(book)恰好一次**,seal 以派生 `book_seal_key` 为键(A2),一次消费同时产出账本级判定 +
+> 成分因子 OOS 诊断(无第二次 claim)。第 1 轮 GPT 跨审 12 条意见全部采纳:candidate 准入必须目标域匹配、
 > 诊断腿禁止默认 claim、遗留 approved 行需要专门 revalidation 通道、处女窗口 book 级多重性预算
 > warn 3 / hard 5。第 2 轮 3 条新意见亦全部采纳:N1 迁移别名必须绑定完整 TUD 载荷(仅
 > universe-id 相等永远不够)、N2 seal 键改为包含全部区分字段的派生 `book_seal_key`、N3 诊断腿
