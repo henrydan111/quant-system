@@ -1,22 +1,35 @@
-# Factor Evaluation Methodology — v1.3 (SUPERSEDED by v1.4, 2026-07-03)
+# Factor Evaluation Methodology — v1.4 (consolidated single source of truth)
 
-> ⚠ **SUPERSEDED: [FACTOR_EVAL_METHODOLOGY_v1.4.md](FACTOR_EVAL_METHODOLOGY_v1.4.md) is the operative
-> methodology** (book-level promotion folded: candidate-terminal ladder, Stage 7 freeze-only, Stage 8
-> = the sole sealed book evaluation keyed by `book_seal_key`). This file remains as design history.
+> **v1.4 is THE operative methodology.** It supersedes the incremental docs (which remain the design
+> history/audit trail). A runnable skill reads **only this file**. v1.4 = v1.3 (GPT 5.5 Pro
+> 4-round-converged) + the **book-level-promotion amendment** (its own 4-round GPT arc
+> REVISE×3→**SHIP**, 2026-07-03): **the factor-level `approved` mint is RETIRED — `candidate` is the
+> terminal factor-level status; Stage 7 is freeze-only (no OOS observation); Stage 8 is the SOLE
+> sealed evaluation, one holdout seal per book keyed by the derived `book_seal_key`.** Full rationale
+> + the round-by-round dispositions:
+> [FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md](FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md).
 >
-> **v1.3 was THE operative methodology.** It supersedes the incremental docs (which remain the design
-> history/audit trail). A runnable skill reads **only this file**. Produced after GPT 5.5 Pro's
-> 4-round review converged the design: R1 CHANGES→v1.1 · R2 cond→C1–C7 · R3 cond→v1.2 roles + FC1–FC8
-> · **R4 (holistic) FINAL MUST-FIX → this v1.3** (resolves 9 cross-document seam/integration defects).
->
-> **Precedence (machine-readable).** On any conflict, v1.3 wins.
+> **Precedence (machine-readable).** On any conflict, v1.4 wins.
 > ```
-> FACTOR_EVAL_METHODOLOGY_v1.3 (this)         SUPERSEDES ALL below
+> FACTOR_EVAL_METHODOLOGY_v1.4 (this)         SUPERSEDES ALL below
+>   ← FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion (A1-A8; folded here)
+>   ← FACTOR_EVAL_METHODOLOGY_v1.3 (the prior consolidated doc)
 >   ← FACTOR_EVAL_FILTER_CONTRACTS_v1 (FC1-FC8; incl. the v1.2 §H1/§H3 amendments)
 >   ← FACTOR_EVAL_METHODOLOGY_v1.2_addendum (roles, FilterEvaluation, StrategyContext)
->   ← FACTOR_EVAL_CONTRACTS_v1 (C1-C7)        [C1 sign-flip cap AMENDED here — §4/§3.3]
+>   ← FACTOR_EVAL_CONTRACTS_v1 (C1-C7)        [C1 sign-flip cap AMENDED at §3.3]
 >   ← FACTOR_EVAL_METHODOLOGY_v1.1 (architecture, dual-scope)
 > ```
+>
+> **v1.4 normative deltas at a glance (A1–A8):** A1 candidate-terminal + explicit stage labels
+> ("Stage 7 — freeze-only, no OOS observation" / "Stage 8 — sole sealed book evaluation"); A2 one
+> seal per book keyed `book_seal_key` (all spend-differentiating fields are hash material) + no-seal
+> component diagnostics inside the claimed book seal; A3 writer gate (`set_status('approved')`
+> refused; audited `legacy_factor_approval_override` + `revalidate_legacy_approved`); A4/A7
+> target-scoped candidate admission (`candidate_on_declared_target`, `candidate_scope_mismatch`
+> refusal, TUD-equivalence alias with exact 4-field equality); A5 statusless signal-replication
+> studies (fresh windows only via pre-recorded override); A6 virgin-window budget (warn 3 / hard 5
+> distinct `book_seal_key` spends per window); A8 no virgin spend before the strategy-registry
+> promotion path exists.
 
 ## R4 must-fix disposition (all ACCEPTED)
 
@@ -43,9 +56,13 @@
    impact, **never IC** (a zero-IC filter like 退市风险 is high-value).
 3. **Dual-scope.** No single canonical universe. Research candidacy may be broad (`univ_all`,
    scope-stamped); **deployment-bound claims require the DECLARED target investable universe**;
-   `approved` is on the FrozenSelectionSet universe.
-4. **Scope explicit** · **single-shot OOS** (observing = spending, keyed by hashes) ·
-   **marginal > standalone** · **fail-closed** · **no lookahead** (PIT, `is_end` label belt).
+   the sealed verdict (v1.4: the BOOK verdict) is on the declared target.
+4. **Scope explicit** · **single-shot OOS** (observing = spending; v1.4: ONE spend per book, keyed
+   by `book_seal_key`) · **marginal > standalone** · **fail-closed** · **no lookahead** (PIT,
+   `is_end` label belt).
+5. **Candidate is terminal (v1.4).** No factor-level `approved` is minted; the promotion unit is
+   the sealed book (`DeploymentFrozenPlan`/`StrategyCandidate` → `strategy_registry`). The 7
+   pre-v1.4 approved rows are legacy evidence (`revalidate_legacy_approved` for validity).
 
 ---
 
@@ -67,7 +84,7 @@ SelectedSet:                               # WHICH factors (ranking) — Stage 6
   target_universe_declaration_hash:        # MUST equal TUD's
   pool_hash: ; selected_representatives: ; selection_code_hash:
 
-FrozenSelectionSet:                        # the sealed ranking identity — Stage 7
+FrozenSelectionSet:                        # the frozen ranking identity — Stage 7 (freeze-only, v1.4)
   target_universe_declaration_hash:        # MUST equal TUD's
   universe:                                # = TUD.target_universe_id
   frozen_set_hash:
@@ -126,8 +143,8 @@ filters walk 2–3 → 8; `both` walks both, as **one frozen design** (FC3).
 | **4** marginal | factor + book → `cohort_redundancy` + `book_marginality` (separate) | selection score = raw direction-aligned IS quality × redundancy penalty (NOT style residual) |
 | **5** gate | draft → `candidate` / `filter_candidate` | ranking: `\|icir\|≥0.10 ∧ sign≥0.70` on the **declared target**; **filter: `FilterCharacterization_v1` → `filter_candidate` (NO strategy A/B claim — pass/fail is Stage 8)** |
 | **6** select | pool → `SelectedSet` (hash-bound, IS-only) | family caps; Stage-3 caps as hard input; TUD frozen (§2.3) |
-| **7** OOS | FrozenSelectionSet → `approved[scope]` | ranking only; seal keyed by `frozen_set_hash` on the **target universe**; multiplicity disclosed (FC6/C7) |
-| **8** deploy | DeploymentFrozenPlan → deployability **metadata** | **filter pass/fail via `FilterDeploymentGate_v1`** (A/B inside the one-shot plan, FC1); CapacityContract pass/fail (FC5) |
+| **7 — freeze-only, no OOS observation (v1.4)** | SelectedSet → `FrozenSelectionSet` + `DeploymentFrozenPlan` assembled, §2.1 chain asserted | **NO seal claim, NO OOS access, NO status mint** — everything that differentiates the spend freezes HERE (any unqualified "Stage 7 OOS" reference is invalid) |
+| **8 — sole sealed book evaluation (v1.4)** | frozen plan → ONE `HoldoutSealStore` claim keyed by the derived `book_seal_key` → the book verdict + component diagnostics | verdict = event-driven 1× total-return vs the pre-declared `pass_fail_bar` (C5); component diagnostics run INSIDE the same claimed seal (no second claim, no status; `spent_in_book_context=True`, `fresh_oos_eligible=False`, `promotion_eligible=False`); filter pass/fail via `FilterDeploymentGate_v1` (FC1 — same one-shot); CapacityContract (FC5); multiplicity disclosed (FC6/C7 + the A6 virgin budget) |
 
 ### §3.3 Role-aware cap resolver (must-fix #5 — the biggest fix; AMENDS C1)
 
@@ -200,10 +217,12 @@ Enum value `status ∈ {draft, candidate, approved, deprecated}` is **unchanged*
 
 ```
 ranking:  candidate_signal[role=ranking, scope=univ_all, 2010-2020]
-          approved_signal[role=ranking, universe=liquid_top300, metric=5d_decile_LS, 2021-2026]
-                          deployable_on_<u>: yes/no/untested
+          candidate_on_declared_target[role=ranking, tud_hash, IS_window]     (v1.4 terminal)
+          approved_signal[LEGACY_per_factor_gate, universe, metric, window]   (pre-v1.4 rows ONLY —
+                          never minted again; book membership + verdicts live on strategy_registry)
 filter:   filter_candidate[role=filter, strategy_context_hash, IS_window]
           deployment_component[role=filter, plan_hash, pass/fail]
+book:     book_verdict[book_seal_key, plan_hash, pass/fail, window]           (the v1.4 promotion object)
 both:     <signal_status> AND <filter_status> shown SEPARATELY (two claims, one frozen design)
 ```
 
@@ -218,14 +237,18 @@ RevalidationCadence:
   triggers: [provider_methodology_change, major_universe_regime_change,
              deployment_live_drawdown_breach, scheduled_annual_review,
              pit_canary_failure]                  # e.g. the eps_diffusion restatement-canary revoke
-  outcomes: [keep, downgrade approved->candidate, mark deprecated, require new FrozenSelectionSet]
+  outcomes: [keep, downgrade approved->candidate (LEGACY factor rows only — v1.4),
+             mark deprecated, revoke/downgrade the STRATEGY row (the v1.4 promotion object),
+             require new frozen plan + new book seal]
 ```
-A factor can decay/retire by rule, not only ad hoc. (The eps_diffusion `approved→candidate` revocation
-was exactly this event happening informally; now it has a home.)
+A factor/book can decay/retire by rule, not only ad hoc. (The eps_diffusion `approved→candidate`
+revocation was exactly this event happening informally; now it has a home. v1.4: legacy-row validity
+re-affirmation goes ONLY through `revalidate_legacy_approved(...)` — `set_approval_validity` refuses
+'valid' on approved rows and the old `set_status('approved')` escape is retired.)
 
 ### §6.2 Selected-set interaction check (#9) — beyond pairwise marginal, IS-only
 
-Before Stage 7/8, on the SelectedSet (IS only):
+Before the Stage-7 freeze (and hence before the Stage-8 spend), on the SelectedSet (IS only):
 ```yaml
 interaction_check:
   remove_one: marginal IS effect of dropping each rep
@@ -242,7 +265,9 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 - **E-wave 6-core.** Stage 2 matrix + Stage 3 (role-aware, **signal-only**) flags sign-divergence +
   emits the per-universe IC profile (NO liquid/illiquidity deployment verdict). Stage 6 **selecting on
   the declared liquid target** naturally down-weights liquid-weak reps (their IC on the liquid target is
-  weak — no Stage-3 deployment flag needed); Stage 7 seal on the **declared** target; **Stage 8** (the
+  weak — no Stage-3 deployment flag needed); Stage 7 freezes the set+plan on the **declared** target
+  (v1.4: no OOS observation here — the E-wave's separate factor-level OOS spend is exactly what v1.4
+  retires); **Stage 8** (the
   strategy-build deployment gate) is where "fails on liquid_top300" is actually measured — via the
   event-driven backtest, not a factor-eval flag. **Note §3.3:** on a *small-cap* target the same factors
   are NOT over-blocked by CSI300 divergence — scope-specific, not universal.
@@ -256,11 +281,11 @@ Guards against two individually-useful factors that cancel jointly under rank-su
 
 ## §8 — Skill decomposition: TWO skills (split at the factor↔strategy boundary)
 
-**`factor-eval` skill = Stages 0–7** (register → seal): strategy-agnostic factor certification +
+**`factor-eval` skill = Stages 0–7** (register → freeze): strategy-agnostic factor certification +
 characterization → produces the factor library. **`strategy-build` skill = Stage 8**: strategy-specific
 construction/optimization + the deployment gate → consumes the library. **Seam:** the
 `TargetUniverseDeclaration` (declared before deployment-bound factor work) + the factor-library hand-off
-(`strategy-build` receives `{target_universe_declaration_hash, frozen_set_hash, selected_set_hash, approved_signal_refs}` +
+(`strategy-build` receives `{target_universe_declaration_hash, frozen_set_hash, selected_set_hash, candidate_refs}` — v1.4: candidate/characterization refs, never `approved_signal_refs` (retired) — +
 `filter_candidate`s + the library, and **refuses to run on any hash mismatch — §2.1 equality chain**).
 `maintain` (§6.1) is a standing cross-cutting process, not a step of either skill. Filters get cheap
 tail-characterization in `factor-eval` (Stage 2–3) but their pass/fail A/B is in `strategy-build` (Stage 8).
@@ -272,18 +297,28 @@ declare_target : TargetUniverseDeclaration builder+checker → target_universe_d
                  (deployment-bound: REQUIRED before characterize interpretation — §2.3)
 characterize   : Stage 2-4  (matrix / role-aware caps / marginal — 3 outputs)
 gate          : Stage 5    role-aware cap resolver (ranking target caps | FilterCharacterization_v1 | both)
-select         : Stage 6    SelectedSet (hash-bound) + §6.2 interaction_check (IS-only, PRE-seal)
-seal           : Stage 7    FrozenSelectionSet → sealed OOS
+select         : Stage 6    SelectedSet (hash-bound) + §6.2 interaction_check (IS-only, PRE-freeze)
+freeze         : Stage 7 — freeze-only, no OOS observation (v1.4): FrozenSelectionSet +
+                 DeploymentFrozenPlan assembled, §2.1 chain asserted; NO seal, NO OOS, NO status
 # ══ strategy-build skill (Stage 8, strategy-specific; consumes the factor library) ══
-deploy        : Stage 8    StrategyContext/DeploymentFrozenPlan assembler (binds rankers+filters+
-                           universe-def filters+trade model+capacity+pass/fail+seal refs)        [assembler step]
-maintain       : §6.1 RevalidationCadence ONLY  (interaction_check is PRE-seal, in `select`, NOT maintenance)
+evaluate_book : Stage 8 — sole sealed book evaluation (v1.4): ONE HoldoutSealStore claim keyed by
+                 the derived book_seal_key → book event-driven 1× total-return verdict vs the
+                 pre-declared bar + component diagnostics inside the SAME seal
+                 (run_component_diagnostics_in_book_context; no second claim) → promotion writes to
+                 strategy_registry (StrategyCandidate; A8: unavailable until that path is
+                 implemented+tested — no virgin spend before it)
+maintain       : §6.1 RevalidationCadence ONLY  (interaction_check is PRE-freeze, in `select`, NOT maintenance;
+                 "downgrade approved->candidate" applies to LEGACY factor rows + the strategy-row equivalent)
 
 skill_mode:
-  deployment_bound     : register → declare_target → characterize → gate → select(+interaction) → seal → deploy → maintain
-                         declare_target REQUIRED before characterize interpretation (§2.3); §2.1 equality chain enforced before select/seal/deploy.
+  deployment_bound     : register → declare_target → characterize → gate → select(+interaction) → freeze → evaluate_book → maintain
+                         declare_target REQUIRED before characterize interpretation (§2.3); §2.1 equality chain enforced before select/freeze/evaluate_book.
   exploratory_research : register → characterize → optional declare_target. A target declared AFTER characterize =
                          post_hoc_target_choice → NO clean deployment-bound FrozenSelectionSet without a signed TargetUniverseOverride (§4 C2).
+  a5_replication_study : a statusless factor-level sealed-OOS study (arXiv-batch shape) — seal-accounted in the
+                         D6 ledger, mints NO status, taints overlapping downstream books on that window; a FRESH
+                         (virgin) window requires a pre-recorded fresh_window_signal_replication_override_id and
+                         counts against the A6 budget.
 ```
 The 4 first-class new steps GPT named (TUD builder, RoleDeclaration resolver, role-aware cap resolver,
 DeploymentFrozenPlan assembler) are explicit above. Part-G new code: the Stage-3 machine-binding reader
@@ -360,17 +395,32 @@ code (then call). The 9 audit ambiguities are resolved inline (⊕). (Detail: `F
   `set_status('candidate')` ungated; human gate publishes.
 - **Stage 6 select** — `build` the `SelectedSet` schema + `target_universe_declaration_hash` (only
   `FrozenSelectionSet` exists); `build` `interaction_check`.
-- **Stage 7 seal** — `call`: `FrozenSelectionSet` → `holdout_seal.py:HoldoutSealStore.claim_holdout_access(seal_key=frozen_set_hash)`
-  → `promotion_evidence.py:reproduce_sealed_oos(...)` → `produce_promotion_evidence(...)` →
-  `set_status('approved', promotion_evidence=, current_git_sha=)`. ⊕#4 **pin `n_quantiles=10`** (decile)
-  for ALL post-2026-06-11 eval (the arXiv driver's 5 mis-scores LS-Sharpe). ⊕#5 **OOS spend ≠
-  auto-promote**: the run spends+records the verdict; `set_status('approved')` is a SEPARATE authorized
-  step. ⊕#6 the bar (sign-aligned `rank_icir>0 ∧ ls_sharpe>1.0`) is a single contract constant, not a
-  per-driver literal. ⊕#9 the OOS leg runs `stage='oos_test'` + a seal-claimed `ResearchAccessContext`
-  (installed by `reproduce_sealed_oos`), NEVER `compute_factors`' default `CacheContext`.
-- **Stage 8 deploy** — `call` `EventDrivenBacktester` + `CostConfig.realistic_china()` +
-  `RankedFallbackStrategy` + `long_only_50cagr/research_utils.py`; `build` the `DeploymentFrozenPlan`
-  assembler + `CapacityContract_v1` + `FilterDeploymentGate_v1` A/B.
+- **Stage 7 — freeze-only (v1.4; the old "Stage 7 seal" binding is RETIRED)** — `call`:
+  `identity.py` `FrozenSelectionSet`/`FrozenSelectionEnvelope` + `DeploymentFrozenPlan` assembly +
+  `assert_identity_chain`. **NO `claim_holdout_access`, NO `reproduce_sealed_oos`, NO
+  `set_status('approved')`** — `FactorRegistryStore.set_status('approved')` now raises
+  `FactorLevelApprovedRetiredError` unconditionally (A3; the audited doors are
+  `legacy_factor_approval_override` / `revalidate_legacy_approved`).
+- **Stage 8 — the sole sealed evaluation (v1.4)** — `call`: derive
+  `identity.py:BookSealIdentity.from_plan(...)` → ONE
+  `holdout_seal.py:HoldoutSealStore.claim_holdout_access(seal_key=book_seal_key)` (no
+  `design_hash`/`frozen_set_hash` fallback) → the book event-driven leg (`EventDrivenBacktester` +
+  the declared formal profile, 1× total return, vs the pre-declared bar) + component diagnostics
+  via `run_component_diagnostics_in_book_context(...)` INSIDE the same claimed context (PR3 `build`;
+  a bare `run_sealed_oos(..., claim_seal=False)` fails closed and is NOT a reuse path — round-2 N3)
+  → `OosWindowLedgerStore.record_book_spend(...)` + `virgin_window_multiplicity(...)` enforced
+  BEFORE the claim on virgin windows (A6) → promotion via `StrategyRegistryStore` (A8 readiness).
+  ⊕#4 **pin `n_quantiles=10`** (decile) for the diagnostics leg. ⊕#5 **OOS spend ≠ auto-promote**:
+  the run spends+records the verdict; the strategy-registry write is a SEPARATE authorized step.
+  ⊕#6 the old factor bar (sign-aligned `rank_icir>0 ∧ ls_sharpe>1.0`) survives only as a diagnostic
+  reference line, never a gate. ⊕#9 the OOS leg runs `stage='oos_test'` + the seal-claimed
+  `ResearchAccessContext` (`holdout_seal_claimed=True`, `seal_key=book_seal_key`), NEVER
+  `compute_factors`' default `CacheContext`.
+- **Stage 8 engine bindings (unchanged mechanics under the v1.4 seal rule above)** — `call`
+  `EventDrivenBacktester` + `CostConfig.realistic_china()` (or the declared formal profile) +
+  `RankedFallbackStrategy` / the PR2 `WeightedTargetStrategy` seam + `long_only_50cagr/research_utils.py`;
+  `build` the `DeploymentFrozenPlan` assembler + `CapacityContract_v1` + `FilterDeploymentGate_v1` A/B
+  + `run_component_diagnostics_in_book_context` (PR3).
 - **qlib compute (all stages)** — `call` `operators.py:compute_factors(catalog, start, end, …, stage=)`
   (→ `qlib_windowed_features`); NEVER bare `D.features` (`lint_no_bare_qlib_features.py`). `stage='oos_test'` for OOS.
 - **provider pre-flight (formal/OOS)** — `call` `provider_manifest.py:load_provider_manifest` +
@@ -390,21 +440,27 @@ scores/gates/seals ANY catalog factor → future-applicable. Four forward-lookin
 2. **New-data factors need the data-infra pipeline FIRST.** factor-eval ASSUMES the `$fields` exist
    (ingest → PIT ledger → provider → field registry → data dictionary, CLAUDE.md §6). A future factor on a
    NEW field is blocked at Stage 1 until data-infra lands it. **Boundary: factor-eval is not a data-ingestion skill.**
-3. **The frozen OOS window (2021-01-01..2026-02-27) is SHARED + bounded.** Per-factor single-shot is preserved
-   (each seal keyed by its own `frozen_set_hash` → safe per factor). BUT (a) a genuinely-forward OOS for a
-   factor proposed *later* requires **advancing the provider/calendar** (a data update) — until then every
-   factor's "OOS" is the same fixed historical window; (b) **cross-factor multiplicity accumulates on that one
-   window** — every distinct frozen set that spends 2021-2026 raises the SYSTEM-level false-discovery rate,
-   which the per-set seal does NOT adjust for. The seal store HAS the spend count; the skill SHOULD surface a
-   system-level FDR/denominator disclosure (how many frozen sets have spent this window), tied to
-   `evidence_tier` / `multiplicity_scope_id`. **This is the sharpest forward-looking gap.**
+3. **Shared, bounded OOS windows — MITIGATED by v1.4 (was "the sharpest forward-looking gap").**
+   (a) a genuinely-forward OOS still requires **advancing the provider/calendar**; the post-2026-02-27
+   accrual (calendar unfreeze) is the only virgin window the current candidate pool will ever have.
+   (b) v1.4 attacks the multiplicity accumulation directly: per-factor spends are RETIRED (one spend
+   per BOOK, `book_seal_key`-keyed), the Stage-7→Stage-8 sequential double-observation is gone
+   (freeze before observe), the D6 ledger counts spend-unit keys, and virgin windows carry a HARD
+   budget (warn 3 / hard 5 distinct `book_seal_key` spends per window, `virgin_window_multiplicity`,
+   refuse-without-pre-recorded-override). Residual (PR5): recipe-search effective-trials deflation —
+   required, and NOT a substitute for the hard budget.
 4. **`evidence_tier` is the forward-looking honesty hook.** As the same IS/OOS windows get re-used across
    future factors, the tier (theory_a_priori vs a_priori_is_informed) + the cross-factor spend count keep a
    future factor's evidence from being over-claimed. Wire them, or future evaluations silently inflate confidence.
 
 ---
 
-*Round-5 residual fixes applied in-place: §8 reordered (declare_target before characterize; interaction_check moved to the pre-seal `select` step), §3.3 added `growth` to the cross-universe divergence domains, §2.2 wording aligned to §2.3. Architecture unchanged — GPT confirmed the core model coherent.*
+*v1.3 history: round-5 residual fixes applied in-place (§8 reordered; §3.3 added `growth`; §2.2
+wording aligned). v1.4 (2026-07-03): the book-level-promotion amendment folded — its own 4-round GPT
+arc (REVISE×3→SHIP, 18+3+3 findings all accepted, none declined) is recorded in
+[FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md](FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md) §9.*
 
-*v1.3 is the single source of truth. The 4 prior docs + 2 responses are the design history. If GPT's
-final confirmation is "coherent + skill-ready," codify §8 as the `factor-eval` skill.*
+*v1.4 is the single source of truth. v1.3 + the 4 earlier docs + responses are the design history.
+Implementation status: A3 writer gate / A7 scope gate / A6 D6 extension / `BookSealIdentity` are
+LIVE (tests green, see the amendment §5 matrix); the book-seal wiring + component-diagnostics helper
+land with PR3 (A8: no virgin spend before then).*

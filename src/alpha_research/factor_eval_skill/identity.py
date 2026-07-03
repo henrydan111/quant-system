@@ -267,6 +267,74 @@ class EvalProtocolSpec:
         return payload_hash(self._payload())
 
 
+@dataclass(frozen=True)
+class BookSealIdentity:
+    """v1.4 A2/N2 (2026-07-03) — the BOOK seal key: every field that differentiates a
+    sealed spend is HASH MATERIAL, never audit-only payload.
+
+    ``DeploymentFrozenPlan.plan_hash`` alone is NOT a safe seal key: its payload covers
+    frozen_set / envelope / TUD / universe / side / construction / pre_declared_bar but
+    omits ``selected_set_hash``, the execution-profile identity, the
+    :class:`EvalProtocolSpec` hash, and the OOS window — so two materially different
+    sealed evaluations could share a bare ``plan_hash``. ``book_seal_key`` closes that:
+    changes to construction (via ``plan_hash``), execution envelope, evaluation protocol,
+    OOS window, or pass/fail bar each produce a DISTINCT key. Book seals in
+    ``HoldoutSealStore`` (and every backstop/resume path) key by ``book_seal_key`` with
+    NO fallback to ``design_hash`` or ``frozen_set_hash``.
+    Design: FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md §2 A2."""
+
+    plan_hash: str
+    frozen_set_hash: str
+    selected_set_hash: str
+    target_universe_declaration_hash: str
+    execution_envelope_hash: str     # execution-profile identity (profile id + hash)
+    eval_protocol_hash: str          # EvalProtocolSpec.protocol_hash
+    oos_window_id: str
+    pre_declared_bar_hash: str
+    schema_version: int = SCHEMA_VERSION
+
+    @classmethod
+    def from_plan(
+        cls,
+        plan: DeploymentFrozenPlan,
+        *,
+        selected_set_hash: str,
+        execution_envelope_hash: str,
+        eval_protocol_hash: str,
+        oos_window_id: str,
+    ) -> "BookSealIdentity":
+        """Derive the seal identity from a frozen plan. ``pre_declared_bar_hash`` is
+        computed from the plan's own bar (it is already inside ``plan_hash``; carrying it
+        explicitly keeps the key self-describing per the round-2 N2 replacement text)."""
+        return cls(
+            plan_hash=plan.plan_hash,
+            frozen_set_hash=str(plan.frozen_set_hash),
+            selected_set_hash=str(selected_set_hash),
+            target_universe_declaration_hash=str(plan.target_universe_declaration_hash),
+            execution_envelope_hash=str(execution_envelope_hash),
+            eval_protocol_hash=str(eval_protocol_hash),
+            oos_window_id=str(oos_window_id),
+            pre_declared_bar_hash=payload_hash(to_jsonable(plan.pre_declared_bar)),
+        )
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": int(self.schema_version),
+            "plan_hash": str(self.plan_hash),
+            "frozen_set_hash": str(self.frozen_set_hash),
+            "selected_set_hash": str(self.selected_set_hash),
+            "target_universe_declaration_hash": str(self.target_universe_declaration_hash),
+            "execution_envelope_hash": str(self.execution_envelope_hash),
+            "eval_protocol_hash": str(self.eval_protocol_hash),
+            "oos_window_id": str(self.oos_window_id),
+            "pre_declared_bar_hash": str(self.pre_declared_bar_hash),
+        }
+
+    @property
+    def book_seal_key(self) -> str:
+        return payload_hash(self._payload())
+
+
 def assert_identity_chain(
     tud: TargetUniverseDeclaration,
     selected_set: SelectedSet,

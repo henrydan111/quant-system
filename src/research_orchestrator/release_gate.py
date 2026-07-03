@@ -475,6 +475,17 @@ class PromotionGateError(RuntimeError):
     """A privileged promotion status/label lacks valid independent-reproduction evidence."""
 
 
+class FactorLevelApprovedRetiredError(PromotionGateError):
+    """v1.4 (2026-07-03): the factor-level `approved` mint is RETIRED — `candidate` is the
+    terminal factor-level research status. Promotion is book-level: a sealed
+    `DeploymentFrozenPlan`/`StrategyCandidate` through `StrategyRegistryStore` (one holdout
+    seal per book, keyed by the derived `book_seal_key`). Legacy approved rows are
+    revalidated via `FactorRegistryStore.revalidate_legacy_approved(...)`; the only mint
+    exception is the audited `FactorRegistryStore.legacy_factor_approval_override(...)`.
+    Design: workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md.
+    """
+
+
 @dataclass(frozen=True)
 class PromotionGateResult:
     """Decision on whether a strategy may carry a privileged registry status or

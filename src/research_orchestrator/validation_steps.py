@@ -180,6 +180,45 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         hub, raw_resolution, artifact_label=str(hypothesis.hypothesis_id)
     )
 
+    # v1.4 A7 (2026-07-03, book-level-promotion amendment): target-scoped candidate
+    # admission. allow_candidate_components admits only candidate_on_declared_target —
+    # each admitted candidate's Stage-5 evidence must bind to the prescription's declared
+    # target (via the canonical UniverseSpec->TUD adapter) through an eligible Stage-3
+    # record or an exactly-TUD-equal equivalence alias. A status-only match refuses with
+    # candidate_scope_mismatch HERE — after definition binding (so the checked
+    # definition_hash is attested current), BEFORE dataset build and BEFORE any holdout
+    # access. The flag attests acceptance of target-scoped candidate evidence; it does
+    # not waive scope mismatch (round-1 B1 / round-2 N1).
+    candidate_scope_report: dict[str, Any] | None = None
+    candidate_entries = [
+        entry
+        for entry in raw_resolution["resolved_objects"]
+        if str(entry.get("source_layer") or "") == "factor_registry_candidate"
+    ]
+    if candidate_entries:
+        from pathlib import Path as _Path
+
+        from src.alpha_research.factor_eval_skill.candidate_scope import (
+            assert_candidates_on_declared_target,
+            tud_from_prescription_universe,
+        )
+
+        # The skill stores live beside the registries (production root:
+        # data/factor_eval_skill — same layout the factor-eval CLI defaults to).
+        skill_store_root = _Path(registry_dirs["factor_registry_dir"]).parent / "factor_eval_skill"
+        candidate_scope_report = assert_candidates_on_declared_target(
+            skill_store_root,
+            candidates=[
+                (
+                    str(entry.get("requested", {}).get("object_name", "")),
+                    str(entry.get("definition_hash", "")),
+                )
+                for entry in candidate_entries
+            ],
+            tud=tud_from_prescription_universe(prescription.universe),
+            artifact_label=str(hypothesis.hypothesis_id),
+        )
+
     # PR 9 of 2026-05-26 freeze plan: field-dependency gate.
     # After the resolver confirms every prescribed component lives in the
     # formal factor layer, walk each resolved factor's Qlib expression and
@@ -225,6 +264,9 @@ def handle_validation_object_resolver(context: StepExecutionContext) -> StepExec
         # PR P1.3: record the definition-binding check (registry hash == current
         # catalog hash for every resolved formal factor).
         "definition_binding_report": definition_binding_report,
+        # v1.4 A7: record the target-scope admission check for every candidate
+        # component (None when the prescription admitted no candidates).
+        "candidate_scope_report": candidate_scope_report,
     }
     write_json(context.step_dir / "registry_resolution.json", outputs)
     return StepExecutionResult(status="completed", outputs=outputs)

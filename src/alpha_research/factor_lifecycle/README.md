@@ -34,13 +34,18 @@ Every factor row in the registry ([data/factor_registry/](../../../data/factor_r
 | Status | Plain meaning | Who can use it |
 |---|---|---|
 | **draft** | Defined in code; no formal proof. | All discovery/sandbox research (status is ignored there — see §4). |
-| **candidate** | Passed the **in-sample-only** walk-forward audition. "Worth taking seriously / worth spending OOS budget on." | Formal validation, only if the run opts in (`allow_candidate_components`). |
-| **approved** | Passed the **full promotion gate**: independent, sealed out-of-sample proof + a committed git SHA. Deployable-grade. | Formal validation, always. |
+| **candidate** | Passed the **in-sample-only** walk-forward audition. **The TERMINAL factor-level status (v1.4, 2026-07-03)** — "worth entering book-composition research." | Formal validation, only if the run opts in (`allow_candidate_components`) AND the candidate is target-scoped (`candidate_on_declared_target`, v1.4 A7 — a status-only match refuses `candidate_scope_mismatch`). |
+| **approved (legacy)** | ⚠ **No longer minted (v1.4).** The 7 pre-v1.4 rows = historical evidence from the retired per-factor sealed-OOS gate. Promotion moved to the **book level**: one holdout seal per sealed `DeploymentFrozenPlan`/`StrategyCandidate` (key = derived `book_seal_key`), published into `strategy_registry`. | Legacy rows still resolve as `formal` in validation (subject to `approval_validity`; re-affirmation only via `revalidate_legacy_approved`). |
 | **deprecated** | Retired / failed. | — |
 
-**Key rule:** `candidate` is an *additive* tier. It does **not** restrict research, and it can
-**never auto-promote** to `approved`. As of 2026-06-02 the live registry is **87 `candidate` +
-84 `draft` + 0 `approved`** (72 base from Phase 6 + 15 Layer-2 from Phase 7).
+**Key rule:** `candidate` is an *additive* tier. It does **not** restrict research, and — since
+v1.4 — it never becomes `approved` at all: `set_status('approved')` for factors is refused
+unconditionally (`FactorLevelApprovedRetiredError`); the sole audited mint exception is
+`legacy_factor_approval_override(...)`. The design rationale (why per-factor sealed OOS
+certified the wrong unit, contaminated the shared window, and issued a non-transferable badge)
+lives in
+[FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md](../../../workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md)
+(4-round GPT cross-review → SHIP).
 
 ## 3. The two safety guarantees behind everything
 
@@ -115,11 +120,15 @@ is an *opt-in* filter for research that *wants* tiering — it is **not** the fo
 
 ## 7. Non-negotiable invariants (do not break these)
 
-1. **`candidate` ≠ `approved`, and never auto-promotes.** Approval goes through the promotion gate
-   in [release_gate.py](../../research_orchestrator/release_gate.py) /
-   [factor_registry/store.py](../factor_registry/store.py) `set_status` — it requires a
-   `current_git_sha` + `promotion_evidence` from an **independent PIT-correct OOS reproduction**
-   (a sandbox/loader panel is *insufficient*).
+1. **`candidate` is terminal for factors (v1.4) — the factor-level `approved` mint is retired.**
+   `FactorRegistryStore.set_status('approved')` refuses unconditionally
+   (`FactorLevelApprovedRetiredError` in [release_gate.py](../../research_orchestrator/release_gate.py));
+   promotion is BOOK-level (one seal per sealed `DeploymentFrozenPlan` via
+   `StrategyRegistryStore`, which keeps the full old gate: `current_git_sha` +
+   `promotion_evidence` from an **independent PIT-correct OOS reproduction** — a
+   sandbox/loader panel is *insufficient*). Legacy approved rows: validity re-affirmation via
+   `revalidate_legacy_approved(...)`; the sole audited mint exception is
+   `legacy_factor_approval_override(...)`.
 2. **`get_factor_catalog()` is the source of truth for all discovery.** Registry status gates only
    *formal* validation components, never discovery.
 3. **Never hand-roll the forward-return label or PIT alignment.** Use the sanctioned builders; the

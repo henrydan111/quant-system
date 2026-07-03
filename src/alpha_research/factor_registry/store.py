@@ -1489,46 +1489,62 @@ class FactorRegistryStore:
         if status not in VALID_STATUSES:
             raise ValueError(f"Unsupported status: {status}")
 
-        # Writer gate (PR P1.1): a transition to a PRIVILEGED status ("approved")
-        # is refused unless promotion_evidence proves an INDEPENDENT PIT-correct
-        # reproduction AND passes the lint/parity/clean-tree/git-sha checks, with a
-        # MANDATORY current_git_sha binding the approval to a committed HEAD. Mirrors
-        # StrategyRegistryStore.set_status. Non-privileged transitions are unchanged.
-        # Lazy import: store.py lives in alpha_research, release_gate in
-        # research_orchestrator — importing at call time avoids a module-load cycle.
+        # v1.4 writer gate (2026-07-03, book-level-promotion amendment): the factor-level
+        # `approved` mint is RETIRED — `candidate` is the terminal factor-level research
+        # status; promotion moved to the BOOK level (StrategyRegistryStore + ONE holdout
+        # seal per DeploymentFrozenPlan, keyed by the derived book_seal_key). There is
+        # deliberately NO keyword bypass on this path (round-1 M4): the only doors are the
+        # separate audited commands `legacy_factor_approval_override(...)` (exceptional
+        # mint) and `revalidate_legacy_approved(...)` (validity re-affirmation on legacy
+        # rows). Downgrades (approved->candidate / ->deprecated) are non-privileged and
+        # unchanged (the eps_diffusion revocation path keeps working). The old PR P1.1
+        # privileged gate (git-sha + promotion evidence) now lives inside the override
+        # command. Lazy import avoids the alpha_research <-> research_orchestrator cycle.
         from src.research_orchestrator.release_gate import (
             PRIVILEGED_REGISTRY_STATUSES,
-            PromotionGateError,
-            assert_promotion_artifact_eligible,
+            FactorLevelApprovedRetiredError,
         )
 
         if status in PRIVILEGED_REGISTRY_STATUSES:
-            if not current_git_sha:
-                raise PromotionGateError(
-                    f"Promotion gate blocked factor:{factor_id}: current_git_sha is "
-                    f"required for a privileged factor-registry status transition "
-                    f"(binds the approval to a committed HEAD)"
-                )
-            artifact = dict(promotion_evidence or {})
-            # Force (NOT setdefault) the transition status into the artifact: a
-            # caller-supplied promotion_status="draft"/"candidate" would otherwise
-            # make the gate evaluate the artifact as non-privileged and trivially
-            # pass — an approval bypass (GPT cross-review P0).
-            artifact["promotion_status"] = status
-            assert_promotion_artifact_eligible(
-                artifact,
-                current_git_sha=current_git_sha,
-                artifact_label=f"factor:{factor_id}",
+            raise FactorLevelApprovedRetiredError(
+                f"factor:{factor_id}: factor-level status 'approved' is retired (v1.4 "
+                f"book-level promotion, 2026-07-03). Promote the BOOK through "
+                f"StrategyRegistryStore (one seal per DeploymentFrozenPlan, keyed by "
+                f"book_seal_key). To re-affirm a legacy approved row's validity use "
+                f"revalidate_legacy_approved(...); the only mint exception is the audited "
+                f"legacy_factor_approval_override(...)."
             )
 
+        return self._apply_status_write(
+            factor_id=factor_id,
+            status=status,
+            reason=reason,
+            version=version,
+            source_run_id=source_run_id,
+            fresh_approval=False,
+        )
+
+    def _apply_status_write(
+        self,
+        *,
+        factor_id: str,
+        status: str,
+        reason: str,
+        version: int | None,
+        source_run_id: str | None,
+        fresh_approval: bool,
+    ) -> dict[str, Any]:
+        """The status write body shared by ``set_status`` (non-privileged transitions) and
+        ``legacy_factor_approval_override`` (the sole audited privileged door). Private —
+        every caller must have passed its gate before reaching this."""
         index = self._resolve_master_index(factor_id=factor_id, version=version)
         changed_at = _now_str()
         old_status = _coerce_string(self.factor_master.at[index, "status"]) or "draft"
 
         self.factor_master.at[index, "status"] = status
         self.factor_master.at[index, "updated_at"] = changed_at
-        if status in PRIVILEGED_REGISTRY_STATUSES:
-            # The gate above passed, so this is a fresh, valid approval.
+        if fresh_approval:
+            # The caller's gate passed, so this is a fresh, valid approval.
             self.factor_master.at[index, "approval_validity"] = "valid"
         if status == "deprecated":
             self.factor_master.at[index, "deprecated_reason"] = reason
@@ -1555,6 +1571,169 @@ class FactorRegistryStore:
             "new_status": status,
         }
 
+    # Override payload fields REQUIRED (non-empty) by legacy_factor_approval_override —
+    # v1.4 round-1 M4: issue trail + human sign-off + reviewer + machine-readable scope.
+    _OVERRIDE_REQUIRED_FIELDS = (
+        "issue_id",
+        "user_signoff_artifact",
+        "reviewer_identity",
+        "reason_code",
+        "scope",
+    )
+
+    def legacy_factor_approval_override(
+        self,
+        *,
+        factor_id: str,
+        reason: str,
+        override: Mapping[str, Any],
+        promotion_evidence: Mapping[str, Any],
+        current_git_sha: str,
+        version: int | None = None,
+        source_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """v1.4 A3/M4 — the SOLE audited exception that can still mint a factor-level
+        ``approved`` row. Deliberately NOT a ``set_status`` flag: a separate command
+        requiring the FULL old promotion gate (git sha + independent PIT-correct
+        reproduction evidence) PLUS an override payload with ``issue_id``,
+        ``user_signoff_artifact``, ``reviewer_identity``, ``reason_code``, ``scope``, and
+        the machine-readable assertion ``not_a_new_research_promotion=True``. A NEW
+        research promotion must go through the book-level StrategyRegistryStore path —
+        using this command for one is a governance violation, and the assertion field
+        exists so that misuse is a recorded lie, not an ambiguity."""
+        from src.research_orchestrator.release_gate import (
+            PromotionGateError,
+            assert_promotion_artifact_eligible,
+        )
+
+        payload = dict(override or {})
+        missing = [
+            field
+            for field in self._OVERRIDE_REQUIRED_FIELDS
+            if not str(payload.get(field) or "").strip()
+        ]
+        if missing:
+            raise PromotionGateError(
+                f"legacy_factor_approval_override factor:{factor_id}: override payload "
+                f"missing required fields: {missing}"
+            )
+        if payload.get("not_a_new_research_promotion") is not True:
+            raise PromotionGateError(
+                f"legacy_factor_approval_override factor:{factor_id}: the machine-readable "
+                f"assertion not_a_new_research_promotion=True is required (bool True, not a "
+                f"string) — a NEW research promotion goes through the book-level "
+                f"StrategyRegistryStore path, never this override"
+            )
+        if not current_git_sha:
+            raise PromotionGateError(
+                f"legacy_factor_approval_override factor:{factor_id}: current_git_sha is "
+                f"required (binds the override to a committed HEAD)"
+            )
+        artifact = dict(promotion_evidence or {})
+        # Force (NOT setdefault) the privileged status into the artifact — same anti-bypass
+        # as the old PR P1.1 gate (GPT cross-review P0).
+        artifact["promotion_status"] = "approved"
+        assert_promotion_artifact_eligible(
+            artifact,
+            current_git_sha=current_git_sha,
+            artifact_label=f"factor:{factor_id} (legacy_factor_approval_override)",
+        )
+        audit = json.dumps(
+            {key: payload[key] for key in sorted(payload)},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        return self._apply_status_write(
+            factor_id=factor_id,
+            status="approved",
+            reason=f"legacy_factor_approval_override: {reason} | override={audit}",
+            version=version,
+            source_run_id=source_run_id,
+            fresh_approval=True,
+        )
+
+    def revalidate_legacy_approved(
+        self,
+        *,
+        factor_id: str,
+        reason: str,
+        revalidation_evidence: Mapping[str, Any],
+        current_git_sha: str,
+        current_definition_hash: str,
+        version: int | None = None,
+        migration_record: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """v1.4 A3/M2 — re-affirm ``approval_validity='valid'`` on a LEGACY approved row
+        WITHOUT minting. Necessary because ``set_approval_validity`` refuses 'valid' on
+        approved rows and its old escape (``set_status('approved', ...)``) is retired —
+        without this door, legacy approved rows that drift to ``requires_revalidation``
+        (which the store applies automatically on rebuild drift) would decay irreversibly.
+        Requires the same evidence rigor as a promotion; refuses non-approved rows (so it
+        can never serve candidate->approved) and refuses definition drift unless an
+        explicit ``migration_record`` documents it."""
+        from src.research_orchestrator.release_gate import (
+            PromotionGateError,
+            assert_promotion_artifact_eligible,
+        )
+
+        index = self._resolve_master_index(factor_id=factor_id, version=version)
+        current_status = _coerce_string(self.factor_master.at[index, "status"]) or "draft"
+        if current_status != "approved":
+            raise PromotionGateError(
+                f"revalidate_legacy_approved factor:{factor_id}: row status is "
+                f"{current_status!r}, not 'approved' — this path re-affirms LEGACY approved "
+                f"rows only and can never mint (candidate->approved is book-level, v1.4)"
+            )
+        if not current_git_sha:
+            raise PromotionGateError(
+                f"revalidate_legacy_approved factor:{factor_id}: current_git_sha is required"
+            )
+        stored_hash = _coerce_string(self.factor_master.at[index, "definition_hash"])
+        if stored_hash != str(current_definition_hash) and migration_record is None:
+            raise PromotionGateError(
+                f"revalidate_legacy_approved factor:{factor_id}: definition_hash drift "
+                f"(stored {stored_hash!r} != current {current_definition_hash!r}) — refused "
+                f"unless an explicit migration_record documents the migration"
+            )
+        artifact = dict(revalidation_evidence or {})
+        artifact["promotion_status"] = "approved"
+        assert_promotion_artifact_eligible(
+            artifact,
+            current_git_sha=current_git_sha,
+            artifact_label=f"factor:{factor_id} (revalidate_legacy_approved)",
+        )
+        changed_at = _now_str()
+        old_validity = (
+            _coerce_string(self.factor_master.at[index, "approval_validity"]) or "valid"
+        )
+        self.factor_master.at[index, "approval_validity"] = "valid"
+        self.factor_master.at[index, "updated_at"] = changed_at
+        note = f"revalidate_legacy_approved ({old_validity}->valid): {reason}"
+        if migration_record is not None:
+            note += " | migration=" + json.dumps(
+                dict(migration_record), ensure_ascii=False, sort_keys=True, default=str
+            )
+        record = StatusHistoryRecord(
+            factor_id=factor_id,
+            version=int(self.factor_master.at[index, "version"]),
+            old_status="approved",
+            new_status="approved",
+            reason=note,
+            source_run_id="",
+            changed_at=changed_at,
+        )
+        self.status_history = pd.concat(
+            [self.status_history, _apply_schema(pd.DataFrame([asdict(record)]), STATUS_HISTORY_COLUMNS, STATUS_HISTORY_SCHEMA)],
+            ignore_index=True,
+        )
+        return {
+            "factor_id": factor_id,
+            "version": int(self.factor_master.at[index, "version"]),
+            "approval_validity": "valid",
+            "old_validity": old_validity,
+        }
+
     def set_approval_validity(
         self,
         *,
@@ -1577,13 +1756,14 @@ class FactorRegistryStore:
         # This method is the drift/downgrade path (valid -> requires_revalidation /
         # stale). Re-affirming an APPROVED row back to "valid" would re-open it as a
         # formal factor WITHOUT the promotion gate — refuse it (GPT cross-review P0).
-        # Re-validation must go through set_status(status="approved", promotion_evidence=...,
-        # current_git_sha=...). Non-approved rows' validity is cosmetic, so unrestricted.
+        # v1.4: re-validation goes through revalidate_legacy_approved(...) (the old
+        # escape via set_status('approved', ...) is retired — round-2 M2).
+        # Non-approved rows' validity is cosmetic, so unrestricted.
         if current_status == "approved" and validity == "valid":
             raise ValueError(
                 f"cannot set approval_validity='valid' on approved factor:{factor_id} via "
-                f"set_approval_validity; re-affirm through the promotion gate "
-                f"(set_status(status='approved', promotion_evidence=..., current_git_sha=...)). "
+                f"set_approval_validity; re-affirm through the evidence-gated "
+                f"revalidate_legacy_approved(...) (v1.4 — set_status('approved') is retired). "
                 f"Downgrades (valid->requires_revalidation/stale) are allowed."
             )
         self.factor_master.at[index, "approval_validity"] = validity

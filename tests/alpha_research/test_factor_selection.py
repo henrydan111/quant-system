@@ -144,8 +144,13 @@ class FactorSelectionTests(unittest.TestCase):
                 status_in={"draft", "candidate", "approved"},
                 include_new_data=True, registry_dir=d,
             )
-            self.assertEqual(len(sel.composite_defs), 20)
-            self.assertEqual(len(sel.industry_relative_defs), 4)
+            # Counts are DERIVED from catalog_composition() (CLAUDE.md §3.5: never
+            # hard-code a catalog count — the 2026-07-03 grn_* wave broke the old
+            # hard-coded 20 silently).
+            from src.alpha_research.factor_library.catalog import catalog_composition
+            comp = catalog_composition()
+            self.assertEqual(len(sel.composite_defs), comp["composite"])
+            self.assertEqual(len(sel.industry_relative_defs), comp["industry_relative"])
             # every composite's base components are present in base_expressions (compute-ready)
             for cdef in sel.composite_defs:
                 for comp in cdef.get("components", []):

@@ -406,6 +406,11 @@ class OosWindowLedgerStore(AppendOnlyStore):
     cross-factor multiplicity; this store NEVER changes any OOS metric or per-set bar."""
 
     FILENAME = "oos_window_ledger.parquet"
+    # v1.4 A6 (2026-07-03): three additive columns migrate the ledger from frozen-set-only
+    # counting to the book_seal_key spend unit. ``spend_unit_type`` in
+    # {frozen_set, book_seal, a5_signal_replication_study}; legacy rows (blank/NA) read as
+    # frozen_set. ``AppendOnlyStore._load`` back-fills missing columns, so pre-v1.4 parquet
+    # files load unchanged.
     COLUMNS = (
         "record_id",
         "recorded_at",
@@ -414,6 +419,9 @@ class OosWindowLedgerStore(AppendOnlyStore):
         "evidence_tier",
         "factor_ids",
         "seal_mode",
+        "spend_unit_type",
+        "book_seal_key",
+        "override_id",
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("oos_window_id", "frozen_set_hash")
@@ -433,6 +441,51 @@ class OosWindowLedgerStore(AppendOnlyStore):
             evidence_tier=normalize_enum(evidence_tier) if evidence_tier else "",
             factor_ids=canonical_json(sorted(str(f) for f in factor_ids)),
             seal_mode=normalize_enum(seal_mode),
+            spend_unit_type="frozen_set",
+        )
+
+    def record_book_spend(
+        self, *, oos_window_id: str, book_seal_key: str, frozen_set_hash: str,
+        evidence_tier: str = "", factor_ids: Sequence[str] = (), seal_mode: str = "live",
+    ) -> dict[str, Any]:
+        """v1.4 A2/A6: record one BOOK spend, idempotent on (oos_window_id, book_seal_key)
+        — NOT on frozen_set_hash, because two plans sharing a frozen set but differing in
+        construction / execution envelope / eval protocol / bar are DISTINCT spends
+        (round-2 N2). ``frozen_set_hash`` is carried for disclosure/overlap accounting."""
+        if not str(book_seal_key).strip():
+            raise ValueError("record_book_spend requires a non-empty book_seal_key")
+        existing = self.latest(oos_window_id=str(oos_window_id), book_seal_key=str(book_seal_key))
+        if existing is not None:
+            return existing
+        return self.record(
+            oos_window_id=str(oos_window_id),
+            frozen_set_hash=str(frozen_set_hash),
+            evidence_tier=normalize_enum(evidence_tier) if evidence_tier else "",
+            factor_ids=canonical_json(sorted(str(f) for f in factor_ids)),
+            seal_mode=normalize_enum(seal_mode),
+            spend_unit_type="book_seal",
+            book_seal_key=str(book_seal_key),
+        )
+
+    def record_study_spend(
+        self, *, oos_window_id: str, frozen_set_hash: str, override_id: str = "",
+        evidence_tier: str = "", factor_ids: Sequence[str] = (), seal_mode: str = "live",
+    ) -> dict[str, Any]:
+        """v1.4 A5: record a statusless signal-replication-study spend. On a FRESH
+        (virgin) window ``override_id`` (the pre-recorded
+        fresh_window_signal_replication_override_id) is REQUIRED by the caller's policy
+        gate; this store records, it does not decide. Counts against the A6 budget."""
+        existing = self.latest(oos_window_id=str(oos_window_id), frozen_set_hash=str(frozen_set_hash))
+        if existing is not None:
+            return existing
+        return self.record(
+            oos_window_id=str(oos_window_id),
+            frozen_set_hash=str(frozen_set_hash),
+            evidence_tier=normalize_enum(evidence_tier) if evidence_tier else "",
+            factor_ids=canonical_json(sorted(str(f) for f in factor_ids)),
+            seal_mode=normalize_enum(seal_mode),
+            spend_unit_type="a5_signal_replication_study",
+            override_id=str(override_id),
         )
 
     def distinct_frozen_sets(self, oos_window_id: str) -> list[str]:
@@ -450,3 +503,87 @@ class OosWindowLedgerStore(AppendOnlyStore):
             key = tier or "unspecified"
             counts[key] = counts.get(key, 0) + 1
         return counts
+
+    def distinct_spend_keys(self, oos_window_id: str) -> list[str]:
+        """v1.4 A6: the per-window SPEND-UNIT keys — ``book_seal_key`` where set (book
+        spends), else ``frozen_set_hash`` (legacy / frozen-set / A5-study rows). This is
+        the virgin-window budget's counting unit; ``book_plan_hash`` grouping is
+        disclosure-only and lives in the report layer."""
+        frame = self._load()
+        frame = frame[frame["oos_window_id"].astype("string") == str(oos_window_id)]
+        if frame.empty:
+            return []
+        keys = frame["book_seal_key"].astype("string").fillna("")
+        fallback = frame["frozen_set_hash"].astype("string").fillna("")
+        merged = keys.where(keys.str.len() > 0, fallback)
+        return sorted(k for k in merged.dropna().unique().tolist() if k)
+
+
+class TudEquivalenceAliasStore(AppendOnlyStore):
+    """v1.4 A7/N1 — the migration relief for PRE-v1.4 candidates whose Stage-5 evidence
+    predates the TUD machinery. An alias binds that legacy evidence to a full
+    TUD-relevant payload; acceptance requires EXACT equality between the alias payload
+    and the current TUD on ``target_universe_id`` + ``universe_definition_filters`` +
+    ``eligibility_policy`` + ``asof_policy`` (the full live TUD identity — round-2 N1:
+    universe-id equality alone is NEVER sufficient). Anything absent, stale,
+    non-canonical, or mismatched -> the resolver refuses ``candidate_scope_mismatch`` and
+    the candidate must pass a target-scoped IS re-audition under the current TUD.
+    Aliases must be recorded BEFORE Stage-7 freeze (``recorded_before_stage7_freeze``)."""
+
+    FILENAME = "tud_equivalence_alias.parquet"
+    COLUMNS = (
+        "record_id",
+        "recorded_at",
+        "alias_id",
+        "alias_version",
+        "created_at",
+        "recorded_before_stage7_freeze",
+        "factor_id",
+        "factor_version",
+        "definition_hash",
+        "source_evidence_id",
+        "stage5_methodology_hash",
+        "evidence_window",
+        "target_universe_id",
+        "universe_definition_filters_json",
+        "eligibility_policy",
+        "asof_policy",
+        "data_policy_ids_json",
+        "alias_payload_hash",
+    )
+    SCHEMA = {column: "string" for column in COLUMNS}
+    KEY_FIELDS = ("alias_id", "alias_version")
+
+    # Fields that must be non-empty for the alias to be acceptable at all (N1: "if any
+    # required field is absent ... the resolver refuses").
+    REQUIRED_FIELDS = (
+        "alias_id",
+        "alias_version",
+        "created_at",
+        "factor_id",
+        "definition_hash",
+        "source_evidence_id",
+        "stage5_methodology_hash",
+        "evidence_window",
+        "target_universe_id",
+        "universe_definition_filters_json",
+        "eligibility_policy",
+        "asof_policy",
+    )
+
+    def record_alias(self, **fields: Any) -> dict[str, Any]:
+        missing = [f for f in self.REQUIRED_FIELDS if not str(fields.get(f) or "").strip()]
+        if missing:
+            raise ValueError(f"TudEquivalenceAliasStore.record_alias missing required fields: {missing}")
+        if fields.get("recorded_before_stage7_freeze") not in (True, "True", "true"):
+            raise ValueError(
+                "TudEquivalenceAliasStore.record_alias: recorded_before_stage7_freeze=True is "
+                "required (an alias recorded after freeze cannot back a clean admission)"
+            )
+        fields["recorded_before_stage7_freeze"] = "True"
+        payload = {k: str(fields.get(k, "")) for k in self.REQUIRED_FIELDS}
+        fields["alias_payload_hash"] = payload_hash(payload)
+        return self.record(**fields)
+
+    def latest_for_factor(self, *, factor_id: str, definition_hash: str) -> dict[str, Any] | None:
+        return self.latest(factor_id=str(factor_id), definition_hash=str(definition_hash))

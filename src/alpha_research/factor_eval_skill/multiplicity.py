@@ -7,8 +7,10 @@ it raises system-level false-discovery risk, and the per-set seal does not adjus
 Layer split (GPT cross-review): the SEAL layer (:class:`OosWindowLedgerStore`) only COUNTS +
 records spends — it never changes an OOS metric or the per-set bar. THIS module is the
 report/approval layer: it reads the count and emits an ACTION by threshold. A fixed per-set
-bar can remain, but once enough distinct sets spend the window, an ``approved_signal`` claim
-needs an explicit acknowledgement or adjusted-FDR/override context.
+bar can remain, but once enough distinct sets spend the window, a sealed claim (v1.4: a BOOK
+verdict; historically an ``approved_signal``) needs an explicit acknowledgement or
+adjusted-FDR/override context. v1.4 adds :func:`virgin_window_multiplicity` — the stricter
+post-2026-02-27 budget counted in ``book_seal_key`` spend units.
 
 This is DISCLOSURE + GUIDANCE, not an automatic bar change: the action tells the approval
 path what is required; it does not silently mutate any verdict.
@@ -22,9 +24,29 @@ from typing import Any
 ACTION_DISCLOSE = "disclose"                       # n < warn: just stamp the denominator
 ACTION_ACKNOWLEDGE = "disclose_acknowledge"        # warn <= n < hard: reviewer must acknowledge
 ACTION_REQUIRE = "require_adjusted_or_override"     # n >= hard: BH/FDR or max-stat context, or an explicit override
+# v1.4 A6: virgin-window hard stop — the spend is REFUSED unless a user-signed
+# multiplicity override was recorded BEFORE the spend (and the artifact then reports
+# adjusted max-stat/FDR/DSR/PSR where applicable).
+ACTION_REFUSE = "refuse_without_override"
 
 DEFAULT_WARN_THRESHOLD = 5
 DEFAULT_HARD_THRESHOLD = 10
+
+# v1.4 A6 (2026-07-03): virgin post-freeze windows get a STRICTER budget counted in
+# distinct book_seal_key spends per OOS window (round-3 R3-M2: the unit is the seal key,
+# book_plan_hash is disclosure grouping only). warn at 3, hard stop at 5.
+VIRGIN_WARN_THRESHOLD = 3
+VIRGIN_HARD_THRESHOLD = 5
+# The calendar-freeze end: OOS data after this date is the virgin accrual (the only
+# genuinely unburned window the current candidate pool will ever have).
+FREEZE_END_DATE = "2026-02-27"
+
+
+def is_virgin_window(oos_end: str, *, freeze_end: str = FREEZE_END_DATE) -> bool:
+    """A window whose end reaches past the calendar freeze contains virgin (post-freeze)
+    observations -> the A6 book-seal-only policy + stricter budget apply. ISO date
+    strings compare lexicographically."""
+    return str(oos_end)[:10] > freeze_end
 
 
 @dataclass(frozen=True)
@@ -105,3 +127,49 @@ def _ordinal_suffix(n: int) -> str:
     if 10 <= (n % 100) <= 20:
         return "th"
     return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def virgin_window_multiplicity(
+    ledger,
+    oos_window_id: str,
+    *,
+    warn_threshold: int = VIRGIN_WARN_THRESHOLD,
+    hard_threshold: int = VIRGIN_HARD_THRESHOLD,
+    override_recorded: bool = False,
+    pending_self: bool = False,
+) -> MultiplicityReport:
+    """v1.4 A6 — the VIRGIN-window budget: counts distinct SPEND-UNIT keys per window
+    (``book_seal_key`` where set, else ``frozen_set_hash`` for legacy/A5 rows — the
+    round-2 N2 unit; ``book_plan_hash`` grouping is disclosure-only). Default budget:
+    warn at 3 distinct ``book_seal_key`` spends per OOS window, HARD STOP at 5 —
+    ``refuse_without_override`` unless a user-signed multiplicity override was recorded
+    BEFORE the spend (``override_recorded=True`` downgrades the refusal to
+    ``require_adjusted_or_override``: the spend may proceed but the artifact must report
+    adjusted max-stat/FDR/DSR/PSR). This budget is enforced at spend time by the seal
+    caller; the ledger only counts. PR5 recipe-search deflation is required separately
+    and is NOT a substitute for this hard budget."""
+    n = len(ledger.distinct_spend_keys(oos_window_id)) + (1 if pending_self else 0)
+    by_tier = ledger.tier_counts(oos_window_id)
+    if n < warn_threshold:
+        action = ACTION_DISCLOSE
+    elif n < hard_threshold:
+        action = ACTION_ACKNOWLEDGE
+    elif override_recorded:
+        action = ACTION_REQUIRE
+    else:
+        action = ACTION_REFUSE
+    nth = "would be the" if pending_self else "is the"
+    note = (
+        f"this {nth} {n}{_ordinal_suffix(n)} distinct spend-unit key on VIRGIN OOS window "
+        f"{oos_window_id} (unit=book_seal_key, warn>={warn_threshold}, hard>={hard_threshold}). "
+        + {
+            ACTION_DISCLOSE: "Disclosure only; per-book bar unchanged.",
+            ACTION_ACKNOWLEDGE: "Reviewer acknowledgement required before the spend.",
+            ACTION_REQUIRE: "Override recorded pre-spend; the artifact MUST report adjusted "
+                            "max-stat/FDR/DSR/PSR where applicable.",
+            ACTION_REFUSE: "HARD STOP: the spend is refused — record a user-signed "
+                           "multiplicity override BEFORE the spend, or stop testing this window.",
+        }[action]
+    )
+    return MultiplicityReport(str(oos_window_id), n, by_tier, action, warn_threshold,
+                              hard_threshold, note)

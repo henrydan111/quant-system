@@ -21,8 +21,8 @@
 | 等级 | 含义 | 怎么得到 | 谁能用 |
 |---|---|---|---|
 | **`draft`** | 已收录,但**没有任何证明** | 写进 [catalog.py](../factor_library/catalog.py) → `sync_catalog_to_registry` 同步成 draft 行 | 所有 discovery / sandbox 研究(忽略 status) |
-| **`candidate`** | 通过**样本内(IS)**体检,"值得花 OOS 预算" | `factor_lifecycle` IS-only 关卡:`\|RankICIR\| ≥ 0.10` 且 年度符号一致性 ≥ 0.70 | 仅当正式 run 显式 opt-in(`allow_candidate_components`) |
-| **`approved`** | 通过**样本外(OOS)**终检,可部署级 | sealed-OOS gate:独立 OOS 复现 + 干净 git 提交 + holdout seal(一次性消费);门槛 `OOS RankICIR > 0` 且 `OOS LS Sharpe > 1.0` | 正式 validation,始终可用 |
+| **`candidate`** | 通过**样本内(IS)**体检 — **因子层的终点等级(v1.4, 2026-07-03)**;"值得进入 book 组合研究" | `factor_lifecycle` IS-only 关卡:`\|RankICIR\| ≥ 0.10` 且 年度符号一致性 ≥ 0.70(在声明的目标域上,§3.3 role-aware) | 正式 run 显式 opt-in(`allow_candidate_components`)**且目标域匹配**(`candidate_on_declared_target`,v1.4 A7 — 仅 status 匹配会被 `candidate_scope_mismatch` 拒绝) |
+| **`approved`(遗留)** | ⚠ **v1.4 起不再新铸**。仅存的 7 行 = 通过旧因子级 sealed-OOS gate 的历史证据;晋升单位改为 **book**(一个 sealed `DeploymentFrozenPlan`/`StrategyCandidate`,每 book 恰好一次 seal,键 `book_seal_key`) | ~~sealed-OOS gate~~ → 已退役。遗留行的 validity 复核走 `revalidate_legacy_approved(...)`;唯一例外铸造 = 审计化 `legacy_factor_approval_override(...)` | 遗留行在正式 validation 仍解析为 `formal`(受 `approval_validity` 约束) |
 | ~~`deprecated`~~ | 退役 / 失败 | — | — |
 
 ---
@@ -77,9 +77,9 @@
 |---|---|---|
 | 收录成 **draft** | 写 catalog.py → `sync_catalog_to_registry` | 无硬门槛(用 §3 的实用标准判断"值不值得加") |
 | draft → **candidate** | `factor_lifecycle` IS gate:[phase6_setup_request.py](../../../workspace/scripts/phase6_setup_request.py) → `research_orchestrator_cli.py run` → [phase6_drive_gates.py](../../../workspace/scripts/phase6_drive_gates.py) | `\|RankICIR\| ≥ 0.10` 且 年度符号一致性 ≥ 0.70(样本内,不碰 OOS) |
-| candidate → **approved** | sealed-OOS 驱动(参考 [promote_sealed_oos_winners.py](../../../workspace/scripts/promote_sealed_oos_winners.py));live 写注册表前**先 commit + 用户确认**(§13) | `OOS RankICIR > 0` 且 `OOS LS Sharpe > 1.0`(独立复现,一次性消费 OOS) |
+| ~~candidate → approved~~ | **已退役(v1.4, 2026-07-03)** — `set_status('approved')` 对因子无条件拒绝(`FactorLevelApprovedRetiredError`,无任何关键字后门) | 晋升单位 = **book**:冻结完整 `DeploymentFrozenPlan` → 每 book 恰好一次 holdout seal(键 = 派生 `book_seal_key`)→ 事件驱动 1× 总回报判定 + 成分因子 OOS 诊断(同一次消费内,不铸 status)→ 写入 `strategy_registry`(PR3) |
 
-> ⚠ candidate → approved 会**一次性消费**该 frozen set 的 OOS 窗口(spend-on-attempt):失败 = 窗口烧掉,因子停在 candidate。务必在干净已提交的树上、确认后再跑。
+> ⚠ **v1.4 关键不变量:** 处女(2026-02-27 后)OOS 窗口只准 book seal 消费(warn 3 / hard 5 个 `book_seal_key`/窗口);因子级 sealed-OOS 研究(A5)不铸 status 且新窗口需预先登记 override。旧的 candidate→approved 一次性消费语义由 book seal 完整继承(spend-on-attempt 不变)。设计:[FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md](../../../workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md)(GPT 4 轮跨审 → SHIP)。
 
 ---
 

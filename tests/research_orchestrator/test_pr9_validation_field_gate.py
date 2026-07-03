@@ -585,6 +585,40 @@ class TestResolverHandlerBehavior:
                 handle_validation_object_resolver(context)
 
 
+def _attach_real_universe(context) -> None:
+    """v1.4 A7 fixtures: the scope gate derives a TUD from prescription.universe, so a
+    bare MagicMock universe is not enough — attach a real (theme) UniverseSpec."""
+    from src.research_orchestrator.hypothesis import UniverseSpec
+
+    context.request.hypothesis.prescription.universe = UniverseSpec(
+        kind="theme", theme_id="t_scope", theme_universe_candidate_id="tuc_scope"
+    )
+
+
+def _seed_scope_record(tmp_path: Path, *, factor_id: str, definition_hash: str,
+                       universe_spec) -> None:
+    """Seed an ELIGIBLE ranking Stage-3 record bound to the TUD the scope gate will
+    derive from ``universe_spec`` (the same canonical adapter — no hand-rolled hash)."""
+    from src.alpha_research.factor_eval_skill.candidate_scope import (
+        tud_from_prescription_universe,
+    )
+    from src.alpha_research.factor_eval_skill.stores import Stage3QualityRecordStore
+
+    tud = tud_from_prescription_universe(universe_spec)
+    Stage3QualityRecordStore(tmp_path / "factor_eval_skill").record(
+        factor_id=factor_id,
+        definition_hash=definition_hash,
+        layer1_methodology_hash="l1_test",
+        target_universe_declaration_hash=tud.tud_hash,
+        role="ranking",
+        quality_flags_json="{}",
+        universe_profile_json="{}",
+        target_universe_pass="True",
+        cross_universe_sign_divergence="False",
+        status_effect="candidate_ceiling",
+    )
+
+
 class TestPR12FormalAllowSet:
     """PR P1.2: handle_validation_object_resolver enforces an EXPLICIT source-layer
     allow-set — {formal} (+ factor_registry_candidate iff allow_candidate_components).
@@ -687,12 +721,20 @@ class TestPR12FormalAllowSet:
         assert "field_dependency_report" in result.outputs
 
     def test_factor_registry_candidate_accepted_with_flag(self, tmp_path: Path) -> None:
+        # v1.4 A7: the flag alone no longer admits a candidate — admission is
+        # candidate_on_declared_target. This positive leg seeds an eligible Stage-3
+        # record bound to the prescription's derived TUD, proving the pass path.
         from src.research_orchestrator.validation_steps import handle_validation_object_resolver
 
         context = self._make_context(tmp_path, allow_candidate=True)
+        _attach_real_universe(context)
+        _seed_scope_record(tmp_path, factor_id="qual_roe", definition_hash="defhash_qual_roe",
+                           universe_spec=context.request.hypothesis.prescription.universe)
+        payload = self._payload("factor_registry_candidate")
+        payload["resolved_objects"][0]["definition_hash"] = "defhash_qual_roe"
         with patch(
             "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
-            return_value=self._payload("factor_registry_candidate"),
+            return_value=payload,
         ), patch(
             "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
             return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
@@ -702,6 +744,111 @@ class TestPR12FormalAllowSet:
         ):
             result = handle_validation_object_resolver(context)
         assert "field_dependency_report" in result.outputs
+        report = result.outputs["candidate_scope_report"]
+        assert report is not None and report["mismatches"] == []
+        assert report["checked"][0]["binding"] == "stage3_record"
+
+
+class TestCandidateScopeGate:
+    """v1.4 A7 (test_candidate_scope_gate): allow_candidate_components admits only
+    candidate_on_declared_target. A status-only candidate match refuses with
+    candidate_scope_mismatch in the RESOLVER step — before dataset build and before any
+    holdout access; a matching target-scoped Stage-3 record (or an exactly-TUD-equal
+    alias) passes; a mismatched alias refuses (round-2 N1: universe-id equality alone is
+    never sufficient)."""
+
+    _make_context = TestPR12FormalAllowSet._make_context
+    _payload = staticmethod(TestPR12FormalAllowSet._payload)
+
+    def _run(self, context, payload):
+        from src.research_orchestrator.validation_steps import handle_validation_object_resolver
+
+        with patch(
+            "src.research_orchestrator.resolver.ResolverHub.resolve_assets",
+            return_value=payload,
+        ), patch(
+            "src.research_orchestrator.validation_steps._validate_factor_field_dependencies",
+            return_value={"eligible": True, "disallowed_fields": [], "unknown_fields": [], "reasons": []},
+        ), patch(
+            "src.research_orchestrator.validation_steps._assert_no_definition_drift",
+            return_value={"checked": 1, "drifted": [], "stage": "formal_validation"},
+        ):
+            return handle_validation_object_resolver(context)
+
+    def test_status_only_candidate_refused(self, tmp_path: Path) -> None:
+        # No Stage-3 record, no alias -> candidate_scope_mismatch (the old behavior —
+        # flag alone admits — is retired).
+        from src.alpha_research.factor_eval_skill.candidate_scope import (
+            CandidateScopeMismatchError,
+        )
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        _attach_real_universe(context)
+        payload = self._payload("factor_registry_candidate")
+        payload["resolved_objects"][0]["definition_hash"] = "defhash_qual_roe"
+        with pytest.raises(CandidateScopeMismatchError, match=r"candidate_scope_mismatch"):
+            self._run(context, payload)
+
+    def test_wrong_target_record_refused(self, tmp_path: Path) -> None:
+        # A Stage-3 record on a DIFFERENT target does not satisfy the declared one.
+        from src.alpha_research.factor_eval_skill.candidate_scope import (
+            CandidateScopeMismatchError,
+        )
+        from src.research_orchestrator.hypothesis import UniverseSpec
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        _attach_real_universe(context)
+        other = UniverseSpec(kind="theme", theme_id="t_other", theme_universe_candidate_id="tuc_other")
+        _seed_scope_record(tmp_path, factor_id="qual_roe",
+                           definition_hash="defhash_qual_roe", universe_spec=other)
+        payload = self._payload("factor_registry_candidate")
+        payload["resolved_objects"][0]["definition_hash"] = "defhash_qual_roe"
+        with pytest.raises(CandidateScopeMismatchError, match=r"candidate_scope_mismatch"):
+            self._run(context, payload)
+
+    def test_exact_tud_alias_passes_and_mismatched_alias_refuses(self, tmp_path: Path) -> None:
+        from src.alpha_research.factor_eval_skill._hashing import canonical_json, to_jsonable
+        from src.alpha_research.factor_eval_skill.candidate_scope import (
+            CandidateScopeMismatchError,
+            tud_from_prescription_universe,
+        )
+        from src.alpha_research.factor_eval_skill.stores import TudEquivalenceAliasStore
+
+        context = self._make_context(tmp_path, allow_candidate=True)
+        _attach_real_universe(context)
+        tud = tud_from_prescription_universe(context.request.hypothesis.prescription.universe)
+        store = TudEquivalenceAliasStore(tmp_path / "factor_eval_skill")
+        alias_fields = dict(
+            alias_id="alias_qual_roe", alias_version="1", created_at="2026-07-03",
+            recorded_before_stage7_freeze=True, factor_id="qual_roe", factor_version="1",
+            definition_hash="defhash_qual_roe", source_evidence_id="ev_legacy_1",
+            stage5_methodology_hash="m5_legacy", evidence_window="2014..2020",
+            target_universe_id=tud.target_universe_id,
+            universe_definition_filters_json=canonical_json(to_jsonable(tud.universe_definition_filters)),
+            eligibility_policy=tud.eligibility_policy, asof_policy=tud.asof_policy,
+            data_policy_ids_json="{}",
+        )
+        store.record_alias(**alias_fields)
+        payload = self._payload("factor_registry_candidate")
+        payload["resolved_objects"][0]["definition_hash"] = "defhash_qual_roe"
+        result = self._run(context, payload)
+        report = result.outputs["candidate_scope_report"]
+        assert report["checked"][0]["binding"] == "tud_equivalence_alias"
+
+        # Same alias but universe-id-only agreement (filters differ) -> REFUSED (N1).
+        context2 = self._make_context(tmp_path / "case2", allow_candidate=True)
+        _attach_real_universe(context2)
+        bad = dict(alias_fields)
+        bad["alias_id"] = "alias_qual_roe_bad"
+        bad["universe_definition_filters_json"] = canonical_json({"kind": "theme", "theme_id": "OTHER"})
+        TudEquivalenceAliasStore(tmp_path / "case2" / "factor_eval_skill").record_alias(**bad)
+        with pytest.raises(CandidateScopeMismatchError, match=r"never sufficient"):
+            self._run(context2, payload)
+
+    def test_formal_entries_do_not_trigger_the_gate(self, tmp_path: Path) -> None:
+        context = self._make_context(tmp_path, allow_candidate=False)
+        result = self._run(context, self._payload("formal"))
+        assert result.outputs["candidate_scope_report"] is None
 
 
 class TestPR13DefinitionBindingGate:

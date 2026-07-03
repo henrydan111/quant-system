@@ -83,9 +83,12 @@ component_load_j = max( |raw_blend_weight_j|,
 Load-bearing threshold `w*` is a governance PRIOR (default 0.05; require a sensitivity report at
 `w* = 0.02 / 0.05 / 0.10` before finalizing):
 
-- **`component_load ≥ w*` (load-bearing):** must be `approved`, or `candidate` with
-  `allow_candidate_components=True`. **`draft` is REFUSED** — a load-bearing component must carry a validated
-  solo signal.
+- **`component_load ≥ w*` (load-bearing):** must be **`candidate_on_declared_target`** — a `candidate`
+  whose Stage-5 evidence is bound to the book's declared target (v1.4 A7; a status-only match refuses
+  `candidate_scope_mismatch`) — with the explicit `allow_candidate_components=True` attestation. The old
+  "`approved`" clause is **legacy-satisfying only** (the 7 pre-v1.4 rows), not required and not expected —
+  the factor-level approved mint is retired (v1.4, 2026-07-03). **`draft` is REFUSED** — a load-bearing
+  component must carry a validated, target-scoped solo signal.
 - **`component_load < w*` (non-load-bearing):** solo status is **provenance**, not a hard gate — validated via
   the **book's** sealed OOS. The noise floor is NOT "any tiny-weight draft" (amendment C). A sub-`w*` component
   is admissible only if ALL hold: (a) sign is pre-declared / inherited from a documented economic prior; (b) IS

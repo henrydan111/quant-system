@@ -16,7 +16,7 @@ def _passing_promotion_evidence(git_sha: str = "abc123") -> dict:
     """A complete promotion artifact that passes assert_promotion_artifact_eligible:
     an INDEPENDENT PIT-correct reproduction source + every required canary/lint/parity
     check 'passed' + a clean tree + a git_sha to be matched against current_git_sha.
-    (promotion_status is filled in by set_status via setdefault.)"""
+    (promotion_status is force-set by the gated writer.)"""
     return {
         "independent_reproduction": {"source": "qlib_windowed_features"},
         "unsafe_pit_dates_lint": "passed",
@@ -30,6 +30,28 @@ def _passing_promotion_evidence(git_sha: str = "abc123") -> dict:
         "dirty_tree": False,
         "git_sha": git_sha,
     }
+
+
+def _override_payload() -> dict:
+    """A complete v1.4 legacy_factor_approval_override payload (round-1 M4)."""
+    return {
+        "issue_id": "GOV-TEST-1",
+        "user_signoff_artifact": "workspace/outputs/test_signoff.json",
+        "reviewer_identity": "test_reviewer",
+        "reason_code": "test_legacy_exception",
+        "scope": "single-factor test scope",
+        "not_a_new_research_promotion": True,
+    }
+
+
+def _mint_legacy_approved(store, factor_id: str, git_sha: str = "legacy_sha") -> None:
+    """Test fixture: create a LEGACY approved row through the sole audited door."""
+    store.legacy_factor_approval_override(
+        factor_id=factor_id, reason="test fixture legacy approval",
+        override=_override_payload(),
+        promotion_evidence=_passing_promotion_evidence(git_sha=git_sha),
+        current_git_sha=git_sha,
+    )
 
 
 class FactorRegistryTests(unittest.TestCase):
@@ -140,28 +162,97 @@ class FactorRegistryTests(unittest.TestCase):
             self.assertEqual(len(store.status_history), 1)
             self.assertEqual(store.status_history.iloc[0]["reason"], "manual promotion")
 
-    def test_set_status_approved_requires_promotion_gate(self):
-        # PR P1.1 writer gate: "approved" needs a passing promotion artifact + a
-        # mandatory current_git_sha; otherwise PromotionGateError. On success the row
-        # becomes approved AND approval_validity=="valid".
-        from src.research_orchestrator.release_gate import PromotionGateError
+    def test_set_status_approved_retired_v14(self):
+        # v1.4 A3: the factor-level 'approved' mint is RETIRED. set_status refuses
+        # candidate->approved ALWAYS — even with a perfect promotion artifact and a
+        # matching git sha — and there is NO keyword bypass (round-1 M4).
+        from src.research_orchestrator.release_gate import FactorLevelApprovedRetiredError
 
         with self.make_temp_dir("factor_registry_gate") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
 
-            with self.assertRaises(PromotionGateError):
+            with self.assertRaises(FactorLevelApprovedRetiredError):
                 store.set_status(factor_id="liq_vol_cv_20d", status="approved", reason="x")
 
-            # evidence present but NO git_sha -> still blocked (sha is mandatory).
-            with self.assertRaises(PromotionGateError):
+            # Even a FULLY passing artifact + sha is refused: the mint is retired,
+            # not evidence-gated.
+            with self.assertRaises(FactorLevelApprovedRetiredError):
                 store.set_status(
                     factor_id="liq_vol_cv_20d", status="approved", reason="x",
-                    promotion_evidence=_passing_promotion_evidence(),
+                    promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
+                    current_git_sha="abc123",
                 )
 
-            result = store.set_status(
-                factor_id="liq_vol_cv_20d", status="approved", reason="promote",
+            # No string-argument escape hatch exists on set_status (round-1 M4).
+            with self.assertRaises(TypeError):
+                store.set_status(
+                    factor_id="liq_vol_cv_20d", status="approved", reason="x",
+                    legacy_exception_reason="please",
+                )
+
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["status"], "draft")
+
+    def test_legacy_override_is_the_sole_gated_mint(self):
+        # v1.4 A3/M4: legacy_factor_approval_override keeps the FULL old promotion gate
+        # (independent reproduction + canaries + sha) AND requires the audited override
+        # payload. On success the row becomes approved with approval_validity=="valid".
+        from src.research_orchestrator.release_gate import PromotionGateError
+
+        with self.make_temp_dir("factor_registry_override") as temp_dir:
+            store = FactorRegistryStore(temp_dir)
+            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+
+            # Missing override payload fields -> refused.
+            incomplete = _override_payload()
+            del incomplete["issue_id"]
+            with self.assertRaises(PromotionGateError):
+                store.legacy_factor_approval_override(
+                    factor_id="liq_vol_cv_20d", reason="x", override=incomplete,
+                    promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
+                    current_git_sha="abc123",
+                )
+
+            # The machine-readable assertion must be literally True (not a string).
+            lying = _override_payload()
+            lying["not_a_new_research_promotion"] = "True"
+            with self.assertRaises(PromotionGateError):
+                store.legacy_factor_approval_override(
+                    factor_id="liq_vol_cv_20d", reason="x", override=lying,
+                    promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
+                    current_git_sha="abc123",
+                )
+
+            # A sandbox/loader reproduction source is NOT independent -> gate blocks.
+            bad = _passing_promotion_evidence(git_sha="abc123")
+            bad["independent_reproduction"] = {"source": "pit_research_loader"}
+            with self.assertRaises(PromotionGateError):
+                store.legacy_factor_approval_override(
+                    factor_id="liq_vol_cv_20d", reason="x", override=_override_payload(),
+                    promotion_evidence=bad, current_git_sha="abc123",
+                )
+
+            # GPT cross-review P0 (inherited): promotion_status in the evidence cannot
+            # downgrade the gate.
+            with self.assertRaises(PromotionGateError):
+                store.legacy_factor_approval_override(
+                    factor_id="liq_vol_cv_20d", reason="x", override=_override_payload(),
+                    promotion_evidence={"promotion_status": "draft"}, current_git_sha="abc123",
+                )
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["status"], "draft")
+
+            # Full payload + full evidence + sha -> the audited mint succeeds.
+            result = store.legacy_factor_approval_override(
+                factor_id="liq_vol_cv_20d", reason="promote",
+                override=_override_payload(),
                 promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
                 current_git_sha="abc123",
             )
@@ -172,42 +263,49 @@ class FactorRegistryTests(unittest.TestCase):
             ].iloc[0]
             self.assertEqual(row["status"], "approved")
             self.assertEqual(row["approval_validity"], "valid")
+            # The override audit payload lands in the status history.
+            self.assertIn("legacy_factor_approval_override", store.status_history.iloc[-1]["reason"])
 
-    def test_set_status_approved_rejects_non_independent_reproduction(self):
-        # A sandbox/loader reproduction source is NOT independent -> gate blocks.
-        from src.research_orchestrator.release_gate import PromotionGateError
+    def test_a3_writer_gate_matrix(self):
+        # v1.4 §5 acceptance test: candidate->approved refused; approved->candidate and
+        # approved->deprecated ALLOWED (revocation paths keep working); legacy
+        # revalidation only via the dedicated evidence-gated path.
+        from src.research_orchestrator.release_gate import (
+            FactorLevelApprovedRetiredError,
+            PromotionGateError,
+        )
 
-        with self.make_temp_dir("factor_registry_gate_bad") as temp_dir:
+        with self.make_temp_dir("factor_registry_matrix") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
-            bad = _passing_promotion_evidence(git_sha="abc123")
-            bad["independent_reproduction"] = {"source": "pit_research_loader"}
-            with self.assertRaises(PromotionGateError):
-                store.set_status(
-                    factor_id="liq_vol_cv_20d", status="approved", reason="x",
-                    promotion_evidence=bad, current_git_sha="abc123",
-                )
 
-    def test_set_status_approved_cannot_be_bypassed_via_evidence_status(self):
-        # GPT cross-review P0: a caller-supplied promotion_status must NOT downgrade
-        # the gate. Evidence with promotion_status="draft" (which would otherwise make
-        # the artifact evaluate as non-privileged and trivially pass) must STILL raise,
-        # and the row must remain draft (no bypass write).
-        from src.research_orchestrator.release_gate import PromotionGateError
+            # candidate->approved refused.
+            store.set_status(factor_id="liq_vol_cv_20d", status="candidate", reason="is-gate")
+            with self.assertRaises(FactorLevelApprovedRetiredError):
+                store.set_status(factor_id="liq_vol_cv_20d", status="approved", reason="promote")
 
-        with self.make_temp_dir("factor_registry_bypass") as temp_dir:
-            store = FactorRegistryStore(temp_dir)
-            store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
+            # Build a legacy approved row through the audited door, then downgrade paths:
+            _mint_legacy_approved(store, "liq_vol_cv_20d")
+            result = store.set_status(
+                factor_id="liq_vol_cv_20d", status="candidate", reason="revocation test"
+            )
+            self.assertEqual(result["old_status"], "approved")
+            self.assertEqual(result["new_status"], "candidate")
+
+            _mint_legacy_approved(store, "rev_up_down_ratio_20d")
+            result = store.set_status(
+                factor_id="rev_up_down_ratio_20d", status="deprecated", reason="retire test"
+            )
+            self.assertEqual(result["new_status"], "deprecated")
+
+            # revalidate_legacy_approved refuses a NON-approved row (can never mint).
             with self.assertRaises(PromotionGateError):
-                store.set_status(
-                    factor_id="liq_vol_cv_20d", status="approved", reason="x",
-                    promotion_evidence={"promotion_status": "draft"}, current_git_sha="abc123",
+                store.revalidate_legacy_approved(
+                    factor_id="liq_vol_cv_20d", reason="x",
+                    revalidation_evidence=_passing_promotion_evidence(git_sha="s2"),
+                    current_git_sha="s2",
+                    current_definition_hash="whatever",
                 )
-            row = store.factor_master[
-                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
-                & (store.factor_master["is_current"].fillna(False))
-            ].iloc[0]
-            self.assertEqual(row["status"], "draft")
 
     def test_set_approval_validity_cannot_revalidate_approved_row(self):
         # GPT cross-review P0: set_approval_validity is the drift/downgrade path; it
@@ -216,10 +314,7 @@ class FactorRegistryTests(unittest.TestCase):
         with self.make_temp_dir("factor_registry_revalidate") as temp_dir:
             store = FactorRegistryStore(temp_dir)
             store.sync_catalog(record_run=False, generated_at="2026-04-04 21:00:00")
-            store.set_status(
-                factor_id="liq_vol_cv_20d", status="approved", reason="promote",
-                promotion_evidence=_passing_promotion_evidence(git_sha="s1"), current_git_sha="s1",
-            )
+            _mint_legacy_approved(store, "liq_vol_cv_20d", git_sha="s1")
             # downgrade (valid -> stale) is allowed
             store.set_approval_validity(factor_id="liq_vol_cv_20d", validity="stale", reason="provider rebuild")
             row = store.factor_master[
@@ -230,6 +325,33 @@ class FactorRegistryTests(unittest.TestCase):
             # re-validation back to valid via this method is refused
             with self.assertRaises(ValueError):
                 store.set_approval_validity(factor_id="liq_vol_cv_20d", validity="valid", reason="hand-wave")
+
+            # v1.4 A3/M2: the dedicated evidence-gated door DOES re-affirm validity —
+            # without a mint and without touching status.
+            stored_hash = row["definition_hash"]
+            result = store.revalidate_legacy_approved(
+                factor_id="liq_vol_cv_20d", reason="canary rerun clean",
+                revalidation_evidence=_passing_promotion_evidence(git_sha="s2"),
+                current_git_sha="s2",
+                current_definition_hash=stored_hash,
+            )
+            self.assertEqual(result["approval_validity"], "valid")
+            row = store.factor_master[
+                (store.factor_master["factor_id"] == "liq_vol_cv_20d")
+                & (store.factor_master["is_current"].fillna(False))
+            ].iloc[0]
+            self.assertEqual(row["status"], "approved")
+            self.assertEqual(row["approval_validity"], "valid")
+
+            # Definition drift without a migration record -> refused.
+            from src.research_orchestrator.release_gate import PromotionGateError
+            with self.assertRaises(PromotionGateError):
+                store.revalidate_legacy_approved(
+                    factor_id="liq_vol_cv_20d", reason="x",
+                    revalidation_evidence=_passing_promotion_evidence(git_sha="s3"),
+                    current_git_sha="s3",
+                    current_definition_hash="a_different_hash",
+                )
 
     def test_approval_validity_backfill_is_fail_closed(self):
         # A row persisted as approved with a BLANK approval_validity (pre-column
@@ -846,13 +968,7 @@ class FactorRegistryIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(int(rev_row["latest_selected_fold_count"]), 1)
             self.assertNotEqual(comp_row["latest_screening_grade"], "")
 
-            store.set_status(
-                factor_id="liq_vol_cv_20d",
-                status="approved",
-                reason="integration export test",
-                promotion_evidence=_passing_promotion_evidence(git_sha="integ_sha"),
-                current_git_sha="integ_sha",
-            )
+            _mint_legacy_approved(store, "liq_vol_cv_20d", git_sha="integ_sha")
             export_path = Path(temp_dir) / "approved.csv"
             export_count = store.export_current(export_path, status="approved")
             export_df = pd.read_csv(export_path)
