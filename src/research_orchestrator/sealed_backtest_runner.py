@@ -46,6 +46,23 @@ class SealedBacktestRunner:
                 "OOS backtest requires a HoldoutContext; "
                 "SealedBacktestRunner was constructed with holdout_context=None"
             )
+        # v1.4 A8 (implementation-review round-2 Blocker 1): this runner claims the seal
+        # DIRECTLY and its effective_seal_key falls back to design_hash — a second legacy
+        # claim path beside the orchestrator chokepoint. Guard it with the SAME shared
+        # helper BEFORE the store is constructed, so a virgin-window refusal writes no
+        # seal row. Burned windows pass (the PR3 dry-run pilot path).
+        from src.research_orchestrator.window_enforcement import (
+            assert_v14_a8_no_legacy_virgin_oos_claim,
+        )
+
+        assert_v14_a8_no_legacy_virgin_oos_claim(
+            stage=stage,
+            time_split=time_split,
+            caller=(
+                "SealedBacktestRunner._claim_if_oos "
+                f"(seal_key={self._ctx.effective_seal_key[:12]}…)"
+            ),
+        )
         store = HoldoutSealStore(self._ctx.seal_store_dir)
         store.claim_holdout_access(
             design_hash=self._ctx.design_hash,

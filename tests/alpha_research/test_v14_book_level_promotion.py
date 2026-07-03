@@ -271,6 +271,10 @@ class TestA8VirginWindowChokepoint:
         hyp = context.request.hypothesis
         hyp.time_split.oos_start = "2021-01-01"
         hyp.time_split.oos_end = oos_end
+        hyp.time_split.to_dict.return_value = {
+            "is_start": "2014-01-01", "is_end": "2020-12-31",
+            "oos_start": "2021-01-01", "oos_end": oos_end,
+        }
         hyp.design_hash.return_value = "dh_a8_test"
         hyp.hypothesis_id = "hyp_a8"
         hyp.structural_family.return_value = "fam_a8"
@@ -298,3 +302,80 @@ class TestA8VirginWindowChokepoint:
             _claim_holdout_access_if_needed(context)  # must NOT raise the A8 guard
         events = HoldoutSealStore(tmp_path / "seals").list_events()
         assert not events.empty  # the burned-window claim was recorded (pilot path alive)
+
+
+class TestA8SealedBacktestRunner:
+    """Implementation-review round-2 Blocker 1: SealedBacktestRunner._claim_if_oos is a
+    SECOND legacy claim path (direct HoldoutSealStore claim, effective_seal_key falls
+    back to design_hash) — the shared A8 guard must refuse virgin windows THERE too,
+    before any seal row is written, on every public runner entry."""
+
+    def _runner(self, tmp_path: Path):
+        from src.research_orchestrator.sealed_backtest_runner import (
+            HoldoutContext,
+            SealedBacktestRunner,
+        )
+
+        ctx = HoldoutContext(
+            design_hash="dh_a8_runner", hypothesis_id="hyp_a8_runner",
+            structural_family="fam_a8", run_dir=str(tmp_path / "run"),
+            step_id="oos_step", stage="oos_test", allow_same_run=False,
+            seal_store_dir=str(tmp_path / "seals"),
+        )
+        return SealedBacktestRunner(ctx)
+
+    def _no_seal_written(self, tmp_path: Path) -> bool:
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+        return HoldoutSealStore(tmp_path / "seals").list_events().empty
+
+    def test_a8_sealed_backtest_runner_refuses_virgin_window_before_claim(self, tmp_path: Path):
+        runner = self._runner(tmp_path)
+        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            runner._claim_if_oos({"stage": "oos_test", "oos_start": "2026-03-01",
+                                  "oos_end": "2026-09-30"})
+        assert self._no_seal_written(tmp_path)
+
+    def test_a8_event_backtest_handler_refuses_virgin_window_through_runner_and_writes_no_seal(
+        self, tmp_path: Path
+    ):
+        from unittest.mock import MagicMock
+
+        runner = self._runner(tmp_path)
+        backtester = MagicMock()
+        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            runner.run_event_driven(
+                time_split={"stage": "oos_test", "oos_end": "2026-06-30"},
+                backtester=backtester,
+            )
+        backtester.run.assert_not_called()
+        assert self._no_seal_written(tmp_path)
+
+    def test_a8_vectorized_oos_handler_refuses_virgin_window_through_runner_and_writes_no_seal(
+        self, tmp_path: Path
+    ):
+        from unittest.mock import MagicMock
+
+        runner = self._runner(tmp_path)
+        backtester = MagicMock()
+        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            runner.run_vectorized(
+                time_split={"stage": "oos_test", "oos_end": "2026-06-30"},
+                backtester=backtester,
+            )
+        backtester.run.assert_not_called()
+        assert self._no_seal_written(tmp_path)
+
+    def test_runner_burned_window_still_claims(self, tmp_path: Path):
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+        runner = self._runner(tmp_path)
+        runner._claim_if_oos({"stage": "oos_test", "oos_start": "2021-01-01",
+                              "oos_end": "2026-02-27"})  # must NOT raise
+        assert not HoldoutSealStore(tmp_path / "seals").list_events().empty
+
+    def test_runner_missing_oos_end_fails_closed(self, tmp_path: Path):
+        runner = self._runner(tmp_path)
+        with pytest.raises(RuntimeError, match=r"unable_to_determine_oos_end"):
+            runner._claim_if_oos({"stage": "oos_test"})
+        assert self._no_seal_written(tmp_path)

@@ -70,3 +70,43 @@ def enforce_is_window_if_hypothesis(
     request = getattr(context, "request", None)
     hypothesis = getattr(request, "hypothesis", None)
     return clamp_window_to_hypothesis(hypothesis, start, end, stage=stage)
+
+
+def assert_v14_a8_no_legacy_virgin_oos_claim(
+    *,
+    stage: str,
+    time_split: Any,
+    caller: str,
+) -> None:
+    """v1.4 A8 (implementation-review rounds 1-2, 2026-07-03): the SHARED pre-claim guard
+    for every LEGACY (design_hash / frozen_set_hash keyed) OOS seal path. A post-2026-02-27
+    VIRGIN window may be spent only by the PR3 StrategyRegistryStore/book_seal_key path or
+    a pre-authorized A5 override study. Called from BOTH legacy claim sites: the
+    orchestrator chokepoint (steps._claim_holdout_access_if_needed) AND
+    SealedBacktestRunner._claim_if_oos (round-2 Blocker 1: the runner claims directly and
+    its effective_seal_key falls back to design_hash). Fail-closed: an undeterminable OOS
+    end date refuses rather than guessing."""
+    if stage != "oos_test":
+        return
+    split = time_split if isinstance(time_split, dict) else {}
+    oos_end = str(
+        split.get("oos_end")
+        or split.get("end_date")
+        or split.get("end")
+        or ""
+    )
+    if not oos_end:
+        raise RuntimeError(
+            f"v1.4_A8_virgin_window_guard_unable_to_determine_oos_end: {caller} "
+            "cannot claim legacy OOS without an explicit OOS end date."
+        )
+    from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
+
+    if is_virgin_window(oos_end):
+        raise RuntimeError(
+            "v1.4_A8_virgin_window_blocked_until_pr3: "
+            f"{caller} still uses the legacy design_hash/frozen_set OOS seal identity. "
+            "Post-2026-02-27 virgin OOS may be spent only by the PR3 "
+            "StrategyRegistryStore/book_seal_key path, or by a pre-authorized "
+            "A5 override study. Use already-burned windows for the required dry-run pilot."
+        )

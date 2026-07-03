@@ -1,4 +1,4 @@
-# Factor Lifecycle — how a factor goes from `draft` to `candidate` (and toward `approved`)
+# Factor Lifecycle — how a factor goes from `draft` to `candidate` (terminal; `approved` is legacy-only, v1.4)
 
 **Read this first** if you are touching factor promotion, the `factor_lifecycle` orchestrator
 profile, the factor registry, or anything that decides "is this factor good enough to use?"
