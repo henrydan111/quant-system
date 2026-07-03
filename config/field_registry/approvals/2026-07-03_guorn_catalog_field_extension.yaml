@@ -1,0 +1,129 @@
+# Field-registry approval evidence (2026-07-03)
+#
+# ENUMERATION EXTENSION of three already-approved statement families (income / balancesheet /
+# indicators) — 67 fields — driven by the 果仁 deployed-20 replication → factor-catalog integration
+# wave (the 12 grn_* draft factors; see PROMPT_catalog_integration.md + DEPLOYED20_REPLICATION_REPORT.md
+# under workspace/research/idea_sourcing/guorn/). No status transition: every field joins a dataset
+# already `approved`; the same PIT anchoring (max(ann_date, f_ann_date), effective>disclosure STRICT)
+# and the same single-quarter/visibility kernels apply.
+#
+# Slot-depth basis: q5..q7 single-quarter and level slots are materialized by the depth-9 provider
+# (SLOT_DEPTH_DEFAULT=9; GPT §10 APPROVED 2026-06-30, publish gates m1/m2 passed 2026-07-01; the
+# deeper-slot kernel is rung-6-validated bit-faithful to depth 16, median rel-err 0.0, n~2M).
+#
+# Value-level evidence (deployed-20 xlsx parities, 2026-07-02..03):
+#   CoreProfit 6-leg (0-fill) — 建行@2014-01-08 0.0971 vs 果仁 0.0993 structure-exact; #8 panel penny
+#   (medRel 0.0001, n=16351). ATO caliber-A (revenue+assets q0..q7) — #16 xlsx penny 0.0005/sp 0.983.
+#   core_qoq_ttm (q0..q7 TTM legs) — #4 xlsx penny 0.0000/sp 0.945. ROETTMDiff weighted-equity
+#   (eq q0..q5) — mapping-doc pinned caliber (0.22pp med). SharesAvgGr (total_share_q0..q7) — official
+#   top-K 100/90/85. 真实负债资产率 (intan/r_and_d q0) — campaign penny, top-K 100%. EV legs
+#   (bond_payable/minority_int/trad_asset q0) — gp_ev sp 0.981 (#4 xlsx). income_tax_sq (q0/q4) —
+#   #4 probe 100% coverage; formula caliber per indicator_reference_auto (denominator |q0|).
+#   profit_dedt_sq_q4 — same Phase-C kernel as the approved q0.
+
+approval_id: 2026-07-03_guorn_catalog_field_extension
+date: 2026-07-03
+dataset_id: income+balancesheet+indicators   # enumeration extension across 3 approved families
+source_endpoint: "tushare.income / tushare.balancesheet / tushare.fina_indicator_vip (existing PIT ledgers; no new ingest)"
+from_status: approved                        # datasets already approved; fields join the enumeration
+to_status: approved
+reviewer: henrydan111
+related_pr: guorn deployed-20 replication -> catalog integration (grn_* wave)
+related_findings_id: null
+
+provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
+calendar_policy_id: frozen_20260227_system_build
+
+source_class: same_family_enumeration_extension
+coverage_tier: full                          # statement slots; q5..q7 legs inherit reporting-history coverage
+
+approval_scope:
+  status: approved
+  stages:
+    sandbox_screening: true
+    vectorized_screening: true
+    formal_validation: true
+    oos_test: true
+    registry_publish: true
+
+fields_income:
+  - $admin_exp_sq_q1
+  - $admin_exp_sq_q2
+  - $admin_exp_sq_q3
+  - $admin_exp_sq_q4
+  - $admin_exp_sq_q5
+  - $admin_exp_sq_q6
+  - $admin_exp_sq_q7
+  - $biz_tax_surchg_sq_q0
+  - $biz_tax_surchg_sq_q1
+  - $biz_tax_surchg_sq_q2
+  - $biz_tax_surchg_sq_q3
+  - $biz_tax_surchg_sq_q4
+  - $biz_tax_surchg_sq_q5
+  - $biz_tax_surchg_sq_q6
+  - $biz_tax_surchg_sq_q7
+  - $fin_exp_sq_q1
+  - $fin_exp_sq_q2
+  - $fin_exp_sq_q3
+  - $fin_exp_sq_q4
+  - $fin_exp_sq_q5
+  - $fin_exp_sq_q6
+  - $fin_exp_sq_q7
+  - $income_tax_sq_q0
+  - $income_tax_sq_q4
+  - $n_income_attr_p_sq_q2
+  - $n_income_attr_p_sq_q3
+  - $oper_cost_sq_q5
+  - $oper_cost_sq_q6
+  - $oper_cost_sq_q7
+  - $rd_exp_sq_q4
+  - $revenue_sq_q2
+  - $revenue_sq_q3
+  - $revenue_sq_q5
+  - $revenue_sq_q6
+  - $revenue_sq_q7
+  - $sell_exp_sq_q1
+  - $sell_exp_sq_q2
+  - $sell_exp_sq_q3
+  - $sell_exp_sq_q4
+  - $sell_exp_sq_q5
+  - $sell_exp_sq_q6
+  - $sell_exp_sq_q7
+
+fields_balancesheet:
+  - $bond_payable_q0
+  - $intan_assets_q0
+  - $minority_int_q0
+  - $r_and_d_q0
+  - $total_assets_q2
+  - $total_assets_q3
+  - $total_assets_q5
+  - $total_assets_q6
+  - $total_assets_q7
+  - $total_hldr_eqy_exc_min_int_q0
+  - $total_hldr_eqy_exc_min_int_q1
+  - $total_hldr_eqy_exc_min_int_q2
+  - $total_hldr_eqy_exc_min_int_q3
+  - $total_hldr_eqy_exc_min_int_q4
+  - $total_hldr_eqy_exc_min_int_q5
+  - $total_share_q0
+  - $total_share_q1
+  - $total_share_q2
+  - $total_share_q3
+  - $total_share_q4
+  - $total_share_q5
+  - $total_share_q6
+  - $total_share_q7
+  - $trad_asset_q0
+
+fields_indicators:
+  - $profit_dedt_sq_q4
+
+# Consumers (the grn_* catalog wave, all registered as draft):
+#   grn_core_profit_qgr, grn_core_qoq_minus_ttm, grn_incometax_qgr, grn_dedt_qgr, grn_rnd_qgr,
+#   grn_roe_ttm_diff_q, grn_shares_avg_gr, grn_ato_diff_py, grn_true_debt_assets, grn_gp_ev,
+#   grn_onmom_250_20, grn_onmom_120_20 (last two use price+$limit_status only).
+# NOTE ($total_share_qN): the REPORT-anchored series (correct for AvgQ(总股本) semantics) — do NOT
+# confuse with the bare effective-date $total_share (§3.1 invariant).
+# NOTE (EV): grn_gp_ev's EV replicates the 果仁 author formula VERBATIM incl the double 货币资金
+# subtraction (fidelity to the deployed book; documented in the factor docstring).

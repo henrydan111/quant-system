@@ -232,7 +232,11 @@ datasets:
       # CUMULATIVE profit_dedt (derive_single_quarter_value). PIT-correct replacement for
       # the unregistered vendor q_dtprofit_to_profit. coverage_tier=sub. q1..q4 stay
       # unregistered until a factor needs them. See approvals/2026-06-24_profit_dedt_sq_to_approved.yaml.
+      # 2026-07-03 (guorn-catalog wave): q4 added — grn_dedt_qgr needs the year-ago slot
+      # (EpsExclXorQGr%PY; #1/#4 xlsx-parity-consumed). Same kernel/anchoring as q0.
+      # See approvals/2026-07-03_guorn_catalog_field_extension.yaml.
       - $profit_dedt_sq_q0
+      - $profit_dedt_sq_q4
 
   reference:
     status: approved
@@ -427,16 +431,42 @@ datasets:
   #   config/field_registry/approvals/2026-05-31_statements_unknown_to_approved.yaml
   income:
     status: approved
-    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml. 2026-06-24 (Phase-B): added admin_exp/fin_exp/sell_exp/total_cogs/total_profit _sq_q0 + the revenue/n_income_attr_p _sq_q1 slots — same family/anchoring/pipeline, value-parity-validated vs the vendor q_* (admin/fin/sell penny-exact via rung-5 CoreProfitQ vs 果仁; total_cogs/total_profit via the Phase-B q_op_to_gr/q_opincome MATCH, _phaseb_qstar_parity_audit.py). Unlocks the Phase-B single-quarter factors. See approvals/2026-06-24_income_phaseb_sq_to_approved.yaml."
+    reason: "Tushare income statement line-items (single-quarter _sq_q* derived). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. $rd_exp_sq_q0 added 2026-06-08 (same family/anchoring/pipeline; cov 0.83; unlocks qual_rd_to_assets) — see approvals/2026-06-08_income_rd_exp_sq_q0_to_approved.yaml. 2026-06-24 (Phase-B): added admin_exp/fin_exp/sell_exp/total_cogs/total_profit _sq_q0 + the revenue/n_income_attr_p _sq_q1 slots — same family/anchoring/pipeline, value-parity-validated vs the vendor q_* (admin/fin/sell penny-exact via rung-5 CoreProfitQ vs 果仁; total_cogs/total_profit via the Phase-B q_op_to_gr/q_opincome MATCH, _phaseb_qstar_parity_audit.py). Unlocks the Phase-B single-quarter factors. See approvals/2026-06-24_income_phaseb_sq_to_approved.yaml. 2026-07-03 (guorn-catalog wave): added 42 slots — CoreProfit 6-leg q0..q7 completion (biz_tax_surchg all, admin/sell/fin q1..q7, revenue q2/q3/q5..q7, oper_cost q5..q7), income_tax_sq q0/q4, rd_exp_sq_q4, n_income_attr_p_sq q2/q3 — same family/anchoring/pipeline; q5..q8 slots materialized by the depth-9 provider (GPT-approved 2026-06-30, rung-6 bit-faithful to depth 16); values consumed+validated in the deployed-20 xlsx parities (CoreProfitQGr 0-fill penny, ato caliber-A 0.983, core_qoq_ttm 0.945). See approvals/2026-07-03_guorn_catalog_field_extension.yaml."
     fields:
       - $admin_exp_sq_q0
+      - $admin_exp_sq_q1
+      - $admin_exp_sq_q2
+      - $admin_exp_sq_q3
+      - $admin_exp_sq_q4
+      - $admin_exp_sq_q5
+      - $admin_exp_sq_q6
+      - $admin_exp_sq_q7
+      - $biz_tax_surchg_sq_q0
+      - $biz_tax_surchg_sq_q1
+      - $biz_tax_surchg_sq_q2
+      - $biz_tax_surchg_sq_q3
+      - $biz_tax_surchg_sq_q4
+      - $biz_tax_surchg_sq_q5
+      - $biz_tax_surchg_sq_q6
+      - $biz_tax_surchg_sq_q7
       - $ebit_sq_q0
       - $ebit_sq_q1
       - $ebit_sq_q2
       - $ebit_sq_q3
       - $fin_exp_sq_q0
+      - $fin_exp_sq_q1
+      - $fin_exp_sq_q2
+      - $fin_exp_sq_q3
+      - $fin_exp_sq_q4
+      - $fin_exp_sq_q5
+      - $fin_exp_sq_q6
+      - $fin_exp_sq_q7
+      - $income_tax_sq_q0
+      - $income_tax_sq_q4
       - $n_income_attr_p_sq_q0
       - $n_income_attr_p_sq_q1
+      - $n_income_attr_p_sq_q2
+      - $n_income_attr_p_sq_q3
       - $n_income_attr_p_sq_q4
       - $n_income_sq_q0
       - $n_income_sq_q1
@@ -448,13 +478,29 @@ datasets:
       - $oper_cost_sq_q2
       - $oper_cost_sq_q3
       - $oper_cost_sq_q4
+      - $oper_cost_sq_q5
+      - $oper_cost_sq_q6
+      - $oper_cost_sq_q7
       - $operate_profit_sq_q0
       - $operate_profit_sq_q4
       - $rd_exp_sq_q0
+      - $rd_exp_sq_q4
       - $revenue_sq_q0
       - $revenue_sq_q1
+      - $revenue_sq_q2
+      - $revenue_sq_q3
       - $revenue_sq_q4
+      - $revenue_sq_q5
+      - $revenue_sq_q6
+      - $revenue_sq_q7
       - $sell_exp_sq_q0
+      - $sell_exp_sq_q1
+      - $sell_exp_sq_q2
+      - $sell_exp_sq_q3
+      - $sell_exp_sq_q4
+      - $sell_exp_sq_q5
+      - $sell_exp_sq_q6
+      - $sell_exp_sq_q7
       - $total_cogs_sq_q0
       - $total_profit_sq_q0
       - $total_revenue_sq_q0
@@ -465,35 +511,59 @@ datasets:
 
   balancesheet:
     status: approved
-    reason: "Tushare balance-sheet line-items (period-end _q* snapshots). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml."
+    reason: "Tushare balance-sheet line-items (period-end _q* snapshots). PIT-anchored on max(ann_date, f_ann_date) per CLAUDE.md §3. Wave-1 promotion 2026-05-31 — coverage + live-provider parity verified. See approvals/2026-05-31_statements_unknown_to_approved.yaml. 2026-07-03 (guorn-catalog wave): added 24 slots — equity ex-minority q0..q5 (ROETTMDiff weighted-equity legs), total_assets q2/q3/q5..q7 (ATO caliber-A), intangibles trio intan_assets/r_and_d q0 (真实负债资产率), EV legs bond_payable/minority_int/trad_asset q0, and the report-anchored share slots total_share_q0..q7 (SharesAvgGr; §3.1: the _qN series is CORRECTLY report-anchored, distinct from the bare effective-date $total_share) — same family/anchoring/pipeline; depth-9 slots per the GPT-approved 2026-06-30 extension; xlsx-parity-consumed (ROETTMDiff v2, zsfz penny, SharesAvgGr rank top-K 100/90/85). See approvals/2026-07-03_guorn_catalog_field_extension.yaml."
     fields:
       - $accounts_pay_q0
       - $accounts_pay_q1
       - $accounts_receiv_q0
       - $accounts_receiv_q4
+      - $bond_payable_q0
       - $goodwill_q0
+      - $intan_assets_q0
       - $inventories_q0
       - $inventories_q1
       - $inventories_q4
       - $lt_borr_q0
+      - $minority_int_q0
       - $money_cap_q0
       - $money_cap_q1
+      - $r_and_d_q0
       - $retained_earnings_q0
       - $st_borr_q0
       - $total_assets_q0
       - $total_assets_q1
+      - $total_assets_q2
+      - $total_assets_q3
       - $total_assets_q4
+      - $total_assets_q5
+      - $total_assets_q6
+      - $total_assets_q7
       - $total_cur_assets_q0
       - $total_cur_assets_q1
       - $total_cur_assets_q4
       - $total_cur_liab_q0
       - $total_cur_liab_q1
       - $total_cur_liab_q4
+      - $total_hldr_eqy_exc_min_int_q0
+      - $total_hldr_eqy_exc_min_int_q1
+      - $total_hldr_eqy_exc_min_int_q2
+      - $total_hldr_eqy_exc_min_int_q3
+      - $total_hldr_eqy_exc_min_int_q4
+      - $total_hldr_eqy_exc_min_int_q5
       - $total_hldr_eqy_inc_min_int_q0
       - $total_hldr_eqy_inc_min_int_q1
       - $total_liab_q0
       - $total_liab_q1
       - $total_liab_q4
+      - $total_share_q0
+      - $total_share_q1
+      - $total_share_q2
+      - $total_share_q3
+      - $total_share_q4
+      - $total_share_q5
+      - $total_share_q6
+      - $total_share_q7
+      - $trad_asset_q0
 
   cashflow:
     status: approved

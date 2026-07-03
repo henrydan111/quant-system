@@ -492,6 +492,11 @@ def get_factor_catalog(include_new_data=False, include_hypothesis_factors: list[
     # → need balance sheet fields not yet in Qlib
 
     # ═══════════════════════════════════════════════════════════════
+    # 10b. GUORN REPLICATION (果仁 deployed-20 复刻波, 2026-07-03) — 12 factors
+    # ═══════════════════════════════════════════════════════════════
+    _add_guorn_replication_factors(catalog)
+
+    # ═══════════════════════════════════════════════════════════════
     # 11-14: NEW DATA FACTORS (require Phase 3 downloads)
     # ═══════════════════════════════════════════════════════════════
     if include_new_data:
@@ -723,6 +728,136 @@ def _add_sealed_oos_winners(catalog):
         "+ If(Ref($total_revenue_sq_q0, 1) / Ref($total_assets_q0, 1) > "
         "Ref($total_revenue_sq_q4, 1) / Ref($total_assets_q4, 1), 1, 0)"
     )
+
+
+def _grn_zf(expr: str) -> str:
+    """果仁-vendor 0-fill: missing statement line → 0, finite values (incl NEGATIVES, e.g. fin_exp
+    interest income) kept. NaN==NaN is False elementwise, so If(Eq(x,x), x, 0) maps only NaN→0.
+    (This qlib vendor has no IsNull op.) Registry fix #11 — see DEPLOYED20_REPLICATION_REPORT §2.9."""
+    return f"If(Eq({expr}, {expr}), {expr}, 0)"
+
+
+def _grn_core_sq(q: int) -> str:
+    """CoreProfitQ (果仁 rung-5 penny caliber + fix-11 0-fill): revenue − oper_cost − (admin+sell+fin)
+    − biz_tax_surchg, all single-quarter slot q. Revenue is REQUIRED (bare → NaN propagates);
+    expense legs 0-fill (FINANCIALS lack oper_cost/sell/fin lines — strict-NaN rank-bottomed banks,
+    the #8 term-drag +0.315 culprit; 0-fill 建行@2014-01-08 = 0.0971 vs 果仁 xlsx 0.0993)."""
+    r = lambda f: f"Ref(${f}_sq_q{q}, 1)"  # noqa: E731
+    return (f"({r('revenue')} - {_grn_zf(r('oper_cost'))}"
+            f" - ({_grn_zf(r('admin_exp'))} + {_grn_zf(r('sell_exp'))} + {_grn_zf(r('fin_exp'))})"
+            f" - {_grn_zf(r('biz_tax_surchg'))})")
+
+
+def _add_guorn_replication_factors(catalog):
+    """Category 10b: 果仁 deployed-20 replication wave (grn_*, 2026-07-03) — 12 draft factors.
+
+    Every expression is the EXACT caliber pinned against 果仁's own xlsx ground-truth columns during
+    the deployed-20 replication (2026-07-02..03) — see
+    workspace/research/idea_sourcing/guorn/DEPLOYED20_REPLICATION_REPORT.md (§2 caliber registry) and
+    guorn_local_field_mapping.md. All legs Ref(...,1) (PIT, T-1); statement fields resolve to the
+    approved income/balancesheet/indicators families (enumeration extended
+    approvals/2026-07-03_guorn_catalog_field_extension.yaml). Registered as DRAFT — 果仁 deployment
+    is NOT alpha evidence; these enter the normal IS-gate/sealed-OOS lifecycle like any other draft.
+
+    Dedup notes (checked vs live catalog 2026-07-03): 果仁 250日涨幅 == mom_return_250d (NOT re-registered);
+    果仁 SalesQGr%PY == grow_rev_q_yoy modulo denominator (|q0| vs |q4| — alias, NOT re-registered);
+    grn_onmom_* differ from mom_overnight_20d (sum-window DIFF construction + 涨停-day exclusion).
+    EXCLUDED from this wave: report_rc aggregates (dataset quarantine), EBITDAQ/EV + FCFQ family
+    (D&A cum-differencing — deferred to materialization), dividend family (needs declared-dividend
+    provider fields), 历史贝塔 (cross-series regression, not per-instrument expressible),
+    HNeutralize/HneutralizeMI composites (cross-sectional; mi_rndqp semantics UNRESOLVED sp −0.18)."""
+    EPS = "0.0001"
+
+    # ── Growth / earnings-quality (statement single-quarter) ──
+    c0, c1, c4 = _grn_core_sq(0), _grn_core_sq(1), _grn_core_sq(4)
+    catalog['grn_core_profit_qgr'] = (
+        f"If(Abs({c4}) > {EPS}, ({c0} - {c4}) / Abs({c4}), np.nan)"
+    )  # CoreProfitQGr%PY (果仁 w2 GARP core; 0-fill penny vs #8 xlsx, medRel 0.0001 n=16351)
+    ttm0 = "(" + " + ".join(_grn_core_sq(i) for i in range(0, 4)) + ")"
+    ttm4 = "(" + " + ".join(_grn_core_sq(i) for i in range(4, 8)) + ")"
+    catalog['grn_core_qoq_minus_ttm'] = (
+        f"If(Abs({c1}) > {EPS}, ({c0} - {c1}) / Abs({c1}), np.nan)"
+        f" - If(Abs({ttm4}) > {EPS}, ({ttm0} - {ttm4}) / Abs({ttm4}), np.nan)"
+    )  # 公式(COREPROFITQGr%PQ−COREPROFITTTMGr%PY); TTM(x,4)=YEAR-AGO 4q sum (registry fix #12);
+    #    #4 xlsx penny (medRel 0.0000 / sp 0.945, n=32k)
+    catalog['grn_incometax_qgr'] = (
+        "If(Abs(Ref($income_tax_sq_q0, 1)) > 0,"
+        " (Ref($income_tax_sq_q0, 1) - Ref($income_tax_sq_q4, 1)) / Abs(Ref($income_tax_sq_q0, 1)),"
+        " np.nan)"
+    )  # 所得税费用QGr%PY — 果仁 denominator is |q0| (indicator_reference_auto L123), NOT |q4|
+    catalog['grn_dedt_qgr'] = (
+        "If(Abs(Ref($profit_dedt_sq_q4, 1)) > 0,"
+        " (Ref($profit_dedt_sq_q0, 1) - Ref($profit_dedt_sq_q4, 1)) / Abs(Ref($profit_dedt_sq_q4, 1)),"
+        " np.nan)"
+    )  # EpsExclXorQGr%PY (扣非单季同比; per-share cancels — amount ratio == eps ratio)
+    catalog['grn_rnd_qgr'] = (
+        "If(Abs(Ref($rd_exp_sq_q4, 1)) > 0,"
+        " (Ref($rd_exp_sq_q0, 1) - Ref($rd_exp_sq_q4, 1)) / Ref($rd_exp_sq_q4, 1), np.nan)"
+    )  # RnDQGR%PY — 果仁 recipe divides by SIGNED refq(rd,4) (no Abs), verbatim (rung-5 0.63% med)
+    _weq0 = ("((0.5 * Ref($total_hldr_eqy_exc_min_int_q4, 1) + Ref($total_hldr_eqy_exc_min_int_q3, 1)"
+             " + Ref($total_hldr_eqy_exc_min_int_q2, 1) + Ref($total_hldr_eqy_exc_min_int_q1, 1)"
+             " + 0.5 * Ref($total_hldr_eqy_exc_min_int_q0, 1)) / 4)")
+    _weq1 = ("((0.5 * Ref($total_hldr_eqy_exc_min_int_q5, 1) + Ref($total_hldr_eqy_exc_min_int_q4, 1)"
+             " + Ref($total_hldr_eqy_exc_min_int_q3, 1) + Ref($total_hldr_eqy_exc_min_int_q2, 1)"
+             " + 0.5 * Ref($total_hldr_eqy_exc_min_int_q1, 1)) / 4)")
+    _ni03 = ("(Ref($n_income_attr_p_sq_q0, 1) + Ref($n_income_attr_p_sq_q1, 1)"
+             " + Ref($n_income_attr_p_sq_q2, 1) + Ref($n_income_attr_p_sq_q3, 1))")
+    _ni14 = ("(Ref($n_income_attr_p_sq_q1, 1) + Ref($n_income_attr_p_sq_q2, 1)"
+             " + Ref($n_income_attr_p_sq_q3, 1) + Ref($n_income_attr_p_sq_q4, 1))")
+    catalog['grn_roe_ttm_diff_q'] = (
+        f"If(Abs({_weq0}) > 1, {_ni03} / {_weq0}, np.nan)"
+        f" - If(Abs({_weq1}) > 1, {_ni14} / {_weq1}, np.nan)"
+    )  # ROETTMDiffPQ — 加权平均净资产 time-weighted proxy legs (registry fix; mapping-doc pinned
+    #    0.22pp med). KNOWN-FRAGILE at top-K selection (tiny QoQ diff vs per-leg residual) — a
+    #    ranking/composite term, documented in the deployed books
+    _sh03 = ("(Ref($total_share_q0, 1) + Ref($total_share_q1, 1)"
+             " + Ref($total_share_q2, 1) + Ref($total_share_q3, 1))")
+    _sh47 = ("(Ref($total_share_q4, 1) + Ref($total_share_q5, 1)"
+             " + Ref($total_share_q6, 1) + Ref($total_share_q7, 1))")
+    catalog['grn_shares_avg_gr'] = (
+        f"If({_sh47} > 0, {_sh03} / {_sh47} - 1, np.nan)"
+    )  # SharesAvgGr%PY (dilution; REPORT-anchored _qN slots — §3.1; official top-K 100/90/85 rank-valid)
+    _ttmrev0 = ("(Ref($revenue_sq_q0, 1) + Ref($revenue_sq_q1, 1)"
+                " + Ref($revenue_sq_q2, 1) + Ref($revenue_sq_q3, 1))")
+    _ttmrev4 = ("(Ref($revenue_sq_q4, 1) + Ref($revenue_sq_q5, 1)"
+                " + Ref($revenue_sq_q6, 1) + Ref($revenue_sq_q7, 1))")
+    _avga0 = ("((Ref($total_assets_q0, 1) + Ref($total_assets_q1, 1)"
+              " + Ref($total_assets_q2, 1) + Ref($total_assets_q3, 1)) / 4)")
+    _avga4 = ("((Ref($total_assets_q4, 1) + Ref($total_assets_q5, 1)"
+              " + Ref($total_assets_q6, 1) + Ref($total_assets_q7, 1)) / 4)")
+    catalog['grn_ato_diff_py'] = (
+        f"If({_avga0} > 0, {_ttmrev0} / {_avga0}, np.nan)"
+        f" - If({_avga4} > 0, {_ttmrev4} / {_avga4}, np.nan)"
+    )  # AssetTurnoverDiffPY — caliber A (4-quarter AVERAGE assets) pinned by #16 xlsx parity
+    #    (registry fix #13: penny 0.0005 / sp 0.983; begin+end/2 caliber B REFUTED at 0.879)
+
+    # ── Value / leverage ──
+    _zsfz_den = (f"(Ref($total_assets_q0, 1) - {_grn_zf('Ref($goodwill_q0, 1)')}"
+                 f" - {_grn_zf('Ref($intan_assets_q0, 1)')} - {_grn_zf('Ref($r_and_d_q0, 1)')})")
+    catalog['grn_true_debt_assets'] = (
+        f"If({_zsfz_den} > 0, Ref($total_liab_q0, 1) / {_zsfz_den}, np.nan)"
+    )  # 真实负债资产率 = 负债/(资产−商誉−无形−开发支出), intangibles 0-fill (campaign penny, top-K 100%;
+    #    distinct from lev_debt_to_assets = plain 负债/资产)
+    _ev = (f"(Ref($total_mv, 1) * 10000 + {_grn_zf('Ref($lt_borr_q0, 1)')}"
+           f" + {_grn_zf('Ref($st_borr_q0, 1)')} + {_grn_zf('Ref($bond_payable_q0, 1)')}"
+           f" + {_grn_zf('Ref($minority_int_q0, 1)')} - {_grn_zf('Ref($money_cap_q0, 1)')}"
+           f" - {_grn_zf('Ref($money_cap_q0, 1)')} - {_grn_zf('Ref($trad_asset_q0, 1)')})")
+    catalog['grn_gp_ev'] = (
+        f"If(Abs({_ev}) > {EPS},"
+        f" (Ref($revenue_sq_q0, 1) - {_grn_zf('Ref($oper_cost_sq_q0, 1)')}) / {_ev}, np.nan)"
+    )  # (营收单季−营业成本单季)/EV — EV replicates the 果仁 author formula VERBATIM incl the DOUBLE
+    #    货币资金 subtraction (a deployed-book author bug kept for fidelity — #4 xlsx sp 0.981 proves
+    #    the doubled form is what the books trade on). $total_mv is 万元 → ×1e4 to 元
+
+    # ── Overnight momentum (limit-excluded window-diff; #1/#16 validated construction) ──
+    _onret = ("If(Eq(Ref($limit_status, 1), 1), 0,"
+              " Log(Ref(($open * $adj_factor), 1) / Ref(($close * $adj_factor), 2)))")
+    for w in (250, 120):
+        catalog[f'grn_onmom_{w}_20'] = (
+            f"Sum({_onret}, {w}) - Sum({_onret}, 20)"
+        )  # SUM(IF(涨停,0,LOG(adjopen/REF(adjclose,1))),w) − SUM(...,20); ln vs 果仁 log10 is a
+        #    constant ×2.3026 (rank-invariant, registry fix #7); xlsx sp 0.972/0.943 (#16).
+        #    DISTINCT from mom_overnight_20d (plain 20d MEAN, no limit exclusion, no window diff)
 
 
 def get_industry_relative_defs() -> list[dict]:
@@ -1108,6 +1243,7 @@ def get_category_map():
             'margin': 'Margin',
             'earn': 'Earnings',
             'comp': 'Composite',
+            'grn': 'Guorn Replication',
         }
         mapping[name] = category_map.get(prefix, 'Other')
     return mapping
