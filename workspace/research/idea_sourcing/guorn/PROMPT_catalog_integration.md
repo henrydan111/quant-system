@@ -66,6 +66,14 @@ bpfin(BP筹资市值比调整,sp 0.976-0.982)、ep_core_neut、中性换手率 v
 2. **PIT lint 三件套必须绿**:`test_factor_library_pit_safety.py`(Ref 包裹栈扫)、
    `test_operator_expressions.py`、`test_operator_behavioral_pit.py`;外加
    `scripts/lint_no_unsafe_pit_dates.py` 与 `lint_no_bare_qlib_features.py`(run_daily_qa 内)。
+2b. **⚠ 原生 compute 冒烟必做(2026-07-03 教训 + GPT finding #4)**:PIT/字段门只审表达式 LOGIC,抓不到
+   原生 `compute_factors` 的**跨数据集广播崩溃**——分子/分母(或 flag/价格)来自不同 provider 数据集时,
+   某股一侧空序列 (0,) 一侧满长 (N,) → qlib `If` 的 np.where 广播崩;deployed-20 harness 的
+   `D.features + reindex(grid).ffill()` 会掩盖它,原生逐股求值不掩盖。**每个新因子必须过一次
+   `operators.compute_factors(catalog={f: expr}, start='2011-01-01', end='2011-06-30', ...)`**(幼股密集窗,
+   深槽 q5+ 与 limit_status 最易缺失;模板见 `_grn_isolate.py`)——0 CRASH 才算过。**跨数据集因子通用规范**:
+   守卫作用在已算比值上(`If(Abs(ratio)<cap, ratio, nan)`,cap≫真实量级),或稀疏字段用 `+ Ref($dense,1)*0`
+   锚到稠密字段长度。这条**先于**下面的字段门/sync。
 3. `sync_catalog` 后跑 `tests/alpha_research/test_factor_registry.py` 全文件(catalog↔registry 平价、
    幂等、TestFormalFactorCompatibility)—— 记忆 `feedback_run_full_test_file_after_gate_change`。
 4. 每个因子 docstring:公式、数据源、口径 registry 编号引用、价格基准(adj/raw)、已知残差/脆弱性

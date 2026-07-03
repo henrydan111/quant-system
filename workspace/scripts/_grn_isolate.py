@@ -1,3 +1,6 @@
+# SCRIPT_STATUS: Class-B one-off compute-safety probe (kept). Native compute_factors smoke over ALL grn_*
+# factors on a young-stock-heavy window (2011-H1, where deep slots q5+ / limit_status most often absent) —
+# reproduces + confirms the cross-dataset broadcast crash fix. Read-only (no registry / provider write).
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]

@@ -1,3 +1,6 @@
+# SCRIPT_STATUS: Class-B one-off compute-safety probe (kept). Isolates the length-safe onmom fix — tests 3
+# limit-exclusion variants (bare If / +$close*0 anchor / no-exclusion) over 2011-H1 to pick the faithful
+# length-safe form. Read-only (no registry / provider write).
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
