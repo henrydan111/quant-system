@@ -175,3 +175,126 @@ class TestBookSealKeyRefusesBlankKey:
         with pytest.raises(ValueError, match=r"book_seal_key"):
             ledger.record_book_spend(oos_window_id="w", book_seal_key="  ",
                                      frozen_set_hash="fsh")
+
+
+class TestSpendUnitIdempotencyIsolation:
+    def test_book_first_then_a5_study_same_frozen_set_counts_two_spends(self, tmp_path: Path):
+        # Implementation-review Blocker 2: a pre-existing BOOK row on (window, fsh) must
+        # not swallow a later A5 study's spend record (order-dependent undercount).
+        ledger = OosWindowLedgerStore(tmp_path / "skill_store")
+        window = "2026-03-01..2026-09-30"
+        ident = _identity(_plan(frozen_set_hash="fsh_shared"))
+        ledger.record_book_spend(oos_window_id=window, book_seal_key=ident.book_seal_key,
+                                 frozen_set_hash="fsh_shared")
+        ledger.record_study_spend(oos_window_id=window, frozen_set_hash="fsh_shared",
+                                  override_id="fresh_window_override_002")
+        rows = ledger.list_all()
+        assert set(rows["spend_unit_type"].dropna()) == {"book_seal", "a5_signal_replication_study"}
+        assert len(ledger.distinct_spend_keys(window)) == 2
+        # And the reverse order (study-first) still records both + stays idempotent.
+        ledger.record_study_spend(oos_window_id=window, frozen_set_hash="fsh_shared")
+        ledger.record_book_spend(oos_window_id=window, book_seal_key=ident.book_seal_key,
+                                 frozen_set_hash="fsh_shared")
+        assert len(ledger.list_all()) == 2
+
+    def test_legacy_record_spend_not_masked_by_book_row(self, tmp_path: Path):
+        ledger = OosWindowLedgerStore(tmp_path / "skill_store")
+        window = "2021-01-01..2026-02-27"
+        ident = _identity(_plan(frozen_set_hash="fsh_legacy"))
+        ledger.record_book_spend(oos_window_id=window, book_seal_key=ident.book_seal_key,
+                                 frozen_set_hash="fsh_legacy")
+        ledger.record_spend(oos_window_id=window, frozen_set_hash="fsh_legacy")
+        assert len(ledger.list_all()) == 2
+
+
+class TestTudAliasFullPayload:
+    """Implementation-review Blocker 3: the migration alias must carry the FULL payload —
+    factor_version + real data/calendar policy identifiers — or refuse."""
+
+    def _fields(self, **overrides):
+        base = dict(
+            alias_id="alias_x", alias_version="1", created_at="2026-07-03",
+            recorded_before_stage7_freeze=True, factor_id="qual_roe", factor_version="1",
+            definition_hash="dh", source_evidence_id="ev1", stage5_methodology_hash="m5",
+            evidence_window="2014..2020", target_universe_id="theme:tuc",
+            universe_definition_filters_json="{}", eligibility_policy="p", asof_policy="p",
+            data_policy_ids_json='{"provider_build_id": "pb_1", "calendar_policy_id": "cp_1"}',
+        )
+        base.update(overrides)
+        return base
+
+    def test_full_payload_accepted(self, tmp_path: Path):
+        from src.alpha_research.factor_eval_skill.stores import TudEquivalenceAliasStore
+
+        row = TudEquivalenceAliasStore(tmp_path / "s").record_alias(**self._fields())
+        assert row["alias_payload_hash"]
+
+    def test_tud_alias_missing_factor_version_refused(self, tmp_path: Path):
+        from src.alpha_research.factor_eval_skill.stores import TudEquivalenceAliasStore
+
+        with pytest.raises(ValueError, match=r"factor_version"):
+            TudEquivalenceAliasStore(tmp_path / "s").record_alias(
+                **self._fields(factor_version="")
+            )
+
+    def test_tud_alias_missing_or_empty_data_policy_ids_refused(self, tmp_path: Path):
+        from src.alpha_research.factor_eval_skill.stores import TudEquivalenceAliasStore
+
+        store = TudEquivalenceAliasStore(tmp_path / "s")
+        with pytest.raises(ValueError, match=r"data_policy_ids_json"):
+            store.record_alias(**self._fields(data_policy_ids_json=""))
+        with pytest.raises(ValueError, match=r"provider_build_id"):
+            store.record_alias(**self._fields(data_policy_ids_json="{}"))
+        with pytest.raises(ValueError, match=r"provider_build_id"):
+            store.record_alias(**self._fields(
+                data_policy_ids_json='{"provider_build_id": "", "calendar_policy_id": "cp"}'
+            ))
+        with pytest.raises(ValueError, match=r"canonical JSON"):
+            store.record_alias(**self._fields(data_policy_ids_json="not json"))
+
+
+class TestA8VirginWindowChokepoint:
+    """Implementation-review Blocker 1: the orchestrator's universal design_hash seal-claim
+    chokepoint refuses VIRGIN (post-2026-02-27) OOS windows until the PR3 book_seal_key
+    path exists; already-burned windows still pass (the dry-run pilot path)."""
+
+    def _context(self, tmp_path: Path, oos_end: str):
+        from unittest.mock import MagicMock
+
+        context = MagicMock()
+        context.step.config = {"stage": "oos_test"}
+        context.step.step_id = "oos_step"
+        context.run_dir = tmp_path / "run"
+        context.resumed = False
+        context.profile.profile_id = "hypothesis_validation"
+        context.registry_dirs = {"holdout_seal_dir": str(tmp_path / "seals")}
+        hyp = context.request.hypothesis
+        hyp.time_split.oos_start = "2021-01-01"
+        hyp.time_split.oos_end = oos_end
+        hyp.design_hash.return_value = "dh_a8_test"
+        hyp.hypothesis_id = "hyp_a8"
+        hyp.structural_family.return_value = "fam_a8"
+        hyp.prescription = None
+        return context
+
+    def test_a8_legacy_design_hash_oos_handler_refuses_virgin_window(self, tmp_path: Path):
+        from unittest.mock import patch
+
+        from src.research_orchestrator.steps import _claim_holdout_access_if_needed
+
+        context = self._context(tmp_path, oos_end="2026-09-30")
+        with patch("src.research_orchestrator.steps._assert_cicc_oos_quarantine"):
+            with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+                _claim_holdout_access_if_needed(context)
+
+    def test_burned_window_still_reaches_the_legacy_claim(self, tmp_path: Path):
+        from unittest.mock import patch
+
+        from src.research_orchestrator.holdout_seal import HoldoutSealStore
+        from src.research_orchestrator.steps import _claim_holdout_access_if_needed
+
+        context = self._context(tmp_path, oos_end="2026-02-27")
+        with patch("src.research_orchestrator.steps._assert_cicc_oos_quarantine"):
+            _claim_holdout_access_if_needed(context)  # must NOT raise the A8 guard
+        events = HoldoutSealStore(tmp_path / "seals").list_events()
+        assert not events.empty  # the burned-window claim was recorded (pilot path alive)

@@ -148,7 +148,9 @@ def main() -> int:
         "greedy_by_standalone": {"members": greedy_standalone, "combined_icir": icir_standalone},
         "greedy_by_marginal": {"members": greedy_marginal, "combined_icir": icir_marginal},
         "per_factor_standalone_icir": {f: stats[f]["icir"] for f in ranked},
-        "note": "IS-only re-derivation (v1.4 amendment §1.3 B3 residual); no OOS touched.",
+        "note": "IS-only CURRENT-POOL re-derivation (v1.4 amendment §1.3 B3 residual); no OOS "
+                "touched. NOT a bit-for-bit reconstruction of the historical experiment — the "
+                "candidate pool has grown since; label any quoted figure accordingly.",
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / "result.json"

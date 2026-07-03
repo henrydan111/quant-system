@@ -23,6 +23,7 @@ provenance is its own store (NOT a fake ``Hypothesis``); the envelope is append-
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping, Sequence
 
 from src.alpha_research.factor_eval_skill._hashing import (
@@ -432,7 +433,11 @@ class OosWindowLedgerStore(AppendOnlyStore):
     ) -> dict[str, Any]:
         """Record one window-tagged spend. Idempotent on (oos_window_id, frozen_set_hash) —
         a frozen set spending the same window again returns the existing row."""
-        existing = self.latest(oos_window_id=str(oos_window_id), frozen_set_hash=str(frozen_set_hash))
+        existing = self._latest_window_frozen_unit(
+            oos_window_id=str(oos_window_id),
+            frozen_set_hash=str(frozen_set_hash),
+            spend_unit_types={"", "frozen_set"},
+        )
         if existing is not None:
             return existing
         return self.record(
@@ -443,6 +448,26 @@ class OosWindowLedgerStore(AppendOnlyStore):
             seal_mode=normalize_enum(seal_mode),
             spend_unit_type="frozen_set",
         )
+
+    def _latest_window_frozen_unit(
+        self, *, oos_window_id: str, frozen_set_hash: str, spend_unit_types: set[str],
+    ) -> dict[str, Any] | None:
+        """Idempotency lookup SCOPED BY SPEND-UNIT TYPE (implementation-review Blocker 2):
+        a book row on the same (window, frozen_set) must never mask a legacy/A5 row's
+        idempotency check — the row types are distinct spends."""
+        frame = self._load()
+        if frame.empty:
+            return None
+        spend_type = frame["spend_unit_type"].astype("string").fillna("")
+        mask = (
+            (frame["oos_window_id"].astype("string") == str(oos_window_id))
+            & (frame["frozen_set_hash"].astype("string") == str(frozen_set_hash))
+            & (spend_type.isin(spend_unit_types))
+        )
+        sub = frame[mask]
+        if sub.empty:
+            return None
+        return sub.iloc[-1].to_dict()
 
     def record_book_spend(
         self, *, oos_window_id: str, book_seal_key: str, frozen_set_hash: str,
@@ -474,8 +499,14 @@ class OosWindowLedgerStore(AppendOnlyStore):
         """v1.4 A5: record a statusless signal-replication-study spend. On a FRESH
         (virgin) window ``override_id`` (the pre-recorded
         fresh_window_signal_replication_override_id) is REQUIRED by the caller's policy
-        gate; this store records, it does not decide. Counts against the A6 budget."""
-        existing = self.latest(oos_window_id=str(oos_window_id), frozen_set_hash=str(frozen_set_hash))
+        gate; this store records, it does not decide. Counts against the A6 budget.
+        Idempotency is scoped to A5 rows only (Blocker 2: a pre-existing BOOK row on the
+        same frozen set must not swallow the study's spend record)."""
+        existing = self._latest_window_frozen_unit(
+            oos_window_id=str(oos_window_id),
+            frozen_set_hash=str(frozen_set_hash),
+            spend_unit_types={"a5_signal_replication_study"},
+        )
         if existing is not None:
             return existing
         return self.record(
@@ -555,12 +586,16 @@ class TudEquivalenceAliasStore(AppendOnlyStore):
     KEY_FIELDS = ("alias_id", "alias_version")
 
     # Fields that must be non-empty for the alias to be acceptable at all (N1: "if any
-    # required field is absent ... the resolver refuses").
+    # required field is absent ... the resolver refuses"). Implementation-review
+    # Blocker 3: the FULL migration payload is required — including the factor VERSION
+    # and the data/calendar policy identifiers needed to reproduce the Stage-5 panel.
     REQUIRED_FIELDS = (
         "alias_id",
         "alias_version",
         "created_at",
+        "recorded_before_stage7_freeze",
         "factor_id",
+        "factor_version",
         "definition_hash",
         "source_evidence_id",
         "stage5_methodology_hash",
@@ -569,18 +604,38 @@ class TudEquivalenceAliasStore(AppendOnlyStore):
         "universe_definition_filters_json",
         "eligibility_policy",
         "asof_policy",
+        "data_policy_ids_json",
     )
 
     def record_alias(self, **fields: Any) -> dict[str, Any]:
-        missing = [f for f in self.REQUIRED_FIELDS if not str(fields.get(f) or "").strip()]
-        if missing:
-            raise ValueError(f"TudEquivalenceAliasStore.record_alias missing required fields: {missing}")
         if fields.get("recorded_before_stage7_freeze") not in (True, "True", "true"):
             raise ValueError(
                 "TudEquivalenceAliasStore.record_alias: recorded_before_stage7_freeze=True is "
                 "required (an alias recorded after freeze cannot back a clean admission)"
             )
         fields["recorded_before_stage7_freeze"] = "True"
+        missing = [f for f in self.REQUIRED_FIELDS if not str(fields.get(f) or "").strip()]
+        if missing:
+            raise ValueError(f"TudEquivalenceAliasStore.record_alias missing required fields: {missing}")
+        # Blocker 3: the data/calendar identifiers must be REAL (canonical JSON with a
+        # non-empty provider_build_id + calendar_policy_id), not a placeholder — without
+        # them the alias cannot prove which data regime produced the Stage-5 evidence.
+        try:
+            data_policy = json.loads(str(fields.get("data_policy_ids_json") or ""))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "TudEquivalenceAliasStore.record_alias: data_policy_ids_json must be "
+                "canonical JSON carrying the Stage-5 provider/calendar/data-policy ids"
+            ) from exc
+        if not isinstance(data_policy, Mapping) or not all(
+            str(data_policy.get(k, "")).strip()
+            for k in ("provider_build_id", "calendar_policy_id")
+        ):
+            raise ValueError(
+                "TudEquivalenceAliasStore.record_alias: data_policy_ids_json must carry "
+                "non-empty provider_build_id and calendar_policy_id; otherwise run a "
+                "target-scoped IS re-audition under the current TUD"
+            )
         payload = {k: str(fields.get(k, "")) for k in self.REQUIRED_FIELDS}
         fields["alias_payload_hash"] = payload_hash(payload)
         return self.record(**fields)

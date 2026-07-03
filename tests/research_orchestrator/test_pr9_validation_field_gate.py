@@ -826,7 +826,8 @@ class TestCandidateScopeGate:
             target_universe_id=tud.target_universe_id,
             universe_definition_filters_json=canonical_json(to_jsonable(tud.universe_definition_filters)),
             eligibility_policy=tud.eligibility_policy, asof_policy=tud.asof_policy,
-            data_policy_ids_json="{}",
+            # Implementation-review Blocker 3: real data/calendar identifiers required.
+            data_policy_ids_json='{"provider_build_id": "pb_legacy_1", "calendar_policy_id": "frozen_20260227_system_build"}',
         )
         store.record_alias(**alias_fields)
         payload = self._payload("factor_registry_candidate")

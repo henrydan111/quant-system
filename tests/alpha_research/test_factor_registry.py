@@ -33,13 +33,15 @@ def _passing_promotion_evidence(git_sha: str = "abc123") -> dict:
 
 
 def _override_payload() -> dict:
-    """A complete v1.4 legacy_factor_approval_override payload (round-1 M4)."""
+    """A complete v1.4 legacy_factor_approval_override payload (round-1 M4 +
+    implementation-review Major 1: a BOUNDED expiration is required)."""
     return {
         "issue_id": "GOV-TEST-1",
         "user_signoff_artifact": "workspace/outputs/test_signoff.json",
         "reviewer_identity": "test_reviewer",
         "reason_code": "test_legacy_exception",
         "scope": "single-factor test scope",
+        "expiration": "2027-01-01",
         "not_a_new_research_promotion": True,
     }
 
@@ -226,6 +228,17 @@ class FactorRegistryTests(unittest.TestCase):
                     promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
                     current_git_sha="abc123",
                 )
+
+            # Implementation-review Major 1: an unbounded expiration is refused.
+            for bad_exp in ("never", "permanent", "none"):
+                unbounded = _override_payload()
+                unbounded["expiration"] = bad_exp
+                with self.assertRaises(PromotionGateError):
+                    store.legacy_factor_approval_override(
+                        factor_id="liq_vol_cv_20d", reason="x", override=unbounded,
+                        promotion_evidence=_passing_promotion_evidence(git_sha="abc123"),
+                        current_git_sha="abc123",
+                    )
 
             # A sandbox/loader reproduction source is NOT independent -> gate blocks.
             bad = _passing_promotion_evidence(git_sha="abc123")

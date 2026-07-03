@@ -423,6 +423,23 @@ def _claim_holdout_access_if_needed(context: StepExecutionContext) -> None:
     # for a CICC-cohort component whose quarantine is approximate or unsatisfied, BEFORE the seal is
     # spent (no-op for non-cohort prescriptions). Covers every OOS path that claims a seal here.
     _assert_cicc_oos_quarantine(context, hypothesis.prescription, str(hypothesis.time_split.oos_start))
+    # v1.4 A8 (implementation-review Blocker 1, 2026-07-03): this chokepoint claims by the
+    # LEGACY design_hash identity. A post-2026-02-27 VIRGIN window may be spent only by the
+    # PR3 StrategyRegistryStore/book_seal_key path (or a pre-authorized A5 override study,
+    # which claims through the skill's own seal path) — refuse it HERE, at the chokepoint,
+    # so every orchestrator OOS handler (event-driven AND vectorized) is covered, before the
+    # seal is spent. Already-burned windows (oos_end <= 2026-02-27) still pass: the required
+    # PR3 dry-run pilot runs on a burned window through this same path.
+    from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
+
+    if is_virgin_window(str(hypothesis.time_split.oos_end)):
+        raise RuntimeError(
+            "v1.4_A8_virgin_window_blocked_until_pr3: the orchestrator OOS seal claim still "
+            "uses the legacy design_hash identity. Post-2026-02-27 virgin OOS may be spent "
+            "only by the PR3 StrategyRegistryStore/book_seal_key path, or by a "
+            "pre-authorized A5 override study. Use already-burned windows for the required "
+            "dry-run pilot."
+        )
     seal_store = HoldoutSealStore(context.registry_dirs["holdout_seal_dir"])
     seal_store.claim_holdout_access(
         design_hash=hypothesis.design_hash(),

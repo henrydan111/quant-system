@@ -1955,19 +1955,40 @@ class ValidationObjectResolverTests(unittest.TestCase):
         # PR P1.2 (Codex round-5): allow_candidate_components admits the
         # factor_registry_candidate layer (candidate-STATUS factors in the formal
         # factor registry), NOT the separate candidate-registry "candidate" layer.
+        # v1.4 A7: the flag alone no longer admits — each candidate needs target-scoped
+        # Stage-5 evidence (candidate_on_declared_target), so this positive test seeds
+        # eligible Stage-3 records bound to the prescription's derived TUD.
         from src.research_orchestrator.validation_steps import handle_validation_object_resolver
         ctx, run_dir = self._build_context(allow_candidate=True)
         try:
+            from src.alpha_research.factor_eval_skill.candidate_scope import (
+                tud_from_prescription_universe,
+            )
+            from src.alpha_research.factor_eval_skill.stores import Stage3QualityRecordStore
+
+            tud = tud_from_prescription_universe(ctx.request.hypothesis.prescription.universe)
+            stage3 = Stage3QualityRecordStore(run_dir / "factor_eval_skill")
+            for name in ("alpha_a", "alpha_b"):
+                stage3.record(
+                    factor_id=name, definition_hash=f"dh_{name}",
+                    layer1_methodology_hash="l1_test",
+                    target_universe_declaration_hash=tud.tud_hash, role="ranking",
+                    quality_flags_json="{}", universe_profile_json="{}",
+                    target_universe_pass="True", cross_universe_sign_divergence="False",
+                    status_effect="candidate_ceiling",
+                )
             mock_resolution = {
                 "formal_hits": 0, "candidate_hits": 2, "new_objects_created": 0,
                 "unresolved_objects": [],
                 "resolved_objects": [
                     {"requested": {"object_type": "factor", "object_name": "alpha_a"},
                      "status": "resolved", "source_layer": "factor_registry_candidate",
-                     "object_type": "factor", "canonical_id": "alpha_a"},
+                     "object_type": "factor", "canonical_id": "alpha_a",
+                     "definition_hash": "dh_alpha_a"},
                     {"requested": {"object_type": "factor", "object_name": "alpha_b"},
                      "status": "resolved", "source_layer": "factor_registry_candidate",
-                     "object_type": "factor", "canonical_id": "alpha_b"},
+                     "object_type": "factor", "canonical_id": "alpha_b",
+                     "definition_hash": "dh_alpha_b"},
                 ],
             }
             # Field gate patched (alpha_a/alpha_b are synthetic fixtures) — see
@@ -1982,6 +2003,10 @@ class ValidationObjectResolverTests(unittest.TestCase):
                 result = handle_validation_object_resolver(ctx)
             self.assertEqual(result.status, "completed")
             self.assertEqual(result.outputs["registry_resolution"]["candidate_hits"], 2)
+            # v1.4 A7: the target-scope admission is recorded on the artifact.
+            scope_report = result.outputs["candidate_scope_report"]
+            self.assertEqual(scope_report["mismatches"], [])
+            self.assertEqual(len(scope_report["checked"]), 2)
         finally:
             shutil.rmtree(run_dir, ignore_errors=True)
 

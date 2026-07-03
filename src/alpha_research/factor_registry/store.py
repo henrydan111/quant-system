@@ -1572,13 +1572,16 @@ class FactorRegistryStore:
         }
 
     # Override payload fields REQUIRED (non-empty) by legacy_factor_approval_override —
-    # v1.4 round-1 M4: issue trail + human sign-off + reviewer + machine-readable scope.
+    # v1.4 round-1 M4 + implementation-review Major 1: issue trail + human sign-off +
+    # reviewer + machine-readable scope + a BOUNDED expiration (permanent factor-level
+    # approved exceptions are not allowed under v1.4).
     _OVERRIDE_REQUIRED_FIELDS = (
         "issue_id",
         "user_signoff_artifact",
         "reviewer_identity",
         "reason_code",
         "scope",
+        "expiration",
     )
 
     def legacy_factor_approval_override(
@@ -1596,8 +1599,9 @@ class FactorRegistryStore:
         ``approved`` row. Deliberately NOT a ``set_status`` flag: a separate command
         requiring the FULL old promotion gate (git sha + independent PIT-correct
         reproduction evidence) PLUS an override payload with ``issue_id``,
-        ``user_signoff_artifact``, ``reviewer_identity``, ``reason_code``, ``scope``, and
-        the machine-readable assertion ``not_a_new_research_promotion=True``. A NEW
+        ``user_signoff_artifact``, ``reviewer_identity``, ``reason_code``, ``scope``, a
+        BOUNDED ``expiration`` (never permanent/unbounded), and the machine-readable
+        assertion ``not_a_new_research_promotion=True``. A NEW
         research promotion must go through the book-level StrategyRegistryStore path —
         using this command for one is a governance violation, and the assertion field
         exists so that misuse is a recorded lie, not an ambiguity."""
@@ -1623,6 +1627,13 @@ class FactorRegistryStore:
                 f"assertion not_a_new_research_promotion=True is required (bool True, not a "
                 f"string) — a NEW research promotion goes through the book-level "
                 f"StrategyRegistryStore path, never this override"
+            )
+        expiration = str(payload.get("expiration") or "").strip().lower()
+        if expiration in {"", "none", "never", "permanent"}:
+            raise PromotionGateError(
+                f"legacy_factor_approval_override factor:{factor_id}: override payload "
+                f"requires a BOUNDED expiration; permanent/unbounded factor-level approved "
+                f"exceptions are not allowed under v1.4"
             )
         if not current_git_sha:
             raise PromotionGateError(
