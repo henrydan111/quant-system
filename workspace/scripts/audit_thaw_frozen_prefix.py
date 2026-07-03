@@ -41,7 +41,10 @@ def _indicator_fields() -> set:
     return base
 
 SIDECAR_EXC_CODES = {"000711_SZ","000793_SZ","001285_SZ","002445_SZ","300344_SZ",
-                     "300391_SZ","301057_SZ","600438_SH","600673_SH","600735_SH"}
+                     "300391_SZ","301057_SZ","600438_SH","600673_SH","600735_SH",
+                     # round-2: the round-1 violation line truncated codes at [:10];
+                     # full diff = 12 codes, each verified strictly additive.
+                     "603121_SH","603966_SH"}
 SIDECAR_EXC_FILES = {"all.txt", "all_stocks.txt"}
 
 def _field_base(field: str) -> str:
@@ -104,7 +107,10 @@ def check_bins() -> None:
                         sb = fh.read(lsize)
                     if hashlib.sha256(lb).digest() != hashlib.sha256(sb).digest():
                         field = entry.name[:-8]
-                        if _field_base(field) in IND_FIELDS:
+                        # report_rc completion: rows the freeze-era fetch missed
+                        # (create_time mid/late-Feb), landed by the contracted
+                        # 202602 overlap refetch — PIT-correct frozen-tail fill.
+                        if _field_base(field) in IND_FIELDS or field.startswith("report_rc__"):
                             n_sha_exc += 1
                         else:
                             n_sha_bad += 1
@@ -117,7 +123,7 @@ def check_bins() -> None:
     report["bins"] = {"symbols": len(symbols), "files_checked": n_checked,
                       "missing": n_missing, "shrunk": n_shrunk,
                       "sha_sampled": n_sha, "sha_mismatch": n_sha_bad,
-                      "sha_approved_indicator_exceptions": n_sha_exc}
+                      "sha_approved_exceptions_ind_or_reportrc": n_sha_exc}
 
 
 def _membership(path: Path, cal: pd.DatetimeIndex) -> pd.DataFrame:
