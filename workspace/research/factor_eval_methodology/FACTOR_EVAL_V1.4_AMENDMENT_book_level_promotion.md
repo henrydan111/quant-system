@@ -1,8 +1,12 @@
 # v1.4 AMENDMENT PROPOSAL — retire the factor-level `approved` mint; one seal per book
 
-> **Status: REVISION 4 — round-3 re-review: N1/N3 RESOLVED, N2 PARTIAL on stale wording only
-> (R3-M1/M2/m1 = 4 wording fixes, ALL APPLIED — disposition §9); reviewer confirmed no remaining
-> implicit guardrails. Pending round-4 confirmation. Not yet operative.**
+> **Status: DESIGN SHIPPED — round-4 GPT 5.5 Pro verdict SHIP (2026-07-03; all four wording fixes
+> CONFIRMED; N2 fully RESOLVED). 4-round arc REVISE×3→SHIP; 18 findings, all accepted, none
+> declined. Round-4 residual risk for implementation pass 1: wiring the ledger/seal API against
+> `book_plan_hash` instead of the derived `book_seal_key`, especially in resume/backstop paths.
+> ⚠ NOT YET OPERATIVE — the governance takes effect only when implementation pass 1 (§5) lands
+> with its acceptance tests + the burned-window dry-run pilot; until then CLAUDE.md §3.5 remains
+> the live contract.**
 > Amends [FACTOR_EVAL_METHODOLOGY_v1.3.md](FACTOR_EVAL_METHODOLOGY_v1.3.md) (the operative methodology)
 > and [STRATEGY_LAYER_BUILD_PLAN_v1.md](../capital_allocation_buildout/STRATEGY_LAYER_BUILD_PLAN_v1.md) §1.1.
 > If approved, folds into a consolidated v1.4 per the v1.3 precedence discipline.
