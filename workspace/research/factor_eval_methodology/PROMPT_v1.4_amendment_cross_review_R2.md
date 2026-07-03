@@ -1,3 +1,56 @@
+# GPT 5.5 Pro cross-review prompt — v1.4 amendment, ROUND 2 (re-review after REVISE)
+
+> Round-1 verdict was REVISE (3 Blockers / 6 Majors / 3 Minors). All 12 findings were ACCEPTED and
+> folded into revision 2 of the amendment. Branch `calendar-unfreeze` is pushed; every raw link
+> resolves against live code. Copy the block below into GPT 5.5 Pro verbatim.
+
+```text
+ROLE
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. This is ROUND 2 of a design-stage review: in round 1 you returned REVISE with findings B1-B3, M1-M6, m1-m3. All were accepted and folded into the revised amendment embedded below. Your job now: verify each finding is faithfully resolved, check the fixes did not introduce new defects, and give a final verdict. Do not rubber-stamp — if a resolution is cosmetic or incomplete, say so.
+
+REPO (public — fetch any file to verify against the live code)
+https://github.com/henrydan111/quant-system   (branch: calendar-unfreeze)
+Raw file form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
+
+CONTEXT (same set as round 1):
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/CLAUDE.md
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/factor_eval_methodology/FACTOR_EVAL_METHODOLOGY_v1.3.md
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/capital_allocation_buildout/STRATEGY_LAYER_BUILD_PLAN_v1.md
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_registry/store.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/research_orchestrator/release_gate.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/research_orchestrator/validation_steps.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/research_orchestrator/resolver.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_eval_skill/identity.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_eval_skill/sealed_oos.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_eval_skill/multiplicity.py
+- https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/src/alpha_research/factor_lifecycle/factor_status_ladder.md
+- Evidence artifacts newly cited in §1 (verify the quoted numbers):
+  https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/idea_sourcing/arxiv_d1d4_sealed_oos_promotion.json
+  https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/idea_sourcing/arxiv_d1d4_selection_provenance.json
+  https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/factor_expansion/unified_eval_standard.md
+- The revised amendment under review (also embedded in full below):
+  https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md
+
+SELF-REVIEW PREFLIGHT — completed before this round-2 request: verdict "clean for GPT round-2"; every round-1 replacement folded (disposition table §9 of the doc, all 12 ACCEPTED, none declined); fixes verified against live code before writing them in: sealed_oos.py:116 claim_seal=True default (B2), store.py:1582 set_approval_validity refusal + store.py:801 auto-requires_revalidation (M2 — confirmed the trap is real: without the dedicated path, legacy approved rows would decay irreversibly), validation_steps.py:1093/1107 design-hash-keyed holdout + :1378 marker-only strategy publish (M1/M5), release_gate.py:447 privileged set = {"approved"} (downgrade safety); §1.2 numbers re-read from both JSONs (OOS rank_icir 0.02551831…→ quoted 0.0255; IS heldout 0.354); §1.3 greedy primary artifact NOT found → marked unverified-at-source with a named resolving script per your B3 replacement. Residual concerns: none new; your round-1 replacements adopted with two deliberate adaptations flagged in REVIEW QUESTIONS 2–3 below.
+
+ROUND-1 → REVISION-2 DISPOSITION SUMMARY (details in the embedded doc §9):
+- B1 → A7 rewritten: candidate_on_declared_target; candidate_scope_mismatch refusal before dataset build and before holdout access; migration via TUD-equivalence alias (evidence.universe == TUD.target_universe_id recorded at freeze) + target-scoped IS re-audition for candidates lacking target evidence.
+- B2 → A2(b) rewritten: no-seal diagnostics inside the already-claimed book seal; run_sealed_oos(..., claim_seal=False) or run_component_diagnostics_in_book_context(...); refuses without an active BookHoldoutSealContext(plan_hash); no second claim; no promotion evidence; m3 schema fields.
+- B3 → §1.2 exact artifact paths + values; §1.3 greedy numbers marked unverified-at-source, resolving script named (rederive_marginal_vs_standalone.py, implementation pass 1).
+- M1 → A2 seal identity: book_plan_hash = DeploymentFrozenPlan.plan_hash; no design_hash/frozen_set_hash fallback for book seals; full payload field list; plans sharing a frozen set but differing in construction/envelope/bar = distinct spends.
+- M2 → revalidate_legacy_approved(...) dedicated evidence-gated path (A3).
+- M3 → A6: D6 extended to plan-hash/recipe-family/A5-overlap counting; virgin-window budget warn 3 / hard 5 with pre-recorded user-signed override + adjusted-stat reporting.
+- M4 → separate audited legacy_factor_approval_override(...) command; no set_status kwarg bypass.
+- M5 → A8 readiness clause: no virgin book seal before the StrategyRegistryStore promotion path is implemented/tested/wired; factor registry never a proxy.
+- M6 → §5 exhaustive grep-sweep list for v1.4 consolidation.
+- m1 → A1 explicit stage labels ("Stage 7 — freeze-only" / "Stage 8 — sole sealed book evaluation").
+- m2 → A5 fresh_window_signal_replication_override_id, pre-recorded, counts against the A6 budget.
+- m3 → A2(b) evidence schema (run_type='book_component_diagnostic', book_plan_hash, component_factor_id, component_weight/load, oos_window_id, spent_in_book_context=True, fresh_oos_eligible=False, promotion_eligible=False).
+
+WHAT CHANGED (authoritative — the full revised amendment; treat this text as the source of truth):
+
+<<<BEGIN REVISED AMENDMENT DOC (revision 2) — workspace/research/factor_eval_methodology/FACTOR_EVAL_V1.4_AMENDMENT_book_level_promotion.md (byte-identical to the committed file at the raw link above)>>>
+
 # v1.4 AMENDMENT PROPOSAL — retire the factor-level `approved` mint; one seal per book
 
 > **Status: REVISION 2 — round-1 GPT 5.5 Pro cross-review returned REVISE (3 Blockers / 6 Majors /
@@ -372,3 +425,20 @@ folded. **Verdict: clean for GPT round-2.**
 | m1 | stage labels | ACCEPTED → A1 explicit-label rule |
 | m2 | A5 fresh-window override | ACCEPTED → A5 override-id requirement |
 | m3 | diagnostics evidence schema | ACCEPTED → A2(b) schema fields |
+
+<<<END REVISED AMENDMENT DOC>>>
+
+QUANTITATIVE-RESEARCH PRINCIPLES — same nine as round 1 (PIT; OOS sacred/sealed; survivorship; factor-eval standard; execution/cost realism; no leverage; no hedge words; four-layer pipeline; multiple testing). A violation is a Blocker.
+
+REVIEW QUESTIONS (round 2)
+1. Resolution fidelity — for each of B1, B2, B3, M1, M2, M3, M4, M5, M6, m1, m2, m3: is the revision's resolution faithful to your round-1 replacement text, and is it normatively sufficient (not just aspirational wording)? Flag any that regressed to "implicit guardrail".
+2. Deliberate adaptation (a): A7's migration mechanism for pre-v1.4 candidates (TUD-equivalence alias = the universe identity recorded in Stage-5/matrix evidence, recorded at freeze; candidates lacking target evidence require a target-scoped IS-only re-audition before load-bearing admission). Your B1 text allowed "an explicitly versioned TUD-equivalence alias recorded before Stage 7 freeze" — is this concrete alias definition acceptable, or does universe-id equality understate what TUD hashes (eligibility_policy, asof_policy, universe_definition_filters)? If insufficient, state the minimal alias content you would require.
+3. Deliberate adaptation (b): A8 adds "Until A8 lands, no book seal may be spent on a virgin window" — stronger than your M5 text. Confirm this is right, or flag if it over-blocks a legitimate interim workflow (e.g. a dry-run book seal on an already-burned window, which §5 explicitly still allows and requires as the pilot).
+4. New-defect scan — did revision 2 introduce any new inconsistency (e.g. A6's warn-3/hard-5 vs the D6 module's existing warn-5/hard-10 defaults for non-virgin windows; A2's payload field list vs the live identity.py field set; the §5 test matrix vs existing test file names)?
+5. Final — SHIP / REVISE / REWORK, plus the single most important residual risk.
+
+OUTPUT FORMAT
+- Per-finding resolution verdict table (B1…m3: RESOLVED / PARTIAL / NOT RESOLVED, one line each).
+- Any NEW issues ranked Blocker / Major / Minor with offending line quoted + exact replacement.
+- Final line: SHIP / REVISE / REWORK + the single most important residual risk.
+```
