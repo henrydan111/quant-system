@@ -62,3 +62,27 @@
 - 无对冲措辞；时长仍标"首次实测"。
 
 **Round-2 结论：clean for GPT re-review。B1 独立核实为真；修订收紧 PIT 未放松，实现阶段须过 report_rc 测试族。**
+
+---
+
+# Round-3 自审（v3 修订后）— 2026-07-04
+
+**背景**：GPT R2 = REVISE，单 Blocker B2（我的 B1 修订守卫键太窄）+ minor m2。B2 接受并已实施；m2 裁定为缓存伪报。
+
+## 独立核实（不 rubber-stamp）
+
+- **B2 亲自核实**：`REPORT_RC_ACTIVE_TTL_OPEN_DAYS = 120`（[pit_backend.py:192](src/data_infra/pit_backend.py#L192)，"a forecast counts as live for this many trading days"，carry daily 于 2888/2970/3117）——GPT 假设的常量精确正确。report_date 早于边界 ~120 天的 forecast 仍 carry 进新鲜窗口 = B2 的 halo 要求有真实材料化依据。B2 是真 Blocker，我的 B1 确实漏了 availability-boundary 语义。
+- **m2 亲自核实**：`git show HEAD:...PHASE5_DESIGN.md | grep -c "report_date replay"` = 6，且 `HEAD == origin/calendar-unfreeze == e897424`——v2 文本确在远程；GPT 读到 GitHub raw 缓存的旧版。m2 是缓存伪报，非流程 bug；但采纳其守卫（impl ticket 引 v3 hash）。
+
+## 修订忠实性（照 GPT B2 替换文本）
+
+- 4 条件任一守卫 ✔；effective 下限 `next_open(max(report_date, create_time, first_seen_floor))` ✔；修订台账（键 = 自然键+payload digest+create_time+first_seen+batch_id，禁 effective 后退）✔；pre-boundary halo ≥ TTL(120)+guard ✔；历史 backfill 仅对全字段窗外行保留 ✔；日更 fallback 纯 raw 禁增量发布 ✔。
+- M1（探针=publish 阻断）+ M2（list/delist 边界 + raw-vs-侧车矛盾=失败）实现精度已折入。
+
+## v3 新引入自查
+
+- 守卫加宽是**进一步收紧**（更多行走 fail-closed 锚），不放松任何历史行为；历史 2010-2021 backfill 显式保留（全字段窗外）。
+- 修订台账是新数据结构——实现须确保台账本身 PIT（first_seen 单调、不可回填）；已在设计标注"禁 effective 后退=build 阻断"。
+- 无对冲措辞。
+
+**Round-3 结论：clean for GPT re-review。B2 独立核实为真（TTL=120 精确）；守卫从 report_date 加宽为可见性/生效/修订影响，进一步收紧未放松；m2=缓存伪报已核实。**
