@@ -438,58 +438,115 @@ def _daily_universe(date: str) -> tuple[set[str], bool, dict]:
     return codes, True, ev
 
 
-def _daily_set_continuity(date: str, daily_codes: set[str]) -> tuple[bool, dict]:
-    """SET-LEVEL daily completeness proof (GPT B1): a name that TRADED on the previous session (so
-    it was listed and NOT suspended then) must trade today UNLESS it delisted or newly suspended.
-    Because prior-session names were trading, the only PIT reasons for a same-name to vanish today
-    are delist (stock_basic.delist_date <= date) or a NEW suspension (suspend_d S event ON date) —
-    no historical suspension-state reconstruction is needed. Any name that vanishes without such a
-    reason is a survivorship hole the count baseline cannot see. Fail-CLOSED. Codes are compared in
-    the dotted-upper form _read_codes_for_trade_date returns (000001.SZ), so stock_basic/suspend_d
-    (already dotted) are just upper-cased — NO dot->underscore here."""
-    ev: dict = {}
-    prior_days = [d for d in _open_trading_days(upto=date) if d < date]
-    if not prior_days:
-        ev["status"] = "skipped_no_prior_session"
-        return True, ev
-    prev = prior_days[-1]
-    prior_codes, pdiag = _read_codes_for_trade_date("market/daily", "daily", prev)
-    if not pdiag["date_ok"] or len(prior_codes) < MIN_PLAUSIBLE_DAILY_ROWS:
-        ev["status"] = f"skipped_prior_unverified:{prev}"
-        return True, ev  # can't establish a reference; the baseline still guards gross partials
+def _norm_codes(s) -> set[str]:
+    """Dotted-upper code form (000001.SZ) matching _read_codes_for_trade_date — NO dot->underscore."""
+    return {str(x).upper().strip() for x in s.dropna()}
 
-    def norm(s) -> set[str]:
-        return {str(x).upper().strip() for x in s.dropna()}
 
-    sb = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
-                         columns=["ts_code", "list_date", "delist_date"])
-    delisted = norm(sb.loc[sb["delist_date"].notna() & (sb["delist_date"].astype(str) <= date), "ts_code"])
-    ipo_today = norm(sb.loc[sb["list_date"].astype(str) == date, "ts_code"])
-
+def _suspended_full_day(date: str) -> tuple[set[str], set[str], bool, dict]:
+    """(full_day_suspended, resumed, ok, ev) from suspend_d(date). Verifies trade_date == date
+    (stale-file guard, GPT B1-b). A suspension only EXCUSES an absent daily row when it is FULL-DAY
+    (no price) — an INTRADAY halt (suspend_timing like '09:30-10:00') still trades, so treating
+    every S as full-day would wrongly excuse an intraday-halted name missing from a partial daily.
+    Full-day = suspend_type S with an empty/None suspend_timing. If the stored file lacks the
+    suspend_timing column (legacy schema — a FRESH catch-up fetch stores it, since fetch_suspend_d
+    returns Tushare's default fields and insert_market_data keeps all columns), fall back to
+    treating every S as full-day with a warning."""
     susp_f = PROJECT_ROOT / "data" / "market" / "suspend_d" / date[:4] / f"suspend_d_{date}.parquet"
     if not susp_f.exists():
-        ev["status"] = "suspend_d_missing"
-        ev["reason"] = f"suspend_d for {date} absent — cannot prove daily completeness (fail-closed)"
-        return False, ev
-    sd = pd.read_parquet(susp_f, columns=["ts_code", "suspend_type"])
+        return set(), set(), False, {"reason": f"suspend_d for {date} absent — cannot prove completeness"}
+    sd = pd.read_parquet(susp_f)
+    if "trade_date" in sd.columns:
+        td = sd["trade_date"].astype(str).str.replace("-", "", regex=False)
+        extra = set(td.dropna().unique()) - {date}
+        if extra:
+            return set(), set(), False, {"reason": f"suspend_d {date} trade_date mismatch: {sorted(extra)[:5]}"}
     stype = sd["suspend_type"].astype(str).str.upper()
-    suspended = norm(sd.loc[stype == "S", "ts_code"])
-    resumed = norm(sd.loc[stype == "R", "ts_code"])
+    timing_present = "suspend_timing" in sd.columns
+    if timing_present:
+        timing = sd["suspend_timing"].astype("string").fillna("").str.strip().str.upper()
+        full = (stype == "S") & timing.isin(["", "NONE", "NAN", "NULL"])
+    else:
+        full = (stype == "S")  # legacy no-timing -> conservative all-S full-day (fresh fetch has timing)
+    ev = {"suspend_timing_present": timing_present, "full_day_suspended": int(full.sum())}
+    if not timing_present:
+        logger.warning("suspend_d %s has NO suspend_timing column - treating every S as full-day "
+                       "(re-fetch to store timing for a precise intraday distinction)", date)
+    return (_norm_codes(sd.loc[full, "ts_code"]), _norm_codes(sd.loc[stype == "R", "ts_code"]), True, ev)
 
-    # names that traded yesterday must trade today unless delisted/newly-suspended; plus today's IPOs
+
+def _daily_set_continuity_from_prior(date: str, prior_date: str, prior_codes: set[str],
+                                     daily_codes: set[str], sb) -> tuple[bool, dict]:
+    """SET-LEVEL completeness step against an EXPLICIT VERIFIED prior (GPT B1-a — never an
+    unverified read). A name that TRADED on prior_date (so it was listed and NOT suspended then)
+    must trade today UNLESS it delisted (stock_basic.delist_date <= date) or NEWLY full-day
+    suspended (suspend_d S event today). Because a prior-session name was trading, the ONLY PIT
+    reasons it can vanish are delist or a same-day full-day suspension — no historical
+    suspension-state reconstruction is needed. Any name vanishing without such a reason is a
+    survivorship hole. Fail-CLOSED. `sb` is stock_basic (read once by the caller)."""
+    delisted = _norm_codes(sb.loc[sb["delist_date"].notna() & (sb["delist_date"].astype(str) <= date), "ts_code"])
+    ipo_today = _norm_codes(sb.loc[sb["list_date"].astype(str) == date, "ts_code"])
+    suspended, resumed, sok, sev = _suspended_full_day(date)
+    ev: dict = {"prior_date": prior_date, "prior_codes": len(prior_codes), **sev}
+    if not sok:
+        ev["reason"] = sev["reason"]
+        return False, ev
     expected = (prior_codes - delisted - suspended) | (ipo_today - suspended)
     missing = sorted(expected - daily_codes)
     unexpected = sorted(daily_codes - prior_codes - ipo_today - resumed)
-    ev.update({"prev": prev, "prior_codes": len(prior_codes), "expected": len(expected),
-               "delisted_by_date": len(delisted), "suspended_today": len(suspended),
+    ev.update({"expected": len(expected), "delisted_by_date": len(delisted),
                "ipo_today": len(ipo_today), "missing": len(missing), "unexpected": len(unexpected)})
     if missing:
-        ev["reason"] = (f"daily universe incomplete vs {prev}: {len(missing)} expected names absent "
-                        f"without a delist/suspend reason; examples={missing[:10]}")
+        ev["reason"] = (f"daily universe incomplete vs {prior_date}: {len(missing)} expected names "
+                        f"absent without a delist/suspend reason; examples={missing[:10]}")
         return False, ev
     if unexpected:
         logger.warning("daily %s: %d names appeared vs %s w/o IPO/resume evidence: %s",
-                       date, len(unexpected), prev, unexpected[:10])
+                       date, len(unexpected), prior_date, unexpected[:10])
+    return True, ev
+
+
+def assert_endpoints_complete_range(parent_end: str, target_end: str) -> tuple[bool, dict]:
+    """POST-catch-up FORMAL completeness gate over (parent_end, target_end] (GPT B1-a). Chains the
+    set-level continuity proof from the VERIFIED published-parent anchor forward through EVERY new
+    trading day — so a survivorship hole cannot be inherited from an unverified prior daily, and no
+    intermediate new day escapes the proof. Each day also re-proves daily (trade_date + baseline) +
+    daily-fresh coverage; cyq_perf coverage is checked at target_end. Fail-CLOSED throughout."""
+    ev: dict = {"parent_end": parent_end, "target_end": target_end, "checked_days": []}
+    # anchor: the parent's calendar_end daily is the trusted reference (already published+audited);
+    # require it date-correct + above floor before chaining from it.
+    prior_codes, pdiag = _read_codes_for_trade_date("market/daily", "daily", parent_end)
+    if not pdiag["date_ok"] or len(prior_codes) < MIN_PLAUSIBLE_DAILY_ROWS:
+        ev["reason"] = f"parent_end {parent_end} is not a verified anchor: {pdiag}"
+        return False, ev
+    sb = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
+                         columns=["ts_code", "list_date", "delist_date"])
+    prior_date = parent_end
+    days = [d for d in _open_trading_days(upto=target_end) if parent_end < d <= target_end]
+    for d in days:
+        daily_codes, daily_ok, dev = _daily_universe(d)
+        if not daily_ok:
+            ev["reason"] = f"daily_universe failed for {d}: {dev.get('reason')}"
+            ev["day"] = d
+            return False, ev
+        cok, cev = _daily_set_continuity_from_prior(d, prior_date, prior_codes, daily_codes, sb)
+        ev["checked_days"].append({"date": d, "continuity": cev})
+        if not cok:
+            ev["reason"] = cev.get("reason")
+            ev["day"] = d
+            return False, ev
+        if not _coverage_gate(d, READINESS_DAILY_FRESH, ev.setdefault("coverage_by_day", {}).setdefault(d, {}), daily_codes):
+            ev["reason"] = f"daily-fresh endpoint coverage failed for {d}: {ev['coverage_by_day'][d].get('reason')}"
+            ev["day"] = d
+            return False, ev
+        prior_codes, prior_date = daily_codes, d
+    # cyq_perf (post-catch-up lagging endpoint) at target_end, vs the proven target daily universe.
+    tcodes, tok, tev = _daily_universe(target_end)
+    if not tok:
+        ev["reason"] = f"target daily {target_end} failed: {tev.get('reason')}"
+        return False, ev
+    if not _coverage_gate(target_end, READINESS_POSTCATCHUP, ev, tcodes):
+        return False, ev
     return True, ev
 
 
@@ -520,25 +577,12 @@ def endpoint_ready(date: str) -> tuple[bool, dict]:
     return _coverage_gate(date, READINESS_DAILY_FRESH, ev, daily_codes), ev
 
 
-def assert_endpoints_complete(date: str) -> tuple[bool, dict]:
-    """POST-catch-up completeness gate on the FINAL target_end data: re-prove the daily universe +
-    daily-fresh endpoints AND the lagging cyq_perf the catch-up just fetched, by COVERAGE vs the
-    PROVEN-complete daily. Fail-closed — a formal provider must never stamp calendar_end at a
-    partial day."""
-    daily_codes, daily_ok, ev = _daily_universe(date)
-    if not daily_ok:
-        return False, ev
-    if not _coverage_gate(date, READINESS_DAILY_FRESH, ev, daily_codes):
-        return False, ev
-    # SET-LEVEL daily completeness proof (GPT B1) — post-catch-up, where prev daily + stock_basic +
-    # suspend_d(date) are all present. The rolling baseline (in _daily_universe) is only a cheap
-    # early detector; THIS is the formal completeness gate before a policy is minted.
-    cont_ok, cont_ev = _daily_set_continuity(date, daily_codes)
-    ev["daily_continuity"] = cont_ev
-    if not cont_ok:
-        ev["reason"] = cont_ev.get("reason")
-        return False, ev
-    return _coverage_gate(date, READINESS_POSTCATCHUP, ev, daily_codes), ev
+def assert_endpoints_complete(parent_end: str, target_end: str) -> tuple[bool, dict]:
+    """POST-catch-up FORMAL completeness gate: the chained set-level proof over (parent_end,
+    target_end] from the verified parent anchor (GPT B1-a) — daily universe + set-continuity +
+    daily-fresh coverage per new day, cyq_perf at target_end. Fail-closed. The rolling baseline in
+    _daily_universe is only a cheap early detector; THIS is the gate before a policy is minted."""
+    return assert_endpoints_complete_range(parent_end, target_end)
 
 
 # ── phases ───────────────────────────────────────────────────────────────────
@@ -651,14 +695,15 @@ def phase_execute(args) -> int:
     # provider. Fail-closed: a partial cyq_perf/moneyflow/stk_limit must never enter a formal
     # calendar_end. report_rc halo completeness is enforced inside the catch-up (Stage E fails
     # closed on an all-zero replay).
-    ok_complete, complete_ev = assert_endpoints_complete(target_end)
+    ok_complete, complete_ev = assert_endpoints_complete(parent_end, target_end)
     if not ok_complete:
         _prune_cyq_state(target_end)  # m1: let a rerun refetch cyq (don't leave zero-row 'done')
-        logger.error("target_end %s endpoint completeness FAILED post-catch-up: %s — bump BLOCKED "
-                     "(vendor may be late; re-run when complete or pass an earlier --target-end).",
-                     target_end, complete_ev)
+        logger.error("endpoint completeness FAILED over (%s, %s]: %s — bump BLOCKED (vendor may be "
+                     "late / a survivorship hole; re-run when complete or pass an earlier "
+                     "--target-end).", parent_end, target_end, complete_ev.get("reason", complete_ev))
         return 2
-    logger.info("endpoint completeness OK for %s: %s", target_end, complete_ev)
+    logger.info("endpoint completeness OK over (%s, %s]: %d days chained-verified",
+                parent_end, target_end, len(complete_ev.get("checked_days", [])))
 
     # 2. new policy YAML (append-only; spent_oos_end frozen).
     policy_id, policy_path = generate_thaw_policy(target_end, parent_build, write=True)

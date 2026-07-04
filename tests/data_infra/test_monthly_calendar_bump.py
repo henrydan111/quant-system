@@ -324,54 +324,77 @@ def _mk_continuity_scaffold(tmp_path, *, sb_rows, susp_rows, prev_codes, prev="2
     _write_endpoint(tmp_path, "market/daily", "daily", prev, 0, codes=prev_codes)
 
 
+def _sb_of(tmp_path):
+    return pd.read_parquet(tmp_path / "data" / "reference" / "stock_basic.parquet")
+
+
 def test_daily_continuity_flags_unexplained_vanished_name(tmp_path, monkeypatch):
     # GPT B1: a name TRADING yesterday that vanishes today WITHOUT a delist/suspend reason is a
-    # survivorship hole the count baseline can't see -> fail closed.
+    # survivorship hole the count baseline can't see -> fail closed. Prior set is passed EXPLICITLY
+    # (the range gate supplies a VERIFIED prior — never an unverified read).
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
     _mk_continuity_scaffold(
         tmp_path,
         sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ", "D.SZ"], "list_date": ["20200101"] * 4,
                  "delist_date": [None] * 4},
         susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"]},
         prev_codes=["A.SZ", "B.SZ", "C.SZ", "D.SZ"])
-    # today: A,B present; C legitimately suspended (absent OK); D VANISHED without reason
-    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ"})
+    sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ", "D.SZ"}
+    # today: A,B present; C legitimately full-day suspended (absent OK); D VANISHED without reason
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
     assert ok is False and "D.SZ" in str(ev.get("reason", "")), ev
-    # restore D -> passes (C still legitimately suspended)
-    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "D.SZ"})
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ", "D.SZ"}, sb)
+    assert ok is True, ev
+
+
+def test_daily_continuity_intraday_suspension_not_excused(tmp_path, monkeypatch):
+    # GPT B1-b: an INTRADAY halt (suspend_timing set) still trades -> it must NOT excuse an absent
+    # daily row. Only full-day (empty suspend_timing) suspensions excuse absence.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_continuity_scaffold(
+        tmp_path,
+        sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ"], "list_date": ["20200101"] * 3,
+                 "delist_date": [None] * 3},
+        # C has an INTRADAY halt (timing 09:30-10:00) -> still trades -> absence is NOT excused
+        susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"],
+                   "suspend_timing": ["09:30-10:00"]},
+        prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+    sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ"}
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
+    assert ok is False and "C.SZ" in str(ev.get("reason", "")), ev  # intraday-halted C should trade
+    # a FULL-DAY suspension (empty timing) DOES excuse it
+    sd = tmp_path / "data" / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet"
+    pd.DataFrame({"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"],
+                  "suspend_timing": [""]}).to_parquet(sd)
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
     assert ok is True, ev
 
 
 def test_daily_continuity_allows_delisted_and_flags_missing_ipo(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
     _mk_continuity_scaffold(
         tmp_path,
-        # A,B,C listed; C delisted on 20260703; E IPOs today (list_date == today)
         sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ", "E.SZ"],
                  "list_date": ["20200101", "20200101", "20200101", "20260703"],
                  "delist_date": [None, None, "20260703", None]},
-        susp_rows=None,
-        prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+        susp_rows=None, prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+    sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ"}
     # C delisted (absent OK), but the IPO E is missing from today -> fail
-    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ"})
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
     assert ok is False and "E.SZ" in str(ev.get("reason", "")), ev
-    # E present, C delisted -> passes
-    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "E.SZ"})
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ", "E.SZ"}, sb)
     assert ok is True, ev
 
 
 def test_daily_continuity_fails_closed_without_suspend_d(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
     _mk_continuity_scaffold(
         tmp_path, sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ"], "list_date": ["20200101"] * 3,
                            "delist_date": [None] * 3},
         susp_rows=None, prev_codes=["A.SZ", "B.SZ", "C.SZ"])
-    # remove the suspend_d file -> cannot prove completeness -> fail closed
     (tmp_path / "data" / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet").unlink()
-    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "C.SZ"})
+    sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ"}
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ", "C.SZ"}, sb)
     assert ok is False and "suspend_d" in ev.get("reason", ""), ev
 
 
@@ -390,18 +413,47 @@ def test_daily_universe_flags_stale_trade_date(tmp_path, monkeypatch):
     assert ok is False and "trade_date" in ev.get("reason", ""), ev
 
 
-def test_assert_endpoints_complete_flags_lagging_cyq_perf(tmp_path, monkeypatch):
-    # cyq_perf lags (fetched post-catch-up); an empty/absent cyq_perf for target_end must fail
-    # the POST-catch-up completeness gate even when the daily-fresh endpoints are complete.
+def test_cyq_perf_coverage_gate_flags_lagging(tmp_path, monkeypatch):
+    # cyq_perf lags (fetched post-catch-up); an empty/absent cyq_perf must fail its coverage gate.
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
     monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
     d = "20260703"
     _write_endpoint(tmp_path, "market/daily", "daily", d, 5)
-    _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 5)
-    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 5)
-    ok, ev = mcb.assert_endpoints_complete(d)  # cyq_perf absent
-    assert ok is False and "cyq_perf" in ev["reason"], ev
+    daily_codes = {f"{i:06d}.SZ" for i in range(5)}
+    ev = {}
+    assert mcb._coverage_gate(d, mcb.READINESS_POSTCATCHUP, ev, daily_codes) is False
+    assert "cyq_perf" in ev["reason"], ev
     _write_endpoint(tmp_path, "market/cyq_perf", "cyq_perf", d, 5)  # catch-up filled it
-    ok, ev = mcb.assert_endpoints_complete(d)
+    ev = {}
+    assert mcb._coverage_gate(d, mcb.READINESS_POSTCATCHUP, ev, daily_codes) is True, ev
+
+
+def test_assert_endpoints_complete_range_chains_from_anchor(tmp_path, monkeypatch):
+    # GPT B1-a: the formal gate chains continuity from the VERIFIED parent anchor through every new
+    # day. A NEW day that drops a name without a delist/suspend reason fails — even if the drop is
+    # small enough that the count baseline (relaxed here) would miss it.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
+    monkeypatch.setattr(mcb, "DAILY_BASELINE_FLOOR", 0.5)  # let the continuity be the failing check
+    (tmp_path / "data" / "reference").mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": ["20260701", "20260702"], "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    pd.DataFrame({"ts_code": ["A.SZ", "B.SZ", "C.SZ", "D.SZ"], "list_date": ["20200101"] * 4,
+                  "delist_date": [None] * 4}).to_parquet(tmp_path / "data" / "reference" / "stock_basic.parquet")
+    sd = tmp_path / "data" / "market" / "suspend_d" / "2026"
+    sd.mkdir(parents=True)
+    pd.DataFrame({"ts_code": [], "trade_date": [], "suspend_type": []}).to_parquet(sd / "suspend_d_20260702.parquet")
+    all4 = ["A.SZ", "B.SZ", "C.SZ", "D.SZ"]
+    _write_endpoint(tmp_path, "market/daily", "daily", "20260701", 0, codes=all4)  # verified anchor
+    for ep, sub in [("moneyflow", "market/moneyflow"), ("stk_limit", "market/stk_limit"),
+                    ("cyq_perf", "market/cyq_perf")]:
+        _write_endpoint(tmp_path, sub, ep, "20260702", 0, codes=all4)
+    # new day drops D without a reason -> chained proof fails
+    _write_endpoint(tmp_path, "market/daily", "daily", "20260702", 0, codes=["A.SZ", "B.SZ", "C.SZ"])
+    ok, ev = mcb.assert_endpoints_complete("20260701", "20260702")
+    assert ok is False and "D.SZ" in str(ev.get("reason", "")), ev
+    # restore D -> passes end to end
+    _write_endpoint(tmp_path, "market/daily", "daily", "20260702", 0, codes=all4)
+    ok, ev = mcb.assert_endpoints_complete("20260701", "20260702")
     assert ok is True, ev

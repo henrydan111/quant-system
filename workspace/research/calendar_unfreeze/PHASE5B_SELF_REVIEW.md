@@ -170,3 +170,28 @@ GPT 建议二选一。选**连续性**：只需 prev-daily + stock_basic + suspe
 74 绿（23 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；py_compile OK；活体：连续性证明真实完整日零误报（missing 0/unexpected 0）。
 
 **结论：clean for GPT（re-review 5）。B1（集合级连续性证明，fail-closed）+ M1（日历缺日 fail-closed）全修；活体真实数据零误报验证。**
+
+---
+
+## REWORK round 7（GPT re-review #5 后修复自审）— 2026-07-04
+
+GPT 复审 29f5cba：确认 **M1 / stale-file / endpoint-split / code-form RESOLVED**，B1 余两子洞 —— **B1-a**（连续性锚在**未验证**的前日；且仅证 target_end，中间新日可漏）+ **B1-b**（suspend_d 未验 trade_date；全部 S 当全天，但 Tushare 有 suspend_timing，盘中停牌仍有价，误豁免）。均修：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1-a** 锚未验证 + 仅证 target | `assert_endpoints_complete_range(parent_end, target_end)`：从**已发布父边界**（parent_end，可信锚，先验 date_ok+floor）**链式**前推**每一个**新交易日；每日 prior=上一**已证**日（非未验证读）。删除 `skipped_prior_unverified→True` 路径。每日再证 daily(trade_date+baseline)+连续性+daily-fresh 覆盖；cyq 在 target 证。全程 fail-closed | 活体：链(20260701→02,03) 两新日 missing 0/unexpected 0（真实零误报），cyq 在 target 正确阻断；新增 chained-from-anchor 单测（小掉名，baseline 放松→连续性抓） |
+| **B1-b** suspend_d 未验日期 + 全 S 当全天 | `_suspended_full_day`：验 trade_date==date（stale guard）；**仅全天**（suspend_type S ∧ suspend_timing 空）豁免缺席；有 timing 列时精确过滤盘中；无 timing 列（旧文件）回退全-S-全天 + WARNING。**活体确认 20260702 的 suspend_d 已带 suspend_timing**（新抓存 timing——insert_market_data 存全列、fetch_suspend_d 返回默认字段含 timing），故被门控的新日 timing 生效 | 新增 intraday-not-excused 单测（盘中 S 不豁免；空 timing 全天豁免）|
+
+### 关键洞察 & 数据事实
+- 链式锚=父 calendar_end 的 daily（已发布+审计的可信参照，先做 date_ok+floor 锚检），非重证父历史。
+- suspend_timing：`fetch_suspend_d` 返回 Tushare 默认字段（含 timing），`insert_market_data` 存全列 → **新抓的门控日带 timing**（活体 20260702 已验），旧文件回退。精确盘中过滤对"真正被门控的新日"生效。
+- 活体链式：两新日连续性 missing 0/unexpected 0，零误报；20260703 无 timing→回退+警告（记录行为）。
+
+### 留 GPT / 已知界限
+- 旧 suspend_d 文件缺 timing → 回退全-S-全天（盘中停牌 name 若从部分 daily 缺失会被误豁免）。已警告；彻底 fail-closed 需强制重抓门控日 suspend_d（带 timing）——留 follow-up；但门控的**新日**多已带 timing（活体证）。
+- cyq_perf 仅在 target 证（Stage-D 自动补齐到 target，gap 填满即 target 完整）。
+
+### 验证汇总
+76 绿（25 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；py_compile OK；活体链式两新日零误报 + timing 活体生效 + cyq target 阻断。
+
+**结论：clean for GPT（re-review 6）。B1-a（链式-从-验证锚）+ B1-b（trade_date + full-day-only timing 过滤）全修；活体真实数据零误报 + timing 生效验证；1 已知界限（旧文件无 timing 回退，flagged）。**
