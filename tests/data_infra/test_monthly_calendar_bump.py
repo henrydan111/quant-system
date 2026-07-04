@@ -137,11 +137,29 @@ def _mk_fresh_window(tmp_path, ts_codes=("000001.SZ", "000002.SZ")):
         pd.DataFrame({"ts_code": list(ts_codes)}).to_parquet(daily_dir / f"daily_{d}.parquet")
 
 
-def _mk_features(prov, codes):
+_TEST_CAL_ISO = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05", "2026-03-06"]
+
+
+def _valid_close_bin(ncover: int) -> bytes:
+    # Qlib .day.bin: float32[0]=start_index (0 here) then `ncover` values -> last covered pos = ncover-1.
+    import struct
+    return struct.pack("<f", 0.0) + b"\x00" * 4 * ncover
+
+
+def _mk_features(prov, codes, *, close_cover=len(_TEST_CAL_ISO)):
+    # provider calendar (ISO) for the bin-coverage check; created once
+    (prov / "calendars").mkdir(parents=True, exist_ok=True)
+    caltxt = prov / "calendars" / "day.txt"
+    if not caltxt.exists():
+        caltxt.write_text("\n".join(_TEST_CAL_ISO) + "\n", encoding="utf-8")
     for c in codes:
-        (prov / "features" / c).mkdir(parents=True, exist_ok=True)
+        cdir = prov / "features" / c
+        cdir.mkdir(parents=True, exist_ok=True)
         for b in mcb.REQUIRED_PRICE_BINS:  # a code counts as present only with the full core bin set
-            (prov / "features" / c / b).write_bytes(b"\x00")
+            if b == "close.day.bin":
+                (cdir / b).write_bytes(_valid_close_bin(close_cover))  # decoded for length
+            else:
+                (cdir / b).write_bytes(b"\x00" * 8)  # presence only
 
 
 def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path, monkeypatch):
@@ -192,6 +210,22 @@ def test_fresh_window_survivorship_audit_flags_incomplete_bins(tmp_path, monkeyp
     assert any(v["type"] == "raw_price_not_in_feature_tree" for v in res["violations"])
 
 
+def test_fresh_window_survivorship_audit_flags_short_bins(tmp_path, monkeypatch):
+    # M1: a code with ALL core bins present but whose close.day.bin is TRUNCATED before a fresh
+    # trading day (covers fewer calendar positions) -> flagged raw_price_bins_short_through_day.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_fresh_window(tmp_path)
+    prov = tmp_path / "prov"
+    (prov / "instruments").mkdir(parents=True)
+    (prov / "instruments" / "all_stocks.txt").write_text(
+        "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
+    _mk_features(prov, ["000001_SZ"])                    # full 5-position coverage
+    _mk_features(prov, ["000002_SZ"], close_cover=2)     # close.day.bin covers only 2 positions
+    res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
+    assert res["ok"] is False
+    assert any(v["type"] == "raw_price_bins_short_through_day" for v in res["violations"])
+
+
 def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
     _mk_fresh_window(tmp_path)
@@ -199,7 +233,7 @@ def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path,
     (prov / "instruments").mkdir(parents=True)
     (prov / "instruments" / "all_stocks.txt").write_text(
         "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
-    _mk_features(prov, ["000001_SZ", "000002_SZ"])  # universe AND feature tree complete
+    _mk_features(prov, ["000001_SZ", "000002_SZ"])  # universe + feature tree + bin coverage complete
     res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
     assert res["ok"] is True, res["violations"]
 
@@ -211,19 +245,36 @@ def _write_endpoint(root, sub, ep, date, nrows):
     pd.DataFrame({"ts_code": [f"{i:06d}.SZ" for i in range(nrows)]}).to_parquet(d / f"{ep}_{date}.parquet")
 
 
-def test_endpoint_ready_row_count_not_existence(tmp_path, monkeypatch):
+def test_endpoint_ready_coverage_not_existence(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
     monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
     d = "20260703"
     _write_endpoint(tmp_path, "market/daily", "daily", d, 5)
     _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 5)
-    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 1)  # EXISTS but partial (1 < 3)
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 1)  # EXISTS but covers 1/5 of daily
     ok, ev = mcb.endpoint_ready(d)
-    assert ok is False and "stk_limit" in ev["reason"], ev  # existence is not enough
-    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 5)  # now complete
+    assert ok is False and "stk_limit" in ev["reason"], ev  # existence/low coverage is not enough
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 5)  # now full coverage
     ok, ev = mcb.endpoint_ready(d)
     assert ok is True, ev
+
+
+def test_endpoint_ready_high_rows_low_coverage_fails(tmp_path, monkeypatch):
+    # GPT B1: plenty of ROWS but LOW COVERAGE of the daily universe (a partial fetch returning
+    # DIFFERENT names) must fail — a fixed row floor alone (3001 of ~5500) is not completeness.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
+    d = "20260703"
+    _write_endpoint(tmp_path, "market/daily", "daily", d, 10)        # universe 000000..000009
+    _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 10)  # full coverage
+    dd = tmp_path / "data" / "market" / "stk_limit" / "2026"
+    dd.mkdir(parents=True)
+    # 10 rows (>= floor) but DISJOINT names -> coverage 0.0
+    pd.DataFrame({"ts_code": [f"9{i:05d}.SZ" for i in range(10)]}).to_parquet(dd / f"stk_limit_{d}.parquet")
+    ok, ev = mcb.endpoint_ready(d)
+    assert ok is False and "stk_limit" in ev["reason"] and "coverage" in ev["reason"], ev
 
 
 def test_assert_endpoints_complete_flags_lagging_cyq_perf(tmp_path, monkeypatch):

@@ -177,13 +177,33 @@ REQUIRED_PRICE_BINS = ("open.day.bin", "high.day.bin", "low.day.bin", "close.day
                        "vol.day.bin", "amount.day.bin", "adj_factor.day.bin")
 
 
-def _codes_with_required_bins(features_dir: Path) -> set[str]:
-    """Codes whose feature dir carries EVERY core price bin (a bare/partial dir does not count)."""
-    out: set[str] = set()
+def _feature_code_paths(features_dir: Path) -> dict[str, Path]:
+    """UPPER-code -> feature dir, for codes whose dir carries EVERY core price bin (a bare/partial
+    dir does not count). Returns the actual (lowercase on disk) path so bins can be decoded."""
+    out: dict[str, Path] = {}
     for p in features_dir.iterdir():
         if p.is_dir() and all((p / b).exists() for b in REQUIRED_PRICE_BINS):
-            out.add(p.name.upper())
+            out[p.name.upper()] = p
     return out
+
+
+def _bin_last_pos(bin_path: Path) -> int:
+    """Last calendar position a Qlib .day.bin covers. Format: float32[0] = start_index (calendar
+    position of the first value), float32[1:] = values. So last_pos = start_index + nvalues - 1.
+    A per-code bin spans [listing, last-data], NOT the whole calendar — decoding the header is the
+    only correct coverage test (a size-vs-full-calendar check false-flags every post-2008 listing).
+    Returns -1 if unreadable/empty."""
+    import struct
+    try:
+        size = bin_path.stat().st_size
+    except OSError:
+        return -1
+    nvalues = size // 4 - 1  # minus the 1-float header
+    if nvalues <= 0:
+        return -1
+    with open(bin_path, "rb") as fh:
+        start_index = int(struct.unpack("<f", fh.read(4))[0])
+    return start_index + nvalues - 1
 
 
 def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target_end: str) -> dict:
@@ -199,12 +219,23 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
                      & (cal["cal_date"] <= target_end.replace("-", ""))]["cal_date"].astype(str).tolist()
     cal_idx = pd.to_datetime(fresh_days)
     members = _membership_from_all_stocks(provider_dir / "instruments", cal_idx)
-    # B4/M1: provider feature-COMPLETENESS — membership alone is not completeness, and a bare
-    # features/<code>/ dir is not either. A code counts as present ONLY if its dir carries every
-    # core price bin; a dir missing close/vol/etc. is a feature-incomplete hole downstream
-    # research would silently operate on.
+    # B4/M1: provider feature-COMPLETENESS — membership alone is not completeness, a bare
+    # features/<code>/ dir is not either, and neither is a dir whose bins are TRUNCATED before the
+    # day the code is raw-priced. (i) present = dir carries every core price bin; (ii) each
+    # raw-priced code's close.day.bin must COVER that trading day (decode the Qlib header).
     features_dir = provider_dir / "features"
-    feature_codes = _codes_with_required_bins(features_dir) if features_dir.is_dir() else set()
+    feature_paths = _feature_code_paths(features_dir) if features_dir.is_dir() else {}
+    feature_codes = set(feature_paths)
+    # provider calendar position by YYYYMMDD (day.txt is ISO) — for the bin-coverage check.
+    prov_cal = (provider_dir / "calendars" / "day.txt").read_text(encoding="utf-8").split()
+    prov_pos = {d.replace("-", ""): i for i, d in enumerate(prov_cal)}
+    _last_pos: dict[str, int] = {}
+
+    def last_pos_of(code: str) -> int:
+        if code not in _last_pos:
+            p = feature_paths.get(code)
+            _last_pos[code] = _bin_last_pos(p / "close.day.bin") if p else -1
+        return _last_pos[code]
 
     violations: list[dict] = []
     checked_days = 0
@@ -226,11 +257,19 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
         if not_in_universe:
             violations.append({"date": d, "type": "raw_price_not_in_universe",
                                "n": len(not_in_universe), "examples": not_in_universe[:10]})
-        # (b) raw-priced code missing from the provider feature tree
+        # (b) raw-priced code missing from the provider feature tree (or missing a core bin)
         not_in_features = sorted(raw_codes - feature_codes)
         if not_in_features:
             violations.append({"date": d, "type": "raw_price_not_in_feature_tree",
                                "n": len(not_in_features), "examples": not_in_features[:10]})
+        # (c) raw-priced code whose close.day.bin does NOT reach this trading day (truncated bin)
+        pos_d = prov_pos.get(d)
+        if pos_d is not None:
+            in_feat = raw_codes & feature_codes
+            too_short = sorted(c for c in in_feat if last_pos_of(c) < pos_d)
+            if too_short:
+                violations.append({"date": d, "type": "raw_price_bins_short_through_day",
+                                   "n": len(too_short), "examples": too_short[:10]})
     return {"fresh_days": len(fresh_days), "checked_days": checked_days,
             "feature_tree_codes": len(feature_codes),
             "ok": not violations, "violations": violations[:50]}
@@ -276,6 +315,25 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
+def _prune_cyq_state(suffix: str) -> None:
+    """On a post-catch-up completeness failure, drop the Stage-D cyq_perf resume keys from the
+    catch-up state file so a rerun RE-FETCHES cyq (m1): a zero-row cyq fetch from a late endpoint
+    is marked 'done' and would otherwise be SKIPPED on rerun, leaving the bump unrecoverable
+    without manual state deletion. The state file is scoped by --state-suffix=target_end."""
+    sp = OUT_DIR / f"catchup_fund_state_{suffix}.json"
+    if not sp.exists():
+        return
+    try:
+        st = json.loads(sp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    pruned = {k: v for k, v in st.items() if not (k.startswith("D:cyq") or k == "D:cyq_repartition")}
+    if len(pruned) != len(st):
+        sp.write_text(json.dumps(pruned, ensure_ascii=False, indent=1), encoding="utf-8")
+        logger.warning("pruned %d Stage-D cyq resume keys from %s so a rerun refetches cyq_perf",
+                       len(st) - len(pruned), sp.name)
+
+
 # Endpoint-readiness contract (M1/B2). Existence != completeness — an empty/partial per-day file
 # must not authorize a formal calendar_end. Two tiers, because coverage-lag differs:
 #   - DAILY-FRESH (daily OHLCV, moneyflow, stk_limit): refreshed same-day, so they exist for a
@@ -289,7 +347,13 @@ def _disk_free_gb() -> int:
 #   - northbound (hk_hold): inherently partial + declining coverage -> NOT a hard gate.
 READINESS_DAILY_FRESH = {"moneyflow": "market/moneyflow", "stk_limit": "market/stk_limit"}
 READINESS_POSTCATCHUP = {"cyq_perf": "market/cyq_perf"}
-MIN_ENDPOINT_ROWS = 3000  # empty/severe-partial floor (normal coverage ~5000+)
+MIN_ENDPOINT_ROWS = 3000  # cheap empty/corruption guard ONLY — completeness is the coverage ratio
+# Per-endpoint completeness = |endpoint ∩ daily universe| / |daily universe| >= floor. Floors set
+# from a measured COMPLETE day (2026-06-30): moneyflow 0.94 (some low-liquidity names lack flow) /
+# stk_limit 1.00 / cyq_perf 1.00 -> conservative floors below-observed but well above any partial
+# (an interrupted fetch drops coverage to ~0.5). A row count alone (e.g. 3001 of ~5500) is NOT a
+# completeness proof; the intersection ratio is (GPT B1).
+ENDPOINT_COVERAGE_FLOOR = {"moneyflow": 0.90, "stk_limit": 0.95, "cyq_perf": 0.95}
 
 
 def _endpoint_rows(sub: str, ep: str, date: str) -> int:
@@ -304,41 +368,67 @@ def _endpoint_rows(sub: str, ep: str, date: str) -> int:
         return 0
 
 
+def _read_ts_codes(sub: str, ep: str, date: str) -> set[str]:
+    f = PROJECT_ROOT / "data" / sub / date[:4] / f"{ep}_{date}.parquet"
+    if not f.exists():
+        return set()
+    try:
+        return {str(x).upper() for x in pd.read_parquet(f, columns=["ts_code"])["ts_code"].dropna()}
+    except Exception:  # noqa: BLE001 — unreadable/corrupt = no coverage
+        return set()
+
+
 def _daily_row_count(date: str) -> int:
     return _endpoint_rows("market/daily", "daily", date)
 
 
+def _endpoint_coverage(ep: str, sub: str, date: str, daily_codes: set[str]) -> tuple[float, dict]:
+    codes = _read_ts_codes(sub, ep, date)
+    ratio = len(codes & daily_codes) / max(1, len(daily_codes))
+    return ratio, {"rows": _endpoint_rows(sub, ep, date), "codes": len(codes),
+                   "coverage": round(ratio, 4),
+                   "missing_examples": sorted(daily_codes - codes)[:8]}
+
+
+def _coverage_gate(date: str, endpoints: dict, ev: dict) -> bool:
+    """True iff every endpoint's coverage vs the daily universe clears its floor. Mutates ev with
+    per-endpoint diagnostics + a reason on failure."""
+    daily_codes = _read_ts_codes("market/daily", "daily", date)
+    if len(daily_codes) < MIN_PLAUSIBLE_DAILY_ROWS:
+        ev["reason"] = f"daily universe itself incomplete ({len(daily_codes)} < {MIN_PLAUSIBLE_DAILY_ROWS})"
+        return False
+    cov = {}
+    for ep, sub in endpoints.items():
+        ratio, diag = _endpoint_coverage(ep, sub, date, daily_codes)
+        cov[ep] = diag
+        floor = ENDPOINT_COVERAGE_FLOOR.get(ep, 0.95)
+        if ratio < floor or diag["rows"] < MIN_ENDPOINT_ROWS:
+            ev["endpoint_coverage"] = cov
+            ev["reason"] = f"{ep} incomplete: coverage {diag['coverage']} < {floor} (rows {diag['rows']})"
+            return False
+    ev.setdefault("endpoint_coverage", {}).update(cov)
+    return True
+
+
 def endpoint_ready(date: str) -> tuple[bool, dict]:
-    """PRE-catch-up target_end gate: the market-wide daily endpoint AND every DAILY-FRESH endpoint
-    (moneyflow, stk_limit) must carry a plausible ROW COUNT — not mere file existence. Lagging
-    endpoints (cyq_perf) + the report_rc halo are verified POST-catch-up, not here."""
+    """PRE-catch-up target_end gate: daily universe non-trivial AND every DAILY-FRESH endpoint
+    (moneyflow, stk_limit) COVERS the daily universe above its floor — not mere file existence or a
+    low row floor. Lagging endpoints (cyq_perf) + the report_rc halo are verified POST-catch-up."""
     ev: dict = {"daily_rows": _daily_row_count(date)}
     if ev["daily_rows"] < MIN_PLAUSIBLE_DAILY_ROWS:
         ev["reason"] = f"daily rows {ev['daily_rows']} < {MIN_PLAUSIBLE_DAILY_ROWS}"
         return False, ev
-    counts = {ep: _endpoint_rows(sub, ep, date) for ep, sub in READINESS_DAILY_FRESH.items()}
-    ev["daily_fresh_rows"] = counts
-    thin = {ep: n for ep, n in counts.items() if n < MIN_ENDPOINT_ROWS}
-    if thin:
-        ev["reason"] = f"daily-fresh endpoints empty/partial: {thin} (< {MIN_ENDPOINT_ROWS})"
-        return False, ev
-    return True, ev
+    return _coverage_gate(date, READINESS_DAILY_FRESH, ev), ev
 
 
 def assert_endpoints_complete(date: str) -> tuple[bool, dict]:
     """POST-catch-up completeness gate on the FINAL target_end data: re-verify the daily-fresh
-    endpoints AND the lagging endpoints (cyq_perf) the catch-up just fetched. Fail-closed — a
-    formal provider must never stamp calendar_end at a day with an empty/partial endpoint."""
+    endpoints AND the lagging cyq_perf the catch-up just fetched, by COVERAGE vs the daily
+    universe. Fail-closed — a formal provider must never stamp calendar_end at a partial day."""
     ok, ev = endpoint_ready(date)
     if not ok:
         return False, ev
-    post = {ep: _endpoint_rows(sub, ep, date) for ep, sub in READINESS_POSTCATCHUP.items()}
-    ev["postcatchup_rows"] = post
-    thin = {ep: n for ep, n in post.items() if n < MIN_ENDPOINT_ROWS}
-    if thin:
-        ev["reason"] = f"post-catch-up endpoints empty/partial: {thin} (< {MIN_ENDPOINT_ROWS})"
-        return False, ev
-    return True, ev
+    return _coverage_gate(date, READINESS_POSTCATCHUP, ev), ev
 
 
 # ── phases ───────────────────────────────────────────────────────────────────
@@ -453,6 +543,7 @@ def phase_execute(args) -> int:
     # closed on an all-zero replay).
     ok_complete, complete_ev = assert_endpoints_complete(target_end)
     if not ok_complete:
+        _prune_cyq_state(target_end)  # m1: let a rerun refetch cyq (don't leave zero-row 'done')
         logger.error("target_end %s endpoint completeness FAILED post-catch-up: %s — bump BLOCKED "
                      "(vendor may be late; re-run when complete or pass an earlier --target-end).",
                      target_end, complete_ev)

@@ -88,7 +88,7 @@ def check_calendar() -> list[str]:
 def check_bins() -> None:
     live_feat, staged_feat = LIVE / "features", STAGED / "features"
     IND_FIELDS = _indicator_fields()
-    n_checked = n_missing = n_shrunk = n_sha = n_sha_bad = n_sha_exc = 0
+    n_checked = n_missing = n_shrunk = n_sha = n_sha_bad = n_sha_exc = n_eligible = 0
     sha_examples = []
     symbols = sorted(os.listdir(live_feat))
     for si, sym in enumerate(symbols):
@@ -97,7 +97,10 @@ def check_bins() -> None:
             n_missing += 1
             V.append(f"symbol dir missing in staged: {sym}")
             continue
-        sample = (si % SAMPLE_EVERY == 0)
+        # MONTHLY strict mode: hash EVERY bin's frozen prefix (no sampling) — a 1-in-50 sample
+        # proves byte-identity for only ~2% of bins, so an unsampled pre-thaw bin could drift and
+        # still pass. For a formal recurring frozen-prefix guarantee, sample != proof (GPT B2).
+        sample = MONTHLY_MODE or (si % SAMPLE_EVERY == 0)
         with os.scandir(sdir_live) as it:
             for entry in it:
                 if not entry.name.endswith(".bin"):
@@ -117,6 +120,7 @@ def check_bins() -> None:
                     if n_shrunk <= 20:
                         V.append(f"bin SHRUNK: {sym}/{entry.name} {lsize}->{tsize}")
                     continue
+                n_eligible += 1  # passed missing+shrunk -> a byte-identity candidate
                 if sample:
                     n_sha += 1
                     lb = Path(entry.path).read_bytes()
@@ -141,10 +145,16 @@ def check_bins() -> None:
         V.append(f"frozen-prefix SHA mismatches: {n_sha_bad} (examples {sha_examples})")
     report["bins"] = {"symbols": len(symbols), "files_checked": n_checked,
                       "missing": n_missing, "shrunk": n_shrunk,
-                      "sha_sampled": n_sha, "sha_mismatch": n_sha_bad,
+                      "sha_mode": "full" if MONTHLY_MODE else "sample",
+                      "sha_hashed": n_sha, "sha_mismatch": n_sha_bad,
                       "gross_sha_drift": n_sha_bad + n_sha_exc,
                       "sha_approved_exceptions_ind_or_reportrc": n_sha_exc,
                       "monthly_strict": MONTHLY_MODE}
+    # In monthly (full) mode every eligible bin (passed missing+shrunk) MUST have been hashed —
+    # prove no bin was left on the cheap size-only path (would defeat the byte-identity guarantee).
+    report["bins"]["sha_eligible"] = n_eligible
+    if MONTHLY_MODE and n_sha != n_eligible:
+        V.append(f"monthly full-SHA coverage gap: hashed {n_sha} != eligible {n_eligible}")
 
 
 def _membership(path: Path, cal: pd.DatetimeIndex) -> pd.DataFrame:

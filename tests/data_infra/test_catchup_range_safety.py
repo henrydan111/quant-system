@@ -67,6 +67,34 @@ def test_report_rc_first_seen_dedup_nan_wins_for_identical_bootstrap():
     assert (out["ts_code"] == "B").any(), "bootstrap-only row survives"
 
 
+def test_stage_e_fails_closed_on_zero_month(tmp_path, monkeypatch):
+    # M2: a zero-row MONTH inside an otherwise non-empty halo must fail closed. Stage E work()
+    # raises -> _run_key records it failed (runner.failed non-empty -> main() would exit 1).
+    monkeypatch.setattr(cfr, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(cfr.TushareFetcher, "__init__", lambda self, **k: None)
+    monkeypatch.setattr(cfr.StorageManager, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(cfr, "load_state", lambda p: {})
+    monkeypatch.setattr(cfr, "save_state", lambda p, s: None)
+    r = cfr.Runner("20260101", "20260228", dry=False,
+                   report_rc_start="20260101", report_rc_end="20260228")
+
+    class FakePro:
+        report_rc = staticmethod(lambda **k: None)
+
+    def fake_paginated(fn, limit, start_date, end_date):
+        if start_date[:6] == "202602":            # 202602 throttled -> zero rows
+            return pd.DataFrame()
+        return pd.DataFrame({"ts_code": ["A"], "report_date": [start_date],
+                             "eps": [1.0], "op_rt": [1.0], "np": [1.0], "rating": ["buy"]})
+
+    r.fetcher.pro = FakePro()
+    r.fetcher._fetch_paginated = fake_paginated
+    r.stage_e()
+    assert any("report_rc" in k for k in r.failed), r.failed
+    key = next(k for k in r.state if k.startswith("E:report_rc"))
+    assert r.state[key]["status"] == "failed" and "ZERO-row month" in r.state[key]["error"], r.state[key]
+
+
 def test_report_rc_window_defaults_to_start_end(monkeypatch):
     # Runner.__init__ must default the report_rc window to [start, end] when not given, and
     # honor an explicit halo window when it is. Construct without touching Tushare/storage.

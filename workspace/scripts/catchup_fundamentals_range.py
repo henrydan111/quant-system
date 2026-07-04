@@ -124,13 +124,14 @@ def trading_days(start: str, end: str) -> list[str]:
 class Runner:
     def __init__(self, start: str, end: str, dry: bool, *, report_rc_start: str | None = None,
                  report_rc_end: str | None = None, state_suffix: str | None = None,
-                 allow_empty_report_rc: bool = False):
+                 allow_empty_report_rc: bool = False, allow_empty_report_rc_months: tuple = ()):
         self.start, self.end, self.dry = start, end, dry
         # report_rc has its own window (the pre-boundary TTL halo); default to [start, end].
         self.report_rc_start = report_rc_start or start
         self.report_rc_end = report_rc_end or end
         self.suffix = state_suffix
-        self.allow_empty_report_rc = allow_empty_report_rc
+        self.allow_empty_report_rc = allow_empty_report_rc                 # whole-window zero (recovery)
+        self.allow_empty_report_rc_months = set(allow_empty_report_rc_months)  # per-month verified-empty
         self.state_path = state_path_for(state_suffix)
         self.state = load_state(self.state_path)
         self.fetcher = TushareFetcher(
@@ -323,6 +324,17 @@ class Runner:
                     f"credible for a monthly bump (endpoint late/throttled/broken). "
                     f"months={month_results}. Pass --allow-empty-report-rc only for a "
                     f"verified-empty window.")
+            # M2: a zero-row MONTH inside an otherwise non-empty halo is also suspicious (one
+            # throttled/failed month while others returned rows) — fail closed unless that month
+            # is explicitly whitelisted (or the whole-window override is set).
+            unexpected_zero = [m["month"] for m in month_results
+                               if m["rows"] == 0 and m["month"] not in self.allow_empty_report_rc_months]
+            if unexpected_zero and not self.allow_empty_report_rc:
+                raise RuntimeError(
+                    f"report_rc halo had ZERO-row month(s) {unexpected_zero} inside "
+                    f"{rc_start}..{rc_end} (others returned rows) — likely endpoint throttling/"
+                    f"staleness. Refusing. Whitelist a verified-empty month via "
+                    f"--allow-empty-report-rc-month YYYYMM[,YYYYMM].")
             new = pd.concat(frames, ignore_index=True)
             # Phase 5 B2 (report_rc availability-boundary): stamp OUR first-ingestion time
             # so the PIT ledger can anchor a late-arriving fresh-window row (create_time
@@ -404,11 +416,16 @@ def main() -> None:
     parser.add_argument("--allow-empty-report-rc", action="store_true",
                         help="Permit an all-zero report_rc halo (Stage E) instead of failing "
                              "closed. Only for a VERIFIED-empty window — not the default path.")
+    parser.add_argument("--allow-empty-report-rc-month", default="",
+                        help="Comma-separated YYYYMM months permitted to return zero report_rc "
+                             "rows inside a non-empty halo (verified-empty months only).")
     args = parser.parse_args()
 
+    months_ok = tuple(m.strip() for m in args.allow_empty_report_rc_month.split(",") if m.strip())
     runner = Runner(args.start, args.end, args.dry_run, report_rc_start=args.report_rc_start,
                     report_rc_end=args.report_rc_end, state_suffix=args.state_suffix,
-                    allow_empty_report_rc=args.allow_empty_report_rc)
+                    allow_empty_report_rc=args.allow_empty_report_rc,
+                    allow_empty_report_rc_months=months_ok)
     started = time.time()
     for stage in args.stages.upper():
         logger.info("===== STAGE %s =====", stage)

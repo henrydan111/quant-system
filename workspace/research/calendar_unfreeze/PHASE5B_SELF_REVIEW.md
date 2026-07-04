@@ -101,3 +101,30 @@ GPT 的 B1 exact-fix 让 `endpoint_ready` pre-catch-up 就卡 cyq_perf 行数。
 65 绿（14 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；3 脚本 py_compile OK；--plan 活体（target_end 20260703 / next thaw_step2）；split-gate 活体行为正确。
 
 **结论：clean for GPT（re-review 2）。5 findings 全修 + split-gate 顺序修正 + 审计跑错树硬化；2 项显式留审（bin 长度、typed 例外迁移）。**
+
+---
+
+## REWORK round 4（GPT re-review #2 后修复自审）— 2026-07-04
+
+GPT 复审 68b0ee3：确认 **m1 RESOLVED + split-gate 架构正确**，给出更锐 REWORK（2 Blocker + 2 Major + 1 minor）。逐条修复，全部落实（含之前留审的 bin 长度）：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** 固定行数 floor 非端点级完整性 | 改**覆盖率门**：`coverage = |端点∩daily universe|/|daily|`，per-endpoint floor（moneyflow 0.90 / stk_limit 0.95 / cyq_perf 0.95，由完整日 2026-06-30 实测 0.94/1.0/1.0 设定）；3000 行仅作 corruption/empty guard。活体：ready(20260703)=True（mf 0.9414 / stk 1.0），complete=False（cyq 0.0） | 新增 high-rows-low-coverage 单测（10 行但覆盖 0→拒） |
+| **B2** frozen-prefix 审计仍**抽样** SHA（1/50）| monthly 模式 `sample = MONTHLY_MODE or (si%50==0)` → **每根 bin 全哈希**；report 记 `sha_mode=full` + `sha_eligible`；加覆盖断言 `n_sha==n_eligible`（monthly 全哈希无遗漏）。⚠ 运行成本：~5.5M bins 全哈希 ≈ ~1h（月度操作可接受，已 log 进度） | py_compile；断言逻辑 |
+| **M1** bin 存在但未证覆盖到 target_end | 解码 Qlib header（`float32[0]=start_index`，`last_pos=start_index+nvalues-1`）——GPT 建议的 `required_len*4` 会误杀所有 2008 后上市（其 start_index>0），故按 header 解码才正确；raw 有价格当日的 code，其 close.day.bin 必须覆盖该日 pos | 活体：000001 last_pos 4492==日历末；新增 short-bins 单测 |
+| **M2** halo 月级零仍记成功 | Stage E 收 `month_results`；**任一月零行**（非白名单）→ raise，除非 `--allow-empty-report-rc-month YYYYMM`；whole-window 零仍 raise（除非 `--allow-empty-report-rc`） | 新增 zero-month fail-closed 单测 |
+| **m1** Stage-D 零行 cyq 污染 resume | driver 在 `assert_endpoints_complete` 失败时 `_prune_cyq_state(target_end)`：删 `D:cyq*`/`D:cyq_repartition` 键，rerun 重抓（否则零行"done"被跳过，bump 不可恢复） | prune 逻辑 |
+
+### 我对 GPT 建议的 2 处修正
+1. **M1 bin 长度**：GPT 的 exact-fix 假设 bin 跨整个日历（`min_bytes=required_len*4`），会误杀所有 2008 后上市（start_index>0，bin 更短）。活体确认 Qlib 格式 = header+values，正确检查是解码 header 得 last_pos（000001 验证 last_pos==日历末）。
+2. **B1 覆盖率 floor**：GPT 举例 0.98，但实测 moneyflow 自然覆盖仅 0.94（低流动性名无 flow）→ 0.98 会误杀。按实测设 per-endpoint floor（mf 0.90 留 margin）。
+
+### 留 GPT / 已知成本
+- **B2 全哈希运行时**：monthly 全哈希 ~5.5M bins（features 子树）≈ ~1h I/O。月度操作可接受；显式告知，若需更快可后续并行化。非正确性问题。
+- northbound 仍不设硬门（覆盖天然偏+衰减；无正式 provider 字段声称其日完整）。
+
+### 验证汇总
+68 绿（16 driver + 7 catchup + 34 report_rc + 11 calendar_policy）；3 脚本 py_compile OK；活体：coverage 门（mf 0.94/stk 1.0）、complete 正确阻断（cyq 0.0）、bin 解码（last_pos 4492==日历末）。
+
+**结论：clean for GPT（re-review 3）。2 Blocker + 2 Major + 1 minor 全修，含之前留审的 bin 长度；2 处修正 GPT 建议（bin 格式、覆盖 floor）；唯一已知成本=全哈希 ~1h，显式告知。**
