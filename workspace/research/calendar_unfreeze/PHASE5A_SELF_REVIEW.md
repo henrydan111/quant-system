@@ -67,3 +67,31 @@
 26 report_rc 测试（9 新）+ 336 data_infra pass + PIT002 clean。历史 2020/2022 测试全绿 = 深史路径不变。
 
 **Round-2 结论：5 findings 全修，2 项有意 scope 显式留审。clean for GPT re-review。**
+
+---
+
+# Round-3 自审（GPT REWORK#2 修订后 — B3 完整修 + M4）— 2026-07-04
+
+**背景**：GPT 实现审查 Round-2 = REWORK（B3 value-lookahead 新 Blocker + M4）。B3 我 preflight 的"payload 修订不改 effective 非前视"论据**错误并已认**（混淆日期可见性与值可见性）。**用户选 (b) 完整修**（非保守 fail-closed）。
+
+## B3 完整修（revision-preserving，`bc6669f`+`aef26c6`）
+
+- **first-seen floor**（`bc6669f`）：served fresh 行锚 `max(report, create, first_seen_raw_fetch)`；raw_fetch=stage-E 最早戳 → 稳定行不膨胀（M1 保持）、晚见/修订值 floor 在首见。
+- **payload_digest 入 ledger key**（`aef26c6`）：同-(analyst, report_date, quarter) 的值修订（eps 变）作为**独立 revision** 存活于各自首见 effective，不再 collapse 回填回锚；min-first-seen dedup（同值再见不延迟，改值=新身份新首见）；no-retrograde 基线改键 (natural+digest)。
+- **materializer 无需改**：既有 per-(analyst,quarter) sort-by-effective + shift(1) 逻辑直接把修订渲染成正确 PIT 日期的 eps_up/dn 事件。
+- **决定性测试**：eps 1.00(3月见)+1.40(7月见) → 2 ledger 行不同 effective；materializer 在 **7 月**（非回锚 3 月）出 eps_up。
+
+## M4（`bc6669f`）
+
+政策边界断言现对**任何带 calendar_policy_id 的 build**（staged/dry-run，非仅 publish）执行——dry-run 证据不能用 stale 常量。
+
+## 有意注记（诚实）
+
+- **current live provider 的 fresh report_rc 无 raw_fetch 戳**（catch-up 时未打）→ floor 退化为 max(report, create) 残留；D3-sealed，下次 bump 重抓带戳修正（GPT Q5 已裁可接受）。
+- digest 覆盖当前唯一 materialized 值字段 eps；注释明确"新字段成 feature 时扩此集"。
+
+## 验证
+
+31 report_rc 测试（本轮 +5：late-first-seen floor、stable-not-inflated、staged-policy、restatement-preserved、restatement-materializes-up）+ 341 data_infra + PIT002 clean。5→4 exact-dup-merge 仍绿（digest 键保留同行 dedup）。
+
+**Round-3 结论：B3 完整修（revision-preserving，端到端测试）+ M4。clean for GPT re-review。**
