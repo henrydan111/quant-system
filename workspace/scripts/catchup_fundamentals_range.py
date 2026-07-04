@@ -9,14 +9,23 @@ Stages (all resume-safe via a per-key JSON state file; strictly serial):
   A  weekly ann_date chunks : income income_quarterly balancesheet cashflow
                               cashflow_quarterly indicators holder_number
   B  per-day ann_date       : forecast dividends
-  C  ann_date chunks->merge : stk_holdertrade (year-file layout)
+  C  ann_date chunks->merge : stk_holdertrade (per-year file, ann_date-partitioned)
   D  per-symbol range       : cyq_perf (auto-detects last covered date)
-  E  month chunks->merge    : report_rc (report_date query; refetch from 202602 overlap)
-  F  monthly                : index_weights (202603..202606 x 7 indices)
+  E  month chunks->merge    : report_rc (report_date query over [report-rc-start, report-rc-end],
+                              per-year file; the monthly bump passes a pre-boundary TTL halo)
+  F  monthly                : index_weights (months spanned by [start, end] x 7 indices)
+
+Range-safety (Phase 5-B / GPT B3): this script is REUSED every monthly freeze-bump, so it must
+be range- and year-safe. --state-suffix scopes the resume-state file (and the cyq buffer) per
+bump so a new window is never skipped by a prior bump's "done" keys; range-scoped state keys and
+per-year output files make a window crossing a year boundary (a report_rc halo reaches into the
+prior year) correct. report_rc/index_weights month iteration derives from the window, not a
+hardcoded 2026 span.
 
 Usage:
     venv/Scripts/python.exe workspace/scripts/catchup_fundamentals_range.py \
-        --start 20260228 --end 20260630 [--stages ABCDEF] [--dry-run]
+        --start 20260228 --end 20260630 [--stages ABCDEF] [--dry-run] \
+        [--report-rc-start YYYYMMDD] [--report-rc-end YYYYMMDD] [--state-suffix TAG]
 """
 from __future__ import annotations
 
@@ -37,9 +46,15 @@ from data_infra.fetchers import TushareFetcher  # noqa: E402
 from data_infra.storage import StorageManager  # noqa: E402
 
 LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "catchup_fundamentals_unfreeze.log")
-STATE_PATH = os.path.join(
-    PROJECT_ROOT, "workspace", "outputs", "calendar_unfreeze", "catchup_fund_state.json"
-)
+OUT_DIR = os.path.join(PROJECT_ROOT, "workspace", "outputs", "calendar_unfreeze")
+
+
+def state_path_for(suffix: str | None) -> str:
+    """Resume-state file, scoped per bump by --state-suffix so a new window is never skipped by
+    a prior bump's `done` keys. No suffix -> the original global file (the shipped Phase-1 run)."""
+    name = "catchup_fund_state.json" if not suffix else f"catchup_fund_state_{suffix}.json"
+    return os.path.join(OUT_DIR, name)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,19 +64,19 @@ logging.basicConfig(
 logger = logging.getLogger("catchup_fund")
 
 
-def load_state() -> dict:
-    if os.path.exists(STATE_PATH):
-        with open(STATE_PATH, "r", encoding="utf-8") as fh:
+def load_state(path: str) -> dict:
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
     return {}
 
 
-def save_state(state: dict) -> None:
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    tmp = STATE_PATH + ".tmp"
+def save_state(path: str, state: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(state, fh, ensure_ascii=False, indent=1)
-    os.replace(tmp, STATE_PATH)
+    os.replace(tmp, path)
 
 
 def weekly_chunks(start: str, end: str) -> list[tuple[str, str]]:
@@ -79,6 +94,27 @@ def calendar_days(start: str, end: str) -> list[str]:
     return [d.strftime("%Y%m%d") for d in pd.date_range(start, end, freq="D")]
 
 
+def months_spanned(start: str, end: str) -> list[str]:
+    """['YYYYMM', ...] for every calendar month intersecting [start, end] (year-crossing safe)."""
+    out, cur = [], datetime.strptime(start[:6] + "01", "%Y%m%d")
+    stop = datetime.strptime(end, "%Y%m%d")
+    while cur <= stop:
+        out.append(cur.strftime("%Y%m"))
+        y, m = cur.year, cur.month
+        cur = datetime(y + (m // 12), (m % 12) + 1, 1)
+    return out
+
+
+def month_bounds(month: str, clip_start: str | None = None, clip_end: str | None = None) -> tuple[str, str]:
+    """(lo, hi) YYYYMMDD for a 'YYYYMM'; optionally clipped to [clip_start, clip_end]."""
+    y, m = int(month[:4]), int(month[4:6])
+    full_lo = month + "01"
+    full_hi = (datetime(y + (m // 12), (m % 12) + 1, 1) - timedelta(days=1)).strftime("%Y%m%d")
+    lo = max(full_lo, clip_start) if clip_start else full_lo
+    hi = min(full_hi, clip_end) if clip_end else full_hi
+    return lo, hi
+
+
 def trading_days(start: str, end: str) -> list[str]:
     cal = pd.read_parquet(os.path.join(PROJECT_ROOT, "data", "reference", "trade_cal.parquet"))
     days = cal[(cal["is_open"] == 1) & (cal["cal_date"] >= start) & (cal["cal_date"] <= end)]
@@ -86,9 +122,15 @@ def trading_days(start: str, end: str) -> list[str]:
 
 
 class Runner:
-    def __init__(self, start: str, end: str, dry: bool):
+    def __init__(self, start: str, end: str, dry: bool, *, report_rc_start: str | None = None,
+                 report_rc_end: str | None = None, state_suffix: str | None = None):
         self.start, self.end, self.dry = start, end, dry
-        self.state = load_state()
+        # report_rc has its own window (the pre-boundary TTL halo); default to [start, end].
+        self.report_rc_start = report_rc_start or start
+        self.report_rc_end = report_rc_end or end
+        self.suffix = state_suffix
+        self.state_path = state_path_for(state_suffix)
+        self.state = load_state(self.state_path)
         self.fetcher = TushareFetcher(
             config_path=os.path.join(PROJECT_ROOT, "config.yaml"), max_retries=5, base_sleep=1.5
         )
@@ -108,7 +150,7 @@ class Runner:
             logger.error("FAILED %s: %s", key, exc)
             self.state[key] = {"status": "failed", "error": str(exc)}
             self.failed.append(key)
-        save_state(self.state)
+        save_state(self.state_path, self.state)
 
     # ---------- Stage A: weekly ann_date range chunks ----------
     STAGE_A = [
@@ -155,9 +197,9 @@ class Runner:
                 return {"rows": int(len(df))}
             self._run_key(f"B:dividends:{day}", work_div)
 
-    # ---------- Stage C: stk_holdertrade year-file merge ----------
+    # ---------- Stage C: stk_holdertrade per-year file merge ----------
     def stage_c(self) -> None:
-        out_path = os.path.join(PROJECT_ROOT, "data", "corporate", "stk_holdertrade", "stk_holdertrade_2026.parquet")
+        rc_dir = os.path.join(PROJECT_ROOT, "data", "corporate", "stk_holdertrade")
 
         def work():
             frames = []
@@ -168,23 +210,32 @@ class Runner:
                 logger.info("  stk_holdertrade %s..%s: %d rows", lo, hi, len(df))
             if not frames:
                 return {"rows": 0}
-            new = pd.concat(frames, ignore_index=True)
-            old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
-            before = len(old)
-            # The bootstrap year file stores date columns as datetime64; the live API
-            # returns YYYYMMDD strings — normalize the NEW side to the OLD file's
-            # datetime64 convention (downstream ledger readers keep their dtype
-            # contract; mixed object columns fail the parquet write — 2026-07-02).
-            for col in ("ann_date", "in_date", "close_date", "begin_date", "end_date"):
-                if col in new.columns and col in old.columns and pd.api.types.is_datetime64_any_dtype(old[col]):
-                    new[col] = pd.to_datetime(new[col].astype(str), format="%Y%m%d", errors="coerce")
-            merged = pd.concat([old, new], ignore_index=True).drop_duplicates()
-            tmp = out_path + ".tmp"
-            merged.to_parquet(tmp, index=False)
-            os.replace(tmp, out_path)
-            logger.info("  stk_holdertrade_2026.parquet: %d -> %d rows", before, len(merged))
-            return {"rows_before": before, "rows_after": int(len(merged))}
-        self._run_key("C:stk_holdertrade", work)
+            new_all = pd.concat(frames, ignore_index=True)
+            # partition new rows by ann_date year -> per-year file (year-crossing safe).
+            yr = pd.to_datetime(new_all["ann_date"].astype(str), format="%Y%m%d", errors="coerce").dt.year
+            before_t = after_t = 0
+            for year, grp in new_all.groupby(yr):
+                if pd.isna(year):
+                    continue
+                out_path = os.path.join(rc_dir, f"stk_holdertrade_{int(year)}.parquet")
+                old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
+                before = len(old)
+                grp = grp.copy()
+                # The bootstrap year file stores date columns as datetime64; the live API
+                # returns YYYYMMDD strings — normalize the NEW side to the OLD file's
+                # datetime64 convention (mixed object columns fail the parquet write — 2026-07-02).
+                for col in ("ann_date", "in_date", "close_date", "begin_date", "end_date"):
+                    if col in grp.columns and col in old.columns and pd.api.types.is_datetime64_any_dtype(old[col]):
+                        grp[col] = pd.to_datetime(grp[col].astype(str), format="%Y%m%d", errors="coerce")
+                merged = pd.concat([old, grp], ignore_index=True).drop_duplicates()
+                tmp = out_path + ".tmp"
+                merged.to_parquet(tmp, index=False)
+                os.replace(tmp, out_path)
+                logger.info("  stk_holdertrade_%d.parquet: %d -> %d rows", int(year), before, len(merged))
+                before_t += before
+                after_t += len(merged)
+            return {"rows_before": before_t, "rows_after": after_t}
+        self._run_key(f"C:stk_holdertrade:{self.start}-{self.end}", work)
 
     # ---------- Stage D: cyq_perf per-symbol ----------
     def stage_d(self) -> None:
@@ -208,8 +259,9 @@ class Runner:
         symbols = sorted(set(live) | set(dead))
         logger.info("cyq_perf symbols: %d (L=%d, recent-D=%d)", len(symbols), len(live), len(dead))
 
-        buffer_key = "D:cyq_buffer"
-        buf_dir = os.path.join(PROJECT_ROOT, "workspace", "outputs", "calendar_unfreeze", "cyq_buffer")
+        # buffer dir scoped per bump (--state-suffix) so sequential bumps never mix partials.
+        buf_name = "cyq_buffer" if not self.suffix else f"cyq_buffer_{self.suffix}"
+        buf_dir = os.path.join(PROJECT_ROOT, "workspace", "outputs", "calendar_unfreeze", buf_name)
         os.makedirs(buf_dir, exist_ok=True)
         for i, code in enumerate(symbols, 1):
             def work(code=code):
@@ -239,20 +291,21 @@ class Runner:
             return {"dates": n_dates}
         self._run_key("D:cyq_repartition", repartition)
 
-    # ---------- Stage E: report_rc month-chunked merge ----------
+    # ---------- Stage E: report_rc month-chunked merge over the halo window ----------
     def stage_e(self) -> None:
-        out_path = os.path.join(PROJECT_ROOT, "data", "analyst", "report_rc", "report_rc_2026.parquet")
+        rc_start, rc_end = self.report_rc_start, self.report_rc_end
 
         def work():
             frames = []
-            for mo in (2, 3, 4, 5, 6):
-                s = f"2026{mo:02d}01"
-                e = f"2026{mo:02d}31" if mo != 6 else "20260630"
+            # iterate the months spanned by [report_rc_start, report_rc_end] (the pre-boundary
+            # TTL halo — reaches into the prior year on the first bump), clipping each end.
+            for mo in months_spanned(rc_start, rc_end):
+                s, e = month_bounds(mo, rc_start, rc_end)
                 df = self.fetcher._fetch_paginated(self.fetcher.pro.report_rc, limit=3000,
                                                    start_date=s, end_date=e)
                 if not df.empty:
                     frames.append(df)
-                logger.info("  report_rc 2026%02d: %d rows", mo, len(df))
+                logger.info("  report_rc %s..%s: %d rows", s, e, len(df))
             if not frames:
                 return {"rows": 0}
             new = pd.concat(frames, ignore_index=True)
@@ -265,34 +318,49 @@ class Runner:
             # re-fetch of an already-seen content row never moves its stamp later.
             now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             new["raw_fetch_ts"] = now_ts
-            old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
-            before = len(old)
-            combined = pd.concat([old, new], ignore_index=True)
-            content_cols = [c for c in combined.columns if c != "raw_fetch_ts"]
-            combined = (
-                combined.sort_values("raw_fetch_ts", kind="mergesort")  # NaN (unknown) sorts last
-                .drop_duplicates(subset=content_cols, keep="first")
-                .reset_index(drop=True)
-            )
-            tmp = out_path + ".tmp"
-            combined.to_parquet(tmp, index=False)
-            os.replace(tmp, out_path)
-            logger.info("  report_rc_2026.parquet: %d -> %d rows (raw_fetch_ts stamped)", before, len(combined))
-            return {"rows_before": before, "rows_after": int(len(combined))}
-        self._run_key("E:report_rc", work)
+            # partition by report_date year -> per-year file (a halo crossing a year boundary
+            # writes report_rc_<prev>.parquet AND report_rc_<cur>.parquet correctly).
+            yr = new["report_date"].astype(str).str[:4]
+            before_t = after_t = 0
+            for year, grp in new.groupby(yr):
+                if not (isinstance(year, str) and year.isdigit() and len(year) == 4):
+                    continue
+                out_path = os.path.join(PROJECT_ROOT, "data", "analyst", "report_rc", f"report_rc_{year}.parquet")
+                old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
+                before = len(old)
+                combined = pd.concat([old, grp], ignore_index=True)
+                content_cols = [c for c in combined.columns if c != "raw_fetch_ts"]
+                # First-seen wins. A pre-instrumentation bootstrap row (year files <2026 have
+                # NO raw_fetch_ts -> NaN after concat) was observed BEFORE we started stamping,
+                # i.e. earliest possible -> NaN must win over a today re-fetch stamp. So sort
+                # NaN FIRST and keep="first" (for two known stamps, ascending -> earliest kept).
+                combined = (
+                    combined.sort_values("raw_fetch_ts", kind="mergesort", na_position="first")
+                    .drop_duplicates(subset=content_cols, keep="first")
+                    .reset_index(drop=True)
+                )
+                tmp = out_path + ".tmp"
+                combined.to_parquet(tmp, index=False)
+                os.replace(tmp, out_path)
+                logger.info("  report_rc_%s.parquet: %d -> %d rows (raw_fetch_ts stamped)", year, before, len(combined))
+                before_t += before
+                after_t += len(combined)
+            return {"rows_before": before_t, "rows_after": after_t}
+        # range-scoped key: a new halo window is never masked by a prior bump's `done`.
+        self._run_key(f"E:report_rc:{rc_start}-{rc_end}", work)
 
     # ---------- Stage F: index_weights ----------
     TRACKED_INDICES = ["000001.SH", "000300.SH", "000905.SH", "000852.SH",
                        "399001.SZ", "399006.SZ", "000688.SH"]
 
     def stage_f(self) -> None:
-        for month in ("202603", "202604", "202605", "202606"):
+        # index_weights is a monthly snapshot -> fetch each FULL month spanned by [start, end]
+        # (the key is already month-scoped, so re-running is idempotent per month/index).
+        for month in months_spanned(self.start, self.end):
+            lo, hi = month_bounds(month)  # full month bounds for the snapshot query
             for idx in self.TRACKED_INDICES:
-                def work(month=month, idx=idx):
-                    last_day = {"202603": "20260331", "202604": "20260430",
-                                "202605": "20260531", "202606": "20260630"}[month]
-                    df = self.fetcher.fetch_index_weight(index_code=idx,
-                                                         start_date=month + "01", end_date=last_day)
+                def work(month=month, idx=idx, lo=lo, hi=hi):
+                    df = self.fetcher.fetch_index_weight(index_code=idx, start_date=lo, end_date=hi)
                     if not df.empty:
                         self.storage.insert_universe_data(df, "index_weights")
                     logger.info("  index_weights %s %s: %d rows", month, idx, len(df))
@@ -306,9 +374,18 @@ def main() -> None:
     parser.add_argument("--end", default="20260630")
     parser.add_argument("--stages", default="ABCDEF")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--report-rc-start", default=None,
+                        help="report_rc (Stage E) window start (YYYYMMDD); defaults to --start. "
+                             "The monthly bump passes a pre-boundary TTL halo start.")
+    parser.add_argument("--report-rc-end", default=None,
+                        help="report_rc (Stage E) window end (YYYYMMDD); defaults to --end.")
+    parser.add_argument("--state-suffix", default=None,
+                        help="Scope the resume-state file + cyq buffer per bump so a new window "
+                             "is not skipped by a prior bump's done keys.")
     args = parser.parse_args()
 
-    runner = Runner(args.start, args.end, args.dry_run)
+    runner = Runner(args.start, args.end, args.dry_run, report_rc_start=args.report_rc_start,
+                    report_rc_end=args.report_rc_end, state_suffix=args.state_suffix)
     started = time.time()
     for stage in args.stages.upper():
         logger.info("===== STAGE %s =====", stage)

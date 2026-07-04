@@ -68,29 +68,39 @@ def _open_trading_days(upto: str | None = None) -> list[str]:
     return [d for d in days if (upto is None or d <= upto)]
 
 
-def determine_target_end(now_cst: datetime, *, probe_daily=None) -> tuple[str | None, dict]:
+def now_cst() -> datetime:
+    """Wall-clock in China time — the vendor-update hours are CST, so the readiness check
+    must not use the host's local time (GPT B2)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Shanghai"))
+    except Exception:  # pragma: no cover — zoneinfo always present on 3.9+
+        return datetime.now()
+
+
+def determine_target_end(now: datetime, *, probe_ready=None) -> tuple[str | None, dict]:
     """Return (target_end, evidence). The latest open trading day whose data is complete:
-    the day is fully past the LATEST required endpoint update hour, and (optionally) a
-    daily-endpoint probe returns a plausible row count. Rolls back to the previous open day
-    until both hold. probe_daily(date)->int is injectable for tests; None skips the probe
-    (schedule/plan use), but a formal execute REQUIRES the probe to authorize target_end."""
-    today = now_cst.strftime("%Y%m%d")
+    the day is past the LATEST required endpoint update hour AND, when probe_ready is given,
+    every required endpoint family passes its readiness/coverage probe. Rolls back to the
+    previous open day otherwise. probe_ready(date) -> (ok: bool, evidence: dict) is injectable
+    for tests; None skips the probe (schedule/plan use). A formal execute REQUIRES probe_ready
+    — daily row count alone cannot authorize a formal target_end (GPT B2)."""
+    today = now.strftime("%Y%m%d")
     latest_hour = max(ENDPOINT_UPDATE_HOUR_CST.values())
     candidates = _open_trading_days(upto=today)
     evidence: dict = {"evaluated": [], "latest_required_hour_cst": latest_hour}
     for d in reversed(candidates):
         rec: dict = {"date": d}
         # a day is complete only once we are past its vendor-update window; for `today`
-        # that means now must be past latest_hour, for past days it is trivially complete.
-        if d == today and now_cst.hour < latest_hour:
+        # that means now (CST) must be past latest_hour, for past days it is trivially so.
+        if d == today and now.hour < latest_hour:
             rec["reason"] = f"today not past update hour {latest_hour}:00 CST"
             evidence["evaluated"].append(rec)
             continue
-        if probe_daily is not None:
-            n = int(probe_daily(d))
-            rec["daily_rows"] = n
-            if n < MIN_PLAUSIBLE_DAILY_ROWS:
-                rec["reason"] = f"daily rows {n} < {MIN_PLAUSIBLE_DAILY_ROWS} (partial/absent)"
+        if probe_ready is not None:
+            ok, ep_ev = probe_ready(d)
+            rec.update(ep_ev)
+            if not ok:
                 evidence["evaluated"].append(rec)
                 continue
         rec["ok"] = True
@@ -174,7 +184,11 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
                      & (cal["cal_date"] <= target_end.replace("-", ""))]["cal_date"].astype(str).tolist()
     cal_idx = pd.to_datetime(fresh_days)
     members = _membership_from_all_stocks(provider_dir / "instruments", cal_idx)
-    member_codes = set(members.columns)
+    # B4: provider feature-tree presence — membership alone is not completeness; a code in
+    # all_stocks but ABSENT from features/<code>/ (or missing required price bins) is a
+    # feature-incomplete/survivorship hole downstream research would silently operate on.
+    features_dir = provider_dir / "features"
+    feature_codes = {p.name.upper() for p in features_dir.iterdir() if p.is_dir()} if features_dir.is_dir() else set()
 
     violations: list[dict] = []
     checked_days = 0
@@ -185,19 +199,24 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
             continue
         checked_days += 1
         raw = pd.read_parquet(f, columns=["ts_code"])
-        # provider code form 000001_SZ (underscore); raw is 000001.SZ
+        # provider code form 000001_SZ (underscore); raw is 000001.SZ / 830001.BJ etc.
         raw_codes = {c.replace(".", "_").upper() for c in raw["ts_code"].dropna().astype(str)}
         day_ts = pd.Timestamp(d)
         if day_ts not in members.index:
             continue
         present = set(members.columns[members.loc[day_ts].values])
-        missing = raw_codes - present
-        # a code with a raw price row but NOT in all_stocks on that day = survivorship hole
-        real_missing = sorted(c for c in missing if c in member_codes or True)
-        if real_missing:
+        # (a) raw-priced code missing from all_stocks membership on that day
+        not_in_universe = sorted(raw_codes - present)
+        if not_in_universe:
             violations.append({"date": d, "type": "raw_price_not_in_universe",
-                               "n": len(real_missing), "examples": real_missing[:10]})
+                               "n": len(not_in_universe), "examples": not_in_universe[:10]})
+        # (b) raw-priced code missing from the provider feature tree
+        not_in_features = sorted(raw_codes - feature_codes)
+        if not_in_features:
+            violations.append({"date": d, "type": "raw_price_not_in_feature_tree",
+                               "n": len(not_in_features), "examples": not_in_features[:10]})
     return {"fresh_days": len(fresh_days), "checked_days": checked_days,
+            "feature_tree_codes": len(feature_codes),
             "ok": not violations, "violations": violations[:50]}
 
 
@@ -241,10 +260,45 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
+# per-day raw endpoints whose file must exist for a day to be formally complete (M1/B2).
+# report_rc is a window-anchored year-file (create_time), covered by the past-latest-hour(22)
+# check, not a per-day file — so it is not in this per-day existence set by design.
+READINESS_PERDAY_ENDPOINTS = {
+    "moneyflow": "market/moneyflow", "cyq_perf": "market/cyq_perf",
+    "northbound": "market/northbound", "stk_limit": "market/stk_limit",
+}
+
+
+def _daily_row_count(date: str) -> int:
+    f = PROJECT_ROOT / "data" / "market" / "daily" / date[:4] / f"daily_{date}.parquet"
+    return len(pd.read_parquet(f, columns=["ts_code"])) if f.exists() else 0
+
+
+def endpoint_ready(date: str) -> tuple[bool, dict]:
+    """Formal endpoint-readiness contract for one trading day (M1/B2): the market-wide daily
+    endpoint is non-empty AND plausibly complete, and every required per-day endpoint family's
+    raw file exists for the day. Daily row count alone cannot authorize target_end."""
+    ev: dict = {"daily_rows": _daily_row_count(date)}
+    if ev["daily_rows"] < MIN_PLAUSIBLE_DAILY_ROWS:
+        ev["reason"] = f"daily rows {ev['daily_rows']} < {MIN_PLAUSIBLE_DAILY_ROWS}"
+        return False, ev
+    missing = []
+    for ep, sub in READINESS_PERDAY_ENDPOINTS.items():
+        f = PROJECT_ROOT / "data" / sub / date[:4] / f"{ep}_{date}.parquet"
+        # a source-empty date is legitimate only if curated as such (northbound non-connect)
+        if not f.exists():
+            missing.append(ep)
+    ev["missing_perday_endpoints"] = missing
+    if missing:
+        ev["reason"] = f"per-day endpoints not yet complete: {missing}"
+        return False, ev
+    return True, ev
+
+
 # ── phases ───────────────────────────────────────────────────────────────────
 def phase_plan(args) -> dict:
     parent_build, parent_policy = live_provider_ids()
-    target_end, evidence = determine_target_end(datetime.now(), probe_daily=None)
+    target_end, evidence = determine_target_end(now_cst(), probe_ready=None)
     plan = {
         "mode": "plan", "generated": datetime.now().isoformat(timespec="seconds"),
         "parent_build_id": parent_build, "parent_policy_id": parent_policy,
@@ -265,13 +319,22 @@ def phase_plan(args) -> dict:
 
 DRYRUN_REPORT_PATH = OUT_DIR / "monthly_bump_dryrun_report.json"
 FRESH_AUDIT_PATH = OUT_DIR / "fresh_window_survivorship_audit.json"
+PUBLISH_HANDOFF_PATH = OUT_DIR / "publish_handoff.json"
 
 
-def _daily_row_count(date: str) -> int:
-    f = PROJECT_ROOT / "data" / "market" / "daily" / date[:4] / f"daily_{date}.parquet"
-    if not f.exists():
-        return 0
-    return len(pd.read_parquet(f, columns=["ts_code"]))
+def _report_rc_halo_start(target_end: str) -> str:
+    """report_rc replay must cover a pre-boundary halo (Phase 5-A contract): a forecast
+    dated up to REPORT_RC_ACTIVE_TTL_OPEN_DAYS before the boundary can carry INTO the fresh
+    window, and a create_time gap up to REPORT_RC_BACKFILL_GAP_DAYS matters. Replay from
+    fresh_holdout_start - (TTL open days + backfill guard) through target_end."""
+    from data_infra.pit_backend import REPORT_RC_ACTIVE_TTL_OPEN_DAYS, REPORT_RC_BACKFILL_GAP_DAYS
+    opens = _open_trading_days(upto=target_end)
+    fresh = FRESH_HOLDOUT_START.replace("-", "")
+    pos = next((i for i, d in enumerate(opens) if d >= fresh), len(opens))
+    halo_pos = max(0, pos - REPORT_RC_ACTIVE_TTL_OPEN_DAYS)
+    start = opens[halo_pos] if opens else fresh
+    # subtract the backfill guard in CALENDAR days as a conservative extra margin
+    return (pd.Timestamp(start) - pd.Timedelta(days=REPORT_RC_BACKFILL_GAP_DAYS)).strftime("%Y%m%d")
 
 
 def phase_execute(args) -> int:
@@ -280,29 +343,59 @@ def phase_execute(args) -> int:
     import subprocess
 
     parent_build, parent_policy = live_provider_ids()
-    target_end = args.target_end
-    if target_end is None:
-        target_end, ev = determine_target_end(datetime.now(), probe_daily=_daily_row_count)
-        if target_end is None:
-            logger.error("no complete trading day found for target_end; evidence=%s", ev)
+
+    # M1: the parent policy MUST still be in the Phase-5 frozen regime (spent_oos_end /
+    # fresh_holdout_start match the constants) before we mint a child — a Phase-6 release
+    # policy must not be silently regressed. Route through the typed loader so the YAML-parsed
+    # ISO dates are normalized to strings (a bare yaml.safe_load yields datetime.date objects,
+    # which would false-fail a string compare) and the loader's own validation runs.
+    from research_orchestrator.calendar_policy import load_calendar_policy
+    parent_pol = load_calendar_policy(parent_policy)
+    if parent_pol.spent_oos_end != SPENT_OOS_END:
+        logger.error("parent policy spent_oos_end %s != Phase-5 constant %s — refusing",
+                     parent_pol.spent_oos_end, SPENT_OOS_END)
+        return 2
+    if parent_pol.fresh_holdout_start != FRESH_HOLDOUT_START:
+        logger.error("parent policy fresh_holdout_start %s != Phase-5 constant %s — refusing",
+                     parent_pol.fresh_holdout_start, FRESH_HOLDOUT_START)
+        return 2
+    parent_end = parent_pol.calendar_end_date.replace("-", "")
+
+    # B2: target_end via the multi-endpoint readiness contract; validate any override.
+    ready_target, ev = determine_target_end(now_cst(), probe_ready=endpoint_ready)
+    if args.target_end:
+        ok, ov_ev = endpoint_ready(args.target_end)
+        if not ok or (ready_target is not None and args.target_end > ready_target):
+            logger.error("--target-end %s is not endpoint-complete or later than the complete "
+                         "target_end %s; evidence=%s / override=%s", args.target_end, ready_target, ev, ov_ev)
             return 2
+        target_end = args.target_end
+    else:
+        target_end = ready_target
+    if target_end is None:
+        logger.error("no endpoint-complete trading day found for target_end; evidence=%s", ev)
+        return 2
     logger.info("target_end=%s (parent build=%s / policy=%s)", target_end, parent_build, parent_policy)
 
     if _disk_free_gb() < 400:
         logger.error("disk free %dGB < 400GB floor — prune referenced-safe backups first", _disk_free_gb())
         return 2
 
-    # 1. catch up raw (the two proven drivers; strictly serial, single fetcher).
-    catchup_start = _open_trading_days()  # first day after the parent policy end
-    parent_end = json.loads((POLICY_DIR / f"{parent_policy}.yaml").read_text(encoding="utf-8"))["calendar_end_date"].replace("-", "")
+    # 1. catch up raw (the two proven drivers; strictly serial, single fetcher). B3: the
+    # fundamentals catch-up is bump-scoped (--state-suffix) and report_rc replays the
+    # pre-boundary halo, not just parent_end+1 (the Phase-5-A availability contract).
+    catchup_start = _open_trading_days()
     lo = next((d for d in catchup_start if d > parent_end and d <= target_end), None)
     if lo is not None:
         py = str(PROJECT_ROOT / "venv" / "Scripts" / "python.exe")
-        logger.info("catch-up raw %s..%s", lo, target_end)
+        halo = _report_rc_halo_start(target_end)
+        logger.info("catch-up raw %s..%s (report_rc halo from %s)", lo, target_end, halo)
         subprocess.run([py, str(PROJECT_ROOT / "workspace" / "scripts" / "catchup_daily_range.py"),
                         "--start", lo, "--end", target_end], check=True)
         subprocess.run([py, str(PROJECT_ROOT / "workspace" / "scripts" / "catchup_fundamentals_range.py"),
-                        "--start", lo, "--end", target_end], check=True)
+                        "--start", lo, "--end", target_end,
+                        "--report-rc-start", halo, "--report-rc-end", target_end,
+                        "--state-suffix", target_end], check=True)
     else:
         logger.info("raw already current through %s", target_end)
 
@@ -339,18 +432,32 @@ def phase_execute(args) -> int:
                      len(fresh["violations"]), FRESH_AUDIT_PATH)
         return 1
 
+    # 4c. recurring approved-exception GATE (M2): a frozen-prefix exception type recurring
+    # two bumps in a row must become a permanent migration (note + tests), not a silent
+    # re-approval by count. Block unless the operator explicitly acknowledges the migration.
+    recurring = ExceptionRegistry(OUT_DIR / "bump_exceptions.json").recurring_types()
+    if recurring and not args.allow_migration_exception:
+        logger.error("recurring frozen-prefix exception types require a permanent migration "
+                     "(note + tests), not a re-approval by count: %s. Re-run with "
+                     "--allow-migration-exception once migrated.", recurring)
+        return 1
+
     # 5. dry-run report -> STOP for human sign-off.
     report = {
         "target_end": target_end, "new_policy_id": policy_id, "staged_build_id": build_id,
+        "staged_provider_dir": str(staged_provider),
         "parent_build_id": parent_build, "parent_policy_id": parent_policy,
         "spent_oos_end": SPENT_OOS_END, "fresh_holdout_start": FRESH_HOLDOUT_START,
-        "disk_free_gb": _disk_free_gb(), "fresh_window_audit_ok": fresh["ok"],
-        "recurring_exception_types": ExceptionRegistry(OUT_DIR / "bump_exceptions.json").recurring_types(),
+        "disk_free_gb": _disk_free_gb(),
+        "frozen_prefix_audit_ok": True, "frozen_prefix_audit_artifact": "frozen_prefix_audit.json",
+        "fresh_window_audit_ok": fresh["ok"], "fresh_window_audit_artifact": str(FRESH_AUDIT_PATH.name),
+        "report_rc_replay_halo_start": _report_rc_halo_start(target_end),
+        "recurring_exception_types": recurring,
         "generated": datetime.now().isoformat(timespec="seconds"),
-        "next": "review this report + the frozen-prefix audit, then run --publish-approved",
+        "next": "review this report + both audit artifacts, then --publish-approved --i-reviewed-the-dryrun",
     }
     DRYRUN_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-    logger.info("DRY-RUN COMPLETE. Review %s + the frozen-prefix audit, then --publish-approved.", DRYRUN_REPORT_PATH)
+    logger.info("DRY-RUN COMPLETE. Review %s + both audits, then --publish-approved.", DRYRUN_REPORT_PATH)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0
 
@@ -366,11 +473,30 @@ def phase_publish(args) -> int:
     if not DRYRUN_REPORT_PATH.exists():
         logger.error("no dry-run report at %s — run the execute phase first.", DRYRUN_REPORT_PATH)
         return 2
-    logger.error("The safe atomic swap + approvals rebind + post-publish QA are deliberately not "
-                 "auto-wired: they mutate the live provider (§13) and follow the depth9/sharecap "
-                 "precedents. Run the safe-publish + rebind scripts for the staged build named in "
-                 "%s, then run_daily_qa. This gate confirms the review happened.", DRYRUN_REPORT_PATH)
-    return 0
+    # m1: the live swap/rebind/QA are deliberately not auto-wired (they mutate the live
+    # provider — §13 — and follow the proven depth9/sharecap precedents). Emit an explicit
+    # handoff artifact the proven scripts consume, and return NON-ZERO so a caller/scheduler
+    # never mistakes this manual-handoff gate for a completed publish.
+    rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
+    handoff = {
+        "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
+        "staged_build_id": rep.get("staged_build_id"),
+        "staged_provider_dir": rep.get("staged_provider_dir"),
+        "new_policy_id": rep.get("new_policy_id"),
+        "parent_build_id": rep.get("parent_build_id"),
+        "required_manual_steps": [
+            "safe atomic swap (staged->adjacent->live, backup old live) per _depth9_safe_publish.py",
+            "rebind ~25 approval YAMLs to the new build+policy id per _rebind_approvals_*.py",
+            "run scripts/run_daily_qa.py — must be Overall PASS (manifest + approval binding + POLICY001)",
+            "write parent-build metadata + retain the referenced old live as .bak",
+        ],
+        "generated_cst": now_cst().isoformat(timespec="seconds"),
+    }
+    PUBLISH_HANDOFF_PATH.write_text(json.dumps(handoff, ensure_ascii=False, indent=1), encoding="utf-8")
+    logger.warning("Publish is MANUAL (§13). Wrote handoff %s. Execute the required_manual_steps "
+                   "with the proven scripts, then run_daily_qa. This gate confirmed the review; it "
+                   "did NOT publish.", PUBLISH_HANDOFF_PATH)
+    return 3  # non-zero: a manual-handoff gate, not a completed publish
 
 
 def main() -> int:
@@ -382,6 +508,10 @@ def main() -> int:
     ap.add_argument("--i-reviewed-the-dryrun", action="store_true",
                     help="Attest the dry-run report was reviewed (required for --publish-approved)")
     ap.add_argument("--target-end", type=str, default=None, help="Override target_end (YYYYMMDD)")
+    ap.add_argument("--allow-migration-exception", action="store_true",
+                    help="Acknowledge that a frozen-prefix exception type recurring 2+ bumps has "
+                         "been migrated to a permanent note+tests (M2). Without it, a recurring "
+                         "exception type BLOCKS the bump.")
     args = ap.parse_args()
 
     if args.plan:

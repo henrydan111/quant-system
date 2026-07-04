@@ -23,12 +23,16 @@ from src.research_orchestrator.calendar_policy import CalendarPolicy, resolve_sp
 
 
 # ── M1: determine_target_end ─────────────────────────────────────────────────
+def _ready(ok: bool, **ev):
+    return (ok, {"daily_rows": ev.get("daily_rows", 5000), **ev})
+
+
 def test_target_end_rolls_back_when_today_not_past_update_hour():
     # A trading "today" before the latest vendor update hour is NOT complete -> roll back.
     days = mcb._open_trading_days()
     today = next((d for d in days if d >= "20260601"), days[-1])
     now = datetime(int(today[:4]), int(today[4:6]), int(today[6:]), 8, 0)  # 08:00, before hour 22
-    te, ev = mcb.determine_target_end(now, probe_daily=lambda d: 5000)
+    te, ev = mcb.determine_target_end(now, probe_ready=lambda d: _ready(True))
     assert te is not None and te < today, f"today {today} must not be target_end pre-update-hour; got {te}"
 
 
@@ -36,18 +40,19 @@ def test_target_end_rejects_partial_daily_via_probe():
     days = mcb._open_trading_days()
     d0 = next((d for d in days if d >= "20260601"), days[-1])
     now = datetime(int(d0[:4]), int(d0[4:6]), int(d0[6:]), 23, 0)  # past all update hours
-    # probe returns a partial count for d0 (the latest), full for the prior -> roll back once
+    # the readiness probe FAILS d0 (the latest), passes the prior -> roll back once
     full_days = [d for d in days if d <= d0]
     partial = full_days[-1]
-    te, ev = mcb.determine_target_end(now, probe_daily=lambda d: 100 if d == partial else 5000)
-    assert te is not None and te < partial, "a partial daily count must not authorize target_end"
+    te, ev = mcb.determine_target_end(
+        now, probe_ready=lambda d: _ready(d != partial, daily_rows=100 if d == partial else 5000))
+    assert te is not None and te < partial, "a not-ready endpoint day must not authorize target_end"
 
 
 def test_target_end_accepts_complete_day():
     days = mcb._open_trading_days()
     d0 = next((d for d in days if d >= "20260601"), days[-1])
     now = datetime(int(d0[:4]), int(d0[4:6]), int(d0[6:]), 23, 0)
-    te, ev = mcb.determine_target_end(now, probe_daily=lambda d: 5000)
+    te, ev = mcb.determine_target_end(now, probe_ready=lambda d: _ready(True))
     assert te == d0
 
 
@@ -68,6 +73,18 @@ def test_generate_thaw_policy_freezes_spent_oos_end_and_parses():
     boundary = resolve_spent_oos_boundary(pol, "2026-08-31")
     assert boundary.spent_oos_end == "2026-02-27"
     assert boundary.fresh_holdout_start == "2026-02-28"
+
+
+def test_parent_policy_fields_normalize_to_driver_constants():
+    # phase_execute's D3-regression guard compares load_calendar_policy(parent).spent_oos_end
+    # to the STRING constants. yaml.safe_load parses `spent_oos_end: 2026-02-27` to a
+    # datetime.date, which would false-fail a string compare — the typed loader must normalize
+    # it to the string form. Exercised against the live parent policy (the exact guard path).
+    from src.research_orchestrator.calendar_policy import load_calendar_policy
+    _, parent_policy = mcb.live_provider_ids()
+    pol = load_calendar_policy(parent_policy)
+    assert pol.spent_oos_end == mcb.SPENT_OOS_END, "D3 spent_oos_end must normalize to the constant"
+    assert pol.fresh_holdout_start == mcb.FRESH_HOLDOUT_START
 
 
 def test_generate_thaw_policy_is_append_only(tmp_path, monkeypatch):
@@ -108,10 +125,8 @@ def test_exception_registry_flags_recurring_type(tmp_path):
 
 
 # ── M2: fresh-window survivorship audit ──────────────────────────────────────
-def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path, monkeypatch):
-    # A ts_code with a raw daily price row but ABSENT from all_stocks on that day = a
-    # survivorship hole -> the audit FAILS (no blanket exception).
-    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+def _mk_fresh_window(tmp_path, ts_codes=("000001.SZ", "000002.SZ")):
+    """Scaffold a fresh-window provider: trade_cal + daily raw files carrying ts_codes."""
     (tmp_path / "data" / "reference").mkdir(parents=True)
     days = pd.bdate_range("2026-03-02", "2026-03-06")
     pd.DataFrame({"exchange": "SSE", "cal_date": days.strftime("%Y%m%d"), "is_open": 1,
@@ -119,9 +134,23 @@ def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path,
     daily_dir = tmp_path / "data" / "market" / "daily" / "2026"
     daily_dir.mkdir(parents=True)
     for d in days.strftime("%Y%m%d"):
-        pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]}).to_parquet(daily_dir / f"daily_{d}.parquet")
+        pd.DataFrame({"ts_code": list(ts_codes)}).to_parquet(daily_dir / f"daily_{d}.parquet")
+
+
+def _mk_features(prov, codes):
+    for c in codes:
+        (prov / "features" / c).mkdir(parents=True, exist_ok=True)
+        (prov / "features" / c / "close.day.bin").write_bytes(b"\x00")
+
+
+def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path, monkeypatch):
+    # A ts_code with a raw daily price row but ABSENT from all_stocks on that day = a
+    # survivorship hole -> the audit FAILS (no blanket exception).
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_fresh_window(tmp_path)
     prov = tmp_path / "prov"
     (prov / "instruments").mkdir(parents=True)
+    _mk_features(prov, ["000001_SZ", "000002_SZ"])  # feature tree complete; only universe hole
     # all_stocks includes 000001 but OMITS 000002 (the survivorship hole)
     (prov / "instruments" / "all_stocks.txt").write_text(
         "000001_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
@@ -130,19 +159,28 @@ def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path,
     assert any(v["type"] == "raw_price_not_in_universe" for v in res["violations"])
 
 
-def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path, monkeypatch):
+def test_fresh_window_survivorship_audit_flags_missing_feature_tree(tmp_path, monkeypatch):
+    # B4: a raw-priced code in all_stocks but ABSENT from the provider feature tree is a
+    # feature-incomplete hole downstream research would silently operate on -> FAIL.
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    (tmp_path / "data" / "reference").mkdir(parents=True)
-    days = pd.bdate_range("2026-03-02", "2026-03-06")
-    pd.DataFrame({"exchange": "SSE", "cal_date": days.strftime("%Y%m%d"), "is_open": 1,
-                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
-    daily_dir = tmp_path / "data" / "market" / "daily" / "2026"
-    daily_dir.mkdir(parents=True)
-    for d in days.strftime("%Y%m%d"):
-        pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]}).to_parquet(daily_dir / f"daily_{d}.parquet")
+    _mk_fresh_window(tmp_path)
     prov = tmp_path / "prov"
     (prov / "instruments").mkdir(parents=True)
     (prov / "instruments" / "all_stocks.txt").write_text(
         "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
+    _mk_features(prov, ["000001_SZ"])  # 000002 in universe but NOT in features/
+    res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
+    assert res["ok"] is False
+    assert any(v["type"] == "raw_price_not_in_feature_tree" for v in res["violations"])
+
+
+def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_fresh_window(tmp_path)
+    prov = tmp_path / "prov"
+    (prov / "instruments").mkdir(parents=True)
+    (prov / "instruments" / "all_stocks.txt").write_text(
+        "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
+    _mk_features(prov, ["000001_SZ", "000002_SZ"])  # universe AND feature tree complete
     res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
     assert res["ok"] is True, res["violations"]
