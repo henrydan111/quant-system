@@ -256,14 +256,29 @@ class Runner:
             if not frames:
                 return {"rows": 0}
             new = pd.concat(frames, ignore_index=True)
+            # Phase 5 B2 (report_rc availability-boundary): stamp OUR first-ingestion time
+            # so the PIT ledger can anchor a late-arriving fresh-window row (create_time
+            # absent/backward) at its true first-seen floor + detect silent payload
+            # revisions. First-seen semantics: dedupe on the vendor CONTENT (every column
+            # except raw_fetch_ts — so a changed payload OR create_time is a distinct
+            # revision keeping its own stamp) and keep the EARLIEST raw_fetch_ts. A
+            # re-fetch of an already-seen content row never moves its stamp later.
+            now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            new["raw_fetch_ts"] = now_ts
             old = pd.read_parquet(out_path) if os.path.exists(out_path) else pd.DataFrame()
             before = len(old)
-            merged = pd.concat([old, new], ignore_index=True).drop_duplicates()
+            combined = pd.concat([old, new], ignore_index=True)
+            content_cols = [c for c in combined.columns if c != "raw_fetch_ts"]
+            combined = (
+                combined.sort_values("raw_fetch_ts", kind="mergesort")  # NaN (unknown) sorts last
+                .drop_duplicates(subset=content_cols, keep="first")
+                .reset_index(drop=True)
+            )
             tmp = out_path + ".tmp"
-            merged.to_parquet(tmp, index=False)
+            combined.to_parquet(tmp, index=False)
             os.replace(tmp, out_path)
-            logger.info("  report_rc_2026.parquet: %d -> %d rows", before, len(merged))
-            return {"rows_before": before, "rows_after": int(len(merged))}
+            logger.info("  report_rc_2026.parquet: %d -> %d rows (raw_fetch_ts stamped)", before, len(combined))
+            return {"rows_before": before, "rows_after": int(len(combined))}
         self._run_key("E:report_rc", work)
 
     # ---------- Stage F: index_weights ----------

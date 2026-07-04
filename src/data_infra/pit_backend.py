@@ -2395,6 +2395,50 @@ class StagedQlibBackendBuilder:
         )
         return status
 
+    def _report_rc_assert_no_retrograde(self, new_ledger: pd.DataFrame, output_path: str) -> None:
+        """B2 revision ledger (calendar-unfreeze Phase 5): a rebuild/replay may ADD
+        report_rc revisions, but must NEVER move an existing FRESH-WINDOW key's
+        effective_date EARLIER than the prior persisted ledger. A retrograde move =
+        a retroactive earlier-visibility = a sealed-window lookahead (e.g. a vendor
+        create_time revised backward, or an anchor regression). Build-blocking.
+
+        The prior persisted ledger IS the first-seen baseline — no separate provenance
+        store is needed for this guard. Scope is the fresh window
+        (effective_date OR report_date >= REPORT_RC_FRESH_HOLDOUT_START); historical
+        keys are exempt (deep-history best-known-state re-dating is intentional and was
+        validated). First build (no prior) or a pre-guard prior schema → no-op.
+        """
+        if not os.path.exists(output_path):
+            return
+        key = ["ts_code", "report_date", "normalized_analyst_id", "quarter"]
+        need = key + ["effective_date"]
+        if not set(need).issubset(new_ledger.columns):
+            return
+        try:
+            prior = pd.read_parquet(output_path, columns=need)
+        except Exception:
+            return  # prior ledger predates these columns — nothing comparable
+        if prior.empty:
+            return
+        fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+        new_df = new_ledger[need].copy()
+        new_df["effective_date"] = pd.to_datetime(new_df["effective_date"])
+        prior_df = prior.rename(columns={"effective_date": "_prior_eff"})
+        prior_df["_prior_eff"] = pd.to_datetime(prior_df["_prior_eff"])
+        merged = new_df.merge(prior_df, on=key, how="inner")
+        if merged.empty:
+            return
+        report_ts = pd.to_datetime(merged["report_date"].astype(str), errors="coerce")
+        fresh_scope = (merged["effective_date"] >= fresh) | (report_ts >= fresh)
+        retrograde = fresh_scope & merged["_prior_eff"].notna() & (merged["effective_date"] < merged["_prior_eff"])
+        n = int(retrograde.sum())
+        if n:
+            ex = merged.loc[retrograde, key + ["effective_date", "_prior_eff"]].head(5).to_dict("records")
+            raise BuildGateError(
+                f"report_rc: {n} fresh-window key(s) moved effective_date EARLIER than the prior "
+                f"ledger (retrograde revision = sealed-window lookahead) — build refused. Examples: {ex}"
+            )
+
     def build_ledger(self, dataset_name: str) -> dict[str, Any]:
         """Build a PIT ledger for one revision-aware dataset."""
         if dataset_name not in PERIODIC_LEDGER_DATASETS:
@@ -2487,19 +2531,40 @@ class StagedQlibBackendBuilder:
             # catches the leak the old code hit: report_date pre-boundary + create_time in
             # the fresh window + gap>45 was classified backfill and anchored at
             # report_date+lag (EARLIER than its true visibility = a sealed-window lookahead).
+            # raw_fetch_ts (our OWN first-ingestion stamp, optional): the third
+            # availability signal (B2 condition 3) + the fail-closed floor for a fresh
+            # row that lacks create_time. Absent on historical data (no stamp) — the
+            # guard then degrades exactly to the report_date/create_time conditions.
+            # Forward stamping (first-seen semantics) is the monthly-bump fetch step's
+            # responsibility (UNFREEZE_PLAN Phase 5 §9); this consumer is graceful.
+            raw_fetch_dt = (
+                normalize_date_series(work["raw_fetch_ts"])
+                if "raw_fetch_ts" in work.columns
+                else pd.Series(pd.NaT, index=work.index)
+            )
             fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
             create_norm = create_dt.dt.normalize()
-            affects_fresh = (report_dt.dt.normalize() >= fresh) | (create_dt.notna() & (create_norm >= fresh))
+            fetch_norm = raw_fetch_dt.dt.normalize()
+            affects_fresh = (
+                (report_dt.dt.normalize() >= fresh)
+                | (create_dt.notna() & (create_norm >= fresh))
+                | (raw_fetch_dt.notna() & (fetch_norm >= fresh))
+            )
             fresh_with_ct = affects_fresh & create_dt.notna()
             if fresh_with_ct.any():
                 trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
                 observed.loc[fresh_with_ct] = trusted.loc[fresh_with_ct]
-            # Fresh-window rows with NO create_time: fail-closed QUARANTINE. We cannot
-            # prove first-visibility, and report_date+lag would be an unproven early
-            # exposure into the sealed window. Drop from the served ledger + record why.
-            # (Empirically ~0: 2023+ report_rc is ~100% contemporaneous with create_time.)
+            # Fresh-window rows with NO create_time: use raw_fetch_ts as the first-seen
+            # floor if we stamped one; otherwise fail-closed QUARANTINE (we cannot prove
+            # first-visibility, and report_date+lag would be an unproven early exposure
+            # into the sealed window). (Empirically ~0: 2023+ report_rc is ~100%
+            # contemporaneous with create_time.)
             fresh_no_ct = affects_fresh & create_dt.isna()
-            n_quarantined = int(fresh_no_ct.sum())
+            fresh_no_ct_floored = fresh_no_ct & raw_fetch_dt.notna()
+            if fresh_no_ct_floored.any():
+                observed.loc[fresh_no_ct_floored] = raw_fetch_dt.loc[fresh_no_ct_floored]
+            fresh_quarantine = fresh_no_ct & raw_fetch_dt.isna()
+            n_quarantined = int(fresh_quarantine.sum())
 
             clean_era_large_gap = int((create_dt.notna() & (report_dt.dt.year >= 2023)
                                        & ~affects_fresh & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
@@ -2526,20 +2591,22 @@ class StagedQlibBackendBuilder:
             work["disclosure_date"] = observed
             work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
             # Build-BLOCKING PIT guard (B1+B2): no SERVED fresh-window row may be anchored
-            # earlier than its create_time. By construction fresh_with_ct rows use
-            # max(report_date, create_time), so this can only fire on a logic regression —
-            # fail the build rather than publish a sealed-window lookahead.
-            served_fresh = fresh_with_ct
+            # earlier than its visibility floor max(create_time, raw_fetch_ts). By
+            # construction the served fresh rows use that floor, so this can only fire on
+            # a logic regression — fail the build rather than publish a sealed lookahead.
+            served_fresh = fresh_with_ct | fresh_no_ct_floored
             if served_fresh.any():
-                eff = pd.to_datetime(work["effective_date"])
-                leak = served_fresh & create_dt.notna() & (eff.dt.normalize() < create_norm)
+                eff = pd.to_datetime(work["effective_date"]).dt.normalize()
+                floor = pd.concat([create_norm, fetch_norm], axis=1).max(axis=1)
+                leak = served_fresh & floor.notna() & (eff < floor)
                 if bool(leak.any()):
                     raise BuildGateError(
                         f"report_rc: {int(leak.sum())} fresh-window rows anchored earlier than "
-                        "their create_time (sealed-window PIT leak) — build refused."
+                        "their visibility floor max(create_time, raw_fetch_ts) (sealed-window "
+                        "PIT leak) — build refused."
                     )
             if n_quarantined:
-                work = work.loc[~fresh_no_ct].copy()
+                work = work.loc[~fresh_quarantine].copy()
                 report_dt = report_dt.loc[work.index]
                 create_dt = create_dt.loc[work.index]
             key_columns = [
@@ -2554,6 +2621,8 @@ class StagedQlibBackendBuilder:
         ledger, conflicts = collapse_duplicate_versions(work, key_columns)
         output_path = self.ledger_path(dataset_name)
         ensure_directory(os.path.dirname(output_path))
+        if dataset_name == "report_rc":
+            self._report_rc_assert_no_retrograde(ledger, output_path)
         ledger.to_parquet(output_path, index=False)
         result = {"dataset": dataset_name, "rows": int(len(ledger)), "conflicts": len(conflicts)}
         if dataset_name == "holder_number":

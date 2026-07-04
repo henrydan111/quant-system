@@ -12,10 +12,11 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from data_infra.pit_backend import (  # noqa: E402
-    StagedQlibBackendBuilder, normalized_analyst_id,
+    StagedQlibBackendBuilder, normalized_analyst_id, BuildGateError,
     add_open_day_lag, strictly_next_open_trade_day, REPORT_RC_VENDOR_LAG_OPEN_DAYS,
     REPORT_RC_FRESH_HOLDOUT_START,
 )
@@ -523,3 +524,70 @@ def test_report_rc_historical_backfill_unchanged_by_fresh_guard(tmp_path):
     exp = strictly_next_open_trade_day(backfill_obs, open_days).iloc[0]
     assert eff == exp
     assert eff < pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+
+
+# ── Phase 5 B2: report_rc revision-ledger no-retrograde guard + raw_fetch_ts rescue ──
+
+def _rebuild_report_rc(data_root: Path, qlib: Path, rows: list, build_id: str):
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_parquet(d / "report_rc_2026.parquet", index=False)
+    b = StagedQlibBackendBuilder(data_root=str(data_root), qlib_dir=str(qlib),
+                                 build_id=build_id, allow_exceptions=True)
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    return b
+
+
+def test_report_rc_no_retrograde_blocks_earlier_effective(tmp_path):
+    # A rebuild that moves an existing fresh-window key's create_time EARLIER (vendor
+    # revised it backward) would move effective_date earlier = a retroactive
+    # earlier-visibility into the sealed window. The revision-ledger guard blocks it.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-03-31")
+    row = {"ts_code": "000001.SZ", "report_date": "20260302",
+           "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0}
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-10")}], "retro1")
+    with pytest.raises(BuildGateError, match="retrograde"):
+        _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-03")}], "retro2")
+
+
+def test_report_rc_no_retrograde_allows_later_effective(tmp_path):
+    # A later create_time (visibility DELAYED) for the same key is conservative, not a
+    # lookahead — allowed.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-03-31")
+    row = {"ts_code": "000001.SZ", "report_date": "20260302",
+           "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0}
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-05")}], "fwd1")
+    b2 = _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-12")}], "fwd2")
+    led = pd.read_parquet(b2.ledger_path("report_rc"))
+    assert (pd.to_datetime(led["effective_date"]) >= pd.Timestamp("2026-03-05")).all()
+
+
+def test_report_rc_historical_retrograde_not_blocked(tmp_path):
+    # Historical keys (pre-boundary) are exempt: deep-history best-known-state re-dating
+    # is intentional. A pre-boundary key whose anchor shifts must NOT trip the guard.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2019-12-20", "2020-03-31")
+    row = {"ts_code": "000001.SZ", "report_date": "20200115",
+           "org_name": "AAA证券", "author_name": "甲", "quarter": "2019Q4", "eps": 1.0}
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2020-01-20")}], "hist1")
+    # earlier create_time on the same historical key -> no block (exempt)
+    b2 = _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2020-01-16")}], "hist2")
+    assert len(pd.read_parquet(b2.ledger_path("report_rc"))) == 1
+
+
+def test_report_rc_fresh_missing_ct_rescued_by_raw_fetch_ts(tmp_path):
+    # A fresh row lacking create_time but carrying our own raw_fetch_ts stamp is NOT
+    # quarantined — it anchors at the first-seen floor raw_fetch_ts.
+    open_days = pd.bdate_range("2026-01-01", "2026-03-31")
+    led = _build_fresh_ledger(tmp_path, [
+        {"ts_code": "000001.SZ", "report_date": "20260302", "create_time": None,
+         "raw_fetch_ts": "2026-03-05 10:00:00",
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
+    ])
+    assert len(led) == 1, "raw_fetch_ts must rescue the row from quarantine"
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-03-05 10:00:00")]), open_days).iloc[0]
+    assert eff == exp
