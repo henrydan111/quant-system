@@ -43,3 +43,27 @@
 - 14 历史测试全绿 = 深史路径 byte 不变的回归证明。
 
 **结论：clean for GPT 实现 diff 审查。核心泄漏（B1/B2）+ 无后退（B2 台账）双闭合，历史路径证明不变；4 个判断点显式留审。**
+
+---
+
+# Round-2 自审（GPT REWORK 修订后，`c917414`）— 2026-07-04
+
+**背景**：GPT 实现审查 = REWORK（2 Blocker B1/B2 + 3 Major M1/M2/M3）。全部核实为真（M1 亲证：normal stamped 行会 trip guard；B1 亲证：TTL=120 carry 真实）。全部接受。
+
+## 修订忠实性（逐条 vs GPT 替换文本）
+
+- **B1（condition 4）**：`affects_fresh` 加 effective_intersects + active_carry(pre_pos+120>=fresh_pos)；**加 `fresh<=calendar_end` 守卫**（GPT 未提但必需——否则 fresh 超出测试日历时 fresh_pos=len 致误判；2020/2022 历史测试证明修好）。测试：carry-into-fresh 锚 create_time、deep-no-carry 保 backfill。
+- **M1（per-row floor）**：单一 `visibility_floor`（ct 行=max(report,create)；缺 ct=raw_fetch）同时用于 anchor + guard；raw_fetch 绝不 inflate 有 create_time 的行。normal stamped 行不再 trip。
+- **B2+M2（append-only 基线）**：`report_rc.revision_baseline.parquet` 存 per-key min-effective，never drop key；fresh_scope 含 new **或** baseline effective + carry。测试：fresh-to-prefresh、disappear-reappear。
+- **M3**：`_assert_report_rc_boundary_matches_policy` 在 build_ledgers 前（publish 政策加载处）；测试 mismatch/match/legacy。
+
+## 有意 scope（留 GPT 裁定，未擅自扩）
+
+- **M2 payload_digest/vendor_create_time/first_seen/ingest_batch_id 完整修订身份键未实现**：我实现的是 per-natural-key min-effective 单调基线。论据：PIT-critical 不变量 = fresh key 的 effective_date 单调不后退（+存活 drop），已闭合；payload 修订**若改 effective** → 被 effective 单调捕获；payload 修订**不改 effective** → 非前视（可见性不变）。故 payload_digest 是 provenance/audit 非 PIT-critical。是否可接受此 scope，留 GPT。
+- **replay halo（fresh−120 抓取）**仍归 5-B 抓取步（GPT Q5 已裁"可接受，只要无 bump 在 halo 抓取前 claim corrected fresh report_rc"）。
+
+## 验证
+
+26 report_rc 测试（9 新）+ 336 data_infra pass + PIT002 clean。历史 2020/2022 测试全绿 = 深史路径不变。
+
+**Round-2 结论：5 findings 全修，2 项有意 scope 显式留审。clean for GPT re-review。**
