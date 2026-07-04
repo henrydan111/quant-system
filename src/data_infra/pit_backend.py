@@ -2634,29 +2634,21 @@ class StagedQlibBackendBuilder:
                 | effective_intersects_fresh
                 | active_carry_intersects_fresh
             )
-            # Per-row VISIBILITY FLOOR (GPT impl-review M1): create_time is the vendor
-            # first-visibility (max(report_date, create_time)); raw_fetch_ts is only OUR
-            # fetch wall-clock (always LATER than true visibility) and floors a row ONLY
-            # when create_time is absent — it must never inflate a row that carries a real
-            # create_time (else a normal stamped row would trip the guard). The SAME floor
-            # is used for the anchor and the build-blocking guard, so they are consistent.
-            has_ct = create_dt.notna()
-            fresh_with_ct = affects_fresh & has_ct
-            fresh_no_ct = affects_fresh & ~has_ct
-            fresh_no_ct_floored = fresh_no_ct & raw_fetch_dt.notna()
-            fresh_quarantine = fresh_no_ct & raw_fetch_dt.isna()
+            # Per-row VISIBILITY FLOOR (GPT impl-review M1 + B3): a SERVED fresh row is
+            # visible no earlier than max(report_date, create_time, first_seen_raw_fetch_ts).
+            # raw_fetch_ts is the FIRST-SEEN stamp (stage-E keeps the EARLIEST per content),
+            # NOT the current-fetch wall-clock — so a STABLE row seen since its create month
+            # is NOT inflated (first-seen ~ create; M1), while a LATE-observed row or a
+            # VALUE REVISION (a changed payload = distinct content = its own later first-seen)
+            # is floored at when we first actually saw it, so its value cannot be backdated
+            # into the sealed window (B3 value-lookahead). The SAME floor is used for the
+            # anchor and the build-blocking guard, so they stay consistent.
+            served_fresh = affects_fresh & (create_dt.notna() | raw_fetch_dt.notna())
+            fresh_quarantine = affects_fresh & create_dt.isna() & raw_fetch_dt.isna()
             visibility_floor = pd.Series(pd.NaT, index=work.index, dtype="datetime64[ns]")
-            if fresh_with_ct.any():
-                vf = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
-                visibility_floor.loc[fresh_with_ct] = vf.loc[fresh_with_ct]
-            if fresh_no_ct_floored.any():
-                visibility_floor.loc[fresh_no_ct_floored] = raw_fetch_dt.loc[fresh_no_ct_floored]
-            # Fresh rows: anchor at the visibility floor (disables the bulk-backfill
-            # fallback). Fresh rows with neither create_time nor raw_fetch_ts are
-            # fail-closed QUARANTINED (unprovable first-visibility). Historical rows keep
-            # the validated deep-history anchor (`observed` from the contemporaneous logic).
-            served_fresh = fresh_with_ct | fresh_no_ct_floored
             if served_fresh.any():
+                vf = pd.concat([report_dt, create_dt, raw_fetch_dt], axis=1).max(axis=1)
+                visibility_floor.loc[served_fresh] = vf.loc[served_fresh]
                 observed.loc[served_fresh] = visibility_floor.loc[served_fresh]
             n_quarantined = int(fresh_quarantine.sum())
 
@@ -2664,11 +2656,11 @@ class StagedQlibBackendBuilder:
                                        & ~affects_fresh & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
             logger.info(
                 "report_rc anchor: %d rows | contemporaneous=%d backfill/missing=%d | "
-                "fresh-window affected=%d (create_time-floored=%d raw_fetch-floored=%d "
-                "quarantined=%d) | pre-fresh clean-era(2023..boundary) gap>%dd=%d",
+                "fresh-window affected=%d (served=%d quarantined=%d) | "
+                "pre-fresh clean-era(2023..boundary) gap>%dd=%d",
                 len(work), int(contemporaneous.sum()), int((~contemporaneous).sum()),
-                int(affects_fresh.sum()), int(fresh_with_ct.sum()), int(fresh_no_ct_floored.sum()),
-                n_quarantined, REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
+                int(affects_fresh.sum()), int(served_fresh.sum()), n_quarantined,
+                REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
             )
             if n_quarantined:
                 logger.warning(
@@ -4687,12 +4679,18 @@ class StagedQlibBackendBuilder:
         # publish to frozen_20260227_system_build). R4-M5: blank/whitespace ids
         # are rejected exactly like missing ones, and the id must resolve to a
         # committed policy YAML (loading it IS the existence + schema check).
-        if publish:
-            if not calendar_policy_id or not str(calendar_policy_id).strip():
-                raise BuildGateError(
-                    "publish=True requires an explicit non-blank calendar_policy_id "
-                    "(config/calendar_policies/<id>.yaml). There is no default."
-                )
+        if publish and (not calendar_policy_id or not str(calendar_policy_id).strip()):
+            raise BuildGateError(
+                "publish=True requires an explicit non-blank calendar_policy_id "
+                "(config/calendar_policies/<id>.yaml). There is no default."
+            )
+        # GPT impl-review M3+M4: whenever a build is given a calendar_policy_id — a PUBLISH
+        # or a staged/dry-run formal build that will become approval evidence — load the
+        # policy and assert the report_rc fresh-window boundary constant matches its
+        # fresh_holdout_start, BEFORE build_ledgers. A dry-run must not materialize evidence
+        # against a stale boundary and only fail at publish. Legacy frozen policies (no
+        # fresh_holdout_start) skip the boundary assertion.
+        if calendar_policy_id and str(calendar_policy_id).strip():
             from pathlib import Path as _Path
 
             from src.research_orchestrator.calendar_policy import (
@@ -4707,13 +4705,9 @@ class StagedQlibBackendBuilder:
                 )
             except CalendarPolicyError as exc:
                 raise BuildGateError(
-                    f"publish=True got calendar_policy_id={calendar_policy_id!r} which does "
-                    f"not resolve to a committed policy: {exc}"
+                    f"calendar_policy_id={calendar_policy_id!r} does not resolve to a "
+                    f"committed policy: {exc}"
                 ) from exc
-            # GPT impl-review M3: the report_rc fresh-window guard boundary constant is a
-            # PIT anchor and MUST match the policy's fresh_holdout_start. Checked BEFORE
-            # build_ledgers so a mismatch fails the build rather than materializing a wrong
-            # anchor. Legacy frozen policies (no fresh_holdout_start) skip.
             _assert_report_rc_boundary_matches_policy(_policy, calendar_policy_id)
 
         if stage == "provider-only":

@@ -662,3 +662,52 @@ def test_report_rc_boundary_policy_mismatch_raises():
     # matching + legacy (None) both pass silently
     _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start=REPORT_RC_FRESH_HOLDOUT_START), "thaw_ok")
     _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start=None), "legacy")
+
+
+def test_report_rc_fresh_late_first_seen_floors_value_at_raw_fetch(tmp_path):
+    # GPT impl-review B3 (value lookahead): a fresh row with create_time present but a
+    # LATE first-seen raw_fetch_ts (a value revision / late-observed row) must anchor at
+    # max(report, create, raw_fetch) = raw_fetch, so the value cannot be backdated to the
+    # create_time into the sealed window.
+    open_days = pd.bdate_range("2026-01-01", "2026-07-31")
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-07-31")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {"ts_code": "000001.SZ", "report_date": "20260305", "create_time": _ct("2026-03-10"),
+         "raw_fetch_ts": "2026-07-01 09:00:00",  # first observed only in July
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.40},
+    ], "b3")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-07-01 09:00:00")]), open_days).iloc[0]
+    assert eff == exp, f"late first-seen value must floor at raw_fetch {exp}, got {eff}"
+    assert eff > pd.Timestamp("2026-03-11"), "value must NOT be backdated to the create_time"
+
+
+def test_report_rc_fresh_stable_row_not_inflated_by_first_seen(tmp_path):
+    # M1 stays fixed under the B3 floor: a stable row whose first-seen raw_fetch_ts is
+    # contemporaneous with its create_time (we had it since its create month) is NOT
+    # inflated — floor = max(report, create, raw_fetch) = create.
+    open_days = pd.bdate_range("2026-01-01", "2026-07-31")
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-07-31")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {"ts_code": "000001.SZ", "report_date": "20260305", "create_time": _ct("2026-03-10"),
+         "raw_fetch_ts": "2026-03-11 09:00:00",  # first seen the day after publish (contemporaneous)
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.00},
+    ], "stable")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-03-11 09:00:00")]), open_days).iloc[0]
+    assert eff == exp  # ~ create_time, not inflated to a far-later fetch
+    assert eff < pd.Timestamp("2026-04-01")
+
+
+def test_report_rc_staged_build_asserts_policy_boundary(tmp_path, monkeypatch):
+    # GPT impl-review M4: a non-publish staged build given a calendar_policy_id must ALSO
+    # assert the boundary (dry-run evidence must not use a stale constant). Exercised via
+    # the extracted helper against a mismatched policy.
+    from types import SimpleNamespace
+    from data_infra.pit_backend import _assert_report_rc_boundary_matches_policy
+    with pytest.raises(BuildGateError, match="boundary mismatch"):
+        _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start="2026-05-01"), "thaw_bad")
