@@ -352,9 +352,13 @@ planned.
 
 ## §6 — Migration & compatibility
 
-- The 7 `approved` rows: status preserved; `approval_validity` + §6.1 govern them; revalidation via
-  `revalidate_legacy_approved(...)` (A3); no re-litigation of their history. Their evidence remains
-  citable as "passed the legacy per-factor sealed-OOS gate".
+- The 7 `approved` rows: **SUPERSEDED 2026-07-04 — the user directed a full revert to `candidate`**
+  (`revert_approved_to_candidate_v14.py`; the non-privileged `approved→candidate` downgrade), so the
+  live registry now has **0 `approved`**. The design's original "status preserved" choice is retired;
+  the sealed-OOS evidence rows, the `status_history` transitions, and the provenance JSONs are all
+  preserved (only the status label changed), so their track record remains citable as "passed the
+  legacy per-factor sealed-OOS gate". `approval_validity` + §6.1 + the `revalidate_legacy_approved` /
+  `legacy_factor_approval_override` machinery remain available for any hypothetical future legacy row.
 - Spent-window bookkeeping unchanged: everything already burned (frozen-13, arXiv-5, GP,
   eps_diffusion, E-wave-6) stays recorded; A5 studies on those windows remain cheap.
 - No orchestrator profile changes beyond the A7 scope check and the A2 book-seal key migration;

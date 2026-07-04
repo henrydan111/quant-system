@@ -22,7 +22,7 @@
 |---|---|---|---|
 | **`draft`** | 已收录,但**没有任何证明** | 写进 [catalog.py](../factor_library/catalog.py) → `sync_catalog_to_registry` 同步成 draft 行 | 所有 discovery / sandbox 研究(忽略 status) |
 | **`candidate`** | 通过**样本内(IS)**体检 — **因子层的终点等级(v1.4, 2026-07-03)**;"值得进入 book 组合研究" | `factor_lifecycle` IS-only 关卡:`\|RankICIR\| ≥ 0.10` 且 年度符号一致性 ≥ 0.70(在声明的目标域上,§3.3 role-aware) | 正式 run 显式 opt-in(`allow_candidate_components`)**且目标域匹配**(`candidate_on_declared_target`,v1.4 A7 — 仅 status 匹配会被 `candidate_scope_mismatch` 拒绝) |
-| **`approved`(遗留)** | ⚠ **v1.4 起不再新铸**。仅存的 7 行 = 通过旧因子级 sealed-OOS gate 的历史证据;晋升单位改为 **book**(一个 sealed `DeploymentFrozenPlan`/`StrategyCandidate`,每 book 恰好一次 seal,键 `book_seal_key`) | ~~sealed-OOS gate~~ → 已退役。遗留行的 validity 复核走 `revalidate_legacy_approved(...)`;唯一例外铸造 = 审计化 `legacy_factor_approval_override(...)` | 遗留行在正式 validation 仍解析为 `formal`(受 `approval_validity` 约束) |
+| **`approved`(遗留)** | ⚠ **v1.4 起不再新铸,当前注册表 0 行**。原 7 行已于 2026-07-04 按用户指令 REVERT 回 `candidate`(证据 + status_history + provenance JSON 全部保留)。晋升单位改为 **book**(一个 sealed `DeploymentFrozenPlan`/`StrategyCandidate`,每 book 恰好一次 seal,键 `book_seal_key`) | ~~sealed-OOS gate~~ → 已退役。未来任何遗留行的 validity 复核走 `revalidate_legacy_approved(...)`;唯一例外铸造 = 审计化 `legacy_factor_approval_override(...)` | 遗留行在正式 validation 仍解析为 `formal`(受 `approval_validity` 约束) |
 | ~~`deprecated`~~ | 退役 / 失败 | — | — |
 
 ---
