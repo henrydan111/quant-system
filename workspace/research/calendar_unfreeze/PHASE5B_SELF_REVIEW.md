@@ -72,3 +72,32 @@ GPT 首审判 **REWORK**（7 findings：B1-B4 / M1 / M2 / m1）。逐条修复 +
 16 单测全绿（11 driver + 5 catchup range-safety）；report_rc ledger 34 + calendar_policy 11 无回归（合计 61 绿）；--plan 活体实测（target_end=20260703，next=thaw_step2）；两脚本 import 干净；halo 跨年确认。
 
 **结论：clean for GPT（re-review）。7 findings 全修 + 2 个自查正确性 bug 修复 + 归一走 typed loader；无阻断残留。**
+
+---
+
+## REWORK round 3（GPT 第 2 轮 REWORK 后修复自审）— 2026-07-04
+
+GPT 复审了正确的 `4cd2fec`（不再是 stale d4f3c74），确认 **B1-path / M1 / m1 RESOLVED**，并给出更锐利的 REWORK（5 项）。逐条修复：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** endpoint 存在≠完整 | 关键洞察：**cyq_perf 滞后**（活体 07-01 vs daily/moneyflow/stk_limit 07-03，Stage-D 逐股抓，由 bump 自身 catch-up 补齐）→ 存在检查在 catch-up 前无意义。改**两层门**：`endpoint_ready`（**pre**-catch-up，按**行数**卡 daily+moneyflow+stk_limit 这些 daily-fresh 端点，非存在）定 target_end；`assert_endpoints_complete`（**post**-catch-up，卡 cyq_perf 行数）在建 provider 前 fail-closed。northbound（覆盖天然偏+衰减）不设硬门 | 活体：ready(20260703)=True，complete=False（cyq_perf=0，正确阻断）；2 新单测（行数非存在 / 滞后 cyq_perf） |
+| **B2** frozen-prefix 审计 blanket 例外 | 审计脚本加 `THAW_MONTHLY_MODE`：monthly 严格模式**禁用** IND_FIELDS/report_rc__* SHA 家族豁免 + sidecar-healing 豁免（settled parent 必须逐字节+成员一致，任何 drift=违规）；report 记 `gross_sha_drift`/`monthly_strict`。driver 已传 THAW_MONTHLY_MODE=1。合法 frozen-prefix 修正=带外迁移（provider-id 轮换），非 monthly | py_compile + 现有审计门路径 |
+| **M1** feature-tree 仅查目录 | survivorship 改查**核心价格 bin 齐全**（`REQUIRED_PRICE_BINS`=open/high/low/close/vol/amount/adj_factor.day.bin；活体确认 bin 名 `vol`/`adj_factor` 非 volume/factor）；缺 bin 的目录=feature-incomplete→flag | 新增 partial-bin 单测 + 建树 helper 改写 |
+| **M2** report_rc halo 全零记成功 | Stage E 收集 `month_results`；**全窗口零帧→raise**（endpoint 迟到/限流/凭证/schema 坏），除非 `--allow-empty-report-rc`（仅 verified-empty） | Stage-E raise 路径 + 单测（dedup 语义锁） |
+| **m1** raw_fetch_ts NaN 理由太窄 | 注释改精确：pre-boundary NaN 行**可**经 TTL carry 影响 fresh，但安全（ledger 隔离缺双时间戳的 fresh-affecting 行；改内容=独立 revision 带今日戳） | 新增 first-seen dedup 回归单测 |
+
+### 我对 GPT B1 建议的修正（split-gate，GPT 未识别的顺序问题）
+GPT 的 B1 exact-fix 让 `endpoint_ready` pre-catch-up 就卡 cyq_perf 行数。但**活体证明 cyq_perf 滞后**——pre-catch-up 时它本就缺（由本 bump 的 catch-up 补），若 pre-gate 卡它会把 target_end 误退到 cyq_perf 最后覆盖日（07-01），défeat bump。正确架构是**两层**：daily-fresh 端点定 target_end（pre），滞后端点 post-catch-up 验证。已如此实现并活体验证。
+
+### 额外硬化（GPT #1 残留风险，本轮先落地）
+- **审计跑错树防护**：driver 在 frozen-prefix 审计后读 `frozen_prefix_audit.json` 的 `staged` 字段，断言 == 本次 staged_provider（THAW_STAGED_PROVIDER plumbing 回归即阻断）——直接关掉 GPT "audited the wrong staged provider" 的 #1 风险。
+
+### 留 GPT / follow-up
+- feature bin **长度** sanity（bin 覆盖到 target_end）未做——presence + 重建完整性覆盖主风险；frozen-prefix 审计已查 prefix bin size。显式留审。
+- 审计的历史 first-thaw 例外仍在脚本内（仅 monthly 模式禁用；standalone 保留）——未迁成 typed diff_hash 行（第一次 thaw 已完成，例外为历史记录）。
+
+### 验证汇总
+65 绿（14 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；3 脚本 py_compile OK；--plan 活体（target_end 20260703 / next thaw_step2）；split-gate 活体行为正确。
+
+**结论：clean for GPT（re-review 2）。5 findings 全修 + split-gate 顺序修正 + 审计跑错树硬化；2 项显式留审（bin 长度、typed 例外迁移）。**

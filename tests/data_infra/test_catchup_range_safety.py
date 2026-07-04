@@ -10,6 +10,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location(
     "catchup_fundamentals_range", ROOT / "workspace" / "scripts" / "catchup_fundamentals_range.py")
@@ -44,6 +46,25 @@ def test_state_path_scoped_per_bump():
     assert base.endswith("catchup_fund_state.json")
     assert tagged.endswith("catchup_fund_state_20260831.json")
     assert base != tagged
+
+
+def test_report_rc_first_seen_dedup_nan_wins_for_identical_bootstrap():
+    # m1: locks the Stage E dedup semantic. A pre-instrumentation bootstrap row (NaN raw_fetch_ts)
+    # keeps its earliest-possible first-seen over a today re-fetch of IDENTICAL content; CHANGED
+    # content is a DISTINCT row that keeps the new stamp; a bootstrap-only row survives.
+    old = pd.DataFrame({"ts_code": ["A", "B"], "eps": [1.0, 2.0],
+                        "raw_fetch_ts": [float("nan"), float("nan")]})
+    new = pd.DataFrame({"ts_code": ["A", "C"], "eps": [1.0, 3.0],
+                        "raw_fetch_ts": ["2026-08-31 10:00:00", "2026-08-31 10:00:00"]})
+    combined = pd.concat([old, new], ignore_index=True)
+    content = [c for c in combined.columns if c != "raw_fetch_ts"]
+    out = (combined.sort_values("raw_fetch_ts", kind="mergesort", na_position="first")
+           .drop_duplicates(subset=content, keep="first").reset_index(drop=True))
+    a = out[out["ts_code"] == "A"].iloc[0]
+    assert pd.isna(a["raw_fetch_ts"]), "identical bootstrap content keeps its NaN first-seen"
+    c = out[out["ts_code"] == "C"].iloc[0]
+    assert c["raw_fetch_ts"] == "2026-08-31 10:00:00", "changed content keeps today's stamp"
+    assert (out["ts_code"] == "B").any(), "bootstrap-only row survives"
 
 
 def test_report_rc_window_defaults_to_start_end(monkeypatch):

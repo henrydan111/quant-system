@@ -171,6 +171,21 @@ def _membership_from_all_stocks(instruments_dir: Path, cal: pd.DatetimeIndex) ->
     return pd.DataFrame(mat, index=cal, columns=codes)
 
 
+# core price/volume bins every tradable code must carry (the engine-required kline set); a
+# features/<code>/ dir missing any of these is feature-incomplete, not merely present.
+REQUIRED_PRICE_BINS = ("open.day.bin", "high.day.bin", "low.day.bin", "close.day.bin",
+                       "vol.day.bin", "amount.day.bin", "adj_factor.day.bin")
+
+
+def _codes_with_required_bins(features_dir: Path) -> set[str]:
+    """Codes whose feature dir carries EVERY core price bin (a bare/partial dir does not count)."""
+    out: set[str] = set()
+    for p in features_dir.iterdir():
+        if p.is_dir() and all((p / b).exists() for b in REQUIRED_PRICE_BINS):
+            out.add(p.name.upper())
+    return out
+
+
 def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target_end: str) -> dict:
     """M2: for [fresh_start, target_end], EVERY ts_code with a raw daily price row must be in
     the provider all_stocks universe on that day (raw-price-vs-sidecar contradiction = FAIL,
@@ -184,11 +199,12 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
                      & (cal["cal_date"] <= target_end.replace("-", ""))]["cal_date"].astype(str).tolist()
     cal_idx = pd.to_datetime(fresh_days)
     members = _membership_from_all_stocks(provider_dir / "instruments", cal_idx)
-    # B4: provider feature-tree presence — membership alone is not completeness; a code in
-    # all_stocks but ABSENT from features/<code>/ (or missing required price bins) is a
-    # feature-incomplete/survivorship hole downstream research would silently operate on.
+    # B4/M1: provider feature-COMPLETENESS — membership alone is not completeness, and a bare
+    # features/<code>/ dir is not either. A code counts as present ONLY if its dir carries every
+    # core price bin; a dir missing close/vol/etc. is a feature-incomplete hole downstream
+    # research would silently operate on.
     features_dir = provider_dir / "features"
-    feature_codes = {p.name.upper() for p in features_dir.iterdir() if p.is_dir()} if features_dir.is_dir() else set()
+    feature_codes = _codes_with_required_bins(features_dir) if features_dir.is_dir() else set()
 
     violations: list[dict] = []
     checked_days = 0
@@ -260,37 +276,67 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
-# per-day raw endpoints whose file must exist for a day to be formally complete (M1/B2).
-# report_rc is a window-anchored year-file (create_time), covered by the past-latest-hour(22)
-# check, not a per-day file — so it is not in this per-day existence set by design.
-READINESS_PERDAY_ENDPOINTS = {
-    "moneyflow": "market/moneyflow", "cyq_perf": "market/cyq_perf",
-    "northbound": "market/northbound", "stk_limit": "market/stk_limit",
-}
+# Endpoint-readiness contract (M1/B2). Existence != completeness — an empty/partial per-day file
+# must not authorize a formal calendar_end. Two tiers, because coverage-lag differs:
+#   - DAILY-FRESH (daily OHLCV, moneyflow, stk_limit): refreshed same-day, so they exist for a
+#     candidate target_end BEFORE the monthly catch-up -> they GATE target_end on ROW COUNT.
+#   - LAGGING (cyq_perf, per-symbol Stage-D fetch): brought current by the monthly catch-up
+#     ITSELF, so a pre-catch-up existence check is meaningless -> verified POST-catch-up
+#     (assert_endpoints_complete). Confirmed live: cyq_perf lagged 07-01 while daily/moneyflow/
+#     stk_limit were current to 07-03.
+#   - report_rc: a window-anchored year-file; completeness = the Stage-E halo fetch failing closed
+#     on an all-zero replay (not a per-day file).
+#   - northbound (hk_hold): inherently partial + declining coverage -> NOT a hard gate.
+READINESS_DAILY_FRESH = {"moneyflow": "market/moneyflow", "stk_limit": "market/stk_limit"}
+READINESS_POSTCATCHUP = {"cyq_perf": "market/cyq_perf"}
+MIN_ENDPOINT_ROWS = 3000  # empty/severe-partial floor (normal coverage ~5000+)
+
+
+def _endpoint_rows(sub: str, ep: str, date: str) -> int:
+    """O(1) parquet row count (footer metadata) for a per-day endpoint file; 0 if absent."""
+    import pyarrow.parquet as pq
+    f = PROJECT_ROOT / "data" / sub / date[:4] / f"{ep}_{date}.parquet"
+    if not f.exists():
+        return 0
+    try:
+        return pq.ParquetFile(f).metadata.num_rows
+    except Exception:  # noqa: BLE001 — a corrupt/half-written file reads as 0 rows (not complete)
+        return 0
 
 
 def _daily_row_count(date: str) -> int:
-    f = PROJECT_ROOT / "data" / "market" / "daily" / date[:4] / f"daily_{date}.parquet"
-    return len(pd.read_parquet(f, columns=["ts_code"])) if f.exists() else 0
+    return _endpoint_rows("market/daily", "daily", date)
 
 
 def endpoint_ready(date: str) -> tuple[bool, dict]:
-    """Formal endpoint-readiness contract for one trading day (M1/B2): the market-wide daily
-    endpoint is non-empty AND plausibly complete, and every required per-day endpoint family's
-    raw file exists for the day. Daily row count alone cannot authorize target_end."""
+    """PRE-catch-up target_end gate: the market-wide daily endpoint AND every DAILY-FRESH endpoint
+    (moneyflow, stk_limit) must carry a plausible ROW COUNT — not mere file existence. Lagging
+    endpoints (cyq_perf) + the report_rc halo are verified POST-catch-up, not here."""
     ev: dict = {"daily_rows": _daily_row_count(date)}
     if ev["daily_rows"] < MIN_PLAUSIBLE_DAILY_ROWS:
         ev["reason"] = f"daily rows {ev['daily_rows']} < {MIN_PLAUSIBLE_DAILY_ROWS}"
         return False, ev
-    missing = []
-    for ep, sub in READINESS_PERDAY_ENDPOINTS.items():
-        f = PROJECT_ROOT / "data" / sub / date[:4] / f"{ep}_{date}.parquet"
-        # a source-empty date is legitimate only if curated as such (northbound non-connect)
-        if not f.exists():
-            missing.append(ep)
-    ev["missing_perday_endpoints"] = missing
-    if missing:
-        ev["reason"] = f"per-day endpoints not yet complete: {missing}"
+    counts = {ep: _endpoint_rows(sub, ep, date) for ep, sub in READINESS_DAILY_FRESH.items()}
+    ev["daily_fresh_rows"] = counts
+    thin = {ep: n for ep, n in counts.items() if n < MIN_ENDPOINT_ROWS}
+    if thin:
+        ev["reason"] = f"daily-fresh endpoints empty/partial: {thin} (< {MIN_ENDPOINT_ROWS})"
+        return False, ev
+    return True, ev
+
+
+def assert_endpoints_complete(date: str) -> tuple[bool, dict]:
+    """POST-catch-up completeness gate on the FINAL target_end data: re-verify the daily-fresh
+    endpoints AND the lagging endpoints (cyq_perf) the catch-up just fetched. Fail-closed — a
+    formal provider must never stamp calendar_end at a day with an empty/partial endpoint."""
+    ok, ev = endpoint_ready(date)
+    if not ok:
+        return False, ev
+    post = {ep: _endpoint_rows(sub, ep, date) for ep, sub in READINESS_POSTCATCHUP.items()}
+    ev["postcatchup_rows"] = post
+    thin = {ep: n for ep, n in post.items() if n < MIN_ENDPOINT_ROWS}
+    if thin:
+        ev["reason"] = f"post-catch-up endpoints empty/partial: {thin} (< {MIN_ENDPOINT_ROWS})"
         return False, ev
     return True, ev
 
@@ -399,6 +445,20 @@ def phase_execute(args) -> int:
     else:
         logger.info("raw already current through %s", target_end)
 
+    # 1b. POST-catch-up completeness gate (B1): the catch-up just fetched the lagging endpoints
+    # (cyq_perf) through target_end — VERIFY the FINAL target_end data is complete across all
+    # required endpoints (row counts, not existence) before minting a policy / building a formal
+    # provider. Fail-closed: a partial cyq_perf/moneyflow/stk_limit must never enter a formal
+    # calendar_end. report_rc halo completeness is enforced inside the catch-up (Stage E fails
+    # closed on an all-zero replay).
+    ok_complete, complete_ev = assert_endpoints_complete(target_end)
+    if not ok_complete:
+        logger.error("target_end %s endpoint completeness FAILED post-catch-up: %s — bump BLOCKED "
+                     "(vendor may be late; re-run when complete or pass an earlier --target-end).",
+                     target_end, complete_ev)
+        return 2
+    logger.info("endpoint completeness OK for %s: %s", target_end, complete_ev)
+
     # 2. new policy YAML (append-only; spent_oos_end frozen).
     policy_id, policy_path = generate_thaw_policy(target_end, parent_build, write=True)
 
@@ -412,15 +472,31 @@ def phase_execute(args) -> int:
 
     # 4a. frozen-prefix audit (delegates to the proven audit script against the NEW staged
     # tree via THAW_STAGED_PROVIDER). Its exit code GATES — a frozen-prefix violation blocks
-    # the bump (do NOT ignore it: it protects pre-2026-02-27 replay byte-identity).
-    logger.info("frozen-prefix audit (staged=%s) ...", staged_provider)
-    audit_env = {**os.environ, "THAW_STAGED_PROVIDER": str(staged_provider)}
+    # the bump (do NOT ignore it: it protects pre-parent-end replay byte-identity). Monthly
+    # mode is STRICT (THAW_MONTHLY_MODE): the first-thaw provenance exceptions (indicator
+    # refetch SHA drift, sidecar suspension-healing) are one-time and already baked into the
+    # SETTLED parent, so a recurring bump must see a byte-identical frozen prefix + identical
+    # sidecars — any drift is a real regression, not an exception.
+    logger.info("frozen-prefix audit (staged=%s, monthly strict) ...", staged_provider)
+    fp_artifact = OUT_DIR / "frozen_prefix_audit.json"
+    audit_env = {**os.environ, "THAW_STAGED_PROVIDER": str(staged_provider), "THAW_MONTHLY_MODE": "1"}
     fp = subprocess.run([str(PROJECT_ROOT / "venv" / "Scripts" / "python.exe"),
                          str(PROJECT_ROOT / "workspace" / "scripts" / "audit_thaw_frozen_prefix.py")],
                         env=audit_env)
     if fp.returncode != 0:
         logger.error("FROZEN-PREFIX AUDIT FAILED (exit %d) — bump BLOCKED. Review the audit report "
                      "+ register any legitimate provenance change as a typed exception.", fp.returncode)
+        return 1
+    # B1 hard guarantee (GPT #1 residual risk): prove the audit actually ran against THIS
+    # staged tree, not a stale default — a passing audit against the wrong provider is worse
+    # than a failing one. The artifact records the audited `staged` path.
+    if not fp_artifact.exists():
+        logger.error("frozen-prefix audit produced no artifact at %s — bump BLOCKED.", fp_artifact)
+        return 1
+    audited = json.loads(fp_artifact.read_text(encoding="utf-8")).get("staged", "")
+    if Path(audited).resolve() != staged_provider.resolve():
+        logger.error("frozen-prefix audit ran against %s, NOT the staged build %s — bump BLOCKED "
+                     "(THAW_STAGED_PROVIDER plumbing failure).", audited, staged_provider)
         return 1
     # 4b. fresh-window survivorship audit (M2, no blanket exceptions).
     logger.info("fresh-window survivorship audit ...")
@@ -452,6 +528,7 @@ def phase_execute(args) -> int:
         "frozen_prefix_audit_ok": True, "frozen_prefix_audit_artifact": "frozen_prefix_audit.json",
         "fresh_window_audit_ok": fresh["ok"], "fresh_window_audit_artifact": str(FRESH_AUDIT_PATH.name),
         "report_rc_replay_halo_start": _report_rc_halo_start(target_end),
+        "endpoint_completeness": complete_ev,
         "recurring_exception_types": recurring,
         "generated": datetime.now().isoformat(timespec="seconds"),
         "next": "review this report + both audit artifacts, then --publish-approved --i-reviewed-the-dryrun",

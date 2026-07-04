@@ -123,12 +123,14 @@ def trading_days(start: str, end: str) -> list[str]:
 
 class Runner:
     def __init__(self, start: str, end: str, dry: bool, *, report_rc_start: str | None = None,
-                 report_rc_end: str | None = None, state_suffix: str | None = None):
+                 report_rc_end: str | None = None, state_suffix: str | None = None,
+                 allow_empty_report_rc: bool = False):
         self.start, self.end, self.dry = start, end, dry
         # report_rc has its own window (the pre-boundary TTL halo); default to [start, end].
         self.report_rc_start = report_rc_start or start
         self.report_rc_end = report_rc_end or end
         self.suffix = state_suffix
+        self.allow_empty_report_rc = allow_empty_report_rc
         self.state_path = state_path_for(state_suffix)
         self.state = load_state(self.state_path)
         self.fetcher = TushareFetcher(
@@ -297,17 +299,30 @@ class Runner:
 
         def work():
             frames = []
+            month_results = []
             # iterate the months spanned by [report_rc_start, report_rc_end] (the pre-boundary
             # TTL halo — reaches into the prior year on the first bump), clipping each end.
             for mo in months_spanned(rc_start, rc_end):
                 s, e = month_bounds(mo, rc_start, rc_end)
                 df = self.fetcher._fetch_paginated(self.fetcher.pro.report_rc, limit=3000,
                                                    start_date=s, end_date=e)
+                month_results.append({"month": mo, "rows": int(len(df))})
                 if not df.empty:
                     frames.append(df)
                 logger.info("  report_rc %s..%s: %d rows", s, e, len(df))
             if not frames:
-                return {"rows": 0}
+                # M2 fail-closed: an all-zero report_rc halo over a multi-month window is NOT
+                # credible completeness (endpoint late/throttled/credential-or-schema-broken).
+                # Only a verified-empty window may proceed, via the explicit manual/test flag.
+                if self.allow_empty_report_rc:
+                    logger.warning("report_rc halo %s..%s returned ZERO rows — ALLOWED by flag. months=%s",
+                                   rc_start, rc_end, month_results)
+                    return {"rows": 0, "month_results": month_results, "allowed_empty": True}
+                raise RuntimeError(
+                    f"report_rc halo replay returned ZERO rows over {rc_start}..{rc_end} — not "
+                    f"credible for a monthly bump (endpoint late/throttled/broken). "
+                    f"months={month_results}. Pass --allow-empty-report-rc only for a "
+                    f"verified-empty window.")
             new = pd.concat(frames, ignore_index=True)
             # Phase 5 B2 (report_rc availability-boundary): stamp OUR first-ingestion time
             # so the PIT ledger can anchor a late-arriving fresh-window row (create_time
@@ -330,10 +345,14 @@ class Runner:
                 before = len(old)
                 combined = pd.concat([old, grp], ignore_index=True)
                 content_cols = [c for c in combined.columns if c != "raw_fetch_ts"]
-                # First-seen wins. A pre-instrumentation bootstrap row (year files <2026 have
-                # NO raw_fetch_ts -> NaN after concat) was observed BEFORE we started stamping,
-                # i.e. earliest possible -> NaN must win over a today re-fetch stamp. So sort
-                # NaN FIRST and keep="first" (for two known stamps, ascending -> earliest kept).
+                # First-seen wins. A pre-instrumentation bootstrap row (year files <2026 have NO
+                # raw_fetch_ts -> NaN after concat) was observed BEFORE we started stamping, i.e.
+                # earliest possible -> NaN wins over a today re-fetch stamp; sort NaN FIRST,
+                # keep="first" (two known stamps -> ascending -> earliest kept). Such a NaN row CAN
+                # be fresh-affecting via TTL carry (its 120-open-day active interval reaches the
+                # fresh window) — that is SAFE: the ledger quarantines a fresh-affecting row missing
+                # BOTH create_time and raw_fetch_ts, and a CHANGED payload/create_time is a DISTINCT
+                # content row keeping its own (today) stamp, not this identical-content branch.
                 combined = (
                     combined.sort_values("raw_fetch_ts", kind="mergesort", na_position="first")
                     .drop_duplicates(subset=content_cols, keep="first")
@@ -345,7 +364,7 @@ class Runner:
                 logger.info("  report_rc_%s.parquet: %d -> %d rows (raw_fetch_ts stamped)", year, before, len(combined))
                 before_t += before
                 after_t += len(combined)
-            return {"rows_before": before_t, "rows_after": after_t}
+            return {"rows_before": before_t, "rows_after": after_t, "month_results": month_results}
         # range-scoped key: a new halo window is never masked by a prior bump's `done`.
         self._run_key(f"E:report_rc:{rc_start}-{rc_end}", work)
 
@@ -382,10 +401,14 @@ def main() -> None:
     parser.add_argument("--state-suffix", default=None,
                         help="Scope the resume-state file + cyq buffer per bump so a new window "
                              "is not skipped by a prior bump's done keys.")
+    parser.add_argument("--allow-empty-report-rc", action="store_true",
+                        help="Permit an all-zero report_rc halo (Stage E) instead of failing "
+                             "closed. Only for a VERIFIED-empty window — not the default path.")
     args = parser.parse_args()
 
     runner = Runner(args.start, args.end, args.dry_run, report_rc_start=args.report_rc_start,
-                    report_rc_end=args.report_rc_end, state_suffix=args.state_suffix)
+                    report_rc_end=args.report_rc_end, state_suffix=args.state_suffix,
+                    allow_empty_report_rc=args.allow_empty_report_rc)
     started = time.time()
     for stage in args.stages.upper():
         logger.info("===== STAGE %s =====", stage)

@@ -9,6 +9,10 @@ Checks (all must pass before safe publish):
   3. sidecars (set discovered from the instruments dir, not hardcoded):
      day-by-day membership over the frozen calendar must be IDENTICAL.
 Writes a JSON audit artifact; exit 1 on any violation.
+
+THAW_MONTHLY_MODE=1 (set by the monthly-bump driver) runs STRICT: the one-time first-thaw
+provenance exceptions (indicator-refetch SHA drift, sidecar suspension-healing) are disabled, so
+a recurring bump against the settled parent must be byte- and membership-identical.
 """
 from __future__ import annotations
 
@@ -26,6 +30,15 @@ LIVE = ROOT / "data" / "qlib_data"
 # staged build via THAW_STAGED_PROVIDER; falls back to the first-thaw default otherwise.
 STAGED = Path(os.environ.get("THAW_STAGED_PROVIDER",
               str(ROOT / "data" / "qlib_builds" / "thaw_step1_20260703c" / "provider")))
+
+# Monthly-bump STRICT mode (the driver sets THAW_MONTHLY_MODE=1): the first-thaw provenance
+# exceptions below (indicator-refetch SHA drift, sidecar suspension-healing) are ONE-TIME and
+# already baked into the SETTLED parent provider, so a recurring monthly bump must see a
+# byte-identical frozen prefix + identical sidecars — ANY drift is a real regression, not a
+# blanket-approved exception. A deliberate approved frozen-prefix correction is an out-of-band
+# migration (its own gate + provider-id rotation), NEVER an automatic monthly bump. Standalone
+# first-thaw runs leave the flag unset, so the historical exceptions still apply there.
+MONTHLY_MODE = bool(os.environ.get("THAW_MONTHLY_MODE"))
 
 # ── Approved exceptions (2026-07-03 diagnosis, UNFREEZE_PLAN 执行期注记 3) ──
 # 1. indicators-family SHA drift: the 2026-06-08 167-col refetch + update_flag
@@ -55,7 +68,8 @@ def _field_base(field: str) -> str:
 OUT = ROOT / "workspace" / "outputs" / "calendar_unfreeze" / "frozen_prefix_audit.json"
 SAMPLE_EVERY = 50
 
-report: dict = {"live": str(LIVE), "staged": str(STAGED), "violations": []}
+report: dict = {"live": str(LIVE), "staged": str(STAGED),
+                "monthly_strict_mode": MONTHLY_MODE, "violations": []}
 V = report["violations"]
 
 
@@ -113,7 +127,9 @@ def check_bins() -> None:
                         # report_rc completion: rows the freeze-era fetch missed
                         # (create_time mid/late-Feb), landed by the contracted
                         # 202602 overlap refetch — PIT-correct frozen-tail fill.
-                        if _field_base(field) in IND_FIELDS or field.startswith("report_rc__"):
+                        # In MONTHLY strict mode these one-time first-thaw exceptions do NOT
+                        # apply (the settled parent must be byte-identical) -> any drift = bad.
+                        if (_field_base(field) in IND_FIELDS or field.startswith("report_rc__")) and not MONTHLY_MODE:
                             n_sha_exc += 1
                         else:
                             n_sha_bad += 1
@@ -126,7 +142,9 @@ def check_bins() -> None:
     report["bins"] = {"symbols": len(symbols), "files_checked": n_checked,
                       "missing": n_missing, "shrunk": n_shrunk,
                       "sha_sampled": n_sha, "sha_mismatch": n_sha_bad,
-                      "sha_approved_exceptions_ind_or_reportrc": n_sha_exc}
+                      "gross_sha_drift": n_sha_bad + n_sha_exc,
+                      "sha_approved_exceptions_ind_or_reportrc": n_sha_exc,
+                      "monthly_strict": MONTHLY_MODE}
 
 
 def _membership(path: Path, cal: pd.DatetimeIndex) -> pd.DataFrame:
@@ -169,7 +187,10 @@ def check_sidecars(live_cal: list[str]) -> None:
         if n_diff:
             bad_codes = [c for c in cols if diff[c].any()]
             additive = bool((b.values >= a.values).all())
-            if (name in SIDECAR_EXC_FILES and set(bad_codes) <= SIDECAR_EXC_CODES and additive):
+            # MONTHLY strict: no first-thaw sidecar-healing exception — a settled parent must be
+            # membership-identical, so any diff is a violation.
+            if (not MONTHLY_MODE and name in SIDECAR_EXC_FILES
+                    and set(bad_codes) <= SIDECAR_EXC_CODES and additive):
                 report["sidecars"][name]["approved_exception"] = f"suspension-healing, {n_diff} additive cells"
             else:
                 days = diff.any(axis=1)

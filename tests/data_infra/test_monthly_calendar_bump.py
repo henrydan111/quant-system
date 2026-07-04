@@ -140,7 +140,8 @@ def _mk_fresh_window(tmp_path, ts_codes=("000001.SZ", "000002.SZ")):
 def _mk_features(prov, codes):
     for c in codes:
         (prov / "features" / c).mkdir(parents=True, exist_ok=True)
-        (prov / "features" / c / "close.day.bin").write_bytes(b"\x00")
+        for b in mcb.REQUIRED_PRICE_BINS:  # a code counts as present only with the full core bin set
+            (prov / "features" / c / b).write_bytes(b"\x00")
 
 
 def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path, monkeypatch):
@@ -174,6 +175,23 @@ def test_fresh_window_survivorship_audit_flags_missing_feature_tree(tmp_path, mo
     assert any(v["type"] == "raw_price_not_in_feature_tree" for v in res["violations"])
 
 
+def test_fresh_window_survivorship_audit_flags_incomplete_bins(tmp_path, monkeypatch):
+    # M1: a code in all_stocks with a features/<code>/ dir but MISSING a core price bin is
+    # feature-incomplete -> flagged (directory presence alone is not completeness).
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_fresh_window(tmp_path)
+    prov = tmp_path / "prov"
+    (prov / "instruments").mkdir(parents=True)
+    (prov / "instruments" / "all_stocks.txt").write_text(
+        "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
+    _mk_features(prov, ["000001_SZ"])                       # 000001 complete
+    (prov / "features" / "000002_SZ").mkdir(parents=True)   # 000002 dir exists but only close.bin
+    (prov / "features" / "000002_SZ" / "close.day.bin").write_bytes(b"\x00")
+    res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
+    assert res["ok"] is False
+    assert any(v["type"] == "raw_price_not_in_feature_tree" for v in res["violations"])
+
+
 def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
     _mk_fresh_window(tmp_path)
@@ -184,3 +202,42 @@ def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path,
     _mk_features(prov, ["000001_SZ", "000002_SZ"])  # universe AND feature tree complete
     res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
     assert res["ok"] is True, res["violations"]
+
+
+# ── B1: endpoint completeness (row-count, split pre/post-catch-up) ───────────
+def _write_endpoint(root, sub, ep, date, nrows):
+    d = root / "data" / sub / date[:4]
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"ts_code": [f"{i:06d}.SZ" for i in range(nrows)]}).to_parquet(d / f"{ep}_{date}.parquet")
+
+
+def test_endpoint_ready_row_count_not_existence(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
+    d = "20260703"
+    _write_endpoint(tmp_path, "market/daily", "daily", d, 5)
+    _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 5)
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 1)  # EXISTS but partial (1 < 3)
+    ok, ev = mcb.endpoint_ready(d)
+    assert ok is False and "stk_limit" in ev["reason"], ev  # existence is not enough
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 5)  # now complete
+    ok, ev = mcb.endpoint_ready(d)
+    assert ok is True, ev
+
+
+def test_assert_endpoints_complete_flags_lagging_cyq_perf(tmp_path, monkeypatch):
+    # cyq_perf lags (fetched post-catch-up); an empty/absent cyq_perf for target_end must fail
+    # the POST-catch-up completeness gate even when the daily-fresh endpoints are complete.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
+    d = "20260703"
+    _write_endpoint(tmp_path, "market/daily", "daily", d, 5)
+    _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 5)
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 5)
+    ok, ev = mcb.assert_endpoints_complete(d)  # cyq_perf absent
+    assert ok is False and "cyq_perf" in ev["reason"], ev
+    _write_endpoint(tmp_path, "market/cyq_perf", "cyq_perf", d, 5)  # catch-up filled it
+    ok, ev = mcb.assert_endpoints_complete(d)
+    assert ok is True, ev
