@@ -298,6 +298,38 @@ REPORT_RC_BACKFILL_GAP_DAYS = 45
 # validated deep-history path unchanged. See UNFREEZE_PLAN.md Phase 5 §5.1 step 3.
 REPORT_RC_FRESH_HOLDOUT_START = "2026-02-28"
 
+# GPT impl-review M5: the report_rc revision-identity digest MUST cover EVERY payload
+# field materialized into a report_rc__* feature — else a same-natural-key revision that
+# changes a non-eps materialized value collapses and backdates it. Two materializers
+# consume: eps (eps_up/dn/revision_count/n_active) + np/op_rt/rating (np_fy1/op_rt_fy1/
+# n_active_orgs/rating_up/dn). org identity is ALREADY in the natural key (via
+# normalized_analyst_id = org::author), so it is not repeated here. ADD a field here in
+# the same change that materializes any new report_rc__* feature from it —
+# test_report_rc_payload_digest_covers_materialized_fields guards this.
+REPORT_RC_DIGEST_NUMERIC_COLS = ("eps", "np", "op_rt")
+REPORT_RC_DIGEST_STRING_COLS = ("rating",)
+
+
+def report_rc_payload_digest(work: "pd.DataFrame") -> "pd.Series":
+    """Canonical per-row revision digest over every materialized report_rc payload field.
+
+    Numerics are rounded to 6dp with -0.0 normalized to 0.0 (NaN -> "nan"); strings are
+    stripped. A change in ANY of these fields is a distinct revision identity, so it
+    survives the ledger key and anchors at its own first-seen effective (GPT B3/M5)."""
+    import numpy as _np
+
+    parts: list[pd.Series] = []
+    for col in REPORT_RC_DIGEST_NUMERIC_COLS:
+        num = pd.to_numeric(work.get(col, pd.Series(_np.nan, index=work.index)), errors="coerce").round(6)
+        parts.append(num.map(lambda v: "nan" if pd.isna(v) else format(float(v) + 0.0, ".6f")).astype("string"))
+    for col in REPORT_RC_DIGEST_STRING_COLS:
+        s = work.get(col, pd.Series("", index=work.index))
+        parts.append(s.astype("string").fillna("").str.strip())
+    out = parts[0]
+    for p in parts[1:]:
+        out = out + "|" + p
+    return out.fillna("")
+
 
 def _assert_report_rc_boundary_matches_policy(policy: Any, calendar_policy_id: Any = None) -> None:
     """GPT impl-review M3: when the calendar policy declares a fresh_holdout_start (thaw
@@ -2416,7 +2448,7 @@ class StagedQlibBackendBuilder:
         """Append-only per-key min-effective baseline sidecar (B2 revision ledger)."""
         return self.ledger_path("report_rc").replace(".parquet", ".revision_baseline.parquet")
 
-    def _report_rc_assert_no_retrograde(self, new_ledger: pd.DataFrame) -> None:
+    def _report_rc_assert_no_retrograde(self, new_ledger: pd.DataFrame) -> "pd.DataFrame | None":
         """B2 revision ledger (calendar-unfreeze Phase 5; GPT impl-review B2+M2): a
         rebuild/replay may ADD report_rc revisions, but must NEVER move a FRESH-WINDOW
         key's effective_date EARLIER than the earliest it was EVER served. A retrograde
@@ -2438,7 +2470,7 @@ class StagedQlibBackendBuilder:
         key = ["ts_code", "report_date", "normalized_analyst_id", "quarter", "report_rc_payload_digest"]
         need = key + ["effective_date"]
         if not set(need).issubset(new_ledger.columns) or new_ledger.empty:
-            return
+            return None
         new_df = new_ledger[need].copy()
         new_df["effective_date"] = pd.to_datetime(new_df["effective_date"]).dt.normalize()
         new_df = new_df.dropna(subset=["effective_date"])
@@ -2485,7 +2517,10 @@ class StagedQlibBackendBuilder:
         else:
             base = pd.DataFrame(columns=key + ["min_effective_date"])
 
-        # Update the append-only baseline: MIN effective per key across old baseline + new.
+        # PLAN (do not write yet) the append-only baseline: MIN effective per key across old
+        # baseline + new. m6: the baseline is committed by _report_rc_commit_baseline AFTER
+        # the main ledger write succeeds, so a ledger-write failure cannot leave the baseline
+        # recording an effective_date that was never actually served (a false future retrograde).
         parts = [new_df[need]]
         if not base.empty:
             parts.insert(0, base.rename(columns={"min_effective_date": "effective_date"})[need])
@@ -2494,6 +2529,14 @@ class StagedQlibBackendBuilder:
         baseline = (combined.dropna(subset=["effective_date"])
                     .groupby(key, as_index=False)["effective_date"].min()
                     .rename(columns={"effective_date": "min_effective_date"}))
+        return baseline
+
+    def _report_rc_commit_baseline(self, baseline: "pd.DataFrame | None") -> None:
+        """Atomically write the planned revision baseline. Called ONLY after the main ledger
+        parquet write has succeeded (m6 ordering)."""
+        if baseline is None:
+            return
+        baseline_path = self._report_rc_baseline_path()
         ensure_directory(os.path.dirname(baseline_path))
         tmp = baseline_path + ".tmp"
         baseline.to_parquet(tmp, index=False)
@@ -2697,23 +2740,18 @@ class StagedQlibBackendBuilder:
                 work = work.loc[~fresh_quarantine].copy()
                 report_dt = report_dt.loc[work.index]
                 create_dt = create_dt.loc[work.index]
-            # Revision-PRESERVING key (GPT impl-review B3, full fix): a value revision is a
+            # Revision-PRESERVING key (GPT impl-review B3+M5, full fix): a value revision is a
             # distinct observation, so the payload digest is part of the ledger key — a
-            # same-(analyst, report_date, quarter) row whose materialized value (eps)
-            # changed survives as its OWN row at its OWN first-seen effective, instead of
-            # collapsing into one and backdating the new value. The digest covers every
-            # field materialized into a report_rc__* feature (currently eps; EXPAND this set
-            # when a new field becomes a feature). Then keep the EARLIEST effective per
-            # revision identity (re-observing the SAME value must not delay it; the changed
-            # value is a new identity at its own later first-seen). The materializer already
-            # sequences per (analyst, quarter) by effective_date, so it renders the revision
-            # (an eps_up/eps_dn event at the restatement's first-seen date) correctly.
-            _eps_digest = pd.to_numeric(
-                work.get("eps", pd.Series(np.nan, index=work.index)), errors="coerce"
-            ).round(6)
-            work["report_rc_payload_digest"] = _eps_digest.map(
-                lambda v: "nan" if pd.isna(v) else format(float(v), ".6f")
-            )
+            # same-(analyst, report_date, quarter) row whose materialized value changed
+            # survives as its OWN row at its OWN first-seen effective, instead of collapsing
+            # into one and backdating the new value. The digest covers EVERY field
+            # materialized into a report_rc__* feature (eps + np/op_rt/rating — see
+            # report_rc_payload_digest / REPORT_RC_DIGEST_*_COLS). Then keep the EARLIEST
+            # effective per revision identity (re-observing the SAME value must not delay it;
+            # a changed value is a new identity at its own later first-seen). The
+            # materializers sequence per (analyst/org, quarter) by effective_date, so they
+            # render the revision (an eps_up/rating_up/... event at first-seen) correctly.
+            work["report_rc_payload_digest"] = report_rc_payload_digest(work)
             key_columns = [
                 column
                 for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter",
@@ -2729,9 +2767,14 @@ class StagedQlibBackendBuilder:
         ledger, conflicts = collapse_duplicate_versions(work, key_columns)
         output_path = self.ledger_path(dataset_name)
         ensure_directory(os.path.dirname(output_path))
+        planned_baseline = None
         if dataset_name == "report_rc":
-            self._report_rc_assert_no_retrograde(ledger)
+            # Check retrograde + PLAN the baseline update, but do not commit it until the
+            # ledger write below succeeds (m6: no baseline row for an unserved effective).
+            planned_baseline = self._report_rc_assert_no_retrograde(ledger)
         ledger.to_parquet(output_path, index=False)
+        if dataset_name == "report_rc":
+            self._report_rc_commit_baseline(planned_baseline)
         result = {"dataset": dataset_name, "rows": int(len(ledger)), "conflicts": len(conflicts)}
         if dataset_name == "holder_number":
             sidecar_path = self.ledger_sidecar_path(dataset_name, HOLDER_NUMBER_UNUSABLE_SUFFIX)

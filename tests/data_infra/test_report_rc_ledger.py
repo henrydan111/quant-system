@@ -761,3 +761,46 @@ def test_report_rc_restatement_materializes_up_event_at_first_seen(tmp_path):
     assert len(up_days) == 1, f"exactly one up-event expected, got {up_days}"
     jul_first_seen = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-07-01 09:00:00")]), cal).iloc[0]
     assert up_days[0] == jul_first_seen, f"up-event must be at July first-seen {jul_first_seen}, got {up_days[0]}"
+
+
+@pytest.mark.parametrize("changed_field,v_old,v_new", [
+    ("np", 100.0, 140.0), ("op_rt", 0.10, 0.18), ("rating", "增持", "买入"),
+])
+def test_report_rc_non_eps_revision_preserved(tmp_path, changed_field, v_old, v_new):
+    # GPT impl-review M5: a same-4-key revision that changes a NON-eps materialized field
+    # (np / op_rt / rating) while eps is unchanged must ALSO survive as a distinct revision
+    # at its own first-seen effective — the digest covers every materialized report_rc field.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-07-31")
+    common = dict(ts_code="000001.SZ", report_date="20260305", create_time=_ct("2026-03-10"),
+                  org_name="AAA证券", author_name="甲", quarter="2026Q4", eps=1.00,
+                  np=100.0, op_rt=0.10, rating="增持")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {**common, changed_field: v_old, "raw_fetch_ts": "2026-03-11 09:00:00"},
+        {**common, changed_field: v_new, "raw_fetch_ts": "2026-07-01 09:00:00"},
+    ], f"m5_{changed_field}")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    assert len(led) == 2, f"{changed_field} revision must survive as 2 rows, got {len(led)}"
+    assert led["report_rc_payload_digest"].nunique() == 2
+
+
+def test_report_rc_payload_digest_covers_materialized_fields():
+    # Guard: every non-key field the materializers read for a report_rc__* feature MUST be
+    # in the digest column set — adding a materialized field without extending the digest
+    # (the M5 bug) fails here. eps/np/op_rt/rating are the materialized value inputs; org is
+    # already in the natural key via normalized_analyst_id.
+    from data_infra.pit_backend import (
+        REPORT_RC_DIGEST_NUMERIC_COLS, REPORT_RC_DIGEST_STRING_COLS,
+    )
+    digest_cols = set(REPORT_RC_DIGEST_NUMERIC_COLS) | set(REPORT_RC_DIGEST_STRING_COLS)
+    materialized_value_inputs = {"eps", "np", "op_rt", "rating"}
+    assert materialized_value_inputs <= digest_cols, (
+        f"digest missing materialized field(s): {materialized_value_inputs - digest_cols}")
+
+
+def test_report_rc_digest_normalizes_negative_zero():
+    # -0.0 and 0.0 must be the SAME revision identity (no spurious revision).
+    from data_infra.pit_backend import report_rc_payload_digest
+    df = pd.DataFrame({"eps": [-0.0, 0.0], "np": [1.0, 1.0], "op_rt": [0.1, 0.1], "rating": ["买入", "买入"]})
+    dig = report_rc_payload_digest(df)
+    assert dig.iloc[0] == dig.iloc[1], f"-0.0 vs 0.0 produced distinct digests: {dig.tolist()}"
