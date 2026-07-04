@@ -317,10 +317,18 @@ def phase_execute(args) -> int:
                                 calendar_policy_id=policy_id)
     staged_provider = Path(result.provider_dir)
 
-    # 4a. frozen-prefix audit (delegates to the proven audit script against the staged tree).
-    logger.info("frozen-prefix audit ...")
-    subprocess.run([str(PROJECT_ROOT / "venv" / "Scripts" / "python.exe"),
-                    str(PROJECT_ROOT / "workspace" / "scripts" / "audit_thaw_frozen_prefix.py")], check=False)
+    # 4a. frozen-prefix audit (delegates to the proven audit script against the NEW staged
+    # tree via THAW_STAGED_PROVIDER). Its exit code GATES — a frozen-prefix violation blocks
+    # the bump (do NOT ignore it: it protects pre-2026-02-27 replay byte-identity).
+    logger.info("frozen-prefix audit (staged=%s) ...", staged_provider)
+    audit_env = {**os.environ, "THAW_STAGED_PROVIDER": str(staged_provider)}
+    fp = subprocess.run([str(PROJECT_ROOT / "venv" / "Scripts" / "python.exe"),
+                         str(PROJECT_ROOT / "workspace" / "scripts" / "audit_thaw_frozen_prefix.py")],
+                        env=audit_env)
+    if fp.returncode != 0:
+        logger.error("FROZEN-PREFIX AUDIT FAILED (exit %d) — bump BLOCKED. Review the audit report "
+                     "+ register any legitimate provenance change as a typed exception.", fp.returncode)
+        return 1
     # 4b. fresh-window survivorship audit (M2, no blanket exceptions).
     logger.info("fresh-window survivorship audit ...")
     fresh = fresh_window_survivorship_audit(staged_provider, FRESH_HOLDOUT_START, target_end)

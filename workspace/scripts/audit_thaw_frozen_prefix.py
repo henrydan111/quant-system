@@ -22,7 +22,10 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 LIVE = ROOT / "data" / "qlib_data"
-STAGED = ROOT / "data" / "qlib_builds" / "thaw_step1_20260703c" / "provider"
+# The staged provider tree to audit. The monthly-bump driver points this at the NEW
+# staged build via THAW_STAGED_PROVIDER; falls back to the first-thaw default otherwise.
+STAGED = Path(os.environ.get("THAW_STAGED_PROVIDER",
+              str(ROOT / "data" / "qlib_builds" / "thaw_step1_20260703c" / "provider")))
 
 # ── Approved exceptions (2026-07-03 diagnosis, UNFREEZE_PLAN 执行期注记 3) ──
 # 1. indicators-family SHA drift: the 2026-06-08 167-col refetch + update_flag
