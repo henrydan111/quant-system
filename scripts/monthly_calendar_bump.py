@@ -63,7 +63,10 @@ MIN_PLAUSIBLE_DAILY_ROWS = 4000  # A-share市场级 daily should carry ~5k names
 
 
 def _open_trading_days(upto: str | None = None) -> list[str]:
-    cal = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet")
+    f = PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet"
+    if not f.exists():
+        return []
+    cal = pd.read_parquet(f)
     days = cal[cal["is_open"] == 1]["cal_date"].astype(str).sort_values().tolist()
     return [d for d in days if (upto is None or d <= upto)]
 
@@ -187,23 +190,23 @@ def _feature_code_paths(features_dir: Path) -> dict[str, Path]:
     return out
 
 
-def _bin_last_pos(bin_path: Path) -> int:
-    """Last calendar position a Qlib .day.bin covers. Format: float32[0] = start_index (calendar
-    position of the first value), float32[1:] = values. So last_pos = start_index + nvalues - 1.
-    A per-code bin spans [listing, last-data], NOT the whole calendar — decoding the header is the
+def _bin_span(bin_path: Path) -> tuple[int, int]:
+    """(start_pos, last_pos) a Qlib .day.bin covers. Format: float32[0] = start_index (calendar
+    position of the first value), float32[1:] = values -> last_pos = start_index + nvalues - 1. A
+    per-code bin spans [listing, last-data], NOT the whole calendar — decoding the header is the
     only correct coverage test (a size-vs-full-calendar check false-flags every post-2008 listing).
-    Returns -1 if unreadable/empty."""
+    Returns (-1, -1) if unreadable/empty/misaligned."""
     import struct
     try:
         size = bin_path.stat().st_size
     except OSError:
-        return -1
+        return -1, -1
     nvalues = size // 4 - 1  # minus the 1-float header
-    if nvalues <= 0:
-        return -1
+    if nvalues <= 0 or size % 4 != 0:  # a non-4-multiple is a corrupt/truncated bin
+        return -1, -1
     with open(bin_path, "rb") as fh:
-        start_index = int(struct.unpack("<f", fh.read(4))[0])
-    return start_index + nvalues - 1
+        start_pos = int(struct.unpack("<f", fh.read(4))[0])
+    return start_pos, start_pos + nvalues - 1
 
 
 def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target_end: str) -> dict:
@@ -229,13 +232,14 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
     # provider calendar position by YYYYMMDD (day.txt is ISO) — for the bin-coverage check.
     prov_cal = (provider_dir / "calendars" / "day.txt").read_text(encoding="utf-8").split()
     prov_pos = {d.replace("-", ""): i for i, d in enumerate(prov_cal)}
-    _last_pos: dict[str, int] = {}
+    _span: dict[tuple, tuple] = {}
 
-    def last_pos_of(code: str) -> int:
-        if code not in _last_pos:
+    def span_of(code: str, binname: str) -> tuple[int, int]:
+        key = (code, binname)
+        if key not in _span:
             p = feature_paths.get(code)
-            _last_pos[code] = _bin_last_pos(p / "close.day.bin") if p else -1
-        return _last_pos[code]
+            _span[key] = _bin_span(p / binname) if p else (-1, -1)
+        return _span[key]
 
     violations: list[dict] = []
     checked_days = 0
@@ -262,11 +266,13 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
         if not_in_features:
             violations.append({"date": d, "type": "raw_price_not_in_feature_tree",
                                "n": len(not_in_features), "examples": not_in_features[:10]})
-        # (c) raw-priced code whose close.day.bin does NOT reach this trading day (truncated bin)
+        # (c) raw-priced code whose ANY core bin does NOT span this trading day (truncated bin) —
+        # every required bin must contain pos_d, not just close (vol/amount/adj_factor matter too).
         pos_d = prov_pos.get(d)
         if pos_d is not None:
-            in_feat = raw_codes & feature_codes
-            too_short = sorted(c for c in in_feat if last_pos_of(c) < pos_d)
+            too_short = sorted(c for c in (raw_codes & feature_codes)
+                               if any(not (span_of(c, b)[0] <= pos_d <= span_of(c, b)[1])
+                                      for b in REQUIRED_PRICE_BINS))
             if too_short:
                 violations.append({"date": d, "type": "raw_price_bins_short_through_day",
                                    "n": len(too_short), "examples": too_short[:10]})
@@ -348,12 +354,15 @@ def _prune_cyq_state(suffix: str) -> None:
 READINESS_DAILY_FRESH = {"moneyflow": "market/moneyflow", "stk_limit": "market/stk_limit"}
 READINESS_POSTCATCHUP = {"cyq_perf": "market/cyq_perf"}
 MIN_ENDPOINT_ROWS = 3000  # cheap empty/corruption guard ONLY — completeness is the coverage ratio
-# Per-endpoint completeness = |endpoint ∩ daily universe| / |daily universe| >= floor. Floors set
-# from a measured COMPLETE day (2026-06-30): moneyflow 0.94 (some low-liquidity names lack flow) /
-# stk_limit 1.00 / cyq_perf 1.00 -> conservative floors below-observed but well above any partial
-# (an interrupted fetch drops coverage to ~0.5). A row count alone (e.g. 3001 of ~5500) is NOT a
-# completeness proof; the intersection ratio is (GPT B1).
+# Per-endpoint completeness = |endpoint ∩ COMPLETE daily universe| / |daily| >= floor. Floors from a
+# measured COMPLETE day (2026-06-30): moneyflow 0.94 (low-liquidity names lack flow) / stk_limit
+# 1.00 / cyq_perf 1.00. But the denominator MUST be a *proven-complete* daily — otherwise a partial
+# daily lets every endpoint cover that same partial universe at 100% (GPT B1).
 ENDPOINT_COVERAGE_FLOOR = {"moneyflow": 0.90, "stk_limit": 0.95, "cyq_perf": 0.95}
+# Daily universe count is stable day-to-day (~5510, <0.3% variation), so a PARTIAL daily above the
+# absolute floor is caught by comparing to the median of recent complete sessions.
+DAILY_BASELINE_FLOOR = 0.98
+DAILY_BASELINE_WINDOW = 10
 
 
 def _endpoint_rows(sub: str, ep: str, date: str) -> int:
@@ -368,67 +377,95 @@ def _endpoint_rows(sub: str, ep: str, date: str) -> int:
         return 0
 
 
-def _read_ts_codes(sub: str, ep: str, date: str) -> set[str]:
+def _read_codes_for_trade_date(sub: str, ep: str, date: str) -> tuple[set[str], dict]:
+    """ts_codes whose row's trade_date == date, plus diagnostics. date_ok proves the file is NOT a
+    stale/mispartitioned file carrying a different trade_date (GPT B1 second form)."""
     f = PROJECT_ROOT / "data" / sub / date[:4] / f"{ep}_{date}.parquet"
     if not f.exists():
-        return set()
+        return set(), {"rows": 0, "date_ok": False, "trade_dates": [], "reason": "missing"}
     try:
-        return {str(x).upper() for x in pd.read_parquet(f, columns=["ts_code"])["ts_code"].dropna()}
-    except Exception:  # noqa: BLE001 — unreadable/corrupt = no coverage
-        return set()
+        df = pd.read_parquet(f, columns=["ts_code", "trade_date"])
+    except Exception:  # noqa: BLE001 — unreadable or no trade_date column = not provably complete
+        return set(), {"rows": 0, "date_ok": False, "trade_dates": [], "reason": "unreadable/no trade_date"}
+    td = df["trade_date"].astype(str).str.replace("-", "", regex=False)
+    trade_dates = set(td.unique())
+    codes = {str(x).upper().strip() for x in df.loc[td == date, "ts_code"].dropna()}
+    return codes, {"rows": int(len(df)), "date_ok": trade_dates == {date},
+                   "trade_dates": sorted(trade_dates)[:5]}
 
 
 def _daily_row_count(date: str) -> int:
     return _endpoint_rows("market/daily", "daily", date)
 
 
-def _endpoint_coverage(ep: str, sub: str, date: str, daily_codes: set[str]) -> tuple[float, dict]:
-    codes = _read_ts_codes(sub, ep, date)
-    ratio = len(codes & daily_codes) / max(1, len(daily_codes))
-    return ratio, {"rows": _endpoint_rows(sub, ep, date), "codes": len(codes),
-                   "coverage": round(ratio, 4),
-                   "missing_examples": sorted(daily_codes - codes)[:8]}
+def _daily_universe(date: str) -> tuple[set[str], bool, dict]:
+    """The COMPLETE daily universe for `date` — the denominator every endpoint coverage is measured
+    against. daily is a completeness OBJECT, not just a count: (1) file trade_date == date; (2) code
+    count >= the absolute floor; (3) code count >= DAILY_BASELINE_FLOOR x the median of the last
+    DAILY_BASELINE_WINDOW complete sessions (catches a partial daily still above the absolute floor
+    — the GPT B1 residual). Returns (codes, ok, evidence)."""
+    codes, diag = _read_codes_for_trade_date("market/daily", "daily", date)
+    ev: dict = {"daily_codes": len(codes), "daily_rows": diag["rows"], "daily_date_ok": diag["date_ok"]}
+    if not diag["date_ok"]:
+        ev["reason"] = f"daily file trade_date mismatch: {diag.get('trade_dates')}"
+        return codes, False, ev
+    if len(codes) < MIN_PLAUSIBLE_DAILY_ROWS:
+        ev["reason"] = f"daily codes {len(codes)} < {MIN_PLAUSIBLE_DAILY_ROWS}"
+        return codes, False, ev
+    prior = [d for d in _open_trading_days(upto=date) if d < date][-DAILY_BASELINE_WINDOW:]
+    base = [n for n in (_endpoint_rows("market/daily", "daily", d) for d in prior)
+            if n >= MIN_PLAUSIBLE_DAILY_ROWS]
+    if base:
+        import statistics
+        baseline = statistics.median(base)
+        ratio = len(codes) / max(1, baseline)
+        ev["daily_baseline_median"] = baseline
+        ev["daily_baseline_ratio"] = round(ratio, 4)
+        if ratio < DAILY_BASELINE_FLOOR:
+            ev["reason"] = (f"daily universe PARTIAL: {len(codes)} vs baseline {baseline} "
+                            f"(ratio {ratio:.4f} < {DAILY_BASELINE_FLOOR})")
+            return codes, False, ev
+    return codes, True, ev
 
 
-def _coverage_gate(date: str, endpoints: dict, ev: dict) -> bool:
-    """True iff every endpoint's coverage vs the daily universe clears its floor. Mutates ev with
-    per-endpoint diagnostics + a reason on failure."""
-    daily_codes = _read_ts_codes("market/daily", "daily", date)
-    if len(daily_codes) < MIN_PLAUSIBLE_DAILY_ROWS:
-        ev["reason"] = f"daily universe itself incomplete ({len(daily_codes)} < {MIN_PLAUSIBLE_DAILY_ROWS})"
-        return False
-    cov = {}
+def _coverage_gate(date: str, endpoints: dict, ev: dict, daily_codes: set[str]) -> bool:
+    """True iff every endpoint file is date-correct AND covers the PROVEN-complete daily universe
+    above its floor. Mutates ev with per-endpoint diagnostics + a reason on failure."""
+    cov = ev.setdefault("endpoint_coverage", {})
     for ep, sub in endpoints.items():
-        ratio, diag = _endpoint_coverage(ep, sub, date, daily_codes)
-        cov[ep] = diag
+        codes, diag = _read_codes_for_trade_date(sub, ep, date)
+        ratio = len(codes & daily_codes) / max(1, len(daily_codes))
+        cov[ep] = {"rows": diag["rows"], "codes": len(codes), "coverage": round(ratio, 4),
+                   "date_ok": diag["date_ok"], "missing_examples": sorted(daily_codes - codes)[:8]}
         floor = ENDPOINT_COVERAGE_FLOOR.get(ep, 0.95)
-        if ratio < floor or diag["rows"] < MIN_ENDPOINT_ROWS:
-            ev["endpoint_coverage"] = cov
-            ev["reason"] = f"{ep} incomplete: coverage {diag['coverage']} < {floor} (rows {diag['rows']})"
+        if not diag["date_ok"] or ratio < floor or diag["rows"] < MIN_ENDPOINT_ROWS:
+            ev["reason"] = (f"{ep} incomplete: coverage {cov[ep]['coverage']} < {floor} "
+                            f"(rows {diag['rows']}, date_ok {diag['date_ok']})")
             return False
-    ev.setdefault("endpoint_coverage", {}).update(cov)
     return True
 
 
 def endpoint_ready(date: str) -> tuple[bool, dict]:
-    """PRE-catch-up target_end gate: daily universe non-trivial AND every DAILY-FRESH endpoint
-    (moneyflow, stk_limit) COVERS the daily universe above its floor — not mere file existence or a
-    low row floor. Lagging endpoints (cyq_perf) + the report_rc halo are verified POST-catch-up."""
-    ev: dict = {"daily_rows": _daily_row_count(date)}
-    if ev["daily_rows"] < MIN_PLAUSIBLE_DAILY_ROWS:
-        ev["reason"] = f"daily rows {ev['daily_rows']} < {MIN_PLAUSIBLE_DAILY_ROWS}"
+    """PRE-catch-up target_end gate: the daily universe is PROVEN complete (date-correct + not a
+    partial vs the recent baseline) AND every DAILY-FRESH endpoint (moneyflow, stk_limit) covers it
+    above floor. Lagging endpoints (cyq_perf) + the report_rc halo are verified POST-catch-up."""
+    daily_codes, daily_ok, ev = _daily_universe(date)
+    if not daily_ok:
         return False, ev
-    return _coverage_gate(date, READINESS_DAILY_FRESH, ev), ev
+    return _coverage_gate(date, READINESS_DAILY_FRESH, ev, daily_codes), ev
 
 
 def assert_endpoints_complete(date: str) -> tuple[bool, dict]:
-    """POST-catch-up completeness gate on the FINAL target_end data: re-verify the daily-fresh
-    endpoints AND the lagging cyq_perf the catch-up just fetched, by COVERAGE vs the daily
-    universe. Fail-closed — a formal provider must never stamp calendar_end at a partial day."""
-    ok, ev = endpoint_ready(date)
-    if not ok:
+    """POST-catch-up completeness gate on the FINAL target_end data: re-prove the daily universe +
+    daily-fresh endpoints AND the lagging cyq_perf the catch-up just fetched, by COVERAGE vs the
+    PROVEN-complete daily. Fail-closed — a formal provider must never stamp calendar_end at a
+    partial day."""
+    daily_codes, daily_ok, ev = _daily_universe(date)
+    if not daily_ok:
         return False, ev
-    return _coverage_gate(date, READINESS_POSTCATCHUP, ev), ev
+    if not _coverage_gate(date, READINESS_DAILY_FRESH, ev, daily_codes):
+        return False, ev
+    return _coverage_gate(date, READINESS_POSTCATCHUP, ev, daily_codes), ev
 
 
 # ── phases ───────────────────────────────────────────────────────────────────

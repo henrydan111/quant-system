@@ -146,7 +146,7 @@ def _valid_close_bin(ncover: int) -> bytes:
     return struct.pack("<f", 0.0) + b"\x00" * 4 * ncover
 
 
-def _mk_features(prov, codes, *, close_cover=len(_TEST_CAL_ISO)):
+def _mk_features(prov, codes, *, close_cover=len(_TEST_CAL_ISO), other_cover=len(_TEST_CAL_ISO)):
     # provider calendar (ISO) for the bin-coverage check; created once
     (prov / "calendars").mkdir(parents=True, exist_ok=True)
     caltxt = prov / "calendars" / "day.txt"
@@ -155,11 +155,8 @@ def _mk_features(prov, codes, *, close_cover=len(_TEST_CAL_ISO)):
     for c in codes:
         cdir = prov / "features" / c
         cdir.mkdir(parents=True, exist_ok=True)
-        for b in mcb.REQUIRED_PRICE_BINS:  # a code counts as present only with the full core bin set
-            if b == "close.day.bin":
-                (cdir / b).write_bytes(_valid_close_bin(close_cover))  # decoded for length
-            else:
-                (cdir / b).write_bytes(b"\x00" * 8)  # presence only
+        for b in mcb.REQUIRED_PRICE_BINS:  # ALL core bins must exist AND span the raw-priced day
+            (cdir / b).write_bytes(_valid_close_bin(close_cover if b == "close.day.bin" else other_cover))
 
 
 def test_fresh_window_survivorship_audit_flags_missing_universe_member(tmp_path, monkeypatch):
@@ -238,11 +235,12 @@ def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path,
     assert res["ok"] is True, res["violations"]
 
 
-# ── B1: endpoint completeness (row-count, split pre/post-catch-up) ───────────
-def _write_endpoint(root, sub, ep, date, nrows):
+# ── B1: endpoint completeness (coverage vs a proven-complete daily) ──────────
+def _write_endpoint(root, sub, ep, date, nrows, codes=None):
     d = root / "data" / sub / date[:4]
     d.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"ts_code": [f"{i:06d}.SZ" for i in range(nrows)]}).to_parquet(d / f"{ep}_{date}.parquet")
+    ts = list(codes) if codes is not None else [f"{i:06d}.SZ" for i in range(nrows)]
+    pd.DataFrame({"ts_code": ts, "trade_date": [date] * len(ts)}).to_parquet(d / f"{ep}_{date}.parquet")
 
 
 def test_endpoint_ready_coverage_not_existence(tmp_path, monkeypatch):
@@ -269,12 +267,47 @@ def test_endpoint_ready_high_rows_low_coverage_fails(tmp_path, monkeypatch):
     d = "20260703"
     _write_endpoint(tmp_path, "market/daily", "daily", d, 10)        # universe 000000..000009
     _write_endpoint(tmp_path, "market/moneyflow", "moneyflow", d, 10)  # full coverage
-    dd = tmp_path / "data" / "market" / "stk_limit" / "2026"
-    dd.mkdir(parents=True)
     # 10 rows (>= floor) but DISJOINT names -> coverage 0.0
-    pd.DataFrame({"ts_code": [f"9{i:05d}.SZ" for i in range(10)]}).to_parquet(dd / f"stk_limit_{d}.parquet")
+    _write_endpoint(tmp_path, "market/stk_limit", "stk_limit", d, 0,
+                    codes=[f"9{i:05d}.SZ" for i in range(10)])
     ok, ev = mcb.endpoint_ready(d)
     assert ok is False and "stk_limit" in ev["reason"] and "coverage" in ev["reason"], ev
+
+
+def test_daily_universe_partial_above_floor_caught(tmp_path, monkeypatch):
+    # GPT B1 (the stated #1 residual): a daily file ABOVE the absolute floor but well below the
+    # recent baseline (a partial fetch) must fail — the coverage denominator must be COMPLETE.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 5)
+    monkeypatch.setattr(mcb, "DAILY_BASELINE_WINDOW", 5)
+    days = ["20260622", "20260623", "20260624", "20260625", "20260626", "20260629"]
+    (tmp_path / "data" / "reference").mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": days, "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    for d in days[:-1]:                                   # prior sessions: full universe of 20
+        _write_endpoint(tmp_path, "market/daily", "daily", d, 20)
+    _write_endpoint(tmp_path, "market/daily", "daily", days[-1], 12)  # target: partial (>= floor 5)
+    codes, ok, ev = mcb._daily_universe(days[-1])
+    assert ok is False and "PARTIAL" in ev.get("reason", ""), ev
+    # and a full target passes
+    _write_endpoint(tmp_path, "market/daily", "daily", days[-1], 20)
+    codes, ok, ev = mcb._daily_universe(days[-1])
+    assert ok is True, ev
+
+
+def test_daily_universe_flags_stale_trade_date(tmp_path, monkeypatch):
+    # GPT B1 second form: a file named for `date` but carrying a DIFFERENT trade_date (stale/
+    # mispartitioned) must not pass — date_ok proves the partition.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 5)
+    d = "20260703"
+    dd = tmp_path / "data" / "market" / "daily" / "2026"
+    dd.mkdir(parents=True)
+    # file is daily_20260703.parquet but every row's trade_date is the PRIOR day
+    pd.DataFrame({"ts_code": [f"{i:06d}.SZ" for i in range(20)],
+                  "trade_date": ["20260702"] * 20}).to_parquet(dd / f"daily_{d}.parquet")
+    codes, ok, ev = mcb._daily_universe(d)
+    assert ok is False and "trade_date" in ev.get("reason", ""), ev
 
 
 def test_assert_endpoints_complete_flags_lagging_cyq_perf(tmp_path, monkeypatch):
