@@ -1,6 +1,8 @@
-# Phase 5 设计方案：解冻后稳态更新机制 — v2
+# Phase 5 设计方案：解冻后稳态更新机制 — v3.1 定稿
 
-*起草 2026-07-04 · v2：R1 REVISE（1B+3M+1m）· v3：R2 REVISE（B2 可见性边界守卫）· v3.1 修订 2026-07-04：GPT R3 = **REVISE**（B2 RESOLVED；唯一新 Major **M4**=§9 交付清单残留旧 `report_date>=boundary` 指令与已批准 §5.1/§11 矛盾）已 verbatim 修正，无拒绝；处置表 §10/§11/§12 · 状态：待 Round-4 清场（M4 为 verbatim 文档一致性修正，实质已 SHIP）*
+*起草 2026-07-04 · GPT §10 跨审四轮：R1 REVISE（1B+3M+1m）→ R2 REVISE（B2 可见性边界守卫）→ R3 REVISE（M4 §9 一致性）→ **R4 SHIP**（零拒绝项）· 状态：**定稿，可进入实现***
+
+**⚠ GPT SHIP 残余风险（实现纪律）**：实现必须精确保持修订台账的**无后退 effective_date** 语义 + canonical digest 覆盖所有影响 PIT 锚/materialized 特征的字段——report_rc availability-boundary 守卫的 load-bearing 保证；实现后须跑完整 report_rc 测试族 + PIT canary。
 *前置：Phase 0-4 完成（live provider = `thaw_step1_20260703c` / `frozen_20260701_thaw_step1` / 日历末端 2026-07-01；D3 机械封存在真 provider 上验证生效）*
 
 ---
