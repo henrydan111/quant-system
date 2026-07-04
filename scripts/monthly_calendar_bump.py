@@ -266,16 +266,21 @@ def fresh_window_survivorship_audit(provider_dir: Path, fresh_start: str, target
         if not_in_features:
             violations.append({"date": d, "type": "raw_price_not_in_feature_tree",
                                "n": len(not_in_features), "examples": not_in_features[:10]})
-        # (c) raw-priced code whose ANY core bin does NOT span this trading day (truncated bin) —
-        # every required bin must contain pos_d, not just close (vol/amount/adj_factor matter too).
+        # (c) a fresh raw-priced day MUST be in the staged provider calendar — else the provider
+        # cannot support the claimed target_end (fail closed, GPT M1).
         pos_d = prov_pos.get(d)
-        if pos_d is not None:
-            too_short = sorted(c for c in (raw_codes & feature_codes)
-                               if any(not (span_of(c, b)[0] <= pos_d <= span_of(c, b)[1])
-                                      for b in REQUIRED_PRICE_BINS))
-            if too_short:
-                violations.append({"date": d, "type": "raw_price_bins_short_through_day",
-                                   "n": len(too_short), "examples": too_short[:10]})
+        if pos_d is None:
+            violations.append({"date": d, "type": "raw_price_day_not_in_provider_calendar",
+                               "n": len(raw_codes), "examples": sorted(raw_codes)[:10]})
+            continue
+        # (d) raw-priced code whose ANY core bin does NOT span this trading day (truncated bin) —
+        # every required bin must contain pos_d, not just close (vol/amount/adj_factor matter too).
+        too_short = sorted(c for c in (raw_codes & feature_codes)
+                           if any(not (span_of(c, b)[0] <= pos_d <= span_of(c, b)[1])
+                                  for b in REQUIRED_PRICE_BINS))
+        if too_short:
+            violations.append({"date": d, "type": "raw_price_bins_short_through_day",
+                               "n": len(too_short), "examples": too_short[:10]})
     return {"fresh_days": len(fresh_days), "checked_days": checked_days,
             "feature_tree_codes": len(feature_codes),
             "ok": not violations, "violations": violations[:50]}
@@ -433,6 +438,61 @@ def _daily_universe(date: str) -> tuple[set[str], bool, dict]:
     return codes, True, ev
 
 
+def _daily_set_continuity(date: str, daily_codes: set[str]) -> tuple[bool, dict]:
+    """SET-LEVEL daily completeness proof (GPT B1): a name that TRADED on the previous session (so
+    it was listed and NOT suspended then) must trade today UNLESS it delisted or newly suspended.
+    Because prior-session names were trading, the only PIT reasons for a same-name to vanish today
+    are delist (stock_basic.delist_date <= date) or a NEW suspension (suspend_d S event ON date) —
+    no historical suspension-state reconstruction is needed. Any name that vanishes without such a
+    reason is a survivorship hole the count baseline cannot see. Fail-CLOSED. Codes are compared in
+    the dotted-upper form _read_codes_for_trade_date returns (000001.SZ), so stock_basic/suspend_d
+    (already dotted) are just upper-cased — NO dot->underscore here."""
+    ev: dict = {}
+    prior_days = [d for d in _open_trading_days(upto=date) if d < date]
+    if not prior_days:
+        ev["status"] = "skipped_no_prior_session"
+        return True, ev
+    prev = prior_days[-1]
+    prior_codes, pdiag = _read_codes_for_trade_date("market/daily", "daily", prev)
+    if not pdiag["date_ok"] or len(prior_codes) < MIN_PLAUSIBLE_DAILY_ROWS:
+        ev["status"] = f"skipped_prior_unverified:{prev}"
+        return True, ev  # can't establish a reference; the baseline still guards gross partials
+
+    def norm(s) -> set[str]:
+        return {str(x).upper().strip() for x in s.dropna()}
+
+    sb = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
+                         columns=["ts_code", "list_date", "delist_date"])
+    delisted = norm(sb.loc[sb["delist_date"].notna() & (sb["delist_date"].astype(str) <= date), "ts_code"])
+    ipo_today = norm(sb.loc[sb["list_date"].astype(str) == date, "ts_code"])
+
+    susp_f = PROJECT_ROOT / "data" / "market" / "suspend_d" / date[:4] / f"suspend_d_{date}.parquet"
+    if not susp_f.exists():
+        ev["status"] = "suspend_d_missing"
+        ev["reason"] = f"suspend_d for {date} absent — cannot prove daily completeness (fail-closed)"
+        return False, ev
+    sd = pd.read_parquet(susp_f, columns=["ts_code", "suspend_type"])
+    stype = sd["suspend_type"].astype(str).str.upper()
+    suspended = norm(sd.loc[stype == "S", "ts_code"])
+    resumed = norm(sd.loc[stype == "R", "ts_code"])
+
+    # names that traded yesterday must trade today unless delisted/newly-suspended; plus today's IPOs
+    expected = (prior_codes - delisted - suspended) | (ipo_today - suspended)
+    missing = sorted(expected - daily_codes)
+    unexpected = sorted(daily_codes - prior_codes - ipo_today - resumed)
+    ev.update({"prev": prev, "prior_codes": len(prior_codes), "expected": len(expected),
+               "delisted_by_date": len(delisted), "suspended_today": len(suspended),
+               "ipo_today": len(ipo_today), "missing": len(missing), "unexpected": len(unexpected)})
+    if missing:
+        ev["reason"] = (f"daily universe incomplete vs {prev}: {len(missing)} expected names absent "
+                        f"without a delist/suspend reason; examples={missing[:10]}")
+        return False, ev
+    if unexpected:
+        logger.warning("daily %s: %d names appeared vs %s w/o IPO/resume evidence: %s",
+                       date, len(unexpected), prev, unexpected[:10])
+    return True, ev
+
+
 def _coverage_gate(date: str, endpoints: dict, ev: dict, daily_codes: set[str]) -> bool:
     """True iff every endpoint file is date-correct AND covers the PROVEN-complete daily universe
     above its floor. Mutates ev with per-endpoint diagnostics + a reason on failure."""
@@ -469,6 +529,14 @@ def assert_endpoints_complete(date: str) -> tuple[bool, dict]:
     if not daily_ok:
         return False, ev
     if not _coverage_gate(date, READINESS_DAILY_FRESH, ev, daily_codes):
+        return False, ev
+    # SET-LEVEL daily completeness proof (GPT B1) — post-catch-up, where prev daily + stock_basic +
+    # suspend_d(date) are all present. The rolling baseline (in _daily_universe) is only a cheap
+    # early detector; THIS is the formal completeness gate before a policy is minted.
+    cont_ok, cont_ev = _daily_set_continuity(date, daily_codes)
+    ev["daily_continuity"] = cont_ev
+    if not cont_ok:
+        ev["reason"] = cont_ev.get("reason")
         return False, ev
     return _coverage_gate(date, READINESS_POSTCATCHUP, ev, daily_codes), ev
 

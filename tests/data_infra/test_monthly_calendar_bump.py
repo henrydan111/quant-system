@@ -223,6 +223,23 @@ def test_fresh_window_survivorship_audit_flags_short_bins(tmp_path, monkeypatch)
     assert any(v["type"] == "raw_price_bins_short_through_day" for v in res["violations"])
 
 
+def test_fresh_window_survivorship_audit_flags_day_not_in_provider_calendar(tmp_path, monkeypatch):
+    # M1: a fresh raw-priced day ABSENT from the staged provider calendar -> the provider cannot
+    # support the claimed target_end -> fail closed (not silently skipped).
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_fresh_window(tmp_path)
+    prov = tmp_path / "prov"
+    (prov / "instruments").mkdir(parents=True)
+    (prov / "instruments" / "all_stocks.txt").write_text(
+        "000001_SZ  2020-01-01  2030-01-01\n000002_SZ  2020-01-01  2030-01-01\n", encoding="utf-8")
+    _mk_features(prov, ["000001_SZ", "000002_SZ"])
+    # provider calendar MISSING the last fresh day (2026-03-06)
+    (prov / "calendars" / "day.txt").write_text("\n".join(_TEST_CAL_ISO[:-1]) + "\n", encoding="utf-8")
+    res = mcb.fresh_window_survivorship_audit(prov, "2026-02-28", "2026-03-06")
+    assert res["ok"] is False
+    assert any(v["type"] == "raw_price_day_not_in_provider_calendar" for v in res["violations"])
+
+
 def test_fresh_window_survivorship_audit_passes_when_universe_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
     _mk_fresh_window(tmp_path)
@@ -293,6 +310,69 @@ def test_daily_universe_partial_above_floor_caught(tmp_path, monkeypatch):
     _write_endpoint(tmp_path, "market/daily", "daily", days[-1], 20)
     codes, ok, ev = mcb._daily_universe(days[-1])
     assert ok is True, ev
+
+
+def _mk_continuity_scaffold(tmp_path, *, sb_rows, susp_rows, prev_codes, prev="20260702", today="20260703"):
+    (tmp_path / "data" / "reference").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": [prev, today], "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    pd.DataFrame(sb_rows).to_parquet(tmp_path / "data" / "reference" / "stock_basic.parquet")
+    sd = tmp_path / "data" / "market" / "suspend_d" / today[:4]
+    sd.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(susp_rows if susp_rows else {"ts_code": [], "trade_date": [], "suspend_type": []}
+                 ).to_parquet(sd / f"suspend_d_{today}.parquet")
+    _write_endpoint(tmp_path, "market/daily", "daily", prev, 0, codes=prev_codes)
+
+
+def test_daily_continuity_flags_unexplained_vanished_name(tmp_path, monkeypatch):
+    # GPT B1: a name TRADING yesterday that vanishes today WITHOUT a delist/suspend reason is a
+    # survivorship hole the count baseline can't see -> fail closed.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    _mk_continuity_scaffold(
+        tmp_path,
+        sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ", "D.SZ"], "list_date": ["20200101"] * 4,
+                 "delist_date": [None] * 4},
+        susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"]},
+        prev_codes=["A.SZ", "B.SZ", "C.SZ", "D.SZ"])
+    # today: A,B present; C legitimately suspended (absent OK); D VANISHED without reason
+    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ"})
+    assert ok is False and "D.SZ" in str(ev.get("reason", "")), ev
+    # restore D -> passes (C still legitimately suspended)
+    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "D.SZ"})
+    assert ok is True, ev
+
+
+def test_daily_continuity_allows_delisted_and_flags_missing_ipo(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    _mk_continuity_scaffold(
+        tmp_path,
+        # A,B,C listed; C delisted on 20260703; E IPOs today (list_date == today)
+        sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ", "E.SZ"],
+                 "list_date": ["20200101", "20200101", "20200101", "20260703"],
+                 "delist_date": [None, None, "20260703", None]},
+        susp_rows=None,
+        prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+    # C delisted (absent OK), but the IPO E is missing from today -> fail
+    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ"})
+    assert ok is False and "E.SZ" in str(ev.get("reason", "")), ev
+    # E present, C delisted -> passes
+    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "E.SZ"})
+    assert ok is True, ev
+
+
+def test_daily_continuity_fails_closed_without_suspend_d(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "MIN_PLAUSIBLE_DAILY_ROWS", 3)
+    _mk_continuity_scaffold(
+        tmp_path, sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ"], "list_date": ["20200101"] * 3,
+                           "delist_date": [None] * 3},
+        susp_rows=None, prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+    # remove the suspend_d file -> cannot prove completeness -> fail closed
+    (tmp_path / "data" / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet").unlink()
+    ok, ev = mcb._daily_set_continuity("20260703", {"A.SZ", "B.SZ", "C.SZ"})
+    assert ok is False and "suspend_d" in ev.get("reason", ""), ev
 
 
 def test_daily_universe_flags_stale_trade_date(tmp_path, monkeypatch):
