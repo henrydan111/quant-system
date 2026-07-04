@@ -75,4 +75,18 @@ blocking + 4 non-blocking**. **All folded; none declined.** R2 stated it would m
 lands (gate applies from the first `StrategyCandidate`); invariant 13 cross-ref `§7.6` → `CLAUDE.md §7.6`;
 title + footer status updated; the "#9 lever" prose already reads "confirmed *in #9*"/"measured" (left).
 
-**Status:** all R1 + R2 findings folded → ready for a final confirmatory GPT re-review (R3).
+**Status (R2):** all R1 + R2 findings folded.
+
+---
+
+## GPT 5.5 Pro cross-review R3 — response & disposition (2026-07-04)
+
+**Verdict received: REVISE — one surgical residual → APPROVE on patch.** R3 confirmed all R1+R2 fixes are
+in place and found exactly one remaining overclaim: **Part VI's milestone still said "果仁-parity-verified,
+sealed book"** — the weighted-book label §S7 now forbids. **Fixed** (0 declined): the milestone now reads
+"**果仁 core-parity-verified + (for a weighted book) weighted-execution-reconciled locally**, sealed book."
+GPT stated it moves to **APPROVE for design-stage use** once this phrase is patched.
+
+**FINAL VERDICT: APPROVE (design-stage methodology).** Three GPT rounds (R1 REVISE → R2 REVISE-narrowly →
+R3 APPROVE-on-patch), **0 findings declined**. A separate implementation/test review gates any actual
+strategy promotion; the methodology itself is now the design-stage source of truth.

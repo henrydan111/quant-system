@@ -1,4 +1,4 @@
-# Strategy Development Methodology — v1.0 (DRAFT — self-review + GPT 5.5 Pro R1/R2 folded; pending final GPT re-review, §10)
+# Strategy Development Methodology — v1.0 (GPT 5.5 Pro R1/R2/R3 folded → APPROVE for design-stage use, §10; not yet implemented)
 
 > **What this is.** The system's ground-truth process for turning trusted factors into deployable
 > strategies and composing strategies into a diversified portfolio. It is the *strategy-level* umbrella
@@ -22,9 +22,11 @@
 > "optimizer-beats-1/N" counters were *refuted* (conditioning variable = idio-vol / N / homogeneity,
 > Platanakis "Horses for Courses"); the microcap 10–18% CAGR is an *unverified hypothesis*; the
 > decorrelation Sharpe ceiling is closed-form `1/√ρ`; effective trials deflate as `N̂ = ρ+(1−ρ)M`; parity =
-> differential-testing + backtest reconciliation. **Self-reviewed + GPT 5.5 Pro cross-review R1 (REVISE) +
-> R2 (REVISE-narrowly) folded — all findings, 0 declined — see [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md);
-> pending final confirmatory GPT re-review.** Not yet implemented. Appendix E lists the external sources.
+> differential-testing + backtest reconciliation. **Self-reviewed + GPT 5.5 Pro R1 (REVISE) + R2
+> (REVISE-narrowly) + R3 (→ APPROVE on one milestone-phrase patch, now applied) folded — all findings, 0
+> declined — see [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md). GPT verdict: APPROVE for design-stage use;
+> implementation/test review still required before any strategy is promoted.** Not yet implemented.
+> Appendix E lists the external sources.
 >
 > **Operating context this is written to (do not silently generalize past it):** solo developer,
 > A-share equities, **< 2M CNY capital → microcaps are tradable**, **unlevered (gross ≤ 1×)**,
@@ -742,9 +744,10 @@ the micro-tail; §S3). Consistent with the 2026-06-22 < 2M re-think and the pari
 | ML unconstrained/distrusted | **BUILD-7** constrained ML combiner (neutralized labels, monotonic, purged CV) + **DDG-DA pilot** + **Qlib GBDT-Alpha158 control** | §S2a / §S5 baseline | **P3** |
 | — | **LATER (> ¥3–4M only)** index-futures hedge subsystem (contract map, roll, basis, margin) | §5.3 aggregate hedge | deferred |
 
-**The north-star milestone (unchanged from the build plan):** *given the factors already trusted, the
-system produces a risk-aware, unlevered, capacity-stamped, event-driven-validated, 果仁-parity-verified,
-sealed book — published in `strategy_registry` — that we would actually trade.* BUILD-0→3 is the minimum
+**The milestone (the revised north star — one robust book):** *given the factors already trusted, the
+system produces a risk-aware, unlevered, capacity-stamped, event-driven-validated, **果仁
+core-parity-verified + (for a weighted book) weighted-execution-reconciled locally** (§S7), sealed book —
+published in `strategy_registry` — that we would actually trade.* BUILD-0→3 is the minimum
 path to it.
 
 ---
@@ -877,6 +880,8 @@ effort.)*
 
 ---
 
-*End of v1.0 draft. Self-review + GPT 5.5 Pro R1 (REVISE) + R2 (REVISE-narrowly) are DONE and all findings
-folded ([REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)). Next: a final GPT re-review to confirm the R2 patches,
-then record the verdict in project_state.md — before any of Part VI is treated as load-bearing.*
+*End of v1.0. Self-review + GPT 5.5 Pro R1 (REVISE) → R2 (REVISE-narrowly) → R3 (→ APPROVE on the single
+milestone-phrase patch, now applied) are DONE and all findings folded ([REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)).
+**Verdict: APPROVE for design-stage methodology use.** Design-stage load-bearing; a separate
+implementation/test review gates any actual strategy promotion. Next: BUILD-0 (the alpha→light-construction→
+weighted-execution→validation→parity spine that produces and proves one robust book).*
