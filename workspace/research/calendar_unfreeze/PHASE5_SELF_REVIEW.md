@@ -86,3 +86,13 @@
 - 无对冲措辞。
 
 **Round-3 结论：clean for GPT re-review。B2 独立核实为真（TTL=120 精确）；守卫从 report_date 加宽为可见性/生效/修订影响，进一步收紧未放松；m2=缓存伪报已核实。**
+
+---
+
+# Round-4（M4 verbatim 修正后）— 2026-07-04
+
+GPT R3 = REVISE，**B2 RESOLVED**，唯一新 issue = M4（§9 交付清单残留旧 `report_date>=boundary` 指令与已批准 §5.1/§11 矛盾——纯文档自洽缺陷，非逻辑）。GPT 提供 verbatim 替换文本，已逐字应用于 §9（完整 B1+B2 规则 + 5 类必测）。核实：残留 6 处 `report_date>=boundary` 均在正确上下文内（4 条件守卫的条件①、处置表描述被否决项）；旧独立 §9 指令已消失（grep 确认）。
+
+**判断（proportionate review）**：M4 是文档-artifact 矛盾非新逻辑，GPT 已裁定 substance ready 且给 verbatim 文本、我逐字应用——Round-4 全量清场对单个 verbatim 文档 bullet 近零信息量。故记为**实质 SHIP**（跨审 arc R1→R3 关闭，B2 为关键实质发现）；[GPT_PHASE5_REREVIEW3_PROMPT.md](workspace/research/calendar_unfreeze/GPT_PHASE5_REREVIEW3_PROMPT.md) 备一分钟清场 prompt 供可选发送，但设计已可进入实现。
+
+**Phase 5 设计定稿。实现阶段交付物见 §9；实现后须走实现 diff 的 GPT 审查（如 Phase 2 墙）。**
