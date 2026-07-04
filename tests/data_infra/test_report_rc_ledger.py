@@ -711,3 +711,53 @@ def test_report_rc_staged_build_asserts_policy_boundary(tmp_path, monkeypatch):
     from data_infra.pit_backend import _assert_report_rc_boundary_matches_policy
     with pytest.raises(BuildGateError, match="boundary mismatch"):
         _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start="2026-05-01"), "thaw_bad")
+
+
+def test_report_rc_value_restatement_preserved_as_distinct_revision(tmp_path):
+    # GPT impl-review B3 FULL FIX: a same-(analyst, report_date, quarter) value
+    # restatement (eps 1.00 first seen March, eps 1.40 first seen July) survives as TWO
+    # distinct ledger revisions at their OWN first-seen effectives — the new value is NOT
+    # backdated onto the old effective, and the old value is NOT lost.
+    open_days = pd.bdate_range("2026-01-01", "2026-07-31")
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-07-31")
+    common = dict(ts_code="000001.SZ", report_date="20260305", create_time=_ct("2026-03-10"),
+                  org_name="AAA证券", author_name="甲", quarter="2026Q4")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {**common, "eps": 1.00, "raw_fetch_ts": "2026-03-11 09:00:00"},  # original, seen March
+        {**common, "eps": 1.40, "raw_fetch_ts": "2026-07-01 09:00:00"},  # restatement, seen July
+    ], "restate")
+    led = pd.read_parquet(b.ledger_path("report_rc")).sort_values("effective_date")
+    assert len(led) == 2, f"both revisions must survive, got {len(led)}"
+    effs = pd.to_datetime(led["effective_date"]).tolist()
+    epss = pd.to_numeric(led["eps"]).tolist()
+    # original eps 1.00 anchored ~March; restatement eps 1.40 floored at July first-seen
+    assert epss[0] == 1.00 and effs[0] == strictly_next_open_trade_day(
+        pd.Series([pd.Timestamp("2026-03-11 09:00:00")]), open_days).iloc[0]
+    assert epss[1] == 1.40 and effs[1] == strictly_next_open_trade_day(
+        pd.Series([pd.Timestamp("2026-07-01 09:00:00")]), open_days).iloc[0]
+    assert effs[1] > pd.Timestamp("2026-06-01"), "restated value must NOT be backdated"
+
+
+def test_report_rc_restatement_materializes_up_event_at_first_seen(tmp_path):
+    # The materializer renders the restatement as an eps_up event on the RESTATEMENT's
+    # first-seen date (July), not the original (March) — proving the revision-preserving
+    # ledger flows through to the report_rc__eps_up feature at the correct PIT date.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-07-31")
+    common = dict(ts_code="000001.SZ", report_date="20260305", create_time=_ct("2026-03-10"),
+                  org_name="AAA证券", author_name="甲", quarter="2026Q4")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {**common, "eps": 1.00, "raw_fetch_ts": "2026-03-11 09:00:00"},
+        {**common, "eps": 1.40, "raw_fetch_ts": "2026-07-01 09:00:00"},
+    ], "restate_mat")
+    cal = b.open_calendar()
+    captured: dict = {}
+    b._write_feature_series = lambda fd, fn, arr: captured.setdefault(fd, {}).__setitem__(
+        fn, np.asarray(arr, dtype=float))
+    b._materialize_report_rc_consensus(cal, {"000001_sz": "x"})
+    up = captured["x"]["report_rc__eps_up"]
+    up_days = [cal[i] for i in np.where(np.nan_to_num(up) > 0)[0]]
+    assert len(up_days) == 1, f"exactly one up-event expected, got {up_days}"
+    jul_first_seen = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-07-01 09:00:00")]), cal).iloc[0]
+    assert up_days[0] == jul_first_seen, f"up-event must be at July first-seen {jul_first_seen}, got {up_days[0]}"

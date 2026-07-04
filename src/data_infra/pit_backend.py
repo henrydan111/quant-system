@@ -2432,7 +2432,10 @@ class StagedQlibBackendBuilder:
         prior-fresh key re-dated back BEFORE the boundary is still caught. Historical keys
         (both dates + carry pre-boundary) are exempt (deep-history re-dating is intentional).
         """
-        key = ["ts_code", "report_date", "normalized_analyst_id", "quarter"]
+        # Keyed by the REVISION IDENTITY (natural key + payload digest) so a changed value
+        # is a distinct revision with its own first-seen effective — a value restatement
+        # cannot silently re-date under the same natural key (GPT impl-review B3/M2).
+        key = ["ts_code", "report_date", "normalized_analyst_id", "quarter", "report_rc_payload_digest"]
         need = key + ["effective_date"]
         if not set(need).issubset(new_ledger.columns) or new_ledger.empty:
             return
@@ -2694,11 +2697,31 @@ class StagedQlibBackendBuilder:
                 work = work.loc[~fresh_quarantine].copy()
                 report_dt = report_dt.loc[work.index]
                 create_dt = create_dt.loc[work.index]
+            # Revision-PRESERVING key (GPT impl-review B3, full fix): a value revision is a
+            # distinct observation, so the payload digest is part of the ledger key — a
+            # same-(analyst, report_date, quarter) row whose materialized value (eps)
+            # changed survives as its OWN row at its OWN first-seen effective, instead of
+            # collapsing into one and backdating the new value. The digest covers every
+            # field materialized into a report_rc__* feature (currently eps; EXPAND this set
+            # when a new field becomes a feature). Then keep the EARLIEST effective per
+            # revision identity (re-observing the SAME value must not delay it; the changed
+            # value is a new identity at its own later first-seen). The materializer already
+            # sequences per (analyst, quarter) by effective_date, so it renders the revision
+            # (an eps_up/eps_dn event at the restatement's first-seen date) correctly.
+            _eps_digest = pd.to_numeric(
+                work.get("eps", pd.Series(np.nan, index=work.index)), errors="coerce"
+            ).round(6)
+            work["report_rc_payload_digest"] = _eps_digest.map(
+                lambda v: "nan" if pd.isna(v) else format(float(v), ".6f")
+            )
             key_columns = [
                 column
-                for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
+                for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter",
+                               "report_rc_payload_digest")
                 if column in work.columns
             ]
+            work = (work.sort_values("effective_date", kind="mergesort")
+                    .drop_duplicates(subset=key_columns, keep="first"))
         else:
             key_columns = [column for column in ("ts_code", "end_date", "disclosure_date") if column in work.columns]
             if "report_type" in work.columns and spec.kind in {"periodic_snapshot", "periodic_cumulative", "periodic_direct_sq"}:
