@@ -412,9 +412,14 @@ def _daily_universe(date: str) -> tuple[set[str], bool, dict]:
     if len(codes) < MIN_PLAUSIBLE_DAILY_ROWS:
         ev["reason"] = f"daily codes {len(codes)} < {MIN_PLAUSIBLE_DAILY_ROWS}"
         return codes, False, ev
+    # baseline uses the SAME trade_date-filtered code count as the target (not the raw footer row
+    # count) so the ratio is apples-to-apples; only date-correct prior sessions above the floor count.
     prior = [d for d in _open_trading_days(upto=date) if d < date][-DAILY_BASELINE_WINDOW:]
-    base = [n for n in (_endpoint_rows("market/daily", "daily", d) for d in prior)
-            if n >= MIN_PLAUSIBLE_DAILY_ROWS]
+    base = []
+    for d in prior:
+        pc, pdiag = _read_codes_for_trade_date("market/daily", "daily", d)
+        if pdiag["date_ok"] and len(pc) >= MIN_PLAUSIBLE_DAILY_ROWS:
+            base.append(len(pc))
     if base:
         import statistics
         baseline = statistics.median(base)
