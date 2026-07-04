@@ -1,78 +1,79 @@
-# GPT 5.5 Pro RE-review #4 — Phase 5-B monthly_calendar_bump driver (post-REWORK-4)
+# GPT 5.5 Pro RE-review #5 — Phase 5-B monthly_calendar_bump driver (post-REWORK-5)
 
-Status: ready to send. Branch `calendar-unfreeze` HEAD `20e096c`. Raw links pinned to the commit sha; embedded delta authoritative.
+Status: ready to send. Branch `calendar-unfreeze` HEAD `29f5cba`. Raw links pinned to the commit sha; embedded delta authoritative.
 
 ---
 
 ```text
 ROLE
 Senior reviewer for an A-share quant system where research validity outranks code that runs. You
-have reviewed this monthly calendar freeze-bump DRIVER four times; it has converged each round
-(7 -> 5 -> 5 -> 2 findings). Round 3 (971282a) you confirmed B2 (full-SHA), M2 (halo month-zero),
-m1 (cyq resume) RESOLVED, and returned 2 findings: Blocker B1 (daily itself can be partial above
-the row floor -> the coverage denominator is unsafe; and files aren't verified trade_date==date)
-and Major M1 (bin-length only checked close.day.bin). Both fixed. This RE-REVIEW #4 verifies them.
+have reviewed this monthly calendar freeze-bump DRIVER five times; it has converged each round
+(7 -> 5 -> 5 -> 2 -> 2). Round 4 (20e096c) you confirmed the stale-file guard, endpoint split, and
+all-core-bin span model RESOLVED, and returned Blocker B1 (a count baseline is not a completeness
+proof — a daily missing <2% of names passes, invisible to the survivorship audit) and Major M1 (a
+fresh raw-priced day absent from the provider calendar was silently skipped). Both fixed with the
+set-level completeness proof you asked for. This RE-REVIEW #5 verifies them.
 
-REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 20e096c)
+REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 29f5cba)
 Files (raw, pinned):
-- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/scripts/monthly_calendar_bump.py
-- catchup: https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/workspace/scripts/catchup_fundamentals_range.py
-- audit:   https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/workspace/scripts/audit_thaw_frozen_prefix.py
-- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/tests/data_infra/test_monthly_calendar_bump.py
-Self-review (round 5): workspace/research/calendar_unfreeze/PHASE5B_SELF_REVIEW.md
+- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/29f5cba/scripts/monthly_calendar_bump.py
+- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/29f5cba/tests/data_infra/test_monthly_calendar_bump.py
+Self-review (round 6): workspace/research/calendar_unfreeze/PHASE5B_SELF_REVIEW.md
 
-CONTEXT (unchanged): D3 spent_oos_end frozen 2026-02-27; split endpoint gate (daily-fresh
-pre-catch-up, cyq_perf post-catch-up, report_rc halo inside Stage E, all fail-closed); frozen-prefix
-audit full-SHA in monthly mode; publish §13 human-gated. Live daily counts are stable: 5507-5517
-over the last ~12 sessions (<0.3% day-to-day variation).
+CONTEXT: split endpoint gate — daily/moneyflow/stk_limit gate target_end PRE-catch-up (cheap
+candidate selection: trade_date-correct + rolling baseline + coverage); cyq_perf + the SET-LEVEL
+daily completeness proof run POST-catch-up in assert_endpoints_complete (the formal gate before a
+policy is minted, where prev daily + stock_basic + suspend_d(date) are all present). Tushare code
+000001.SZ; the endpoint/coverage/continuity path compares codes in dotted-upper form (000001.SZ)
+per _read_codes_for_trade_date; the survivorship audit uses underscore form (000001_SZ) for the
+provider feature tree. stock_basic has list_date/delist_date (YYYYMMDD str, delist null=listed);
+suspend_d per-date files have (ts_code, trade_date, suspend_type in {S,R}).
 
-HOW THE 2 ROUND-3 FINDINGS WERE FIXED
+HOW THE 2 ROUND-4 FINDINGS WERE FIXED
 
-B1 (daily itself can be partial above the 4000 floor -> unsafe denominator; files not date-verified):
-FIXED — `daily` is now a completeness OBJECT, not just the denominator. _daily_universe(date) proves:
-  1. file trade_date == date: _read_codes_for_trade_date reads (ts_code, trade_date), keeps only
-     rows whose trade_date == date, and sets date_ok = (the file's trade_date set == {date}). A
-     stale/mispartitioned file (right name, wrong trade_date) -> date_ok False -> reject (your
-     second B1 form).
-  2. code count >= MIN_PLAUSIBLE_DAILY_ROWS (absolute floor).
-  3. code count >= DAILY_BASELINE_FLOOR(0.98) x median(last DAILY_BASELINE_WINDOW=10 complete
-     sessions' daily counts). Because the universe count is stable (<0.3% variation), 0.98 is a
-     tight partial detector: a partial daily still above 4000 (e.g. 4500 of ~5510) -> ratio 0.82 ->
-     reject.
-Every endpoint coverage (moneyflow/stk_limit pre; cyq_perf post) is then measured against this
-PROVEN-complete daily universe, and each endpoint file is itself trade_date-verified. Live:
-_daily_universe('20260703') -> ok, 5516 codes vs baseline 5511 (ratio 1.0009), date_ok True;
-endpoint_ready True (moneyflow 0.9414, stk_limit 1.0); assert_endpoints_complete False (cyq_perf
-0.0). Tests added: partial-daily-above-floor (12 vs baseline 20 -> reject), stale-trade_date.
-  DESIGN CHOICE (scrutinize): you offered two daily-completeness proofs — an expected-universe
-  reconstruction (list/delist bounds minus suspended) or a rolling stable-count baseline. I chose
-  the BASELINE: dependency-light (no stock_basic/suspend_d reconciliation, each with its own PIT and
-  completeness caveats), and it targets the actual failure mode (an interrupted fetch loses a large
-  chunk -> a big count drop). DOCUMENTED LIMIT: a <2% mild partial (~110 names) sits within the
-  0.98 band and is not distinguished from natural universe drift; interrupted fetches are not mild,
-  so the baseline separates cleanly. Is the baseline acceptable, or do you consider the
-  expected-universe reconstruction load-bearing enough to block?
+B1 (count baseline is not a completeness proof): FIXED with _daily_set_continuity(date, daily_codes)
+run in assert_endpoints_complete (post-catch-up). The proof:
+  prior_codes = the previous session's verified daily code set (a name here TRADED yesterday, so it
+                was listed AND not suspended yesterday).
+  delisted    = stock_basic where delist_date <= date.
+  suspended   = suspend_d(date) rows with suspend_type == 'S' (a NEW suspension today).
+  ipo_today   = stock_basic where list_date == date.
+  expected    = (prior_codes - delisted - suspended) | (ipo_today - suspended)
+  missing     = expected - daily_codes  -> if non-empty, FAIL (survivorship hole).
+KEY INSIGHT (why no historical suspension-state reconstruction is needed): a prior-session name was
+TRADING yesterday, so the ONLY PIT reasons it can be absent today are (a) it delisted, or (b) it
+suspended TODAY (an S event dated today). A name suspended on an earlier day would not have traded
+yesterday, so it is not in prior_codes and cannot be a false "missing". A missing suspend_d(date)
+file -> FAIL closed (cannot prove completeness). unexpected names (today - prior - ipo - resumed) ->
+WARN, not fail (additions aren't a survivorship risk). The rolling count baseline is demoted to a
+cheap PRE-catch-up early detector. LIVE (real data): _daily_set_continuity('20260703') -> ok=True;
+prior 5517, suspended_today 18, delisted 333, ipo 0, MISSING 0, UNEXPECTED 0 — zero false positives
+on a genuinely complete session. Tests: unexplained-vanished-name -> fail; delisted allowed + a
+missing IPO -> fail; suspend_d-missing -> fail closed.
 
-M1 (bin-length only checked close.day.bin): FIXED — _bin_span(path) -> (start_pos, last_pos) with a
-size%4 guard, and the survivorship audit now requires EVERY core bin
-(open/high/low/close/vol/amount/adj_factor.day.bin) to satisfy start_pos <= day_pos <= last_pos for
-each raw-priced (code, day). A truncated vol/amount/adj_factor bin is now caught, not just close.
-Live: all 7 bins of 000001 reach the calendar end index (4492).
+M1 (fresh raw-priced day absent from provider calendar silently skipped): FIXED. `pos_d is None`
+now appends a raw_price_day_not_in_provider_calendar violation and continues, instead of skipping
+the bin-span check. The all-core-bin span check (open/high/low/close/vol/amount/adj_factor spanning
+each raw-priced day) is retained.
 
 RE-REVIEW QUESTIONS
-1. B1 rolling baseline: with live daily counts at 5507-5517 (<0.3% variation), is the 0.98 floor
-   over a 10-session median a sufficient partial-daily detector, or is the documented <2%-mild-
-   partial gap material enough to require the expected-universe (list/delist - suspend)
-   reconstruction? Is median (vs min) the right baseline statistic?
-2. B1 trade_date verification: is date_ok = (file's trade_date set == {date}) the right stale-file
-   guard? Any endpoint where multiple trade_dates in one file is legitimate (so this over-rejects)?
-3. M1 all-bin span: is start_pos <= day_pos <= last_pos for every core bin correct, and is scoping
-   the check to days the code is RAW-PRICED on the right way to avoid false-flagging suspended /
-   delisted days (which have no raw row)?
-4. Any NEW hole from this round: the baseline now uses the SAME trade_date-filtered code count for
-   prior sessions AND the target (apples-to-apples; only date-correct prior sessions above the floor
-   count toward the median); the _open_trading_days empty-on-missing-calendar guard; the span cache
-   keyed by (code, binname).
+1. Is the set-continuity proof a sufficient formal daily-completeness gate? Specifically: is the
+   "a prior-session trader can only vanish via delist or a same-day-S suspension" argument airtight
+   (so no historical suspension-range reconstruction is needed)? Any A-share case where a name
+   trades one day, is legitimately absent the next, and has NEITHER a delist_date <= date NOR an S
+   event dated that day (e.g. a suspension whose S event is dated the prior evening / a half-day /
+   an exchange-halt with no suspend_d row)?
+2. Is failing closed on a missing suspend_d(date) correct, or will it over-block when suspend_d
+   legitimately has zero rows on a day with no suspensions? (Note: the file is written per-date by
+   the catch-up even when empty; absence — not emptiness — triggers the fail. Is that the right
+   distinction?)
+3. Is running the set proof POST-catch-up only (not pre, for target_end selection) acceptable —
+   given target_end is a candidate and the formal gate before policy minting is post-catch-up?
+4. Is the IPO check (list_date == date names must be present) correct, or can a name legitimately
+   list on `date` yet have no first-day price row (e.g. listed-but-halted debut)?
+5. Any NEW hole: the dotted-upper vs underscore code-form split between the continuity/coverage path
+   and the survivorship-audit path; delist_date/list_date string comparison; the unexpected-names
+   WARN-not-fail choice.
 
 OUTPUT FORMAT
 - Issues ranked Blocker / Major / Minor, each with the offending code quoted + exact fix. Map every
