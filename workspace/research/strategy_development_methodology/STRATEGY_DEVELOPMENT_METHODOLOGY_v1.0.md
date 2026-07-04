@@ -22,8 +22,10 @@
 > "optimizer-beats-1/N" counters were *refuted* (conditioning variable = idio-vol / N / homogeneity,
 > Platanakis "Horses for Courses"); the microcap 10–18% CAGR is an *unverified hypothesis*; the
 > decorrelation Sharpe ceiling is closed-form `1/√ρ`; effective trials deflate as `N̂ = ρ+(1−ρ)M`; parity =
-> differential-testing + backtest reconciliation. **Self-reviewed 2026-07-04 (§10); pending GPT
-> cross-review.** Not yet implemented. Appendix E lists the external sources.
+> differential-testing + backtest reconciliation. **Self-reviewed + GPT 5.5 Pro cross-review R1 = REVISE
+> (2026-07-04); all 8 blocking issues + downgrades folded, 0 declined — see
+> [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md); pending GPT re-review.** Not yet implemented. Appendix E lists
+> the external sources.
 >
 > **Operating context this is written to (do not silently generalize past it):** solo developer,
 > A-share equities, **< 2M CNY capital → microcaps are tradable**, **unlevered (gross ≤ 1×)**,
@@ -51,17 +53,22 @@ IR  ≈  TC · IC · √breadth
 - **breadth** — the number of independent bets per year. *Low by design (~a handful of trusted factors).*
 - **TC (transfer coefficient)** = `corr(μᵢ/σᵢ, Δwᵢ·σᵢ)` — the fraction of forecasting skill that survives
   portfolio construction. TC ∈ [0,1]; an unconstrained optimal book has TC = 1; real constrained books
-  run **TC ≈ 0.3–0.6**. *The system's TC is near the floor.*
+  run **TC ≈ 0.3–0.6**. *The system's TC is **not yet measured** — measuring it on a real book
+  (`corr(μ/σ, Δw·σ)`) is the first empirical task; that `rank→top-K→EW` sits low on the TC scale is a
+  strong prior, not a measurement.*
 
-`rank → top-K → equal-weight` is close to the **minimum-TC construction possible**: it throws away the
+`rank → top-K → equal-weight` is **among the lowest-TC constructions**: it throws away the
 *cardinal* signal (rank 1 and rank K get identical weight), ignores risk (`σ`), and ignores covariance
 (correlated top-K names collapse into one bet). Two validated factors run through it can only deliver a
 fraction of their IC as IR.
 
-**This reframes every past "strategy failure" in the record.** E-wave passed sealed OOS 6/6 then deployed
-at −3.6% CAGR / −52% MDD; eps_diffusion reached `approved` then delivered +4.5% / −62% on the liquid
-universe. Those were **not factor failures** — the factors' IC was real. They were (a) a TC collapse and
-(b) a universe/capacity mis-scope. *Exceptional strategies are made by raising TC and composing breadth —
+**This reframes past "strategy failures" in the record.** E-wave passed sealed OOS 6/6 then deployed
+negative; eps_diffusion (an approved factor at the time) deployed weakly on the liquid universe. **⚠ The
+specific deployment magnitudes (E-wave −3.6% / −52%, eps_diffusion +4.5% / −62%) are STALE** — CLAUDE.md
+§3.5 marks them superseded by the 2026-06-22 fill-price-aware limit gate and requires a **rerun** before
+they are quoted as numbers; only the **qualitative pattern** (a factor's IC OOS passes → the deployed
+net/liquid book fails) is safe to cite. Those were **not factor failures** — the factors' IC was real —
+but a TC collapse and a universe/capacity mis-scope. *Exceptional strategies are made by raising TC and composing breadth —
 not by finding more factors.* The value chain is inverted; the highest-ROI work is the construction and
 validation layer, on the factors already trusted.
 
@@ -158,11 +165,15 @@ A book sits on a spectrum between two poles (both legitimate; they differ on co-
 | P&L shape | lumpy, larger MDD | averaged-out, smoother |
 | Sharpe vs CAGR | higher CAGR / lower Sharpe | higher Sharpe / lower per-name upside |
 | capacity | lower | higher |
-| example | VQ10 large-cap value top-10 (best deployable to date) | the breadth-harvesting machine (to build) |
+| example | VQ10 large-cap value top-10 (best historical local *benchmark* — NOT re-validated through S6/S7; registry empty) | the breadth-harvesting machine (to build) |
 
-**North star:** a *diversified portfolio of low-return-correlation books* (Part V). **Emphasis / unit of
-work:** *one individually robust, risk-adjusted book* (Part III) — because the system cannot yet reliably
-produce even one, and a portfolio of un-robust books is not a portfolio.
+**North star (revised after GPT review + the verified `1/√ρ` ceiling):** **one robust, parity-verified,
+unlevered book — plus one controlled microcap-lane hypothesis test.** A *diversified portfolio of
+low-return-correlation books* (Part V) is a **later risk-management phase, not the organizing goal**: at the
+system's sleeve correlations (ρ 0.52–0.79) it buys only ~1.1–1.4× Sharpe (§5.1), and its
+book-weight / correlation-cutoff / add-drop multiplicity can cost more than it lifts while the system
+cannot yet reliably produce even *one* robust book. **Build one; add an orthogonal book only after each is
+standalone-proven** (S6 + S7 + capacity).
 
 ---
 
@@ -256,7 +267,10 @@ lookahead that produced the E-wave "wins on microcap → declare small-cap" fork
 - **For the micro-tail lane, bake the 国九条 shell/junk exclusion into the universe-definition filters**
   (hashed into the TUD, frozen thereafter): exclude ST/*ST, revenue < ¥300M with losses, negative
   equity, and explicit delisting-risk names — this is exactly what "应退尽退" now targets, and it removes
-  the *dying* half of the shell premium while keeping the durable liquidity premium.
+  the *dying* half of the shell premium while keeping the durable liquidity premium. **⚠ Every one of
+  these fields MUST be point-in-time / visible-as-of the rebalance decision** (as-of source + disclosure
+  lag, §3.2), hashed into the TUD — a *current* ST label, a *later* annual report, or a *realized*
+  delisting outcome would leak survivorship and turn the lane into hindsight junk-avoidance.
 - Universe membership is a **boolean mask over the full market** (Layer 2). Factors are still computed on
   the full market (Layer 1, §S2) so lookbacks and cross-sectional ranks have full context; suspended
   names keep ranking context and are excluded only at execution (Layer 4).
@@ -266,14 +280,18 @@ lookahead that produced the E-wave "wins on microcap → declare small-cap" fork
 This is the first half of the TC fix. Turn the selected factors into **one calibrated expected-return
 vector**, in two sub-steps. *Never feed ranks or raw z-scores to a constructor.*
 
-**(0) Deployable alpha only — measured, not optional (the 果仁 #9 lesson).** Screen tradeability *before*
-combining. Include only factors whose edge **survives open-fill execution** — value + quality + low-vol
-deploy near-losslessly; **exclude** illiquidity (`liq_amihud`), short-horizon reversal (`rev_return_5d`),
-and overnight-momentum (`grn_onmom`)-type factors: their gross IC is real but structurally un-capturable
-at the open, and their inclusion is the *measured* cause of the #9 paper→deploy collapse (§1.2). **A
-high-IC composite that includes un-tradeable factors is a worse book than a lower-IC composite that
-excludes them.** (This is not the same as size-neutralizing — a composite can be non-microcap and still
-leak through fast/limit-up-gapping names.)
+**(0) Deployable-alpha admission test — measured, not optional (the 果仁 #9 lesson).** Screen tradeability
+*before* combining, as a **book-context admission test, NOT a global name-ban**: a factor is admitted only
+if its edge **survives open-fill, net-of-cost, capacity-aware execution on IS / validation** for the target
+universe's tradeable names. Slow factors (value + quality + low-vol) deploy near-losslessly; fast /
+high-turnover / illiquid / limit-up-gapping factors (`liq_amihud`, `rev_return_5d`, `grn_onmom`-type)
+usually **fail** the test — their gross IC is real but structurally un-capturable at the open, and their
+inclusion was the *measured* cause of the #9 paper→deploy collapse (§1.2). But the exclusion is
+**turnover-conditioned** (§1.2, Frazzini-Israel-Moskowitz — cost-optimization rescues *slow* factors, not
+fast ones): admit a fast factor **iff** its after-cost edge survives the test on the tradeable set; do not
+blanket-ban by name. **A high-IC composite that includes un-tradeable factors is a worse book than a
+lower-IC composite that passes the test.** (Distinct from size-neutralizing — a composite can be
+non-microcap and still leak through fast/limit-up-gapping names.)
 
 **(a) Combine into one cross-sectional score.**
 - **Neutralize each factor before combining** — demean within industry, residualize on standardized
@@ -285,7 +303,9 @@ leak through fast/limit-up-gapping names.)
   **marginally-selected ~5–15 representatives** (§2.2); add shrinkage-toward-equal only after IS
   calibration; use cross-sectional-regression / IC-shrinkage weighting only with heavy shrinkage.
 - **Optional ML combiner** — a *shallow, strongly-regularized* GBDT/ridge/stacking **over the factor
-  scores** (not raw prices), the one setting where ML reliably helps (~+3%/yr in the literature). Guard it
+  scores** (not raw prices), the one setting where ML most reliably helps — a **testable candidate
+  improvement**, not a promise (Gu-Kelly-Xiu show ML/interaction gains, but the ~+3%/yr figure is a
+  US-equity result, not a guaranteed after-cost A-share microcap increment). Guard it
   the way §4.6 mandates: **neutralized labels**, liquidity-screened training universe, monotonic
   constraints, purged+embargoed CV, seed-averaged. This is combination, not alpha mining.
 
@@ -314,14 +334,20 @@ its place.**
 **Default = light construction (and the right answer for the micro-tail lane):**
 ```
 target_wᵢ  ∝  calibrated αᵢ            # preserve the cardinal signal (raise TC vs top-K/EW)
-   subject to  size / industry neutrality        # no unintended style bet
+   subject to  wᵢ ≥ 0                             # LONG-ONLY — no single-name shorts (§7.11; 融券 infeasible)
+               Σ wᵢ ≤ 1 , cash allowed            # gross ≤ 1× UNLEVERED, no margin (an explicit box, not a hope)
+               size / industry neutrality        # no unintended style bet
                max single-name weight            # concentration cap
                industry active-weight bounds
                ADV participation cap              # capacity / impact
+               lot / min-order rounding           # A-share 100-share lots, min-commission drag
                turnover / cost penalty            # match to half-life; survive cost
                capacity ceiling                   # micro-tail = low-capacity product
    optional:   HRP / inverse-vol risk balancing   # no Σ inversion; tolerates singular Σ
+   FAIL CLOSED in formal mode                     # infeasible / solver-fail → refuse; NEVER a silent equal-weight fallback
 ```
+The non-negativity + gross-≤-1 box is **mandatory, not an implementation detail** — `wᵢ ∝ αᵢ` alone can
+produce negative or levered weights, which would silently violate §7.11.
 This preserves breadth *and* cardinal signal without trusting a noisy covariance. HRP (López de Prado) is
 the preferred risk-balancer when used at all: it needs no matrix inversion and tolerates the
 ill-conditioned Σ that suspensions and limit-censoring produce.
@@ -335,7 +361,12 @@ governance gate):
    Courses"; MV's edge over 1/N rises only as idio-vol falls, and the "optimizer wins at low turnover"
    counter was refuted 0-3);*
 3. Σ is real, **shrunk (Ledoit–Wolf), PSD, and well-conditioned**;
-4. the optimized book **beats light construction net-of-cost in the sealed OOS**.
+4. the optimized book **beats light construction net-of-cost on IS / walk-forward / pre-seal validation
+   folds** — the comparison is made **before** the seal is claimed. **⚠ Never select the optimizer-vs-light
+   winner on the sealed OOS: that is model selection on the test set.** If both variants are ever run
+   through the OOS window, **both `book_seal_key`s are spent** and neither is deployable without a fresh
+   untouched window (§S6, §4.1). (Same rule for every "OOS" comparison in the risk-model/construction layer:
+   it means *pre-seal validation folds*, not the one sealed strategy OOS.)
 
 > **Reconciliation with the 果仁 #9 enhancement (sibling doc), and the one open validation.** #9
 > (`divheavy`) is a *non-microcap* dividend/value book (top-10 median size-pct 0.65), so its Σ is
@@ -347,7 +378,7 @@ governance gate):
 > literally a test of gate-condition (4). **Measured verdict (2026-07-04, first-cut):** that control
 > experiment has now RUN — and the optimizer **did not earn its place even on #9.** Across a λ = 2…100 MVO
 > sweep on a pragmatic Σ, Sharpe stayed flat (0.85–0.91 vs top-K 0.90) and **MDD got *worse*** (−40 to
-> −47% vs −40%); nothing beat #9's own +30% / −33.9% / 1.18. This **vindicates the light-construction
+> −47% vs −40%); nothing beat #9's own +30% / −33.9% / 1.18. This **corroborates the light-construction
 > default and gate-condition (4)** (the optimizer must *beat* light construction — here it did not) and
 > **refutes the earlier guess that a non-microcap book guarantees the optimizer earns its place.** The
 > real, *confirmed* lever is the **signal side** (deployable-alpha selection, gap 26pp→~1pp), not the
@@ -405,8 +436,14 @@ one-shot OOS, so the seal is spent on a book you already believe in:
   seed-averaged) is a cheap, standardized bar. A hand-built book that can't beat it *net-of-cost on the
   same universe/period* isn't earning its complexity.
 - **Overfitting quantification** — build the T×N return matrix over the *recipe* trials and compute
-  **PBO via CSCV** and the **Deflated Sharpe** on the max, using **effective N** (cluster correlated
-  trials — a re-tuned weight is not a new trial).
+  **PBO via CSCV** and the **Deflated Sharpe** on the max, using **effective N** (`N̂ = ρ+(1−ρ)M`; cluster
+  correlated trials — a re-tuned weight is not a new trial). **The CSCV/PBO must be leakage-safe:**
+  **temporal** (not random) row-blocks, **purged + embargoed** across the holding horizon, and Sharpe SEs
+  on **non-overlapping / HAC / block-bootstrap** returns (overlapping holding-period returns are serially
+  correlated and inflate the Sharpe).
+- **Trial ledger (mandatory)** — every recipe, rejected variant, manual fork, universe choice, optimizer
+  λ-sweep, ML seed-family, and parity-tolerance attempt is **counted or clustered** into the effective-N
+  *before* DSR/PBO. Human-driven search is the multiplicity that hides — log it, don't wish it away.
 
 **Pre-seal gate (all on IS):** promote to the seal only if **DSR > 0.95 AND PBO < 0.10** on family-
 adjusted effective-N, the robustness surfaces are plateaus, and the book beats the baseline net-of-cost.
@@ -421,9 +458,9 @@ costs + rebalance + capacity screen — into a **`DeploymentFrozenPlan`**, deriv
 `HoldoutSealStore` **once**.
 
 - **The verdict metric is net-of-cost CAGR / Sharpe / MDD / turnover / realized capacity on the DEPLOYABLE
-  universe — never IC.** This is the precise fix for the E-wave / eps_diffusion failure mode: those passed
-  a *cost-free cross-sectional IC* OOS and died on *net / liquid* PnL. Bake the deployable universe and
-  realistic costs **into the sealed test itself.**
+  universe — never IC.** This is the precise fix for the E-wave / eps_diffusion failure *pattern*
+  (magnitudes stale — §1.1): those passed a *cost-free cross-sectional IC* OOS and died on *net / liquid*
+  PnL. Bake the deployable universe and realistic costs **into the sealed test itself.**
 - Judge against the S0 `pre_declared_bar`. Deflate by effective trials; disclose multiplicity
   (`oos_window_multiplicity`), respecting the virgin-window budget (warn 3 / hard 5 distinct
   `book_seal_key` per window).
@@ -438,9 +475,20 @@ costs + rebalance + capacity screen — into a **`DeploymentFrozenPlan`**, deriv
 that passes S6 must be **reproducible on 果仁 under 果仁's own rules** before it is deploy-ready.
 
 - **Purpose = end-to-end system-integrity check, not re-grading the strategy.** A metric-and-holdings
-  match proves the *shared core* — data, PIT alignment, factor formulas, equal-weight execution,
-  limit/suspension handling — is sound. A **divergence localizes a *local* bug.** ("You validate the
-  system with trusted strategies, not trusted strategies with an unproven system.")
+  match proves the **shared computational core** — data, PIT alignment, factor formulas, execution,
+  limit/suspension handling — is sound; it does **NOT** prove deployability or alpha (parity = differential
+  testing / reconciliation, DEEP_RESEARCH_ADJUDICATION Claim 7). A **divergence localizes a *mismatch*** —
+  which may be a local bug, a 果仁 modelling assumption, a formula-translation gap, or a *legitimate* model
+  difference (the known-divergence list below is exactly these; don't presume "local bug"). ("You validate
+  the system with trusted strategies, not trusted strategies with an unproven system.")
+- **Two parity tiers — the second is load-bearing for a *weighted* book.** (i) **Core parity** (the ladder
+  below, vs 果仁's equal-weight model): validates the shared engine — data / PIT / factor formulas /
+  equal-weight execution / limit-suspension. (ii) **Actual-book execution parity:** a
+  `WeightedTargetStrategy` book (§S3) is **NOT** deploy-ready on equal-weight core parity alone — its own
+  weighted schedule (target-vs-delta orders, lot rounding, fills, limit handling, rebalance timing) must be
+  validated by the event-driven engine's weighted path (§S4) and self-reconciled, since 果仁 is
+  equal-weight-only and cannot parity-check weights. Core parity proves the *engine*; the weighted overlay
+  is the *engine's* job.
 - **Reproduce under 果仁's cost/PIT model, not the realistic one.** 果仁 uses flat 0.2%/side, no
   slippage, 一字板-only limit block, 公告日 PIT, 后复权. Matching 果仁 under *realistic microcap cost*
   would be a *bug*, not a success — realistic cost is a **separate downstream deployment lens** (§S4),
@@ -463,9 +511,14 @@ that passes S6 must be **reproducible on 果仁 under 果仁's own rules** befor
 
 - **Capacity curve** (roadmap BUILD-5, generalizing the one-off `eval_*_capacity.py`): sweep AUM ×
   ADV-participation with a linear+square-root impact model → net CAGR/Sharpe/MDD, worst-participation,
-  days-to-build/liquidate, and **the AUM at which Sharpe decays 25% / CAGR halves.** For < 2M this is an
-  *informational ceiling*, not a gate: a micro-tail book is a **low-capacity product**, routed to its lane
-  with a number stamped, **not killed.**
+  days-to-build/liquidate, and **the AUM at which Sharpe decays 25% / CAGR halves.**
+- **Two capacity concepts — do NOT conflate them.** (i) The *institutional* ceiling (the AUM at which the
+  book decays) is **informational** — a micro-tail book is a low-capacity *product*, routed to its lane, not
+  killed for being small-capacity. (ii) **Actual-capital capacity at your ¥2M is a HARD GATE, not a stamp.**
+  A book that at ¥2M shows infeasible ADV participation, multi-day liquidation, a limit-down exit trap,
+  min-lot / min-commission drag that erodes the edge, or forced over-concentration is **not deployable** —
+  being a small operator does not exempt it. Compute net CAGR/Sharpe/MDD **at ¥2M with real microcap costs**
+  and gate on it.
 - **Deployment decision:** passes S6 (net/liquid/deflated) **and** S7 (parity within tolerance) **and**
   carries a capacity stamp → publish a **`StrategyCandidate v0`** into the (currently empty)
   `strategy_registry`, sealed and hash-bound (factor_set_hash / signal_transform_hash / risk_model_hash /
@@ -642,14 +695,21 @@ expect it to cut MDD and cost a little CAGR. It is drawdown control, not a retur
   portfolio IR), never a near-duplicate. **Actively refuse correlated near-duplicates** — they unbalance
   risk and add cost without diversification.
 - **Retire a book** on correlation drift into the existing set, or on decayed live IR past its kill floor.
+- **The multi-book portfolio is itself a sealed unit (a book of books).** The meta-allocation layer — book
+  weights, correlation cutoffs, vol-brake triggers, add/drop rules — can overfit by being chosen *after*
+  seeing the component books' OOS. So the *portfolio recipe* carries its own frozen **`portfolio_seal_key`**,
+  its own **effective-trial count**, and **one** sealed OOS spend — the single-shot discipline of §S6, one
+  level up. Never tune the portfolio on the window that graded its books.
 
-### §5.7 The realistic portfolio target
+### §5.7 The realistic portfolio target — a LATER phase
 
 A **value core + a sector/beta-neutral defensive sleeve + a cash/bond overlay + one or two
-orthogonal-*horizon* books**, allocated risk-parity-floored-to-1/N and vol-managed slowly at the top. The
-goal is to shave the value book's standalone −27% MDD and lift **portfolio Sharpe toward ~1.2–1.4 via
-decorrelation** — earned through correlation structure, not leverage, not (infeasible) hedging. That, at
-this capital and these constraints, is what "exceptional" honestly looks like.
+orthogonal-*horizon* books**, allocated risk-parity-floored-to-1/N and vol-managed slowly at the top —
+**entered only once the individual books are each standalone-proven (§1.5), not as the organizing goal.**
+The lift is **modest and bounded** (`1/√ρ` ≈ 1.1–1.4× at these correlations, §5.1): shave the value book's
+standalone −27% MDD and nudge **portfolio Sharpe toward its ~1.2–1.4 ceiling via decorrelation** — earned
+through correlation structure, not leverage, not (infeasible) hedging. That is what "exceptional" honestly
+looks like at this capital — *but the prerequisite is one robust book, not this portfolio.*
 
 ---
 
@@ -706,9 +766,16 @@ path to it.
 5. **Unlevered, gross ≤ 1×; no market-neutral *claim* at < 2M** (it is infeasible — say so).
 6. **果仁 parity within tolerance before a book is deploy-ready** (the correctness oracle).
 7. **`DSR > 0.95 ∧ PBO < 0.10` on effective-N** before the seal; MinBTL respected.
-8. **Diversify on realized returns; capacity is a binding weight cap.**
+8. **Diversify on realized returns; actual-capital (¥2M, real microcap cost) capacity is a HARD
+   deployability gate**, not just a stamp.
 9. **No hedge words; the deployable number is the 1×, net, limit-gated, tail-survived number.**
 10. **ML only for combination / risk / execution — never free-form alpha mining.**
+11. **The optimizer-vs-light choice — and every construction "OOS" comparison — is made on pre-seal
+    validation folds, NEVER the sealed OOS** (selecting on the test set spends the seal).
+12. **The multi-book portfolio is itself sealed** (`portfolio_seal_key`, own effective-N, one spend).
+13. **MLflow logging is mandatory** for every substantive strategy-level backtest / model run (§7.6).
+14. **Universe filters are PIT / visible-as-of the decision** (hashed into the TUD); the default
+    construction box is explicitly **long-only + gross ≤ 1× + lot-rounded, fail-closed** in formal mode.
 
 ### §7.3 Banned strategy-level anti-patterns
 
@@ -716,7 +783,10 @@ Tuning on the OOS window · quoting a gross backtested micro-tail CAGR · equati
 `approved` with strategy viability · running MVO on a noisy micro-tail Σ · asserting market-neutrality at
 < 2M · adding correlated near-duplicate books · improving a recipe after seeing its OOS · encoding
 tradability inside the signal · comparing a vectorized price-return screen to an event-driven total-return
-book without accounting for the dividend gap.
+book without accounting for the dividend gap · **selecting the optimizer (or any recipe) on the sealed
+OOS** · **using current / hindsight universe labels** (survivorship) · **treating small capital as exempt
+from actual-capacity feasibility** · shipping a levered or short weight vector from an unconstrained
+`w ∝ α` · **citing the stale E-wave / eps_diffusion deployment magnitudes** as if current.
 
 ---
 
@@ -746,10 +816,13 @@ book without accounting for the dividend gap.
 ## Appendix B — The optimizer-vs-light-construction gate (§S3)
 
 Use **light construction** (signal-proportional + caps + neutralize + turnover + HRP option) **unless ALL**
-hold: (1) risk-model bias statistic ∈ `1 ± √(2/T)` OOS; (2) quality ratio (independent bets ÷ #names)
-materially > ~0.1; (3) Σ real, Ledoit–Wolf-shrunk, PSD, well-conditioned; (4) optimized book beats light
-construction net-of-cost in the sealed OOS. For a single-factor-dominated micro-tail book, (2) typically
-fails → light construction is correct.
+hold — **all evaluated on pre-seal validation folds, NEVER the sealed OOS**: (1) risk-model bias statistic
+`b ∈ 1 ± √(2/T)`; (2) **quality ratio > ~0.1** — *operational def:* independent-bets ÷ #names, where
+independent-bets = the effective rank of the name-correlation matrix over the rebalance-horizon window
+(`(Σλ)²/Σλ²` on its eigenvalues, or an ONC cluster count); (3) Σ real, Ledoit–Wolf-shrunk, PSD,
+well-conditioned; (4) optimized book beats light construction net-of-cost **on IS / walk-forward**. For a
+single-factor-dominated micro-tail book, (2) typically fails → light construction is correct. **Selecting
+the winner on the sealed OOS spends the seal** (§S6, invariant 11).
 
 ## Appendix C — 果仁 parity checklist
 
@@ -762,11 +835,14 @@ Realistic-cost matching is a *separate* lens, **not** parity.
 
 ## Appendix D — Honest return expectations (priors to falsify, not targets)
 
-Unlevered, net, cross-cycle: **micro-tail book ~10–18% CAGR / Sharpe ~0.8–1.1** with −30% to −50%
-drawdown *capacity* and multi-year regime risk; **large-cap value core ~ +20% CAGR / −27% MDD / Sharpe
-~1.0** (the VQ10 benchmark already found); **diversified portfolio target Sharpe ~1.2–1.4** via
-decorrelation. **50%+ CAGR is infeasible on clean-PIT unlevered A-share long-only** (confirmed
-exhaustively). These are *priors to test on your own sealed OOS*, never targets to reverse-engineer.
+Unlevered, net, cross-cycle — **all are unverified priors to falsify on a sealed OOS, NOT targets or
+established numbers:** **micro-tail book ~10–18% CAGR / Sharpe ~0.8–1.1** (a *hypothesis* — the shell-premium
+magnitude was refuted in verification and no surviving source corroborates the range, §1.3); **large-cap
+value core ~ +20% CAGR / −27% MDD / Sharpe ~1.0** (the VQ10 **historical local benchmark**, not
+re-validated through S6/S7); **diversified portfolio Sharpe ~1.2–1.4** = the `1/√ρ` *ceiling* via
+decorrelation (§5.1), not a base case. **50%+ CAGR looks infeasible on clean-PIT unlevered A-share
+long-only on the evidence to date** — a *strong prior*, not an exhaustively-proven theorem (the search
+space + multiplicity artifact is not published). Test every number here; never reverse-engineer to it.
 
 ## Appendix E — External sources (deep-research, 2026-07-04)
 
