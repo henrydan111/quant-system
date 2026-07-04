@@ -38,3 +38,27 @@
 日更是否需碰 provider（1）· spent_oos_end 冻结的张力与是否需滚动 IS 释放（2，最重要）· 重建时长与追加物化器立项时机（3）· target_end 权威定义（4）· 月度补齐的 PIT 完整性（5）。
 
 **结论：clean for GPT。设计未触犯任何 §3 不变量；唯一 PIT 关注点与唯一 D3 语义判断均已显式标注送审，未擅自决定。**
+
+---
+
+# Round-2 自审（v2 修订后，re-review 前置）— 2026-07-04
+
+**背景**：GPT Round-1 = REVISE（B1 report_rc 前视 + M1 target_end 就绪 + M2 新鲜窗口生存者审计 + M3 例外洗白 + m1 时长阈值）。GPT fetch 了真实 repo + Tushare 官方文档。全部 5 条接受，无拒绝。
+
+## 独立核实（不 rubber-stamp GPT）
+
+- **B1 亲自核实 pit_backend.py:2461-2486**：`contemporaneous = gap_days <= 45` → 否则锚 `report_date+2`；代码注释 2471-2486 自认"clean-era 大 gap 行锚得早于 create_time = potential early-exposure"仅 WARN。**GPT 判断完全正确**——月度 regime 下新鲜窗口的真实晚到行（report 3 月/create_time 5 月）会被回锚进 sealed 窗口 = 前视泄漏，污染未来 holdout。B1 是真 Blocker。
+
+## 修订忠实性
+
+- B1：report_date replay + 新鲜窗口禁 backfill 回退 + max(report_date,create_time) + 缺则隔离 + 回锚早于 create_time = build 阻断（§5.1 步 3，照 GPT 替换文本逐条）。
+- M1/M2/M3/m1：§4.1/§5.1 步 2、步 6(b)、步 6 例外、§8 风险表——均照 GPT 替换文本。
+- GPT Q2 裁定（spent_oos_end 冻结正确 + 释放须 spend 事件）折入 §6，明确释放机制归 Phase 6。
+
+## v2 新引入自查
+
+- report_rc 锚改动会触及 §3 报表族 PIT 逻辑（load-bearing）——但方向是**收紧**（新鲜窗口更保守，不锚早于可见），不放松任何历史行为；historical bulk-backfill（2022-05 stamp on 2010-2021）不受影响（那些 report_date < fresh_holdout_start）。实现时须跑 report_rc 全测试族 + PIT canary（feedback: run full test file after gate change）。
+- 新鲜窗口审计是纯新增闸，无回归面。
+- 无对冲措辞；时长仍标"首次实测"。
+
+**Round-2 结论：clean for GPT re-review。B1 独立核实为真；修订收紧 PIT 未放松，实现阶段须过 report_rc 测试族。**
