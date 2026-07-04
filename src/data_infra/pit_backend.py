@@ -299,6 +299,23 @@ REPORT_RC_BACKFILL_GAP_DAYS = 45
 REPORT_RC_FRESH_HOLDOUT_START = "2026-02-28"
 
 
+def _assert_report_rc_boundary_matches_policy(policy: Any, calendar_policy_id: Any = None) -> None:
+    """GPT impl-review M3: when the calendar policy declares a fresh_holdout_start (thaw
+    policies), it MUST equal REPORT_RC_FRESH_HOLDOUT_START — a policy that moves the
+    boundary without a matching code change would silently materialize a stale report_rc
+    anchor. Legacy frozen policies (no fresh_holdout_start) skip. Raises BuildGateError."""
+    import pandas as _pd
+
+    policy_fresh = getattr(policy, "fresh_holdout_start", None)
+    if policy_fresh and _pd.Timestamp(policy_fresh) != _pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START):
+        raise BuildGateError(
+            "report_rc fresh-window guard boundary mismatch: "
+            f"code REPORT_RC_FRESH_HOLDOUT_START={REPORT_RC_FRESH_HOLDOUT_START} != "
+            f"policy {calendar_policy_id!r} fresh_holdout_start={policy_fresh}. Update the "
+            "constant (and its tests) in the same change that moves the policy boundary."
+        )
+
+
 @dataclass(frozen=True)
 class DerivedMetricSpec:
     """Canonical PIT-derived periodic metric."""
@@ -2395,49 +2412,89 @@ class StagedQlibBackendBuilder:
         )
         return status
 
-    def _report_rc_assert_no_retrograde(self, new_ledger: pd.DataFrame, output_path: str) -> None:
-        """B2 revision ledger (calendar-unfreeze Phase 5): a rebuild/replay may ADD
-        report_rc revisions, but must NEVER move an existing FRESH-WINDOW key's
-        effective_date EARLIER than the prior persisted ledger. A retrograde move =
-        a retroactive earlier-visibility = a sealed-window lookahead (e.g. a vendor
-        create_time revised backward, or an anchor regression). Build-blocking.
+    def _report_rc_baseline_path(self) -> str:
+        """Append-only per-key min-effective baseline sidecar (B2 revision ledger)."""
+        return self.ledger_path("report_rc").replace(".parquet", ".revision_baseline.parquet")
 
-        The prior persisted ledger IS the first-seen baseline — no separate provenance
-        store is needed for this guard. Scope is the fresh window
-        (effective_date OR report_date >= REPORT_RC_FRESH_HOLDOUT_START); historical
-        keys are exempt (deep-history best-known-state re-dating is intentional and was
-        validated). First build (no prior) or a pre-guard prior schema → no-op.
+    def _report_rc_assert_no_retrograde(self, new_ledger: pd.DataFrame) -> None:
+        """B2 revision ledger (calendar-unfreeze Phase 5; GPT impl-review B2+M2): a
+        rebuild/replay may ADD report_rc revisions, but must NEVER move a FRESH-WINDOW
+        key's effective_date EARLIER than the earliest it was EVER served. A retrograde
+        move = retroactive earlier-visibility = sealed-window lookahead (vendor create_time
+        revised backward, or an anchor regression). Build-blocking.
+
+        The baseline is an APPEND-ONLY sidecar keyed by the natural key storing the MIN
+        effective_date ever served — it survives a key being dropped (quarantined) then
+        reappearing (M2: the collapsed served ledger cannot, because it loses dropped
+        keys). Fresh scope is availability/EFFECT based (GPT B2): the NEW or the BASELINE
+        effective is at/after the boundary, OR either one's active/carry interval
+        (+REPORT_RC_ACTIVE_TTL_OPEN_DAYS open days) intersects the fresh window — so a
+        prior-fresh key re-dated back BEFORE the boundary is still caught. Historical keys
+        (both dates + carry pre-boundary) are exempt (deep-history re-dating is intentional).
         """
-        if not os.path.exists(output_path):
-            return
         key = ["ts_code", "report_date", "normalized_analyst_id", "quarter"]
         need = key + ["effective_date"]
-        if not set(need).issubset(new_ledger.columns):
+        if not set(need).issubset(new_ledger.columns) or new_ledger.empty:
             return
-        try:
-            prior = pd.read_parquet(output_path, columns=need)
-        except Exception:
-            return  # prior ledger predates these columns — nothing comparable
-        if prior.empty:
-            return
-        fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
         new_df = new_ledger[need].copy()
-        new_df["effective_date"] = pd.to_datetime(new_df["effective_date"])
-        prior_df = prior.rename(columns={"effective_date": "_prior_eff"})
-        prior_df["_prior_eff"] = pd.to_datetime(prior_df["_prior_eff"])
-        merged = new_df.merge(prior_df, on=key, how="inner")
-        if merged.empty:
-            return
-        report_ts = pd.to_datetime(merged["report_date"].astype(str), errors="coerce")
-        fresh_scope = (merged["effective_date"] >= fresh) | (report_ts >= fresh)
-        retrograde = fresh_scope & merged["_prior_eff"].notna() & (merged["effective_date"] < merged["_prior_eff"])
-        n = int(retrograde.sum())
-        if n:
-            ex = merged.loc[retrograde, key + ["effective_date", "_prior_eff"]].head(5).to_dict("records")
-            raise BuildGateError(
-                f"report_rc: {n} fresh-window key(s) moved effective_date EARLIER than the prior "
-                f"ledger (retrograde revision = sealed-window lookahead) — build refused. Examples: {ex}"
-            )
+        new_df["effective_date"] = pd.to_datetime(new_df["effective_date"]).dt.normalize()
+        new_df = new_df.dropna(subset=["effective_date"])
+        baseline_path = self._report_rc_baseline_path()
+
+        open_cal = self.open_calendar()
+        fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+        have_cal = bool(len(open_cal)) and (fresh <= pd.Timestamp(open_cal.max()))
+        fresh_pos = int(np.searchsorted(open_cal.values, np.datetime64(fresh), side="left")) if have_cal else None
+
+        def _affects_fresh(eff: pd.Series) -> pd.Series:
+            eff = pd.to_datetime(eff).dt.normalize()
+            at_or_after = eff >= fresh
+            if not have_cal:
+                return at_or_after.fillna(False)
+            pos = pd.Series(open_cal.get_indexer(pd.DatetimeIndex(eff)), index=eff.index)
+            carry = eff.notna() & pos.ge(0) & ((pos + REPORT_RC_ACTIVE_TTL_OPEN_DAYS) >= fresh_pos)
+            return (at_or_after | carry).fillna(False)
+
+        if os.path.exists(baseline_path):
+            try:
+                base = pd.read_parquet(baseline_path, columns=key + ["min_effective_date"])
+            except Exception:
+                base = pd.DataFrame(columns=key + ["min_effective_date"])
+            base["min_effective_date"] = pd.to_datetime(base["min_effective_date"]).dt.normalize()
+            merged = new_df.merge(base, on=key, how="inner")
+            if not merged.empty:
+                report_ts = pd.to_datetime(merged["report_date"].astype(str), errors="coerce")
+                fresh_scope = (
+                    _affects_fresh(merged["effective_date"])
+                    | _affects_fresh(merged["min_effective_date"])
+                    | (report_ts >= fresh)
+                )
+                retro = fresh_scope & merged["min_effective_date"].notna() & (
+                    merged["effective_date"] < merged["min_effective_date"])
+                n = int(retro.sum())
+                if n:
+                    ex = merged.loc[retro, key + ["effective_date", "min_effective_date"]].head(5).to_dict("records")
+                    raise BuildGateError(
+                        f"report_rc: {n} fresh-window key(s) moved effective_date EARLIER than the "
+                        f"earliest ever served (retrograde revision = sealed-window lookahead) — "
+                        f"build refused. Examples: {ex}"
+                    )
+        else:
+            base = pd.DataFrame(columns=key + ["min_effective_date"])
+
+        # Update the append-only baseline: MIN effective per key across old baseline + new.
+        parts = [new_df[need]]
+        if not base.empty:
+            parts.insert(0, base.rename(columns={"min_effective_date": "effective_date"})[need])
+        combined = pd.concat(parts, ignore_index=True)
+        combined["effective_date"] = pd.to_datetime(combined["effective_date"]).dt.normalize()
+        baseline = (combined.dropna(subset=["effective_date"])
+                    .groupby(key, as_index=False)["effective_date"].min()
+                    .rename(columns={"effective_date": "min_effective_date"}))
+        ensure_directory(os.path.dirname(baseline_path))
+        tmp = baseline_path + ".tmp"
+        baseline.to_parquet(tmp, index=False)
+        os.replace(tmp, baseline_path)
 
     def build_ledger(self, dataset_name: str) -> dict[str, Any]:
         """Build a PIT ledger for one revision-aware dataset."""
@@ -2545,41 +2602,78 @@ class StagedQlibBackendBuilder:
             fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
             create_norm = create_dt.dt.normalize()
             fetch_norm = raw_fetch_dt.dt.normalize()
+            open_cal = self.open_calendar()
+            calendar_end = pd.Timestamp(open_cal.max()) if len(open_cal) else fresh
+            fresh_pos = int(np.searchsorted(open_cal.values, np.datetime64(fresh), side="left"))
+            # B2 condition 4 (GPT impl-review B1): the boundary is availability/EFFECT-based.
+            # A row also affects the fresh window if its computed effective_date OR its
+            # active/carry-forward interval [effective, effective + REPORT_RC_ACTIVE_TTL_OPEN_DAYS
+            # open days] intersects [fresh, calendar_end] — the materializer carries each
+            # forecast's state for the TTL, so a pre-boundary row can inject state INTO the
+            # sealed window. Computed from the pre-override (historical-logic) anchor.
+            # Condition 4 applies ONLY when this provider's calendar actually spans the
+            # boundary (fresh <= calendar_end). A provider whose calendar ends before the
+            # boundary has NO fresh window — no row can intersect it, and fresh_pos would
+            # be len(open_cal) (out of range), so the carry test must be suppressed.
+            boundary_in_calendar = bool(len(open_cal)) and (fresh <= calendar_end)
+            if boundary_in_calendar:
+                pre_eff = strictly_next_open_trade_day(observed, open_cal).dt.normalize()
+                pre_pos = pd.Series(open_cal.get_indexer(pd.DatetimeIndex(pre_eff)), index=work.index)
+                effective_intersects_fresh = pre_eff.notna() & (pre_eff >= fresh) & (pre_eff <= calendar_end)
+                active_carry_intersects_fresh = (
+                    pre_eff.notna() & pre_pos.ge(0) & (pre_eff <= calendar_end)
+                    & ((pre_pos + REPORT_RC_ACTIVE_TTL_OPEN_DAYS) >= fresh_pos)
+                )
+            else:
+                effective_intersects_fresh = pd.Series(False, index=work.index)
+                active_carry_intersects_fresh = pd.Series(False, index=work.index)
             affects_fresh = (
                 (report_dt.dt.normalize() >= fresh)
                 | (create_dt.notna() & (create_norm >= fresh))
                 | (raw_fetch_dt.notna() & (fetch_norm >= fresh))
+                | effective_intersects_fresh
+                | active_carry_intersects_fresh
             )
-            fresh_with_ct = affects_fresh & create_dt.notna()
-            if fresh_with_ct.any():
-                trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
-                observed.loc[fresh_with_ct] = trusted.loc[fresh_with_ct]
-            # Fresh-window rows with NO create_time: use raw_fetch_ts as the first-seen
-            # floor if we stamped one; otherwise fail-closed QUARANTINE (we cannot prove
-            # first-visibility, and report_date+lag would be an unproven early exposure
-            # into the sealed window). (Empirically ~0: 2023+ report_rc is ~100%
-            # contemporaneous with create_time.)
-            fresh_no_ct = affects_fresh & create_dt.isna()
+            # Per-row VISIBILITY FLOOR (GPT impl-review M1): create_time is the vendor
+            # first-visibility (max(report_date, create_time)); raw_fetch_ts is only OUR
+            # fetch wall-clock (always LATER than true visibility) and floors a row ONLY
+            # when create_time is absent — it must never inflate a row that carries a real
+            # create_time (else a normal stamped row would trip the guard). The SAME floor
+            # is used for the anchor and the build-blocking guard, so they are consistent.
+            has_ct = create_dt.notna()
+            fresh_with_ct = affects_fresh & has_ct
+            fresh_no_ct = affects_fresh & ~has_ct
             fresh_no_ct_floored = fresh_no_ct & raw_fetch_dt.notna()
-            if fresh_no_ct_floored.any():
-                observed.loc[fresh_no_ct_floored] = raw_fetch_dt.loc[fresh_no_ct_floored]
             fresh_quarantine = fresh_no_ct & raw_fetch_dt.isna()
+            visibility_floor = pd.Series(pd.NaT, index=work.index, dtype="datetime64[ns]")
+            if fresh_with_ct.any():
+                vf = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
+                visibility_floor.loc[fresh_with_ct] = vf.loc[fresh_with_ct]
+            if fresh_no_ct_floored.any():
+                visibility_floor.loc[fresh_no_ct_floored] = raw_fetch_dt.loc[fresh_no_ct_floored]
+            # Fresh rows: anchor at the visibility floor (disables the bulk-backfill
+            # fallback). Fresh rows with neither create_time nor raw_fetch_ts are
+            # fail-closed QUARANTINED (unprovable first-visibility). Historical rows keep
+            # the validated deep-history anchor (`observed` from the contemporaneous logic).
+            served_fresh = fresh_with_ct | fresh_no_ct_floored
+            if served_fresh.any():
+                observed.loc[served_fresh] = visibility_floor.loc[served_fresh]
             n_quarantined = int(fresh_quarantine.sum())
 
             clean_era_large_gap = int((create_dt.notna() & (report_dt.dt.year >= 2023)
                                        & ~affects_fresh & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
             logger.info(
                 "report_rc anchor: %d rows | contemporaneous=%d backfill/missing=%d | "
-                "fresh-window affected=%d (create_time-anchored=%d quarantined-no-ct=%d) | "
-                "pre-fresh clean-era(2023..boundary) gap>%dd=%d",
+                "fresh-window affected=%d (create_time-floored=%d raw_fetch-floored=%d "
+                "quarantined=%d) | pre-fresh clean-era(2023..boundary) gap>%dd=%d",
                 len(work), int(contemporaneous.sum()), int((~contemporaneous).sum()),
-                int(affects_fresh.sum()), int(fresh_with_ct.sum()), n_quarantined,
-                REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
+                int(affects_fresh.sum()), int(fresh_with_ct.sum()), int(fresh_no_ct_floored.sum()),
+                n_quarantined, REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
             )
             if n_quarantined:
                 logger.warning(
-                    "report_rc anchor: %d fresh-window rows lack create_time -> QUARANTINED "
-                    "(fail-closed; cannot prove first-visibility)", n_quarantined,
+                    "report_rc anchor: %d fresh-window rows lack create_time AND raw_fetch_ts "
+                    "-> QUARANTINED (fail-closed; cannot prove first-visibility)", n_quarantined,
                 )
             if clean_era_large_gap:
                 logger.warning(
@@ -2589,21 +2683,20 @@ class StagedQlibBackendBuilder:
                     REPORT_RC_BACKFILL_GAP_DAYS,
                 )
             work["disclosure_date"] = observed
-            work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
-            # Build-BLOCKING PIT guard (B1+B2): no SERVED fresh-window row may be anchored
-            # earlier than its visibility floor max(create_time, raw_fetch_ts). By
-            # construction the served fresh rows use that floor, so this can only fire on
-            # a logic regression — fail the build rather than publish a sealed lookahead.
-            served_fresh = fresh_with_ct | fresh_no_ct_floored
+            work["effective_date"] = strictly_next_open_trade_day(observed, open_cal)
+            # Build-BLOCKING PIT guard (M1-consistent): no SERVED fresh-window row may be
+            # anchored earlier than its PER-ROW visibility floor (the same floor used for
+            # the anchor — NOT an always-on max(create_time, raw_fetch_ts), which would
+            # trip normal stamped rows). By construction effective >= floor, so this only
+            # fires on a logic regression — fail rather than publish a sealed lookahead.
             if served_fresh.any():
                 eff = pd.to_datetime(work["effective_date"]).dt.normalize()
-                floor = pd.concat([create_norm, fetch_norm], axis=1).max(axis=1)
-                leak = served_fresh & floor.notna() & (eff < floor)
+                vfloor = visibility_floor.dt.normalize()
+                leak = served_fresh & vfloor.notna() & (eff < vfloor)
                 if bool(leak.any()):
                     raise BuildGateError(
                         f"report_rc: {int(leak.sum())} fresh-window rows anchored earlier than "
-                        "their visibility floor max(create_time, raw_fetch_ts) (sealed-window "
-                        "PIT leak) — build refused."
+                        "their per-row visibility floor (sealed-window PIT leak) — build refused."
                     )
             if n_quarantined:
                 work = work.loc[~fresh_quarantine].copy()
@@ -2622,7 +2715,7 @@ class StagedQlibBackendBuilder:
         output_path = self.ledger_path(dataset_name)
         ensure_directory(os.path.dirname(output_path))
         if dataset_name == "report_rc":
-            self._report_rc_assert_no_retrograde(ledger, output_path)
+            self._report_rc_assert_no_retrograde(ledger)
         ledger.to_parquet(output_path, index=False)
         result = {"dataset": dataset_name, "rows": int(len(ledger)), "conflicts": len(conflicts)}
         if dataset_name == "holder_number":
@@ -4608,7 +4701,7 @@ class StagedQlibBackendBuilder:
             )
 
             try:
-                load_calendar_policy(
+                _policy = load_calendar_policy(
                     str(calendar_policy_id).strip(),
                     root=_Path(self.paths.project_root) / "config" / "calendar_policies",
                 )
@@ -4617,6 +4710,11 @@ class StagedQlibBackendBuilder:
                     f"publish=True got calendar_policy_id={calendar_policy_id!r} which does "
                     f"not resolve to a committed policy: {exc}"
                 ) from exc
+            # GPT impl-review M3: the report_rc fresh-window guard boundary constant is a
+            # PIT anchor and MUST match the policy's fresh_holdout_start. Checked BEFORE
+            # build_ledgers so a mismatch fails the build rather than materializing a wrong
+            # anchor. Legacy frozen policies (no fresh_holdout_start) skip.
+            _assert_report_rc_boundary_matches_policy(_policy, calendar_policy_id)
 
         if stage == "provider-only":
             profiled = self.collect_profiles(datasets=datasets, use_persisted=True)

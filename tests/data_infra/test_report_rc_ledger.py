@@ -510,20 +510,41 @@ def test_report_rc_fresh_missing_create_time_quarantined(tmp_path):
     assert set(led["normalized_analyst_id"]) == {"BBB证券::乙"}, "the no-create_time fresh row must be quarantined"
 
 
-def test_report_rc_historical_backfill_unchanged_by_fresh_guard(tmp_path):
-    # Both dates pre-boundary + backfill gap (46d>45): keeps the validated deep-history
-    # path (report_date+lag), the fresh guard must NOT touch it or anchor it in the fresh
-    # window. This is the regression proof that history is preserved at the boundary edge.
+def test_report_rc_carry_into_fresh_forces_availability_anchor(tmp_path):
+    # GPT impl-review B1 (condition 4): a row with BOTH scalar dates pre-boundary
+    # (report_date 2026-01-05, create_time 2026-02-20, gap 46 -> old code = backfill ->
+    # report_date+lag = January) whose 120-open-day active/carry interval reaches the
+    # sealed fresh window MUST anchor at its provable availability max(report,create) =
+    # 2026-02-20, not the assumed-backfill January — else its carried state injects into
+    # the sealed window from an unproven early date.
     open_days = pd.bdate_range("2026-01-01", "2026-03-31")
     led = _build_fresh_ledger(tmp_path, [
         {"ts_code": "000001.SZ", "report_date": "20260105", "create_time": "2026-02-20 08:00:00",
          "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
     ])
     eff = pd.to_datetime(led["effective_date"]).iloc[0]
-    backfill_obs = add_open_day_lag(pd.Series([pd.Timestamp("20260105")]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+    exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-02-20 08:00:00")]), open_days).iloc[0]
+    assert eff == exp, f"carry-into-fresh must anchor at create_time {exp}, got {eff}"
+
+
+def test_report_rc_deep_history_no_carry_keeps_backfill_anchor(tmp_path):
+    # The regression proof that history is preserved: a row whose active/carry interval
+    # does NOT reach the fresh window (report_date 2025-06-02 is >120 open days before
+    # 2026-02-28) keeps the validated deep-history path (report_date+lag), untouched by
+    # the fresh guard, even with a backfill-gap create_time.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    open_days = _write_business_calendar(data_root, "2025-06-01", "2026-03-31")
+    b = _rebuild_report_rc(data_root, qlib, [
+        {"ts_code": "000001.SZ", "report_date": "20250602", "create_time": "2025-09-15 08:00:00",
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2025Q4", "eps": 1.0},
+    ], "deep_nocarry")
+    led = pd.read_parquet(b.ledger_path("report_rc"))
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    backfill_obs = add_open_day_lag(pd.Series([pd.Timestamp("20250602")]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
     exp = strictly_next_open_trade_day(backfill_obs, open_days).iloc[0]
-    assert eff == exp
+    assert eff == exp, f"deep row without carry must keep report_date+lag {exp}, got {eff}"
     assert eff < pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+
 
 
 # ── Phase 5 B2: report_rc revision-ledger no-retrograde guard + raw_fetch_ts rescue ──
@@ -591,3 +612,53 @@ def test_report_rc_fresh_missing_ct_rescued_by_raw_fetch_ts(tmp_path):
     eff = pd.to_datetime(led["effective_date"]).iloc[0]
     exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-03-05 10:00:00")]), open_days).iloc[0]
     assert eff == exp
+
+
+def test_report_rc_no_retrograde_blocks_fresh_to_prefresh(tmp_path):
+    # GPT impl-review B2: a key whose PRIOR effective was inside the fresh window
+    # (2026-03-11) but a later rebuild re-dates it BEFORE the boundary (report_date and
+    # new effective both pre-boundary) must still be caught — the old guard scoped only on
+    # the NEW effective/report_date and missed this. The append-only baseline + prior-eff
+    # fresh scope catches it.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-03-31")
+    row = {"ts_code": "000001.SZ", "report_date": "20260105",
+           "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0}
+    # Build 1: create_time 2026-03-10 (fresh) -> effective 2026-03-11 (in the fresh window).
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-10")}], "ftp1")
+    # Build 2: create_time REMOVED -> backfill anchor would be report_date+lag (January),
+    # i.e. the prior fresh key re-dated back before the boundary. Must raise.
+    with pytest.raises(BuildGateError, match="retrograde"):
+        _rebuild_report_rc(data_root, qlib, [{**row, "create_time": None,
+                                              "raw_fetch_ts": "2026-01-06 08:00:00"}], "ftp2")
+
+
+def test_report_rc_no_retrograde_survives_disappear_reappear(tmp_path):
+    # GPT impl-review M2: a fresh key served then QUARANTINED (dropped from the served
+    # ledger) then reappearing EARLIER must still be caught — the append-only baseline
+    # retains the dropped key's min-effective, which the collapsed ledger cannot.
+    data_root, qlib = tmp_path / "data", tmp_path / "q"
+    _write_business_calendar(data_root, "2026-01-01", "2026-03-31")
+    row = {"ts_code": "000001.SZ", "report_date": "20260302",
+           "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0}
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-10")}], "dr1")  # eff 2026-03-11
+    # disappear: fresh row with no create_time / no raw_fetch_ts -> quarantined (dropped)
+    _rebuild_report_rc(data_root, qlib, [{**row, "create_time": None}], "dr2")
+    # reappear EARLIER (create_time 2026-03-03 -> eff 2026-03-04 < baseline 2026-03-11) -> raise
+    with pytest.raises(BuildGateError, match="retrograde"):
+        _rebuild_report_rc(data_root, qlib, [{**row, "create_time": _ct("2026-03-03")}], "dr3")
+
+
+def test_report_rc_boundary_policy_mismatch_raises():
+    # GPT impl-review M3: a policy whose fresh_holdout_start differs from the code constant
+    # must fail the build (a boundary move needs a matching code change). A legacy policy
+    # without the field is exempt; a matching policy passes.
+    from types import SimpleNamespace
+    from data_infra.pit_backend import (
+        _assert_report_rc_boundary_matches_policy, REPORT_RC_FRESH_HOLDOUT_START,
+    )
+    with pytest.raises(BuildGateError, match="boundary mismatch"):
+        _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start="2026-03-15"), "thaw_x")
+    # matching + legacy (None) both pass silently
+    _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start=REPORT_RC_FRESH_HOLDOUT_START), "thaw_ok")
+    _assert_report_rc_boundary_matches_policy(SimpleNamespace(fresh_holdout_start=None), "legacy")
