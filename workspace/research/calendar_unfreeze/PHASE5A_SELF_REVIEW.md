@@ -95,3 +95,21 @@
 31 report_rc 测试（本轮 +5：late-first-seen floor、stable-not-inflated、staged-policy、restatement-preserved、restatement-materializes-up）+ 341 data_infra + PIT002 clean。5→4 exact-dup-merge 仍绿（digest 键保留同行 dedup）。
 
 **Round-3 结论：B3 完整修（revision-preserving，端到端测试）+ M4。clean for GPT re-review。**
+
+---
+
+# Round-4 自审（M5+m6 修订后）— 2026-07-04
+
+GPT R3 = REVISE：M4 RESOLVED，B3 PARTIALLY（新 Major M5：digest 只覆盖 eps，但第二个 materializer 从 np/op_rt/rating 出 report_rc__np_fy1/op_rt_fy1/n_active_orgs/rating_up/dn）+ minor m6（baseline 先于 ledger 写）。**M5 亲证**：grep 确认 line 3261+ 第二 materializer 确实 emit 这些非-eps 字段——GPT 正确，我 under-scope。全接受。
+
+## 修订
+- **M5**：digest 改为 `report_rc_payload_digest` 覆盖 {eps,np,op_rt,rating}（org 已在 natural key via normalized_analyst_id）；-0.0→0.0 规范化；REPORT_RC_DIGEST_*_COLS 集中 + coverage-guard 测试（加 materialized 字段不扩 digest 即红）。
+- **m6**：`_report_rc_assert_no_retrograde` 只 check + 返回 planned baseline；`_report_rc_commit_baseline` 在 ledger 写成功后才提交——ledger 写失败不再留下未 served 的 baseline effective。
+
+## 留 GPT
+rating 用 stripped raw string digest（同义词→同 ordinal 会 spurious-but-conservative 判为独立 revision）——是否需改用 normalize_rating_to_ordinal。
+
+## 验证
+36 report_rc 测试（+5：np/op_rt/rating revision、digest coverage、-0.0）+ 346 data_infra + PIT002 clean。
+
+**Round-4 结论：M5+m6 修完。clean for GPT clearing re-review。**
