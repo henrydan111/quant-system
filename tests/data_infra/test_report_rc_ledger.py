@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from data_infra.pit_backend import (  # noqa: E402
     StagedQlibBackendBuilder, normalized_analyst_id,
     add_open_day_lag, strictly_next_open_trade_day, REPORT_RC_VENDOR_LAG_OPEN_DAYS,
+    REPORT_RC_FRESH_HOLDOUT_START,
 )
 from data_infra.storage.qlib_bin_utils import (  # noqa: E402
     read_qlib_bin, write_qlib_bin, validate_stock_bins,
@@ -441,3 +442,84 @@ def test_normalized_analyst_id_handles_messy_strings():
     assert set(ids.iloc[1].split("::", 1)[1].split("+")) == {"乙", "丙"}
     assert ids.iloc[2] == "CCC证券::UNKNOWN_AUTHOR"
     assert ids.iloc[3] == "::甲"
+
+
+# ── Calendar-unfreeze Phase 5 B1+B2: report_rc availability-boundary anchor guard ──
+# The sealed/fresh boundary is an AVAILABILITY boundary. A row affects the fresh
+# window when its report_date OR create_time is at/after REPORT_RC_FRESH_HOLDOUT_START;
+# for such rows the bulk-backfill fallback is disabled (anchor at the true visibility).
+# Historical rows (both dates pre-boundary) keep the validated deep-history path — the
+# older tests above (2020/2022 dates) are the regression proof for that half.
+# (Revision-ledger cases — retrograde create_time, silent payload revision — land with
+# the report_rc revision-ledger commit, not this anchor commit.)
+
+def _build_fresh_ledger(tmp: Path, rows: list) -> pd.DataFrame:
+    data_root = tmp / "data"
+    _write_business_calendar(data_root, "2026-01-01", "2026-03-31")
+    d = data_root / "analyst" / "report_rc"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_parquet(d / "report_rc_2026.parquet", index=False)
+    b = StagedQlibBackendBuilder(data_root=str(data_root), qlib_dir=str(tmp / "q"),
+                                 build_id="fresh_guard", allow_exceptions=True)
+    b.normalize_dataset("report_rc")
+    b.build_ledger("report_rc")
+    return pd.read_parquet(b.ledger_path("report_rc"))
+
+
+def test_report_rc_fresh_late_arrival_anchors_on_create_time_not_report_date(tmp_path):
+    # THE B2 leak: report_date pre-boundary (2026-01-05) but create_time in the fresh
+    # window (2026-03-10), gap 64d > 45. The OLD code classified this as backfill and
+    # anchored at report_date+lag (Jan) — exposing a row in the sealed window BEFORE it
+    # actually arrived (a lookahead). The fresh guard forces max(report_date, create_time).
+    open_days = pd.bdate_range("2026-01-01", "2026-03-31")
+    led = _build_fresh_ledger(tmp_path, [
+        {"ts_code": "000001.SZ", "report_date": "20260105", "create_time": _ct("2026-03-10"),
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
+    ])
+    assert len(led) == 1
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    exp_fresh = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-03-10 21:00:00")]), open_days).iloc[0]
+    old_backfill_obs = add_open_day_lag(pd.Series([pd.Timestamp("20260105")]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+    old_backfill_eff = strictly_next_open_trade_day(old_backfill_obs, open_days).iloc[0]
+    assert eff == exp_fresh, f"expected create_time anchor {exp_fresh}, got {eff}"
+    assert eff != old_backfill_eff              # NOT the old report_date+lag leak
+    assert eff >= pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+
+
+def test_report_rc_fresh_contemporaneous_anchors_normally(tmp_path):
+    open_days = pd.bdate_range("2026-01-01", "2026-03-31")
+    led = _build_fresh_ledger(tmp_path, [
+        {"ts_code": "000001.SZ", "report_date": "20260302", "create_time": _ct("2026-03-02"),
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
+    ])
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    exp = strictly_next_open_trade_day(pd.Series([pd.Timestamp("2026-03-02 21:00:00")]), open_days).iloc[0]
+    assert eff == exp
+
+
+def test_report_rc_fresh_missing_create_time_quarantined(tmp_path):
+    # Fresh-window row with NO create_time: fail-closed QUARANTINE (dropped from the
+    # served ledger). A co-located row WITH create_time survives — proves selective drop.
+    led = _build_fresh_ledger(tmp_path, [
+        {"ts_code": "000001.SZ", "report_date": "20260302", "create_time": None,
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
+        {"ts_code": "000001.SZ", "report_date": "20260302", "create_time": _ct("2026-03-02"),
+         "org_name": "BBB证券", "author_name": "乙", "quarter": "2026Q4", "eps": 1.1},
+    ])
+    assert set(led["normalized_analyst_id"]) == {"BBB证券::乙"}, "the no-create_time fresh row must be quarantined"
+
+
+def test_report_rc_historical_backfill_unchanged_by_fresh_guard(tmp_path):
+    # Both dates pre-boundary + backfill gap (46d>45): keeps the validated deep-history
+    # path (report_date+lag), the fresh guard must NOT touch it or anchor it in the fresh
+    # window. This is the regression proof that history is preserved at the boundary edge.
+    open_days = pd.bdate_range("2026-01-01", "2026-03-31")
+    led = _build_fresh_ledger(tmp_path, [
+        {"ts_code": "000001.SZ", "report_date": "20260105", "create_time": "2026-02-20 08:00:00",
+         "org_name": "AAA证券", "author_name": "甲", "quarter": "2026Q4", "eps": 1.0},
+    ])
+    eff = pd.to_datetime(led["effective_date"]).iloc[0]
+    backfill_obs = add_open_day_lag(pd.Series([pd.Timestamp("20260105")]), open_days, REPORT_RC_VENDOR_LAG_OPEN_DAYS)
+    exp = strictly_next_open_trade_day(backfill_obs, open_days).iloc[0]
+    assert eff == exp
+    assert eff < pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)

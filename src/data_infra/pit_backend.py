@@ -284,6 +284,19 @@ REPORT_RC_VENDOR_LAG_OPEN_DAYS = 2
 # few days (2023+ median 1d); the smallest backfill gap (late-2021 reports stamped
 # 2022-05) is ~120d — 45 cleanly separates the two regimes.
 REPORT_RC_BACKFILL_GAP_DAYS = 45
+# Calendar-unfreeze Phase 5 (B1+B2, GPT-SHIP'd design): the born-sealed fresh-window
+# AVAILABILITY boundary. The sealed boundary is an availability boundary, NOT a
+# report_date boundary — a report_rc row "affects the fresh window" when its
+# report_date OR its create_time (first-visibility) is at/after this date. For such
+# rows the historical bulk-backfill fallback (report_date+lag) is DISABLED: a large
+# create_time gap in the fresh era is a GENUINE LATE ARRIVAL, not the one-time 2022-05
+# mass-backfill stamp, so the row must anchor at its true visibility
+# max(report_date, create_time) (missing create_time in the fresh window is
+# quarantined fail-closed). Frozen at 2026-02-28 by the unfreeze design (§6:
+# spent_oos_end stays 2026-02-27 across monthly bumps) — MUST equal the live calendar
+# policy's fresh_holdout_start. Historical rows (both dates pre-boundary) keep the
+# validated deep-history path unchanged. See UNFREEZE_PLAN.md Phase 5 §5.1 step 3.
+REPORT_RC_FRESH_HOLDOUT_START = "2026-02-28"
 
 
 @dataclass(frozen=True)
@@ -2465,29 +2478,70 @@ class StagedQlibBackendBuilder:
                 # trust the genuine ingestion timestamp: max(report_date, create_time)
                 trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
                 observed.loc[contemporaneous] = trusted.loc[contemporaneous]
-            # Continuous-checkability audit (GPT post-impl review Q1/Q2): the threshold
-            # assumes the 2023+ contemporaneous era has create_time gaps of only a few
-            # days. A clean-era (report_date >= 2023) row with gap > threshold would be
-            # classified backfill and anchored at report_date+lag — EARLIER than its
-            # create_time (a potential early-exposure). Log the split every build and WARN
-            # if the canary count is non-zero, so the empirical assumption is monitored.
+            # Calendar-unfreeze Phase 5 B1+B2 (GPT-SHIP'd): the fresh/sealed boundary is an
+            # AVAILABILITY boundary. A row affects the fresh window when its report_date OR
+            # its create_time is at/after REPORT_RC_FRESH_HOLDOUT_START. For such rows the
+            # bulk-backfill fallback is DISABLED — a large create_time gap in the fresh era
+            # is a genuine LATE ARRIVAL (visible only at create_time), not the 2022-05 mass
+            # stamp — so force the availability anchor max(report_date, create_time). This
+            # catches the leak the old code hit: report_date pre-boundary + create_time in
+            # the fresh window + gap>45 was classified backfill and anchored at
+            # report_date+lag (EARLIER than its true visibility = a sealed-window lookahead).
+            fresh = pd.Timestamp(REPORT_RC_FRESH_HOLDOUT_START)
+            create_norm = create_dt.dt.normalize()
+            affects_fresh = (report_dt.dt.normalize() >= fresh) | (create_dt.notna() & (create_norm >= fresh))
+            fresh_with_ct = affects_fresh & create_dt.notna()
+            if fresh_with_ct.any():
+                trusted = pd.concat([report_dt, create_dt], axis=1).max(axis=1)
+                observed.loc[fresh_with_ct] = trusted.loc[fresh_with_ct]
+            # Fresh-window rows with NO create_time: fail-closed QUARANTINE. We cannot
+            # prove first-visibility, and report_date+lag would be an unproven early
+            # exposure into the sealed window. Drop from the served ledger + record why.
+            # (Empirically ~0: 2023+ report_rc is ~100% contemporaneous with create_time.)
+            fresh_no_ct = affects_fresh & create_dt.isna()
+            n_quarantined = int(fresh_no_ct.sum())
+
             clean_era_large_gap = int((create_dt.notna() & (report_dt.dt.year >= 2023)
-                                       & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
+                                       & ~affects_fresh & (gap_days > REPORT_RC_BACKFILL_GAP_DAYS)).sum())
             logger.info(
                 "report_rc anchor: %d rows | contemporaneous=%d backfill/missing=%d | "
-                "clean-era(report_date>=2023) gap>%dd=%d",
+                "fresh-window affected=%d (create_time-anchored=%d quarantined-no-ct=%d) | "
+                "pre-fresh clean-era(2023..boundary) gap>%dd=%d",
                 len(work), int(contemporaneous.sum()), int((~contemporaneous).sum()),
+                int(affects_fresh.sum()), int(fresh_with_ct.sum()), n_quarantined,
                 REPORT_RC_BACKFILL_GAP_DAYS, clean_era_large_gap,
             )
+            if n_quarantined:
+                logger.warning(
+                    "report_rc anchor: %d fresh-window rows lack create_time -> QUARANTINED "
+                    "(fail-closed; cannot prove first-visibility)", n_quarantined,
+                )
             if clean_era_large_gap:
                 logger.warning(
-                    "report_rc anchor: %d clean-era (report_date>=2023) rows have a create_time gap "
-                    ">%dd and were anchored at report_date+lag (earlier than create_time) — the "
-                    "contemporaneous-era assumption may be violated; review REPORT_RC_BACKFILL_GAP_DAYS",
-                    clean_era_large_gap, REPORT_RC_BACKFILL_GAP_DAYS,
+                    "report_rc anchor: %d pre-fresh clean-era (2023..boundary) rows have a "
+                    "create_time gap >%dd and were anchored at report_date+lag (earlier than "
+                    "create_time); review REPORT_RC_BACKFILL_GAP_DAYS", clean_era_large_gap,
+                    REPORT_RC_BACKFILL_GAP_DAYS,
                 )
             work["disclosure_date"] = observed
             work["effective_date"] = strictly_next_open_trade_day(observed, self.open_calendar())
+            # Build-BLOCKING PIT guard (B1+B2): no SERVED fresh-window row may be anchored
+            # earlier than its create_time. By construction fresh_with_ct rows use
+            # max(report_date, create_time), so this can only fire on a logic regression —
+            # fail the build rather than publish a sealed-window lookahead.
+            served_fresh = fresh_with_ct
+            if served_fresh.any():
+                eff = pd.to_datetime(work["effective_date"])
+                leak = served_fresh & create_dt.notna() & (eff.dt.normalize() < create_norm)
+                if bool(leak.any()):
+                    raise BuildGateError(
+                        f"report_rc: {int(leak.sum())} fresh-window rows anchored earlier than "
+                        "their create_time (sealed-window PIT leak) — build refused."
+                    )
+            if n_quarantined:
+                work = work.loc[~fresh_no_ct].copy()
+                report_dt = report_dt.loc[work.index]
+                create_dt = create_dt.loc[work.index]
             key_columns = [
                 column
                 for column in ("ts_code", "report_date", "normalized_analyst_id", "quarter")
