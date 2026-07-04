@@ -1,111 +1,93 @@
-# GPT 5.5 Pro RE-review #2 — Phase 5-B monthly_calendar_bump driver (post-REWORK-2)
+# GPT 5.5 Pro RE-review #3 — Phase 5-B monthly_calendar_bump driver (post-REWORK-3)
 
-Status: ready to send. Branch `calendar-unfreeze` HEAD `68b0ee3`. Raw links pinned to the commit sha; embedded delta authoritative.
+Status: ready to send. Branch `calendar-unfreeze` HEAD `971282a`. Raw links pinned to the commit sha; embedded delta authoritative.
 
 ---
 
 ```text
 ROLE
 Senior reviewer for an A-share quant system where research validity outranks code that runs. You
-reviewed this monthly calendar freeze-bump DRIVER twice. Round 1 you REWORK'd (7 findings, all
-fixed). Round 2 you reviewed the correct commit 4cd2fec, confirmed B1-path / M1 (parent-policy
-YAML) / m1 (publish handoff) RESOLVED, and returned a sharper REWORK with 5 findings. This is
-RE-REVIEW #2: verify those 5 are real, complete, and hole-free. One of them I fixed DIFFERENTLY
-than you suggested (endpoint readiness) for a concrete data reason — scrutinize that most.
+have reviewed this monthly calendar freeze-bump DRIVER three times (REWORK, REWORK, REWORK) and it
+has converged each round. Round 3 (commit 68b0ee3) you confirmed m1 RESOLVED + the split endpoint
+gate is the right architecture, and returned 2 Blocker + 2 Major + 1 minor. This RE-REVIEW #3
+verifies those are real, complete, and hole-free. I corrected TWO of your suggested fixes for
+concrete data reasons (bin-length format; coverage floor) — scrutinize those hardest.
 
-REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 68b0ee3)
+REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 971282a)
 Files (raw, pinned):
-- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/68b0ee3/scripts/monthly_calendar_bump.py
-- catchup: https://raw.githubusercontent.com/henrydan111/quant-system/68b0ee3/workspace/scripts/catchup_fundamentals_range.py
-- audit:   https://raw.githubusercontent.com/henrydan111/quant-system/68b0ee3/workspace/scripts/audit_thaw_frozen_prefix.py
-- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/68b0ee3/tests/data_infra/test_monthly_calendar_bump.py
-           https://raw.githubusercontent.com/henrydan111/quant-system/68b0ee3/tests/data_infra/test_catchup_range_safety.py
-Self-review (round 3): workspace/research/calendar_unfreeze/PHASE5B_SELF_REVIEW.md
+- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/971282a/scripts/monthly_calendar_bump.py
+- catchup: https://raw.githubusercontent.com/henrydan111/quant-system/971282a/workspace/scripts/catchup_fundamentals_range.py
+- audit:   https://raw.githubusercontent.com/henrydan111/quant-system/971282a/workspace/scripts/audit_thaw_frozen_prefix.py
+- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/971282a/tests/data_infra/test_monthly_calendar_bump.py
+           https://raw.githubusercontent.com/henrydan111/quant-system/971282a/tests/data_infra/test_catchup_range_safety.py
+Self-review (round 4): workspace/research/calendar_unfreeze/PHASE5B_SELF_REVIEW.md
 
-CONTEXT (unchanged invariants): D3 spent_oos_end frozen at 2026-02-27 across every bump (fresh
-window grows monotonically); D1 append-only policy id, fail-closed on blank; target_end = last
-COMPLETE trading day; frozen-prefix audit + fresh-window survivorship audit both GATE; publish is
-§13 human-gated. Tushare 000001.SZ / provider 000001_SZ. report_rc raw has report_date (YYYYMMDD)
-+ create_time; per-year files report_rc_<year>.parquet (2010..2026), only 2026 has raw_fetch_ts.
+CONTEXT (unchanged invariants): D3 spent_oos_end frozen 2026-02-27; D1 append-only policy id;
+target_end = last COMPLETE trading day; frozen-prefix audit + fresh-window survivorship audit both
+GATE; publish §13 human-gated. Tushare 000001.SZ / provider 000001_SZ. Split endpoint gate:
+daily-fresh endpoints (daily/moneyflow/stk_limit, same-day) gate target_end PRE-catch-up; the
+LAGGING cyq_perf (per-symbol Stage-D fetch) + the report_rc halo verify POST-catch-up.
 
-HOW EACH ROUND-2 FINDING WAS FIXED (verify real + complete + no new hole)
+HOW EACH ROUND-3 FINDING WAS FIXED (verify real + complete + no new hole)
 
-B1 (endpoint existence != completeness): FIXED, but NOT the way you suggested — and here is why.
-Your exact-fix put per-endpoint row-count checks (incl. cyq_perf) inside the PRE-catch-up
-target_end probe. Live data shows cyq_perf LAGS: on 2026-07-04, daily/moneyflow/stk_limit were
-current through 07-03 but cyq_perf only through 07-01, because cyq_perf is a per-SYMBOL Stage-D
-fetch that the MONTHLY CATCH-UP ITSELF brings current. If the pre-catch-up probe required cyq_perf,
-target_end would wrongly roll back to cyq_perf's STALE coverage (07-01) and defeat the bump. So I
-split the gate into two tiers:
-  - endpoint_ready(date)  [PRE-catch-up, gates target_end]: daily row count >= 4000 AND each
-    DAILY-FRESH endpoint (moneyflow, stk_limit) row count >= MIN_ENDPOINT_ROWS=3000. ROW COUNT,
-    not existence. northbound is NOT a hard gate (inherently partial + declining coverage).
-  - assert_endpoints_complete(date) [POST-catch-up, before minting policy / building provider]:
-    re-verify daily-fresh AND the LAGGING cyq_perf row count. Fail-closed (return 2) — a partial
-    cyq_perf/moneyflow/stk_limit never enters a formal calendar_end.
-  Verified live: endpoint_ready('20260703') -> (True, {daily 5516, moneyflow 5193, stk_limit
-  7677}); assert_endpoints_complete('20260703') -> (False, cyq_perf=0) — correctly blocks until
-  the catch-up's Stage D fills cyq_perf. report_rc completeness is enforced inside the catch-up
-  (Stage E fails closed on an all-zero halo — see M2). --target-end override is validated by
-  endpoint_ready AND must not exceed the computed ready target.
+B1 (fixed row floor != endpoint completeness): FIXED with a COVERAGE ratio, not a row count. For
+each endpoint, coverage = |endpoint_ts_codes ∩ daily_ts_codes| / |daily_ts_codes|, and it must
+clear a per-endpoint floor. Floors set from a MEASURED complete day (2026-06-30): moneyflow 0.9415
+(≈6% of daily names legitimately have no moneyflow) / stk_limit 1.00 / cyq_perf 1.00 -> floors
+moneyflow 0.90, stk_limit 0.95, cyq_perf 0.95. MIN_ENDPOINT_ROWS=3000 remains ONLY as a cheap
+empty/corruption guard, not the completeness criterion. (I did NOT use your 0.98 example — measured
+moneyflow coverage is 0.94, so 0.98 would false-fail a complete day. Floors are below-observed but
+far above any partial: an interrupted fetch drops coverage to ~0.5.) endpoint_ready (pre-catch-up)
+gates daily-fresh coverage; assert_endpoints_complete (post-catch-up) adds cyq_perf coverage,
+fail-closed before minting a policy. Live: endpoint_ready('20260703') -> True (moneyflow 0.9414,
+stk_limit 1.0); assert_endpoints_complete -> False (cyq_perf 0.0, blocks until Stage D fills it).
+Test added: 10 endpoint rows but DISJOINT names -> coverage 0.0 -> fails (rows-high/coverage-low).
 
-B2 (frozen-prefix audit blanket exceptions): FIXED. The audit script now honors THAW_MONTHLY_MODE
-(the driver sets =1). In monthly mode the one-time first-thaw exceptions are DISABLED: the
-IND_FIELDS/report_rc__* SHA-family approval branch and the sidecar suspension-healing approval
-branch are both gated on `not MONTHLY_MODE`, so a recurring bump against the SETTLED parent must be
-byte-identical (SHA) and membership-identical (sidecars) — any drift is a real regression, counted
-in gross_sha_drift. Rationale: those exceptions were the first-thaw indicator-refetch + suspension
-healing, already baked into the settled parent; a monthly rebuild re-materializes identical bytes.
-A LEGITIMATE approved frozen-prefix correction (e.g. a provider-id-rotation like the share-capital
-fix) is an out-of-band migration with its own gate, NEVER an automatic monthly bump. (I did NOT
-build the full typed-diff_hash exception registry you sketched — for the monthly path, ZERO
-exceptions is stricter and simpler than typed laundering; the historical exceptions remain only for
-the standalone first-thaw run.)
+B2 (#1 risk — frozen-prefix audit SAMPLED SHA 1-in-50): FIXED. In THAW_MONTHLY_MODE the audit
+hashes EVERY bin's frozen prefix, not a 1-in-50 sample: `sample = MONTHLY_MODE or (si % SAMPLE_EVERY
+== 0)`. The report records sha_mode="full" + sha_eligible, and a coverage assertion fires if
+n_sha != n_eligible (proves no bin was left on the cheap size-only path). RUNTIME: full-hashing the
+features subtree (~5.5M bins) is ~1h of I/O — acceptable for a monthly gate, progress-logged. (I
+did NOT build a typed diff_hash exception registry; monthly mode has ZERO exceptions, which is
+stricter. A legitimate frozen-prefix correction is an out-of-band migration.)
 
-M1 (feature-tree directory-only): FIXED. fresh_window_survivorship_audit now counts a code as
-present only if features/<code>/ carries the FULL core price-bin set
-REQUIRED_PRICE_BINS = open/high/low/close/vol/amount/adj_factor.day.bin (verified live: the
-provider uses `vol`/`adj_factor`, not `volume`/`factor`). A dir missing any core bin is flagged
-raw_price_not_in_feature_tree. (Bin LENGTH sanity — that each bin covers through target_end — is
-NOT implemented; the frozen-prefix audit already checks prefix bin sizes and the rebuild
-materializes full-calendar bins. Flagged as follow-up — tell me if you consider it blocking.)
+M1 (bin existence != coverage through target_end): FIXED by DECODING the Qlib bin header, not by a
+size-vs-full-calendar check. Qlib .day.bin = float32[0]=start_index (calendar position of the first
+value), float32[1:]=values, so a per-code bin spans [listing, last-data], NOT the whole calendar.
+last_pos = start_index + nvalues - 1. For each raw-priced code on a fresh day, its close.day.bin
+last_pos must be >= that day's provider-calendar position, else raw_price_bins_short_through_day.
+(Your suggested fix `min_bytes = required_len*4` assumed bins span the full calendar — it would
+false-flag EVERY post-2008 listing, whose start_index>0 makes the bin legitimately shorter than the
+calendar. Verified live: 000001 close.day.bin last_pos == calendar end index 4492.)
 
-M2 (report_rc halo can mark all-zero as done): FIXED. Stage E collects per-month row counts
-(month_results) and, if the ENTIRE halo returns zero frames, RAISES RuntimeError (which fails the
-catch-up subprocess -> the driver's check=True aborts the bump) unless --allow-empty-report-rc is
-passed (for a verified-empty window only). A single legitimately-empty month within a non-empty
-halo is fine.
+M2 (halo month-level zero marked done): FIXED. Stage E collects per-month row counts and raises on
+ANY zero-row month inside a non-empty halo, unless that month is whitelisted via
+--allow-empty-report-rc-month YYYYMM[,YYYYMM]. The whole-window-zero case still raises unless
+--allow-empty-report-rc. Test added (202602 throttled -> zero -> Stage E work() raises -> recorded
+failed).
 
-m1 (raw_fetch_ts NaN-first rationale too narrow): FIXED. The dedup keeps na_position="first" (a
-pre-instrumentation bootstrap row's NaN is the earliest-possible first-seen and wins over a today
-re-fetch of IDENTICAL content). The comment now states precisely that such a NaN row CAN be
-fresh-affecting via TTL carry, and why that is safe: the ledger quarantines a fresh-affecting row
-missing BOTH create_time and raw_fetch_ts, and a CHANGED payload/create_time is a DISTINCT content
-row that keeps its own (today) stamp. Added a regression test locking the dedup semantic.
-
-EXTRA hardening (your round-2 stated #1 residual risk = "audited the wrong staged provider"): the
-driver now, after the frozen-prefix audit, reads the audit artifact's `staged` field and asserts
-it resolves to the SAME path as this bump's staged_provider — a passing audit against a stale
-default tree is now impossible (THAW_STAGED_PROVIDER plumbing regression -> return 1).
+m1 (Stage-D zero-row cyq poisons resume state): FIXED. On a post-catch-up completeness failure the
+driver calls _prune_cyq_state(target_end), deleting the D:cyq* / D:cyq_repartition keys from
+catchup_fund_state_<target_end>.json so a rerun RE-FETCHES cyq_perf (a zero-row fetch from a late
+endpoint was being marked 'done' and skipped on rerun, leaving the bump unrecoverable without
+manual state deletion).
 
 RE-REVIEW QUESTIONS
-1. Is the SPLIT endpoint gate (daily-fresh pre / cyq_perf + report_rc post) the correct resolution
-   of B1 given cyq_perf's per-symbol lag, or do you still want cyq_perf probed pre-catch-up? Is
-   MIN_ENDPOINT_ROWS=3000 (vs ~5000 normal) the right empty/partial floor, and is dropping
-   northbound from the hard gate acceptable?
-2. B2 strict monthly mode: is DISABLING all first-thaw exceptions (byte+membership identity) the
-   right monthly contract, or do you require the full typed-diff_hash exception registry even for
-   the recurring path? Any legitimate frozen-prefix change a monthly rebuild could produce that
-   this would false-block? (My claim: a 2026 restatement's effective date lands in the fresh
-   window, not the frozen prefix, so frozen-prefix bins stay byte-identical — is that right?)
-3. M1: is the required-core-bin-set check sufficient, or is the bin-length-covers-target_end check
-   load-bearing enough to block on now?
-4. M2: is "raise iff the ENTIRE halo is zero frames" the right fail-closed threshold, or should a
-   per-month zero (within a non-empty halo) also be suspicious? Is --allow-empty-report-rc a safe
-   escape?
-5. Any NEW hole from this round: the post-catch-up gate ordering (policy minted only after
-   completeness passes); the audit-artifact staged-path assertion; the pyarrow row-count read;
-   the THAW_MONTHLY_MODE plumbing.
+1. B1: is coverage-vs-daily with per-endpoint measured floors (mf 0.90 / stk 0.95 / cyq 0.95) the
+   right completeness proof? Is comparing cyq_perf to the DAILY universe correct given cyq_perf may
+   include recently-delisted names not in daily (over-coverage is fine; under-coverage is the risk)?
+2. B2: is `sample = MONTHLY_MODE or (si%50==0)` + the n_sha==n_eligible assertion a complete
+   removal of the sampling hole? Is the ~1h full-hash runtime acceptable, or do you want it
+   parallelized / scoped to a bin allowlist before SHIP?
+3. M1: is the header-decode last_pos check correct (vs your full-calendar-length assumption)? Any
+   edge where a legitimately-short bin (a code that delisted mid-fresh-window, or is suspended
+   through target_end) would false-flag? (It only checks days the code is RAW-PRICED on, so a
+   suspended/delisted day has no raw row -> no check — is that the right scoping?)
+4. M2: is "raise on any zero month unless whitelisted" the right threshold, or too strict for a
+   sparse historical halo month? Is the per-month whitelist a safe escape?
+5. Any NEW hole from this round: the coverage set-intersection (ts_code case/dtype); the
+   _prune_cyq_state key match (D:cyq* prefix also catches D:cyq_repartition — intended); the
+   full-SHA coverage assertion arithmetic; the bin-header struct unpack.
 
 OUTPUT FORMAT
 - Issues ranked Blocker / Major / Minor, each with the offending code quoted + exact fix. Map every
