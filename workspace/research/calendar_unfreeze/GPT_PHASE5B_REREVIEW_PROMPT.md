@@ -1,6 +1,6 @@
 # GPT 5.5 Pro RE-review #4 — Phase 5-B monthly_calendar_bump driver (post-REWORK-4)
 
-Status: ready to send. Branch `calendar-unfreeze` HEAD `319dbcf`. Raw links pinned to the commit sha; embedded delta authoritative.
+Status: ready to send. Branch `calendar-unfreeze` HEAD `20e096c`. Raw links pinned to the commit sha; embedded delta authoritative.
 
 ---
 
@@ -13,12 +13,12 @@ m1 (cyq resume) RESOLVED, and returned 2 findings: Blocker B1 (daily itself can 
 the row floor -> the coverage denominator is unsafe; and files aren't verified trade_date==date)
 and Major M1 (bin-length only checked close.day.bin). Both fixed. This RE-REVIEW #4 verifies them.
 
-REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 319dbcf)
+REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 20e096c)
 Files (raw, pinned):
-- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/319dbcf/scripts/monthly_calendar_bump.py
-- catchup: https://raw.githubusercontent.com/henrydan111/quant-system/319dbcf/workspace/scripts/catchup_fundamentals_range.py
-- audit:   https://raw.githubusercontent.com/henrydan111/quant-system/319dbcf/workspace/scripts/audit_thaw_frozen_prefix.py
-- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/319dbcf/tests/data_infra/test_monthly_calendar_bump.py
+- driver:  https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/scripts/monthly_calendar_bump.py
+- catchup: https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/workspace/scripts/catchup_fundamentals_range.py
+- audit:   https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/workspace/scripts/audit_thaw_frozen_prefix.py
+- tests:   https://raw.githubusercontent.com/henrydan111/quant-system/20e096c/tests/data_infra/test_monthly_calendar_bump.py
 Self-review (round 5): workspace/research/calendar_unfreeze/PHASE5B_SELF_REVIEW.md
 
 CONTEXT (unchanged): D3 spent_oos_end frozen 2026-02-27; split endpoint gate (daily-fresh
