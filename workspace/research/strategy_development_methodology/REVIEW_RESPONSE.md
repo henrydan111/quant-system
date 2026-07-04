@@ -49,4 +49,30 @@ Two blocking issues (OOS-as-selector; stale citations) should have been caught i
 Added to memory: a self-review must (a) trace every "OOS" reference to confirm it is a diagnostic, not a
 selector, and (b) cross-check every cited empirical number against CLAUDE.md §3 staleness flags.
 
-**Status:** all R1 findings folded → the doc is ready for a GPT re-review.
+**Status (R1):** all R1 findings folded.
+
+---
+
+## GPT 5.5 Pro cross-review R2 — response & disposition (2026-07-04)
+
+**Verdict received: REVISE (narrowly)** — R2 confirmed every R1 hard quant-safety fix is in place
+(sealed-OOS integrity, stale-number honesty, long-only/gross box, PIT filters, portfolio seal,
+leakage-safe PBO/trial ledger, actual-capital capacity gate) and raised **3 residual (textual/consistency)
+blocking + 4 non-blocking**. **All folded; none declined.** R2 stated it would move to APPROVE once patched.
+
+**Blocking (fixed):**
+- **R2-B1 — "exactly three leaks" absolute + "both measured" contradiction (§1.1/§1.2).** Now "consistent
+  with three recurring leak *classes* (not a proven exhaustive taxonomy)"; leak-1 distinguishes the
+  construction sub-leak (a **prior, not yet measured**) from signal-tradeability (**measured in #9**).
+- **R2-B2 — §S7 "actual-book parity" overclaim.** Renamed to **"actual-book execution reconciliation
+  (LOCAL — not 果仁 parity)"**; explicit evidentiary status "core-parity-verified vs 果仁 +
+  weighted-execution-reconciled locally", which does NOT carry external-oracle status; invariant 6 updated.
+- **R2-B3 — north-star contradiction** (top summary + Part V title still said "diversified portfolio").
+  Top operating-context now reads "one robust book first; portfolio a later phase"; Part V retitled
+  "Later-Phase Portfolio Assembly (only after one robust book)"; §5.7 already reframed.
+
+**Non-blocking (applied):** BUILD-5 capacity row notes one-off ¥2M reports acceptable until the harness
+lands (gate applies from the first `StrategyCandidate`); invariant 13 cross-ref `§7.6` → `CLAUDE.md §7.6`;
+title + footer status updated; the "#9 lever" prose already reads "confirmed *in #9*"/"measured" (left).
+
+**Status:** all R1 + R2 findings folded → ready for a final confirmatory GPT re-review (R3).

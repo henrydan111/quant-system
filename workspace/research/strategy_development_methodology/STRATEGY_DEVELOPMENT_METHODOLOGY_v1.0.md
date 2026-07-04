@@ -1,4 +1,4 @@
-# Strategy Development Methodology — v1.0 (DRAFT — pending self-review + GPT 5.5 Pro cross-review, §10)
+# Strategy Development Methodology — v1.0 (DRAFT — self-review + GPT 5.5 Pro R1/R2 folded; pending final GPT re-review, §10)
 
 > **What this is.** The system's ground-truth process for turning trusted factors into deployable
 > strategies and composing strategies into a diversified portfolio. It is the *strategy-level* umbrella
@@ -22,17 +22,16 @@
 > "optimizer-beats-1/N" counters were *refuted* (conditioning variable = idio-vol / N / homogeneity,
 > Platanakis "Horses for Courses"); the microcap 10–18% CAGR is an *unverified hypothesis*; the
 > decorrelation Sharpe ceiling is closed-form `1/√ρ`; effective trials deflate as `N̂ = ρ+(1−ρ)M`; parity =
-> differential-testing + backtest reconciliation. **Self-reviewed + GPT 5.5 Pro cross-review R1 = REVISE
-> (2026-07-04); all 8 blocking issues + downgrades folded, 0 declined — see
-> [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md); pending GPT re-review.** Not yet implemented. Appendix E lists
-> the external sources.
+> differential-testing + backtest reconciliation. **Self-reviewed + GPT 5.5 Pro cross-review R1 (REVISE) +
+> R2 (REVISE-narrowly) folded — all findings, 0 declined — see [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md);
+> pending final confirmatory GPT re-review.** Not yet implemented. Appendix E lists the external sources.
 >
 > **Operating context this is written to (do not silently generalize past it):** solo developer,
 > A-share equities, **< 2M CNY capital → microcaps are tradable**, **unlevered (gross ≤ 1×)**,
 > single-name shorting restricted, **果仁/guorn is the trusted benchmark + deployment venue and the
-> correctness oracle**; the local system has **never traded real capital**. North star = a **diversified
-> portfolio of low-return-correlation books**, with the emphasized unit of work being **one individually
-> robust, risk-adjusted book**.
+> correctness oracle**; the local system has **never traded real capital**. North star (post-R2) = **one
+> robust, parity-verified, unlevered book + one controlled microcap-lane hypothesis test** (§1.5); a
+> diversified portfolio of low-return-correlation books is a **later phase**, not the organizing goal.
 
 ---
 
@@ -74,14 +73,16 @@ validation layer, on the factors already trusted.
 
 ### §1.2 The three leaks between a good factor and a good strategy
 
-Every past failure is one (or more) of exactly three leaks. The methodology is organized to close each:
+The observed past failures are **consistent with** three recurring leak *classes* (not a proven exhaustive
+taxonomy). The methodology is organized to close each:
 
-1. **TC leak — construction *and* signal-tradeability (two sub-leaks, both measured).** (a) *Construction:*
-   cardinal signal, risk-scaling, and covariance are discarded at the `top-K/EW` step. (b) *Signal
-   tradeability:* part of the composite's gross IC lives in names you **cannot buy at the open** —
-   limit-up gappers, illiquid / short-reversal / overnight signals — real IC that is structurally
-   un-capturable. *Closed by §S2 (deployable-alpha-only) + §S3 (construction) + §S4 (fill-price-aware
-   execution).*
+1. **TC leak — construction *and* signal-tradeability (two sub-leaks).** (a) *Construction:* cardinal
+   signal, risk-scaling, and covariance are discarded at the `top-K/EW` step — a **strong prior until TC
+   is directly measured** (`corr(μ/σ, Δw·σ)`, §1.1); **not yet measured** in this system. (b) *Signal
+   tradeability:* part of the composite's gross IC lives in names you **cannot buy at the open** — limit-up
+   gappers, illiquid / short-reversal / overnight signals — real IC that is structurally un-capturable;
+   **this sub-leak IS measured** (the #9 26pp→~1pp result, §1.2 callout). *Closed by §S2
+   (deployable-alpha-only) + §S3 (construction) + §S4 (fill-price-aware execution).*
 2. **Universe / capacity mis-scope.** The alpha lives in illiquid microcaps; validated on a liquid
    universe it vanishes, validated gross it is un-tradeable. *Closed by §S1 (declare the investable
    universe first) + §S8 (capacity stamp).*
@@ -483,12 +484,15 @@ that passes S6 must be **reproducible on 果仁 under 果仁's own rules** befor
   the system with trusted strategies, not trusted strategies with an unproven system.")
 - **Two parity tiers — the second is load-bearing for a *weighted* book.** (i) **Core parity** (the ladder
   below, vs 果仁's equal-weight model): validates the shared engine — data / PIT / factor formulas /
-  equal-weight execution / limit-suspension. (ii) **Actual-book execution parity:** a
+  equal-weight execution / limit-suspension. (ii) **Actual-book execution reconciliation (LOCAL — not 果仁 parity):** a
   `WeightedTargetStrategy` book (§S3) is **NOT** deploy-ready on equal-weight core parity alone — its own
   weighted schedule (target-vs-delta orders, lot rounding, fills, limit handling, rebalance timing) must be
-  validated by the event-driven engine's weighted path (§S4) and self-reconciled, since 果仁 is
-  equal-weight-only and cannot parity-check weights. Core parity proves the *engine*; the weighted overlay
-  is the *engine's* job.
+  validated by the event-driven engine's weighted path (§S4) and **self-reconciled locally**, since 果仁 is
+  equal-weight-only and cannot parity-check weights. **Evidentiary status (do not overclaim):** such a book
+  is **"core-parity-verified vs 果仁 + weighted-execution-reconciled locally"** — the local weighted
+  reconciliation does **NOT** carry the external-oracle status of 果仁 differential testing and must **not**
+  be labelled "果仁-parity-verified"; full 果仁 parity of the weighted book would require 果仁 to
+  independently reproduce the weighted schedule.
 - **Reproduce under 果仁's cost/PIT model, not the realistic one.** 果仁 uses flat 0.2%/side, no
   slippage, 一字板-only limit block, 公告日 PIT, 后复权. Matching 果仁 under *realistic microcap cost*
   would be a *bug*, not a success — realistic cost is a **separate downstream deployment lens** (§S4),
@@ -609,10 +613,12 @@ they clear the same PIT + sealed-OOS + cost gates.
 
 ---
 
-## Part V — Assembling the Diversified Portfolio of Books
+## Part V — Later-Phase Portfolio Assembly (only after one robust book)
 
-The north star. Once §III can reliably produce *one* robust book, the portfolio is where the durable
-risk-adjusted return is actually made — through **decorrelation, not leverage and not (feasibly) hedging.**
+**A later phase — NOT the north star (§1.5).** Once §III can reliably produce *one* robust book, the
+portfolio is where the durable risk-adjusted return is *additionally* refined — through **decorrelation,
+not leverage and not (feasibly) hedging** — but the bounded `1/√ρ` lift (§5.1) makes this a refinement,
+not the organizing goal.
 
 ### §5.1 The prize is decorrelation
 
@@ -731,7 +737,7 @@ the micro-tail; §S3). Consistent with the 2026-06-22 < 2M re-think and the pari
 | 果仁 parity is offline/scripted | **BUILD-2** promote to a **first-class, tolerance-bounded parity gate** wired into the deploy decision | §S7 (the correctness oracle) | **P0** |
 | identity chain + `book_seal_key` exist; `cmd_deploy` live **raises**; registry empty | **BUILD-3** wire `run_deployment` (live) + `run_component_diagnostics_in_book_context` + publish `StrategyCandidate v0` | §S6/§S8; **unblocks A8 virgin OOS spend** | **P1** |
 | risk model `predict→0.05` | **BUILD-4** risk model v1 (`Σ=XFXᵀ+Δ`, shrinkage, censoring, bias-stat validation) — **attribution/neutralization LENS first, optimizer input later** | §S3 optimizer-vs-light gate | **P1** |
-| capacity = one-off `eval_*_capacity.py` | **BUILD-5** reusable AUM-sweep capacity harness (linear+√ impact) | §S8 stamp | **P2** |
+| capacity = one-off `eval_*_capacity.py` | **BUILD-5** reusable AUM-sweep capacity harness (linear+√ impact) — **one-off ¥2M capacity reports are acceptable until this lands**; the actual-capital capacity GATE (§S8 / invariant 8) applies from the first `StrategyCandidate` regardless | §S8 gate | **P1–P2** |
 | no multi-book layer | **BUILD-6** meta-allocation (risk-parity-floored-1/N) + slow vol/trend overlay + defensive/low-beta sleeve | Part V | **P2** |
 | ML unconstrained/distrusted | **BUILD-7** constrained ML combiner (neutralized labels, monotonic, purged CV) + **DDG-DA pilot** + **Qlib GBDT-Alpha158 control** | §S2a / §S5 baseline | **P3** |
 | — | **LATER (> ¥3–4M only)** index-futures hedge subsystem (contract map, roll, basis, margin) | §5.3 aggregate hedge | deferred |
@@ -764,7 +770,8 @@ path to it.
 3. **One sealed OOS per book** (`book_seal_key`); any post-OOS recipe edit = a new hash + a new spend.
 4. **Light construction is the default; the MV optimizer only past the four-condition gate** (§S3).
 5. **Unlevered, gross ≤ 1×; no market-neutral *claim* at < 2M** (it is infeasible — say so).
-6. **果仁 parity within tolerance before a book is deploy-ready** (the correctness oracle).
+6. **果仁 core-parity within tolerance before deploy-ready** (the external correctness oracle) — **plus**,
+   for a *weighted* book, local weighted-execution reconciliation (§S7), which is NOT external-oracle-status.
 7. **`DSR > 0.95 ∧ PBO < 0.10` on effective-N** before the seal; MinBTL respected.
 8. **Diversify on realized returns; actual-capital (¥2M, real microcap cost) capacity is a HARD
    deployability gate**, not just a stamp.
@@ -773,7 +780,7 @@ path to it.
 11. **The optimizer-vs-light choice — and every construction "OOS" comparison — is made on pre-seal
     validation folds, NEVER the sealed OOS** (selecting on the test set spends the seal).
 12. **The multi-book portfolio is itself sealed** (`portfolio_seal_key`, own effective-N, one spend).
-13. **MLflow logging is mandatory** for every substantive strategy-level backtest / model run (§7.6).
+13. **MLflow logging is mandatory** for every substantive strategy-level backtest / model run (CLAUDE.md §7.6).
 14. **Universe filters are PIT / visible-as-of the decision** (hashed into the TUD); the default
     construction box is explicitly **long-only + gross ≤ 1× + lot-rounded, fail-closed** in formal mode.
 
@@ -870,6 +877,6 @@ effort.)*
 
 ---
 
-*End of v1.0 draft. Next: structured self-review against CLAUDE.md §3 invariants + §7 principles, then GPT
-5.5 Pro cross-review per §10 (push branch first; commit-pinned public raw links), fold findings, record the
-verdict in project_state.md — before any of Part VI is treated as load-bearing.*
+*End of v1.0 draft. Self-review + GPT 5.5 Pro R1 (REVISE) + R2 (REVISE-narrowly) are DONE and all findings
+folded ([REVIEW_RESPONSE.md](REVIEW_RESPONSE.md)). Next: a final GPT re-review to confirm the R2 patches,
+then record the verdict in project_state.md — before any of Part VI is treated as load-bearing.*
