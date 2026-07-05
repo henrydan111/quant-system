@@ -337,7 +337,8 @@ def test_daily_continuity_flags_unexplained_vanished_name(tmp_path, monkeypatch)
         tmp_path,
         sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ", "D.SZ"], "list_date": ["20200101"] * 4,
                  "delist_date": [None] * 4},
-        susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"]},
+        susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"],
+                   "suspend_timing": [""]},  # full-day suspension (empty timing)
         prev_codes=["A.SZ", "B.SZ", "C.SZ", "D.SZ"])
     sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ", "D.SZ"}
     # today: A,B present; C legitimately full-day suspended (absent OK); D VANISHED without reason
@@ -368,6 +369,22 @@ def test_daily_continuity_intraday_suspension_not_excused(tmp_path, monkeypatch)
                   "suspend_timing": [""]}).to_parquet(sd)
     ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
     assert ok is True, ev
+
+
+def test_daily_continuity_legacy_suspend_without_timing_fails_if_s_rows(tmp_path, monkeypatch):
+    # GPT B1-b: a legacy suspend_d file with S rows but NO suspend_timing column is AMBIGUOUS
+    # (full-day vs intraday) -> the formal gate must FAIL CLOSED, not excuse the S names as full-day.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    _mk_continuity_scaffold(
+        tmp_path,
+        sb_rows={"ts_code": ["A.SZ", "B.SZ", "C.SZ"], "list_date": ["20200101"] * 3,
+                 "delist_date": [None] * 3},
+        # C has an S row but the file has NO suspend_timing column (legacy)
+        susp_rows={"ts_code": ["C.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"]},
+        prev_codes=["A.SZ", "B.SZ", "C.SZ"])
+    sb, prior = _sb_of(tmp_path), {"A.SZ", "B.SZ", "C.SZ"}
+    ok, ev = mcb._daily_set_continuity_from_prior("20260703", "20260702", prior, {"A.SZ", "B.SZ"}, sb)
+    assert ok is False and "suspend_timing" in ev.get("reason", ""), ev
 
 
 def test_daily_continuity_allows_delisted_and_flags_missing_ipo(tmp_path, monkeypatch):

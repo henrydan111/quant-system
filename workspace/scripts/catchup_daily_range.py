@@ -79,12 +79,24 @@ def run_one_day(updater: DailyDataUpdater, date: str) -> dict:
     _, phase3_sets = updater.update_phase3_daily_market(date)
     detail["phase3"] = sorted(phase3_sets)
 
-    # suspend_d is not wired into the daily updater (bootstrap-only historically);
-    # fetch per trade_date here so the suspension proxy stays exact over the gap.
+    # suspend_d is not wired into the daily updater (bootstrap-only historically); fetch per
+    # trade_date here so the suspension proxy stays exact over the gap. Write the per-date file
+    # DIRECTLY (overwrite) rather than via insert_market_data's merge: suspend_d(date) is a complete
+    # same-date snapshot, so a re-fetch REPLACES it, and this preserves suspend_timing (the merge
+    # would duplicate rows + drop timing on a schema change). suspend_timing is load-bearing for the
+    # monthly-bump full-day-vs-intraday completeness proof (GPT B1-b).
     df_susp = updater.fetcher.fetch_suspend_d(trade_date=date)
-    if not df_susp.empty:
-        updater.storage.insert_market_data(df_susp.dropna(how="all", axis=1), "suspend_d")
+    susp_dir = os.path.join(PROJECT_ROOT, "data", "market", "suspend_d", date[:4])
+    os.makedirs(susp_dir, exist_ok=True)
+    susp_path = os.path.join(susp_dir, f"suspend_d_{date}.parquet")
+    keep = [c for c in ("ts_code", "trade_date", "suspend_type", "suspend_timing") if c in df_susp.columns]
+    out = df_susp[keep] if (not df_susp.empty and keep) else pd.DataFrame(
+        columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
+    tmp = susp_path + ".tmp"
+    out.to_parquet(tmp, index=False)
+    os.replace(tmp, susp_path)
     detail["suspend_rows"] = int(len(df_susp))
+    detail["suspend_timing_present"] = "suspend_timing" in keep
 
     return detail
 

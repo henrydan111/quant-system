@@ -195,3 +195,23 @@ GPT 复审 29f5cba：确认 **M1 / stale-file / endpoint-split / code-form RESOL
 76 绿（25 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；py_compile OK；活体链式两新日零误报 + timing 活体生效 + cyq target 阻断。
 
 **结论：clean for GPT（re-review 6）。B1-a（链式-从-验证锚）+ B1-b（trade_date + full-day-only timing 过滤）全修；活体真实数据零误报 + timing 生效验证；1 已知界限（旧文件无 timing 回退，flagged）。**
+
+---
+
+## REWORK round 8（GPT re-review #6 后修复自审）— 2026-07-04
+
+GPT 复审 6483567：确认 **B1-a（链式）RESOLVED**、M1(round5)/code-form/IPO RESOLVED。余 —— **Blocker B1**（旧 suspend_d 无 timing 回退全-S-全天=非保守，可误豁免盘中停牌缺名）+ **Major M1**（cyq 仅在 target 证，非逐新日）。均修：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** 旧无-timing 回退非保守 | `_suspended_full_day` 改**fail-closed**：文件有 S 行但**无 suspend_timing 列** → 拒（无法区分全天/盘中）；空文件（无停牌）放行；补必需列检查 + trade_date 空文件守卫。**且**让门可通过：catchup_daily_range 的 suspend_d 改**直接覆写**（快照语义，re-fetch 替换）保留 suspend_timing（insert_market_data 的 merge 会在 schema 变时重复行+丢 timing）→ 被门控新日经 catch-up 得净-带-timing suspend_d | 活体：20260702(有timing) ok full_day=17；20260703(旧无timing+S) **fail-closed**；新增 legacy-no-timing-fails 单测；vanished 单测补 timing 列 |
+| **M1** cyq 仅 target | 逐新日 cyq 覆盖率（range loop 内，紧接 daily-fresh）；删 target-only 块（target 即 loop 末日）| 活体：range 门在首新日 20260702 cyq 缺→正确阻断；range 单测每新日 cyq |
+
+### 关键设计
+- **fail-closed OR refetch**（GPT 允许其一）：两者都做——门 fail-closed（正确性）+ catch-up 覆写存 timing（可通过性）。suspend_d(date) 是同日完整快照 → 覆写=正确（merge 反而错，累积+schema 变丢 timing）。
+- 被门控的**新日** [parent_end+1, target] 由本 bump 的 catch-up 新抓 → fetch_suspend_d 返回默认字段含 timing + 直接覆写 → 净带 timing → fail-closed 门可通过。旧 20260703（并行日更写，无 timing）在 bump catch-up 时非"done"→ 会被覆写带 timing。
+
+### 验证汇总
+77 绿（26 driver + 6 catchup + 34 report_rc + 11 calendar_policy）；2 脚本 py_compile OK；活体：20260702 timing 生效(full_day 17)、20260703 fail-closed、逐新日 cyq 阻断。
+
+**结论：clean for GPT（re-review 7）。B1（无-timing fail-closed + catch-up 覆写存 timing）+ M1（逐新日 cyq）全修；活体 fail-closed + timing 生效 + per-day cyq 验证。**

@@ -454,25 +454,32 @@ def _suspended_full_day(date: str) -> tuple[set[str], set[str], bool, dict]:
     treating every S as full-day with a warning."""
     susp_f = PROJECT_ROOT / "data" / "market" / "suspend_d" / date[:4] / f"suspend_d_{date}.parquet"
     if not susp_f.exists():
-        return set(), set(), False, {"reason": f"suspend_d for {date} absent — cannot prove completeness"}
+        return set(), set(), False, {"reason": f"suspend_d for {date} absent - cannot prove completeness"}
     sd = pd.read_parquet(susp_f)
-    if "trade_date" in sd.columns:
-        td = sd["trade_date"].astype(str).str.replace("-", "", regex=False)
-        extra = set(td.dropna().unique()) - {date}
-        if extra:
-            return set(), set(), False, {"reason": f"suspend_d {date} trade_date mismatch: {sorted(extra)[:5]}"}
+    missing_cols = {"ts_code", "trade_date", "suspend_type"} - set(sd.columns)
+    if missing_cols:
+        return set(), set(), False, {"reason": f"suspend_d {date} missing required columns {sorted(missing_cols)}"}
+    if len(sd):  # an empty file (no suspensions that day) is legitimate; skip the date check
+        td = set(sd["trade_date"].astype(str).str.replace("-", "", regex=False).dropna().unique())
+        if td != {date}:
+            return set(), set(), False, {"reason": f"suspend_d {date} trade_date mismatch: {sorted(td)[:5]}"}
     stype = sd["suspend_type"].astype(str).str.upper()
-    timing_present = "suspend_timing" in sd.columns
-    if timing_present:
-        timing = sd["suspend_timing"].astype("string").fillna("").str.strip().str.upper()
-        full = (stype == "S") & timing.isin(["", "NONE", "NAN", "NULL"])
-    else:
-        full = (stype == "S")  # legacy no-timing -> conservative all-S full-day (fresh fetch has timing)
-    ev = {"suspend_timing_present": timing_present, "full_day_suspended": int(full.sum())}
-    if not timing_present:
-        logger.warning("suspend_d %s has NO suspend_timing column - treating every S as full-day "
-                       "(re-fetch to store timing for a precise intraday distinction)", date)
-    return (_norm_codes(sd.loc[full, "ts_code"]), _norm_codes(sd.loc[stype == "R", "ts_code"]), True, ev)
+    resumed = _norm_codes(sd.loc[stype == "R", "ts_code"])
+    if "suspend_timing" not in sd.columns:
+        # legacy no-timing: an S row is AMBIGUOUS (full-day vs intraday). Treating it as full-day
+        # could wrongly excuse an intraday-halted name missing from a partial daily -> FAIL CLOSED
+        # when any S rows exist (a fresh catch-up fetch stores suspend_timing; re-fetch this date).
+        if (stype == "S").any():
+            return set(), set(), False, {
+                "reason": (f"suspend_d {date} has S rows but NO suspend_timing - cannot distinguish "
+                           "full-day suspension from intraday halt; re-fetch suspend_d for this date")}
+        return set(), resumed, True, {"suspend_timing_present": False, "full_day_suspended": 0}
+    # FULL-DAY only: an S with empty/None suspend_timing has no price all day (excuses absence); an
+    # intraday halt (timing like 09:30-10:00) still trades and must NOT excuse an absent daily row.
+    timing = sd["suspend_timing"].astype("string").fillna("").str.strip().str.upper()
+    full = (stype == "S") & timing.isin(["", "NONE", "NAN", "NULL"])
+    return (_norm_codes(sd.loc[full, "ts_code"]), resumed, True,
+            {"suspend_timing_present": True, "full_day_suspended": int(full.sum())})
 
 
 def _daily_set_continuity_from_prior(date: str, prior_date: str, prior_codes: set[str],
@@ -539,14 +546,13 @@ def assert_endpoints_complete_range(parent_end: str, target_end: str) -> tuple[b
             ev["reason"] = f"daily-fresh endpoint coverage failed for {d}: {ev['coverage_by_day'][d].get('reason')}"
             ev["day"] = d
             return False, ev
+        # cyq_perf (post-catch-up lagging endpoint) per NEW day (GPT M1) — not target_end only; the
+        # catch-up backfills cyq over the whole gap, so an intermediate partial day must also fail.
+        if not _coverage_gate(d, READINESS_POSTCATCHUP, ev.setdefault("cyq_by_day", {}).setdefault(d, {}), daily_codes):
+            ev["reason"] = f"cyq_perf coverage failed for {d}: {ev['cyq_by_day'][d].get('reason')}"
+            ev["day"] = d
+            return False, ev
         prior_codes, prior_date = daily_codes, d
-    # cyq_perf (post-catch-up lagging endpoint) at target_end, vs the proven target daily universe.
-    tcodes, tok, tev = _daily_universe(target_end)
-    if not tok:
-        ev["reason"] = f"target daily {target_end} failed: {tev.get('reason')}"
-        return False, ev
-    if not _coverage_gate(target_end, READINESS_POSTCATCHUP, ev, tcodes):
-        return False, ev
     return True, ev
 
 
