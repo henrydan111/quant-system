@@ -65,6 +65,46 @@ def trading_days(start: str, end: str) -> list[str]:
     return sorted(days["cal_date"].astype(str).tolist())
 
 
+def _suspend_d_path(date: str) -> str:
+    return os.path.join(PROJECT_ROOT, "data", "market", "suspend_d", date[:4], f"suspend_d_{date}.parquet")
+
+
+def write_suspend_d(updater: DailyDataUpdater, date: str) -> dict:
+    """Fetch suspend_d(date) and write the per-date file DIRECTLY (atomic overwrite) rather than via
+    insert_market_data's merge: suspend_d(date) is a complete same-date snapshot, so a re-fetch
+    REPLACES it, and this preserves suspend_timing (the merge would duplicate rows + drop timing on a
+    schema change). suspend_timing is load-bearing for the monthly-bump full-day-vs-intraday
+    completeness proof (GPT B1-b)."""
+    df_susp = updater.fetcher.fetch_suspend_d(trade_date=date)
+    os.makedirs(os.path.dirname(_suspend_d_path(date)), exist_ok=True)
+    keep = [c for c in ("ts_code", "trade_date", "suspend_type", "suspend_timing") if c in df_susp.columns]
+    out = df_susp[keep] if (not df_susp.empty and keep) else pd.DataFrame(
+        columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
+    tmp = _suspend_d_path(date) + ".tmp"
+    out.to_parquet(tmp, index=False)
+    os.replace(tmp, _suspend_d_path(date))
+    return {"suspend_rows": int(len(df_susp)), "suspend_timing_present": "suspend_timing" in keep}
+
+
+def suspend_d_needs_refetch(date: str) -> bool:
+    """True if suspend_d(date) is absent, unreadable, missing required columns, or has S rows but no
+    suspend_timing column (a legacy no-timing file the monthly gate fails closed on). An empty file
+    (no suspensions) is fine. Lets a done-day get a targeted timing-schema refresh (GPT m1)."""
+    path = _suspend_d_path(date)
+    if not os.path.exists(path):
+        return True
+    try:
+        df = pd.read_parquet(path)
+    except Exception:  # noqa: BLE001 — unreadable -> re-fetch
+        return True
+    if not {"ts_code", "trade_date", "suspend_type"} <= set(df.columns):
+        return True
+    if len(df) == 0:
+        return False
+    stype = df["suspend_type"].astype(str).str.upper()
+    return bool((stype == "S").any()) and "suspend_timing" not in df.columns
+
+
 def run_one_day(updater: DailyDataUpdater, date: str) -> dict:
     detail: dict = {}
 
@@ -80,23 +120,8 @@ def run_one_day(updater: DailyDataUpdater, date: str) -> dict:
     detail["phase3"] = sorted(phase3_sets)
 
     # suspend_d is not wired into the daily updater (bootstrap-only historically); fetch per
-    # trade_date here so the suspension proxy stays exact over the gap. Write the per-date file
-    # DIRECTLY (overwrite) rather than via insert_market_data's merge: suspend_d(date) is a complete
-    # same-date snapshot, so a re-fetch REPLACES it, and this preserves suspend_timing (the merge
-    # would duplicate rows + drop timing on a schema change). suspend_timing is load-bearing for the
-    # monthly-bump full-day-vs-intraday completeness proof (GPT B1-b).
-    df_susp = updater.fetcher.fetch_suspend_d(trade_date=date)
-    susp_dir = os.path.join(PROJECT_ROOT, "data", "market", "suspend_d", date[:4])
-    os.makedirs(susp_dir, exist_ok=True)
-    susp_path = os.path.join(susp_dir, f"suspend_d_{date}.parquet")
-    keep = [c for c in ("ts_code", "trade_date", "suspend_type", "suspend_timing") if c in df_susp.columns]
-    out = df_susp[keep] if (not df_susp.empty and keep) else pd.DataFrame(
-        columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
-    tmp = susp_path + ".tmp"
-    out.to_parquet(tmp, index=False)
-    os.replace(tmp, susp_path)
-    detail["suspend_rows"] = int(len(df_susp))
-    detail["suspend_timing_present"] = "suspend_timing" in keep
+    # trade_date here so the suspension proxy stays exact over the gap.
+    detail.update(write_suspend_d(updater, date))
 
     return detail
 
@@ -111,16 +136,32 @@ def main() -> None:
     days = trading_days(args.start, args.end)
     state = load_state()
     pending = [d for d in days if state.get(d, {}).get("status") != "done"]
+    # GPT m1: a day marked `done` under the OLD daily path may have a legacy no-timing suspend_d the
+    # monthly gate fails closed on. Give those a TARGETED suspend_d-only timing refresh (not a full
+    # re-fetch of market/index/phase3), so the gate becomes self-healing without manual state edits.
+    suspend_refresh = [d for d in days
+                       if state.get(d, {}).get("status") == "done" and suspend_d_needs_refetch(d)]
 
     logger.info(
-        "Catch-up window %s..%s: %d trading days total, %d already done, %d pending",
-        args.start, args.end, len(days), len(days) - len(pending), len(pending),
+        "Catch-up window %s..%s: %d trading days total, %d already done, %d pending, %d suspend_d refresh",
+        args.start, args.end, len(days), len(days) - len(pending), len(pending), len(suspend_refresh),
     )
     if args.dry_run:
         logger.info("[dry-run] pending dates: %s", ", ".join(pending) or "(none)")
+        logger.info("[dry-run] suspend_d timing-refresh dates: %s", ", ".join(suspend_refresh) or "(none)")
         return
 
     updater = DailyDataUpdater(config_path=os.path.join(PROJECT_ROOT, "config.yaml"))
+
+    for date in suspend_refresh:
+        try:
+            detail = write_suspend_d(updater, date)
+            state.setdefault(date, {}).update({"suspend_d_schema": "timing_required_v1", **detail})
+            logger.info("suspend_d timing-refresh %s: rows=%d timing=%s",
+                        date, detail["suspend_rows"], detail["suspend_timing_present"])
+        except Exception as exc:  # noqa: BLE001 — non-fatal; the gate stays fail-closed for this date
+            logger.error("suspend_d refresh FAILED %s: %s", date, exc)
+        save_state(state)
 
     started = time.time()
     failed: list[str] = []

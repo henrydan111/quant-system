@@ -19,6 +19,36 @@ cfr = importlib.util.module_from_spec(_spec)
 sys.modules["catchup_fundamentals_range"] = cfr
 _spec.loader.exec_module(cfr)
 
+sys.path.insert(0, str(ROOT / "src"))
+_spec2 = importlib.util.spec_from_file_location(
+    "catchup_daily_range", ROOT / "workspace" / "scripts" / "catchup_daily_range.py")
+cdr = importlib.util.module_from_spec(_spec2)
+sys.modules["catchup_daily_range"] = cdr
+_spec2.loader.exec_module(cdr)
+
+
+def _write_suspend(tmp_path, date, cols):
+    d = tmp_path / "data" / "market" / "suspend_d" / date[:4]
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(cols).to_parquet(d / f"suspend_d_{date}.parquet")
+
+
+def test_suspend_d_needs_refetch_schema_aware(tmp_path, monkeypatch):
+    # GPT m1: the daily catch-up must re-fetch a legacy no-timing suspend_d even when the day is
+    # marked done, so the monthly gate (which fails closed on S-without-timing) becomes self-healing.
+    monkeypatch.setattr(cdr, "PROJECT_ROOT", str(tmp_path))
+    d = "20260703"
+    assert cdr.suspend_d_needs_refetch(d) is True                              # absent -> refetch
+    _write_suspend(tmp_path, d, {"ts_code": ["C.SZ"], "trade_date": [d], "suspend_type": ["S"]})
+    assert cdr.suspend_d_needs_refetch(d) is True                              # S but no timing -> refetch
+    _write_suspend(tmp_path, d, {"ts_code": ["C.SZ"], "trade_date": [d], "suspend_type": ["S"],
+                                 "suspend_timing": [""]})
+    assert cdr.suspend_d_needs_refetch(d) is False                             # S with timing col -> ok
+    _write_suspend(tmp_path, d, {"ts_code": [], "trade_date": [], "suspend_type": []})
+    assert cdr.suspend_d_needs_refetch(d) is False                             # empty (no suspensions) -> ok
+    _write_suspend(tmp_path, d, {"ts_code": ["C.SZ"], "trade_date": [d]})      # missing suspend_type
+    assert cdr.suspend_d_needs_refetch(d) is True
+
 
 def test_months_spanned_crosses_year_boundary():
     # a report_rc halo reaching from the prior year into the current one must enumerate BOTH
