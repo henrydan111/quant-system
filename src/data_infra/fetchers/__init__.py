@@ -868,3 +868,51 @@ class TushareFetcher:
             DataFrame with columns [month, broker, ts_code, name].
         """
         return self._safe_api_call(self.pro.broker_recommend, month=month)
+
+    # ------------------------------------------------------------------
+    # Text sources (大模型语料专题, doc-142 family) — Phase-2A, 单独权限.
+    # PIT: raw frames MUST be persisted through data_infra.text_store.ingest_rows
+    # (C1 stamps; nominal dates are never visibility). See data_dictionary.md.
+    # ------------------------------------------------------------------
+
+    def fetch_research_report(self, trade_date: str) -> pd.DataFrame:
+        """Fetch 券商研究报告 abstracts for one nominal date (doc_id=415).
+
+        ⚠ PIT: `trade_date` is a NOMINAL date (no timestamp; vendor updates
+        twice daily — the report_rc-class backfill trap). Ingest with
+        `published_col=None` so visibility falls back to first ingestion.
+        1000 rows/call cap — a truncated day logs a warning downstream.
+        """
+        return self._safe_api_call(self.pro.research_report, trade_date=trade_date)
+
+    def fetch_irm_qa_sh(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch 上证e互动 Q&A (doc_id=366; history from 2023-06; 3000/call).
+
+        PIT anchor = `pub_time` (reply timestamp): ingest with
+        `published_col="pub_time"`.
+        """
+        return self._safe_api_call(
+            self.pro.irm_qa_sh, start_date=start_date, end_date=end_date
+        )
+
+    def fetch_irm_qa_sz(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch 深证互动易 Q&A (doc_id=367; history from 2010-10; 3000/call).
+
+        PIT anchor = `pub_time`; extra `industry` column (涉及行业).
+        """
+        return self._safe_api_call(
+            self.pro.irm_qa_sz, start_date=start_date, end_date=end_date
+        )
+
+    def fetch_anns_d(self, ann_date: str) -> pd.DataFrame:
+        """Fetch 上市公司公告 titles+PDF URLs for one day (doc_id=176; 2000/call).
+
+        PIT anchor = `rec_time` (发布时间, datetime) — NON-default, must be
+        requested explicitly via `fields=`. Title record only; PDF text (if
+        ever parsed) needs its own pdf_visible_at (C1).
+        """
+        return self._safe_api_call(
+            self.pro.anns_d,
+            ann_date=ann_date,
+            fields="ann_date,ts_code,name,title,url,rec_time",
+        )

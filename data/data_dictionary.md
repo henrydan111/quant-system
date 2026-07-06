@@ -1080,3 +1080,38 @@ Anchor: `ann_date`. Annual only.
 | `audit_fees` | Audit Fees | 审计总费用(元) |
 | `audit_agency` | Audit Firm | 会计事务所 |
 | `audit_sign` | Signing Auditors | 签字会计师 |
+
+---
+
+## Text sources (大模型语料专题, doc 142 family) — Phase-2A, C1-stamped
+
+> **Storage & PIT (ALL four):** ingested ONLY through `src/data_infra/text_store.py`
+> (`data/text_store/{source}/text_{source}.parquet`, append-only, hash-versioned).
+> Every row gets `decision_visible_at = max(source_published_at, first_ingested_at)`
+> (CONTRACTS C1); nominal dates are NEVER visibility. Historical backfills are
+> fixture-only (visible from ingestion) — the clean panel accumulates FORWARD.
+> Access permission: 单独权限 (unlocked 1-year, 2026-06-30), not 积分-based.
+
+### research_report (券商研究报告, doc_id=415)
+Endpoint `research_report`; history from 2017-01-01; **增量每天两次更新**; 1000 rows/call
+(loop by date). Fields: `trade_date`(研报发布时间) `abstr`(摘要) `title` `report_type`
+(个股研报/行业研报) `author` `name` `ts_code` `inst_csname`(机构) `ind_name`(行业) `url`(PDF).
+**⚠ PIT: `trade_date` is a NOMINAL date (no timestamp) with twice-daily vendor updates —
+the report_rc-class backfill trap. `published_col=None` → visible = first ingestion.**
+Content = abstract only (PDF not parsed in v1). Trust tier: 中 (sell-side).
+
+### irm_qa_sh (上证e互动, doc_id=366)
+Endpoint `irm_qa_sh`; history from 2023-06; 3000 rows/call. Fields: `ts_code` `name`
+`trade_date` `q`(问题) `a`(回复) `pub_time`(回复时间, datetime). **PIT anchor = `pub_time`**
+(real timestamp, `published_col="pub_time"`). Full text. Trust tier: 强 (exchange platform).
+
+### irm_qa_sz (深证互动易, doc_id=367)
+Endpoint `irm_qa_sz`; history from 2010-10; 3000 rows/call. Fields: `ts_code` `name`
+`trade_date`(发布时间) `q` `a` `pub_time`(答复时间) `industry`(涉及行业). **PIT anchor =
+`pub_time`.** Full text + industry. Trust tier: 强.
+
+### anns_d (上市公司全量公告, doc_id=176)
+Endpoint `anns_d`; 2000 rows/call (loop by `ann_date`). Fields: `ann_date` `ts_code` `name`
+`title` `url`(PDF 下载链接) `rec_time`(发布时间, datetime, **NON-default → must request via
+`fields=`**). **PIT anchor = `rec_time`** for the title record; any future PDF-derived text
+needs its OWN `pdf_visible_at` (C1/R5-B1). Title+URL only in v1. Trust tier: 强 (official).
