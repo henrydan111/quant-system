@@ -239,13 +239,13 @@ is NOT `test_stub` (test_stub requires a committed failing/xfail CI test). **Cur
 |---|---|---|---|---|---|
 | C1 text visible-time PIT | lookahead | Phase 2A | design_only | data_infra/text_store | — |
 | C2 LLM evidence labels | lookahead/leakage | Phase 2B | design_only | research_orchestrator | — |
-| C3 金股 PIT universe | survivorship | Phase 0 | design_only | data_infra/provider_metadata | — |
+| C3 金股 PIT universe | survivorship | Phase 0 | **enforced** (local pytest 16/16; repo CI = manual run_daily_qa) | data_infra/golden_stock_universe | `42c5ccc` (stubs RED `9f11182`) |
 | C4 IPO ledger | survivorship | PARKED | parked | — | — |
 | C5 forward-only evidence | lookahead | Phase 3 | design_only | harness | — |
 | C6 two-mode ledgers | overfitting | Phase 2B/3 | design_only | strategy_registry | — |
 | C7 overlay caps | risk | Phase 2B | design_only | portfolio_risk | — |
 | C8 id/panel contracts | corruption | Phase 2 | design_only | data_infra | — |
-| C9 Phase-0 diagnostics-only | cost-realism | Phase 0 | design_only | result_analysis | — |
+| C9 Phase-0 diagnostics-only | cost-realism | Phase 0 | **enforced** (local pytest; allowlist fail-closed) | result_analysis/phase0_report | `42c5ccc` (stubs RED `9f11182`) |
 | C10 solo MVG | governance | all | design_only | research_orchestrator | — |
 | C11 bucket freeze | comparability | all eval | design_only | alpha_research | — |
 | C12 analyst typed output | auditability | Phase 2B | design_only | ai_layer (new) | — |
