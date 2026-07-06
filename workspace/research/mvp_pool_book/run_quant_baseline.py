@@ -33,6 +33,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT))  # operators.py uses `from src....` imports
 
 from data_infra.golden_stock_universe import load_golden_stock_events  # noqa: E402
 from alpha_research.factor_library.catalog import get_factor_catalog  # noqa: E402
