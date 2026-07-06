@@ -31,7 +31,8 @@
 - **依赖**:无(现成机器)。
 - **AI/收益**:无 AI。**高置信 · 地基**。
 
-### Phase 1 · 组合引擎(真短板,无 AI)
+### Phase 1 · 组合引擎(真短板,无 AI)— **⏸ 推迟(2026-07-06c 用户裁定,MVP 先行)**
+> **MVP 简化(用户裁定)**:最初验证用 **top-K 等权**,不建优化器(果仁 #9 在案:MV 未打赢 top-K)。**MVP 管线**=①量化腿:池内 7 因子复合→top-K(≈20-30)等权,月度 day-4 调仓,事件驱动总收益,**历史可跑**(2021+ NON-FORMAL);②AI 腿:文本 scorecard(C16,LLM 只打分)→**确定性 re-rank 公式**→新 top-K,**仅前向**(C2/C5);③三方前向对照 AI-top-K vs 量化-top-K vs 池 EW(≥6 月起评)。**C7 的 rank 空间实例化(预注册数值,超界→ai_final_decider_shadow)**:`max_swap_count≤K/3` · `promotion_floor=量化前 2K` · veto 不设限 · 单行业 ≤⌈K/3⌉ 名(确定性护栏顶替风险模型;热门池 −52% MDD 教训)。完整引擎(风险模型+优化器)推迟到 MVP 出结果后。
 - **目标**:唤醒 `portfolio_risk` —— 风险模型(因子协方差+特异风险)+ 优化器(cvxpy,1× gross,换手/持仓/行业约束,成本内生)。= `capital_allocation_buildout` PR1-2。
 - **闸门**:优化构建净换手后是否跑赢同信号 equal-weight top-K(Sharpe/回撤)?
 - **依赖**:Phase 0 信号。
