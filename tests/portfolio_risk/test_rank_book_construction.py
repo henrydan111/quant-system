@@ -42,8 +42,8 @@ def test_industry_cap_skips_and_backfills():
 
 def test_unknown_industry_is_its_own_capped_bucket():
     s = _scores({"X1": 0.9, "X2": 0.8, "X3": 0.7, "B1": 0.6})
-    out = select_top_k_equal_weight(s, k=3, industry_of={}, max_per_industry=2)
-    # X* have no industry -> UNKNOWN bucket, capped at 2
+    out = select_top_k_equal_weight(s, k=3, industry_of=IND, max_per_industry=2)
+    # X* are absent from IND -> UNKNOWN bucket, capped at 2; B1 (白酒) still fits
     assert out == ["X1", "X2", "B1"]
 
 
