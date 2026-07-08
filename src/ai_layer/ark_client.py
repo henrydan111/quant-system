@@ -43,6 +43,11 @@ DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_TOKENS = 2000
 TIMEOUT_S = 120
 
+#: impl-review m1: transient statuses get exactly ONE bounded retry (backoff
+#: below); anything else fails closed immediately.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRY_BACKOFF_S = 3.0
+
 
 class ArkClientError(Exception):
     """Fail-closed error for Ark calls (non-200, malformed reply, missing key)."""
@@ -86,6 +91,10 @@ def chat(
     default for extraction/scoring); True -> enabled; None -> omit the field
     (model default). If the endpoint rejects the thinking field (400), the call
     is retried once WITHOUT it and the event is logged — never silently.
+
+    impl-review m1: transient failures (429/500/502/503/504 or a transport
+    exception) get exactly ONE bounded retry after a short backoff; a second
+    failure raises — never an unbounded loop.
     """
     payload: dict = {
         "model": model,
@@ -102,14 +111,33 @@ def chat(
     }
     url = f"{ARK_BASE_URL}/chat/completions"
 
+    def _post():
+        return requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+
     t0 = time.time()
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+    try:
+        resp = _post()
+    except requests.RequestException as e:
+        logger.warning("Ark transport error for %s (%s) — one bounded retry (m1)",
+                       model, type(e).__name__)
+        time.sleep(RETRY_BACKOFF_S)
+        t0 = time.time()
+        try:
+            resp = _post()
+        except requests.RequestException as e2:
+            raise ArkClientError(f"Ark transport failure for {model} after retry: {e2}") from e2
     if resp.status_code == 400 and "thinking" in payload:
         logger.warning("Ark rejected 'thinking' field for %s — retrying without it "
                        "(body: %.200s)", model, resp.text)
         payload.pop("thinking")
         t0 = time.time()
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+        resp = _post()
+    if resp.status_code in RETRYABLE_STATUSES:
+        logger.warning("Ark %s for %s — one bounded retry after %.0fs (m1)",
+                       resp.status_code, model, RETRY_BACKOFF_S)
+        time.sleep(RETRY_BACKOFF_S)
+        t0 = time.time()
+        resp = _post()
     latency = time.time() - t0
 
     if resp.status_code != 200:

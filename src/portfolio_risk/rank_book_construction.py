@@ -86,13 +86,24 @@ def select_top_k_equal_weight(
 
 @dataclass
 class OverlayResult:
-    """Audit record of one bounded re-rank (C7 rank-space instantiation)."""
+    """Audit record of one bounded re-rank (C7 rank-space instantiation).
+
+    impl-review m3: the veto channel and the tilt channel are audited
+    SEPARATELY — a forward decision log must show which mechanism moved each
+    name, not just the net book.
+    """
 
     final: list[str]
     quant_book: list[str]
     swaps_in: list[str] = field(default_factory=list)
     swaps_out: list[str] = field(default_factory=list)
     clamped: bool = False
+    # m3 audit extensions
+    vetoes: list[str] = field(default_factory=list)              # vetoes as applied
+    veto_removed: list[str] = field(default_factory=list)        # quant_book ∩ vetoes
+    veto_backfill_in: list[str] = field(default_factory=list)    # base \ quant_book
+    tilt_swaps: list[tuple[str, str]] = field(default_factory=list)  # (in, out) pairs
+    industry_cap_skipped_entrants: list[str] = field(default_factory=list)
 
 
 def apply_rank_overlay(
@@ -151,6 +162,7 @@ def apply_rank_overlay(
     final = list(base)
     swaps_in: list[str] = []
     swaps_out: list[str] = []
+    cap_skipped: list[str] = []
     per_ind: dict[str, int] = defaultdict(int)
     for c in final:
         per_ind[industry_of.get(c) or UNKNOWN_INDUSTRY] += 1
@@ -163,6 +175,7 @@ def apply_rank_overlay(
         ind_in = industry_of.get(entrant) or UNKNOWN_INDUSTRY
         ind_out = industry_of.get(out) or UNKNOWN_INDUSTRY
         if ind_in != ind_out and per_ind[ind_in] >= max_per_industry:
+            cap_skipped.append(entrant)
             continue  # entrant's industry at cap -> skip (does not consume a swap)
         final.remove(out)
         per_ind[ind_out] -= 1
@@ -173,5 +186,12 @@ def apply_rank_overlay(
 
     # stable presentation: quant-score order (code tie-break)
     final.sort(key=lambda c: (-float(quant_scores.get(c, float("-inf"))), c))
-    return OverlayResult(final=final, quant_book=quant_book,
-                         swaps_in=swaps_in, swaps_out=swaps_out, clamped=clamped)
+    return OverlayResult(
+        final=final, quant_book=quant_book,
+        swaps_in=swaps_in, swaps_out=swaps_out, clamped=clamped,
+        vetoes=sorted(vetoes),
+        veto_removed=[c for c in quant_book if c in vetoes],
+        veto_backfill_in=[c for c in base if c not in quant_book],
+        tilt_swaps=list(zip(swaps_in, swaps_out)),
+        industry_cap_skipped_entrants=cap_skipped,
+    )
