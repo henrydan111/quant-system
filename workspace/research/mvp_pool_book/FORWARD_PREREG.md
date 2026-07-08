@@ -4,12 +4,15 @@
 **绑定:** [CONTRACTS.md](../trading_agents_design/CONTRACTS.md) C1/C2/C5/C6/C7/C12/C15/C16 ·
 config = [rerank_v2.yaml](../../../config/ai_layer/rerank_v2.yaml)
 
-config_hash_v2: `12724e20f1f78b55`
+config_hash_v2: `5c8a462e1c5500b3`
 
 > **v1→v2 修订记录(2026-07-08,起跑前):** GPT 实现级 §10 review #1(REVISE)裁定 7 Blocker,
 > 其中 B1(payload 渲染+证据落地)、B3(tilt 改 cohort 均值中心化 + 覆盖率闸门)、M4(组合上限)
 > 直接改变 config/prompt 内容 → 按 §4 规则升版 `mvp_pool_rerank_v1` → **`mvp_pool_rerank_v2`**,
 > 旧 hash `c2aa469d1b0220d9` 作废(v1 从未产生前向决策,无战绩可污染)。
+> **review #2(REVISE)追加修订(2026-07-08,仍在起跑前):** R2-Blocker-1 罚分证据强制(score_v2
+> penalty schema 带 evidence_spans,无逐字证据的罚分只入 risk_flags 不入 final)→ hash 由
+> `12724e20f1f78b55` 更新为 `5c8a462e1c5500b3`;决策产出改为 **attempt 台账制**(见 §4)。
 
 ---
 
@@ -44,17 +47,27 @@ config_hash_v2: `12724e20f1f78b55`
 ## 4. 不可变项(冻结清单)
 
 `rerank_v2.yaml` 全文(models/weights/tilt 映射/覆盖率闸门/K/max_swap/floor/行业与组合上限)·
-extract_v2/score_v2 两个 prompt · config_hash_v2 `12724e20f1f78b55` · 判定规则(§3)·
-决策日志 append-only(每期 cycles/<cycle>/:manifest.json 全输入 hash、scorecards、overlay audit、
-decision.json 三本账本 + fill_plan;fill_record.json 事后补录,同样 append-only)。
+extract_v2/score_v2 两个 prompt · config_hash_v2 `5c8a462e1c5500b3` · 判定规则(§3)·
+**attempt 台账制决策日志(R2-Blocker-2)**:LLM 花费前必先落不可变
+`cycles/<cycle>/attempt_<decision_id>/`(attempts_ledger.jsonl 计数);逐名 LLM
+request/response/validated-scorecard 边跑边落盘;失败 attempt 永不删除、同 cycle 重跑必须显式
+`--new-attempt <reason>`;已 published 的 cycle 永不可再决策;manifest 按 `REQUIRED_MANIFEST_FIELDS`
+钉住全部输入与产物 hash(含逐名 dossier/raw-LLM/scorecard hash、quant_scores_hash、prompt/model id、
+`git_worktree_clean` 硬闸);fill_record.json 事后补录,同样 append-only。
 **改任何一项 = rerank_v3 + 新预注册。**
 
 ## 5. 已知缺口(起跑前置,诚实在案)
 
 1. **量化分新鲜度:** 月度 5-B bump 满足月级新鲜度(§6 规则);5-C 日更=自动化增强,非硬闸。
-2. **日度文本任务未挂**(schtasks 待用户授权)——未挂期间人工补跑;runner 硬闸拒绝 >48h 陈旧拉取。
+   provider as-of 上界硬闸:provider 末日必须 ≤ 成交日前一开市日(R2-Blocker-4)。
+2. **日度文本任务未挂**(schtasks 待用户授权)——未挂期间人工补跑;runner 硬闸拒绝 >48h 陈旧拉取、
+   任一 required source 无 ok 状态、store 文件缺失(R2-Blocker-6)。
 3. **Ark 模型 cutoff 未公布**(C2 在案)——与 forward-only 设计一致,无阻塞。
 4. v2 无自动 veto(红旗探测器后续版本);行业标签=当前快照(仅护栏)。
+5. **过渡持仓账本缺口(R2-Major-3,第二周期前必补):** `--record-fills` 目前只记录目标账本的
+   买入可执行性;从第 2 期起必须落完整 transition fill ledger(旧仓→新仓 sell/buy delta、
+   跌停/停牌无法卖出、现金滞留、部分成交 carry),否则 6 个月对比会把不可卖出旧仓当作已顺利切换。
+6. **时区语义:** Asia/Shanghai 为唯一决策时区(R2-Blocker-5);text_store 全部时间戳=CN 墙钟。
 
 ## 6. 起跑条件(全部满足才开钟)
 

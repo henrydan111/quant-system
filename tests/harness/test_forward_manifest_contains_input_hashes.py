@@ -1,6 +1,8 @@
-"""B7/B4: the forward manifest must pin EVERY input the decision depended on by
-content hash — provider build, config, pool parquet, per-source text stores,
-pull manifest, git commit — so any later dispute is resolvable byte-for-byte."""
+"""B7/B4 + R2 Blocker-3/Major-5: the manifest must pin EVERY decision input by
+content hash — completeness is CODE-enforced (build_manifest refuses missing or
+blank required fields), and the required set covers the evidence-grade fields
+(raw LLM responses, quant scores, prompts/models, worktree cleanliness), not
+just the easy-to-hash files."""
 from __future__ import annotations
 
 import hashlib
@@ -8,7 +10,6 @@ import importlib.util
 from pathlib import Path
 import sys
 
-import pandas as pd
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,21 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 SCRIPT = (PROJECT_ROOT / "workspace" / "research" / "mvp_pool_book"
           / "run_forward_cycle.py")
+
+#: the evidence-grade contract — if any of these leaves REQUIRED_MANIFEST_FIELDS,
+#: this test must break (Major-5: tests cover the research-validity contract).
+EVIDENCE_GRADE_FIELDS = {
+    "git_commit", "git_worktree_clean",
+    "provider_manifest_sha256", "trade_cal_sha256", "qlib_calendar_sha256",
+    "factor_registry_sha256", "factor_expression_hashes", "factor_list",
+    "golden_stock_events_hash", "pool_parquet_hash", "industry_map_hash",
+    "quant_scores_hash", "config_hash", "prompt_hashes", "model_ids",
+    "text_store_hash_by_required_source", "input_row_hashes_by_source",
+    "dossier_hash_by_ts_code", "raw_llm_response_hash_by_ts_code",
+    "validated_scorecard_hash_by_ts_code",
+    "overlay_audit_hash", "decision_json_hash", "scorecards_parquet_hash",
+    "latest_allowed_asof",
+}
 
 
 @pytest.fixture(scope="module")
@@ -26,29 +42,43 @@ def fwd():
     return mod
 
 
-def test_manifest_contains_all_input_hashes(fwd, tmp_path):
-    pool = tmp_path / "broker_recommend_202608.parquet"
-    pd.DataFrame({"ts_code": ["000001.SZ"]}).to_parquet(pool, index=False)
-    store = tmp_path / "text_anns_d.parquet"
-    pd.DataFrame({"title": ["t"]}).to_parquet(store, index=False)
+def _full_fields(fwd):
+    return {k: ({"x": "y"} if k.endswith(("_by_ts_code", "_by_source", "hashes",
+                                          "model_ids"))
+                else ["f"] if k == "factor_list"
+                else True if k == "git_worktree_clean"
+                else 2 if k == "calendar_staleness_trading_days"
+                else "v")
+            for k in fwd.REQUIRED_MANIFEST_FIELDS}
 
-    decision_time = pd.Timestamp("2026-08-03 20:45:00")
-    m = fwd.build_manifest(
-        cycle="202608", decision_time=decision_time, config_hash="cfg123",
-        git_commit="deadbeef", staleness_days=2,
-        provider_manifest={"provider_build_id": "b1", "calendar_policy_id": "p1"},
-        calendar_end="2026-08-01",
-        pool_path=pool, text_store_paths={"anns_d": store},
-        pull_manifest={"ok": True, "run_ts": "2026-08-03T20:35:00"})
 
-    assert m["decision_id"] == fwd.compute_decision_id(
-        "202608", decision_time.isoformat(), "cfg123", "deadbeef")
-    assert m["provider_build_id"] == "b1" and m["calendar_policy_id"] == "p1"
-    assert m["git_commit"] == "deadbeef" and m["config_hash"] == "cfg123"
-    # content hashes are REAL sha256 of the files
-    assert m["input_hashes"]["pool_parquet"]["sha256"] == hashlib.sha256(
-        pool.read_bytes()).hexdigest()
-    assert m["input_hashes"]["text_stores"]["anns_d"]["sha256"] == hashlib.sha256(
-        store.read_bytes()).hexdigest()
-    assert m["text_pull_manifest"]["ok"] is True
-    assert m["strategy_version"] == "mvp_pool_rerank_v2"
+def test_required_set_covers_evidence_grade_contract(fwd):
+    missing = EVIDENCE_GRADE_FIELDS - fwd.REQUIRED_MANIFEST_FIELDS
+    assert not missing, f"evidence-grade fields dropped from the contract: {missing}"
+
+
+def test_manifest_refuses_missing_required_field(fwd):
+    fields = _full_fields(fwd)
+    fields.pop("raw_llm_response_hash_by_ts_code")
+    with pytest.raises(fwd.ForwardGateError, match="missing required"):
+        fwd.build_manifest(fields)
+
+
+def test_manifest_refuses_blank_required_field(fwd):
+    fields = _full_fields(fwd)
+    fields["quant_scores_hash"] = ""
+    with pytest.raises(fwd.ForwardGateError, match="blank required"):
+        fwd.build_manifest(fields)
+
+
+def test_full_manifest_builds_and_preserves_fields(fwd):
+    fields = _full_fields(fwd)
+    m = fwd.build_manifest(fields)
+    assert set(m) >= fwd.REQUIRED_MANIFEST_FIELDS
+
+
+def test_sha256_file_is_real_content_hash(fwd, tmp_path):
+    p = tmp_path / "f.bin"
+    p.write_bytes(b"evidence")
+    assert fwd.sha256_file(p) == hashlib.sha256(b"evidence").hexdigest()
+    assert fwd.sha256_text("evidence") == hashlib.sha256(b"evidence").hexdigest()

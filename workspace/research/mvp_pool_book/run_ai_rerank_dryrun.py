@@ -69,8 +69,15 @@ def provider_calendar_end() -> str:
     return day_txt.read_text().strip().splitlines()[-1].strip()
 
 
-def quant_composite_for_pool(pool_codes: list[str]) -> pd.Series:
-    """Oriented 7-factor composite at the LAST PUBLISHED provider day (dynamic)."""
+def quant_composite_for_pool(pool_codes: list[str],
+                             asof_end: str | pd.Timestamp | None = None) -> pd.Series:
+    """Oriented 7-factor composite at the LAST PUBLISHED provider day.
+
+    R2 Blocker-4: when ``asof_end`` is given (forward path: the last open day
+    STRICTLY BEFORE the fill date), a provider whose calendar extends beyond it
+    is REFUSED — factor rows on/after the fill day can never leak into the
+    ranking, even if the provider was thawed further than expected.
+    """
     reg = pd.read_parquet(REGISTRY)
     id_col = "factor_id" if "factor_id" in reg.columns else "name"
     cur = reg.sort_values(id_col).drop_duplicates(subset=[id_col], keep="last")
@@ -80,6 +87,10 @@ def quant_composite_for_pool(pool_codes: list[str]) -> pd.Series:
         dirs[f] = -1 if ("inverse" in d or "neg" in d) else 1
 
     end = provider_calendar_end()
+    if asof_end is not None and pd.Timestamp(end) > pd.Timestamp(asof_end):
+        raise RuntimeError(
+            f"quant score provider end {end} exceeds decision as-of "
+            f"{pd.Timestamp(asof_end).date()} (R2 Blocker-4 PIT bound) — refusing")
     print(f"[quant] provider calendar end = {end} (dynamic, thaw-aware)", flush=True)
     import qlib
     from qlib.config import REG_CN
@@ -186,8 +197,7 @@ def main() -> int:
             # not the quick-layer digest — a hallucinated digest event can
             # never be quoted back as "evidence" (spans ⊂ dossier)
             evidence_context = dossier
-            validate_scorecard_record(rec, weights=weights,
-                                      evidence_context=evidence_context)
+            validate_scorecard_record(rec, weights=weights)
             final = compute_scorecard_final(rec, weights=weights,
                                             evidence_context=evidence_context)
             row.update({"status": "ok", "final": final,

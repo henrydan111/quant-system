@@ -1,29 +1,41 @@
-# SCRIPT_STATUS: ACTIVE — MVP forward paper-live cycle runner (B4, impl-review #1)
+# SCRIPT_STATUS: ACTIVE — MVP forward paper-live cycle runner (B4 R1 + R2 rework)
 """One pre-registered forward decision cycle: 金股 pool -> quant top-K -> AI overlay.
 
 THE decision-producing entry point for FORWARD_PREREG.md (mvp_pool_rerank_v2).
-First true cycle: 202608 (activation 2026-08-04). Everything here is
-fail-closed and append-only:
+First true cycle: 202608. Evidence-grade rules (GPT impl-review #2):
 
-  - decision_id = sha256(cycle|decision_time|config_hash|git_commit)[:16]
-  - cycles/<cycle>/ is APPEND-ONLY: an existing dir REFUSES the run (no
-    overwrite, no silent re-decision); outputs are staged in a tmp dir and
-    published by ONE atomic os.replace rename
-  - gates BEFORE any LLM call: provider manifest present; provider calendar
-    staleness <= 5 trading days vs the fill date (FORWARD_PREREG freshness
-    rule); latest text pull manifest ok==True and fresh (<48h); config hash ==
-    the prereg-pinned EXPECTED_CONFIG_HASH; decision strictly BEFORE the fill
-    day's open (C5: no backfilled "decisions")
-  - manifest.json records ALL input hashes (provider build, config+prompts,
-    pool parquet, per-source text stores, pull manifest, git commit)
-  - M5: decision.json carries the fill plan (next-open EW) + a decision-time
-    tradability snapshot; `--record-fills` later appends fill_record.json
-    (append-only) with observed open-fill tradability once the provider covers
-    the fill date.
+  - **Asia/Shanghai is the ONLY decision timezone** (Blocker-5): decision_time
+    is tz-aware CN; the fill-open cutoff (09:25) is CN wall time; manifests
+    carry the +08:00 offset.
+  - **Attempt ledger BEFORE any LLM spend** (Blocker-2): after the pure gates
+    pass, an immutable ``cycles/<cycle>/attempt_<decision_id>/`` directory is
+    created and registered in ``attempts_ledger.jsonl``; every per-name LLM
+    request/response/validated-scorecard streams to disk AS IT HAPPENS; a
+    failed attempt is marked failed and NEVER deleted; a rerun of the same
+    cycle is refused unless ``--new-attempt <reason>`` (counted in the ledger);
+    a cycle with a PUBLISHED attempt can never be decided again.
+  - **Manifest pins EVERY input by content hash** (Blocker-3): provider build /
+    calendars / factor registry+expressions / pool / industry map / quant
+    scores / config+prompts+models / per-source text stores + in-window row
+    hashes / per-name dossier + raw-LLM + validated-scorecard hashes /
+    artifact hashes. ``git_worktree_clean`` is a HARD gate.
+  - **Provider as-of upper bound** (Blocker-4): provider calendar end must be
+    <= the last open day STRICTLY BEFORE the fill date, and the quant
+    composite re-checks it internally.
+  - **Required text sources must EXIST** (Blocker-6): a missing store file or
+    a pull manifest without ok per-source status refuses the cycle — silent
+    no-text is not a thing.
+  - **Caps are explicit gates** (Major-4): name weight / AI one-way turnover /
+    L1 active / industry weight raise ForwardGateError, never bare assert.
+  - ``--record-fills`` appends observed open-fill tradability into the
+    PUBLISHED attempt (append-only). NOTE (Major-3, recorded): from cycle #2 a
+    full transition fill ledger (sell/buy deltas, limit-down sell failures,
+    suspension carry, cash drag) must replace this buy-side-only record.
 
 Usage:
   venv/Scripts/python.exe workspace/research/mvp_pool_book/run_forward_cycle.py --cycle 202608
-  venv/Scripts/python.exe ... --cycle 202608 --record-fills   # after the monthly 5-B bump
+  ... --cycle 202608 --new-attempt "reason"   # after a FAILED attempt only
+  ... --cycle 202608 --record-fills           # after the monthly 5-B bump
 """
 from __future__ import annotations
 
@@ -32,7 +44,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,24 +55,72 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
+CN_TZ = "Asia/Shanghai"
 FORWARD_ROOT = PROJECT_ROOT / "workspace" / "outputs" / "mvp_forward"
 CYCLES_ROOT = FORWARD_ROOT / "cycles"
+ATTEMPTS_LEDGER = FORWARD_ROOT / "attempts_ledger.jsonl"
 PULL_MANIFEST_LATEST = PROJECT_ROOT / "logs" / "text_pull" / "pull_manifest_latest.json"
 POOL_DIR = PROJECT_ROOT / "data" / "analyst" / "broker_recommend"
 TRADE_CAL = PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet"
 PROVIDER_MANIFEST = PROJECT_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json"
-
-#: prereg-pinned config identity (FORWARD_PREREG.md mvp_pool_rerank_v2).
-#: Recomputed at run time from config/ai_layer/rerank_v2.yaml + the v2 prompts;
-#: mismatch = REFUSE (someone edited a frozen artifact).
-EXPECTED_CONFIG_HASH = "PINNED_IN_PREREG"   # overwritten below by _load_pinned_hash()
+QLIB_CALENDAR = PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt"
+FACTOR_REGISTRY = PROJECT_ROOT / "data" / "factor_registry" / "factor_master.parquet"
+STOCK_BASIC = PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet"
 
 MAX_CALENDAR_STALENESS_TRADING_DAYS = 5     # FORWARD_PREREG freshness rule
 MAX_PULL_AGE_HOURS = 48.0
 
+#: R2 Blocker-3 / Major-5: manifest completeness is CODE-enforced — a manifest
+#: missing any of these fields refuses to build (tests pin this set).
+REQUIRED_MANIFEST_FIELDS = frozenset({
+    "decision_id", "strategy_id", "cycle", "decision_time", "fill_date",
+    "git_commit", "git_worktree_clean",
+    "provider_build_id", "calendar_policy_id", "provider_calendar_end",
+    "calendar_staleness_trading_days", "latest_allowed_asof",
+    "provider_manifest_sha256", "trade_cal_sha256", "qlib_calendar_sha256",
+    "factor_registry_sha256", "factor_list", "factor_expression_hashes",
+    "golden_stock_events_hash", "pool_parquet_hash", "industry_map_hash",
+    "quant_scores_hash",
+    "config_hash", "prompt_hashes", "model_ids",
+    "text_store_hash_by_required_source", "input_row_hashes_by_source",
+    "dossier_hash_by_ts_code", "raw_llm_response_hash_by_ts_code",
+    "validated_scorecard_hash_by_ts_code",
+    "overlay_audit_hash", "decision_json_hash", "scorecards_parquet_hash",
+    "text_pull_manifest", "prereg",
+})
+
 
 class ForwardGateError(Exception):
     """A fail-closed forward gate refused the cycle."""
+
+
+# ------------------------------------------------------------- hash helpers
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_json_atomic(path: Path, obj) -> None:
+    fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        Path(tmp).write_text(json.dumps(obj, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------- pure gates
@@ -72,21 +131,25 @@ def compute_decision_id(cycle: str, decision_time: str, config_hash: str,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def ensure_cycle_dir_free(cycles_root: Path, cycle: str) -> Path:
-    """Append-only: an existing cycle dir is a completed decision — REFUSE."""
-    final_dir = cycles_root / cycle
-    if final_dir.exists():
+def previous_open_day(fill_date, trade_cal: pd.DataFrame) -> pd.Timestamp:
+    """Last OPEN trading day STRICTLY before fill_date (the quant as-of bound)."""
+    cal = trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"].astype(str)
+    fill = pd.Timestamp(fill_date).strftime("%Y%m%d")
+    prev = cal[cal < fill]
+    if prev.empty:
+        raise ForwardGateError(f"no open day before fill date {fill} in trade_cal")
+    return pd.Timestamp(prev.max())
+
+
+def check_provider_asof_bound(provider_end, latest_allowed_asof) -> None:
+    """R2 Blocker-4: provider data on/after the fill day must never rank names."""
+    p = pd.Timestamp(provider_end).normalize()
+    a = pd.Timestamp(latest_allowed_asof).normalize()
+    if p > a:
         raise ForwardGateError(
-            f"cycle dir {final_dir} already exists — forward decisions are "
-            f"append-only; a re-decision needs a NEW cycle id, never an overwrite")
-    return final_dir
-
-
-def atomic_publish(tmp_dir: Path, final_dir: Path) -> None:
-    """Publish the staged cycle by one atomic rename (same volume)."""
-    if final_dir.exists():
-        raise ForwardGateError(f"{final_dir} appeared during staging — refusing")
-    os.replace(tmp_dir, final_dir)
+            f"provider calendar end {p.date()} exceeds the latest allowed as-of "
+            f"{a.date()} (last open day before fill) — same/future-day factor "
+            f"rows would leak into the ranking; refusing")
 
 
 def check_calendar_freshness(calendar_end: str, fill_date: str,
@@ -106,18 +169,31 @@ def check_calendar_freshness(calendar_end: str, fill_date: str,
 
 
 def check_pull_manifest(manifest: dict, decision_time: pd.Timestamp,
+                        required_sources: list[str] | None = None,
                         max_age_hours: float = MAX_PULL_AGE_HOURS) -> None:
-    """The latest daily text pull must be CLEAN and FRESH (B5 evidence)."""
+    """The latest daily text pull must be CLEAN, FRESH, and cover every
+    required source with an ok status (R2 Blocker-6)."""
     if not manifest.get("ok", False):
         raise ForwardGateError(
             f"latest text pull manifest reports failures: {manifest.get('failures')} "
             f"— text inputs incomplete, refusing the cycle")
     run_ts = pd.Timestamp(manifest["run_ts"])
-    age_h = (decision_time - run_ts).total_seconds() / 3600.0
+    if run_ts.tzinfo is None:                     # legacy naive = CN wall time
+        run_ts = run_ts.tz_localize(CN_TZ)
+    dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
+    age_h = (dt - run_ts).total_seconds() / 3600.0
     if age_h > max_age_hours or age_h < 0:
         raise ForwardGateError(
             f"latest text pull is {age_h:.1f}h old (max {max_age_hours}h) — "
             f"run text_daily_pull before deciding")
+    if required_sources:
+        status = manifest.get("source_status", {})
+        bad = [s for s in required_sources
+               if not str(status.get(s, "missing")).startswith("ok_")]
+        if bad:
+            raise ForwardGateError(
+                f"required sources without ok pull status: {bad} "
+                f"(statuses: { {s: status.get(s, 'missing') for s in bad} })")
 
 
 def check_config_hash(actual: str, expected: str) -> None:
@@ -129,50 +205,61 @@ def check_config_hash(actual: str, expected: str) -> None:
 
 def check_decision_before_fill_open(decision_time: pd.Timestamp,
                                     fill_date: pd.Timestamp) -> None:
-    """C5: the decision must exist BEFORE the fill day's open (09:25 auction)."""
-    open_cutoff = fill_date.normalize() + pd.Timedelta(hours=9, minutes=25)
-    if decision_time >= open_cutoff:
+    """C5: the decision must exist BEFORE the fill day's 09:25 CN open."""
+    fill_open = (pd.Timestamp(pd.Timestamp(fill_date).date()).tz_localize(CN_TZ)
+                 + pd.Timedelta(hours=9, minutes=25))
+    dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
+    if dt >= fill_open:
         raise ForwardGateError(
-            f"decision_time {decision_time} is not strictly before the "
-            f"{fill_date.date()} 09:25 open — a post-open 'decision' is a "
-            f"backfill (C5), refused")
+            f"decision_time {dt} is not strictly before the {fill_open} CN open "
+            f"— a post-open 'decision' is a backfill (C5), refused")
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def check_worktree_clean(porcelain_output: str) -> None:
+    """R2 Blocker-3: a dirty worktree makes the recorded commit meaningless."""
+    if porcelain_output.strip():
+        raise ForwardGateError(
+            "git worktree is DIRTY — commit or stash before a forward decision; "
+            "the recorded commit must byte-identify the deciding code:\n"
+            + porcelain_output.strip()[:800])
 
 
-def build_manifest(*, cycle: str, decision_time: pd.Timestamp, config_hash: str,
-                   git_commit: str, provider_manifest: dict, calendar_end: str,
-                   staleness_days: int, pool_path: Path,
-                   text_store_paths: dict[str, Path],
-                   pull_manifest: dict) -> dict:
-    """Every input the decision depended on, by content hash (B4)."""
-    decision_id = compute_decision_id(cycle, decision_time.isoformat(),
-                                      config_hash, git_commit)
-    return {
-        "decision_id": decision_id,
-        "cycle": cycle,
-        "decision_time": decision_time.isoformat(),
-        "git_commit": git_commit,
-        "config_hash": config_hash,
-        "provider_build_id": provider_manifest.get("provider_build_id"),
-        "calendar_policy_id": provider_manifest.get("calendar_policy_id"),
-        "provider_calendar_end": calendar_end,
-        "calendar_staleness_trading_days": staleness_days,
-        "input_hashes": {
-            "pool_parquet": {"path": str(pool_path), "sha256": sha256_file(pool_path)},
-            "text_stores": {s: {"path": str(p), "sha256": sha256_file(p)}
-                            for s, p in text_store_paths.items() if p.exists()},
-        },
-        "text_pull_manifest": pull_manifest,
-        "prereg": "workspace/research/mvp_pool_book/FORWARD_PREREG.md",
-        "strategy_version": "mvp_pool_rerank_v2",
-    }
+def ensure_attempt_allowed(cycles_root: Path, cycle: str, *,
+                           new_attempt: bool = False) -> None:
+    """Append-only attempt discipline (R2 Blocker-2):
+
+    - a PUBLISHED attempt exists -> ALWAYS refuse (the decision exists);
+    - any prior attempt (started/failed) exists -> refuse unless
+      ``new_attempt`` (an explicit, ledger-counted retry).
+    """
+    cycle_dir = cycles_root / cycle
+    if not cycle_dir.exists():
+        return
+    attempts = sorted(cycle_dir.glob("attempt_*"))
+    for a in attempts:
+        am = a / "attempt_manifest.json"
+        if am.exists() and json.loads(am.read_text(encoding="utf-8")).get(
+                "status") == "published":
+            raise ForwardGateError(
+                f"cycle {cycle} already has a PUBLISHED decision ({a.name}) — "
+                f"forward decisions are append-only, never re-made")
+    if attempts and not new_attempt:
+        raise ForwardGateError(
+            f"cycle {cycle} has prior attempt(s) {[a.name for a in attempts]} — "
+            f"rerun requires an explicit --new-attempt <reason> (ledger-counted); "
+            f"silent retries are a selection channel")
+
+
+def build_manifest(fields: dict) -> dict:
+    """R2 Blocker-3: refuse to build a manifest missing ANY required field."""
+    missing = sorted(REQUIRED_MANIFEST_FIELDS - set(fields))
+    if missing:
+        raise ForwardGateError(f"manifest is missing required fields: {missing}")
+    blank = sorted(k for k in REQUIRED_MANIFEST_FIELDS
+                   if fields[k] is None or fields[k] == "")
+    if blank:
+        raise ForwardGateError(f"manifest has blank required fields: {blank}")
+    return dict(fields)
 
 
 # ------------------------------------------------------------- orchestration
@@ -186,10 +273,10 @@ def _load_dryrun_module():
     return mod
 
 
-def _git_commit() -> str:
-    out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT,
+def _git(*args: str) -> str:
+    out = subprocess.run(["git", *args], cwd=PROJECT_ROOT,
                          capture_output=True, text=True, check=True)
-    return out.stdout.strip()
+    return out.stdout
 
 
 def _load_pinned_hash() -> str:
@@ -201,17 +288,32 @@ def _load_pinned_hash() -> str:
     raise ForwardGateError("FORWARD_PREREG.md lacks a pinned config_hash_v2 line")
 
 
-def run_decision(cycle: str) -> int:
+def _ledger_append(event: dict) -> None:
+    ATTEMPTS_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    with open(ATTEMPTS_LEDGER, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _reply_is_pure_json(text: str) -> bool:
+    try:
+        json.loads(text.strip())
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
+def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
     chain = _load_dryrun_module()
     from data_infra.golden_stock_universe import load_golden_stock_events
-    from data_infra.text_store import DEFAULT_STORE_DIR
+    from data_infra.text_store import DEFAULT_STORE_DIR, load_text
     from portfolio_risk.rank_book_construction import apply_rank_overlay
     from ai_layer.ark_client import ArkClientError, chat, parse_json_reply
     from ai_layer.prompt_render import render_extract_messages, render_score_messages
     from ai_layer.scorecard import (ScorecardViolation, compute_scorecard_final,
                                     validate_scorecard_record)
 
-    decision_time = pd.Timestamp.now()
+    # -------- pure gates (NOTHING is spent before all of these pass) --------
+    decision_time = pd.Timestamp.now(tz=CN_TZ)
     cfg, cfg_hash = chain.load_config()
     check_config_hash(cfg_hash, _load_pinned_hash())
 
@@ -226,63 +328,171 @@ def run_decision(cycle: str) -> int:
         raise ForwardGateError("provider_build.json missing — no attested provider")
     provider_manifest = json.loads(PROVIDER_MANIFEST.read_text(encoding="utf-8"))
     calendar_end = chain.provider_calendar_end()
+    trade_cal = pd.read_parquet(TRADE_CAL)
+    latest_allowed_asof = previous_open_day(fill_date, trade_cal)
+    check_provider_asof_bound(calendar_end, latest_allowed_asof)
     staleness = check_calendar_freshness(calendar_end, fill_date.strftime("%Y%m%d"),
-                                         pd.read_parquet(TRADE_CAL))
+                                         trade_cal)
+
+    required_sources = list(cfg["dossier"]["sources"])
     if not PULL_MANIFEST_LATEST.exists():
         raise ForwardGateError("no text pull manifest — text_daily_pull has never run")
     pull_manifest = json.loads(PULL_MANIFEST_LATEST.read_text(encoding="utf-8"))
-    check_pull_manifest(pull_manifest, decision_time)
+    check_pull_manifest(pull_manifest, decision_time, required_sources)
 
-    final_dir = ensure_cycle_dir_free(CYCLES_ROOT, cycle)
-    CYCLES_ROOT.mkdir(parents=True, exist_ok=True)
+    text_store_paths = {s: Path(DEFAULT_STORE_DIR) / s / f"text_{s}.parquet"
+                        for s in required_sources}
+    missing_stores = [s for s, p in text_store_paths.items() if not p.exists()]
+    if missing_stores:                                    # R2 Blocker-6
+        raise ForwardGateError(f"required text stores missing: {missing_stores}")
+    text_store_hashes = {s: sha256_file(p) for s, p in text_store_paths.items()}
 
+    git_commit = _git("rev-parse", "HEAD").strip()
+    check_worktree_clean(_git("status", "--porcelain"))    # R2 Blocker-3
+
+    pool_path = POOL_DIR / f"broker_recommend_{cycle}.parquet"
+    if not pool_path.exists():
+        raise ForwardGateError(f"pool parquet missing: {pool_path}")
+
+    # -------- attempt reservation BEFORE any LLM spend (R2 Blocker-2) --------
+    decision_id = compute_decision_id(cycle, decision_time.isoformat(),
+                                      cfg_hash, git_commit)
+    ensure_attempt_allowed(CYCLES_ROOT, cycle,
+                           new_attempt=new_attempt_reason is not None)
+    attempt_dir = CYCLES_ROOT / cycle / f"attempt_{decision_id}"
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+    attempt_manifest_path = attempt_dir / "attempt_manifest.json"
+    attempt_state = {
+        "status": "started", "cycle": cycle, "decision_id": decision_id,
+        "decision_time": decision_time.isoformat(), "git_commit": git_commit,
+        "config_hash": cfg_hash, "pure_gate_status": "passed",
+        "new_attempt_reason": new_attempt_reason,
+    }
+    write_json_atomic(attempt_manifest_path, attempt_state)
+    _ledger_append({"event": "attempt_started", "cycle": cycle,
+                    "decision_id": decision_id,
+                    "decision_time": decision_time.isoformat(),
+                    "new_attempt_reason": new_attempt_reason})
     pool = sorted(set(cyc["ts_code"]))
     print(f"[gates] ALL PASS — cycle={cycle} fill={fill_date.date()} "
-          f"staleness={staleness}d pool={len(pool)}", flush=True)
+          f"asof<={latest_allowed_asof.date()} staleness={staleness}d "
+          f"pool={len(pool)} attempt={decision_id}", flush=True)
 
-    comp = chain.quant_composite_for_pool(pool)
-    cutoff = decision_time - pd.Timedelta(days=cfg["dossier"]["lookback_days"])
-    from data_infra.text_store import load_text
-    texts = {}
-    for s in cfg["dossier"]["sources"]:
-        df = load_text(s, decision_time)
-        texts[s] = df[df["decision_visible_at"] >= cutoff] if not df.empty else df
+    try:
+        return _run_attempt_body(
+            chain=chain, cfg=cfg, cfg_hash=cfg_hash, cycle=cycle, pool=pool,
+            cyc=cyc, decision_time=decision_time, decision_id=decision_id,
+            fill_date=fill_date, latest_allowed_asof=latest_allowed_asof,
+            calendar_end=calendar_end, staleness=staleness,
+            provider_manifest=provider_manifest, pull_manifest=pull_manifest,
+            text_store_paths=text_store_paths, text_store_hashes=text_store_hashes,
+            git_commit=git_commit, pool_path=pool_path,
+            required_sources=required_sources, attempt_dir=attempt_dir,
+            attempt_state=attempt_state, load_text=load_text,
+            apply_rank_overlay=apply_rank_overlay, chat=chat,
+            parse_json_reply=parse_json_reply, ArkClientError=ArkClientError,
+            render_extract_messages=render_extract_messages,
+            render_score_messages=render_score_messages,
+            ScorecardViolation=ScorecardViolation,
+            compute_scorecard_final=compute_scorecard_final,
+            validate_scorecard_record=validate_scorecard_record,
+        )
+    except BaseException as e:
+        attempt_state.update({"status": "failed",
+                              "stage": "attempt_body",
+                              "error": f"{type(e).__name__}: {e}"[:500]})
+        write_json_atomic(attempt_manifest_path, attempt_state)
+        _ledger_append({"event": "attempt_failed", "cycle": cycle,
+                        "decision_id": decision_id,
+                        "error": f"{type(e).__name__}: {e}"[:300]})
+        raise
+
+
+def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
+                      decision_id, fill_date, latest_allowed_asof, calendar_end,
+                      staleness, provider_manifest, pull_manifest,
+                      text_store_paths, text_store_hashes, git_commit, pool_path,
+                      required_sources, attempt_dir, attempt_state, load_text,
+                      apply_rank_overlay, chat, parse_json_reply, ArkClientError,
+                      render_extract_messages, render_score_messages,
+                      ScorecardViolation, compute_scorecard_final,
+                      validate_scorecard_record) -> int:
+    from data_infra.provider_metadata import tushare_to_qlib_canonical
+    attempt_manifest_path = attempt_dir / "attempt_manifest.json"
+
+    comp = chain.quant_composite_for_pool(pool, asof_end=latest_allowed_asof)
+    quant_scores_hash = sha256_text(
+        "\n".join(f"{c}={comp[c]:.10f}" for c in sorted(comp.index)))
+
+    cutoff = decision_time.tz_localize(None) - pd.Timedelta(
+        days=cfg["dossier"]["lookback_days"])
+    texts, input_row_hashes = {}, {}
+    for s in required_sources:
+        df = load_text(s, decision_time, require_exists=True)   # R2 Blocker-6
+        df = df[df["decision_visible_at"] >= cutoff] if not df.empty else df
+        texts[s] = df
+        input_row_hashes[s] = sha256_text(
+            "\n".join(sorted(df["content_hash"])) if not df.empty else "")
 
     floor_names = comp.sort_values(ascending=False).head(
         cfg["book"]["promotion_floor"]).index.tolist()
-    sb = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
-                         columns=["ts_code", "industry"])
+    sb = pd.read_parquet(STOCK_BASIC, columns=["ts_code", "industry"])
     industry_of = {t: (i if isinstance(i, str) and i else None)
                    for t, i in zip(sb["ts_code"], sb["industry"])}
 
     weights, tilt_cap = cfg["weights"], float(cfg["tilt"]["tilt_cap"])
     records = []
+    dossier_hashes, raw_llm_hashes, scorecard_hashes = {}, {}, {}
+    names_dir = attempt_dir / "names"
     for n, code in enumerate(floor_names, 1):
         dossier = chain.build_dossier(code, texts, cfg)
-        row = {"ts_code": code, "quant_score": float(comp[code]), "n_chars": len(dossier)}
+        row = {"ts_code": code, "quant_score": float(comp[code]),
+               "n_chars": len(dossier)}
         if not dossier.strip():
             row.update({"status": "no_text", "final": None})
             records.append(row)
             continue
+        name_dir = names_dir / tushare_to_qlib_canonical(code)
+        name_dir.mkdir(parents=True, exist_ok=True)
+        dossier_hashes[code] = sha256_text(dossier)
         try:
-            r1 = chat(render_extract_messages(cfg["_prompt_extract"], dossier),
-                      model=cfg["models"]["quick"], thinking=cfg["models"]["thinking"],
+            # ---- stream EVERY LLM artifact as it happens (R2 Blocker-2) ----
+            msgs1 = render_extract_messages(cfg["_prompt_extract"], dossier)
+            write_json_atomic(name_dir / "extract_request.json", msgs1)
+            r1 = chat(msgs1, model=cfg["models"]["quick"],
+                      thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1200)
+            write_json_atomic(name_dir / "extract_response_raw.json", r1.raw)
             digest = parse_json_reply(r1.text)
+
             spans = dossier[:1200]
-            r2 = chat(render_score_messages(cfg["_prompt_score"], digest, spans),
-                      model=cfg["models"]["deep"], thinking=cfg["models"]["thinking"],
+            msgs2 = render_score_messages(cfg["_prompt_score"], digest, spans)
+            write_json_atomic(name_dir / "score_request.json", msgs2)
+            r2 = chat(msgs2, model=cfg["models"]["deep"],
+                      thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1500)
+            write_json_atomic(name_dir / "score_response_raw.json", r2.raw)
             rec = parse_json_reply(r2.text)
-            # B1+: ground evidence on RAW source text only (see dry-run note)
-            evidence_context = dossier
-            validate_scorecard_record(rec, weights=weights,
-                                      evidence_context=evidence_context)
+
+            evidence_context = dossier          # B1+: RAW source text only
+            validate_scorecard_record(rec, weights=weights)
             final = compute_scorecard_final(rec, weights=weights,
                                             evidence_context=evidence_context)
-            row.update({"status": "ok", "final": final, "dossier": dossier,
+            write_json_atomic(name_dir / "validated_scorecard.json", rec)
+            raw_llm_hashes[code] = {
+                "extract": sha256_text(json.dumps(r1.raw, ensure_ascii=False,
+                                                  sort_keys=True)),
+                "score": sha256_text(json.dumps(r2.raw, ensure_ascii=False,
+                                                sort_keys=True)),
+            }
+            scorecard_hashes[code] = sha256_text(
+                json.dumps(rec, ensure_ascii=False, sort_keys=True))
+            row.update({"status": "ok", "final": final,
+                        "reply_pure_json": _reply_is_pure_json(r2.text),
                         "scorecard": json.dumps(rec, ensure_ascii=False)})
         except (ArkClientError, ScorecardViolation) as e:
+            write_json_atomic(name_dir / "failure.json",
+                              {"error": f"{type(e).__name__}: {e}"[:500]})
             row.update({"status": f"fail:{type(e).__name__}", "final": None,
                         "err": str(e)[:200]})
         records.append(row)
@@ -309,70 +519,140 @@ def run_decision(cycle: str) -> int:
         promotion_floor=cfg["book"]["promotion_floor"],
         industry_of=industry_of, max_per_industry=cfg["book"]["max_per_industry"])
 
-    # M4 caps (same assertions as the dry run)
+    # ---- R2 Major-4: caps are EXPLICIT gates, never bare assert ----
     caps, k = cfg["portfolio_caps"], cfg["book"]["k"]
-    oneway = len(res.swaps_in) / k
-    assert oneway <= caps["max_ai_oneway_turnover"] + 1e-9
+    observed = {
+        "max_name_weight": 1.0 / k,
+        "ai_oneway_turnover": len(res.swaps_in) / k,
+        "ai_l1_active_weight": 2.0 * len(res.swaps_in) / k,
+    }
+    ind_counts: dict[str, int] = {}
+    for c in res.final:
+        ind = industry_of.get(c)
+        if ind:
+            ind_counts[ind] = ind_counts.get(ind, 0) + 1
+    observed["max_industry_weight"] = max(ind_counts.values(), default=0) / k
+    for obs_key, cap_key in (("max_name_weight", "max_name_weight"),
+                             ("ai_oneway_turnover", "max_ai_oneway_turnover"),
+                             ("ai_l1_active_weight", "max_ai_l1_active_weight"),
+                             ("max_industry_weight", "max_industry_weight")):
+        if observed[obs_key] > float(caps[cap_key]) + 1e-9:
+            raise ForwardGateError(
+                f"portfolio cap breached: {obs_key}={observed[obs_key]:.4f} > "
+                f"{cap_key}={caps[cap_key]} — refusing to publish")
 
-    # M5: fill plan + decision-time tradability snapshot (provider last day)
     ew = 1.0 / k
-    fill_plan = {"fill_date": fill_date.strftime("%Y-%m-%d"),
-                 "fill_price_basis": "next_open_paper",
-                 "weights": {c: ew for c in res.final}}
-
-    git_commit = _git_commit()
-    manifest = build_manifest(
-        cycle=cycle, decision_time=decision_time, config_hash=cfg_hash,
-        git_commit=git_commit, provider_manifest=provider_manifest,
-        calendar_end=calendar_end, staleness_days=staleness,
-        pool_path=POOL_DIR / f"broker_recommend_{cycle}.parquet",
-        text_store_paths={s: Path(DEFAULT_STORE_DIR) / s / f"text_{s}.parquet"
-                          for s in cfg["dossier"]["sources"]},
-        pull_manifest=pull_manifest)
-
+    overlay_audit = {
+        "swaps_in": res.swaps_in, "swaps_out": res.swaps_out,
+        "clamped": res.clamped, "vetoes": res.vetoes,
+        "veto_removed": res.veto_removed,
+        "veto_backfill_in": res.veto_backfill_in,
+        "tilt_swaps": res.tilt_swaps,
+        "industry_cap_skipped_entrants": res.industry_cap_skipped_entrants,
+        "coverage_scored_pct": scored_pct,
+        "overlay_disabled_for_cycle": overlay_disabled,
+        "portfolio_caps_observed": observed,
+        "portfolio_caps_config": dict(caps),
+    }
     decision = {
-        "decision_id": manifest["decision_id"],
+        "decision_id": decision_id,
         "cycle": cycle, "decision_time": decision_time.isoformat(),
         "strategy_version": "mvp_pool_rerank_v2",
         "legs": {"quant_book": res.quant_book, "ai_book": res.final,
                  "pool_ew": pool},
-        "overlay_audit": {
-            "swaps_in": res.swaps_in, "swaps_out": res.swaps_out,
-            "clamped": res.clamped, "vetoes": res.vetoes,
-            "veto_removed": res.veto_removed,
-            "veto_backfill_in": res.veto_backfill_in,
-            "tilt_swaps": res.tilt_swaps,
-            "industry_cap_skipped_entrants": res.industry_cap_skipped_entrants,
-            "coverage_scored_pct": scored_pct,
-            "overlay_disabled_for_cycle": overlay_disabled},
-        "fill_plan": fill_plan,
+        "overlay_audit": overlay_audit,
+        "fill_plan": {"fill_date": fill_date.strftime("%Y-%m-%d"),
+                      "fill_price_basis": "next_open_paper",
+                      "weights": {c: ew for c in res.final}},
     }
 
-    tmp = Path(tempfile.mkdtemp(prefix=f"cycle_{cycle}_", dir=FORWARD_ROOT))
-    try:
-        det.to_parquet(tmp / "scorecards.parquet", index=False)
-        (tmp / "decision.json").write_text(
-            json.dumps(decision, indent=2, ensure_ascii=False), encoding="utf-8")
-        (tmp / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        atomic_publish(tmp, final_dir)
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
-    print(f"[published] {final_dir} decision_id={manifest['decision_id']} "
+    det.to_parquet(attempt_dir / "scorecards.parquet", index=False)
+    write_json_atomic(attempt_dir / "decision.json", decision)
+
+    # ---- factor expression identity (R2 Blocker-3) ----
+    from alpha_research.factor_library.catalog import get_factor_catalog
+    cat = get_factor_catalog(include_new_data=True)
+    factor_expr_hashes = {f: sha256_text(str(cat[f]))[:16] for f in chain.FACTORS7}
+    events_hash = sha256_text("\n".join(sorted(
+        f"{r.ts_code}|{r.month}|{r.activation_date}|{r.expiry_date}"
+        for r in cyc.itertuples())))
+
+    manifest = build_manifest({
+        "decision_id": decision_id,
+        "strategy_id": "mvp_pool_rerank_v2",
+        "cycle": cycle,
+        "decision_time": decision_time.isoformat(),
+        "fill_date": fill_date.strftime("%Y-%m-%d"),
+        "git_commit": git_commit,
+        "git_worktree_clean": True,               # hard-gated above
+        "provider_build_id": provider_manifest.get("provider_build_id"),
+        "calendar_policy_id": provider_manifest.get("calendar_policy_id"),
+        "provider_calendar_end": calendar_end,
+        "calendar_staleness_trading_days": staleness,
+        "latest_allowed_asof": latest_allowed_asof.strftime("%Y-%m-%d"),
+        "provider_manifest_sha256": sha256_file(PROVIDER_MANIFEST),
+        "trade_cal_sha256": sha256_file(TRADE_CAL),
+        "qlib_calendar_sha256": sha256_file(QLIB_CALENDAR),
+        "factor_registry_sha256": sha256_file(FACTOR_REGISTRY),
+        "factor_list": list(chain.FACTORS7),
+        "factor_expression_hashes": factor_expr_hashes,
+        "golden_stock_events_hash": events_hash,
+        "pool_parquet_hash": sha256_file(pool_path),
+        "industry_map_hash": sha256_file(STOCK_BASIC),
+        "quant_scores_hash": quant_scores_hash,
+        "config_hash": cfg_hash,
+        "prompt_hashes": {
+            "extract": sha256_text(cfg["_prompt_extract"]),
+            "score": sha256_text(cfg["_prompt_score"]),
+        },
+        "model_ids": {"quick": cfg["models"]["quick"],
+                      "deep": cfg["models"]["deep"]},
+        "text_store_hash_by_required_source": text_store_hashes,
+        "input_row_hashes_by_source": input_row_hashes,
+        "dossier_hash_by_ts_code": dossier_hashes,
+        "raw_llm_response_hash_by_ts_code": raw_llm_hashes,
+        "validated_scorecard_hash_by_ts_code": scorecard_hashes,
+        "overlay_audit_hash": sha256_text(
+            json.dumps(overlay_audit, ensure_ascii=False, sort_keys=True)),
+        "decision_json_hash": sha256_file(attempt_dir / "decision.json"),
+        "scorecards_parquet_hash": sha256_file(attempt_dir / "scorecards.parquet"),
+        "text_pull_manifest": pull_manifest,
+        "prereg": "workspace/research/mvp_pool_book/FORWARD_PREREG.md",
+    })
+    write_json_atomic(attempt_dir / "manifest.json", manifest)
+
+    attempt_state.update({"status": "published"})
+    write_json_atomic(attempt_manifest_path, attempt_state)
+    _ledger_append({"event": "attempt_published", "cycle": cycle,
+                    "decision_id": decision_id})
+    print(f"[published] {attempt_dir} decision_id={decision_id} "
           f"overlay_disabled={overlay_disabled}", flush=True)
     return 0
 
 
-def run_record_fills(cycle: str) -> int:
-    """After the monthly 5-B bump covers the fill date: observed tradability (M5)."""
-    cyc_dir = CYCLES_ROOT / cycle
-    fills_path = cyc_dir / "fill_record.json"
-    if not cyc_dir.exists():
+def _published_attempt_dir(cycle: str) -> Path:
+    cycle_dir = CYCLES_ROOT / cycle
+    if not cycle_dir.exists():
         raise ForwardGateError(f"no decision published for cycle {cycle}")
+    for a in sorted(cycle_dir.glob("attempt_*")):
+        am = a / "attempt_manifest.json"
+        if am.exists() and json.loads(am.read_text(encoding="utf-8")).get(
+                "status") == "published":
+            return a
+    raise ForwardGateError(f"cycle {cycle} has no PUBLISHED attempt")
+
+
+def run_record_fills(cycle: str) -> int:
+    """After the monthly 5-B bump covers the fill date: observed tradability (M5).
+
+    Major-3 (recorded): buy-side only; from cycle #2 a transition fill ledger
+    (sell/buy deltas, limit-down sell failure, suspension carry) must land.
+    """
+    attempt_dir = _published_attempt_dir(cycle)
+    fills_path = attempt_dir / "fill_record.json"
     if fills_path.exists():
         raise ForwardGateError(f"{fills_path} already exists — fill records are append-only")
-    decision = json.loads((cyc_dir / "decision.json").read_text(encoding="utf-8"))
+    decision = json.loads((attempt_dir / "decision.json").read_text(encoding="utf-8"))
     fill_date = decision["fill_plan"]["fill_date"]
 
     chain = _load_dryrun_module()
@@ -407,11 +687,10 @@ def run_record_fills(cycle: str) -> int:
                                 else "filled_at_open"),
                      "open": None if pd.isna(row["$open"]) else float(row["$open"])}
     record = {"cycle": cycle, "fill_date": fill_date,
-              "recorded_at": pd.Timestamp.now().isoformat(),
+              "recorded_at": pd.Timestamp.now(tz=CN_TZ).isoformat(),
               "provider_calendar_end": chain.provider_calendar_end(),
               "fills": fills}
-    fills_path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
+    write_json_atomic(fills_path, record)
     print(f"[fills] recorded -> {fills_path}", flush=True)
     return 0
 
@@ -420,15 +699,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycle", required=True, help="pool month, e.g. 202608")
     ap.add_argument("--record-fills", action="store_true")
+    ap.add_argument("--new-attempt", metavar="REASON", default=None,
+                    help="explicit ledger-counted retry after a FAILED attempt")
     args = ap.parse_args()
     FORWARD_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         if args.record_fills:
             return run_record_fills(args.cycle)
-        return run_decision(args.cycle)
+        return run_decision(args.cycle, new_attempt_reason=args.new_attempt)
     except ForwardGateError as e:
         print(f"[REFUSED] {e}", file=sys.stderr, flush=True)
         return 2
+    except Exception as e:  # noqa: BLE001 — attempt already marked failed
+        print(f"[ATTEMPT FAILED] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return 3
 
 
 if __name__ == "__main__":
