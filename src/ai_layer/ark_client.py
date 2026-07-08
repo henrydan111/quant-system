@@ -133,7 +133,12 @@ def parse_json_reply(text: str) -> dict:
     i, j = t.find("{"), t.rfind("}")
     if i == -1 or j <= i:
         raise ArkClientError(f"no JSON object in reply: {t[:200]}")
+    blob = t[i:j + 1]
     try:
-        return json.loads(t[i:j + 1])
-    except json.JSONDecodeError as e:
-        raise ArkClientError(f"invalid JSON in reply: {t[i:i + 200]}") from e
+        return json.loads(blob)
+    except json.JSONDecodeError:
+        # occasional double-escaped replies (literal \n / \" between tokens)
+        try:
+            return json.loads(blob.replace("\\n", " ").replace('\\"', '"'))
+        except json.JSONDecodeError as e:
+            raise ArkClientError(f"invalid JSON in reply: {blob[:200]}") from e
