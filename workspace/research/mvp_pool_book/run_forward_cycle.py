@@ -274,7 +274,8 @@ def run_decision(cycle: str) -> int:
                       model=cfg["models"]["deep"], thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1500)
             rec = parse_json_reply(r2.text)
-            evidence_context = json.dumps(digest, ensure_ascii=False) + "\n" + spans
+            # B1+: ground evidence on RAW source text only (see dry-run note)
+            evidence_context = dossier
             validate_scorecard_record(rec, weights=weights,
                                       evidence_context=evidence_context)
             final = compute_scorecard_final(rec, weights=weights,

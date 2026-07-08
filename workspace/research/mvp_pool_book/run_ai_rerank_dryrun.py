@@ -182,8 +182,10 @@ def main() -> int:
                       model=cfg["models"]["deep"], thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1500)
             rec = parse_json_reply(r2.text)
-            # B1: evidence must be grounded in what the scorer actually SAW
-            evidence_context = json.dumps(digest, ensure_ascii=False) + "\n" + spans
+            # B1+: evidence must be grounded in RAW source text (the dossier),
+            # not the quick-layer digest — a hallucinated digest event can
+            # never be quoted back as "evidence" (spans ⊂ dossier)
+            evidence_context = dossier
             validate_scorecard_record(rec, weights=weights,
                                       evidence_context=evidence_context)
             final = compute_scorecard_final(rec, weights=weights,

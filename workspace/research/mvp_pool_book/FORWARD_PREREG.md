@@ -4,7 +4,7 @@
 **绑定:** [CONTRACTS.md](../trading_agents_design/CONTRACTS.md) C1/C2/C5/C6/C7/C12/C15/C16 ·
 config = [rerank_v2.yaml](../../../config/ai_layer/rerank_v2.yaml)
 
-config_hash_v2: `4d6003548f0a58f8`
+config_hash_v2: `12724e20f1f78b55`
 
 > **v1→v2 修订记录(2026-07-08,起跑前):** GPT 实现级 §10 review #1(REVISE)裁定 7 Blocker,
 > 其中 B1(payload 渲染+证据落地)、B3(tilt 改 cohort 均值中心化 + 覆盖率闸门)、M4(组合上限)
@@ -24,7 +24,7 @@ config_hash_v2: `4d6003548f0a58f8`
 
 | 腿 | 定义 |
 |---|---|
-| **AI 账本** | 量化 top-50(floor)→ dossier → quick(lite)digest(JSON payload 渲染,C15/B1)→ deep(pro)维度分 → scorecard final(证据落地校验,B1)→ **tilt=0.15·(final−scored_cycle_mean)/50(B3 cohort 中心化)** → 覆盖率闸门(scored<80% → 本期 overlay 停用,回退纯量化账本)→ `apply_rank_overlay`(K=25, max_swap≤8, floor=50, 行业≤9, v2 无自动 veto)→ 等权 |
+| **AI 账本** | 量化 top-50(floor)→ dossier → quick(lite)digest(JSON payload 渲染,C15/B1)→ deep(pro)维度分 → scorecard final(证据须逐字落地于 **dossier 原文**——digest 概括句不算证据,B1+)→ **tilt=0.15·(final−scored_cycle_mean)/50(B3 cohort 中心化)** → 覆盖率闸门(scored<80% → 本期 overlay 停用,回退纯量化账本)→ `apply_rank_overlay`(K=25, max_swap≤8, floor=50, 行业≤9, v2 无自动 veto)→ 等权 |
 | **量化账本(锚)** | 同一量化复合 top-25 等权(基线:inline-sim 历史 +8.4%/0.46) |
 | **池等权** | 当月全池等权 |
 
@@ -44,7 +44,7 @@ config_hash_v2: `4d6003548f0a58f8`
 ## 4. 不可变项(冻结清单)
 
 `rerank_v2.yaml` 全文(models/weights/tilt 映射/覆盖率闸门/K/max_swap/floor/行业与组合上限)·
-extract_v2/score_v2 两个 prompt · config_hash_v2 `4d6003548f0a58f8` · 判定规则(§3)·
+extract_v2/score_v2 两个 prompt · config_hash_v2 `12724e20f1f78b55` · 判定规则(§3)·
 决策日志 append-only(每期 cycles/<cycle>/:manifest.json 全输入 hash、scorecards、overlay audit、
 decision.json 三本账本 + fill_plan;fill_record.json 事后补录,同样 append-only)。
 **改任何一项 = rerank_v3 + 新预注册。**

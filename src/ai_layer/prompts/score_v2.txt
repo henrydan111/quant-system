@@ -9,4 +9,4 @@
 - catalyst_timing 催化时点:兑现窗口越近越高(0-6个月=高)
 - mgmt_clarity 管理层清晰度:互动易答复具体、可验证=高;含糊、回避=低
 - 惩罚分(存在才打,否则 0):rumor_like 传闻性;hype_no_fundamental 蹭热点无基本面支撑;governance_flag 治理红旗(大额减持/高质押/违规)
-每个 factor score 必须附 evidence_spans:必须是 payload 内 digest 或 spans 的逐字原文短引(不超过80字)——不得改写、翻译或概括;给不出逐字证据就把 evidence_spans 留空列表(该维度将不计分)。
+每个 factor score 必须附 evidence_spans:必须是 payload 内 spans 字段的逐字原文短引(不超过80字)——不得改写、翻译或概括,不得引用 digest 的概括句;给不出逐字证据就把 evidence_spans 留空列表(该维度将不计分)。
