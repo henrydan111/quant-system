@@ -71,6 +71,8 @@ def test_partial_source_failure_exits_nonzero(pull_mod, monkeypatch):
     assert rc == 1                                   # OTHER sources succeeded — still fail
     assert manifest["ok"] is False and manifest["failures"]
     assert any("anns_d" in f for f in manifest["failures"])
+    assert manifest["source_status"]["anns_d"] == "failed"          # R2 B6
+    assert manifest["source_status"]["research_report"] == "ok_nonzero_rows"
     assert pull_mod._ingested                        # partial ingestion did happen
 
 
@@ -78,9 +80,14 @@ def test_truncated_anns_day_counts_as_failure(pull_mod, monkeypatch):
     rc, manifest = _run(pull_mod, monkeypatch, anns_truncated=True)
     assert rc == 1
     assert any("truncated" in f for f in manifest["failures"])
+    assert manifest["source_status"]["anns_d"] == "failed"
 
 
 def test_clean_run_exits_zero_with_manifest(pull_mod, monkeypatch):
     rc, manifest = _run(pull_mod, monkeypatch)
     assert rc == 0 and manifest["ok"] is True
     assert manifest["counts"] and manifest["window"]["start"] <= manifest["window"]["end"]
+    assert set(manifest["source_status"]) == {"anns_d", "research_report",
+                                              "irm_qa_sh", "irm_qa_sz"}
+    assert all(v.startswith("ok_") for v in manifest["source_status"].values())
+    assert "+08:00" in manifest["run_ts"]            # R2 B5: CN offset explicit

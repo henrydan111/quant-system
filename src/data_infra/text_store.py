@@ -13,19 +13,26 @@ Q&A, announcements, news). Every row is stamped at ingestion:
   (the R5-B1 ``max``-not-``earliest`` rule); missing/nominal publication falls
   back to ``first_ingested_at`` with ``published_missing=True`` (fixture-only
   for historical replay);
-- ``content_hash`` — sha256 over source + a PINNED per-source column basis
-  (``SOURCE_HASH_COLUMNS``, impl-review M1); a silent vendor REVISION becomes
-  a NEW row (new hash), the original row is frozen forever. Pinning makes the
-  hash reproducible across adapter/schema drift (a vendor adding an incidental
-  column must not re-mint every hash); each row records the
-  ``adapter_contract_hash`` of the basis it was hashed under. Unknown/test
-  sources fall back to hashing ALL raw columns (conservative: never hides a
-  revision).
+- **dual hashes (impl-review #2 Major-2)**: ``object_id_hash`` names the text
+  OBJECT (identity columns); ``content_hash`` covers identity + content
+  columns (whitespace-normalized). Same object, changed content = a NEW
+  revision row appended (old row + its ``first_ingested_at`` frozen forever —
+  the C1 revision rule); identical content re-ingested = dedup no-op. For
+  irm_qa the answer text ``a`` IS content (an in-place answer edit is a
+  revision), while format noise is absorbed by normalization;
+- ``adapter_contract_hash`` — names the (source, object-basis, content-basis)
+  contract a row was minted under; changing a basis = a new contract and a
+  store migration, never an in-place re-mint.
+
+**Timezone contract (impl-review #2 Blocker-5)**: ALL timestamps stored here
+are Asia/Shanghai WALL TIME (naive storage, CN semantics). tz-aware inputs are
+converted to CN then stripped; naive inputs are assumed to already be CN wall
+time. ``load_text`` normalizes ``decision_time`` the same way.
 
 The loader gate (``load_text``) admits a row at decision time ``T`` only when
 ``decision_visible_at <= T`` — so a historical backfill ingested today can never
-fake visibility in the past (the reason historical text alpha is largely
-non-validatable; the clean path is forward accumulation).
+fake visibility in the past. Formal/forward callers pass ``require_exists=True``
+so a missing store file is a hard error, never silent no-text (R2 Blocker-6).
 
 Enforced by: tests/pit/test_text_visible_time_gate.py ·
 tests/pit/test_text_backfill_rejection.py · tests/pit/test_text_revision_hash_freeze.py.
@@ -45,9 +52,12 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STORE_DIR = _PROJECT_ROOT / "data" / "text_store"
 
+CN_TZ = "Asia/Shanghai"
+
 #: stamp columns added by ingest_rows; the loader FAILS CLOSED when absent.
 STAMP_COLUMNS = (
     "source",
+    "object_id_hash",
     "content_hash",
     "adapter_contract_hash",
     "source_published_at",
@@ -57,25 +67,44 @@ STAMP_COLUMNS = (
     "published_missing",
 )
 
-#: impl-review M1 — the PINNED identity/content basis for content_hash, per
-#: production source. Changing a basis = a new adapter contract (new
-#: ``adapter_contract_hash``) and REQUIRES a store migration, never an in-place
-#: re-mint. Column names verified against the live store schemas 2026-07-08.
-#: irm_qa deliberately EXCLUDES the answer text ``a``: vendor re-formatting of
-#: an answer must not mint spurious rows; a real answer revision arrives with a
-#: new ``pub_time`` and thus a new hash.
-SOURCE_HASH_COLUMNS: dict[str, list[str]] = {
-    "anns_d": ["ann_date", "ts_code", "title", "url"],
+#: impl-review #2 Major-2 — object identity vs content bases, per production
+#: source. Column names verified against the live store schemas 2026-07-08.
+SOURCE_OBJECT_ID_COLUMNS: dict[str, list[str]] = {
+    "anns_d": ["ann_date", "ts_code", "url"],
     "irm_qa_sh": ["ts_code", "pub_time", "q"],
     "irm_qa_sz": ["ts_code", "pub_time", "q"],
     "research_report": ["ts_code", "title", "inst_csname", "trade_date"],
 }
+SOURCE_CONTENT_COLUMNS: dict[str, list[str]] = {
+    "anns_d": ["ann_date", "ts_code", "title", "url"],
+    "irm_qa_sh": ["ts_code", "pub_time", "q", "a"],
+    "irm_qa_sz": ["ts_code", "pub_time", "q", "a"],
+    "research_report": ["ts_code", "title", "inst_csname", "trade_date"],
+}
 
 
-def adapter_contract_hash(source: str, columns: list[str] | None = None) -> str:
-    """Short hash naming the (source, hash-basis) contract a row was minted under."""
-    basis = columns if columns is not None else SOURCE_HASH_COLUMNS.get(source)
-    payload = source + "|" + ("|".join(basis) if basis else "<ALL_RAW_COLUMNS>")
+class TextStoreError(Exception):
+    """Fail-closed error for the PIT text store."""
+
+
+def _norm_value(v) -> str:
+    """Whitespace-normalize a value for hashing (absorbs vendor format noise)."""
+    return " ".join(str(v).split())
+
+
+def to_cn_naive(ts) -> pd.Timestamp:
+    """Normalize any timestamp to Asia/Shanghai WALL TIME (naive, CN semantics)."""
+    t = pd.Timestamp(ts)
+    if t.tzinfo is not None:
+        t = t.tz_convert(CN_TZ).tz_localize(None)
+    return t
+
+
+def adapter_contract_hash(source: str, object_cols: list[str] | None,
+                          content_cols: list[str] | None) -> str:
+    """Short hash naming the (source, object-basis, content-basis) contract."""
+    payload = (source + "|obj:" + ("|".join(object_cols) if object_cols else "<ALL>")
+               + "|content:" + ("|".join(content_cols) if content_cols else "<ALL>"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -95,31 +124,29 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
         raise
 
 
-class TextStoreError(Exception):
-    """Fail-closed error for the PIT text store."""
-
-
 def _store_path(source: str, store_dir: str | os.PathLike | None) -> Path:
     base = Path(store_dir) if store_dir is not None else DEFAULT_STORE_DIR
     return base / source / f"text_{source}.parquet"
 
 
-def _hash_basis(source: str, raw_columns: list[str]) -> list[str]:
-    """Resolve the pinned hash basis; fail CLOSED if a pinned column is absent."""
-    pinned = SOURCE_HASH_COLUMNS.get(source)
-    if pinned is None:
-        return sorted(raw_columns)          # unknown source: ALL raw columns
-    missing = [c for c in pinned if c not in raw_columns]
+def _resolve_bases(source: str, raw_columns: list[str]) -> tuple[list[str], list[str]]:
+    """Resolve (object basis, content basis); fail CLOSED on missing pinned cols."""
+    obj = SOURCE_OBJECT_ID_COLUMNS.get(source)
+    content = SOURCE_CONTENT_COLUMNS.get(source)
+    if obj is None or content is None:
+        cols = sorted(raw_columns)              # unknown source: ALL raw columns
+        return cols, cols
+    missing = [c for c in {*obj, *content} if c not in raw_columns]
     if missing:
         raise TextStoreError(
             f"source '{source}' raw batch is missing pinned hash columns "
-            f"{missing} (SOURCE_HASH_COLUMNS contract, M1) — refusing to ingest"
+            f"{missing} (SOURCE_*_COLUMNS contract, M1/Major-2) — refusing to ingest"
         )
-    return pinned
+    return obj, content
 
 
 def _hash_row(source: str, row: pd.Series, basis: list[str]) -> str:
-    payload = source + "|" + "|".join(f"{k}={row[k]}" for k in basis)
+    payload = source + "|" + "|".join(f"{k}={_norm_value(row[k])}" for k in basis)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -139,7 +166,8 @@ def ingest_rows(
         published_col: name of the column carrying a VERIFIED publication
             timestamp; ``None`` when the source has only nominal dates
             (fail-closed: visibility falls back to ingestion).
-        retrieved_at: the actual fetch time for this batch.
+        retrieved_at: the actual fetch time for this batch (any tz; normalized
+            to CN wall time).
         store_dir: override for tests; defaults to ``data/text_store``.
 
     Returns:
@@ -148,21 +176,29 @@ def ingest_rows(
     """
     if raw.empty:
         return raw.copy()
-    retrieved_at = pd.Timestamp(retrieved_at)
+    retrieved_at = to_cn_naive(retrieved_at)
 
     stamped = raw.copy().reset_index(drop=True)
     stamped["source"] = source
-    basis = _hash_basis(source, list(raw.columns))
-    stamped["content_hash"] = [
-        _hash_row(source, stamped.loc[i, list(raw.columns)], basis)
+    obj_basis, content_basis = _resolve_bases(source, list(raw.columns))
+    stamped["object_id_hash"] = [
+        _hash_row(source, stamped.loc[i, list(raw.columns)], obj_basis)
         for i in stamped.index
     ]
+    stamped["content_hash"] = [
+        _hash_row(source, stamped.loc[i, list(raw.columns)], content_basis)
+        for i in stamped.index
+    ]
+    known_source = source in SOURCE_OBJECT_ID_COLUMNS
     stamped["adapter_contract_hash"] = adapter_contract_hash(
-        source, basis if source in SOURCE_HASH_COLUMNS else None)
+        source, obj_basis if known_source else None,
+        content_basis if known_source else None)
     if published_col is not None:
         if published_col not in stamped.columns:
             raise TextStoreError(f"published_col '{published_col}' not in raw columns")
         pub = pd.to_datetime(stamped[published_col], errors="coerce")
+        if getattr(pub.dt, "tz", None) is not None:
+            pub = pub.dt.tz_convert(CN_TZ).dt.tz_localize(None)
     else:
         pub = pd.Series(pd.NaT, index=stamped.index)
     stamped["source_published_at"] = pub
@@ -196,14 +232,21 @@ def load_text(
     decision_time: str | pd.Timestamp,
     *,
     store_dir: str | os.PathLike | None = None,
+    require_exists: bool = False,
 ) -> pd.DataFrame:
     """PIT loader: rows with ``decision_visible_at <= decision_time`` only.
 
     Fails closed when the store file lacks the stamp columns (a parquet written
-    outside ``ingest_rows`` is refused, never guessed at).
+    outside ``ingest_rows`` is refused, never guessed at). Formal/forward
+    callers MUST pass ``require_exists=True`` — a missing required source is a
+    hard error, not silent no-text (R2 Blocker-6).
     """
     path = _store_path(source, store_dir)
     if not path.exists():
+        if require_exists:
+            raise TextStoreError(
+                f"required text store missing: {source} ({path}) — refusing to "
+                f"treat a missing source as no-text (fail-closed)")
         return pd.DataFrame()
     df = pd.read_parquet(path)
     missing = [c for c in STAMP_COLUMNS if c not in df.columns]
@@ -212,5 +255,5 @@ def load_text(
             f"{path} is missing PIT stamp columns {missing} — refusing to load "
             f"(rows must be written through ingest_rows)"
         )
-    t = pd.Timestamp(decision_time)
+    t = to_cn_naive(decision_time)
     return df[df["decision_visible_at"] <= t].copy()

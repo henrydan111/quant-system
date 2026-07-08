@@ -44,21 +44,24 @@ log = logging.getLogger("text_daily_pull")
 
 LOOKBACK_DAYS = 4
 MANIFEST_DIR = LOG_DIR / "text_pull"
+CN_TZ = "Asia/Shanghai"   # R2 Blocker-5: the ONLY decision timezone
+SOURCES = ("anns_d", "research_report", "irm_qa_sh", "irm_qa_sz")
 
 
 def main() -> int:
     f = TushareFetcher()
-    run_ts = pd.Timestamp.now()
-    end = date.today()
+    run_ts = pd.Timestamp.now(tz=CN_TZ)
+    end = run_ts.date()
     start = end - timedelta(days=LOOKBACK_DAYS - 1)
-    log.info("daily pull window %s..%s", start, end)
+    log.info("daily pull window %s..%s (CN wall time)", start, end)
 
-    counts: dict[str, int] = {}
+    counts: dict[str, int] = {s: 0 for s in SOURCES}
+    failed_sources: set[str] = set()
     failures: list[str] = []
     d = start
     while d <= end:
         ymd = d.strftime("%Y%m%d")
-        now = pd.Timestamp.now()
+        now = pd.Timestamp.now(tz=CN_TZ)
         for source, call, pub_col in (
             ("anns_d", lambda: f.fetch_anns_d_paged(ymd), "rec_time"),
             ("research_report", lambda: f.fetch_research_report(ymd), None),
@@ -69,12 +72,14 @@ def main() -> int:
                 df = call()
             except Exception as e:  # noqa: BLE001
                 failures.append(f"{source}@{ymd}: {type(e).__name__}: {e}")
+                failed_sources.add(source)
                 log.error("%s @%s failed: %s", source, ymd, e)
                 continue
             if df is None or df.empty:
                 continue
             if df.attrs.get("truncated"):     # M3: incomplete day = failure
                 failures.append(f"{source}@{ymd}: truncated (max_pages hit, day incomplete)")
+                failed_sources.add(source)
                 log.error("%s @%s TRUNCATED — day incomplete, counted as failure",
                           source, ymd)
             ingest_rows(source, df, published_col=pub_col, retrieved_at=now)
@@ -82,13 +87,23 @@ def main() -> int:
         d += timedelta(days=1)
         time.sleep(0.3)
 
-    # B5: per-run manifest — the forward runner's completeness evidence
+    # B5 + R2 Blocker-6: per-run manifest with PER-SOURCE status — the forward
+    # runner's completeness evidence (counts alone cannot distinguish
+    # zero-rows-ok from never-attempted/failed)
+    source_status = {
+        s: ("failed" if s in failed_sources
+            else "ok_nonzero_rows" if counts.get(s, 0) > 0
+            else "ok_zero_rows")
+        for s in SOURCES
+    }
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "run_ts": run_ts.isoformat(),
+        "run_ts": run_ts.isoformat(),         # ISO-8601 with +08:00 offset
+        "timezone": CN_TZ,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "lookback_days": LOOKBACK_DAYS,
         "counts": counts,
+        "source_status": source_status,
         "failures": failures,
         "ok": not failures,
     }
