@@ -85,7 +85,11 @@ request/response/validated-scorecard 边跑边落盘;失败 attempt 永不删除
 ☐ 日度文本任务运行中(schtasks 待授权;过渡期人工跑 text_daily_pull.py;runner 校验最新 pull manifest ok+新鲜)
 ☐ 本文件 committed 且 config_hash_v2 与 runner 重算一致(runner 硬闸)
 ☐ 首期决策产出目录 append-only(workspace/outputs/mvp_forward/cycles/;runner 硬闸)
-☑ 实现级 §10 diff-review #1 裁定已全部应用(7B+5M+4m,2026-07-08);re-review #2 待发
+☑ **实现级 §10 GPT 跨审已完整走完并终裁 SHIP(2026-07-08)**:review #1(REVISE 7B+5M+4m)→
+  #2(REVISE 6B+5M)→ #3(REVISE 3B+3M)→ #4(REVISE 3B+2M)→ #5(REVISE 窄口径 3B)→
+  **#6 = SHIP(0 Blocker / 0 Major)**;每轮发现全数应用、偏离均披露并获裁定
+  (attempt_manifest 出 published 封印、覆盖恢复语义 D1、就地迁移、inst_csname 校正)。
+  SHIP 附带运维前置:文本拉取/覆盖工件必须持续到决策日;第 2 周期前 transition ledger(§5.5)硬前置。
 
 **首个真前向周期 = 2026-08(activation ≈ 2026-08-04 后首个交易日);2026-07 周期决策时点已过,
 不可回填(仅可作近真演练,不记战绩)。D3 不变:spent_oos_end 冻结 2026-02-27——解冻延长数据,不延长证据窗。**
