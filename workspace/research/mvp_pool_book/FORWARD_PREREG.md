@@ -48,5 +48,15 @@ scorecards、overlay audit、最终两本账本)。**改任何一项 = rerank_v2
 
 ## 6. 起跑条件(全部满足才开钟)
 
-☐ 5-C 日更发布(量化分到 T-1)　☐ 日度文本任务运行中　☐ 本文件 committed 且 hash 引用正确
-☐ 首期决策日志目录就绪(workspace/outputs/mvp_forward/)
+**(修订 2026-07-08,前向未起跑故合法;修订原因:查证发现 thaw step 1 已发布,provider 日历至
+2026-07-01[policy `frozen_20260701_thaw_step1`, build `thaw_step1_20260703c`]——原条件①"等 5-C"
+过严,月度调仓只需月级新鲜度。)**
+
+☐ **数据新鲜度规则:** 决策用因子值 = provider 末日(≤ activation−1);**陈旧度(activation − provider_end)
+  ≤ 5 个交易日**,每期记入决策日志;月度 5-B bump 发布覆盖月初即满足(5-C 日更=自动化增强,非硬闸)
+☐ 日度文本任务运行中(schtasks 待授权;过渡期人工跑 text_daily_pull.py 并记录)
+☐ 本文件 committed 且 hash 引用正确　☐ 首期决策日志目录就绪(workspace/outputs/mvp_forward/)
+☐ 实现级 §10 diff-review 通过(text_store/scorecard/overlay/ark_client/runners)
+
+**首个真前向周期 = 2026-08(activation ≈ 2026-08-04 后首个交易日);2026-07 周期决策时点已过,
+不可回填(仅可作近真演练,不记战绩)。D3 不变:spent_oos_end 冻结 2026-02-27——解冻延长数据,不延长证据窗。**

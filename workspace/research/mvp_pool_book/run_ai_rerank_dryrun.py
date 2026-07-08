@@ -58,8 +58,13 @@ def load_config() -> tuple[dict, str]:
     return cfg, h
 
 
+def provider_calendar_end() -> str:
+    day_txt = PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt"
+    return day_txt.read_text().strip().splitlines()[-1].strip()
+
+
 def quant_composite_for_pool(pool_codes: list[str]) -> pd.Series:
-    """Oriented 7-factor composite at the LAST frozen provider day (stale, labeled)."""
+    """Oriented 7-factor composite at the LAST PUBLISHED provider day (dynamic)."""
     reg = pd.read_parquet(REGISTRY)
     id_col = "factor_id" if "factor_id" in reg.columns else "name"
     cur = reg.sort_values(id_col).drop_duplicates(subset=[id_col], keep="last")
@@ -68,17 +73,19 @@ def quant_composite_for_pool(pool_codes: list[str]) -> pd.Series:
         d = str(cur.loc[cur[id_col] == f, "expected_direction"].iloc[0]).lower()
         dirs[f] = -1 if ("inverse" in d or "neg" in d) else 1
 
+    end = provider_calendar_end()
+    print(f"[quant] provider calendar end = {end} (dynamic, thaw-aware)", flush=True)
     import qlib
     from qlib.config import REG_CN
     from qlib.data import D
     qlib.init(provider_uri=str(PROJECT_ROOT / "data" / "qlib_data"), region=REG_CN, kernels=1)
     avail = {i.upper(): i for i in D.list_instruments(
-        D.instruments("all"), start_time="2025-06-01", end_time="2026-02-27", as_list=True)}
+        D.instruments("all"), start_time="2025-06-01", end_time=end, as_list=True)}
     qcodes = {c: avail[c.replace(".", "_").upper()] for c in pool_codes
               if c.replace(".", "_").upper() in avail}
     cat = get_factor_catalog(include_new_data=True)
     df = D.features(list(qcodes.values()), [cat[f] for f in FACTORS7],
-                    start_time="2025-06-01", end_time="2026-02-27", freq="day")
+                    start_time="2025-06-01", end_time=end, freq="day")
     df.columns = FACTORS7
     last = df.groupby(level=0).tail(1).droplevel(1)          # last row per instrument
     last.index = [i.upper() for i in last.index]
