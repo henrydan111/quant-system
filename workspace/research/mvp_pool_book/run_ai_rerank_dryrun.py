@@ -4,11 +4,15 @@
 Chain: 202607 pool -> quant composite (LAST provider day, frozen 2026-02-27 —
 STALE, explicitly a pipeline-validation stand-in; real forward needs 5-C
 unfreeze publishing) -> per-name dossier (text_store, 30d lookback) ->
-quick(lite) digest -> deep(pro) dimension scores -> scorecard validation +
-deterministic final -> tilt = tilt_cap*(final-50)/50 -> apply_rank_overlay
-(K=25, max_swap=8, floor=50, industry cap 9, no vetoes v1) -> AI book vs quant book.
+quick(lite) digest -> deep(pro) dimension scores -> scorecard validation
+(evidence grounding, B1) + deterministic final -> two-pass cohort-mean tilt
+tilt = tilt_cap*(final - scored_cycle_mean)/50 (B3) -> coverage gate (scored
+< 80% of floor => overlay DISABLED for the cycle, B3) -> apply_rank_overlay
+(K=25, max_swap=8, floor=50, industry cap 9, no vetoes v1) -> M4 portfolio-cap
+assertions -> AI book vs quant book.
 
-Config = config/ai_layer/rerank_v1.yaml (pre-registered; config_hash logged).
+Config = config/ai_layer/rerank_v2.yaml (pre-registered; config_hash logged).
+Untrusted text travels ONLY as JSON payload via ai_layer.prompt_render (C15/B1).
 Artifacts -> workspace/outputs/mvp_rerank_dryrun/.
 """
 from __future__ import annotations
@@ -28,8 +32,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from data_infra.golden_stock_universe import load_golden_stock_events  # noqa: E402
+from data_infra.provider_metadata import tushare_to_qlib_canonical  # noqa: E402
 from data_infra.text_store import load_text  # noqa: E402
 from ai_layer.ark_client import ArkClientError, chat, parse_json_reply  # noqa: E402
+from ai_layer.prompt_render import render_extract_messages, render_score_messages  # noqa: E402
 from ai_layer.scorecard import (  # noqa: E402
     ScorecardViolation, compute_scorecard_final, validate_scorecard_record,
 )
@@ -37,7 +43,7 @@ from portfolio_risk.rank_book_construction import apply_rank_overlay  # noqa: E4
 from alpha_research.factor_library.catalog import get_factor_catalog  # noqa: E402
 
 OUT_DIR = PROJECT_ROOT / "workspace" / "outputs" / "mvp_rerank_dryrun"
-CONFIG_PATH = PROJECT_ROOT / "config" / "ai_layer" / "rerank_v1.yaml"
+CONFIG_PATH = PROJECT_ROOT / "config" / "ai_layer" / "rerank_v2.yaml"
 REGISTRY = PROJECT_ROOT / "data" / "factor_registry" / "factor_master.parquet"
 POOL_MONTH = "202607"
 
@@ -81,8 +87,8 @@ def quant_composite_for_pool(pool_codes: list[str]) -> pd.Series:
     qlib.init(provider_uri=str(PROJECT_ROOT / "data" / "qlib_data"), region=REG_CN, kernels=1)
     avail = {i.upper(): i for i in D.list_instruments(
         D.instruments("all"), start_time="2025-06-01", end_time=end, as_list=True)}
-    qcodes = {c: avail[c.replace(".", "_").upper()] for c in pool_codes
-              if c.replace(".", "_").upper() in avail}
+    qcodes = {c: avail[tushare_to_qlib_canonical(c)] for c in pool_codes
+              if tushare_to_qlib_canonical(c) in avail}
     cat = get_factor_catalog(include_new_data=True)
     df = D.features(list(qcodes.values()), [cat[f] for f in FACTORS7],
                     start_time="2025-06-01", end_time=end, freq="day")
@@ -156,47 +162,64 @@ def main() -> int:
 
     weights = cfg["weights"]
     tilt_cap = float(cfg["tilt"]["tilt_cap"])
-    records, tilts = [], {}
+    records = []
     t_start = time.time()
+    # PASS 1: score every floor name (tilts need the SCORED cohort mean, B3)
     for n, code in enumerate(floor_names, 1):
         dossier = build_dossier(code, texts, cfg)
         row = {"ts_code": code, "quant_score": float(comp[code]), "n_chars": len(dossier)}
         if not dossier.strip():
             row.update({"status": "no_text", "final": None})
-            records.append(row); tilts[code] = 0.0
+            records.append(row)
             continue
         try:
-            r1 = chat([{"role": "user",
-                        "content": cfg["_prompt_extract"].replace("{DOSSIER}", dossier)}],
+            r1 = chat(render_extract_messages(cfg["_prompt_extract"], dossier),
                       model=cfg["models"]["quick"], thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1200)
             digest = parse_json_reply(r1.text)
             spans = dossier[:1200]
-            r2 = chat([{"role": "user",
-                        "content": cfg["_prompt_score"]
-                        .replace("{DIGEST}", json.dumps(digest, ensure_ascii=False))
-                        .replace("{SPANS}", spans)}],
+            r2 = chat(render_score_messages(cfg["_prompt_score"], digest, spans),
                       model=cfg["models"]["deep"], thinking=cfg["models"]["thinking"],
                       temperature=cfg["models"]["temperature"], max_tokens=1500)
             rec = parse_json_reply(r2.text)
-            validate_scorecard_record(rec, weights=weights)
-            final = compute_scorecard_final(rec, weights=weights)
-            tilt = tilt_cap * (final - 50.0) / 50.0
-            row.update({"status": "ok", "final": final, "tilt": tilt,
+            # B1: evidence must be grounded in what the scorer actually SAW
+            evidence_context = json.dumps(digest, ensure_ascii=False) + "\n" + spans
+            validate_scorecard_record(rec, weights=weights,
+                                      evidence_context=evidence_context)
+            final = compute_scorecard_final(rec, weights=weights,
+                                            evidence_context=evidence_context)
+            row.update({"status": "ok", "final": final,
                         "n_events": len(digest.get("events", [])),
                         "usage_quick": r1.usage.get("total_tokens"),
                         "usage_deep": r2.usage.get("total_tokens"),
                         "scorecard": json.dumps(rec, ensure_ascii=False)})
-            tilts[code] = tilt
         except (ArkClientError, ScorecardViolation) as e:
             row.update({"status": f"fail:{type(e).__name__}", "final": None,
-                        "err": str(e)[:200]})
-            tilts[code] = 0.0   # fail-closed: no influence
+                        "err": str(e)[:200]})   # fail-closed: no influence
         records.append(row)
         if n % 10 == 0:
             print(f"[llm] {n}/{len(floor_names)} elapsed={time.time()-t_start:.0f}s", flush=True)
 
     det = pd.DataFrame(records)
+
+    # PASS 2 (B3): cohort-mean-centered tilts + coverage gate
+    ok_mask = det["status"] == "ok"
+    scored_pct = float(ok_mask.sum()) / max(1, len(floor_names))
+    min_pct = float(cfg["coverage"]["min_scored_floor_pct"])
+    overlay_disabled = scored_pct < min_pct
+    if overlay_disabled:
+        print(f"[coverage] scored {scored_pct:.0%} < floor {min_pct:.0%} -> "
+              f"{cfg['coverage']['fail_action']} (fail-closed to quant book)", flush=True)
+        tilts = {c: 0.0 for c in floor_names}
+        det["tilt"] = 0.0
+    else:
+        scored_mean = float(det.loc[ok_mask, "final"].mean())
+        det["tilt"] = det["final"].map(
+            lambda f: tilt_cap * (float(f) - scored_mean) / 50.0 if f is not None else 0.0
+        ).fillna(0.0)
+        det.loc[~ok_mask, "tilt"] = 0.0
+        tilts = dict(zip(det["ts_code"], det["tilt"]))
+        print(f"[tilt] cohort mean = {scored_mean:.1f} (centering basis, B3)", flush=True)
     det.to_parquet(OUT_DIR / "scorecards.parquet", index=False)
 
     res = apply_rank_overlay(
@@ -205,11 +228,34 @@ def main() -> int:
         promotion_floor=cfg["book"]["promotion_floor"],
         industry_of=industry_of, max_per_industry=cfg["book"]["max_per_industry"],
     )
+
+    # M4: assert the realized book against the declared portfolio caps
+    caps = cfg["portfolio_caps"]
+    k = cfg["book"]["k"]
+    assert abs(1.0 / k - caps["max_name_weight"]) < 1e-9, "EW weight vs max_name_weight"
+    oneway = len(res.swaps_in) / k
+    assert oneway <= caps["max_ai_oneway_turnover"] + 1e-9, (
+        f"AI one-way turnover {oneway:.2f} breaches cap {caps['max_ai_oneway_turnover']}")
+    l1_active = 2.0 * oneway
+    assert l1_active <= caps["max_ai_l1_active_weight"] + 1e-9
+    ind_counts: dict[str, int] = {}
+    for c in res.final:
+        ind = industry_of.get(c)
+        if ind:
+            ind_counts[ind] = ind_counts.get(ind, 0) + 1
+    max_ind_w = max(ind_counts.values(), default=0) / k
+    assert max_ind_w <= caps["max_industry_weight"] + 1e-9, (
+        f"industry weight {max_ind_w:.2f} breaches cap {caps['max_industry_weight']}")
+
     audit = {"config_version": cfg["version"], "config_hash": cfg_hash,
              "pool_month": POOL_MONTH, "run_type": "PIPELINE_DRY_RUN_NOT_A_DECISION",
              "quant_book": res.quant_book, "ai_book": res.final,
              "swaps_in": res.swaps_in, "swaps_out": res.swaps_out,
              "clamped": res.clamped,
+             "coverage_scored_pct": scored_pct,
+             "overlay_disabled_for_cycle": overlay_disabled,
+             "portfolio_caps_checked": {**caps, "realized_oneway_turnover": oneway,
+                                        "realized_max_industry_weight": max_ind_w},
              "n_scored": int((det["status"] == "ok").sum()),
              "n_no_text": int((det["status"] == "no_text").sum()),
              "n_fail": int(det["status"].str.startswith("fail").sum())}

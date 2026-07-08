@@ -1,0 +1,43 @@
+# rerank_v2 — PRE-REGISTERED immutable config (C16 artifact).
+# Supersedes rerank_v1 per GPT impl-review #1 (B1 payload rendering, B3 cohort-mean
+# centering + coverage gate, M4 portfolio caps). Any change = rerank_v3.yaml; NEVER edit in place.
+version: rerank_v2
+models:
+  quick: doubao-seed-2.0-lite      # extraction (thinking off, reproducibility)
+  deep: doubao-seed-2.0-pro        # dimension scoring
+  thinking: false
+  temperature: 0.1
+prompts:                            # v2: instructions-only; untrusted text travels as
+  extract: src/ai_layer/prompts/extract_v2.txt   # JSON payload via ai_layer.prompt_render (B1)
+  score: src/ai_layer/prompts/score_v2.txt
+weights:                            # 5*sum(weights)=100 -> final unsaturated in [0,100]
+  event_materiality: 6
+  fundamental_link: 4
+  novelty: 4
+  catalyst_timing: 3
+  mgmt_clarity: 3
+tilt:
+  # B3: center on the SCORED cohort mean, not the fixed 50 — a calibration drift of
+  # the LLM (all-finals-high/low regime) must not translate into a book-wide push.
+  mapping: "tilt = tilt_cap * (final - scored_cycle_mean) / 50"   # deterministic, code-side
+  tilt_cap: 0.15                    # rank-pct units on the combined score
+coverage:
+  # B3: a cycle where the AI leg only scored a minority of the floor is NOT an AI
+  # decision — fail closed to the pure quant book for the WHOLE cycle.
+  min_scored_floor_pct: 0.80
+  fail_action: disable_ai_overlay_for_cycle
+book:
+  k: 25
+  max_swap_count: 8                 # floor(K/3), 07-06c directive
+  promotion_floor: 50               # quant top-2K
+  max_per_industry: 9               # ceil(K/3)
+portfolio_caps:                     # M4: declared caps, asserted post-overlay in code
+  max_name_weight: 0.04             # EW at K=25
+  max_ai_oneway_turnover: 0.32      # = max_swap_count / K
+  max_ai_l1_active_weight: 0.64     # = 2 * max_ai_oneway_turnover
+  max_industry_weight: 0.36         # = max_per_industry / K
+vetoes: manual_only_v1              # v1: NO automatic LLM vetoes (reserved for red-flag detectors)
+dossier:
+  lookback_days: 30
+  max_items: 20
+  sources: [anns_d, irm_qa_sh, irm_qa_sz, research_report]
