@@ -50,6 +50,10 @@ ALLOWED_TOP_LEVEL = frozenset(
 #: is computed, never trusted from the record.
 ALLOWED_ENTRY_KEYS = frozenset({"name", "score_0_5", "evidence_spans"})
 _MAX_SPAN_CHARS = 160
+#: R3 Major-3: a 1-2 character quote cannot carry evidentiary weight — trivial
+#: substrings would ground in almost any dossier.
+_MIN_SPAN_CHARS = 8
+_TRIVIAL_SPANS = frozenset({"公司", "公告", "投资者", "互动易"})
 
 
 class ScorecardViolation(Exception):
@@ -62,9 +66,15 @@ def _norm_text(s: str) -> str:
 
 def _span_is_grounded(span: str, evidence_context: str) -> bool:
     """An evidence span counts ONLY if it literally appears in the raw visible
-    text (impl-review B1/B1+) — a hallucinated span cannot unlock points."""
+    text (impl-review B1/B1+) AND is substantive: 8-160 normalized chars, not a
+    trivial generic token (R3 Major-3) — a hallucinated or near-empty span
+    cannot unlock points."""
     span_n = _norm_text(span)
-    return 0 < len(span_n) <= _MAX_SPAN_CHARS and span_n in _norm_text(evidence_context)
+    if not (_MIN_SPAN_CHARS <= len(span_n) <= _MAX_SPAN_CHARS):
+        return False
+    if span_n in _TRIVIAL_SPANS:
+        return False
+    return span_n in _norm_text(evidence_context)
 
 
 def _evidence_ok(entry: dict, evidence_context: str) -> bool:

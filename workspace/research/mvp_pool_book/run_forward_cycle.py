@@ -69,6 +69,18 @@ STOCK_BASIC = PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet"
 
 MAX_CALENDAR_STALENESS_TRADING_DAYS = 5     # FORWARD_PREREG freshness rule
 MAX_PULL_AGE_HOURS = 48.0
+TEXT_MIGRATION_MANIFEST = PROJECT_ROOT / "data" / "text_store" / "migration_manifest.json"
+PULL_MANIFEST_DIR = PROJECT_ROOT / "logs" / "text_pull"
+
+#: R3 Blocker-1: attempt states. `started` is NON-TERMINAL — it can never be
+#: bypassed by an ordinary --new-attempt; only a dedicated, attested
+#: --abandon-started-attempt transitions it to a terminal retryable state.
+TERMINAL_RETRYABLE = frozenset({"failed", "abandoned_due_to_crash"})
+TERMINAL_FINAL = frozenset({"published"})
+
+#: R3 Major-2: worktree-clean whitelist — generated logs/outputs and local
+#: secrets ONLY. Never data/, config/, src/, tests/, prereg, registries.
+WORKTREE_CLEAN_WHITELIST = ("logs/", "workspace/outputs/", ".env")
 
 #: R2 Blocker-3 / Major-5: manifest completeness is CODE-enforced — a manifest
 #: missing any of these fields refuses to build (tests pin this set).
@@ -83,11 +95,26 @@ REQUIRED_MANIFEST_FIELDS = frozenset({
     "quant_scores_hash",
     "config_hash", "prompt_hashes", "model_ids",
     "text_store_hash_by_required_source", "input_row_hashes_by_source",
-    "dossier_hash_by_ts_code", "raw_llm_response_hash_by_ts_code",
+    "dossier_hash_by_ts_code", "llm_artifact_hash_by_ts_code",
     "validated_scorecard_hash_by_ts_code",
     "overlay_audit_hash", "decision_json_hash", "scorecards_parquet_hash",
     "text_pull_manifest", "prereg",
+    # R3 Blocker-3 / Major-1
+    "text_coverage_manifest_hash", "text_coverage_window",
+    "text_coverage_required_sources",
+    "text_store_migration_manifest_hash", "text_store_migration_id",
 })
+
+#: R3 Blocker-2: per-name artifacts the manifest must pin — by DIRECTORY SCAN,
+#: never by trusting the success path (failed/partial spends are spends too).
+PER_NAME_ARTIFACTS = (
+    "extract_request.json",
+    "extract_response_raw.json",
+    "score_request.json",
+    "score_response_raw.json",
+    "validated_scorecard.json",
+    "failure.json",
+)
 
 
 class ForwardGateError(Exception):
@@ -216,38 +243,206 @@ def check_decision_before_fill_open(decision_time: pd.Timestamp,
 
 
 def check_worktree_clean(porcelain_output: str) -> None:
-    """R2 Blocker-3: a dirty worktree makes the recorded commit meaningless."""
-    if porcelain_output.strip():
+    """R2 Blocker-3: a dirty worktree makes the recorded commit meaningless.
+
+    R3 Major-2: an explicit whitelist covers GENERATED paths only (logs,
+    forward outputs, local secrets) — any dirty code/config/data/test/prereg
+    path still refuses.
+    """
+    offending = []
+    for line in porcelain_output.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip().strip('"').replace("\\", "/")
+        # rename entries look like "old -> new"; judge the destination
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if any(path == w.rstrip("/") or path.startswith(w)
+               for w in WORKTREE_CLEAN_WHITELIST):
+            continue
+        offending.append(line.rstrip())
+    if offending:
         raise ForwardGateError(
             "git worktree is DIRTY — commit or stash before a forward decision; "
             "the recorded commit must byte-identify the deciding code:\n"
-            + porcelain_output.strip()[:800])
+            + "\n".join(offending)[:800])
+
+
+def load_attempt_index(cycles_root: Path, ledger_path: Path,
+                       cycle: str) -> dict[str, dict]:
+    """R3 Blocker-1: cross-check attempt DIRECTORIES against the append-only
+    LEDGER — the ledger is a start-gate, not just an audit trail.
+
+    - an attempt dir without attempt_manifest.json = refused (torn attempt);
+    - a ledger-referenced attempt whose dir is GONE = refused (manual
+      deletion/loss is an evidence breach, never a fresh cycle).
+    """
+    by_id: dict[str, dict] = {}
+    cycle_dir = cycles_root / cycle
+    for d in (sorted(cycle_dir.glob("attempt_*")) if cycle_dir.exists() else []):
+        attempt_id = d.name.removeprefix("attempt_")
+        am = d / "attempt_manifest.json"
+        if not am.exists():
+            raise ForwardGateError(
+                f"attempt dir {d} lacks attempt_manifest.json — torn attempt, refusing")
+        m = json.loads(am.read_text(encoding="utf-8"))
+        by_id.setdefault(attempt_id, {})["dir"] = d
+        by_id[attempt_id]["dir_status"] = m.get("status")
+    if ledger_path.exists():
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            ev = json.loads(line)
+            if ev.get("cycle") != cycle:
+                continue
+            attempt_id = ev.get("decision_id")
+            by_id.setdefault(attempt_id, {})["ledger_seen"] = True
+            by_id[attempt_id].setdefault("ledger_events", []).append(ev.get("event"))
+    missing_dirs = [aid for aid, x in by_id.items()
+                    if x.get("ledger_seen") and "dir_status" not in x]
+    if missing_dirs:
+        raise ForwardGateError(
+            f"attempt ledger references missing attempt dirs {missing_dirs} for "
+            f"cycle {cycle} — manual deletion/loss is an evidence breach, "
+            f"refusing silent rerun")
+    return by_id
 
 
 def ensure_attempt_allowed(cycles_root: Path, cycle: str, *,
-                           new_attempt: bool = False) -> None:
-    """Append-only attempt discipline (R2 Blocker-2):
+                           new_attempt: bool = False,
+                           ledger_path: Path | None = None) -> None:
+    """Append-only attempt discipline (R2 Blocker-2 + R3 Blocker-1):
 
     - a PUBLISHED attempt exists -> ALWAYS refuse (the decision exists);
-    - any prior attempt (started/failed) exists -> refuse unless
+    - a NON-TERMINAL (`started`) attempt exists -> ALWAYS refuse, even with
+      --new-attempt: a partial LLM spend must first be terminally abandoned
+      via --abandon-started-attempt (attested, ledger-counted);
+    - terminally failed/abandoned attempts exist -> refuse unless
       ``new_attempt`` (an explicit, ledger-counted retry).
     """
-    cycle_dir = cycles_root / cycle
-    if not cycle_dir.exists():
-        return
-    attempts = sorted(cycle_dir.glob("attempt_*"))
-    for a in attempts:
-        am = a / "attempt_manifest.json"
-        if am.exists() and json.loads(am.read_text(encoding="utf-8")).get(
-                "status") == "published":
-            raise ForwardGateError(
-                f"cycle {cycle} already has a PUBLISHED decision ({a.name}) — "
-                f"forward decisions are append-only, never re-made")
+    ledger = ledger_path if ledger_path is not None else ATTEMPTS_LEDGER
+    attempts = load_attempt_index(cycles_root, ledger, cycle)
+    published = [aid for aid, x in attempts.items()
+                 if x.get("dir_status") in TERMINAL_FINAL]
+    if published:
+        raise ForwardGateError(
+            f"cycle {cycle} already has a PUBLISHED decision {published} — "
+            f"forward decisions are append-only, never re-made")
+    nonterminal = [aid for aid, x in attempts.items()
+                   if x.get("dir_status") not in TERMINAL_RETRYABLE]
+    if nonterminal:
+        raise ForwardGateError(
+            f"cycle {cycle} has NON-TERMINAL attempt(s) {nonterminal} — a "
+            f"partial LLM spend can never be bypassed; terminally abandon it "
+            f"first via --abandon-started-attempt <id> --new-attempt <reason>")
     if attempts and not new_attempt:
         raise ForwardGateError(
-            f"cycle {cycle} has prior attempt(s) {[a.name for a in attempts]} — "
-            f"rerun requires an explicit --new-attempt <reason> (ledger-counted); "
-            f"silent retries are a selection channel")
+            f"cycle {cycle} has prior failed/abandoned attempt(s) "
+            f"{sorted(attempts)} — retry requires an explicit "
+            f"--new-attempt <reason> (ledger-counted); silent retries are a "
+            f"selection channel")
+
+
+def collect_llm_artifact_hashes(names_dir: Path, status_by_code: dict[str, str],
+                                dir_name_of: dict[str, str]) -> dict[str, dict]:
+    """R3 Blocker-2: hash EVERY attempted LLM artifact by scanning the per-name
+    dirs — success, scorecard violation, parse failure, all pinned; a
+    replaced/removed artifact after publication becomes a manifest mismatch.
+
+    Consistency rules: status ok requires the full 5-artifact chain; any
+    failure status requires at least failure.json; no_text is pinned as an
+    explicit no-attempt. Missing artifacts REFUSE the publication.
+    """
+    out: dict[str, dict] = {}
+    for code, status in status_by_code.items():
+        entry: dict = {"status": status}
+        if status == "no_text":
+            entry["llm_attempted"] = False
+            out[code] = entry
+            continue
+        name_dir = names_dir / dir_name_of[code]
+        if not name_dir.exists():
+            raise ForwardGateError(
+                f"missing per-name artifact dir for attempted name {code}")
+        entry["llm_attempted"] = True
+        entry["artifacts"] = {fn: sha256_file(name_dir / fn)
+                              for fn in PER_NAME_ARTIFACTS
+                              if (name_dir / fn).exists()}
+        if status == "ok":
+            required = {"extract_request.json", "extract_response_raw.json",
+                        "score_request.json", "score_response_raw.json",
+                        "validated_scorecard.json"}
+        else:
+            required = {"failure.json"}
+        missing = required - set(entry["artifacts"])
+        if missing:
+            raise ForwardGateError(
+                f"{code} status={status} is missing artifact hashes {sorted(missing)} "
+                f"— an unpinned LLM spend cannot be published")
+        out[code] = entry
+    return out
+
+
+def check_text_coverage_history(manifest_dir: Path, *,
+                                decision_time: pd.Timestamp,
+                                lookback_days: int,
+                                required_sources: list[str]) -> dict:
+    """R3 Blocker-3: a fresh, clean LATEST pull does not prove the 30-day
+    dossier window is complete — every calendar day in the lookback must be
+    covered by some ok pull manifest (or the pre-start bootstrap manifest)
+    with an ok_ per-source status for EVERY required source.
+
+    A failed manifest does not poison the gate by itself IF later overlapping
+    clean pulls re-covered its dates (the 4-day-lookback design exists for
+    exactly that); it is recorded for audit. Uncovered dates REFUSE.
+    """
+    dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
+    dt = dt.tz_convert(CN_TZ)
+    end = dt.date()
+    start = (dt - pd.Timedelta(days=lookback_days - 1)).date()
+
+    covered: dict[str, set] = {s: set() for s in required_sources}
+    bad_manifests: list[dict] = []
+    used: list[str] = []
+    for p in sorted(manifest_dir.glob("pull_manifest_*.json")):
+        if p.name == "pull_manifest_latest.json":
+            continue
+        m = json.loads(p.read_text(encoding="utf-8"))
+        w = m.get("window", {})
+        if not w.get("start") or not w.get("end"):
+            continue
+        ws, we = pd.Timestamp(w["start"]).date(), pd.Timestamp(w["end"]).date()
+        if we < start or ws > end:
+            continue                              # outside the dossier window
+        if not m.get("ok", False):
+            bad_manifests.append({"manifest": p.name,
+                                  "failures": m.get("failures", [])[:5]})
+            continue
+        status = m.get("source_status", {})
+        used.append(p.name)
+        d = ws
+        while d <= we:
+            if start <= d <= end:
+                for s in required_sources:
+                    if str(status.get(s, "missing")).startswith("ok_"):
+                        covered[s].add(d)
+            d += pd.Timedelta(days=1)
+
+    all_days = [d.date() for d in pd.date_range(start, end)]
+    missing = {s: [str(d) for d in all_days if d not in covered[s]]
+               for s in required_sources}
+    missing = {s: v for s, v in missing.items() if v}
+    if missing:
+        raise ForwardGateError(
+            f"text coverage incomplete over the dossier lookback "
+            f"{start}..{end}: missing={missing}; unre-covered failed "
+            f"manifests={bad_manifests} — a gap changes no_text/coverage/"
+            f"selection while looking valid; refusing")
+    return {"window_start": str(start), "window_end": str(end),
+            "required_sources": list(required_sources),
+            "manifest_files_used": used,
+            "failed_manifests_recovered_later": bad_manifests,
+            "coverage_ok": True}
 
 
 def build_manifest(fields: dict) -> dict:
@@ -339,6 +534,17 @@ def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
         raise ForwardGateError("no text pull manifest — text_daily_pull has never run")
     pull_manifest = json.loads(PULL_MANIFEST_LATEST.read_text(encoding="utf-8"))
     check_pull_manifest(pull_manifest, decision_time, required_sources)
+    # R3 Blocker-3: the WHOLE dossier lookback must be covered, not just the tail
+    coverage_record = check_text_coverage_history(
+        PULL_MANIFEST_DIR, decision_time=decision_time,
+        lookback_days=int(cfg["dossier"]["lookback_days"]),
+        required_sources=required_sources)
+    # R3 Major-1: the PIT-preserving migration proof must exist and be pinned
+    if not TEXT_MIGRATION_MANIFEST.exists():
+        raise ForwardGateError(
+            f"text store migration manifest missing: {TEXT_MIGRATION_MANIFEST}")
+    migration_manifest = json.loads(TEXT_MIGRATION_MANIFEST.read_text(encoding="utf-8"))
+    migration_id = migration_manifest["migrations"][-1]["migration_id"]
 
     text_store_paths = {s: Path(DEFAULT_STORE_DIR) / s / f"text_{s}.parquet"
                         for s in required_sources}
@@ -367,6 +573,7 @@ def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
         "decision_time": decision_time.isoformat(), "git_commit": git_commit,
         "config_hash": cfg_hash, "pure_gate_status": "passed",
         "new_attempt_reason": new_attempt_reason,
+        "pid": os.getpid(),                     # liveness hint for --abandon
     }
     write_json_atomic(attempt_manifest_path, attempt_state)
     _ledger_append({"event": "attempt_started", "cycle": cycle,
@@ -385,6 +592,7 @@ def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
             fill_date=fill_date, latest_allowed_asof=latest_allowed_asof,
             calendar_end=calendar_end, staleness=staleness,
             provider_manifest=provider_manifest, pull_manifest=pull_manifest,
+            coverage_record=coverage_record, migration_id=migration_id,
             text_store_paths=text_store_paths, text_store_hashes=text_store_hashes,
             git_commit=git_commit, pool_path=pool_path,
             required_sources=required_sources, attempt_dir=attempt_dir,
@@ -411,6 +619,7 @@ def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
 def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
                       decision_id, fill_date, latest_allowed_asof, calendar_end,
                       staleness, provider_manifest, pull_manifest,
+                      coverage_record, migration_id,
                       text_store_paths, text_store_hashes, git_commit, pool_path,
                       required_sources, attempt_dir, attempt_state, load_text,
                       apply_rank_overlay, chat, parse_json_reply, ArkClientError,
@@ -442,7 +651,8 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
 
     weights, tilt_cap = cfg["weights"], float(cfg["tilt"]["tilt_cap"])
     records = []
-    dossier_hashes, raw_llm_hashes, scorecard_hashes = {}, {}, {}
+    dossier_hashes, scorecard_hashes = {}, {}
+    dir_name_of: dict[str, str] = {}
     names_dir = attempt_dir / "names"
     for n, code in enumerate(floor_names, 1):
         dossier = chain.build_dossier(code, texts, cfg)
@@ -452,7 +662,8 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
             row.update({"status": "no_text", "final": None})
             records.append(row)
             continue
-        name_dir = names_dir / tushare_to_qlib_canonical(code)
+        dir_name_of[code] = tushare_to_qlib_canonical(code)
+        name_dir = names_dir / dir_name_of[code]
         name_dir.mkdir(parents=True, exist_ok=True)
         dossier_hashes[code] = sha256_text(dossier)
         try:
@@ -479,12 +690,6 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
             final = compute_scorecard_final(rec, weights=weights,
                                             evidence_context=evidence_context)
             write_json_atomic(name_dir / "validated_scorecard.json", rec)
-            raw_llm_hashes[code] = {
-                "extract": sha256_text(json.dumps(r1.raw, ensure_ascii=False,
-                                                  sort_keys=True)),
-                "score": sha256_text(json.dumps(r2.raw, ensure_ascii=False,
-                                                sort_keys=True)),
-            }
             scorecard_hashes[code] = sha256_text(
                 json.dumps(rec, ensure_ascii=False, sort_keys=True))
             row.update({"status": "ok", "final": final,
@@ -500,6 +705,10 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
             print(f"[llm] {n}/{len(floor_names)}", flush=True)
 
     det = pd.DataFrame(records)
+    # R3 Blocker-2: pin EVERY attempted LLM artifact by directory scan —
+    # failed/partial spends included; missing artifacts refuse publication
+    llm_artifact_hashes = collect_llm_artifact_hashes(
+        names_dir, dict(zip(det["ts_code"], det["status"])), dir_name_of)
     ok_mask = det["status"] == "ok"
     scored_pct = float(ok_mask.sum()) / max(1, len(floor_names))
     overlay_disabled = scored_pct < float(cfg["coverage"]["min_scored_floor_pct"])
@@ -610,8 +819,15 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
         "text_store_hash_by_required_source": text_store_hashes,
         "input_row_hashes_by_source": input_row_hashes,
         "dossier_hash_by_ts_code": dossier_hashes,
-        "raw_llm_response_hash_by_ts_code": raw_llm_hashes,
+        "llm_artifact_hash_by_ts_code": llm_artifact_hashes,
         "validated_scorecard_hash_by_ts_code": scorecard_hashes,
+        "text_coverage_manifest_hash": sha256_text(
+            json.dumps(coverage_record, ensure_ascii=False, sort_keys=True)),
+        "text_coverage_window": {"start": coverage_record["window_start"],
+                                 "end": coverage_record["window_end"]},
+        "text_coverage_required_sources": coverage_record["required_sources"],
+        "text_store_migration_manifest_hash": sha256_file(TEXT_MIGRATION_MANIFEST),
+        "text_store_migration_id": migration_id,
         "overlay_audit_hash": sha256_text(
             json.dumps(overlay_audit, ensure_ascii=False, sort_keys=True)),
         "decision_json_hash": sha256_file(attempt_dir / "decision.json"),
@@ -627,6 +843,49 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
                     "decision_id": decision_id})
     print(f"[published] {attempt_dir} decision_id={decision_id} "
           f"overlay_disabled={overlay_disabled}", flush=True)
+    return 0
+
+
+def _pid_alive(pid: int) -> bool | None:
+    """Best-effort liveness check; None = unverifiable on this host."""
+    try:
+        import psutil  # type: ignore
+        return psutil.pid_exists(pid)
+    except ImportError:
+        return None
+
+
+def run_abandon_attempt(cycle: str, attempt_id: str, reason: str) -> int:
+    """R3 Blocker-1: the ONLY door out of a `started` attempt — terminal
+    ``abandoned_due_to_crash`` with attestation; artifacts preserved forever."""
+    if not reason or not reason.strip():
+        raise ForwardGateError("--abandon-started-attempt requires a non-empty reason")
+    attempt_dir = CYCLES_ROOT / cycle / f"attempt_{attempt_id}"
+    am = attempt_dir / "attempt_manifest.json"
+    if not am.exists():
+        raise ForwardGateError(f"no attempt manifest at {am}")
+    state = json.loads(am.read_text(encoding="utf-8"))
+    if state.get("status") != "started":
+        raise ForwardGateError(
+            f"attempt {attempt_id} is '{state.get('status')}', not 'started' — "
+            f"only a live-crashed attempt can be abandoned")
+    pid = state.get("pid")
+    alive = _pid_alive(pid) if pid else None
+    if alive is True:
+        raise ForwardGateError(
+            f"attempt {attempt_id} PID {pid} is STILL RUNNING — abandoning a "
+            f"live attempt is a selection channel; wait or kill it first")
+    state.update({
+        "status": "abandoned_due_to_crash",
+        "abandon_reason": reason.strip(),
+        "abandoned_at": pd.Timestamp.now(tz=CN_TZ).isoformat(),
+        "pid_liveness_at_abandon": ("dead" if alive is False
+                                    else "unverified_no_psutil"),
+    })
+    write_json_atomic(am, state)
+    _ledger_append({"event": "attempt_abandoned", "cycle": cycle,
+                    "decision_id": attempt_id, "reason": reason.strip()})
+    print(f"[abandoned] {attempt_dir} (artifacts preserved)", flush=True)
     return 0
 
 
@@ -700,10 +959,17 @@ def main() -> int:
     ap.add_argument("--cycle", required=True, help="pool month, e.g. 202608")
     ap.add_argument("--record-fills", action="store_true")
     ap.add_argument("--new-attempt", metavar="REASON", default=None,
-                    help="explicit ledger-counted retry after a FAILED attempt")
+                    help="explicit ledger-counted retry after a TERMINAL "
+                         "failed/abandoned attempt (never bypasses 'started')")
+    ap.add_argument("--abandon-started-attempt", metavar="ATTEMPT_ID", default=None,
+                    help="terminally abandon a crashed 'started' attempt "
+                         "(requires --new-attempt REASON as the attestation)")
     args = ap.parse_args()
     FORWARD_ROOT.mkdir(parents=True, exist_ok=True)
     try:
+        if args.abandon_started_attempt:
+            return run_abandon_attempt(args.cycle, args.abandon_started_attempt,
+                                       args.new_attempt or "")
         if args.record_fills:
             return run_record_fills(args.cycle)
         return run_decision(args.cycle, new_attempt_reason=args.new_attempt)

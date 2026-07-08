@@ -4,7 +4,7 @@
 **绑定:** [CONTRACTS.md](../trading_agents_design/CONTRACTS.md) C1/C2/C5/C6/C7/C12/C15/C16 ·
 config = [rerank_v2.yaml](../../../config/ai_layer/rerank_v2.yaml)
 
-config_hash_v2: `5c8a462e1c5500b3`
+config_hash_v2: `07492b544b52288c`
 
 > **v1→v2 修订记录(2026-07-08,起跑前):** GPT 实现级 §10 review #1(REVISE)裁定 7 Blocker,
 > 其中 B1(payload 渲染+证据落地)、B3(tilt 改 cohort 均值中心化 + 覆盖率闸门)、M4(组合上限)
@@ -13,6 +13,15 @@ config_hash_v2: `5c8a462e1c5500b3`
 > **review #2(REVISE)追加修订(2026-07-08,仍在起跑前):** R2-Blocker-1 罚分证据强制(score_v2
 > penalty schema 带 evidence_spans,无逐字证据的罚分只入 risk_flags 不入 final)→ hash 由
 > `12724e20f1f78b55` 更新为 `5c8a462e1c5500b3`;决策产出改为 **attempt 台账制**(见 §4)。
+> **review #3(REVISE)追加修订(2026-07-08,仍在起跑前):** R3-Major-3 证据 span 实质性下限
+> (8-80 字逐字、泛词不算)→ hash 更新为 `07492b544b52288c`;R3-Blocker-1 `started` attempt
+> 永不可被普通 `--new-attempt` 越过(专用 `--abandon-started-attempt` 出口,PID 活性核查+归因),
+> ledger↔目录双重核对(ledger 有记录而目录被删=证据违规,永拒);R3-Blocker-2 manifest 按目录
+> 扫描钉住**全部**LLM 尝试产物(成功/违规/解析失败/部分),缺件拒发布;R3-Blocker-3 **文本覆盖史
+> 闸门(预注册)**:30 天 dossier 回看窗内每个自然日、每个 required source 必须被某个 ok pull
+> manifest(含起跑前 bootstrap manifest)覆盖,缺口=拒绝本周期(替代方案"缺口→overlay 停用
+> 计入分母"未采用——直接拒绝更严);失败 manifest 若被其后重叠的干净拉取重新覆盖则不毒化闸门
+> (4 天回看设计的本意),仅记审计。
 
 ---
 

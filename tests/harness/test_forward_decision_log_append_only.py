@@ -1,7 +1,8 @@
-"""B7/B4 + R2 Blocker-2: forward attempts are APPEND-ONLY, ledger-counted
-research events — a published cycle can never be re-decided; a failed attempt
-blocks silent retries (explicit --new-attempt only); attempt state files are
-written atomically."""
+"""B7/B4 + R2-B2 + R3-B1: forward attempts are APPEND-ONLY, ledger-counted
+research events — a published cycle can never be re-decided; a `started`
+(non-terminal, partial-spend) attempt can NEVER be bypassed, even explicitly;
+the ledger is a START-GATE cross-checked against the attempt dirs (a deleted
+dir with a ledger record refuses forever)."""
 from __future__ import annotations
 
 import importlib.util
@@ -34,40 +35,76 @@ def _mk_attempt(cycles_root: Path, cycle: str, att_id: str, status: str):
     return d
 
 
+def _ledger(tmp_path: Path, events: list[dict]) -> Path:
+    p = tmp_path / "attempts_ledger.jsonl"
+    p.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    return p
+
+
+def _empty_ledger(tmp_path: Path) -> Path:
+    return tmp_path / "no_ledger.jsonl"          # nonexistent = empty
+
+
 def test_fresh_cycle_allowed(fwd, tmp_path):
-    fwd.ensure_attempt_allowed(tmp_path, "202608")   # no raise
+    fwd.ensure_attempt_allowed(tmp_path, "202608",
+                               ledger_path=_empty_ledger(tmp_path))
 
 
 def test_published_attempt_refuses_forever(fwd, tmp_path):
     _mk_attempt(tmp_path, "202608", "aaaa", "published")
-    with pytest.raises(fwd.ForwardGateError, match="PUBLISHED"):
-        fwd.ensure_attempt_allowed(tmp_path, "202608")
-    # even an explicit new attempt cannot re-decide a published cycle
-    with pytest.raises(fwd.ForwardGateError, match="PUBLISHED"):
-        fwd.ensure_attempt_allowed(tmp_path, "202608", new_attempt=True)
+    for na in (False, True):
+        with pytest.raises(fwd.ForwardGateError, match="PUBLISHED"):
+            fwd.ensure_attempt_allowed(tmp_path, "202608", new_attempt=na,
+                                       ledger_path=_empty_ledger(tmp_path))
+
+
+def test_started_attempt_cannot_be_bypassed_even_explicitly(fwd, tmp_path):
+    # R3 Blocker-1: a partial LLM spend is NON-TERMINAL — --new-attempt must NOT work
+    _mk_attempt(tmp_path, "202609", "bbbb", "started")
+    for na in (False, True):
+        with pytest.raises(fwd.ForwardGateError, match="NON-TERMINAL"):
+            fwd.ensure_attempt_allowed(tmp_path, "202609", new_attempt=na,
+                                       ledger_path=_empty_ledger(tmp_path))
 
 
 def test_failed_attempt_blocks_silent_retry_but_allows_explicit(fwd, tmp_path):
-    _mk_attempt(tmp_path, "202609", "bbbb", "failed")
+    _mk_attempt(tmp_path, "202610", "cccc", "failed")
     with pytest.raises(fwd.ForwardGateError, match="new-attempt"):
-        fwd.ensure_attempt_allowed(tmp_path, "202609")
-    fwd.ensure_attempt_allowed(tmp_path, "202609", new_attempt=True)   # explicit OK
+        fwd.ensure_attempt_allowed(tmp_path, "202610",
+                                   ledger_path=_empty_ledger(tmp_path))
+    fwd.ensure_attempt_allowed(tmp_path, "202610", new_attempt=True,
+                               ledger_path=_empty_ledger(tmp_path))
 
 
-def test_started_attempt_also_blocks_silent_retry(fwd, tmp_path):
-    # a crashed-before-terminal attempt is still a spend — no silent rerun
-    _mk_attempt(tmp_path, "202610", "cccc", "started")
-    with pytest.raises(fwd.ForwardGateError, match="new-attempt"):
-        fwd.ensure_attempt_allowed(tmp_path, "202610")
+def test_abandoned_attempt_is_terminal_retryable(fwd, tmp_path):
+    _mk_attempt(tmp_path, "202611", "dddd", "abandoned_due_to_crash")
+    fwd.ensure_attempt_allowed(tmp_path, "202611", new_attempt=True,
+                               ledger_path=_empty_ledger(tmp_path))
+
+
+def test_ledger_record_with_missing_dir_refuses(fwd, tmp_path):
+    # R3 Blocker-1: manual deletion of an attempt dir = evidence breach
+    ledger = _ledger(tmp_path, [{"event": "attempt_started", "cycle": "202612",
+                                 "decision_id": "eeee"}])
+    with pytest.raises(fwd.ForwardGateError, match="evidence breach"):
+        fwd.ensure_attempt_allowed(tmp_path, "202612", new_attempt=True,
+                                   ledger_path=ledger)
+
+
+def test_attempt_dir_without_manifest_refuses(fwd, tmp_path):
+    d = tmp_path / "202613" / "attempt_ffff"
+    d.mkdir(parents=True)                          # torn: no attempt_manifest.json
+    with pytest.raises(fwd.ForwardGateError, match="torn attempt"):
+        fwd.ensure_attempt_allowed(tmp_path, "202613",
+                                   ledger_path=_empty_ledger(tmp_path))
 
 
 def test_write_json_atomic_no_partial_file(fwd, tmp_path):
     p = tmp_path / "x.json"
     fwd.write_json_atomic(p, {"a": 1})
-    assert json.loads(p.read_text(encoding="utf-8")) == {"a": 1}
-    fwd.write_json_atomic(p, {"a": 2})               # atomic overwrite
+    fwd.write_json_atomic(p, {"a": 2})
     assert json.loads(p.read_text(encoding="utf-8")) == {"a": 2}
-    assert not list(tmp_path.glob("*.tmp"))          # no leftovers
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_decision_id_derivation_is_pinned(fwd):

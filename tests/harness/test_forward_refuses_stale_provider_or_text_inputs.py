@@ -132,3 +132,86 @@ def test_dirty_worktree_refused(fwd):
         fwd.check_worktree_clean(" M src/ai_layer/scorecard.py\n?? junk.py\n")
     fwd.check_worktree_clean("")
     fwd.check_worktree_clean("\n")
+
+
+def test_worktree_whitelist_covers_generated_paths_only(fwd):
+    # R3 Major-2: logs/outputs/.env are generated/local -> pass
+    fwd.check_worktree_clean("?? logs/text_pull/pull_manifest_x.json\n"
+                             "?? workspace/outputs/mvp_forward/attempts_ledger.jsonl\n"
+                             " M .env\n")
+    # but code/config/data/tests/prereg NEVER pass, even mixed with whitelisted
+    for line in (" M config/ai_layer/rerank_v2.yaml",
+                 " M src/data_infra/text_store.py",
+                 "?? tests/harness/new_test.py",
+                 " M workspace/research/mvp_pool_book/FORWARD_PREREG.md"):
+        with pytest.raises(fwd.ForwardGateError, match="DIRTY"):
+            fwd.check_worktree_clean("?? logs/x.log\n" + line + "\n")
+
+
+# --------------------- R3 Blocker-3: text coverage history -------------------
+
+import json  # noqa: E402
+
+
+def _write_manifest(d: Path, name: str, *, start: str, end: str, ok=True,
+                    statuses=None, failures=()):
+    (d / f"pull_manifest_{name}.json").write_text(json.dumps({
+        "run_ts": "2026-08-03T20:35:00+08:00",
+        "window": {"start": start, "end": end},
+        "source_status": statuses or {},
+        "failures": list(failures),
+        "ok": ok,
+    }), encoding="utf-8")
+
+
+SRC = ["anns_d", "research_report"]
+DT = pd.Timestamp("2026-08-03 21:00:00", tz="Asia/Shanghai")
+
+
+def test_full_coverage_passes(fwd, tmp_path):
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+                    end="2026-07-20", statuses=ok_st)
+    _write_manifest(tmp_path, "20260803", start="2026-07-21",
+                    end="2026-08-03", statuses=ok_st)
+    rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                          lookback_days=30, required_sources=SRC)
+    assert rec["coverage_ok"] is True and len(rec["manifest_files_used"]) == 2
+
+
+def test_gap_inside_window_refuses(fwd, tmp_path):
+    # daily task down 2026-07-22..2026-07-26 — latest pull is clean but window has a hole
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+                    end="2026-07-21", statuses=ok_st)
+    _write_manifest(tmp_path, "20260803", start="2026-07-27",
+                    end="2026-08-03", statuses=ok_st)
+    with pytest.raises(fwd.ForwardGateError, match="coverage incomplete"):
+        fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                        lookback_days=30, required_sources=SRC)
+
+
+def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
+    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+                    end="2026-08-03",
+                    statuses={"anns_d": "ok_nonzero_rows",
+                              "research_report": "failed"})
+    with pytest.raises(fwd.ForwardGateError, match="research_report"):
+        fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                        lookback_days=30, required_sources=SRC)
+
+
+def test_failed_manifest_recovered_by_later_clean_pull_passes(fwd, tmp_path):
+    # D1 deviation (disclosed): a failed pull does not poison the gate IF later
+    # overlapping clean pulls re-covered its dates (4-day lookback design)
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+                    end="2026-07-30", statuses=ok_st)
+    _write_manifest(tmp_path, "20260801", start="2026-07-29", end="2026-08-01",
+                    ok=False, statuses={}, failures=["anns_d@20260801: boom"])
+    _write_manifest(tmp_path, "20260803", start="2026-07-31", end="2026-08-03",
+                    statuses=ok_st)
+    rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                          lookback_days=30, required_sources=SRC)
+    assert rec["coverage_ok"] is True
+    assert rec["failed_manifests_recovered_later"]      # audit trail kept
