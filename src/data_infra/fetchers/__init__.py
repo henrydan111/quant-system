@@ -921,11 +921,14 @@ class TushareFetcher:
                            max_pages: int = 6) -> pd.DataFrame:
         """anns_d with offset pagination (busy days exceed the 2000/call cap).
 
-        Stops when a page returns < page_size, repeats, or max_pages is hit
-        (a hit is logged by the caller via the returned length == cap*max_pages).
+        impl-review M3: the returned frame carries ``df.attrs['truncated']`` —
+        True when max_pages was exhausted with the last page still FULL (the
+        day may extend beyond what was fetched); callers treating the pull as
+        complete MUST check it and fail the day, not silently under-ingest.
         """
         frames: list[pd.DataFrame] = []
         seen_first: set[str] = set()
+        truncated = False
         for page in range(max_pages):
             df = self._safe_api_call(
                 self.pro.anns_d,
@@ -935,14 +938,21 @@ class TushareFetcher:
                 fields="ann_date,ts_code,name,title,url,rec_time",
             )
             if df is None or df.empty:
+                truncated = False
                 break
             marker = f"{df.iloc[0]['ts_code']}|{df.iloc[0]['title']}"
             if marker in seen_first:  # offset unsupported -> same page again
+                truncated = False
                 break
             seen_first.add(marker)
             frames.append(df)
             if len(df) < page_size:
+                truncated = False
                 break
+            truncated = True          # full page; a later break clears it
         if not frames:
-            return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True).drop_duplicates()
+            out = pd.DataFrame()
+        else:
+            out = pd.concat(frames, ignore_index=True).drop_duplicates()
+        out.attrs["truncated"] = truncated
+        return out

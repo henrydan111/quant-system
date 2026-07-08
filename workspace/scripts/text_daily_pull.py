@@ -5,7 +5,11 @@ Design:
   - LOOKBACK = 4 calendar days each run: catches late replies/revisions and a
     missed run (machine off). Idempotent — content_hash dedup in text_store
     means overlapping pulls are free; a revision becomes a NEW row (C1).
-  - anns_d uses offset pagination (busy days exceed 2000/call).
+  - anns_d uses offset pagination (busy days exceed 2000/call); a truncated
+    day (M3: df.attrs['truncated']) counts as a FAILURE, never silent.
+  - impl-review B5: every run writes a manifest JSON to logs/text_pull/ and
+    exits NON-ZERO on ANY source failure — the forward runner reads the
+    latest manifest and refuses a cycle whose text inputs are incomplete.
   - Sequential calls only (§6.1). Logs to logs/text_daily_pull.log (rotating).
 
 Scheduled as Windows task `QuantTextDailyPull` (daily 20:30) — the forward
@@ -13,6 +17,7 @@ clean panel accrues through this job; without it, only fixtures exist.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
@@ -38,10 +43,12 @@ logging.basicConfig(level=logging.INFO, handlers=[handler, logging.StreamHandler
 log = logging.getLogger("text_daily_pull")
 
 LOOKBACK_DAYS = 4
+MANIFEST_DIR = LOG_DIR / "text_pull"
 
 
 def main() -> int:
     f = TushareFetcher()
+    run_ts = pd.Timestamp.now()
     end = date.today()
     start = end - timedelta(days=LOOKBACK_DAYS - 1)
     log.info("daily pull window %s..%s", start, end)
@@ -66,13 +73,33 @@ def main() -> int:
                 continue
             if df is None or df.empty:
                 continue
+            if df.attrs.get("truncated"):     # M3: incomplete day = failure
+                failures.append(f"{source}@{ymd}: truncated (max_pages hit, day incomplete)")
+                log.error("%s @%s TRUNCATED — day incomplete, counted as failure",
+                          source, ymd)
             ingest_rows(source, df, published_col=pub_col, retrieved_at=now)
             counts[source] = counts.get(source, 0) + len(df)
         d += timedelta(days=1)
         time.sleep(0.3)
 
-    log.info("done: %s%s", counts, f" | FAILURES: {failures}" if failures else "")
-    return 1 if failures and not counts else 0
+    # B5: per-run manifest — the forward runner's completeness evidence
+    MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "run_ts": run_ts.isoformat(),
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "lookback_days": LOOKBACK_DAYS,
+        "counts": counts,
+        "failures": failures,
+        "ok": not failures,
+    }
+    mpath = MANIFEST_DIR / f"pull_manifest_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
+    mpath.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    (MANIFEST_DIR / "pull_manifest_latest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    log.info("done: %s%s | manifest -> %s", counts,
+             f" | FAILURES: {failures}" if failures else "", mpath)
+    return 1 if failures else 0            # B5: ANY failure = non-zero exit
 
 
 if __name__ == "__main__":

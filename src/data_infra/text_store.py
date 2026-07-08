@@ -13,8 +13,14 @@ Q&A, announcements, news). Every row is stamped at ingestion:
   (the R5-B1 ``max``-not-``earliest`` rule); missing/nominal publication falls
   back to ``first_ingested_at`` with ``published_missing=True`` (fixture-only
   for historical replay);
-- ``content_hash`` — sha256 over source + all raw fields; a silent vendor
-  REVISION becomes a NEW row (new hash), the original row is frozen forever.
+- ``content_hash`` — sha256 over source + a PINNED per-source column basis
+  (``SOURCE_HASH_COLUMNS``, impl-review M1); a silent vendor REVISION becomes
+  a NEW row (new hash), the original row is frozen forever. Pinning makes the
+  hash reproducible across adapter/schema drift (a vendor adding an incidental
+  column must not re-mint every hash); each row records the
+  ``adapter_contract_hash`` of the basis it was hashed under. Unknown/test
+  sources fall back to hashing ALL raw columns (conservative: never hides a
+  revision).
 
 The loader gate (``load_text``) admits a row at decision time ``T`` only when
 ``decision_visible_at <= T`` — so a historical backfill ingested today can never
@@ -29,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -42,12 +49,50 @@ DEFAULT_STORE_DIR = _PROJECT_ROOT / "data" / "text_store"
 STAMP_COLUMNS = (
     "source",
     "content_hash",
+    "adapter_contract_hash",
     "source_published_at",
     "retrieved_at",
     "first_ingested_at",
     "decision_visible_at",
     "published_missing",
 )
+
+#: impl-review M1 — the PINNED identity/content basis for content_hash, per
+#: production source. Changing a basis = a new adapter contract (new
+#: ``adapter_contract_hash``) and REQUIRES a store migration, never an in-place
+#: re-mint. Column names verified against the live store schemas 2026-07-08.
+#: irm_qa deliberately EXCLUDES the answer text ``a``: vendor re-formatting of
+#: an answer must not mint spurious rows; a real answer revision arrives with a
+#: new ``pub_time`` and thus a new hash.
+SOURCE_HASH_COLUMNS: dict[str, list[str]] = {
+    "anns_d": ["ann_date", "ts_code", "title", "url"],
+    "irm_qa_sh": ["ts_code", "pub_time", "q"],
+    "irm_qa_sz": ["ts_code", "pub_time", "q"],
+    "research_report": ["ts_code", "title", "inst_csname", "trade_date"],
+}
+
+
+def adapter_contract_hash(source: str, columns: list[str] | None = None) -> str:
+    """Short hash naming the (source, hash-basis) contract a row was minted under."""
+    basis = columns if columns is not None else SOURCE_HASH_COLUMNS.get(source)
+    payload = source + "|" + ("|".join(basis) if basis else "<ALL_RAW_COLUMNS>")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """impl-review M2: same-dir tempfile + os.replace — a crashed writer can
+    never leave a torn store file behind."""
+    fd, tmp = tempfile.mkstemp(suffix=".parquet.tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        df.to_parquet(tmp, index=False)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class TextStoreError(Exception):
@@ -59,8 +104,22 @@ def _store_path(source: str, store_dir: str | os.PathLike | None) -> Path:
     return base / source / f"text_{source}.parquet"
 
 
-def _hash_row(source: str, row: pd.Series) -> str:
-    payload = source + "|" + "|".join(f"{k}={row[k]}" for k in sorted(row.index))
+def _hash_basis(source: str, raw_columns: list[str]) -> list[str]:
+    """Resolve the pinned hash basis; fail CLOSED if a pinned column is absent."""
+    pinned = SOURCE_HASH_COLUMNS.get(source)
+    if pinned is None:
+        return sorted(raw_columns)          # unknown source: ALL raw columns
+    missing = [c for c in pinned if c not in raw_columns]
+    if missing:
+        raise TextStoreError(
+            f"source '{source}' raw batch is missing pinned hash columns "
+            f"{missing} (SOURCE_HASH_COLUMNS contract, M1) — refusing to ingest"
+        )
+    return pinned
+
+
+def _hash_row(source: str, row: pd.Series, basis: list[str]) -> str:
+    payload = source + "|" + "|".join(f"{k}={row[k]}" for k in basis)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -93,9 +152,13 @@ def ingest_rows(
 
     stamped = raw.copy().reset_index(drop=True)
     stamped["source"] = source
+    basis = _hash_basis(source, list(raw.columns))
     stamped["content_hash"] = [
-        _hash_row(source, stamped.loc[i, list(raw.columns)]) for i in stamped.index
+        _hash_row(source, stamped.loc[i, list(raw.columns)], basis)
+        for i in stamped.index
     ]
+    stamped["adapter_contract_hash"] = adapter_contract_hash(
+        source, basis if source in SOURCE_HASH_COLUMNS else None)
     if published_col is not None:
         if published_col not in stamped.columns:
             raise TextStoreError(f"published_col '{published_col}' not in raw columns")
@@ -119,12 +182,12 @@ def ingest_rows(
         new_rows = stamped[~stamped["content_hash"].isin(known)]
         if not new_rows.empty:
             combined = pd.concat([existing, new_rows], ignore_index=True)
-            combined.to_parquet(path, index=False)
+            _atomic_write_parquet(combined, path)
         else:
             combined = existing
         # return authoritative stamps for THIS batch's hashes (originals win)
         return combined[combined["content_hash"].isin(set(stamped["content_hash"]))].copy()
-    stamped.to_parquet(path, index=False)
+    _atomic_write_parquet(stamped, path)
     return stamped
 
 
