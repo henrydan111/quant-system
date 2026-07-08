@@ -163,6 +163,50 @@ def test_write_json_atomic_no_partial_file(fwd, tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+# ---------------------- R5 Blocker-1: published seal -------------------------
+
+def _mk_published(fwd, cycles_root: Path, cycle: str, att_id: str):
+    d = _mk_attempt(cycles_root, cycle, att_id, "published")
+    (d / "decision.json").write_text('{"legs": {}}', encoding="utf-8")
+    (d / "manifest.json").write_text('{"decision_id": "x"}', encoding="utf-8")
+    h = fwd.write_published_attempt_seal(d, cycle=cycle, decision_id=att_id)
+    return d, h
+
+
+def test_published_seal_roundtrip_and_fill_record_excluded(fwd, tmp_path):
+    d, h = _mk_published(fwd, tmp_path, "202620", "pppp")
+    fwd.verify_published_attempt_seal(d, h)             # intact -> no raise
+    # a later fill_record must NOT break the pre-fill seal
+    (d / "fill_record.json").write_text('{"fills": {}}', encoding="utf-8")
+    fwd.verify_published_attempt_seal(d, h)
+    # attempt_manifest status flip is ledger-protected, not seal-protected
+    (d / "attempt_manifest.json").write_text(
+        json.dumps({"status": "published", "published_attempt_seal_hash": h}),
+        encoding="utf-8")
+    fwd.verify_published_attempt_seal(d, h)
+
+
+def test_tampered_published_decision_refuses(fwd, tmp_path):
+    d, h = _mk_published(fwd, tmp_path, "202621", "qqqq")
+    (d / "decision.json").write_text('{"legs": {"ai_book": ["HACKED"]}}',
+                                     encoding="utf-8")
+    with pytest.raises(fwd.ForwardGateError, match="after sealing"):
+        fwd.verify_published_attempt_seal(d, h)
+
+
+def test_unsealed_or_ledger_missing_published_refuses(fwd, tmp_path):
+    d = _mk_attempt(tmp_path, "202622", "rrrr", "published")
+    (d / "decision.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(fwd.ForwardGateError, match="unsealed decision"):
+        fwd.verify_published_attempt_seal(d, "0" * 64)
+    h = fwd.write_published_attempt_seal(d, cycle="202622", decision_id="rrrr")
+    with pytest.raises(fwd.ForwardGateError, match="unsealed publication"):
+        fwd.verify_published_attempt_seal(d, None)      # ledger lacks the hash
+    with pytest.raises(fwd.ForwardGateError, match="does not match"):
+        fwd.verify_published_attempt_seal(d, "0" * 64)  # ledger disagrees
+    fwd.verify_published_attempt_seal(d, h)
+
+
 def test_decision_id_derivation_is_pinned(fwd):
     a = fwd.compute_decision_id("202608", "2026-08-03T20:45:00+08:00", "abcd1234", "deadbeef")
     b = fwd.compute_decision_id("202608", "2026-08-03T20:45:00+08:00", "abcd1234", "deadbeef")

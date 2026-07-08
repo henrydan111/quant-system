@@ -170,7 +170,7 @@ DT = pd.Timestamp("2026-08-03 21:00:00", tz="Asia/Shanghai")
 
 def test_full_coverage_passes_and_is_content_addressed(fwd, tmp_path):
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "20260720", start="2026-07-05",
+    _write_manifest(tmp_path, "20260720", start="2026-07-04",
                     end="2026-07-20", statuses=ok_st)
     _write_manifest(tmp_path, "20260803", start="2026-07-21",
                     end="2026-08-03", statuses=ok_st)
@@ -185,13 +185,23 @@ def test_full_coverage_passes_and_is_content_addressed(fwd, tmp_path):
     assert rec["manifest_sha256_by_file"][p.name] == _h.sha256(p.read_bytes()).hexdigest()
     # ...and every covered (source, day) names its covering manifest
     assert rec["coverage_by_source_day"]["anns_d"]["2026-08-01"] == p.name
-    assert len(rec["coverage_by_source_day"]["anns_d"]) == 30
+    # R5 Blocker-3: 31 dates — the PARTIAL first day of the lookback included
+    assert len(rec["coverage_by_source_day"]["anns_d"]) == 31
+    assert rec["window_start"] == "2026-07-04"
+
+
+def test_coverage_window_start_equals_shared_dossier_cutoff(fwd):
+    # R5 Blocker-3: ONE cutoff definition for coverage gate and dossier filter
+    cutoff = fwd.dossier_cutoff_ts(DT, 30)
+    assert cutoff == pd.Timestamp("2026-07-04 21:00:00")
+    # a UTC decision time resolves to the same CN cutoff
+    assert fwd.dossier_cutoff_ts(DT.tz_convert("UTC"), 30) == cutoff
 
 
 def test_gap_inside_window_refuses(fwd, tmp_path):
     # daily task down 2026-07-22..2026-07-26 — latest pull is clean but window has a hole
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "20260721", start="2026-07-05",
+    _write_manifest(tmp_path, "20260721", start="2026-07-04",
                     end="2026-07-21", statuses=ok_st)
     _write_manifest(tmp_path, "20260803", start="2026-07-27",
                     end="2026-08-03", statuses=ok_st)
@@ -200,8 +210,19 @@ def test_gap_inside_window_refuses(fwd, tmp_path):
                                         lookback_days=30, required_sources=SRC)
 
 
-def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
+def test_partial_first_day_requires_coverage_too(fwd, tmp_path):
+    # R5 Blocker-3 regression: coverage starting one day AFTER the cutoff date
+    # (the old lookback_days-1 window) must now REFUSE
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
     _write_manifest(tmp_path, "20260803", start="2026-07-05",
+                    end="2026-08-03", statuses=ok_st)
+    with pytest.raises(fwd.ForwardGateError, match="2026-07-04"):
+        fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                        lookback_days=30, required_sources=SRC)
+
+
+def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
+    _write_manifest(tmp_path, "20260803", start="2026-07-04",
                     end="2026-08-03",
                     statuses={"anns_d": "ok_nonzero_rows",
                               "research_report": "failed"})
@@ -210,12 +231,34 @@ def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
                                         lookback_days=30, required_sources=SRC)
 
 
+def test_coverage_record_is_self_contained_after_source_manifest_loss(fwd, tmp_path):
+    # R5 Blocker-2: the persisted record alone must reconstruct the coverage
+    # evidence — delete a consulted manifest AFTER the record is written
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    _write_manifest(tmp_path, "20260720", start="2026-07-04",
+                    end="2026-07-20", statuses=ok_st)
+    _write_manifest(tmp_path, "20260803", start="2026-07-21",
+                    end="2026-08-03", statuses=ok_st)
+    rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                          lookback_days=30, required_sources=SRC)
+    attempt_dir = tmp_path / "attempt_x"
+    attempt_dir.mkdir()
+    fwd.write_json_atomic(attempt_dir / "text_coverage_record.json", rec)
+    (tmp_path / "pull_manifest_20260720.json").unlink()      # historical loss
+    stored = json.loads((attempt_dir / "text_coverage_record.json")
+                        .read_text(encoding="utf-8"))
+    # the payload still names every covering manifest, day by day, WITH hashes
+    assert stored["manifest_sha256_by_file"]["pull_manifest_20260720.json"]
+    assert stored["coverage_by_source_day"]["anns_d"]["2026-07-10"] == \
+        "pull_manifest_20260720.json"
+
+
 def test_failed_manifest_recovered_by_later_clean_pull_passes(fwd, tmp_path):
     # D1 (GPT-accepted, conditional on hashing): a failed pull does not poison
     # the gate IF later overlapping clean pulls re-covered its dates — and the
     # failed manifest itself is content-hash pinned in the audit record
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "20260730", start="2026-07-05",
+    _write_manifest(tmp_path, "20260730", start="2026-07-04",
                     end="2026-07-30", statuses=ok_st)
     _write_manifest(tmp_path, "20260801", start="2026-07-29", end="2026-08-01",
                     ok=False, statuses={}, failures=["anns_d@20260801: boom"])
@@ -245,9 +288,9 @@ def _write_bootstrap(d: Path, source: str, coverage_by_day: dict | None,
 def test_day_level_bootstrap_is_credited(fwd, tmp_path):
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
     days = {str(d.date()): ("ok_zero_rows" if i % 3 == 0 else "ok_nonzero_rows")
-            for i, d in enumerate(pd.date_range("2026-07-05", "2026-07-20"))}
+            for i, d in enumerate(pd.date_range("2026-07-04", "2026-07-20"))}
     for s in SRC:
-        _write_bootstrap(tmp_path, s, days, "2026-07-05", "2026-07-20")
+        _write_bootstrap(tmp_path, s, days, "2026-07-04", "2026-07-20")
     _write_manifest(tmp_path, "20260803", start="2026-07-21",
                     end="2026-08-03", statuses=ok_st)
     rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
@@ -261,7 +304,7 @@ def test_coarse_bootstrap_without_day_map_earns_no_credit(fwd, tmp_path):
     # retired min..max form: bootstrap flag but no coverage_by_day -> no credit
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
     for s in SRC:
-        _write_bootstrap(tmp_path, s, None, "2026-07-05", "2026-07-20")
+        _write_bootstrap(tmp_path, s, None, "2026-07-04", "2026-07-20")
     _write_manifest(tmp_path, "20260803", start="2026-07-21",
                     end="2026-08-03", statuses=ok_st)
     with pytest.raises(fwd.ForwardGateError, match="coverage incomplete"):
@@ -272,10 +315,10 @@ def test_coarse_bootstrap_without_day_map_earns_no_credit(fwd, tmp_path):
 def test_bootstrap_failed_day_earns_no_credit(fwd, tmp_path):
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
     days = {str(d.date()): "ok_nonzero_rows"
-            for d in pd.date_range("2026-07-05", "2026-07-20")}
+            for d in pd.date_range("2026-07-04", "2026-07-20")}
     days["2026-07-10"] = "failed"
     for s in SRC:
-        _write_bootstrap(tmp_path, s, days, "2026-07-05", "2026-07-20")
+        _write_bootstrap(tmp_path, s, days, "2026-07-04", "2026-07-20")
     _write_manifest(tmp_path, "20260803", start="2026-07-21",
                     end="2026-08-03", statuses=ok_st)
     with pytest.raises(fwd.ForwardGateError, match="2026-07-10"):

@@ -99,9 +99,10 @@ REQUIRED_MANIFEST_FIELDS = frozenset({
     "validated_scorecard_hash_by_ts_code",
     "overlay_audit_hash", "decision_json_hash", "scorecards_parquet_hash",
     "text_pull_manifest", "prereg",
-    # R3 Blocker-3 / Major-1
-    "text_coverage_manifest_hash", "text_coverage_window",
-    "text_coverage_required_sources",
+    # R3 Blocker-3 / Major-1 · R5 Blocker-2: the coverage record is PERSISTED
+    # in the attempt dir (payload, not just a hash) and pinned by file hash
+    "text_coverage_record_hash", "text_coverage_record_path",
+    "text_coverage_window", "text_coverage_required_sources",
     "text_store_migration_manifest_hash", "text_store_migration_id",
 })
 
@@ -156,6 +157,17 @@ def compute_decision_id(cycle: str, decision_time: str, config_hash: str,
                         git_commit: str) -> str:
     payload = f"{cycle}|{decision_time}|{config_hash}|{git_commit}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def dossier_cutoff_ts(decision_time: pd.Timestamp,
+                      lookback_days: int) -> pd.Timestamp:
+    """R5 Blocker-3: THE shared dossier cutoff (CN wall time, naive) — the
+    coverage gate and the dossier text filter MUST derive from this single
+    definition, else the first partial calendar day of the lookback is
+    dossier-eligible without coverage proof."""
+    dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
+    return dt.tz_convert(CN_TZ).tz_localize(None) - pd.Timedelta(
+        days=int(lookback_days))
 
 
 def previous_open_day(fill_date, trade_cal: pd.DataFrame) -> pd.Timestamp:
@@ -295,6 +307,78 @@ def write_terminal_attempt_manifest(attempt_dir: Path, *, cycle: str,
     out = attempt_dir / "terminal_attempt_manifest.json"
     write_json_atomic(out, manifest)
     return sha256_file(out)
+
+
+#: files excluded from the PUBLISHED pre-fill seal: the seal itself, the
+#: post-outcome fill record (own append-only ledger hash event), and
+#: attempt_manifest.json (state-tracking file whose started->published
+#: transition is protected by the LEDGER, not the seal — sealing it would
+#: make the legitimate status flip look like tampering).
+_PUBLISHED_SEAL_EXCLUDE = frozenset({"published_attempt_seal.json",
+                                     "fill_record.json",
+                                     "attempt_manifest.json"})
+
+
+def write_published_attempt_seal(attempt_dir: Path, *, cycle: str,
+                                 decision_id: str) -> str:
+    """R5 Blocker-1: seal the PUBLISHED decision itself, pre-fill — the
+    manifest's internal hashes are necessary but not sufficient (the manifest
+    file itself was not ledger-pinned; a post-outcome rewrite of decision +
+    scorecards + artifacts + manifest together would have been invisible)."""
+    files = {}
+    for p in sorted(attempt_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(attempt_dir)).replace("\\", "/")
+        if rel in _PUBLISHED_SEAL_EXCLUDE:
+            continue
+        files[rel] = sha256_file(p)
+    seal = {
+        "cycle": cycle,
+        "decision_id": decision_id,
+        "seal_type": "published_pre_fill",
+        "sealed_at": pd.Timestamp.now(tz=CN_TZ).isoformat(),
+        "artifact_hashes": files,
+    }
+    out = attempt_dir / "published_attempt_seal.json"
+    write_json_atomic(out, seal)
+    return sha256_file(out)
+
+
+def verify_published_attempt_seal(attempt_dir: Path,
+                                  ledger_hash: str | None) -> None:
+    """Any reader of a published decision (record-fills, forward analysis)
+    verifies the pre-fill seal first: seal exists, matches the ledger hash,
+    and the pre-outcome artifact tree still matches the sealed hashes."""
+    sp = attempt_dir / "published_attempt_seal.json"
+    if not sp.exists():
+        raise ForwardGateError(
+            f"published attempt {attempt_dir.name} lacks "
+            f"published_attempt_seal.json — unsealed decision, refusing to read")
+    if ledger_hash is None:
+        raise ForwardGateError(
+            f"ledger has no published_attempt_seal_hash for {attempt_dir.name} "
+            f"— unsealed publication, refusing")
+    if sha256_file(sp) != ledger_hash:
+        raise ForwardGateError(
+            f"published seal of {attempt_dir.name} does not match the "
+            f"ledger-recorded hash — tampered decision, refusing")
+    sealed = json.loads(sp.read_text(encoding="utf-8"))["artifact_hashes"]
+    current = {}
+    for p in sorted(attempt_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(attempt_dir)).replace("\\", "/")
+        if rel in _PUBLISHED_SEAL_EXCLUDE:
+            continue
+        current[rel] = sha256_file(p)
+    if current != sealed:
+        changed = sorted(set(sealed) ^ set(current)
+                         | {k for k in set(sealed) & set(current)
+                            if sealed[k] != current[k]})
+        raise ForwardGateError(
+            f"published decision {attempt_dir.name} artifact tree changed "
+            f"after sealing ({changed[:10]}) — refusing")
 
 
 def verify_terminal_attempt_seal(attempt_dir: Path,
@@ -474,7 +558,9 @@ def check_text_coverage_history(manifest_dir: Path, *,
     dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
     dt = dt.tz_convert(CN_TZ)
     end = dt.date()
-    start = (dt - pd.Timedelta(days=lookback_days - 1)).date()
+    # R5 Blocker-3: start = the SHARED dossier cutoff's calendar date — the
+    # partial first day admitted by the dossier filter requires coverage too
+    start = dossier_cutoff_ts(decision_time, lookback_days).date()
 
     covered: dict[str, dict] = {s: {} for s in required_sources}   # day -> manifest
     bad_manifests: list[dict] = []
@@ -724,12 +810,17 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
     from data_infra.provider_metadata import tushare_to_qlib_canonical
     attempt_manifest_path = attempt_dir / "attempt_manifest.json"
 
+    # R5 Blocker-2: persist the coverage PAYLOAD in the attempt dir first
+    coverage_record_path = attempt_dir / "text_coverage_record.json"
+    write_json_atomic(coverage_record_path, coverage_record)
+    coverage_record_hash = sha256_file(coverage_record_path)
+
     comp = chain.quant_composite_for_pool(pool, asof_end=latest_allowed_asof)
     quant_scores_hash = sha256_text(
         "\n".join(f"{c}={comp[c]:.10f}" for c in sorted(comp.index)))
 
-    cutoff = decision_time.tz_localize(None) - pd.Timedelta(
-        days=cfg["dossier"]["lookback_days"])
+    # R5 Blocker-3: the ONE shared cutoff (same definition as the coverage gate)
+    cutoff = dossier_cutoff_ts(decision_time, cfg["dossier"]["lookback_days"])
     texts, input_row_hashes = {}, {}
     for s in required_sources:
         df = load_text(s, decision_time, require_exists=True)   # R2 Blocker-6
@@ -917,8 +1008,8 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
         "dossier_hash_by_ts_code": dossier_hashes,
         "llm_artifact_hash_by_ts_code": llm_artifact_hashes,
         "validated_scorecard_hash_by_ts_code": scorecard_hashes,
-        "text_coverage_manifest_hash": sha256_text(
-            json.dumps(coverage_record, ensure_ascii=False, sort_keys=True)),
+        "text_coverage_record_hash": coverage_record_hash,
+        "text_coverage_record_path": "text_coverage_record.json",
         "text_coverage_window": {"start": coverage_record["window_start"],
                                  "end": coverage_record["window_end"]},
         "text_coverage_required_sources": coverage_record["required_sources"],
@@ -933,11 +1024,16 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
     })
     write_json_atomic(attempt_dir / "manifest.json", manifest)
 
-    attempt_state.update({"status": "published"})
+    # R5 Blocker-1: seal the published decision itself (pre-fill), pin in ledger
+    published_seal_hash = write_published_attempt_seal(
+        attempt_dir, cycle=cycle, decision_id=decision_id)
+    attempt_state.update({"status": "published",
+                          "published_attempt_seal_hash": published_seal_hash})
     write_json_atomic(attempt_manifest_path, attempt_state)
     _ledger_append({"event": "attempt_published", "cycle": cycle,
-                    "decision_id": decision_id})
-    print(f"[published] {attempt_dir} decision_id={decision_id} "
+                    "decision_id": decision_id,
+                    "published_attempt_seal_hash": published_seal_hash})
+    print(f"[published+sealed] {attempt_dir} decision_id={decision_id} "
           f"overlay_disabled={overlay_disabled}", flush=True)
     return 0
 
@@ -996,7 +1092,23 @@ def run_abandon_attempt(cycle: str, attempt_id: str, reason: str) -> int:
     return 0
 
 
+def _published_seal_hash_from_ledger(cycle: str, decision_id: str) -> str | None:
+    if not ATTEMPTS_LEDGER.exists():
+        return None
+    h = None
+    for line in ATTEMPTS_LEDGER.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        ev = json.loads(line)
+        if (ev.get("cycle") == cycle and ev.get("decision_id") == decision_id
+                and ev.get("published_attempt_seal_hash")):
+            h = ev["published_attempt_seal_hash"]
+    return h
+
+
 def _published_attempt_dir(cycle: str) -> Path:
+    """Locate AND seal-verify the published decision (R5 Blocker-1: every
+    reader of a published decision verifies the pre-fill seal first)."""
     cycle_dir = CYCLES_ROOT / cycle
     if not cycle_dir.exists():
         raise ForwardGateError(f"no decision published for cycle {cycle}")
@@ -1004,6 +1116,9 @@ def _published_attempt_dir(cycle: str) -> Path:
         am = a / "attempt_manifest.json"
         if am.exists() and json.loads(am.read_text(encoding="utf-8")).get(
                 "status") == "published":
+            decision_id = a.name.removeprefix("attempt_")
+            verify_published_attempt_seal(
+                a, _published_seal_hash_from_ledger(cycle, decision_id))
             return a
     raise ForwardGateError(f"cycle {cycle} has no PUBLISHED attempt")
 
@@ -1057,6 +1172,11 @@ def run_record_fills(cycle: str) -> int:
               "provider_calendar_end": chain.provider_calendar_end(),
               "fills": fills}
     write_json_atomic(fills_path, record)
+    # R5 Blocker-1: the fill record gets its OWN append-only ledger hash event
+    # (it must never mutate the pre-fill published seal)
+    _ledger_append({"event": "fill_recorded", "cycle": cycle,
+                    "decision_id": attempt_dir.name.removeprefix("attempt_"),
+                    "fill_record_hash": sha256_file(fills_path)})
     print(f"[fills] recorded -> {fills_path}", flush=True)
     return 0
 

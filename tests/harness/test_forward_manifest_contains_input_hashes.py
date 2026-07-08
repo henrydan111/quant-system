@@ -31,9 +31,9 @@ EVIDENCE_GRADE_FIELDS = {
     "validated_scorecard_hash_by_ts_code",
     "overlay_audit_hash", "decision_json_hash", "scorecards_parquet_hash",
     "latest_allowed_asof",
-    # R3: coverage + migration provenance
-    "text_coverage_manifest_hash", "text_coverage_window",
-    "text_coverage_required_sources",
+    # R3/R5: coverage payload persisted + pinned, migration provenance
+    "text_coverage_record_hash", "text_coverage_record_path",
+    "text_coverage_window", "text_coverage_required_sources",
     "text_store_migration_manifest_hash", "text_store_migration_id",
 }
 
