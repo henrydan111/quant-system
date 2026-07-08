@@ -35,6 +35,18 @@ def ts_code_to_qlib(ts_code: str, lower: bool = True) -> str:
     return code.lower() if lower else code.upper()
 
 
+#: C8 canonical case for Qlib joins (impl-review B2): the provider-side universe
+#: builder writes Qlib instruments in UPPER underscore form.
+QLIB_CANONICAL_LOWER = False
+
+
+def tushare_to_qlib_canonical(ts_code: str) -> str:
+    """THE sanctioned Tushare→Qlib converter (C8). Hand-rolled
+    ``.replace('.', '_')`` conversions are banned everywhere else —
+    enforced by tests/contracts/test_no_handrolled_tushare_qlib_conversion.py."""
+    return ts_code_to_qlib(ts_code, lower=QLIB_CANONICAL_LOWER)
+
+
 class SuspensionLookup:
     """P1-1: Range-based suspension lookup for the backtester.
 

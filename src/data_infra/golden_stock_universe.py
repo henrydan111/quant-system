@@ -149,18 +149,37 @@ def load_golden_stock_events(
         anchors[month] = _month_anchor(open_days, month)
         expiries[month] = _month_anchor(open_days, _next_month(month))
 
+    raw_months = sorted(anchors.keys())
     unresolved = [m for m, a in anchors.items() if a is None]
     if unresolved:
+        # impl-review B6 (fail-closed): the LATEST raw month falling beyond the
+        # trade calendar means a NEW pool exists but cannot activate — dropping
+        # it would silently keep trading the stale prior pool. Refuse.
+        if max(raw_months) in unresolved:
+            raise GoldenStockUniverseError(
+                f"latest raw broker_recommend month {max(raw_months)} has no "
+                f"activation inside trade_cal — extend the trade calendar before "
+                f"forward/formal use (fail-closed, B6)"
+            )
         logger.warning(
-            "golden_stock_universe: dropping %d month(s) beyond the trade calendar "
-            "(no activation resolvable): %s",
-            len(unresolved),
-            unresolved,
+            "golden_stock_universe: dropping %d HISTORICAL month(s) beyond the "
+            "trade calendar: %s", len(unresolved), unresolved,
         )
         events = events[~events["month"].isin(unresolved)]
         if events.empty:
             raise GoldenStockUniverseError(
                 "no month has a resolvable activation inside the trade calendar"
+            )
+    # B6: an unresolved EXPIRY while the raw NEXT month exists would leave this
+    # month open-ended over a period where a fresher pool should rule. Refuse.
+    for m in raw_months:
+        if m in unresolved:
+            continue
+        nm = _next_month(m)
+        if nm in raw_months and nm not in unresolved and expiries[m] is None:
+            raise GoldenStockUniverseError(
+                f"expiry for {m} unresolved while raw next month {nm} exists — "
+                f"refusing open-ended stale membership (fail-closed, B6)"
             )
 
     events["activation_date"] = events["month"].map(anchors)
@@ -212,8 +231,12 @@ def golden_stock_membership_mask(
     """
     if events is None:
         events = load_golden_stock_events(data_dir=data_dir, trade_cal_path=trade_cal_path)
+    try:
+        from data_infra.provider_metadata import tushare_to_qlib_canonical
+    except ImportError:  # pragma: no cover - src-form import context
+        from src.data_infra.provider_metadata import tushare_to_qlib_canonical
     codes = sorted(events["ts_code"].unique())
-    columns = [c.replace(".", "_") for c in codes] if qlib_form else codes
+    columns = [tushare_to_qlib_canonical(c) for c in codes] if qlib_form else codes
     mask = pd.DataFrame(False, index=pd.DatetimeIndex(dates), columns=columns)
     col_of = dict(zip(codes, columns))
     for _, ev in events.drop_duplicates(subset=["month", "ts_code"]).iterrows():

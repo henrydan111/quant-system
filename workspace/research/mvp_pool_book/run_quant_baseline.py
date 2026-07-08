@@ -36,6 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))  # operators.py uses `from src....` imports
 
 from data_infra.golden_stock_universe import load_golden_stock_events  # noqa: E402
+from data_infra.provider_metadata import tushare_to_qlib_canonical  # noqa: E402
 from alpha_research.factor_library.catalog import get_factor_catalog  # noqa: E402
 from portfolio_risk.rank_book_construction import select_top_k_equal_weight  # noqa: E402
 
@@ -112,7 +113,7 @@ def simulate(holdings: dict[pd.Timestamp, list[str]], R: pd.DataFrame,
 
 def load_benchmark(ts_code: str, days: pd.DatetimeIndex) -> pd.Series | None:
     for cand in (INDEX_DIR / f"index_{ts_code}.parquet",
-                 INDEX_DIR / f"index_{ts_code.replace('.', '_')}.parquet"):
+                 INDEX_DIR / f"index_{tushare_to_qlib_canonical(ts_code)}.parquet"):
         if cand.exists():
             df = pd.read_parquet(cand)
             dcol = "trade_date" if "trade_date" in df.columns else df.columns[0]
@@ -130,13 +131,13 @@ def main() -> int:
     events = load_golden_stock_events()
     anchors = (events.drop_duplicates("month")[["month", "activation_date"]]
                .sort_values("activation_date").reset_index(drop=True))
-    pool_by_month = {m: sorted({c.replace(".", "_").upper() for c in g["ts_code"]})
+    pool_by_month = {m: sorted({tushare_to_qlib_canonical(c) for c in g["ts_code"]})
                      for m, g in events.groupby("month")}
 
     # industry map (CURRENT snapshot -> guardrail only)
     sb = pd.read_parquet(PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
                          columns=["ts_code", "industry"])
-    industry_of = {t.replace(".", "_").upper(): (i if isinstance(i, str) and i else None)
+    industry_of = {tushare_to_qlib_canonical(t): (i if isinstance(i, str) and i else None)
                    for t, i in zip(sb["ts_code"], sb["industry"])}
 
     import qlib
