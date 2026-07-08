@@ -124,3 +124,16 @@ def chat(
     logger.info("ark call model=%s latency=%.1fs usage=%s", model, latency, usage)
     return ArkReply(text=text, model=data.get("model", model), usage=usage,
                     latency_s=latency, raw=data)
+
+
+def parse_json_reply(text: str) -> dict:
+    """Defensive JSON extraction: strips markdown fences (kimi-k2.6 behaviour),
+    tolerates stray prose around the object, fails closed on no/invalid JSON."""
+    t = text.strip()
+    i, j = t.find("{"), t.rfind("}")
+    if i == -1 or j <= i:
+        raise ArkClientError(f"no JSON object in reply: {t[:200]}")
+    try:
+        return json.loads(t[i:j + 1])
+    except json.JSONDecodeError as e:
+        raise ArkClientError(f"invalid JSON in reply: {t[i:i + 200]}") from e

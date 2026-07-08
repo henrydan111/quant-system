@@ -1,0 +1,30 @@
+# rerank_v1 — PRE-REGISTERED immutable config (C16 artifact).
+# Any change = write rerank_v2.yaml (new version/CandidateID component); NEVER edit in place.
+version: rerank_v1
+models:
+  quick: doubao-seed-2.0-lite      # extraction (thinking off, reproducibility)
+  deep: doubao-seed-2.0-pro        # dimension scoring
+  thinking: false
+  temperature: 0.1
+prompts:
+  extract: src/ai_layer/prompts/extract_v1.txt
+  score: src/ai_layer/prompts/score_v1.txt
+weights:                            # 5*sum(weights)=100 -> final unsaturated in [0,100]
+  event_materiality: 6
+  fundamental_link: 4
+  novelty: 4
+  catalyst_timing: 3
+  mgmt_clarity: 3
+tilt:
+  mapping: "tilt = tilt_cap * (final - 50) / 50"   # deterministic, code-side
+  tilt_cap: 0.15                    # rank-pct units on the combined score
+book:
+  k: 25
+  max_swap_count: 8                 # floor(K/3), 07-06c directive
+  promotion_floor: 50               # quant top-2K
+  max_per_industry: 9               # ceil(K/3)
+vetoes: manual_only_v1              # v1: NO automatic LLM vetoes (reserved for red-flag detectors)
+dossier:
+  lookback_days: 30
+  max_items: 20
+  sources: [anns_d, irm_qa_sh, irm_qa_sz, research_report]
