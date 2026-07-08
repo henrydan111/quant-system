@@ -268,6 +268,66 @@ def check_worktree_clean(porcelain_output: str) -> None:
             + "\n".join(offending)[:800])
 
 
+def hash_attempt_tree(attempt_dir: Path) -> dict[str, str]:
+    """R4 Blocker-1: content hash of EVERY file in an attempt (the terminal
+    manifest itself excluded — it carries this map)."""
+    files = {}
+    for p in sorted(attempt_dir.rglob("*")):
+        if p.is_file() and p.name != "terminal_attempt_manifest.json":
+            files[str(p.relative_to(attempt_dir)).replace("\\", "/")] = sha256_file(p)
+    return files
+
+
+def write_terminal_attempt_manifest(attempt_dir: Path, *, cycle: str,
+                                    decision_id: str, terminal_status: str,
+                                    reason: str) -> str:
+    """Seal a terminal (failed/abandoned) attempt: hash the whole artifact
+    tree into terminal_attempt_manifest.json; the LEDGER records this file's
+    hash — any later edit/cleanup of the attempt becomes a start-gate breach."""
+    manifest = {
+        "cycle": cycle,
+        "decision_id": decision_id,
+        "terminal_status": terminal_status,
+        "terminalized_at": pd.Timestamp.now(tz=CN_TZ).isoformat(),
+        "reason": reason,
+        "artifact_hashes": hash_attempt_tree(attempt_dir),
+    }
+    out = attempt_dir / "terminal_attempt_manifest.json"
+    write_json_atomic(out, manifest)
+    return sha256_file(out)
+
+
+def verify_terminal_attempt_seal(attempt_dir: Path,
+                                 ledger_hash: str | None) -> None:
+    """R4 Blocker-1: before a retry is permitted, every prior TERMINAL attempt
+    must still match its seal — the terminal manifest file must exist, its
+    hash must equal the ledger-recorded hash, AND the artifact tree must still
+    match the sealed per-file hashes (a modified/cleaned artifact refuses)."""
+    tm = attempt_dir / "terminal_attempt_manifest.json"
+    if not tm.exists():
+        raise ForwardGateError(
+            f"terminal attempt {attempt_dir.name} lacks "
+            f"terminal_attempt_manifest.json — unsealed terminal attempt, "
+            f"refusing retry (evidence breach)")
+    if ledger_hash is None:
+        raise ForwardGateError(
+            f"ledger has no terminal_attempt_manifest_hash for "
+            f"{attempt_dir.name} — unsealed terminal transition, refusing retry")
+    if sha256_file(tm) != ledger_hash:
+        raise ForwardGateError(
+            f"terminal manifest of {attempt_dir.name} does not match the "
+            f"ledger-recorded hash — tampered terminal attempt, refusing retry")
+    sealed = json.loads(tm.read_text(encoding="utf-8"))["artifact_hashes"]
+    current = hash_attempt_tree(attempt_dir)
+    if current != sealed:
+        changed = sorted(set(sealed) ^ set(current)
+                         | {k for k in set(sealed) & set(current)
+                            if sealed[k] != current[k]})
+        raise ForwardGateError(
+            f"artifact tree of terminal attempt {attempt_dir.name} changed "
+            f"after sealing ({changed[:10]}) — refusing retry")
+
+
 def load_attempt_index(cycles_root: Path, ledger_path: Path,
                        cycle: str) -> dict[str, dict]:
     """R3 Blocker-1: cross-check attempt DIRECTORIES against the append-only
@@ -298,6 +358,9 @@ def load_attempt_index(cycles_root: Path, ledger_path: Path,
             attempt_id = ev.get("decision_id")
             by_id.setdefault(attempt_id, {})["ledger_seen"] = True
             by_id[attempt_id].setdefault("ledger_events", []).append(ev.get("event"))
+            if ev.get("terminal_attempt_manifest_hash"):
+                by_id[attempt_id]["terminal_manifest_hash"] = (
+                    ev["terminal_attempt_manifest_hash"])
     missing_dirs = [aid for aid, x in by_id.items()
                     if x.get("ledger_seen") and "dir_status" not in x]
     if missing_dirs:
@@ -341,6 +404,9 @@ def ensure_attempt_allowed(cycles_root: Path, cycle: str, *,
             f"{sorted(attempts)} — retry requires an explicit "
             f"--new-attempt <reason> (ledger-counted); silent retries are a "
             f"selection channel")
+    # R4 Blocker-1: a retry is permitted ONLY over intact terminal seals
+    for aid, x in attempts.items():
+        verify_terminal_attempt_seal(x["dir"], x.get("terminal_manifest_hash"))
 
 
 def collect_llm_artifact_hashes(names_dir: Path, status_by_code: dict[str, str],
@@ -394,16 +460,25 @@ def check_text_coverage_history(manifest_dir: Path, *,
 
     A failed manifest does not poison the gate by itself IF later overlapping
     clean pulls re-covered its dates (the 4-day-lookback design exists for
-    exactly that); it is recorded for audit. Uncovered dates REFUSE.
+    exactly that); it is recorded for audit WITH its content hash. Uncovered
+    dates REFUSE.
+
+    R4 Blocker-3: the returned record is CONTENT-ADDRESSED — every manifest
+    consulted is sha256-pinned (``manifest_sha256_by_file``) and every covered
+    (source, day) names its covering manifest (``coverage_by_source_day``), so
+    the decision manifest transitively pins the full availability evidence.
+    Bootstrap-form manifests must carry DAY-LEVEL ``coverage_by_day`` (real
+    per-day query results); window-form is reserved for daily pulls whose
+    per-day fetches roll up into ``source_status``.
     """
     dt = decision_time if decision_time.tzinfo else decision_time.tz_localize(CN_TZ)
     dt = dt.tz_convert(CN_TZ)
     end = dt.date()
     start = (dt - pd.Timedelta(days=lookback_days - 1)).date()
 
-    covered: dict[str, set] = {s: set() for s in required_sources}
+    covered: dict[str, dict] = {s: {} for s in required_sources}   # day -> manifest
     bad_manifests: list[dict] = []
-    used: list[str] = []
+    manifest_hashes: dict[str, str] = {}
     for p in sorted(manifest_dir.glob("pull_manifest_*.json")):
         if p.name == "pull_manifest_latest.json":
             continue
@@ -414,18 +489,30 @@ def check_text_coverage_history(manifest_dir: Path, *,
         ws, we = pd.Timestamp(w["start"]).date(), pd.Timestamp(w["end"]).date()
         if we < start or ws > end:
             continue                              # outside the dossier window
+        manifest_hashes[p.name] = sha256_file(p)  # pin EVERY consulted manifest
         if not m.get("ok", False):
             bad_manifests.append({"manifest": p.name,
+                                  "sha256": manifest_hashes[p.name],
                                   "failures": m.get("failures", [])[:5]})
             continue
+        if m.get("bootstrap"):
+            # R4: bootstrap must prove DAY-LEVEL query success, per source
+            day_map = m.get("coverage_by_day")
+            src = m.get("source")
+            if not day_map or src not in required_sources:
+                continue                          # coarse/legacy bootstrap: no credit
+            for day_s, st in day_map.items():
+                d = pd.Timestamp(day_s).date()
+                if start <= d <= end and str(st).startswith("ok_"):
+                    covered[src].setdefault(d, p.name)
+            continue
         status = m.get("source_status", {})
-        used.append(p.name)
         d = ws
         while d <= we:
             if start <= d <= end:
                 for s in required_sources:
                     if str(status.get(s, "missing")).startswith("ok_"):
-                        covered[s].add(d)
+                        covered[s].setdefault(d, p.name)
             d += pd.Timedelta(days=1)
 
     all_days = [d.date() for d in pd.date_range(start, end)]
@@ -440,7 +527,10 @@ def check_text_coverage_history(manifest_dir: Path, *,
             f"selection while looking valid; refusing")
     return {"window_start": str(start), "window_end": str(end),
             "required_sources": list(required_sources),
-            "manifest_files_used": used,
+            "manifest_sha256_by_file": manifest_hashes,
+            "coverage_by_source_day": {
+                s: {str(d): mf for d, mf in sorted(covered[s].items())}
+                for s in required_sources},
             "failed_manifests_recovered_later": bad_manifests,
             "coverage_ok": True}
 
@@ -610,9 +700,14 @@ def run_decision(cycle: str, *, new_attempt_reason: str | None = None) -> int:
                               "stage": "attempt_body",
                               "error": f"{type(e).__name__}: {e}"[:500]})
         write_json_atomic(attempt_manifest_path, attempt_state)
+        # R4 Blocker-1: hash-seal the failed attempt's whole artifact tree
+        terminal_hash = write_terminal_attempt_manifest(
+            attempt_dir, cycle=cycle, decision_id=decision_id,
+            terminal_status="failed", reason=f"{type(e).__name__}: {e}"[:500])
         _ledger_append({"event": "attempt_failed", "cycle": cycle,
                         "decision_id": decision_id,
-                        "error": f"{type(e).__name__}: {e}"[:300]})
+                        "error": f"{type(e).__name__}: {e}"[:300],
+                        "terminal_attempt_manifest_hash": terminal_hash})
         raise
 
 
@@ -656,6 +751,8 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
     names_dir = attempt_dir / "names"
     for n, code in enumerate(floor_names, 1):
         dossier = chain.build_dossier(code, texts, cfg)
+        # R4 Major-2: EVERY floor name pins a dossier hash — no_text pins sha256("")
+        dossier_hashes[code] = sha256_text(dossier)
         row = {"ts_code": code, "quant_score": float(comp[code]),
                "n_chars": len(dossier)}
         if not dossier.strip():
@@ -665,7 +762,6 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
         dir_name_of[code] = tushare_to_qlib_canonical(code)
         name_dir = names_dir / dir_name_of[code]
         name_dir.mkdir(parents=True, exist_ok=True)
-        dossier_hashes[code] = sha256_text(dossier)
         try:
             # ---- stream EVERY LLM artifact as it happens (R2 Blocker-2) ----
             msgs1 = render_extract_messages(cfg["_prompt_extract"], dossier)
@@ -846,13 +942,17 @@ def _run_attempt_body(*, chain, cfg, cfg_hash, cycle, pool, cyc, decision_time,
     return 0
 
 
-def _pid_alive(pid: int) -> bool | None:
-    """Best-effort liveness check; None = unverifiable on this host."""
+def _pid_alive(pid: int) -> bool:
+    """R4 Blocker-2: liveness must be VERIFIED — unverifiable liveness refuses
+    abandonment (the unsafe case is abandoning a still-live attempt, which can
+    later publish while a new attempt runs). psutil is a hard dependency."""
     try:
         import psutil  # type: ignore
-        return psutil.pid_exists(pid)
-    except ImportError:
-        return None
+    except ImportError as e:
+        raise ForwardGateError(
+            "psutil is required for evidence-grade abandonment; cannot abandon "
+            "a started attempt with unverifiable liveness (install psutil)") from e
+    return psutil.pid_exists(pid)
 
 
 def run_abandon_attempt(cycle: str, attempt_id: str, reason: str) -> int:
@@ -870,8 +970,11 @@ def run_abandon_attempt(cycle: str, attempt_id: str, reason: str) -> int:
             f"attempt {attempt_id} is '{state.get('status')}', not 'started' — "
             f"only a live-crashed attempt can be abandoned")
     pid = state.get("pid")
-    alive = _pid_alive(pid) if pid else None
-    if alive is True:
+    if not pid:
+        raise ForwardGateError(
+            f"attempt {attempt_id} manifest lacks a pid — liveness "
+            f"unverifiable, refusing abandonment (fail-closed)")
+    if _pid_alive(int(pid)):                      # raises if unverifiable (B2)
         raise ForwardGateError(
             f"attempt {attempt_id} PID {pid} is STILL RUNNING — abandoning a "
             f"live attempt is a selection channel; wait or kill it first")
@@ -879,13 +982,17 @@ def run_abandon_attempt(cycle: str, attempt_id: str, reason: str) -> int:
         "status": "abandoned_due_to_crash",
         "abandon_reason": reason.strip(),
         "abandoned_at": pd.Timestamp.now(tz=CN_TZ).isoformat(),
-        "pid_liveness_at_abandon": ("dead" if alive is False
-                                    else "unverified_no_psutil"),
+        "pid_liveness_at_abandon": "dead_verified",
     })
     write_json_atomic(am, state)
+    # R4 Blocker-1: seal the abandoned attempt's artifact tree
+    terminal_hash = write_terminal_attempt_manifest(
+        attempt_dir, cycle=cycle, decision_id=attempt_id,
+        terminal_status="abandoned_due_to_crash", reason=reason.strip())
     _ledger_append({"event": "attempt_abandoned", "cycle": cycle,
-                    "decision_id": attempt_id, "reason": reason.strip()})
-    print(f"[abandoned] {attempt_dir} (artifacts preserved)", flush=True)
+                    "decision_id": attempt_id, "reason": reason.strip(),
+                    "terminal_attempt_manifest_hash": terminal_hash})
+    print(f"[abandoned+sealed] {attempt_dir} (artifacts preserved)", flush=True)
     return 0
 
 

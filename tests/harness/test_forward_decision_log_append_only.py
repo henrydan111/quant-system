@@ -45,6 +45,21 @@ def _empty_ledger(tmp_path: Path) -> Path:
     return tmp_path / "no_ledger.jsonl"          # nonexistent = empty
 
 
+def _mk_sealed_terminal(fwd, cycles_root: Path, cycle: str, att_id: str,
+                        status: str) -> tuple[Path, Path]:
+    """A terminal attempt SEALED per R4-B1: terminal manifest + ledger hash."""
+    d = _mk_attempt(cycles_root, cycle, att_id, status)
+    (d / "some_artifact.json").write_text('{"x": 1}', encoding="utf-8")
+    h = fwd.write_terminal_attempt_manifest(
+        d, cycle=cycle, decision_id=att_id, terminal_status=status, reason="r")
+    ledger = _ledger(cycles_root, [
+        {"event": "attempt_started", "cycle": cycle, "decision_id": att_id},
+        {"event": "attempt_failed", "cycle": cycle, "decision_id": att_id,
+         "terminal_attempt_manifest_hash": h},
+    ])
+    return d, ledger
+
+
 def test_fresh_cycle_allowed(fwd, tmp_path):
     fwd.ensure_attempt_allowed(tmp_path, "202608",
                                ledger_path=_empty_ledger(tmp_path))
@@ -67,19 +82,60 @@ def test_started_attempt_cannot_be_bypassed_even_explicitly(fwd, tmp_path):
                                        ledger_path=_empty_ledger(tmp_path))
 
 
-def test_failed_attempt_blocks_silent_retry_but_allows_explicit(fwd, tmp_path):
-    _mk_attempt(tmp_path, "202610", "cccc", "failed")
+def test_failed_attempt_blocks_silent_retry_but_allows_explicit_when_sealed(fwd, tmp_path):
+    _, ledger = _mk_sealed_terminal(fwd, tmp_path, "202610", "cccc", "failed")
     with pytest.raises(fwd.ForwardGateError, match="new-attempt"):
-        fwd.ensure_attempt_allowed(tmp_path, "202610",
-                                   ledger_path=_empty_ledger(tmp_path))
+        fwd.ensure_attempt_allowed(tmp_path, "202610", ledger_path=ledger)
     fwd.ensure_attempt_allowed(tmp_path, "202610", new_attempt=True,
-                               ledger_path=_empty_ledger(tmp_path))
+                               ledger_path=ledger)
 
 
-def test_abandoned_attempt_is_terminal_retryable(fwd, tmp_path):
-    _mk_attempt(tmp_path, "202611", "dddd", "abandoned_due_to_crash")
+def test_abandoned_attempt_is_terminal_retryable_when_sealed(fwd, tmp_path):
+    _, ledger = _mk_sealed_terminal(fwd, tmp_path, "202611", "dddd",
+                                    "abandoned_due_to_crash")
     fwd.ensure_attempt_allowed(tmp_path, "202611", new_attempt=True,
-                               ledger_path=_empty_ledger(tmp_path))
+                               ledger_path=ledger)
+
+
+# ------------------------ R4 Blocker-1: terminal seals ----------------------
+
+def test_unsealed_terminal_attempt_refuses_retry(fwd, tmp_path):
+    _mk_attempt(tmp_path, "202614", "gggg", "failed")   # no seal, no ledger hash
+    with pytest.raises(fwd.ForwardGateError, match="unsealed"):
+        fwd.ensure_attempt_allowed(tmp_path, "202614", new_attempt=True,
+                                   ledger_path=_empty_ledger(tmp_path))
+
+
+def test_tampered_terminal_manifest_refuses_retry(fwd, tmp_path):
+    d, _ = _mk_sealed_terminal(fwd, tmp_path, "202615", "hhhh", "failed")
+    ledger = _ledger(tmp_path, [
+        {"event": "attempt_failed", "cycle": "202615", "decision_id": "hhhh",
+         "terminal_attempt_manifest_hash": "0" * 64},   # ledger says different
+    ])
+    with pytest.raises(fwd.ForwardGateError, match="does not match the"):
+        fwd.ensure_attempt_allowed(tmp_path, "202615", new_attempt=True,
+                                   ledger_path=ledger)
+
+
+def test_modified_artifact_after_sealing_refuses_retry(fwd, tmp_path):
+    d, ledger = _mk_sealed_terminal(fwd, tmp_path, "202616", "iiii", "failed")
+    (d / "some_artifact.json").write_text('{"x": 2}', encoding="utf-8")  # tamper
+    with pytest.raises(fwd.ForwardGateError, match="after sealing"):
+        fwd.ensure_attempt_allowed(tmp_path, "202616", new_attempt=True,
+                                   ledger_path=ledger)
+
+
+def test_seal_roundtrip_hashes_whole_tree(fwd, tmp_path):
+    d = _mk_attempt(tmp_path, "202617", "jjjj", "failed")
+    sub = d / "names" / "000001_SZ"
+    sub.mkdir(parents=True)
+    (sub / "extract_response_raw.json").write_text('{"r": 1}', encoding="utf-8")
+    h = fwd.write_terminal_attempt_manifest(
+        d, cycle="202617", decision_id="jjjj", terminal_status="failed", reason="r")
+    tm = json.loads((d / "terminal_attempt_manifest.json").read_text(encoding="utf-8"))
+    assert "names/000001_SZ/extract_response_raw.json" in tm["artifact_hashes"]
+    assert "attempt_manifest.json" in tm["artifact_hashes"]
+    fwd.verify_terminal_attempt_seal(d, h)              # intact -> no raise
 
 
 def test_ledger_record_with_missing_dir_refuses(fwd, tmp_path):

@@ -168,21 +168,30 @@ SRC = ["anns_d", "research_report"]
 DT = pd.Timestamp("2026-08-03 21:00:00", tz="Asia/Shanghai")
 
 
-def test_full_coverage_passes(fwd, tmp_path):
+def test_full_coverage_passes_and_is_content_addressed(fwd, tmp_path):
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+    _write_manifest(tmp_path, "20260720", start="2026-07-05",
                     end="2026-07-20", statuses=ok_st)
     _write_manifest(tmp_path, "20260803", start="2026-07-21",
                     end="2026-08-03", statuses=ok_st)
     rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
                                           lookback_days=30, required_sources=SRC)
-    assert rec["coverage_ok"] is True and len(rec["manifest_files_used"]) == 2
+    assert rec["coverage_ok"] is True
+    # R4 Blocker-3: every consulted manifest is sha256-pinned...
+    assert set(rec["manifest_sha256_by_file"]) == {
+        "pull_manifest_20260720.json", "pull_manifest_20260803.json"}
+    import hashlib as _h
+    p = tmp_path / "pull_manifest_20260803.json"
+    assert rec["manifest_sha256_by_file"][p.name] == _h.sha256(p.read_bytes()).hexdigest()
+    # ...and every covered (source, day) names its covering manifest
+    assert rec["coverage_by_source_day"]["anns_d"]["2026-08-01"] == p.name
+    assert len(rec["coverage_by_source_day"]["anns_d"]) == 30
 
 
 def test_gap_inside_window_refuses(fwd, tmp_path):
     # daily task down 2026-07-22..2026-07-26 — latest pull is clean but window has a hole
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+    _write_manifest(tmp_path, "20260721", start="2026-07-05",
                     end="2026-07-21", statuses=ok_st)
     _write_manifest(tmp_path, "20260803", start="2026-07-27",
                     end="2026-08-03", statuses=ok_st)
@@ -192,7 +201,7 @@ def test_gap_inside_window_refuses(fwd, tmp_path):
 
 
 def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
-    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+    _write_manifest(tmp_path, "20260803", start="2026-07-05",
                     end="2026-08-03",
                     statuses={"anns_d": "ok_nonzero_rows",
                               "research_report": "failed"})
@@ -202,10 +211,11 @@ def test_per_source_gap_refuses_even_if_other_source_covered(fwd, tmp_path):
 
 
 def test_failed_manifest_recovered_by_later_clean_pull_passes(fwd, tmp_path):
-    # D1 deviation (disclosed): a failed pull does not poison the gate IF later
-    # overlapping clean pulls re-covered its dates (4-day lookback design)
+    # D1 (GPT-accepted, conditional on hashing): a failed pull does not poison
+    # the gate IF later overlapping clean pulls re-covered its dates — and the
+    # failed manifest itself is content-hash pinned in the audit record
     ok_st = {s: "ok_nonzero_rows" for s in SRC}
-    _write_manifest(tmp_path, "00000000_bootstrap", start="2026-06-01",
+    _write_manifest(tmp_path, "20260730", start="2026-07-05",
                     end="2026-07-30", statuses=ok_st)
     _write_manifest(tmp_path, "20260801", start="2026-07-29", end="2026-08-01",
                     ok=False, statuses={}, failures=["anns_d@20260801: boom"])
@@ -214,4 +224,79 @@ def test_failed_manifest_recovered_by_later_clean_pull_passes(fwd, tmp_path):
     rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
                                           lookback_days=30, required_sources=SRC)
     assert rec["coverage_ok"] is True
-    assert rec["failed_manifests_recovered_later"]      # audit trail kept
+    bad = rec["failed_manifests_recovered_later"]
+    assert bad and bad[0]["sha256"]                     # audit trail is hashed
+    assert "pull_manifest_20260801.json" in rec["manifest_sha256_by_file"]
+
+
+# ------------------- R4 Blocker-3: bootstrap day-level form ------------------
+
+def _write_bootstrap(d: Path, source: str, coverage_by_day: dict | None,
+                     start: str, end: str):
+    payload = {"run_ts": "2026-07-08T21:00:00+08:00", "bootstrap": True,
+               "source": source, "window": {"start": start, "end": end},
+               "failures": [], "ok": True}
+    if coverage_by_day is not None:
+        payload["coverage_by_day"] = coverage_by_day
+    (d / f"pull_manifest_00000000_bootstrap_{source}.json").write_text(
+        json.dumps(payload), encoding="utf-8")
+
+
+def test_day_level_bootstrap_is_credited(fwd, tmp_path):
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    days = {str(d.date()): ("ok_zero_rows" if i % 3 == 0 else "ok_nonzero_rows")
+            for i, d in enumerate(pd.date_range("2026-07-05", "2026-07-20"))}
+    for s in SRC:
+        _write_bootstrap(tmp_path, s, days, "2026-07-05", "2026-07-20")
+    _write_manifest(tmp_path, "20260803", start="2026-07-21",
+                    end="2026-08-03", statuses=ok_st)
+    rec = fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                          lookback_days=30, required_sources=SRC)
+    assert rec["coverage_ok"] is True
+    assert rec["coverage_by_source_day"]["anns_d"]["2026-07-06"].startswith(
+        "pull_manifest_00000000_bootstrap_anns_d")
+
+
+def test_coarse_bootstrap_without_day_map_earns_no_credit(fwd, tmp_path):
+    # retired min..max form: bootstrap flag but no coverage_by_day -> no credit
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    for s in SRC:
+        _write_bootstrap(tmp_path, s, None, "2026-07-05", "2026-07-20")
+    _write_manifest(tmp_path, "20260803", start="2026-07-21",
+                    end="2026-08-03", statuses=ok_st)
+    with pytest.raises(fwd.ForwardGateError, match="coverage incomplete"):
+        fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                        lookback_days=30, required_sources=SRC)
+
+
+def test_bootstrap_failed_day_earns_no_credit(fwd, tmp_path):
+    ok_st = {s: "ok_nonzero_rows" for s in SRC}
+    days = {str(d.date()): "ok_nonzero_rows"
+            for d in pd.date_range("2026-07-05", "2026-07-20")}
+    days["2026-07-10"] = "failed"
+    for s in SRC:
+        _write_bootstrap(tmp_path, s, days, "2026-07-05", "2026-07-20")
+    _write_manifest(tmp_path, "20260803", start="2026-07-21",
+                    end="2026-08-03", statuses=ok_st)
+    with pytest.raises(fwd.ForwardGateError, match="2026-07-10"):
+        fwd.check_text_coverage_history(tmp_path, decision_time=DT,
+                                        lookback_days=30, required_sources=SRC)
+
+
+# --------------- R4 Major-1: prereg pinned hash consistency ------------------
+
+def test_prereg_pinned_hash_matches_frozen_config(fwd):
+    import hashlib as _h
+    cfg = (PROJECT_ROOT / "config" / "ai_layer" / "rerank_v2.yaml").read_text(encoding="utf-8")
+    pe = (PROJECT_ROOT / "src" / "ai_layer" / "prompts" / "extract_v2.txt").read_text(encoding="utf-8")
+    ps = (PROJECT_ROOT / "src" / "ai_layer" / "prompts" / "score_v2.txt").read_text(encoding="utf-8")
+    live = _h.sha256((cfg + pe + ps).encode("utf-8")).hexdigest()[:16]
+    assert fwd._load_pinned_hash() == live, (
+        "FORWARD_PREREG config_hash_v2 pin does not match the frozen config — "
+        "either a frozen artifact drifted or the prereg was not re-pinned")
+    # the pin must also not be contradicted elsewhere in the prereg (R4 Major-1)
+    prereg = (PROJECT_ROOT / "workspace" / "research" / "mvp_pool_book"
+              / "FORWARD_PREREG.md").read_text(encoding="utf-8")
+    import re
+    hashes = set(re.findall(r"config_hash_v2[:\s`]+([0-9a-f]{16})", prereg))
+    assert hashes == {live}, f"contradictory config_hash_v2 pins in prereg: {hashes}"

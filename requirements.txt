@@ -23,6 +23,7 @@ mlflow==3.10.0
 # 调度与监控
 apache-airflow==3.1.7
 schedule==1.2.2
+psutil==7.2.2          # forward attempt abandonment liveness gate (R4-B2, hard dep)
 
 # 开发工具
 jupyterlab==4.5.5

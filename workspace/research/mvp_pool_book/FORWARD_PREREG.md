@@ -56,7 +56,7 @@ config_hash_v2: `07492b544b52288c`
 ## 4. 不可变项(冻结清单)
 
 `rerank_v2.yaml` 全文(models/weights/tilt 映射/覆盖率闸门/K/max_swap/floor/行业与组合上限)·
-extract_v2/score_v2 两个 prompt · config_hash_v2 `5c8a462e1c5500b3` · 判定规则(§3)·
+extract_v2/score_v2 两个 prompt · config_hash_v2 `07492b544b52288c` · 判定规则(§3)·
 **attempt 台账制决策日志(R2-Blocker-2)**:LLM 花费前必先落不可变
 `cycles/<cycle>/attempt_<decision_id>/`(attempts_ledger.jsonl 计数);逐名 LLM
 request/response/validated-scorecard 边跑边落盘;失败 attempt 永不删除、同 cycle 重跑必须显式
