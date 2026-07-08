@@ -916,3 +916,33 @@ class TushareFetcher:
             ann_date=ann_date,
             fields="ann_date,ts_code,name,title,url,rec_time",
         )
+
+    def fetch_anns_d_paged(self, ann_date: str, *, page_size: int = 2000,
+                           max_pages: int = 6) -> pd.DataFrame:
+        """anns_d with offset pagination (busy days exceed the 2000/call cap).
+
+        Stops when a page returns < page_size, repeats, or max_pages is hit
+        (a hit is logged by the caller via the returned length == cap*max_pages).
+        """
+        frames: list[pd.DataFrame] = []
+        seen_first: set[str] = set()
+        for page in range(max_pages):
+            df = self._safe_api_call(
+                self.pro.anns_d,
+                ann_date=ann_date,
+                limit=page_size,
+                offset=page * page_size,
+                fields="ann_date,ts_code,name,title,url,rec_time",
+            )
+            if df is None or df.empty:
+                break
+            marker = f"{df.iloc[0]['ts_code']}|{df.iloc[0]['title']}"
+            if marker in seen_first:  # offset unsupported -> same page again
+                break
+            seen_first.add(marker)
+            frames.append(df)
+            if len(df) < page_size:
+                break
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).drop_duplicates()
