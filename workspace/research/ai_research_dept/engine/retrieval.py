@@ -30,9 +30,10 @@ from data_infra.provider_metadata import industry_as_of  # noqa: E402
 
 logger = logging.getLogger("retrieval")
 
-#: RetrievalConfig v0(横切 #8:任何改动 = 新 CandidateID;首轮前向前 FORWARD_PREREG 冻结)
+#: RetrievalConfig(横切 #8:任何改动 = 新 CandidateID;首轮前向前 FORWARD_PREREG 冻结)
+#  v0.2: +concept 通道(THS 快照,特异性 direct>concept>industry)
 RETRIEVAL_CONFIG = {
-    "retrieval_config_id": "retr_v0.1",
+    "retrieval_config_id": "retr_v0.2",
     "lookback_days": 30,
     "decision_time_cn": "09:15",
     "channel_w": {"direct": 1.0, "relation": 0.7, "concept": 0.5,
@@ -55,16 +56,35 @@ def snapshot_id() -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+_STOCK_CONCEPTS: dict | None = None
+
+
+def stock_concepts() -> dict[str, set]:
+    global _STOCK_CONCEPTS
+    if _STOCK_CONCEPTS is None:
+        mem = C.load_concept_members()          # 与事件打标同一份过滤成分
+        if mem is not None:
+            _STOCK_CONCEPTS = mem.groupby("con_code")["ts_code"].apply(set).to_dict()
+        else:
+            _STOCK_CONCEPTS = {}
+    return _STOCK_CONCEPTS
+
+
 def assemble_for_stock(code: str, day: str, ev: pd.DataFrame,
                        cutoff: pd.Timestamp, win_start: pd.Timestamp) -> list[dict]:
     cfg = RETRIEVAL_CONFIG
     ind = industry_as_of(code, day, "L1")
+    my_concepts = stock_concepts().get(code, set())
     w = ev[(ev["visible_at"] <= cutoff) & (ev["visible_at"] >= win_start)]
     out = []
     for _, r in w.iterrows():
         subjects = list(r["subject_codes"])
+        ct_raw = r.get("concept_tags")
+        ct = set(list(ct_raw)) if ct_raw is not None and len(ct_raw) else set()  # np数组禁truthiness
         if code in subjects:
             channel = "direct"
+        elif my_concepts and (my_concepts & ct):
+            channel = "concept"           # 特异性:直接 > 概念 > 行业(2A.3)
         elif ind is not None and ind in list(r["industry_tags"]):
             channel = "industry"
         else:

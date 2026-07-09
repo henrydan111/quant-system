@@ -45,7 +45,30 @@ HIST_YEARS = 10
 
 # ---- 事件库 ----
 EVENT_STORE_VERSION = "event_v0.5"   # v0.5: +政策三源无主属事件(v1.5-D);v0.4: +研报/修正潮/互动易
-TAG_VERSION = "tags_v0.1"
+TAG_VERSION = "tags_v0.3"   # v0.3: 概念泛板块过滤(5-300成员+黑名单);v0.2: +概念标签维
+
+
+#: 概念板块过滤(v1.5-E 修正):同花顺"泛板块"(融资融券/沪股通/机构重仓等状态板,
+#  成员数千)不是主题概念 —— 不过滤会让 concept 通道比 industry 还宽(实测吞掉行业通道)。
+CONCEPT_MIN_MEMBERS = 5
+CONCEPT_MAX_MEMBERS = 300
+CONCEPT_NAME_BLOCKLIST = ("融资融券|转融|沪股通|深股通|标的|预盈预增|预亏预减|ST板块|次新股|"
+                          "MSCI|富时|成份|样本|同花顺|漂亮|壳资源|股权转让|高送转|破净|低价")
+
+
+def load_concept_members() -> "object":
+    """过滤后的概念成分(事件打标与检索画像共用同一份,防口径漂移)。"""
+    import re
+    import pandas as pd
+    d = PROJECT_ROOT / "data" / "reference" / "ths_concept"
+    if not (d / "ths_members.parquet").exists():
+        return None
+    idx = pd.read_parquet(d / "ths_index.parquet", columns=["ts_code", "name", "count"])
+    ok = idx[(idx["count"].fillna(0) >= CONCEPT_MIN_MEMBERS)
+             & (idx["count"].fillna(9e9) <= CONCEPT_MAX_MEMBERS)
+             & ~idx["name"].astype(str).str.contains(CONCEPT_NAME_BLOCKLIST, regex=True)]
+    mem = pd.read_parquet(d / "ths_members.parquet", columns=["ts_code", "con_code"])
+    return mem[mem["ts_code"].isin(set(ok["ts_code"]))]
 
 
 def config_hash() -> str:

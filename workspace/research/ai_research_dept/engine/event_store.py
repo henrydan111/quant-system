@@ -74,6 +74,22 @@ def sha16(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+_CONCEPT_MAP: dict | None = None
+
+
+def concept_map() -> dict[str, list[str]]:
+    """con_code(股票) → [概念板块代码];快照口径(PIT 弱于行业,ths_ingest 声明在案)。"""
+    global _CONCEPT_MAP
+    if _CONCEPT_MAP is None:
+        mem = C.load_concept_members()          # 泛板块过滤后的成分(与检索画像同源)
+        if mem is not None:
+            _CONCEPT_MAP = mem.groupby("con_code")["ts_code"].apply(list).to_dict()
+        else:
+            logger.warning("ths_members 缺失 — 概念标签维为空(先跑 ths_ingest.py)")
+            _CONCEPT_MAP = {}
+    return _CONCEPT_MAP
+
+
 def _event(event_type: str, subjects: list[str], visible_at, title: str,
            payload: dict, importance: int, direction: str, source: str,
            tier: str, keywords: list[str] | None = None,
@@ -84,10 +100,12 @@ def _event(event_type: str, subjects: list[str], visible_at, title: str,
     else:
         inds = sorted({i for c in subjects
                        if (i := industry_as_of(c, day, "L1")) is not None})
+    cmap = concept_map()
+    concepts = sorted({b for c in subjects for b in cmap.get(c, [])})[:20]
     return {
         "event_id": sha16(f"{event_type}|{'|'.join(sorted(subjects))}|{day}|{title[:80]}"),
         "event_type": event_type, "subject_codes": subjects,
-        "industry_tags": inds, "concept_tags": [], "hotword_tags": [],
+        "industry_tags": inds, "concept_tags": concepts, "hotword_tags": [],
         "keyword_tags": keywords or [],
         "importance_0_5": importance, "direction": direction,
         "source": source, "source_tier": tier,
