@@ -57,6 +57,20 @@
 | Q8-C2 澄清:**v1 全部输出不含 Pass-C 精读卡**(Pass-C=v1.5) | 本 §4 |
 待办不变:R6 合并 LLM 预算表(re-review 材料附)。**下一步:re-review #2。**
 
+## 2c. GPT §10 re-review #2 = **SHIP**(2026-07-08)——设计冻结,可进实现
+
+0 Blocker / 0 Major。上一轮核心风险("retrieval+synthesis 隐形研究信号生成器")被确认拆解闭合。
+SHIP 附带四项收尾加固,**全部已应用**:
+| R2 裁定 | 落点 |
+|---|---|
+| Minor-1/Q3 **FORWARD_RETRIEVAL_PREREG**(首轮前向前冻结检索配置;C16b 管探索、PREREG 管部署;改动=新 CandidateID+新前向纪元) | 二篇横切 #10(**实施前置,非设计 blocker**) |
+| Q2 最低 rubric(3×3 claim×evidence 允许矩阵 + 单源强因果措辞禁令) | 修正案·两类校验表 |
+| Minor-A 快照内容寻址去重(不日频复制全图) | 二篇 2A.3 |
+| Minor-B candidate 焦点词进 review 队列+浏览页,边界不放松 | 二篇 2A.2 |
+| Minor-C replay 管线自动注入 evidence_class=NON_EVIDENTIARY_PILOT | 二篇横切 #9 |
+**残余风险(GPT 原话)**:首轮 forward run 前必须冻结 RetrievalConfig,否则探索/生产边界模糊——
+已立为实施前置。**评审弧线:#1 REVISE(2M+1Ml+5m+5Q)→ #2 SHIP,全裁定零拒绝。**
+
 ## 3. 本地 Web 平台(用户裁定,设计在二篇 §6)
 
 通用层全部信息可浏览:本地只读 Web 服务(localhost),七个页面(今日大事/事件流浏览器/
