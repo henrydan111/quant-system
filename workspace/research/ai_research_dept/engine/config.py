@@ -43,8 +43,8 @@ INDUSTRY_MIN_N = 8
 #: 自身时序分位回看(年);季度采样
 HIST_YEARS = 10
 
-# ---- 事件库 v0 ----
-EVENT_STORE_VERSION = "event_v0.1"
+# ---- 事件库 ----
+EVENT_STORE_VERSION = "event_v0.2"   # v0.2: +ledger 生成器(业绩预告/董监高/分红,经 pit_event_feed 门)
 TAG_VERSION = "tags_v0.1"
 
 

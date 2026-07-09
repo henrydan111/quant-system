@@ -199,3 +199,25 @@
     cadence under study). Read-only; no factor/serving path.
   permanent: true
   link: workspace/research/idea_sourcing/guorn/guorn_local_field_mapping.md
+
+- path: workspace/scripts/audit_thaw_frozen_prefix.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Calendar-unfreeze frozen-prefix audit (UNFREEZE_PLAN Phase 3.2): reads
+    ONLY the indicators ledger COLUMN NAMES to recognize the approved
+    indicator-family exception class — an infrastructure/audit read, no PIT
+    alignment or research consumption. Publish-gate tooling, kept for the
+    monthly bump ceremony.
+  permanent: true
+
+- path: src/data_infra/pit_event_feed.py
+  rule: PIT002
+  owner: data-infra
+  reason: >-
+    Sanctioned EVENT-LEVEL ledger door (row-level events with validated
+    visible_at) for the intel-center universal event store. Whitelist-only
+    datasets/fields, D3 born-sealed clamp, provider-bounds guard; the third
+    blessed reader after pit_research_loader and pit_backend.
+  permanent: true
+  link: workspace/research/ai_research_dept/INTEL_CENTER_DATA_LAYER_v1.md

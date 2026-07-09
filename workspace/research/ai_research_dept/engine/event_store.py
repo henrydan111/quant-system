@@ -224,6 +224,58 @@ def gen_anns_events(window_start: str, window_end: str) -> tuple[list[dict], dic
     return ev, stats
 
 
+def gen_ledger_events(window_start: str, window_end: str) -> list[dict]:
+    """G6-G8:业绩预告/董监高增减持/分红 —— 经 sanctioned 事件门(pit_event_feed),
+    可见性=账本已验 effective_date(dividends=严格次开盘日推导)。全市场。"""
+    from data_infra.pit_event_feed import load_event_feed
+    ev = []
+    # 业绩预告:类型自带方向;重要性按幅度+方向翻转
+    fc = load_event_feed("forecast", start=window_start, end=window_end)
+    for _, r in fc.iterrows():
+        typ = str(r.get("type", ""))
+        pmax = r.get("p_change_max")
+        flip = typ in ("扭亏", "首亏")
+        imp = 5 if flip else 4 if (pd.notna(pmax) and abs(pmax) >= 50) else 3
+        d_ = ("显著利好" if typ in ("预增", "扭亏", "略增", "续盈") and imp >= 4 else
+              "轻微利好" if typ in ("预增", "扭亏", "略增", "续盈") else
+              "严重利空" if typ in ("首亏",) else
+              "间接利空" if typ in ("预减", "略减", "续亏") else "中性")
+        rng = (f"{r.get('p_change_min')}%~{r.get('p_change_max')}%"
+               if pd.notna(r.get("p_change_min")) else "")
+        ev.append(_event("业绩预告", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} 业绩预告:{typ} {rng}",
+                         {"type": typ, "p_change_min": None if pd.isna(r.get("p_change_min")) else float(r["p_change_min"]),
+                          "p_change_max": None if pd.isna(pmax) else float(pmax),
+                          "summary": str(r.get("summary", ""))[:200]},
+                         imp, d_, "forecast", "strong", [typ]))
+    # 董监高增减持:方向=in_de;重要性按变动比例
+    ht = load_event_feed("stk_holdertrade", start=window_start, end=window_end)
+    for _, r in ht.iterrows():
+        inc = str(r.get("in_de", "")).upper() in ("IN", "增持")
+        ratio = r.get("change_ratio")
+        imp = 4 if (pd.notna(ratio) and abs(ratio) >= 0.5) else 3
+        ev.append(_event("董监高增减持", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} {str(r.get('holder_type',''))}"
+                         f"{'增持' if inc else '减持'} {ratio if pd.notna(ratio) else '?'}%",
+                         {"holder_type": str(r.get("holder_type", "")),
+                          "in_de": str(r.get("in_de", "")),
+                          "change_ratio": None if pd.isna(ratio) else float(ratio)},
+                         imp, "轻微利好" if inc else "轻微利空",
+                         "stk_holdertrade", "strong"))
+    # 分红:预案/实施
+    dv = load_event_feed("dividends", start=window_start, end=window_end)
+    dv = dv[dv["div_proc"].isin(["预案", "实施"])]
+    for _, r in dv.iterrows():
+        cash = r.get("cash_div_tax")
+        ev.append(_event("分红", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} 分红{r['div_proc']}"
+                         f"{'' if pd.isna(cash) else f' 每股{cash}元'}",
+                         {"div_proc": str(r["div_proc"]),
+                          "cash_div_tax": None if pd.isna(cash) else float(cash)},
+                         2, "轻微利好", "dividends", "strong"))
+    return ev
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -239,8 +291,10 @@ def main() -> int:
     win_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
     anns, stats = gen_anns_events(win_start, days[-1])
     logger.info("anns events: %d | %s", len(anns), stats)
+    led = gen_ledger_events(win_start, days[-1])
+    logger.info("ledger events (forecast/holdertrade/dividends): %d", len(led))
 
-    all_ev = pd.DataFrame(ev + sus + anns)
+    all_ev = pd.DataFrame(ev + sus + anns + led)
     all_ev = all_ev.drop_duplicates(subset=["event_id"])      # 判同 v0:同键去重
     C.EVENT_DIR.mkdir(parents=True, exist_ok=True)
     out = C.EVENT_DIR / f"events_{C.PILOT_POOL_MONTH}.parquet"

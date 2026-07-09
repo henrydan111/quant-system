@@ -301,16 +301,24 @@ def main() -> int:
     retr = pd.read_parquet(C.OUT_ROOT / "retrieval" / f"retrieval_{C.PILOT_POOL_MONTH}.parquet")
 
     t0 = time.time()
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     for day in days:
         out_dir = CHAIN_DIR / day
         out_dir.mkdir(parents=True, exist_ok=True)
         todo = pool[: args.names] if args.names else pool
-        done = 0
-        for i, code in enumerate(todo, 1):
-            a = run_stock(code, day, facts, pv, retr, out_dir)
-            done += a is not None
-            if i % 10 == 0:
-                logger.info("[%s] %d/%d | %.0fs", day, i, len(todo), time.time() - t0)
+        done, n = 0, 0
+        # 5 线程并发:每股独立文件,LLM 调用线程安全;Ark 无 Tushare 式串行约束
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futs = {ex.submit(run_stock, c, day, facts, pv, retr, out_dir): c
+                    for c in todo}
+            for fut in as_completed(futs):
+                n += 1
+                try:
+                    done += fut.result() is not None
+                except Exception as e:  # noqa: BLE001 — 单股失败不拖全日
+                    logger.error("[%s] %s failed: %s", day, futs[fut], str(e)[:150])
+                if n % 10 == 0:
+                    logger.info("[%s] %d/%d | %.0fs", day, n, len(todo), time.time() - t0)
         logger.info("[%s] DONE %d archives | %.0fs", day, done, time.time() - t0)
     return 0
 
