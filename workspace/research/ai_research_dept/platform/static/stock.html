@@ -4,16 +4,18 @@
 <div class="wrap">
 <div class="banner" id="banner">⚠ NON_EVIDENTIARY</div>
 <nav><b>投研情报中心</b><a href="/">热点榜</a><a href="events.html">事件流</a>
-<a href="archives.html">研究档案</a><a href="department.html">投研分析部</a>
+<a href="archives.html">研究档案</a><a href="analysis.html">个股分析</a>
+<a href="department.html">投研分析部</a>
 <span style="margin-left:auto">日期 <select id="day"></select></span></nav>
-<h1 id="title">个股档案</h1>
+<h1 id="title">个股数据明细</h1>
+<p class="dim" id="xlink"></p>
 <div class="cards" id="cards"></div>
 <div id="archive"></div>
 <h2>基本面事实(三锚定:值 · 行业分位 · 自身10年分位)</h2>
 <table id="facts"><thead><tr><th>字段</th><th class="num">值</th><th class="num">行业分位</th>
 <th class="num">同业样本</th><th class="num">10年分位</th></tr></thead><tbody></tbody></table>
 <h2>量价情报包</h2><div id="pv"></div>
-<h2>检索装配(消息面输入;direct=本股,industry=同业间接)</h2>
+<h2>检索装配(消息面输入;direct=本股,concept=概念同伴,industry=同业间接)</h2>
 <table id="retr"><thead><tr><th>通道</th><th>类型</th><th>标题</th><th>极性</th>
 <th class="num">相关度</th></tr></thead><tbody></tbody></table>
 <footer id="foot"></footer></div>
@@ -31,7 +33,10 @@ function dirCls(d){return d&&d.includes('利好')?'pos':d&&d.includes('利空')?
 async function load(){
  const code=P.get('code'),day=document.getElementById('day').value;
  const s=await j(`/api/stock?code=${code}&date=${day}`);
- document.getElementById('title').textContent=`${s.ts_code} ${s.name} · ${s.date}`;
+ document.getElementById('title').textContent=`${s.ts_code} ${s.name} · ${s.date} 数据明细`;
+ document.getElementById('xlink').innerHTML=
+  `本页为原始数据行(事实表/量价包/检索表)与推理链审计;LLM 输入卡原文与报告视图见
+   <a href="analysis.html?code=${s.ts_code}&date=${s.date}">个股分析</a>。`;
  document.getElementById('cards').innerHTML=
   `<div class="card"><div class="v">${s.attention??'—'}</div><div class="k">关注度(截面0-100)</div></div>`;
  const A=s.archive, av=document.getElementById('archive'); av.innerHTML='';

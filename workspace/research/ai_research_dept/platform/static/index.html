@@ -5,8 +5,9 @@
 <div class="banner" id="banner">⚠ NON_EVIDENTIARY — 历史重放,非证据;不得据此调参</div>
 <nav><b>投研情报中心</b>
 <a class="on" href="/">热点榜</a><a href="events.html">事件流</a>
-<a href="archives.html">研究档案</a><a href="department.html">投研分析部</a>
-<span class="dim">个股页:点击任意股票进入</span>
+<a href="archives.html">研究档案</a><a href="analysis.html">个股分析</a>
+<a href="department.html">投研分析部</a>
+<span class="dim">点击任意股票进入个股分析</span>
 <span style="margin-left:auto">日期 <select id="day"></select></span></nav>
 <div id="regime" class="card" style="display:none;margin:10px 0;padding:10px 14px">
  <b>市场情境</b> <span id="rg-label" class="tag"></span>
@@ -42,7 +43,7 @@ async function load(){
  const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
  rows.forEach((r,i)=>{const tr=document.createElement('tr');
   tr.innerHTML=`<td class="dim">${i+1}</td>
-   <td><a href="stock.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
+   <td><a href="analysis.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
    <td class="num">${r.attention}</td>
    <td><span class="bar" style="width:${r.attention}px"></span></td>
    <td class="num">${fmtTrend(r.trend)}</td>

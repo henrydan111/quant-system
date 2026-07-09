@@ -4,7 +4,8 @@
 <div class="wrap">
 <div class="banner" id="banner">⚠ NON_EVIDENTIARY</div>
 <nav><b>投研情报中心</b><a href="/">热点榜</a><a class="on" href="events.html">事件流</a>
-<a href="archives.html">研究档案</a><a href="department.html">投研分析部</a><span class="dim">个股页:点击任意股票进入</span></nav>
+<a href="archives.html">研究档案</a><a href="analysis.html">个股分析</a>
+<a href="department.html">投研分析部</a><span class="dim">点击任意股票进入个股分析</span></nav>
 <h1>事件流浏览器(通用层·无主属)</h1>
 <nav>
  类型 <select id="type"><option value="">全部</option></select>
@@ -35,7 +36,7 @@ async function load(){
    <td class="num">${'★'.repeat(r.importance)||'—'}</td>
    <td class="${dirCls(r.direction)}">${r.direction}</td>
    <td>${r.subjects.map(s=>{const c=s.split(' ')[0];
-     return `<a href="stock.html?code=${c}">${s}</a>`}).join('<br>')}</td>
+     return `<a href="analysis.html?code=${c}">${s}</a>`}).join('<br>')}</td>
    <td class="dim">${r.industries.join(' ')}</td><td class="dim">${r.source}</td>`;
   tb.appendChild(tr)})}
 (async()=>{const m=await j('/api/meta');

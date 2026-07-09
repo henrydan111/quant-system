@@ -63,6 +63,7 @@ class Data:
                               columns=["l1_code", "l1_name"]).drop_duplicates()
         self.ind_names = dict(zip(mem.l1_code, mem.l1_name))
         self.days = sorted(self.attn.trade_date.unique())
+        self.pool = sorted(set(self.attn.ts_code))
         self.snapshot = str(self.retr.retrieval_profile_snapshot_id.iloc[0])
         # 研究档案(分析师链产物;逐日目录,可能只有部分日)
         self.archives: dict[tuple[str, str], dict] = {}
@@ -82,6 +83,7 @@ class Data:
     def meta(self):
         return {"month": MONTH, "days": self.days,
                 "archive_days": self.archive_days,
+                "pool": [{"code": c, "name": self.names.get(c, "")} for c in self.pool],
                 "event_types": sorted(self.events.event_type.unique()),
                 "industries": self.ind_names,
                 "evidence_class": C.EVIDENCE_CLASS_REPLAY,
@@ -214,6 +216,13 @@ class Handler(BaseHTTPRequestHandler):
                 cards = {"fund": render_fund_card(f, biz_text) if not f.empty else "",
                          "tech": render_pv_card(p) if not p.empty else "",
                          "news": render_news_card(r) if not r.empty else ""}
+                # 全席共享的 market_context(chain_v1.2 起进 payload;与链同一构造)
+                rg = DATA.regime[DATA.regime.trade_date == day]
+                if len(rg):
+                    cards["market_context"] = (rg["card_text"].iloc[0]
+                                               + "\nregime: " + rg["regime"].iloc[0])
+                att = DATA.attn[(DATA.attn.ts_code == code)
+                                & (DATA.attn.trade_date == day)]
                 raws = {}
                 raw_dir = (C.OUT_ROOT / "analyst_chain" / day / "raw"
                            / code.replace(".", "_"))
@@ -229,6 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                             raws[seat] = None
                 return self._json({
                     "ts_code": code, "name": DATA.names.get(code, ""), "date": day,
+                    "attention": None if att.empty else float(att.attention.iloc[0]),
                     "cards": cards, "raws": raws,
                     "archive": DATA.archives.get((code, day)),
                     "prompts": {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")

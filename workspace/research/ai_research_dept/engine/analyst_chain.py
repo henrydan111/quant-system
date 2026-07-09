@@ -39,7 +39,8 @@ from ai_layer.scorecard import ScorecardViolation, _span_is_grounded, \
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v1.2"  # v1.2: +market_context 情境卡(v1.5-F);v1.1: +业务构成
+CHAIN_VERSION = "chain_v1.3"  # v1.3: news_card 间接节并入概念通道(修复 v1.5-E 半接线,
+#   概念通道上线后 industry-only 渲染让间接节静默变空);v1.2: +market_context;v1.1: +业务构成
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN,

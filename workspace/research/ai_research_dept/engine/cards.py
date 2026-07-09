@@ -63,8 +63,15 @@ def render_news_card(retr: pd.DataFrame) -> str:
     lines.append(f"—— 直接事件(本股,{len(d)} 条)——" if len(d) else "—— 直接事件:无 ——")
     for _, r in d.iterrows():
         lines.append(f"- {r['event_type']}|{r['title']}|{r['direction']}")
-    ind = retr[retr["channel"] == "industry"].nlargest(12, "relevance")
-    lines.append(f"—— 行业间接事件(同业,top{len(ind)})——" if len(ind) else "—— 行业间接事件:无 ——")
+    # 间接节 = concept+industry+relation 合并按相关度取 top(v1.5-E 半接线修复:检索精筛
+    # 是 direct→concept→industry 的 elif 链,概念通道上线后抢走大部分行业事件,只渲染
+    # industry 会让间接节静默变空 —— LLM 实际看不到任何同伴事件)
+    ind = retr[retr["channel"].isin(("concept", "industry", "relation"))] \
+        .nlargest(15, "relevance")
+    _cn = {"concept": "概念", "industry": "行业", "relation": "关联"}
+    lines.append(f"—— 间接事件(概念/行业同伴,top{len(ind)})——" if len(ind)
+                 else "—— 间接事件:无 ——")
     for _, r in ind.iterrows():
-        lines.append(f"- {r['event_type']}|{r['title']}|{r['direction']}|相关度{r['relevance']:.2f}")
+        lines.append(f"- [{_cn.get(r['channel'], r['channel'])}]{r['event_type']}"
+                     f"|{r['title']}|{r['direction']}|相关度{r['relevance']:.2f}")
     return "\n".join(lines)

@@ -1,0 +1,115 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>个股分析 — 投研情报中心</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="wrap">
+<div class="banner" id="banner">⚠ NON_EVIDENTIARY</div>
+<nav><b>投研情报中心</b><a href="/">热点榜</a><a href="events.html">事件流</a>
+<a href="archives.html">研究档案</a><a class="on" href="analysis.html">个股分析</a>
+<a href="department.html">投研分析部</a>
+<span style="margin-left:auto">股票 <select id="code"></select>
+日期 <select id="day"></select></span></nav>
+<h1 id="title">个股分析</h1>
+<p class="dim">本页 = 该决策会话 <b>LLM 收到的全部输入</b>(下方四张卡原文,一字不多一字不少)
+与 <b>LLM 产出的报告</b>。信息集于 D 日收盘后装配 = 最早 D+1 开盘行动前可见;三席<b>互盲</b>:
+每席只见自己的卡 + 市场情境卡,互相看不到对方(反羊群)。Prompt 与模型路由见
+<a id="deptlink" href="department.html">投研分析部</a>;原始数据明细与推理链审计见
+<a id="rawlink" href="stock.html">数据明细</a>。</p>
+<div class="cards" id="cards"></div>
+<div id="body"></div>
+<footer id="foot"></footer></div>
+<script>
+const P=new URLSearchParams(location.search);
+async function j(u){const r=await fetch(u);return r.json()}
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function pre(t){return `<pre style="white-space:pre-wrap;font:12px/1.7 inherit;color:var(--ink2);
+ background:var(--plane);border:1px solid var(--grid);border-radius:8px;padding:10px 14px;
+ max-height:480px;overflow:auto">${esc(t)}</pre>`}
+function scoreTable(rec,weights){
+ if(!rec)return '<p class="dim">无输出(该席未跑或失败)</p>';
+ let h='<table><thead><tr><th>维度</th><th class="num">分</th><th class="num">权重</th><th>证据(卡内逐字)</th></tr></thead><tbody>';
+ (rec.factor_scores||[]).forEach(fs=>{
+  h+=`<tr><td>${esc(fs.name)}</td><td class="num">${fs.score_0_5}</td>
+   <td class="num dim">${weights?.[fs.name]??'—'}</td>
+   <td class="dim">${(fs.evidence_spans||[]).map(s=>`「${esc(String(s).slice(0,80))}」`).join('<br>')||'<span class="neg">无证据→不计分</span>'}</td></tr>`});
+ (rec.penalty_scores||[]).filter(p=>p.score_0_5>0).forEach(p=>{
+  h+=`<tr><td class="neg">罚分 ${esc(p.name)}</td><td class="num neg">-${2*p.score_0_5}</td><td class="num dim">×2</td>
+   <td class="dim">${(p.evidence_spans||[]).map(s=>`「${esc(String(s).slice(0,80))}」`).join('<br>')}</td></tr>`});
+ h+='</tbody></table>';
+ const w=Array.isArray(rec.what_could_weaken)?rec.what_could_weaken:(rec.what_could_weaken?[rec.what_could_weaken]:[]);
+ if(w.length)h+=`<p class="dim"><b>什么会证明我错:</b>${esc(w.join(';'))}</p>`;
+ return h}
+const SEAT={fund:{label:'基本面席',card:'fund',cardName:'基本面卡(三锚定事实表+业务构成)'},
+ tech:{label:'技术面席',card:'tech',cardName:'技术面卡(量价情报包五子卡)'},
+ news:{label:'消息面席',card:'news',cardName:'消息面卡(检索装配单:直接+间接事件)'}};
+async function load(){
+ const code=document.getElementById('code').value,day=document.getElementById('day').value;
+ history.replaceState(null,'',`analysis.html?code=${code}&date=${day}`);
+ document.getElementById('deptlink').href=`department.html?code=${code}&date=${day}`;
+ document.getElementById('rawlink').href=`stock.html?code=${code}&date=${day}`;
+ const d=await j(`/api/dept?code=${code}&date=${day}`);
+ const A=d.archive,j2=A?.judge||{};
+ document.getElementById('title').innerHTML=`${d.ts_code} ${esc(d.name)} · ${d.date} 决策会话`+
+  (A?` <span class="chip" title="产生该档案时的链版本;本页输入卡为当前渲染器实时重渲,旧档案当时所见卡片可能与本页有出入">${esc(A.chain_version)}</span>`:'');
+ document.getElementById('cards').innerHTML=
+  `<div class="card"><div class="v">${j2.composite??'—'}</div><div class="k">composite(research_summary)</div></div>
+   <div class="card"><div class="v">${j2.composite_adj??'—'}</div><div class="k">空头调整后</div></div>
+   <div class="card"><div class="v">${j2.dispersion??'—'}</div><div class="k">三席分歧度</div></div>
+   <div class="card"><div class="v">${d.attention??'—'}</div><div class="k">关注度(截面0-100)</div></div>`;
+ let h='';
+ // ---- 输入 0:市场情境卡(全席共享) ----
+ h+=`<div class="scorebox" style="margin:14px 0"><h2 style="margin:0 0 6px">输入 · 市场情境卡
+  <span class="chip">全席共享</span></h2>
+  <p class="dim" style="margin:4px 0">规则(prompt v1.1):只准校准置信度与催化时点判断,
+  不得改事实维度分,不得把市场数字当本股证据。</p>`+
+  (d.cards.market_context?pre(d.cards.market_context):'<p class="dim">该日无情境卡</p>')+'</div>';
+ // ---- 三席:输入卡 + 输出 ----
+ for(const [k,s] of Object.entries(SEAT)){
+  const arch=A?.seats?.[k];
+  h+=`<div class="scorebox" style="margin:14px 0">
+   <h2 style="margin:0 0 6px">${s.label}
+    ${arch&&arch.final!==null?`<span class="chip">final ${arch.final}</span><span class="chip">折减后 ${arch.adj_final??'—'}</span><span class="chip dim">计分 ${arch.scored_dims}</span>`:''}
+    ${arch?.error?'<span class="neg">ERR</span>':''}</h2>
+   <details open><summary style="cursor:pointer"><b>输入:${s.cardName}</b></summary>
+    ${pre(d.cards[s.card]||'(空)')}</details>
+   <p style="margin:8px 0 4px"><b>输出:维度评分(模型 JSON;档案计分前还要过逐字接地+证据独占校验)</b></p>
+   ${scoreTable(d.raws[k],d.weights[k])}</div>`}
+ // ---- 空头席 ----
+ const b=A?.bear||{};
+ h+=`<div class="scorebox" style="margin:14px 0"><h2 style="margin:0 0 6px">空头席(对抗)</h2>
+  <p class="dim">输入 = 上方三张卡全文 + 三席各自最高分的 2 个维度及其证据;每条反驳必须给卡内逐字反证,
+  强度≥4 触发裁判对该维 ×0.5 折减。</p>`;
+ if((b.refutations||[]).length){
+  h+='<table><thead><tr><th>目标</th><th class="num">强度</th><th>被反驳主张</th><th>反证(逐字)</th><th>理由</th></tr></thead><tbody>';
+  b.refutations.forEach(r=>{h+=`<tr><td><span class="chip">${esc(r.target_seat)}.${esc(r.target_dim)}</span></td>
+   <td class="num ${r.strength_0_5>=4?'neg':''}">${r.strength_0_5}</td><td>${esc(r.claim||'')}</td>
+   <td class="dim">「${esc(String(r.counter_quote||'').slice(0,70))}」</td><td>${esc(r.reason||'')}</td></tr>`});
+  h+='</tbody></table>'}else h+='<p class="dim">无有效反驳</p>';
+ const ks=Array.isArray(b.kill_switches)?b.kill_switches:[];
+ if(ks.length)h+='<p><b>Kill switches(什么出现立即推翻本档案):</b> '+ks.map(k=>`<span class="chip">${esc(k)}</span>`).join(' ')+'</p>';
+ const bs=Array.isArray(b.blind_spots)?b.blind_spots:[];
+ if(bs.length)h+='<p class="dim"><b>盲点:</b> '+bs.map(esc).join(';')+'</p>';
+ h+='</div>';
+ // ---- 裁判 ----
+ h+=`<div class="scorebox" style="margin:14px 0"><h2 style="margin:0 0 6px">裁判(确定性代码,非 LLM)</h2>
+  <p class="dim">final=clamp(Σ权重×分 − 2Σ罚分, 0-100);空头强度≥4 → 该维×0.5;
+  composite=${Object.entries(d.composite_w).map(([s,w])=>`${w}×${s}`).join(' + ')}
+  (evidence_class=research_summary,<b>禁入排序/选股</b>)。</p>`+
+  (A?`<p>composite=${j2.composite} → 空头调整后 <b>${j2.composite_adj}</b> · 分歧度 ${j2.dispersion}
+   ${(j2.divergence_flags||[]).map(f=>`<span class="chip">${f}</span>`).join('')}</p>`
+   :'<p class="dim">该日无研究档案(分析师链未跑此日;上方输入卡仍为确定性重渲的当日原文)</p>')+
+ '</div>';
+ document.getElementById('body').innerHTML=h}
+(async()=>{const m=await j('/api/meta');
+ document.getElementById('banner').textContent='⚠ '+m.evidence_class+' — 历史重放,非证据;不得据此调参';
+ const cs=document.getElementById('code');
+ m.pool.forEach(p=>{const o=document.createElement('option');o.value=p.code;
+  o.textContent=`${p.code} ${p.name}`;cs.appendChild(o)});
+ cs.value=P.get('code')||m.pool[0].code; if(!cs.value)cs.selectedIndex=0;
+ const sel=document.getElementById('day');
+ m.days.forEach(d=>{const o=document.createElement('option');o.value=d;
+  o.textContent=d+(m.archive_days.includes(d)?' ●':'');sel.appendChild(o)});
+ sel.value=P.get('date')||(m.archive_days.length?m.archive_days[m.archive_days.length-1]:m.days[m.days.length-1]);
+ cs.onchange=load;sel.onchange=load;
+ document.getElementById('foot').textContent=`config=${m.config_hash} · snapshot=${m.snapshot} · 只读平台(平台不执行任何 LLM 调用) · ●=有研究档案`;
+ load()})();
+</script></body></html>

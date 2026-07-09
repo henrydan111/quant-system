@@ -4,7 +4,8 @@
 <div class="wrap">
 <div class="banner" id="banner">⚠ NON_EVIDENTIARY</div>
 <nav><b>投研情报中心</b><a href="/">热点榜</a><a href="events.html">事件流</a>
-<a class="on" href="archives.html">研究档案</a><a href="department.html">投研分析部</a>
+<a class="on" href="archives.html">研究档案</a><a href="analysis.html">个股分析</a>
+<a href="department.html">投研分析部</a>
 <span style="margin-left:auto">日期 <select id="day"></select></span></nav>
 <h1>研究档案榜(五席评分 · 空头调整后排序)</h1>
 <p class="dim">composite = 0.4基本面+0.3技术面+0.3消息面(research_summary,禁入排序/选股决策);
@@ -21,7 +22,7 @@ async function load(){
  const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
  rows.forEach((r,i)=>{const tr=document.createElement('tr');
   tr.innerHTML=`<td class="dim">${i+1}</td>
-   <td><a href="stock.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
+   <td><a href="analysis.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
    <td class="num">${r.composite??'—'}</td><td class="num"><b>${r.adj??'—'}</b></td>
    <td class="num">${r.dispersion??'—'}</td>
    <td>${(r.flags||[]).map(f=>`<span class="chip">${f}</span>`).join('')}</td>
