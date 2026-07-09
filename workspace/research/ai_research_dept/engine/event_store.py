@@ -262,6 +262,32 @@ def gen_ledger_events(window_start: str, window_end: str) -> list[dict]:
                           "change_ratio": None if pd.isna(ratio) else float(ratio)},
                          imp, "轻微利好" if inc else "轻微利空",
                          "stk_holdertrade", "strong"))
+    # 业绩快报:比正式财报早,数字为实际值(非预告区间)
+    ex = load_event_feed("express", start=window_start, end=window_end)
+    for _, r in ex.iterrows():
+        yoy = r.get("yoy_net_profit")
+        imp = 4 if (pd.notna(yoy) and abs(yoy) >= 50) else 3
+        d_ = ("显著利好" if pd.notna(yoy) and yoy >= 50 else
+              "轻微利好" if pd.notna(yoy) and yoy > 0 else
+              "间接利空" if pd.notna(yoy) and yoy <= -30 else
+              "轻微利空" if pd.notna(yoy) and yoy < 0 else "中性")
+        ev.append(_event("业绩快报", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} 业绩快报:净利同比"
+                         f"{'' if pd.isna(yoy) else f'{yoy:+.0f}%'}",
+                         {"n_income": None if pd.isna(r.get("n_income")) else float(r["n_income"]),
+                          "yoy_net_profit": None if pd.isna(yoy) else float(yoy),
+                          "diluted_roe": None if pd.isna(r.get("diluted_roe")) else float(r["diluted_roe"])},
+                         imp, d_, "express", "strong"))
+    # 非标审计意见:治理红旗(标准无保留意见不成事件)
+    au = load_event_feed("fina_audit", start=window_start, end=window_end)
+    au = au[au["audit_result"].notna()
+            & ~au["audit_result"].astype(str).str.startswith("标准无保留")]
+    for _, r in au.iterrows():
+        ev.append(_event("非标审计意见", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} 审计意见:{r['audit_result']}",
+                         {"audit_result": str(r["audit_result"]),
+                          "audit_agency": str(r.get("audit_agency", ""))},
+                         5, "严重利空", "fina_audit", "strong"))
     # 分红:预案/实施
     dv = load_event_feed("dividends", start=window_start, end=window_end)
     dv = dv[dv["div_proc"].isin(["预案", "实施"])]

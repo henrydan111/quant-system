@@ -71,6 +71,21 @@ EVENT_FEED_SPECS: dict[str, dict] = {
         "payload": ["ann_date", "end_date", "div_proc", "stk_div", "cash_div",
                      "cash_div_tax", "record_date", "ex_date"],
     },
+    # ---- 辅助账本(scripts/build_aux_pit_ledgers.py;事件/卡片用途,非因子字段)----
+    "express": {
+        "visible_col": "effective_date",
+        "payload": ["ann_date", "end_date", "revenue", "operate_profit", "n_income",
+                     "diluted_eps", "diluted_roe", "yoy_net_profit", "yoy_sales"],
+    },
+    "fina_audit": {
+        "visible_col": "effective_date",
+        "payload": ["ann_date", "end_date", "audit_result", "audit_agency"],
+    },
+    "fina_mainbz": {
+        # 可见性 = 同期定期报告 ann_date 的严格次开盘日(builder 内 join income 账本推导)
+        "visible_col": "effective_date",
+        "payload": ["ann_date", "end_date", "bz_item", "bz_sales", "bz_profit", "curr_type"],
+    },
 }
 
 

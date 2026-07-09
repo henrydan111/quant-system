@@ -44,7 +44,7 @@ INDUSTRY_MIN_N = 8
 HIST_YEARS = 10
 
 # ---- 事件库 ----
-EVENT_STORE_VERSION = "event_v0.2"   # v0.2: +ledger 生成器(业绩预告/董监高/分红,经 pit_event_feed 门)
+EVENT_STORE_VERSION = "event_v0.3"   # v0.3: +express 业绩快报 + fina_audit 非标审计(缺口①③);v0.2: +ledger 生成器
 TAG_VERSION = "tags_v0.1"
 
 

@@ -74,3 +74,15 @@ def test_instrument_filter():
     sub = load_event_feed("forecast", instruments=[some], **WINDOW)
     assert set(sub["ts_code"]) == {some}
     assert len(sub) <= len(ev)
+
+
+@pytest.mark.parametrize("dataset", ["express", "fina_audit", "fina_mainbz"])
+def test_aux_ledgers_serve_valid_events(dataset):
+    """缺口①②③ 辅助账本:可见性非空、严格晚于名义公告日历日、窗口内。"""
+    ev = load_event_feed(dataset, start="2024-04-01", end="2024-05-31")
+    assert not ev.empty, f"{dataset} 年报季窗口必须有事件"
+    assert ev["visible_at"].notna().all()
+    ann = pd.to_datetime(ev["ann_date"], errors="coerce")
+    ok = ann.notna()
+    assert (ev.loc[ok, "visible_at"] > ann[ok]).all(), \
+        f"{dataset}: effective 必须严格晚于 ann_date(strictly-next-open 锚)"
