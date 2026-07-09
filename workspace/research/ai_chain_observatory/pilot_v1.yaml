@@ -1,0 +1,46 @@
+# pilot_v1_hist_202501 — AI 链路观察站试点 config(Class-D,非证据)
+# 与生产 rerank_v2 的关系:决策参数逐字复制;新增 fund persona + 匿名化对照。
+# 本文件哈希随工件记录;它不是 FORWARD_PREREG 的一部分,不得反向影响 rerank_v2。
+version: pilot_v1_hist_202501
+evidence_class: NON_EVIDENTIARY_PILOT   # C5 quasi-forward;DESIGN.md
+models:
+  quick: doubao-seed-2.0-lite
+  deep: doubao-seed-2.0-pro
+  thinking: false
+  temperature: 0.1
+prompts:                                # extract/score 逐字复用生产 v2(一致性口径)
+  extract: src/ai_layer/prompts/extract_v2.txt
+  score: src/ai_layer/prompts/score_v2.txt
+  fund: workspace/research/ai_chain_observatory/prompts/score_fund_pilot_v1.txt
+weights:                                # 文本 persona — 与 rerank_v2 逐字一致
+  event_materiality: 6
+  fundamental_link: 4
+  novelty: 4
+  catalyst_timing: 3
+  mgmt_clarity: 3
+fund_weights:                           # 基本面 persona — sum=20 → final 原生 0-100
+  profitability_quality: 8
+  growth_momentum: 8
+  balance_sheet_strength: 4
+combine:                                # 确定性合成(LLM 永不合成)
+  text_weight: 0.6
+  fund_weight: 0.4
+  # 缺腿规则(预注册):text 缺→用 fund;fund 缺→用 text;双缺→no-score(零 tilt)
+tilt:
+  mapping: "tilt = tilt_cap * (combined - scored_cycle_mean) / 50"
+  tilt_cap: 0.15
+coverage:
+  min_scored_floor_pct: 0.80
+  fail_action: disable_ai_overlay_for_cycle
+book:                                   # 与 rerank_v2 逐字一致
+  k: 25
+  max_swap_count: 8
+  promotion_floor: 50
+  max_per_industry: 9
+dossier:                                # 与 rerank_v2 逐字一致
+  lookback_days: 30
+  max_items: 20
+  sources: [anns_d, irm_qa_sh, irm_qa_sz, research_report]
+replay:
+  decision_time_cn: "09:15"             # 晚于名义回退戳 09:00,早于 09:25 开盘决策墙
+  anonymization: true                   # 匿名化对照腿(污染诊断)
