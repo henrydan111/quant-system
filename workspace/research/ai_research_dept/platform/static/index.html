@@ -8,6 +8,13 @@
 <a href="archives.html">研究档案</a><a href="department.html">投研分析部</a>
 <span class="dim">个股页:点击任意股票进入</span>
 <span style="margin-left:auto">日期 <select id="day"></select></span></nav>
+<div id="regime" class="card" style="display:none;margin:10px 0;padding:10px 14px">
+ <b>市场情境</b> <span id="rg-label" class="tag"></span>
+ <span id="rg-nar" class="dim"></span>
+ <div id="rg-watch" class="dim" style="margin-top:4px"></div>
+ <details style="margin-top:6px"><summary class="dim">情境卡原文(代码计算)</summary>
+  <pre id="rg-card" style="white-space:pre-wrap;font-size:12px"></pre></details>
+</div>
 <h1>关注度榜(202501 金股池)</h1>
 <p class="dim">关注度=事件密度/换手分位/量比/龙虎榜/涨停语言/资金极端 六分量加权后的截面分位;
 高关注≠看多——拥挤反指假设由技术席消费。</p>
@@ -20,8 +27,17 @@ let META;
 async function j(u){const r=await fetch(u);return r.json()}
 function fmtTrend(t){if(t===null)return'<span class="dim">—</span>';
  const c=t>0?'pos':t<0?'neg':'';return `<span class="${c}">${t>0?'+':''}${t}</span>`}
+async function loadRegime(day){
+ const g=await j('/api/regime?date='+day);const box=document.getElementById('regime');
+ if(!g){box.style.display='none';return}
+ box.style.display='block';
+ document.getElementById('rg-label').textContent=g.regime+(g.llm_ok?'':' (LLM未通过校验,仅确定性卡)');
+ document.getElementById('rg-nar').textContent=g.narrative||'';
+ document.getElementById('rg-watch').textContent=g.watch?('关注: '+g.watch):'';
+ document.getElementById('rg-card').textContent=g.card_text}
 async function load(){
  const day=document.getElementById('day').value;
+ loadRegime(day);
  const rows=await j('/api/hotboard?date='+day);
  const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
  rows.forEach((r,i)=>{const tr=document.createElement('tr');

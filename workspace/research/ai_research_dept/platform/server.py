@@ -52,6 +52,9 @@ class Data:
         biz_path = C.OUT_ROOT / "biz_mix" / f"biz_mix_{MONTH}.parquet"
         self.biz = pd.read_parquet(biz_path) if biz_path.exists() else pd.DataFrame(
             columns=["ts_code", "trade_date", "biz_text"])
+        rg_path = C.OUT_ROOT / "regime" / f"regime_{MONTH}.parquet"
+        self.regime = pd.read_parquet(rg_path) if rg_path.exists() else pd.DataFrame(
+            columns=["trade_date", "card_text", "regime", "narrative", "watch", "llm_ok"])
         sb = pd.read_parquet(C.PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
                              columns=["ts_code", "name"])
         self.names = dict(zip(sb.ts_code, sb.name))
@@ -247,6 +250,16 @@ class Handler(BaseHTTPRequestHandler):
                         msg = raw.get("choices", [{}])[0].get("message", {})
                         out[seat] = msg.get("reasoning_content") or ""
                 return self._json(out)
+            if u.path == "/api/regime":
+                # 市场情境简报(v1.5-F):确定性卡 + LLM 归纳(锚外数字校验后)
+                day = q.get("date", [DATA.days[-1]])[0]
+                rg = DATA.regime[DATA.regime.trade_date == day]
+                if rg.empty:
+                    return self._json(None)
+                r = rg.iloc[0]
+                return self._json({"date": day, "regime": r["regime"],
+                                   "narrative": r["narrative"], "watch": r["watch"],
+                                   "card_text": r["card_text"], "llm_ok": bool(r["llm_ok"])})
             if u.path == "/api/stock":
                 return self._json(DATA.stock(q["code"][0],
                                              q.get("date", [DATA.days[-1]])[0]))
