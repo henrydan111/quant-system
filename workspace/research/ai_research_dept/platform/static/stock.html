@@ -41,6 +41,7 @@ async function load(){
   `<div class="card"><div class="v">${s.attention??'—'}</div><div class="k">关注度(截面0-100)</div></div>`;
  const A=s.archive, av=document.getElementById('archive'); av.innerHTML='';
  const arr=x=>Array.isArray(x)?x:(x?[x]:[]);   // LLM 偶发字符串代替数组,防御归一
+ const wk=x=>arr(x).map(w=>typeof w==='object'&&w?`${w.condition||''}(${w.observable_in||''})`:String(w));  // v2 结构化证伪兼容
  if(A){
   const SEAT={fund:'基本面席',tech:'技术面席',news:'消息面席'};
   const j2=A.judge||{};
@@ -54,7 +55,7 @@ async function load(){
    const dims=Object.entries(st.dims||{}).map(([d,v])=>`<span class="chip">${d}:${v}</span>`).join('');
    h+=`<tr><td>${label}${st.error?' <span class="neg">ERR</span>':''}</td>
     <td class="num">${st.final??'—'}</td><td class="num">${st.adj_final??'—'}</td>
-    <td>${dims}</td><td class="dim">${arr(st.what_could_weaken).join(';')}</td></tr>`});
+    <td>${dims}</td><td class="dim">${wk(st.what_could_weaken).join(';')}</td></tr>`});
   h+='</tbody></table>';
   const b=A.bear||{};
   h+='<h2>空头对抗</h2>';

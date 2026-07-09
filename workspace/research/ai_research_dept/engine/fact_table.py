@@ -89,14 +89,40 @@ def _grouped_pctl(day_values: pd.Series, industries: pd.Series,
 
 # ------------------------------------------------------------------ builders
 
-def build_fund_facts(days: list[str], pool: list[str]) -> pd.DataFrame:
-    """基本面 11 字段:全市场面板(行业分位用)+ 池内 10 年季度史(时序分位用)。"""
+def build_fund_facts(days: list[str], pool: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """基本面 11 字段:全市场面板(行业分位用)+ 池内 10 年季度史(时序分位用)。
+
+    v0.2 同时产出 vintage 8 季序列(审计 F3 退化口径):每点=该采样时点 loader 已知值
+    (lag-1),末点=D 日当前值——全序列同为 vintage 定义,内部一致;卡内显式标注。
+    """
     t0 = time.time()
     panels = load_pit_signal_panel(C.FUND_FIELDS, days)          # 全市场
     hist_days = quarterly_dates(days[0], C.HIST_YEARS)
     hist = load_pit_signal_panel(C.FUND_FIELDS, hist_days, instruments=pool)
     logger.info("fund panels loaded (%d fields × %d days + %d hist dates) %.0fs",
                 len(C.FUND_FIELDS), len(days), len(hist_days), time.time() - t0)
+
+    series_rows = []
+    for f in C.SERIES_FIELDS:
+        key = f"${f}" if f"${f}" in panels else f
+        hkey = f"${f}" if f"${f}" in hist else f
+        hdf = hist[hkey]
+        for day in days:
+            samples = hdf[hdf.index <= day]
+            cur_vals = panels[key].loc[day]
+            for code in pool:
+                if code not in hdf.columns:
+                    continue
+                s = samples[code].dropna().iloc[-(C.SERIES_POINTS - 1):]
+                pts = list(zip(s.index, s.values))
+                cur = cur_vals.get(code)
+                if cur is not None and pd.notna(cur):
+                    pts.append((day, float(cur)))
+                for seq, (d, v) in enumerate(pts):
+                    series_rows.append({
+                        "ts_code": code, "trade_date": day, "field": f,
+                        "seq": seq, "sample_date": str(d), "value": float(v),
+                    })
 
     rows = []
     for day in days:
@@ -128,7 +154,7 @@ def build_fund_facts(days: list[str], pool: list[str]) -> pd.DataFrame:
                     "pctl_scope": anchors.loc[code, "scope"],
                     "hist_pctl": hp, "source": "pit_research_loader/indicators",
                 })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), pd.DataFrame(series_rows)
 
 
 def build_mkt_facts(days: list[str], pool: list[str]) -> pd.DataFrame:
@@ -205,7 +231,7 @@ def main() -> int:
     logger.info("FactTable v0: %d days × %d pool names | config=%s",
                 len(days), len(pool), C.config_hash())
 
-    fund = build_fund_facts(days, pool)
+    fund, series = build_fund_facts(days, pool)
     mkt = build_mkt_facts(days, pool)
     ft = pd.concat([fund, mkt], ignore_index=True)
     ft["fact_table_version"] = C.FACT_TABLE_VERSION
@@ -214,6 +240,11 @@ def main() -> int:
     C.FACT_DIR.mkdir(parents=True, exist_ok=True)
     out = C.FACT_DIR / f"fact_table_{C.PILOT_POOL_MONTH}.parquet"
     ft.to_parquet(out, index=False)
+    series["fact_table_version"] = C.FACT_TABLE_VERSION
+    series["evidence_class"] = C.EVIDENCE_CLASS_REPLAY
+    series.to_parquet(C.FACT_DIR / f"fund_series_{C.PILOT_POOL_MONTH}.parquet",
+                      index=False)
+    logger.info("fund vintage series rows: %d", len(series))
 
     cov = ft.groupby("field")["value"].count()
     summary = {

@@ -64,8 +64,12 @@ def streak(bools: pd.Series) -> int:
 
 def rows_for_stock(code: str, g: pd.DataFrame, day: str,
                    ind_rs_pctl: float, bench_ret20: float,
-                   bench_ret60: float) -> list[dict]:
-    """g = 该股全部历史(至 day),index=Timestamp 升序。"""
+                   bench_ret60: float, ind_ctx: tuple | None = None) -> list[dict]:
+    """g = 该股全部历史(至 day),index=Timestamp 升序。
+
+    v0.2:两融/北向/龙虎榜等次晨披露数据窗口硬截止 D-1(审计 F2,§6.3a 类③/②);
+    +本股 5d/20d 收益、换手趋势、大单净流占比(量纲归一)、行业情境行(ind_ctx)。
+    """
     out = []
     add = lambda card, item, value, state="", pctl=float("nan"): out.append(
         {"ts_code": code, "trade_date": day, "subcard": card, "item": item,
@@ -99,9 +103,18 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
              "下降" if c_ < m60 and slope20 < -0.005 else "盘整")
     dd60 = float(c_ / adj.iloc[-60:].max() - 1)
     add("A", "趋势阶段", dd60, f"{stage}|60日回撤{dd60:.1%}")
+    add("A", "本股收益5d", float(adj.iloc[-1] / adj.iloc[-6] - 1) if len(adj) > 6 else float("nan"))
+    add("A", "本股收益20d", ret20)
     add("A", "RS_vs_300_20d", ret20 - bench_ret20)
     add("A", "RS_vs_300_60d", ret60 - bench_ret60)
     add("A", "RS_行业分位_60d", ind_rs_pctl, "", ind_rs_pctl)
+    if ind_ctx is not None:
+        ind_name, ir5, ir20 = ind_ctx
+        add("A", "所属行业", None, str(ind_name))
+        if ir5 is not None and pd.notna(ir5):
+            add("A", "行业指数5d", float(ir5))
+        if ir20 is not None and pd.notna(ir20):
+            add("A", "行业指数20d", float(ir20))
     body = (adj - adj_o).abs()
     up_shadow, dn_shadow = adj_h - np.maximum(adj, adj_o), np.minimum(adj, adj_o) - adj_l
     add("A", "连阳连阴", streak(adj.diff() > 0) or -streak(adj.diff() < 0))
@@ -122,6 +135,11 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
     add("B", "量价四象限", streak(quad_series == quad), quad)
     add("B", "量比", cur["volume_ratio"])
     add("B", "换手分位250d", cur["turnover_rate"], "", pctl_last(g["turnover_rate"].iloc[-250:]))
+    t5 = g["turnover_rate"].iloc[-5:].mean()
+    t20 = g["turnover_rate"].iloc[-20:].mean()
+    if pd.notna(t5) and pd.notna(t20) and t20 > 0:
+        add("B", "换手5d/20d比", t5 / t20,
+            "量能放大" if t5 > 1.3 * t20 else "量能退潮" if t5 < 0.7 * t20 else "")
     rv = adj.pct_change().rolling(20).std() * np.sqrt(252)
     add("B", "波动分位", rv.iloc[-1], "", pctl_last(rv.iloc[-250:]))
     bb_w = (adj.rolling(20).std() * 4) / adj.rolling(20).mean()
@@ -155,31 +173,37 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
                        / g["cyq_perf__cost_50pct"])
         trend = "收敛" if conc < conc_series.iloc[-20] else "发散"
         add("C", "筹码集中度", conc, trend)
-    if pd.notna(cur["rzye"]):
-        add("C", "融资余额20d变动", g["rzye"].iloc[-1] / g["rzye"].iloc[-20] - 1
-            if len(g) > 20 and g["rzye"].iloc[-20] > 0 else float("nan"),
-            "", pctl_last(g["rzye"].iloc[-250:]))
-        rz_ratio = g["rzmre"] / g["amount"].replace(0, np.nan) / 10  # 万元 vs 千元 尺度对齐由分位吸收
-        add("C", "融资买入占比分位", rz_ratio.iloc[-1], "", pctl_last(rz_ratio.iloc[-250:]))
-    if pd.notna(cur["ratio"]):
-        add("C", "北向持股比", cur["ratio"],
-            "", float("nan"))
-        add("C", "北向20d变动", g["ratio"].iloc[-1] - g["ratio"].iloc[-20]
-            if len(g) > 20 else float("nan"))
+    # 两融/北向为次晨披露(§6.3a 类③):D 日值在 D 盘后会话不可知 → 窗口硬截止 D-1(审计 F2)
+    g1 = g.iloc[:-1]
+    if len(g1) and pd.notna(g1["rzye"].iloc[-1]):
+        add("C", "融资余额20d变动", g1["rzye"].iloc[-1] / g1["rzye"].iloc[-20] - 1
+            if len(g1) > 20 and g1["rzye"].iloc[-20] > 0 else float("nan"),
+            "截至D-1", pctl_last(g1["rzye"].iloc[-250:]))
+        rz_ratio = g1["rzmre"] / g1["amount"].replace(0, np.nan) / 10  # 万元 vs 千元 尺度对齐由分位吸收
+        add("C", "融资买入占比分位", rz_ratio.iloc[-1], "截至D-1", pctl_last(rz_ratio.iloc[-250:]))
+    if len(g1) and pd.notna(g1["ratio"].iloc[-1]):
+        add("C", "北向持股比", g1["ratio"].iloc[-1], "截至D-1", float("nan"))
+        add("C", "北向20d变动", g1["ratio"].iloc[-1] - g1["ratio"].iloc[-21]
+            if len(g1) > 21 else float("nan"), "截至D-1")
 
     # ---------- D 主力行为 ----------
     net_big = (g["buy_lg_amount"].fillna(0) + g["buy_elg_amount"].fillna(0)
                - g["sell_lg_amount"].fillna(0) - g["sell_elg_amount"].fillna(0))
     net_sm = g["buy_sm_amount"].fillna(0) - g["sell_sm_amount"].fillna(0)
-    add("D", "大单净流5d", net_big.iloc[-5:].sum())
-    add("D", "大单净流20d", net_big.iloc[-20:].sum())
+    # v0.2:净流以占成交额比呈现(量纲归一;moneyflow 万元 vs amount 千元 → /10 对齐)
+    amt5 = g["amount"].iloc[-5:].sum() / 10
+    amt20 = g["amount"].iloc[-20:].sum() / 10
+    add("D", "大单净流5d占成交额", net_big.iloc[-5:].sum() / amt5 if amt5 > 0 else float("nan"))
+    add("D", "大单净流20d占成交额", net_big.iloc[-20:].sum() / amt20 if amt20 > 0 else float("nan"))
     add("D", "大单同向天数", streak(net_big > 0) or -streak(net_big < 0))
     shape = ("吸筹形态" if net_big.iloc[-5:].sum() > 0 and net_sm.iloc[-5:].sum() < 0 else
              "派发形态" if net_big.iloc[-5:].sum() < 0 and net_sm.iloc[-5:].sum() > 0 else "同向")
     add("D", "大小单形态", 0, shape)
     strength = net_big / g["amount"].replace(0, np.nan) / 10
     add("D", "净流强度分位", strength.iloc[-1], "", pctl_last(strength.iloc[-250:]))
-    add("D", "龙虎榜20d", int(g["top_list__amount"].iloc[-20:].notna().sum()))
+    # 龙虎榜为交易所晚间披露(§6.3a 类②,与事件库 D+1 晨可见戳对齐)→ 窗口 ≤ D-1
+    add("D", "龙虎榜20d", int(g1["top_list__amount"].iloc[-20:].notna().sum())
+        if len(g1) else 0, "截至D-1")
 
     # ---------- E 涨停语言 ----------
     lim_up = (g["close"] >= g["up_limit"] - EPS) & g["up_limit"].notna()
@@ -241,22 +265,33 @@ def main() -> int:
         root, exch = str(qcode).upper().split("_")
         return f"{root}.{exch}"
 
+    mem = pd.read_parquet(C.PROJECT_ROOT / "data" / "universe"
+                          / "industry_sw2021_members" / "industry_sw2021_members.parquet",
+                          columns=["l1_code", "l1_name"]).drop_duplicates()
+    c2n = dict(zip(mem.l1_code, mem.l1_name))
+
     all_rows = []
-    back = {v: k for k, v in qmap.items()}
     for day in days:
         ts_day = pd.Timestamp(day)
-        # 行业 RS 分位(60d 收益在申万 L1 内的排名)
+        # 行业 RS 分位(60d 收益在申万 L1 内排名)+ 行业 5d/20d 等权收益(v0.2 情境行)
         window = mkt_adj.loc[:ts_day]
-        ret60_all = (window.iloc[-1] / window.iloc[-61] - 1) if len(window) > 61 else None
-        ind_pctl_map = {}
-        if ret60_all is not None:
-            r = ret60_all.dropna()
-            r.index = [to_ts(str(i)) for i in r.index]
-            idx = pd.MultiIndex.from_product([[ts_day], r.index])
+        ind_pctl_map, ind_of, ind_r5, ind_r20 = {}, {}, {}, {}
+        if len(window) > 61:
+            cols_ts = [to_ts(str(i)) for i in window.columns]
+            idx = pd.MultiIndex.from_product([[ts_day], cols_ts])
             inds = build_industry_series_asof(idx, "L1").droplevel(0)
-            df_rs = pd.DataFrame({"ret": r, "ind": inds}).dropna()
+            ret60 = pd.Series(window.iloc[-1].values / window.iloc[-61].values - 1,
+                              index=cols_ts)
+            df_rs = pd.DataFrame({"ret": ret60, "ind": inds}).dropna()
             df_rs["p"] = df_rs.groupby("ind")["ret"].rank(pct=True)
             ind_pctl_map = df_rs["p"].to_dict()
+            ret5 = pd.Series(window.iloc[-1].values / window.iloc[-6].values - 1,
+                             index=cols_ts)
+            ret20s = pd.Series(window.iloc[-1].values / window.iloc[-21].values - 1,
+                               index=cols_ts)
+            ind_r5 = ret5.groupby(inds).mean().to_dict()
+            ind_r20 = ret20s.groupby(inds).mean().to_dict()
+            ind_of = inds.to_dict()
         b20 = float(bench.loc[:day].iloc[-1] / bench.loc[:day].iloc[-21] - 1)
         b60 = float(bench.loc[:day].iloc[-1] / bench.loc[:day].iloc[-61] - 1)
         for code, qc in qmap.items():
@@ -267,12 +302,15 @@ def main() -> int:
                 continue
             if len(g) < 80 or pd.isna(g["close"].iloc[-1]):
                 continue
+            ic = ind_of.get(code)
+            ind_ctx = ((c2n.get(ic, ic), ind_r5.get(ic), ind_r20.get(ic))
+                       if ic is not None and pd.notna(ic) else None)
             all_rows.extend(rows_for_stock(
-                code, g, day, ind_pctl_map.get(code, float("nan")), b20, b60))
+                code, g, day, ind_pctl_map.get(code, float("nan")), b20, b60, ind_ctx))
         logger.info("[%s] pv rows so far: %d", day, len(all_rows))
 
     pv = pd.DataFrame(all_rows)
-    pv["pv_pack_version"] = "pv_v0.1"
+    pv["pv_pack_version"] = "pv_v0.2"
     pv["evidence_class"] = C.EVIDENCE_CLASS_REPLAY
     C.PV_DIR.mkdir(parents=True, exist_ok=True)
     out = C.PV_DIR / f"pv_pack_{C.PILOT_POOL_MONTH}.parquet"

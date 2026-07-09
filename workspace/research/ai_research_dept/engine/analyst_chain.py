@@ -39,11 +39,13 @@ from ai_layer.scorecard import ScorecardViolation, _span_is_grounded, \
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v1.3"  # v1.3: news_card 间接节并入概念通道(修复 v1.5-E 半接线,
-#   概念通道上线后 industry-only 渲染让间接节静默变空);v1.2: +market_context;v1.1: +业务构成
+CHAIN_VERSION = "chain_v2.0"  # v2.0: 审计 v1 实施 —— 卡片 v0.2/0.3(行ID/格式/⚑/8季序列/
+#   披露动态B方案/news时间-星标-配额-聚合-缺席声明)+ prompts v2(证据先行/检查单/结构化证伪)
+#   + 空头全量scorecard+证伪回验 + F2修复(两融/北向/龙虎榜 ≤D-1);
+#   v1.3: news间接节并概念通道;v1.2: +market_context;v1.1: +业务构成
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
-    COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN,
+    COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN, disclosure_status,
     render_fund_card, render_news_card, render_pv_card,
 )
 BEAR_DISCOUNT_STRENGTH = 4      # 反驳强度≥4 且有反证 → 目标维贡献 ×0.5
@@ -108,16 +110,21 @@ def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
 
 
 def run_bear(cards: dict, seat_results: dict, audit_dir: Path) -> dict:
-    claims = []
+    # v2.0:喂全量 scorecard(维度分+证据+证伪条件),空头做证伪回验(审计 §5.1)
+    scorecards = {}
     for seat, res in seat_results.items():
-        top = sorted([fs for fs in res["record"]["factor_scores"]
-                      if fs.get("evidence_spans")],
-                     key=lambda x: -x["score_0_5"])[:2]
-        for fs in top:
-            claims.append({"seat": seat, "dim": fs["name"], "score": fs["score_0_5"],
-                           "evidence": fs["evidence_spans"][:2]})
-    prompt = (Path(__file__).parent / "prompts" / "bear_analyst_v1.txt").read_text(encoding="utf-8")
-    payload = {"cards": cards, "seat_claims": claims}
+        rec = res["record"]
+        scorecards[seat] = {
+            "factor_scores": [{"name": fs["name"], "score_0_5": fs["score_0_5"],
+                               "evidence_spans": (fs.get("evidence_spans") or [])[:3]}
+                              for fs in rec.get("factor_scores", [])],
+            "penalty_scores": [{"name": p["name"], "score_0_5": p["score_0_5"]}
+                               for p in rec.get("penalty_scores", [])
+                               if p.get("evidence_spans")],
+            "what_could_weaken": rec.get("what_could_weaken", []),
+        }
+    prompt = (Path(__file__).parent / "prompts" / "bear_analyst_v2.txt").read_text(encoding="utf-8")
+    payload = {"cards": cards, "seat_scorecards": scorecards}
     msgs = [{"role": "system", "content": SYSTEM_C15 + prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     r = L.call("bear_rebuttal", msgs)
@@ -176,7 +183,7 @@ def judge(seat_results: dict, bear: dict) -> dict:
 
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
               retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
-              out_dir: Path) -> dict | None:
+              series: pd.DataFrame, out_dir: Path) -> dict | None:
     arch_path = out_dir / f"{code.replace('.', '_')}.json"
     if arch_path.exists():                       # append-only:已有档案跳过
         return json.loads(arch_path.read_text(encoding="utf-8"))
@@ -187,15 +194,18 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
         return None
     b = biz[(biz.ts_code == code) & (biz.trade_date == day)]
     biz_text = b["biz_text"].iloc[0] if len(b) else None
-    cards = {"fund_card": render_fund_card(f, biz_text), "pv_card": render_pv_card(p),
-             "news_card": render_news_card(r)}
+    ser = series[(series.ts_code == code) & (series.trade_date == day)]
+    disclosure = disclosure_status(r[r["channel"] == "direct"], day)
+    cards = {"fund_card": render_fund_card(f, biz_text, ser, disclosure),
+             "pv_card": render_pv_card(p),
+             "news_card": render_news_card(r, day)}
     audit = out_dir / "raw" / code.replace(".", "_")
     audit.mkdir(parents=True, exist_ok=True)
     prompts_dir = Path(__file__).parent / "prompts"
     seat_results = {}
-    for seat, pfile, key in [("fund", "fund_analyst_v1.txt", "fund_card"),
-                              ("tech", "tech_analyst_v1.txt", "pv_card"),
-                              ("news", "news_analyst_v1.txt", "news_card")]:
+    for seat, pfile, key in [("fund", "fund_analyst_v2.txt", "fund_card"),
+                              ("tech", "tech_analyst_v2.txt", "pv_card"),
+                              ("news", "news_analyst_v2.txt", "news_card")]:
         prompt = (prompts_dir / pfile).read_text(encoding="utf-8")
         rg = regime[regime.trade_date == day]
         payload = {key: cards[key]}
@@ -257,6 +267,7 @@ def main() -> int:
     retr = pd.read_parquet(C.OUT_ROOT / "retrieval" / f"retrieval_{C.PILOT_POOL_MONTH}.parquet")
     biz = pd.read_parquet(C.OUT_ROOT / "biz_mix" / f"biz_mix_{C.PILOT_POOL_MONTH}.parquet")
     regime = pd.read_parquet(C.OUT_ROOT / "regime" / f"regime_{C.PILOT_POOL_MONTH}.parquet")
+    series = pd.read_parquet(C.FACT_DIR / f"fund_series_{C.PILOT_POOL_MONTH}.parquet")
 
     t0 = time.time()
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -267,7 +278,8 @@ def main() -> int:
         done, n = 0, 0
         # 5 线程并发:每股独立文件,LLM 调用线程安全;Ark 无 Tushare 式串行约束
         with ThreadPoolExecutor(max_workers=5) as ex:
-            futs = {ex.submit(run_stock, c, day, facts, pv, retr, biz, regime, out_dir): c
+            futs = {ex.submit(run_stock, c, day, facts, pv, retr, biz, regime,
+                              series, out_dir): c
                     for c in todo}
             for fut in as_completed(futs):
                 n += 1

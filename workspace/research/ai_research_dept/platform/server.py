@@ -25,13 +25,14 @@ from workspace.research.ai_research_dept.engine import config as C  # noqa: E402
 # 边界说明:cards=纯渲染器,llm_config=纯配置字典(call() 才会 lazy-import LLM 客户端,
 # 平台绝不调 call)——均不违反"平台不 import 评分/编排执行"的硬边界(INTEL_CENTER §6)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
-    COMPOSITE_W, SEAT_WEIGHTS, render_fund_card, render_news_card, render_pv_card,
+    COMPOSITE_W, SEAT_WEIGHTS, disclosure_status,
+    render_fund_card, render_news_card, render_pv_card,
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
-SEAT_PROMPT_FILES = {"fund": "fund_analyst_v1.txt", "tech": "tech_analyst_v1.txt",
-                     "news": "news_analyst_v1.txt", "bear": "bear_analyst_v1.txt"}
+SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
+                     "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
 
 logger = logging.getLogger("platform")
 STATIC = Path(__file__).parent / "static"
@@ -55,6 +56,9 @@ class Data:
         rg_path = C.OUT_ROOT / "regime" / f"regime_{MONTH}.parquet"
         self.regime = pd.read_parquet(rg_path) if rg_path.exists() else pd.DataFrame(
             columns=["trade_date", "card_text", "regime", "narrative", "watch", "llm_ok"])
+        sr_path = C.FACT_DIR / f"fund_series_{MONTH}.parquet"
+        self.series = pd.read_parquet(sr_path) if sr_path.exists() else pd.DataFrame(
+            columns=["ts_code", "trade_date", "field", "seq", "value"])
         sb = pd.read_parquet(C.PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
                              columns=["ts_code", "name"])
         self.names = dict(zip(sb.ts_code, sb.name))
@@ -213,9 +217,14 @@ class Handler(BaseHTTPRequestHandler):
                 r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
                 b = DATA.biz[(DATA.biz.ts_code == code) & (DATA.biz.trade_date == day)]
                 biz_text = b["biz_text"].iloc[0] if len(b) else None
-                cards = {"fund": render_fund_card(f, biz_text) if not f.empty else "",
+                ser = DATA.series[(DATA.series.ts_code == code)
+                                  & (DATA.series.trade_date == day)]
+                disc = disclosure_status(r[r["channel"] == "direct"], day) \
+                    if not r.empty else None
+                cards = {"fund": render_fund_card(f, biz_text, ser, disc)
+                         if not f.empty else "",
                          "tech": render_pv_card(p) if not p.empty else "",
-                         "news": render_news_card(r) if not r.empty else ""}
+                         "news": render_news_card(r, day) if not r.empty else ""}
                 # 全席共享的 market_context(chain_v1.2 起进 payload;与链同一构造)
                 rg = DATA.regime[DATA.regime.trade_date == day]
                 if len(rg):

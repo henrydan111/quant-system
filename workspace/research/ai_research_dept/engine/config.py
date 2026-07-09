@@ -28,16 +28,20 @@ PILOT_POOL_MONTH = "202501"
 PILOT_MONTH_END = "20250131"
 EVIDENCE_CLASS_REPLAY = "NON_EVIDENTIARY_PILOT"   # replay 自动注入(R2 Minor-C)
 
-# ---- FactTable v0 ----
-FACT_TABLE_VERSION = "fact_v0.1"
+# ---- FactTable v0.2(chain_v2.0 输入升级:+PS/股息率;+vintage 8 季序列) ----
+FACT_TABLE_VERSION = "fact_v0.2"
 #: 基本面字段(pit_research_loader,sandbox_screening 全批准,2026-07-08 探测确认)
 FUND_FIELDS = [
     "roe_waa", "grossprofit_margin", "netprofit_margin", "ocf_to_or",
     "or_yoy", "netprofit_yoy", "dt_netprofit_yoy", "basic_eps_yoy",
     "debt_to_assets", "current_ratio", "assets_turn",
 ]
-#: 市场字段(provider daily_basic bins,approved)
-MKT_FIELDS = ["$pe_ttm", "$pb", "$total_mv", "$turnover_rate"]
+#: 市场字段(provider daily_basic bins,approved;ps_ttm/dv_ratio 注册表实查 2026-07-09)
+MKT_FIELDS = ["$pe_ttm", "$pb", "$ps_ttm", "$dv_ratio", "$total_mv", "$turnover_rate"]
+#: vintage 8 季序列字段(审计 F3 探测裁决:指标 q-slot 未注册 → 退化 vintage 口径,
+#  各点=该采样时点已知值,含 D 日当前点;卡内显式标注)
+SERIES_FIELDS = ["or_yoy", "netprofit_yoy", "grossprofit_margin", "roe_waa"]
+SERIES_POINTS = 8
 #: 行业分位:同业样本数下限,不足回退全市场分位(第一篇 §11 诚实缺口的 fallback)
 INDUSTRY_MIN_N = 8
 #: 自身时序分位回看(年);季度采样

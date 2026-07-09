@@ -35,7 +35,8 @@ function scoreTable(rec,weights){
   h+=`<tr><td class="neg">罚分 ${esc(p.name)}</td><td class="num neg">-${2*p.score_0_5}</td><td class="num dim">×2</td>
    <td class="dim">${(p.evidence_spans||[]).map(s=>`「${esc(String(s).slice(0,80))}」`).join('<br>')}</td></tr>`});
  h+='</tbody></table>';
- const w=Array.isArray(rec.what_could_weaken)?rec.what_could_weaken:(rec.what_could_weaken?[rec.what_could_weaken]:[]);
+ const w=(Array.isArray(rec.what_could_weaken)?rec.what_could_weaken:(rec.what_could_weaken?[rec.what_could_weaken]:[]))
+  .map(x=>typeof x==='object'&&x?`${x.condition||''}(可观测于:${x.observable_in||'—'})`:String(x));
  if(w.length)h+=`<p class="dim"><b>什么会证明我错:</b>${esc(w.join(';'))}</p>`;
  return h}
 const SEAT={fund:{label:'基本面席',card:'fund',cardName:'基本面卡(三锚定事实表+业务构成)'},
