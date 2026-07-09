@@ -22,6 +22,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from workspace.research.ai_research_dept.engine import config as C  # noqa: E402
+# 边界说明:cards=纯渲染器,llm_config=纯配置字典(call() 才会 lazy-import LLM 客户端,
+# 平台绝不调 call)——均不违反"平台不 import 评分/编排执行"的硬边界(INTEL_CENTER §6)
+from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
+    COMPOSITE_W, SEAT_WEIGHTS, render_fund_card, render_news_card, render_pv_card,
+)
+from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
+
+PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
+SEAT_PROMPT_FILES = {"fund": "fund_analyst_v1.txt", "tech": "tech_analyst_v1.txt",
+                     "news": "news_analyst_v1.txt", "bear": "bear_analyst_v1.txt"}
 
 logger = logging.getLogger("platform")
 STATIC = Path(__file__).parent / "static"
@@ -187,6 +197,38 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/archives":
                 day = q.get("date", [DATA.archive_days[-1] if DATA.archive_days else ""])[0]
                 return self._json(DATA.archive_list(day))
+            if u.path == "/api/dept":
+                # 投研分析部:每席 输入卡(确定性重渲)/Prompt/原始输出/档案结果
+                code, day = q["code"][0].upper(), q["date"][0]
+                f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
+                p = DATA.pv[(DATA.pv.ts_code == code) & (DATA.pv.trade_date == day)]
+                r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
+                cards = {"fund": render_fund_card(f) if not f.empty else "",
+                         "tech": render_pv_card(p) if not p.empty else "",
+                         "news": render_news_card(r) if not r.empty else ""}
+                raws = {}
+                raw_dir = (C.OUT_ROOT / "analyst_chain" / day / "raw"
+                           / code.replace(".", "_"))
+                for seat in ("fund", "tech", "news", "bear"):
+                    fp = raw_dir / f"{seat}_raw.json"
+                    if fp.exists():
+                        raw = json.loads(fp.read_text(encoding="utf-8"))
+                        content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        try:
+                            i, k = content.find("{"), content.rfind("}")
+                            raws[seat] = json.loads(content[i:k + 1]) if i >= 0 else None
+                        except (json.JSONDecodeError, ValueError):
+                            raws[seat] = None
+                return self._json({
+                    "ts_code": code, "name": DATA.names.get(code, ""), "date": day,
+                    "cards": cards, "raws": raws,
+                    "archive": DATA.archives.get((code, day)),
+                    "prompts": {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
+                                for s, fn in SEAT_PROMPT_FILES.items()},
+                    "routing": {"scoring": TASK_LLM["dimension_scoring"],
+                                "bear": TASK_LLM["bear_rebuttal"]},
+                    "weights": SEAT_WEIGHTS, "composite_w": COMPOSITE_W,
+                })
             if u.path == "/api/reasoning":
                 # G5 审计视图:按需从 raw/ 读推理链;只读展示,永不入档案数据
                 code, day = q["code"][0].upper(), q["date"][0]
