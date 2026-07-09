@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>热点榜 — 投研情报中心</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="wrap">
+<div class="banner" id="banner">⚠ NON_EVIDENTIARY — 历史重放,非证据;不得据此调参</div>
+<nav><b>投研情报中心</b>
+<a class="on" href="/">热点榜</a><a href="events.html">事件流</a>
+<a href="archives.html">研究档案</a>
+<span class="dim">个股页:点击任意股票进入</span>
+<span style="margin-left:auto">日期 <select id="day"></select></span></nav>
+<h1>关注度榜(202501 金股池)</h1>
+<p class="dim">关注度=事件密度/换手分位/量比/龙虎榜/涨停语言/资金极端 六分量加权后的截面分位;
+高关注≠看多——拥挤反指假设由技术席消费。</p>
+<table id="tbl"><thead><tr><th>#</th><th>股票</th><th>关注度</th><th></th><th>5日趋势</th>
+<th class="num">事件密度分位</th><th class="num">换手分位</th><th class="num">龙虎榜</th>
+<th class="num">涨停语言</th></tr></thead><tbody></tbody></table>
+<footer id="foot"></footer></div>
+<script>
+let META;
+async function j(u){const r=await fetch(u);return r.json()}
+function fmtTrend(t){if(t===null)return'<span class="dim">—</span>';
+ const c=t>0?'pos':t<0?'neg':'';return `<span class="${c}">${t>0?'+':''}${t}</span>`}
+async function load(){
+ const day=document.getElementById('day').value;
+ const rows=await j('/api/hotboard?date='+day);
+ const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
+ rows.forEach((r,i)=>{const tr=document.createElement('tr');
+  tr.innerHTML=`<td class="dim">${i+1}</td>
+   <td><a href="stock.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
+   <td class="num">${r.attention}</td>
+   <td><span class="bar" style="width:${r.attention}px"></span></td>
+   <td class="num">${fmtTrend(r.trend)}</td>
+   <td class="num">${(r.ev_density*100).toFixed(0)}%</td>
+   <td class="num">${(r.turnover_p*100).toFixed(0)}%</td>
+   <td class="num">${(r.top_list*3).toFixed(0)}</td>
+   <td class="num">${(r.limit_lang*4).toFixed(0)}</td>`;
+  tb.appendChild(tr)})}
+(async()=>{META=await j('/api/meta');
+ document.getElementById('banner').textContent='⚠ '+META.evidence_class+' — 历史重放,非证据;不得据此调参';
+ const sel=document.getElementById('day');
+ META.days.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;sel.appendChild(o)});
+ sel.value=META.days[META.days.length-1];sel.onchange=load;
+ document.getElementById('foot').textContent=
+  `config=${META.config_hash} · retrieval_snapshot=${META.snapshot} · 只读平台(无写路径)`;
+ load()})();
+</script></body></html>

@@ -123,6 +123,8 @@ workspace/research/**/run_console.log
 workspace/research/**/*.parquet
 workspace/research/**/*.csv
 workspace/research/**/*.html
+# 平台源码页面豁免(生成物仍被上一行覆盖;platform/static = 手写源码非产物)
+!workspace/research/ai_research_dept/platform/static/*.html
 workspace/research/**/*.pkl
 workspace/research/**/*.png
 workspace/research/**/*.jpg

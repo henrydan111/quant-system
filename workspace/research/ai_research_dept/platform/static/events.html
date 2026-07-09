@@ -1,0 +1,50 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>事件流 — 投研情报中心</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="wrap">
+<div class="banner" id="banner">⚠ NON_EVIDENTIARY</div>
+<nav><b>投研情报中心</b><a href="/">热点榜</a><a class="on" href="events.html">事件流</a>
+<a href="archives.html">研究档案</a><span class="dim">个股页:点击任意股票进入</span></nav>
+<h1>事件流浏览器(通用层·无主属)</h1>
+<nav>
+ 类型 <select id="type"><option value="">全部</option></select>
+ 重要性≥ <select id="imp"><option>0</option><option>1</option><option>2</option>
+  <option selected>3</option><option>4</option><option>5</option></select>
+ 行业 <select id="ind"><option value="">全部</option></select>
+ 个股 <input id="code" placeholder="600000.SH" size="10">
+ 标题 <input id="q" placeholder="关键词" size="10">
+ <button onclick="load()">检索</button>
+</nav>
+<table id="tbl"><thead><tr><th>可见时点</th><th>类型</th><th>标题</th><th>重要性</th>
+<th>极性</th><th>主体</th><th>行业标签</th><th>源</th></tr></thead><tbody></tbody></table>
+<footer id="foot"></footer></div>
+<script>
+async function j(u){const r=await fetch(u);return r.json()}
+function dirCls(d){return d.includes('利好')?'pos':d.includes('利空')?'neg':'dim'}
+async function load(){
+ const p=new URLSearchParams();
+ const g=id=>document.getElementById(id).value;
+ if(g('type'))p.set('type',g('type'));if(g('imp')>0)p.set('min_imp',g('imp'));
+ if(g('ind'))p.set('industry',g('ind'));if(g('code'))p.set('code',g('code'));
+ if(g('q'))p.set('q',g('q'));
+ const rows=await j('/api/events?'+p);
+ const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
+ rows.forEach(r=>{const tr=document.createElement('tr');
+  tr.innerHTML=`<td class="dim">${r.visible_at}</td>
+   <td><span class="chip">${r.type}</span></td><td>${r.title}</td>
+   <td class="num">${'★'.repeat(r.importance)||'—'}</td>
+   <td class="${dirCls(r.direction)}">${r.direction}</td>
+   <td>${r.subjects.map(s=>{const c=s.split(' ')[0];
+     return `<a href="stock.html?code=${c}">${s}</a>`}).join('<br>')}</td>
+   <td class="dim">${r.industries.join(' ')}</td><td class="dim">${r.source}</td>`;
+  tb.appendChild(tr)})}
+(async()=>{const m=await j('/api/meta');
+ document.getElementById('banner').textContent='⚠ '+m.evidence_class+' — 历史重放,非证据';
+ const ts=document.getElementById('type');
+ m.event_types.forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=t;ts.appendChild(o)});
+ const ind=document.getElementById('ind');
+ Object.entries(m.industries).forEach(([c,n])=>{const o=document.createElement('option');
+  o.value=c;o.textContent=n;ind.appendChild(o)});
+ document.getElementById('foot').textContent=`config=${m.config_hash} · 只读平台`;
+ load()})();
+</script></body></html>
