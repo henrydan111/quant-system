@@ -187,6 +187,19 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/archives":
                 day = q.get("date", [DATA.archive_days[-1] if DATA.archive_days else ""])[0]
                 return self._json(DATA.archive_list(day))
+            if u.path == "/api/reasoning":
+                # G5 审计视图:按需从 raw/ 读推理链;只读展示,永不入档案数据
+                code, day = q["code"][0].upper(), q["date"][0]
+                raw_dir = (C.OUT_ROOT / "analyst_chain" / day / "raw"
+                           / code.replace(".", "_"))
+                out = {}
+                for seat in ("fund", "tech", "news", "bear"):
+                    p = raw_dir / f"{seat}_raw.json"
+                    if p.exists():
+                        raw = json.loads(p.read_text(encoding="utf-8"))
+                        msg = raw.get("choices", [{}])[0].get("message", {})
+                        out[seat] = msg.get("reasoning_content") or ""
+                return self._json(out)
             if u.path == "/api/stock":
                 return self._json(DATA.stock(q["code"][0],
                                              q.get("date", [DATA.days[-1]])[0]))

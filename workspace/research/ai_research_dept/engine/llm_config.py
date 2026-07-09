@@ -21,8 +21,10 @@ LLM_CONFIG_VERSION = "llm_v0.1"
 #: 模型注册表(用户指定 11 模型,全部经火山方舟)
 #: PROBE 2026-07-09:11/11 可用;thinking 冒烟 doubao-pro/deepseek-v4-pro/glm-5.2 全通
 #: (reasoning_content 独立字段)。个体特性已标注。
-#: ⚠ G5 卫兵:reasoning_content 只许留在 attempt 审计工件,**永不进入卡片/档案/平台页**
-#: (蚂蚁晨报 CoT 泄漏糟粕的运行时防线;输出卫兵测试断言之)。
+#: ⚠ G5 卫兵(2026-07-09 修订):reasoning_content **永不进入卡片/档案数据/任何下游消费**
+#: (蚂蚁晨报 CoT 泄漏糟粕的防线);平台允许一个**隔离的只读审计视图**展示它(用户裁定:
+#: 需要看到各席思路)——必须明确标注"模型推理独白,未经校验,不构成档案内容",且仅从
+#: raw/ 审计目录按需读取,绝不写入档案 JSON。
 MODEL_REGISTRY = {
     # doubao 家族(Ark 原生,保底可用)
     "doubao-seed-2.0-code":  {"family": "doubao",   "tier": "code",   "note": "代码生成/工具类"},
