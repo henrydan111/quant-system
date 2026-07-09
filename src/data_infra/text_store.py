@@ -74,12 +74,19 @@ SOURCE_OBJECT_ID_COLUMNS: dict[str, list[str]] = {
     "irm_qa_sh": ["ts_code", "pub_time", "q"],
     "irm_qa_sz": ["ts_code", "pub_time", "q"],
     "research_report": ["ts_code", "title", "inst_csname", "trade_date"],
+    # 政策三源(v1.5-D;宏观级,无 ts_code)
+    "npr": ["pubtime", "title", "puborg"],
+    "monetary_policy": ["pub_date", "title"],
+    "cctv_news": ["date", "title"],
 }
 SOURCE_CONTENT_COLUMNS: dict[str, list[str]] = {
     "anns_d": ["ann_date", "ts_code", "title", "url"],
     "irm_qa_sh": ["ts_code", "pub_time", "q", "a"],
     "irm_qa_sz": ["ts_code", "pub_time", "q", "a"],
     "research_report": ["ts_code", "title", "inst_csname", "trade_date"],
+    "npr": ["pubtime", "title", "puborg", "ptype"],
+    "monetary_policy": ["pub_date", "title", "url"],
+    "cctv_news": ["date", "title", "content"],
 }
 
 

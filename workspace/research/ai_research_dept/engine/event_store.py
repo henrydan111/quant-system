@@ -76,10 +76,14 @@ def sha16(text: str) -> str:
 
 def _event(event_type: str, subjects: list[str], visible_at, title: str,
            payload: dict, importance: int, direction: str, source: str,
-           tier: str, keywords: list[str] | None = None) -> dict:
+           tier: str, keywords: list[str] | None = None,
+           industries_override: list[str] | None = None) -> dict:
     day = str(visible_at)[:10]
-    inds = sorted({i for c in subjects
-                   if (i := industry_as_of(c, day, "L1")) is not None})
+    if industries_override is not None:      # 宏观/政策事件:无个股主属,直给行业标签
+        inds = sorted(set(industries_override))
+    else:
+        inds = sorted({i for c in subjects
+                       if (i := industry_as_of(c, day, "L1")) is not None})
     return {
         "event_id": sha16(f"{event_type}|{'|'.join(sorted(subjects))}|{day}|{title[:80]}"),
         "event_type": event_type, "subject_codes": subjects,
@@ -385,6 +389,83 @@ def gen_irm_events() -> list[dict]:
     return ev
 
 
+#: 政策→申万 L1 行业词表(v1 手工;词命中即打行业标签,政策事件经 industry 通道被检索)
+_POLICY_IND_WORDS = {
+    "房地产|楼市|住房|保障房": "房地产", "银行|信贷|存款|贷款": "银行",
+    "证券|券商|资本市场|IPO|上市公司": "非银金融", "保险": "非银金融",
+    "芯片|半导体|集成电路": "电子", "汽车|新能源车|智能网联": "汽车",
+    "光伏|风电|储能|锂电": "电力设备", "医药|医疗|药品|医保|疫苗": "医药生物",
+    "白酒|食品|乳业": "食品饮料", "军工|国防": "国防军工", "煤炭": "煤炭",
+    "钢铁": "钢铁", "化工|化肥": "基础化工", "农业|粮食|种业|耕地": "农林牧渔",
+    "家电": "家用电器", "基建|建筑|城市更新": "建筑装饰", "水泥|建材": "建筑材料",
+    "机械|装备制造|工业母机": "机械设备",
+    "人工智能|算力|软件|数据要素|数字经济|信创": "计算机",
+    "5G|6G|通信|电信": "通信", "游戏|影视|文化|传媒|广电": "传媒",
+    "环保|碳排放|碳中和|绿色": "环保", "电力|电网|电价": "公用事业",
+    "石油|油气|成品油": "石油石化", "稀土|有色|锂矿|铜": "有色金属",
+    "纺织|服装": "纺织服饰", "零售|消费|免税": "商贸零售",
+    "旅游|酒店|餐饮": "社会服务", "物流|快递|航运|港口|铁路|民航": "交通运输",
+}
+
+
+def _l1_name_to_code() -> dict[str, str]:
+    mem = pd.read_parquet(C.PROJECT_ROOT / "data" / "universe"
+                          / "industry_sw2021_members" / "industry_sw2021_members.parquet",
+                          columns=["l1_code", "l1_name"]).drop_duplicates()
+    return dict(zip(mem.l1_name, mem.l1_code))
+
+
+def _match_industries(text: str, name2code: dict) -> tuple[list[str], list[str]]:
+    import re
+    codes, words = set(), []
+    for pat, ind_name in _POLICY_IND_WORDS.items():
+        m = re.search(pat, text)
+        if m and ind_name in name2code:
+            codes.add(name2code[ind_name])
+            words.append(m.group(0))
+    return sorted(codes), words
+
+
+def gen_policy_events(window_start: str, window_end: str) -> list[dict]:
+    """G12:政策三源(npr/货政/联播)→ 无主属行业级政策事件(v1.5-D)。"""
+    n2c = _l1_name_to_code()
+    ev = []
+    ws, we = pd.Timestamp(window_start), pd.Timestamp(window_end) + pd.Timedelta(days=1)
+
+    def _load(src):
+        p = HIST_TEXT_STORE / src / f"text_{src}.parquet"
+        if not p.exists():
+            return pd.DataFrame()
+        df = pd.read_parquet(p)
+        df = df[df["sim_visible_at"].notna()
+                & (df["sim_visible_at"] >= ws) & (df["sim_visible_at"] <= we)]
+        return df
+
+    for _, r in _load("npr").iterrows():
+        text = f"{r.get('title', '')} {r.get('ptype', '')}"
+        codes, words = _match_industries(text, n2c)
+        ev.append(_event("政策发布", [], r["sim_visible_at"],
+                         f"[{r.get('puborg', '')}] {str(r.get('title', ''))[:80]}",
+                         {"ptype": str(r.get("ptype", ""))}, 4, "中性", "npr",
+                         "strong", words, industries_override=codes))
+    for _, r in _load("monetary_policy").iterrows():
+        ev.append(_event("货币政策报告", [], r["sim_visible_at"],
+                         str(r.get("title", ""))[:80], {}, 5, "中性",
+                         "monetary_policy", "strong",
+                         industries_override=[c for n, c in n2c.items()
+                                              if n in ("银行", "非银金融")]))
+    for _, r in _load("cctv_news").iterrows():
+        text = f"{r.get('title', '')} {str(r.get('content', ''))[:3000]}"
+        codes, words = _match_industries(text, n2c)
+        if not codes:
+            continue                          # 无行业关联的联播条目=宏观噪音,不成事件
+        ev.append(_event("新闻联播", [], r["sim_visible_at"],
+                         str(r.get("title", ""))[:80],
+                         {"matched": words}, 2, "中性", "cctv_news", "strong",
+                         words, industries_override=codes))
+    return ev
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -408,8 +489,10 @@ def main() -> int:
     logger.info("report_rc surge events: %d", len(rc))
     irm = gen_irm_events()
     logger.info("irm_qa substantive events: %d", len(irm))
+    pol = gen_policy_events(win_start, days[-1])
+    logger.info("policy events (npr/货政/联播): %d", len(pol))
 
-    all_ev = pd.DataFrame(ev + sus + anns + led + rr + rc + irm)
+    all_ev = pd.DataFrame(ev + sus + anns + led + rr + rc + irm + pol)
     all_ev = all_ev.drop_duplicates(subset=["event_id"])      # 判同 v0:同键去重
     C.EVENT_DIR.mkdir(parents=True, exist_ok=True)
     out = C.EVENT_DIR / f"events_{C.PILOT_POOL_MONTH}.parquet"

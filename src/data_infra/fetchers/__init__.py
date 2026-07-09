@@ -917,6 +917,32 @@ class TushareFetcher:
             fields="ann_date,ts_code,name,title,url,rec_time",
         )
 
+    def fetch_npr(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch 国家政策库 (doc_id=406; 500/call, datetime params).
+
+        PIT anchor = `pubtime` (发布时间, datetime): ingest with
+        `published_col="pubtime"`. 量小(~9条/周),单窗单 call 够用。
+        """
+        return self._safe_api_call(self.pro.npr, start_date=start_date,
+                                   end_date=end_date)
+
+    def fetch_monetary_policy(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch 央行货币政策执行报告 (doc_id=465; 2001 起, 1000/call 一次拉全).
+
+        ⚠ PIT: `pub_date` 仅日级(无时间戳) → ingest `published_col=None`,
+        可见性回退入库时刻;历史回补用 pub_date+1 开盘日模拟锚。
+        """
+        return self._safe_api_call(self.pro.monetary_policy,
+                                   start_date=start_date, end_date=end_date)
+
+    def fetch_cctv_news(self, date: str) -> pd.DataFrame:
+        """Fetch 新闻联播文字稿 (doc_id=154; 2017 起, 按日).
+
+        ⚠ PIT: `date` 名义日,节目 19:00 播出 → ingest `published_col=None`;
+        历史回补模拟锚 = date+1 开盘日(晚间播出,次晨可用)。
+        """
+        return self._safe_api_call(self.pro.cctv_news, date=date)
+
     def fetch_anns_d_paged(self, ann_date: str, *, page_size: int = 2000,
                            max_pages: int = 6) -> pd.DataFrame:
         """anns_d with offset pagination (busy days exceed the 2000/call cap).

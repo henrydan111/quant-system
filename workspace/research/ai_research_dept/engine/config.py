@@ -44,7 +44,7 @@ INDUSTRY_MIN_N = 8
 HIST_YEARS = 10
 
 # ---- 事件库 ----
-EVENT_STORE_VERSION = "event_v0.4"   # v0.4: +研报分型/分析师修正潮/互动易实质问答(v1.5-B/C);v0.3: +快报/非标审计
+EVENT_STORE_VERSION = "event_v0.5"   # v0.5: +政策三源无主属事件(v1.5-D);v0.4: +研报/修正潮/互动易
 TAG_VERSION = "tags_v0.1"
 
 
