@@ -44,7 +44,7 @@ INDUSTRY_MIN_N = 8
 HIST_YEARS = 10
 
 # ---- 事件库 ----
-EVENT_STORE_VERSION = "event_v0.3"   # v0.3: +express 业绩快报 + fina_audit 非标审计(缺口①③);v0.2: +ledger 生成器
+EVENT_STORE_VERSION = "event_v0.4"   # v0.4: +研报分型/分析师修正潮/互动易实质问答(v1.5-B/C);v0.3: +快报/非标审计
 TAG_VERSION = "tags_v0.1"
 
 

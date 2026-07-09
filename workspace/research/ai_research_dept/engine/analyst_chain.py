@@ -39,7 +39,7 @@ from ai_layer.scorecard import ScorecardViolation, _span_is_grounded, \
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v1.0"
+CHAIN_VERSION = "chain_v1.1"  # v1.1: 基本面卡+业务构成节(v1.5-A)
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN,
@@ -174,7 +174,7 @@ def judge(seat_results: dict, bear: dict) -> dict:
 # ------------------------------------------------------------------ runner
 
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
-              retr: pd.DataFrame, out_dir: Path) -> dict | None:
+              retr: pd.DataFrame, biz: pd.DataFrame, out_dir: Path) -> dict | None:
     arch_path = out_dir / f"{code.replace('.', '_')}.json"
     if arch_path.exists():                       # append-only:已有档案跳过
         return json.loads(arch_path.read_text(encoding="utf-8"))
@@ -183,7 +183,9 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     r = retr[(retr.ts_code == code) & (retr.trade_date == day)]
     if f.empty or p.empty:
         return None
-    cards = {"fund_card": render_fund_card(f), "pv_card": render_pv_card(p),
+    b = biz[(biz.ts_code == code) & (biz.trade_date == day)]
+    biz_text = b["biz_text"].iloc[0] if len(b) else None
+    cards = {"fund_card": render_fund_card(f, biz_text), "pv_card": render_pv_card(p),
              "news_card": render_news_card(r)}
     audit = out_dir / "raw" / code.replace(".", "_")
     audit.mkdir(parents=True, exist_ok=True)
@@ -246,6 +248,7 @@ def main() -> int:
     facts = pd.read_parquet(C.FACT_DIR / f"fact_table_{C.PILOT_POOL_MONTH}.parquet")
     pv = pd.read_parquet(C.PV_DIR / f"pv_pack_{C.PILOT_POOL_MONTH}.parquet")
     retr = pd.read_parquet(C.OUT_ROOT / "retrieval" / f"retrieval_{C.PILOT_POOL_MONTH}.parquet")
+    biz = pd.read_parquet(C.OUT_ROOT / "biz_mix" / f"biz_mix_{C.PILOT_POOL_MONTH}.parquet")
 
     t0 = time.time()
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -256,7 +259,7 @@ def main() -> int:
         done, n = 0, 0
         # 5 线程并发:每股独立文件,LLM 调用线程安全;Ark 无 Tushare 式串行约束
         with ThreadPoolExecutor(max_workers=5) as ex:
-            futs = {ex.submit(run_stock, c, day, facts, pv, retr, out_dir): c
+            futs = {ex.submit(run_stock, c, day, facts, pv, retr, biz, out_dir): c
                     for c in todo}
             for fut in as_completed(futs):
                 n += 1

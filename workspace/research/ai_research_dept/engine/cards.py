@@ -31,12 +31,14 @@ SUBCARD_CN = {"A": "趋势形态", "B": "量能结构", "C": "筹码持仓",
               "D": "主力行为", "E": "涨停语言"}
 
 
-def render_fund_card(facts: pd.DataFrame) -> str:
+def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None) -> str:
     lines = ["【基本面三锚定事实表】(值|行业分位(同业家数)|自身10年分位)"]
     for _, r in facts.iterrows():
         ip = "" if pd.isna(r["industry_pctl"]) else f"行业分位{r['industry_pctl']:.0%}({r['industry_n']}家)"
         hp = "" if pd.isna(r["hist_pctl"]) else f"10年分位{r['hist_pctl']:.0%}"
         lines.append(f"- {FIELD_CN.get(r['field'], r['field'])}: {r['value']:g}|{ip}|{hp}")
+    if biz_text:
+        lines.append(biz_text)          # v1.5-A: fina_mainbz 业务构成节(as-of 最新报告期)
     return "\n".join(lines)
 
 

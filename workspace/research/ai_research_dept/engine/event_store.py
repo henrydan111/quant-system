@@ -302,6 +302,89 @@ def gen_ledger_events(window_start: str, window_end: str) -> list[dict]:
     return ev
 
 
+def gen_research_report_events(window_start: str, window_end: str) -> list[dict]:
+    """G9:研报摘要事件(确定性标题/摘要分型;摘要精华烤进标题供 dossier 呈现)。"""
+    df = pd.read_parquet(HIST_TEXT_STORE / "research_report" / "text_research_report.parquet")
+    df = df[df["sim_visible_at"].notna()
+            & (df["sim_visible_at"] >= pd.Timestamp(window_start))
+            & (df["sim_visible_at"] <= pd.Timestamp(window_end) + pd.Timedelta(days=1))]
+    df = df[df["ts_code"].notna() & (df["ts_code"].astype(str).str.len() > 0)]
+    ev = []
+    for _, r in df.iterrows():
+        title, abstr = str(r.get("title", "")), str(r.get("abstr", "") or "")
+        if "首次覆盖" in title or "首次覆盖" in abstr[:100]:
+            typ, imp = "研报首次覆盖", 3
+        elif any(k in title for k in ("买入", "增持", "推荐", "强推", "优于大市")):
+            typ, imp = "研报评级", 2
+        elif "深度" in title:
+            typ, imp = "深度研报", 2
+        else:
+            typ, imp = "研报点评", 1
+        show = f"{r.get('inst_csname', '')}研报:{title[:40]}" + \
+               (f"——{abstr[:80]}" if abstr else "")
+        ev.append(_event(typ, [r["ts_code"]], r["sim_visible_at"], show,
+                         {"inst": str(r.get("inst_csname", "")), "abstr": abstr[:300]},
+                         imp, "轻微利好" if typ in ("研报首次覆盖", "研报评级") else "中性",
+                         "research_report", "medium"))
+    return ev
+
+
+def gen_report_rc_events(days: list[str]) -> list[dict]:
+    """G10:分析师修正潮(bins:单日 eps_up/dn ≥3 人 → 事件;全市场)。"""
+    from qlib.data import D          # qlib 已在 gen_market_events 初始化
+    avail = D.list_instruments(D.instruments("all"),
+                               start_time=days[0], end_time=days[-1], as_list=True)
+    win_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    df = D.features(avail, ["$report_rc__eps_up", "$report_rc__eps_dn"],
+                    start_time=win_start, end_time=days[-1], freq="day")
+    df.columns = ["eps_up", "eps_dn"]
+    df = df[(df["eps_up"] >= 3) | (df["eps_dn"] >= 3)]
+    ev = []
+    for (inst, ts), r in df.iterrows():
+        root, exch = str(inst).upper().split("_")
+        code, day = f"{root}.{exch}", ts.strftime("%Y%m%d")
+        if pd.notna(r["eps_up"]) and r["eps_up"] >= 3:
+            ev.append(_event("分析师上调潮", [code], _next_morning(day),
+                             f"{code} 单日 {int(r['eps_up'])} 名分析师上调 FY1 EPS",
+                             {"day": day, "eps_up": int(r["eps_up"])}, 3, "轻微利好",
+                             "report_rc", "medium"))
+        if pd.notna(r["eps_dn"]) and r["eps_dn"] >= 3:
+            ev.append(_event("分析师下调潮", [code], _next_morning(day),
+                             f"{code} 单日 {int(r['eps_dn'])} 名分析师下调 FY1 EPS",
+                             {"day": day, "eps_dn": int(r["eps_dn"])}, 3, "轻微利空",
+                             "report_rc", "medium"))
+    return ev
+
+
+_IRM_TYPES = ["产能", "订单", "业绩", "产品", "客户", "研发", "扩张", "风险", "其他"]
+
+
+def _norm_irm_type(raw: str) -> str:
+    """LLM 偶发自由组合标签(研发|产品 / 整枚举复读)→ 归一到首个合法类型(税onomy 纪律)。"""
+    for token in str(raw).replace("/", "|").split("|"):
+        if token.strip() in _IRM_TYPES:
+            return token.strip()
+    return "其他"
+
+
+def gen_irm_events() -> list[dict]:
+    """G11:互动易实质问答(消费 irm_typing.py 的分型产物;缺文件=跳过并警告)。"""
+    p = C.OUT_ROOT / "irm_typed" / f"irm_typed_{C.PILOT_POOL_MONTH}.parquet"
+    if not p.exists():
+        logger.warning("irm_typed parquet missing (%s) — 互动易事件跳过,先跑 irm_typing.py", p)
+        return []
+    df = pd.read_parquet(p)
+    df["type"] = df["type"].map(_norm_irm_type)
+    ev = []
+    for _, r in df.iterrows():
+        ev.append(_event(f"互动易-{r['type']}", [r["ts_code"]], r["visible_at"],
+                         f"{r['ts_code']} 互动易({r['mgmt_tone']}):{r['summary']}",
+                         {"q": r["q"], "summary": r["summary"],
+                          "mgmt_tone": r["mgmt_tone"]},
+                         2, r["direction"], r["source"], "strong"))
+    return ev
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -319,8 +402,14 @@ def main() -> int:
     logger.info("anns events: %d | %s", len(anns), stats)
     led = gen_ledger_events(win_start, days[-1])
     logger.info("ledger events (forecast/holdertrade/dividends): %d", len(led))
+    rr = gen_research_report_events(win_start, days[-1])
+    logger.info("research_report events: %d", len(rr))
+    rc = gen_report_rc_events(days)
+    logger.info("report_rc surge events: %d", len(rc))
+    irm = gen_irm_events()
+    logger.info("irm_qa substantive events: %d", len(irm))
 
-    all_ev = pd.DataFrame(ev + sus + anns + led)
+    all_ev = pd.DataFrame(ev + sus + anns + led + rr + rc + irm)
     all_ev = all_ev.drop_duplicates(subset=["event_id"])      # 判同 v0:同键去重
     C.EVENT_DIR.mkdir(parents=True, exist_ok=True)
     out = C.EVENT_DIR / f"events_{C.PILOT_POOL_MONTH}.parquet"

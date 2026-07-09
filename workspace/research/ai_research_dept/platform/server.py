@@ -49,6 +49,9 @@ class Data:
         self.pv = pd.read_parquet(C.PV_DIR / f"pv_pack_{MONTH}.parquet")
         self.retr = pd.read_parquet(C.OUT_ROOT / "retrieval" / f"retrieval_{MONTH}.parquet")
         self.attn = pd.read_parquet(C.OUT_ROOT / "attention" / f"attention_{MONTH}.parquet")
+        biz_path = C.OUT_ROOT / "biz_mix" / f"biz_mix_{MONTH}.parquet"
+        self.biz = pd.read_parquet(biz_path) if biz_path.exists() else pd.DataFrame(
+            columns=["ts_code", "trade_date", "biz_text"])
         sb = pd.read_parquet(C.PROJECT_ROOT / "data" / "reference" / "stock_basic.parquet",
                              columns=["ts_code", "name"])
         self.names = dict(zip(sb.ts_code, sb.name))
@@ -203,7 +206,9 @@ class Handler(BaseHTTPRequestHandler):
                 f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
                 p = DATA.pv[(DATA.pv.ts_code == code) & (DATA.pv.trade_date == day)]
                 r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
-                cards = {"fund": render_fund_card(f) if not f.empty else "",
+                b = DATA.biz[(DATA.biz.ts_code == code) & (DATA.biz.trade_date == day)]
+                biz_text = b["biz_text"].iloc[0] if len(b) else None
+                cards = {"fund": render_fund_card(f, biz_text) if not f.empty else "",
                          "tech": render_pv_card(p) if not p.empty else "",
                          "news": render_news_card(r) if not r.empty else ""}
                 raws = {}
