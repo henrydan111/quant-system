@@ -48,16 +48,43 @@ class Data:
         self.ind_names = dict(zip(mem.l1_code, mem.l1_name))
         self.days = sorted(self.attn.trade_date.unique())
         self.snapshot = str(self.retr.retrieval_profile_snapshot_id.iloc[0])
+        # 研究档案(分析师链产物;逐日目录,可能只有部分日)
+        self.archives: dict[tuple[str, str], dict] = {}
+        chain_dir = C.OUT_ROOT / "analyst_chain"
+        if chain_dir.exists():
+            for day_dir in chain_dir.iterdir():
+                if not day_dir.is_dir():
+                    continue
+                for fj in day_dir.glob("*.json"):
+                    a = json.loads(fj.read_text(encoding="utf-8"))
+                    self.archives[(a["ts_code"], a["date"])] = a
+        self.archive_days = sorted({d for _, d in self.archives})
         logger.info("loaded: %d events / %d facts / %d pv / %d retr / %d attn",
                     len(self.events), len(self.facts), len(self.pv),
                     len(self.retr), len(self.attn))
 
     def meta(self):
         return {"month": MONTH, "days": self.days,
+                "archive_days": self.archive_days,
                 "event_types": sorted(self.events.event_type.unique()),
                 "industries": self.ind_names,
                 "evidence_class": C.EVIDENCE_CLASS_REPLAY,
                 "config_hash": C.config_hash(), "snapshot": self.snapshot}
+
+    def archive_list(self, day: str):
+        out = []
+        for (code, d), a in self.archives.items():
+            if d != day:
+                continue
+            j, b = a.get("judge", {}), a.get("bear", {})
+            out.append({"ts_code": code, "name": self.names.get(code, ""),
+                        "composite": j.get("composite"), "adj": j.get("composite_adj"),
+                        "dispersion": j.get("dispersion"),
+                        "flags": j.get("divergence_flags", []),
+                        "n_refs": len(b.get("refutations", [])),
+                        "kill": b.get("kill_switches", [])[:1]})
+        out.sort(key=lambda x: -(x["adj"] if x["adj"] is not None else -1))
+        return out
 
     def hotboard(self, day: str):
         d = self.attn[self.attn.trade_date == day].nlargest(80, "attention")
@@ -120,6 +147,7 @@ class Data:
             "retrieval": [{"channel": r.channel, "type": r.event_type, "title": r.title,
                            "direction": r.direction, "relevance": float(r.relevance)}
                           for _, r in retr.iterrows()],
+            "archive": self.archives.get((code, day)),
         }
 
 
@@ -156,6 +184,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(DATA.hotboard(q.get("date", [DATA.days[-1]])[0]))
             if u.path == "/api/events":
                 return self._json(DATA.query_events(q))
+            if u.path == "/api/archives":
+                day = q.get("date", [DATA.archive_days[-1] if DATA.archive_days else ""])[0]
+                return self._json(DATA.archive_list(day))
             if u.path == "/api/stock":
                 return self._json(DATA.stock(q["code"][0],
                                              q.get("date", [DATA.days[-1]])[0]))
