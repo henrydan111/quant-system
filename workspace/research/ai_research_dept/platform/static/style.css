@@ -1,0 +1,35 @@
+:root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+--grid:#e1e0d9;--border:rgba(11,11,11,.10);--acc:#2a78d6;--good:#006300;--bad:#d03b3b;
+--warn-bg:#fff3e0;--warn-ink:#8a4b00}
+@media(prefers-color-scheme:dark){:root{--surface:#1a1a19;--plane:#0d0d0d;--ink:#fff;
+--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--border:rgba(255,255,255,.10);--acc:#3987e5;
+--good:#0ca30c;--bad:#e66767;--warn-bg:#3a2a10;--warn-ink:#f0c070}}
+*{box-sizing:border-box}body{margin:0;background:var(--plane);color:var(--ink);
+font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:16px 20px 60px}
+.banner{background:var(--warn-bg);color:var(--warn-ink);border:1px solid var(--border);
+border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;margin-bottom:14px}
+nav{display:flex;gap:14px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+nav a{color:var(--acc);text-decoration:none;font-weight:600}
+nav a.on{border-bottom:2px solid var(--acc)}
+h1{font-size:20px;margin:4px 0 10px}h2{font-size:15px;margin:18px 0 8px}
+select,input{background:var(--surface);color:var(--ink);border:1px solid var(--grid);
+border-radius:6px;padding:5px 8px;font:inherit}
+table{border-collapse:collapse;width:100%;background:var(--surface);
+border:1px solid var(--border);border-radius:10px;overflow:hidden;
+font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:600;font-size:12px;text-align:left;padding:7px 10px;
+border-bottom:1px solid var(--grid);position:sticky;top:0;background:var(--surface)}
+td{padding:6px 10px;border-bottom:1px solid var(--grid);vertical-align:top}
+tr:last-child td{border-bottom:none}
+.num{text-align:right}.pos{color:var(--good)}.neg{color:var(--bad)}
+.chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;
+border:1px solid var(--border);color:var(--ink2);margin-right:4px}
+.bar{display:inline-block;height:8px;background:var(--acc);border-radius:4px;
+vertical-align:middle}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+footer{margin-top:30px;color:var(--muted);font-size:12px}
+.dim{color:var(--muted)}.cards{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+padding:10px 14px;min-width:120px}.card .v{font-size:19px;font-weight:700}
+.card .k{color:var(--muted);font-size:12px}
