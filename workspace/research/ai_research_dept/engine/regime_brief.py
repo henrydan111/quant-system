@@ -133,16 +133,23 @@ def main() -> int:
                 break
         return int(streak.max())
 
-    rows, prev_top5 = [], None
-    for day in days:
-        ts_day = pd.Timestamp(day)
+    def day_rotation(ts_day: pd.Timestamp):
         day_pct = pct.loc[ts_day].dropna()
         day_pct.index = [to_ts(i) for i in day_pct.index]
         midx = pd.MultiIndex.from_product([[ts_day], day_pct.index])
         inds = build_industry_series_asof(midx, "L1").droplevel(0)
         ind_ret = (pd.DataFrame({"p": day_pct, "i": inds}).dropna()
                    .groupby("i")["p"].mean().sort_values(ascending=False))
-        rotation = [(c2n.get(k, k), float(v)) for k, v in ind_ret.items()]
+        return day_pct, [(c2n.get(k, k), float(v)) for k, v in ind_ret.items()]
+
+    rows = []
+    # 复审#3 minor:首决策日的 M14 主线重合需要前一交易日的轮动作基线(400 日面板内有)
+    prev_idx = pct.index[pct.index < pd.Timestamp(days[0])]
+    prev_top5 = ([n for n, _ in day_rotation(prev_idx[-1])[1][:5]]
+                 if len(prev_idx) else None)
+    for day in days:
+        ts_day = pd.Timestamp(day)
+        day_pct, rotation = day_rotation(ts_day)
         up, dn = int((day_pct > 0).sum()), int((day_pct < 0).sum())
 
         amt_series = amt_daily[amt_daily.index <= ts_day].iloc[-250:]

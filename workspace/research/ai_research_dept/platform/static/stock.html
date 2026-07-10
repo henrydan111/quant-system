@@ -32,11 +32,12 @@ function pc(v){return v===null?'<span class="dim">—</span>':(v*100).toFixed(0)
 function dirCls(d){return d&&d.includes('利好')?'pos':d&&d.includes('利空')?'neg':'dim'}
 async function load(){
  const code=P.get('code'),day=document.getElementById('day').value;
- const s=await j(`/api/stock?code=${code}&date=${day}`);
+ const chain=P.get('chain')||'';
+ const s=await j(`/api/stock?code=${code}&date=${day}${chain?`&chain=${encodeURIComponent(chain)}`:''}`);
  document.getElementById('title').textContent=`${s.ts_code} ${s.name} · ${s.date} 数据明细`;
  document.getElementById('xlink').innerHTML=
   `本页为原始数据行(事实表/量价包/检索表)与推理链审计;LLM 输入卡原文与报告视图见
-   <a href="analysis.html?code=${s.ts_code}&date=${s.date}">个股分析</a>。`;
+   <a href="analysis.html?code=${s.ts_code}&date=${s.date}${chain?`&chain=${encodeURIComponent(chain)}`:''}">个股分析</a>。`;
  document.getElementById('cards').innerHTML=
   `<div class="card"><div class="v">${s.attention??'—'}</div><div class="k">关注度(截面0-100)</div></div>`;
  const A=s.archive, av=document.getElementById('archive'); av.innerHTML='';
@@ -75,7 +76,7 @@ async function load(){
    <p class="dim">⚠ 以下为各席 LLM 的原始推理独白(thinking 输出)——未经证据校验,不构成档案内容,
    不得作为任何判断依据;仅供审计"分数是怎么想出来的"。</p><div id="reasoning"></div>`;
   av.innerHTML=h;
-  fetch(`/api/reasoning?code=${code}&date=${day}`).then(r=>r.json()).then(rs=>{
+  fetch(`/api/reasoning?code=${code}&date=${day}${chain?`&chain=${encodeURIComponent(chain)}`:''}`).then(r=>r.json()).then(rs=>{
    const SEAT2={fund:'基本面席',tech:'技术面席',news:'消息面席',bear:'空头席'};
    document.getElementById('reasoning').innerHTML=Object.entries(SEAT2)
     .filter(([k])=>rs[k])

@@ -125,18 +125,37 @@ def enforce_v2_evidence(rec: dict, card_text: str, seat: str) -> dict:
     return rec
 
 
+#: 行 ID 前缀 → 证据域(strength=5 快径的 observable_in 域校验,复审#3 minor)
+def _lid_domain(lid: str) -> str | None:
+    if lid.startswith("F"):        # F/FB/FS/FD
+        return "fund"
+    if lid.startswith("T"):
+        return "tech"
+    if lid.startswith("N"):
+        return "news"
+    if lid.startswith("M"):
+        return "market"
+    return None
+
+
 def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
                          falsifiers: dict) -> dict:
     """空头输出 typed 校验:**逐条** fail-closed 丢弃(单条畸形绝不波及他条),
-    返回净化记录 + 审计计数。
+    返回净化记录 + 审计计数 + **schema_valid**(复审#3 B3:顶层容器损坏不得
+    伪装成"空但正常"——它会让档案被标记完整并永久固化)。
 
     falsifiers: {falsifier_id: {"seat": str, "observable_in": str}} —— strength=5
-    快径要求 falsifier_id 存在且其声明席位 == refutation.target_seat(目标绑定)。
+    快径要求 falsifier_id 存在、声明席位 == target_seat、且反证行所在证据域 ∈
+    该证伪声明的 observable_in(机械确认命中,非仅 ID 存在)。
     """
     lmap = line_map(all_cards_text)
+    schema_valid = (isinstance(rec, dict)
+                    and isinstance(rec.get("refutations"), list)
+                    and isinstance(rec.get("kill_switches"), list)
+                    and isinstance(rec.get("blind_spots"), list))
     valid, dropped = [], {"keys": 0, "pairing": 0, "strength": 0, "quote": 0,
                           "falsifier_downgraded": 0}
-    refs = rec.get("refutations", [])
+    refs = rec.get("refutations", []) if isinstance(rec, dict) else []
     if not isinstance(refs, list):
         refs = []
     for r in refs:
@@ -157,19 +176,29 @@ def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
         if isinstance(raw_strength, bool) or not isinstance(raw_strength, Real):
             dropped["strength"] += 1
             continue
-        strength = float(raw_strength)
+        try:
+            strength = float(raw_strength)     # 10**10000 是 Real 但 float() 溢出(复审#3)
+        except (TypeError, ValueError, OverflowError):
+            dropped["strength"] += 1
+            continue
         if not math.isfinite(strength) or not 0 <= strength <= 5:
             dropped["strength"] += 1
             continue
         strength = int(strength)
-        if span_line_id(r.get("counter_quote", ""), lmap) is None:
+        quote_lid = span_line_id(r.get("counter_quote", ""), lmap)
+        if quote_lid is None:
             dropped["quote"] += 1
             continue
         fid = r.get("falsifier_id")
+        # 机械确认命中(复审#3 minor):ID 存在 + 席位绑定 + 反证域 ∈ 证伪声明的
+        # observable_in(observable_in=fund 的证伪引用 M 行不再保 5)
+        allowed = set(str(falsifiers.get(fid, {}).get("observable_in", "")
+                          ).split("|")) if isinstance(fid, str) else set()
         fid_ok = (isinstance(fid, str) and fid in falsifiers
-                  and falsifiers[fid].get("seat") == seat)      # 目标席位绑定
+                  and falsifiers[fid].get("seat") == seat
+                  and _lid_domain(quote_lid) in allowed)
         if strength == 5 and not fid_ok:
-            strength = 4                       # 自动 5 分仅限机械验证+席位绑定的证伪命中
+            strength = 4                       # 自动 5 分仅限机械验证的证伪命中
             dropped["falsifier_downgraded"] += 1
         valid.append({"target_seat": seat, "target_dim": dim,
                       "claim": _norm(r.get("claim", ""))[:_MAX_CLAIM],
@@ -177,11 +206,11 @@ def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
                       "strength_0_5": strength,
                       "reason": _norm(r.get("reason", ""))[:_MAX_REASON],
                       **({"falsifier_id": fid} if fid_ok else {})})
-    ks_raw = rec.get("kill_switches")
-    bs_raw = rec.get("blind_spots")
+    ks_raw = rec.get("kill_switches") if isinstance(rec, dict) else None
+    bs_raw = rec.get("blind_spots") if isinstance(rec, dict) else None
     ks = [_norm(k)[:_MAX_TEXT] for k in (ks_raw if isinstance(ks_raw, list) else [])
           if isinstance(k, str) and k.strip()][:5]
     bs = [_norm(b)[:_MAX_TEXT] for b in (bs_raw if isinstance(bs_raw, list) else [])
           if isinstance(b, str) and b.strip()][:5]
     return {"refutations": valid, "kill_switches": ks, "blind_spots": bs,
-            "validation_dropped": dropped}
+            "schema_valid": schema_valid, "validation_dropped": dropped}

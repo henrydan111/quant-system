@@ -78,12 +78,21 @@ class TestStrictOptIn:
                     {"name": "b", "score_0_5": 0, "evidence_spans": []}])
         validate_scorecard_record(rec, weights=W, require_registered_exact=True)
 
-    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1, 6, "5", True])
+    @pytest.mark.parametrize("bad", [
+        float("nan"), float("inf"), -1, 6, "5", True,
+        pytest.param(10**10000, id="huge-int")])   # str() 上限:必须显式 id
     def test_score_domain_hard_fail(self, bad):
+        # 复审#3 Major:10**10000 是合法 JSON 整数且属 Number,但 float() 溢出——
+        # 必须变成 ScorecardViolation,不得以 OverflowError 逃出校验器
         rec = _rec([{"name": "a", "score_0_5": bad, "evidence_spans": []},
                     {"name": "b", "score_0_5": 3, "evidence_spans": []}])
         with pytest.raises(ScorecardViolation, match="finite number"):
             validate_scorecard_record(rec, weights=W, require_registered_exact=True)
+
+    def test_huge_int_no_score_in_compute(self):
+        """非严格路径:超大整数 → NO-SCORE(_valid_score 溢出防护),不崩不计分。"""
+        rec = _rec([{"name": "a", "score_0_5": 10**10000, "evidence_spans": [SPAN1]}])
+        assert compute_scorecard_final(rec, weights=W, evidence_context=CTX) == 0.0
 
     def test_default_params_keep_legacy_behavior(self):
         """MVP 冻结产品路径:默认参数下,缺维/域外分不 raise(compute 端 NO-SCORE 兜底)。"""

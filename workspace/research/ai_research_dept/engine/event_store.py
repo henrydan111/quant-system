@@ -499,8 +499,12 @@ def main() -> int:
     win_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
     cal = pd.read_parquet(C.TRADE_CAL)
     opens = cal.loc[cal["is_open"] == 1, "cal_date"].astype(str)
-    event_days = sorted(opens[(opens >= win_start.replace("-", ""))
-                              & (opens <= days[-1])])
+    # 复审#3 minor:窗首前再多取一个开市日——win_start 当天可见的行情事件可能来自
+    # 前一交易日盘后;最终窗口由检索端按 visible_at 过滤
+    open_days = sorted(opens[opens <= days[-1]])
+    first = next(i for i, d in enumerate(open_days)
+                 if d >= win_start.replace("-", ""))
+    event_days = open_days[max(0, first - 1):]
 
     ev = gen_market_events(event_days)
     logger.info("market events: %d (窗含 %d 个预热交易日)",

@@ -46,13 +46,14 @@ const SEAT={fund:{label:'基本面席',card:'fund',cardName:'基本面卡(三锚
 async function load(){
  const code=document.getElementById('code').value,day=document.getElementById('day').value;
  const chain=document.getElementById('chain').value;
- history.replaceState(null,'',`analysis.html?code=${code}&date=${day}&chain=${chain}`);
- document.getElementById('deptlink').href=`department.html?code=${code}&date=${day}`;
- document.getElementById('rawlink').href=`stock.html?code=${code}&date=${day}`;
- const d=await j(`/api/dept?code=${code}&date=${day}&chain=${chain}`);
+ history.replaceState(null,'',`analysis.html?code=${code}&date=${day}&chain=${encodeURIComponent(chain)}`);
+ document.getElementById('deptlink').href=`department.html?code=${code}&date=${day}&chain=${encodeURIComponent(chain)}`;
+ document.getElementById('rawlink').href=`stock.html?code=${code}&date=${day}&chain=${encodeURIComponent(chain)}`;
+ const d=await j(`/api/dept?code=${code}&date=${day}&chain=${encodeURIComponent(chain)}`);
  const A=d.archive,j2=A?.judge||{};
  document.getElementById('title').innerHTML=`${d.ts_code} ${esc(d.name)} · ${d.date} 决策会话`+
-  (A?` <span class="chip" title="产生该档案时的链版本;本页输入卡为当前渲染器实时重渲,旧档案当时所见卡片可能与本页有出入">${esc(A.chain_version)}</span>`:'');
+  (A?` <span class="chip" title="产生该档案时的链版本">${esc(A.chain_version)}</span>`:'')+
+  (d.cards_source?` <span class="chip dim" title="输入卡来源:archive_snapshot=归档精确快照(LLM 当时所见);live_preview=无档案时的现行渲染器预览">${esc(d.cards_source)}</span>`:'');
  document.getElementById('cards').innerHTML=
   `<div class="card"><div class="v">${j2.composite??'—'}</div><div class="k">composite(research_summary)</div></div>
    <div class="card"><div class="v">${j2.composite_adj??'—'}</div><div class="k">空头调整后</div></div>

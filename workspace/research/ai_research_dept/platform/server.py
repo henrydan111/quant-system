@@ -30,11 +30,14 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     render_fund_card, render_news_card, render_pv_card,
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
+from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
+    is_sealed, verify_archive_body, verify_manifest_body,
+)
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.2"
+RENDER_VERSION = "chain_v2.3"
 SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
                      "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
 
@@ -43,14 +46,23 @@ _CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
 
 
 def safe_raw_dir(base_dir: Path, chains: set[str], chain: str, day: str,
-                 code: str) -> Path | None:
+                 code: str, attempt: int | None = None) -> Path | None:
     """raw 路径防穿越(复审#2 Major-2):chain 必须在已知集合、day/code 严格格式,
-    解析后路径必须仍在版本根内(day=../chain_v1.0/... 类注入一律拒绝)。"""
+    解析后路径必须仍在版本根内(day=../chain_v1.0/... 类注入一律拒绝)。
+    v2.3 起 raw 住 attempts/<code>/attempt_NNNN/raw(发布档案带 attempt 号);
+    legacy 版本仍为 day/raw/<code>。"""
     if chain not in chains or not _DAY_RE.match(day or "") \
             or not _CODE_RE.match(code or ""):
         return None
+    if attempt is not None and not (isinstance(attempt, int) and 1 <= attempt <= 9999):
+        return None
     base = base_dir.resolve()
-    p = (base / chain / day / "raw" / code.replace(".", "_")).resolve()
+    code_u = code.replace(".", "_")
+    if attempt is not None:
+        p = (base / chain / day / "attempts" / code_u
+             / f"attempt_{attempt:04d}" / "raw").resolve()
+    else:
+        p = (base / chain / day / "raw" / code_u).resolve()
     return p if p.is_relative_to(base / chain) else None
 
 logger = logging.getLogger("platform")
@@ -88,7 +100,8 @@ class Data:
         self.days = sorted(self.attn.trade_date.unique())
         self.pool = sorted(set(self.attn.ts_code))
         self.snapshot = str(self.retr.retrieval_profile_snapshot_id.iloc[0])
-        # 研究档案:按链版本目录隔离(GPT Blocker-1);key=(version, code, day)
+        # 研究档案:按链版本目录隔离(Blocker-1)+ **加载即验证**(复审#3 B2:
+        # 平台同样不得信任磁盘自称——manifest 正文重算、归档封印/结构复核,不符即拒载)
         self.archives: dict[tuple[str, str, str], dict] = {}
         self.manifests: dict[str, dict] = {}
         chain_dir = C.OUT_ROOT / "analyst_chain"
@@ -97,13 +110,31 @@ class Data:
                 if not vdir.is_dir() or not vdir.name.startswith("chain_v"):
                     continue
                 mf = vdir / "manifest.json"
-                self.manifests[vdir.name] = (json.loads(mf.read_text(encoding="utf-8"))
-                                             if mf.exists() else {})
+                manifest = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {}
+                if manifest.get("manifest_fp"):
+                    mp = verify_manifest_body(manifest)
+                    if mp or manifest.get("chain_version") != vdir.name:
+                        logger.warning("拒载 %s manifest: %s", vdir.name,
+                                       mp or "chain_version 与目录不符")
+                        continue
+                self.manifests[vdir.name] = manifest
                 for day_dir in vdir.iterdir():
-                    if not day_dir.is_dir():
+                    if not day_dir.is_dir() or day_dir.name == "attempts" \
+                            or not day_dir.name.isdigit():
                         continue
                     for fj in day_dir.glob("*.json"):
                         a = json.loads(fj.read_text(encoding="utf-8"))
+                        sealed = is_sealed(a)
+                        problems = verify_archive_body(
+                            a, expect_chain=vdir.name, expect_date=day_dir.name,
+                            expect_stem=fj.stem,
+                            expect_manifest_fp=manifest.get("manifest_fp")
+                            if sealed and manifest.get("manifest_fp") else None)
+                        if problems:
+                            logger.warning("拒载归档 %s/%s/%s: %s", vdir.name,
+                                           day_dir.name, fj.name, ";".join(problems))
+                            continue
+                        a["_verify"] = "sealed_ok" if sealed else "legacy_structural"
                         self.archives[(vdir.name, a["ts_code"], a["date"])] = a
         self.chain_versions = sorted(self.manifests)          # 字典序=版本序
         self.default_chain = self.chain_versions[-1] if self.chain_versions else ""
@@ -179,8 +210,9 @@ class Data:
                         "source": r.source})
         return out
 
-    def stock(self, code: str, day: str):
+    def stock(self, code: str, day: str, chain: str | None = None):
         code = code.upper()
+        chain = chain or self.default_chain
         facts = self.facts[(self.facts.ts_code == code) & (self.facts.trade_date == day)]
         pv = self.pv[(self.pv.ts_code == code) & (self.pv.trade_date == day)]
         retr = self.retr[(self.retr.ts_code == code) & (self.retr.trade_date == day)] \
@@ -201,7 +233,7 @@ class Data:
             "retrieval": [{"channel": r.channel, "type": r.event_type, "title": r.title,
                            "direction": r.direction, "relevance": float(r.relevance)}
                           for _, r in retr.iterrows()],
-            "archive": self.archives.get((self.default_chain, code, day)),
+            "archive": self.archives.get((chain, code, day)),
         }
 
 
@@ -255,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                         or not _DAY_RE.match(day) or not _CODE_RE.match(code):
                     return self._send(400, b"invalid chain/date/code", "text/plain")
                 arch = DATA.archives.get((chain, code, day))
-                cards, prompts, cards_source = {}, {}, ""
+                cards, cards_source = {}, ""
                 if arch and arch.get("cards"):
                     # 归档精确输入快照(v2.2+ 档案自带)
                     cards = {"fund": arch["cards"].get("fund_card", ""),
@@ -264,9 +296,6 @@ class Handler(BaseHTTPRequestHandler):
                     if arch.get("market_context"):
                         cards["market_context"] = arch["market_context"]
                     cards_source = "archive_snapshot"
-                    prompts = {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
-                               for s, fn in SEAT_PROMPT_FILES.items()} \
-                        if chain == RENDER_VERSION else {}
                 elif chain == RENDER_VERSION or not DATA.chain_versions:
                     cards_source = "live_preview(无档案,现行渲染器)"
                     f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
@@ -286,8 +315,6 @@ class Handler(BaseHTTPRequestHandler):
                     if len(rg):
                         cards["market_context"] = (rg["card_text"].iloc[0]
                                                    + "\nregime: " + rg["regime"].iloc[0])
-                    prompts = {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
-                               for s, fn in SEAT_PROMPT_FILES.items()}
                 else:
                     note = DATA.manifests.get(chain, {}).get(
                         "note", "该版本输入卡不可由现行渲染器重渲;只读档案与 raw 审计文件")
@@ -296,7 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                                 & (DATA.attn.trade_date == day)]
                 raws = {}
                 raw_dir = safe_raw_dir(C.OUT_ROOT / "analyst_chain",
-                                       set(DATA.manifests), chain, day, code)
+                                       set(DATA.manifests), chain, day, code,
+                                       attempt=(arch or {}).get("attempt"))
                 for seat in ("fund", "tech", "news", "bear") if raw_dir else ():
                     fp = raw_dir / f"{seat}_raw.json"
                     if fp.exists():
@@ -307,25 +335,51 @@ class Handler(BaseHTTPRequestHandler):
                             raws[seat] = json.loads(content[i:k + 1]) if i >= 0 else None
                         except (json.JSONDecodeError, ValueError):
                             raws[seat] = None
+                # 契约展示(复审#3 Major-4):归档视图从**冻结 manifest** 读 prompt/
+                # routing/weights,不读当前进程(旧版本档案不得配现行语义)
+                mfst = DATA.manifests.get(chain, {})
+                if mfst.get("effective_prompts"):
+                    seat_keys = ["fund", "tech", "news", "bear"]
+                    pf = mfst.get("prompt_files", [])
+                    prompts = {s: mfst["effective_prompts"].get(fn, "")
+                               for s, fn in zip(seat_keys, pf)}
+                    sc = mfst.get("scoring_contract", {})
+                    routing = mfst.get("routing", {})
+                    weights = sc.get("seat_weights", {})
+                    composite_w = sc.get("composite_weights", {})
+                    contract_source = "frozen_manifest"
+                elif chain == RENDER_VERSION:
+                    prompts = {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
+                               for s, fn in SEAT_PROMPT_FILES.items()}
+                    routing = {"scoring": TASK_LLM["dimension_scoring"],
+                               "bear": TASK_LLM["bear_rebuttal"]}
+                    weights, composite_w = SEAT_WEIGHTS, COMPOSITE_W
+                    contract_source = "current_process(无冻结manifest)"
+                else:
+                    prompts, routing = {}, {}
+                    weights, composite_w = {}, {}
+                    contract_source = "unavailable(legacy版本无冻结契约)"
                 return self._json({
                     "ts_code": code, "name": DATA.names.get(code, ""), "date": day,
                     "chain": chain, "chain_versions": DATA.chain_versions,
                     "cards_source": cards_source,
-                    "manifest": DATA.manifests.get(chain, {}),
+                    "contract_source": contract_source,
+                    "manifest": {k: v for k, v in mfst.items()
+                                 if k != "effective_prompts"},
                     "attention": None if att.empty else float(att.attention.iloc[0]),
                     "cards": cards, "raws": raws,
-                    "archive": DATA.archives.get((chain, code, day)),
-                    "prompts": prompts,
-                    "routing": {"scoring": TASK_LLM["dimension_scoring"],
-                                "bear": TASK_LLM["bear_rebuttal"]},
-                    "weights": SEAT_WEIGHTS, "composite_w": COMPOSITE_W,
+                    "archive": arch,
+                    "prompts": prompts, "routing": routing,
+                    "weights": weights, "composite_w": composite_w,
                 })
             if u.path == "/api/reasoning":
                 # G5 审计视图:按需从 raw/ 读推理链;只读展示,永不入档案数据
                 code, day = q["code"][0].upper(), q["date"][0]
                 chain = q.get("chain", [DATA.default_chain])[0]
+                arch_r = DATA.archives.get((chain, code, day))
                 raw_dir = safe_raw_dir(C.OUT_ROOT / "analyst_chain",
-                                       set(DATA.manifests), chain, day, code)
+                                       set(DATA.manifests), chain, day, code,
+                                       attempt=(arch_r or {}).get("attempt"))
                 if raw_dir is None:
                     return self._send(400, b"invalid chain/date/code", "text/plain")
                 out = {}
@@ -347,8 +401,12 @@ class Handler(BaseHTTPRequestHandler):
                                    "narrative": r["narrative"], "watch": r["watch"],
                                    "card_text": r["card_text"], "llm_ok": bool(r["llm_ok"])})
             if u.path == "/api/stock":
+                chain = q.get("chain", [DATA.default_chain])[0]
+                if DATA.manifests and chain not in DATA.manifests:
+                    return self._send(400, b"unknown chain version", "text/plain")
                 return self._json(DATA.stock(q["code"][0],
-                                             q.get("date", [DATA.days[-1]])[0]))
+                                             q.get("date", [DATA.days[-1]])[0],
+                                             chain))
             # static
             name = "index.html" if u.path == "/" else u.path.lstrip("/")
             f = (STATIC / name).resolve()

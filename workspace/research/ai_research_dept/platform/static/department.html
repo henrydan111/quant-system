@@ -20,6 +20,8 @@ const ROLE={
  tech:{label:'技术面分析师',duty:'只读量价情报包五子卡(全部由代码判定的状态标签+分位),打 5 维+拥挤罚分;不得自行推断卡内未给出的形态。',card:'tech'},
  news:{label:'消息面分析师',duty:'只读检索装配单(direct=本股事件,industry=同业间接事件);打 4 维+3 罚分;间接事件支撑的维度封顶 3 分。',card:'news'},
  bear:{label:'空头分析师(对抗席)',duty:'消费与三席完全相同的卡片+三席最高分主张,专职反驳:每条反驳必须有卡内逐字反证;输出反驳强度/kill switches/盲点。强度≥4 触发裁判折减(该维×0.5)。',card:null}};
+const P=new URLSearchParams(location.search);
+let CHAIN='';
 async function j(u){const r=await fetch(u);return r.json()}
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 function scoreTable(rec,weights){
@@ -52,9 +54,11 @@ function bearTable(rec){
 async function load(){
  const code=document.getElementById('code').value.trim().toUpperCase();
  const day=document.getElementById('day').value;
- const d=await j(`/api/dept?code=${code}&date=${day}`);
+ const d=await j(`/api/dept?code=${code}&date=${day}&chain=${encodeURIComponent(CHAIN)}`);
  document.getElementById('dept').innerHTML='';
- let html=`<h2 style="margin-top:4px">${d.ts_code} ${esc(d.name)} · ${d.date}</h2>`;
+ let html=`<h2 style="margin-top:4px">${d.ts_code} ${esc(d.name)} · ${d.date}
+  <span class="chip">${esc(d.chain||'')}</span>
+  <span class="chip dim" title="prompt/routing/weights 来源">${esc(d.contract_source||'')}</span></h2>`;
  const routing=k=>{const r=k==='bear'?d.routing.bear:d.routing.scoring;
   return `<span class="chip">模型 ${r.model}</span><span class="chip">thinking ${r.thinking?'ON':'OFF'}</span><span class="chip">温度 ${r.temperature}</span>`};
  for(const [k,role] of Object.entries(ROLE)){
@@ -86,9 +90,11 @@ async function load(){
   (evidence_class=research_summary,禁入排序/选股)。</p>`+
   (j2?`<p>composite=${j2.composite} → 空头调整后 ${j2.composite_adj} · 分歧度 ${j2.dispersion}
    ${(j2.divergence_flags||[]).map(f=>`<span class="chip">${f}</span>`).join('')}</p>`:'<p class="dim">该日无档案</p>')+
-  `</div><p class="dim">推理链(各席 thinking 独白)在<a href="stock.html?code=${d.ts_code}&date=${d.date}">个股档案页</a>底部的审计视图。</p>`;
+  `</div><p class="dim">推理链(各席 thinking 独白)在<a href="stock.html?code=${d.ts_code}&date=${d.date}&chain=${encodeURIComponent(d.chain||'')}">个股数据明细页</a>底部的审计视图。</p>`;
  document.getElementById('dept').innerHTML=html}
 (async()=>{const m=await j('/api/meta');
+ CHAIN=P.get('chain')||m.default_chain||'';
+ if(P.get('code'))document.getElementById('code').value=P.get('code');
  document.getElementById('banner').textContent='⚠ '+m.evidence_class+' — 历史重放,非证据;不得据此调参';
  const sel=document.getElementById('day');
  (m.archive_days.length?m.archive_days:m.days).forEach(d=>{

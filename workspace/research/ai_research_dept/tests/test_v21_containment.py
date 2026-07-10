@@ -160,6 +160,33 @@ class TestBearPerEntryRobustness:
         out = validate_bear_record({"refutations": [cross]}, NEWS_CARD, SEAT_W, FALS)
         assert out["refutations"][0]["strength_0_5"] == 4
 
+    def test_falsifier_fast_path_requires_domain_match(self):
+        """复审#3 minor:observable_in=fund 的证伪引用 M 行(market 域)不再保 5。"""
+        card_m = CARD + "\n- [M01]指数: 上证-0.1% 沪深300-0.4%"
+        ref = self._base(strength_0_5=5, falsifier_id="fund-0",
+                         counter_quote="- [M01]指数: 上证-0.1% 沪深300-0.4%")
+        out = validate_bear_record({"refutations": [ref]}, card_m, SEAT_W, FALS)
+        assert out["refutations"][0]["strength_0_5"] == 4
+
+    def test_overflow_strength_dropped_individually(self):
+        """复审#3 Major:10**10000 是 Real 但 float() 溢出——单条 drop,兄弟保留。"""
+        rec = {"refutations": [self._base(strength_0_5=10**10000), self._base()],
+               "kill_switches": ["k"], "blind_spots": []}
+        out = validate_bear_record(rec, CARD, SEAT_W, FALS)
+        assert len(out["refutations"]) == 1
+        assert out["validation_dropped"]["strength"] == 1
+        assert out["schema_valid"] is True
+
+    def test_schema_valid_flag(self):
+        """复审#3 B3:顶层容器损坏必须标记 schema_valid=False(不得伪装空但正常)。"""
+        out = validate_bear_record({"refutations": {"not": "a list"},
+                                    "kill_switches": ["k"], "blind_spots": []},
+                                   CARD, SEAT_W, FALS)
+        assert out["schema_valid"] is False and out["refutations"] == []
+        out2 = validate_bear_record({"refutations": [], "kill_switches": "str",
+                                     "blind_spots": []}, CARD, SEAT_W, FALS)
+        assert out2["schema_valid"] is False
+
 
 def test_platform_render_version_matches_chain():
     chain_src = (ROOT / "workspace/research/ai_research_dept/engine/analyst_chain.py"

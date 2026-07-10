@@ -474,6 +474,21 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **R4**:loader 扩展/top_inst 行/golden set 可延后过重放;①b 就绪门+golden set 仍为前向/证据级使用的强制前置。
 **测试:73/73 绿**(+23 条复审#2 回归)。
 
+### §10.3 复审#3 裁定与处置(2026-07-10,chain_v2.3)
+
+**裁定:REVISE**(3 Blocker + 4 Major + 2 Minor;核心:评分契约不在指纹里/磁盘自称指纹被信任/
+顶层 schema 损坏的空头可装完整)。处置:
+
+| # | Blocker | chain_v2.3 修复 |
+|---|---|---|
+| B1'' | 改席位权重不动 manifest_fp → 同版本静默复用旧规则产物 | manifest 绑定**完整评分契约**:确定性引擎代码字节哈希(analyst_chain/cards/validators/scorecard 四文件)、有效 prompt 全文(含 SYSTEM_C15)+逐文件 sha256、seat_weights/composite/折扣阈值/背离阈值快照、LLM 路由快照 |
+| B2'' | manifest/档案/平台信任磁盘自称指纹(篡改正文保留旧指纹曾被接受;伪造 composite=99.9 被复用) | **验证不信任**([integrity.py](engine/integrity.py) 纯模块,链与平台同一把尺):manifest 正文重算复核;档案增 `archive_sha256` 输出正文封印,复用前重算 存档输入指纹+封印+chain/date/文件名/manifest_fp 五重校验;manifest 首写 file_lock+临时文件+os.replace 原子发布;平台**加载即验证**,不符拒载并告警 |
+| B3'' | `refutations` 非列表被静默洗成空列表 → "空但正常"空头 + 单席/无 bear 曾判完整 | `schema_valid` 顶层容器校验写入 bear 结果;`archive_complete` 严格化:三席**恰好齐全**+final 有限实数+records 齐全+bear schema_valid+parse_mode∈{strict,lenient}+kill_switches 非空+judge finals 齐全(逐条 validation_dropped>0 仍算技术完成) |
+
+**Major**:①`float(10**10000)` OverflowError 防护(validators 单条 drop;scorecard 严格路径→ScorecardViolation、非严格→NO-SCORE;错误消息 repr 受保护——修复中发现 repr 自身也会触发 int→str 上限);②批处理失败语义:不完整档案计 failure、退出码 2,VersionCollisionError 全体撤单上抛,LLM 提交前对已有档案全量指纹**预检**;③attempts 审计结构(`day/attempts/<code>/attempt_NNNN/{raw,archive.json,status.json}` + append-only attempts_ledger.jsonl,失败 raw 永不被覆盖;完整结果原子发布到 `day/<code>.json`);④前端 chain 全链传播(analysis→dept/stock 链接、department/stock 页 fetch 全带 chain)+ 归档视图从**冻结 manifest** 返回 prompt/routing/weights(contract_source 标注),不读当前进程。
+**Minor**:strength=5 快径增加 **observable_in 域校验**(反证行 ID 前缀→域,须∈证伪声明域;observable_in=fund 引 M 行不再保 5);事件预热窗首多取一个开市日;regime 首日 M14 用前一交易日轮动初始化。
+**测试:92/92**(+19 条复审#3 回归,含篡改正文保留指纹/伪造输出封印识破/单席判完整复现/超大整数)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

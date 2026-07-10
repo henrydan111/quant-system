@@ -20,9 +20,13 @@ import argparse
 import hashlib
 import json
 import logging
+import math
+import os
 import re
 import sys
+import threading
 import time
+from numbers import Real
 from pathlib import Path
 
 import pandas as pd
@@ -39,13 +43,18 @@ from ai_layer.scorecard import ScorecardViolation, \
 from workspace.research.ai_research_dept.engine.validators import (  # noqa: E402
     enforce_v2_evidence, validate_bear_record,
 )
+from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
+    input_artifact_fp, manifest_core_fp, sha16_json as _sha16_json,
+    verify_archive_body, verify_manifest_body,
+)
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.2"  # v2.2: 复审#2 修复 —— 不可变 manifest+artifact_fp 输入绑定+
-#   完整性感知复用+档案存快照(同版本漂移封死)/空头逐条健壮化+market_context+证伪席位绑定/
-#   聚合钳位按ID类/两遍独占/事件30d预热/pv全窗universe;
-#   v2.1: 首轮 REVISE 修复;v2.0: 审计 v1 输入升级;v1.x 见历史
+CHAIN_VERSION = "chain_v2.3"  # v2.3: 复审#3 修复 —— 评分契约进指纹(权重/折扣/引擎代码/
+#   有效prompt)/manifest与档案**验证不信任**(重算指纹+archive_sha256 封印+file_lock 原子首写)/
+#   archive_complete 严格化(三席恰全+bear schema_valid+parse_mode+kill_switches)/attempts
+#   审计目录+原子发布/批处理失败=非零退出+碰撞即停/OverflowError 防护/strength5 域校验;
+#   v2.2: 漂移封死;v2.1: 首轮修复;v2.0: 输入升级;v1.x 见历史
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN, disclosure_status,
@@ -69,40 +78,76 @@ class VersionCollisionError(RuntimeError):
     """同一 CHAIN_VERSION 下输入指纹变更(复审#2 B1):禁止原地漂移,必须 bump 版本。"""
 
 
-def _sha16_json(obj) -> str:
-    import hashlib
-    return hashlib.sha256(json.dumps(obj, sort_keys=True,
-                                     ensure_ascii=False).encode()).hexdigest()[:16]
-
-
 def ensure_immutable_manifest(vdir: Path, manifest: dict) -> dict:
-    """manifest 不可变(复审#2 B1):首次写入定格指纹;再入指纹不同 → 硬失败。"""
-    core = {k: v for k, v in manifest.items() if k not in ("created_at", "manifest_fp")}
-    fp = _sha16_json(core)
+    """manifest 不可变 + **验证不信任**(复审#3 B2):已存 manifest 的指纹必须由
+    正文重算复核——磁盘自称的 manifest_fp 不作数(篡改正文保留旧指纹曾被接受)。
+    首写走 file_lock + 临时文件 + os.replace 原子发布(关闭并发首写覆盖窗口)。"""
+    from research_orchestrator.file_lock import file_lock
+    fp = manifest_core_fp(manifest)
     mf_path = vdir / "manifest.json"
-    if mf_path.exists():
-        old = json.loads(mf_path.read_text(encoding="utf-8"))
-        if old.get("manifest_fp") != fp:
-            raise VersionCollisionError(
-                f"{manifest.get('chain_version')} 的输入指纹已变更 "
-                f"({old.get('manifest_fp')} → {fp})——同版本禁止漂移,bump CHAIN_VERSION")
-        return old
-    manifest = dict(manifest)
-    manifest["manifest_fp"] = fp
-    mf_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
+    with file_lock(vdir / ".manifest.lock"):
+        if mf_path.exists():
+            old = json.loads(mf_path.read_text(encoding="utf-8"))
+            body_problems = verify_manifest_body(old)
+            if body_problems:
+                raise VersionCollisionError(
+                    f"{vdir.name}: {';'.join(body_problems)}——疑似篡改")
+            if old["manifest_fp"] != fp:
+                raise VersionCollisionError(
+                    f"{manifest.get('chain_version')} 的输入/契约指纹已变更 "
+                    f"({old['manifest_fp']} → {fp})——同版本禁止漂移,bump CHAIN_VERSION")
+            return old
+        manifest = dict(manifest)
+        manifest["manifest_fp"] = fp
+        tmp = mf_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
                        encoding="utf-8")
+        os.replace(tmp, mf_path)
     return manifest
 
 
+def verify_existing_archive(existing: dict, manifest_fp: str,
+                            artifact_fp: str, code: str, day: str) -> None:
+    """归档复用前的**验证不信任**(复审#3 B2):输入指纹由存档正文重算、输出正文由
+    archive_sha256 封印复核——任何不一致 = 硬失败,绝不静默复用伪造/漂移结果。"""
+    problems = verify_archive_body(existing, expect_chain=CHAIN_VERSION,
+                                   expect_date=day,
+                                   expect_stem=code.replace(".", "_"),
+                                   expect_manifest_fp=manifest_fp)
+    if "archive_sha256" not in existing:
+        problems.append("缺 archive_sha256 封印(pre-v2.3 归档不得在本版本目录复用)")
+    if existing.get("artifact_fp") != artifact_fp:
+        problems.append("archive 输入指纹与当前输入不一致(同版本漂移)")
+    if problems:
+        raise VersionCollisionError(
+            f"{code}@{day}: {';'.join(problems)}——bump CHAIN_VERSION 或排查篡改")
+
+
 def archive_complete(a: dict) -> bool:
-    """完整档案 = 三席全部有 final 且无错误、空头无错误(复审#2 B1/B3:
-    失败席/空头失败的档案不可复用——否则空空头被永久固化)。"""
-    seats = a.get("seats", {})
-    if not seats:
+    """严格完整性(复审#3 B3):三席**恰好齐全**且 final 为有限实数、records 齐全、
+    bear schema_valid+parse_mode 合法+至少一条 kill_switch、judge finals 齐全。
+    逐条 validation_dropped>0 不影响完整;顶层 schema 损坏必须不完整。"""
+    seats = a.get("seats")
+    records = a.get("records")
+    bear = a.get("bear")
+    verdict = a.get("judge")
+    if not isinstance(seats, dict) or set(seats) != set(SEAT_WEIGHTS):
         return False
-    if any(s.get("error") or s.get("final") is None for s in seats.values()):
+    if not isinstance(records, dict) or set(records) != set(SEAT_WEIGHTS):
         return False
-    return not a.get("bear", {}).get("error")
+    for seat in SEAT_WEIGHTS:
+        final = seats[seat].get("final")
+        if (seats[seat].get("error") or isinstance(final, bool)
+                or not isinstance(final, Real)
+                or not math.isfinite(float(final))):
+            return False
+    if (not isinstance(bear, dict) or bear.get("error")
+            or not bear.get("schema_valid")
+            or bear.get("parse_mode") not in ("strict", "lenient")
+            or not bear.get("kill_switches")):     # prompt 明确要求至少一条
+        return False
+    return (isinstance(verdict, dict)
+            and set(verdict.get("finals", {})) == set(SEAT_WEIGHTS))
 
 
 def _normalize_falsifiers(wcw) -> tuple[list, dict]:
@@ -243,17 +288,46 @@ def judge(seat_results: dict, bear: dict) -> dict:
 
 def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
                    regime: pd.DataFrame) -> dict:
-    """链版本 manifest:输入指纹(卡版本/prompt 哈希/配置哈希),供档案溯源与再审。"""
-    import hashlib
+    """链版本 manifest = **完整评分契约指纹**(复审#3 B1:改席位权重曾不动 manifest_fp
+    → 同版本静默复用旧规则产物)。绑定:有效 prompt 全文(含 SYSTEM_C15)、确定性引擎
+    代码字节(本文件/cards/validators/scorecard)、评分参数(权重/合成/折扣/背离)、
+    LLM 路由快照——平台归档视图从此处读冻结 prompt/routing/weights,不读当前进程。"""
     pdir = Path(__file__).parent / "prompts"
     pfiles = ["fund_analyst_v2.txt", "tech_analyst_v2.txt",
               "news_analyst_v2.txt", "bear_analyst_v2.txt"]
     ph = hashlib.sha256(b"".join((pdir / p).read_bytes() for p in pfiles)).hexdigest()[:16]
+    # 确定性评分引擎契约:代码字节级哈希(权重改动/裁判逻辑改动都必然改变它)
+    contract_files = [
+        Path(__file__),
+        Path(__file__).with_name("cards.py"),
+        Path(__file__).with_name("validators.py"),
+        C.PROJECT_ROOT / "src" / "ai_layer" / "scorecard.py",
+    ]
+    h = hashlib.sha256()
+    for path in contract_files:
+        h.update(path.name.encode())
+        h.update(b"\0")
+        h.update(path.read_bytes())
+    effective_prompts = {p: SYSTEM_C15 + (pdir / p).read_text(encoding="utf-8")
+                         for p in pfiles}
     return {
         "chain_version": CHAIN_VERSION,
         "config_hash": C.config_hash(),
         "llm_config_hash": L.llm_config_hash(),
         "prompt_files": pfiles, "prompts_sha16": ph,
+        "effective_prompts": effective_prompts,
+        "effective_prompt_sha256_by_file": {
+            p: hashlib.sha256(v.encode()).hexdigest()
+            for p, v in effective_prompts.items()},
+        "engine_contract_sha256": h.hexdigest(),
+        "scoring_contract": {
+            "seat_weights": SEAT_WEIGHTS,
+            "composite_weights": COMPOSITE_W,
+            "bear_discount_strength": BEAR_DISCOUNT_STRENGTH,
+            "divergence_gap": DIVERGENCE_GAP,
+        },
+        "routing": {"scoring": L.TASK_LLM["dimension_scoring"],
+                    "bear": L.TASK_LLM["bear_rebuttal"]},
         "fact_table_version": C.FACT_TABLE_VERSION,
         "pv_pack_version": str(pv["pv_pack_version"].iloc[0]) if "pv_pack_version" in pv else "?",
         "retrieval_snapshot": str(retr["retrieval_profile_snapshot_id"].iloc[0])
@@ -265,10 +339,10 @@ def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
     }
 
 
-def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
-              retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
-              series: pd.DataFrame, out_dir: Path,
-              manifest_fp: str = "") -> dict | None:
+def build_inputs(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
+                 retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
+                 series: pd.DataFrame) -> tuple[dict, str] | None:
+    """确定性输入装配(run_stock 与预检共用同一份渲染逻辑,防两处口径漂移)。"""
     f = facts[(facts.ts_code == code) & (facts.trade_date == day)]
     p = pv[(pv.ts_code == code) & (pv.trade_date == day)]
     r = retr[(retr.ts_code == code) & (retr.trade_date == day)]
@@ -284,21 +358,44 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     rg = regime[regime.trade_date == day]
     mc = (rg["card_text"].iloc[0] + "\nregime: " + rg["regime"].iloc[0]) \
         if len(rg) else ""
-    # 逐档输入指纹(复审#2 B1):manifest 指纹 × 精确输入快照;同版本下指纹漂移=硬失败
-    artifact_fp = _sha16_json({"manifest_fp": manifest_fp,
-                               "input_snapshot": {"cards": cards, "market_context": mc}})
+    return cards, mc
+
+
+_LEDGER_LOCK = threading.Lock()
+
+
+def _ledger_append(out_dir: Path, entry: dict) -> None:
+    """append-only attempt ledger(复审#3 Major-3:重试选择是可靠性审计的一部分)。"""
+    with _LEDGER_LOCK:
+        with (out_dir / "attempts_ledger.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
+              retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
+              series: pd.DataFrame, out_dir: Path,
+              manifest_fp: str = "") -> dict | None:
+    inputs = build_inputs(code, day, facts, pv, retr, biz, regime, series)
+    if inputs is None:
+        return None
+    cards, mc = inputs
+    artifact_fp = input_artifact_fp(cards, mc, manifest_fp)
     arch_path = out_dir / f"{code.replace('.', '_')}.json"
     if arch_path.exists():
         existing = json.loads(arch_path.read_text(encoding="utf-8"))
-        if (existing.get("chain_version") != CHAIN_VERSION
-                or existing.get("artifact_fp") != artifact_fp):
-            raise VersionCollisionError(
-                f"{code}@{day}: 档案输入指纹与当前输入不一致——同版本禁止漂移,"
-                f"bump CHAIN_VERSION(旧 {existing.get('artifact_fp')} 新 {artifact_fp})")
+        # 验证不信任(复审#3 B2):正文重算指纹 + archive_sha256 封印复核
+        verify_existing_archive(existing, manifest_fp, artifact_fp, code, day)
         if archive_complete(existing):
             return existing
-        # 不完整档案(失败席/空头失败)→ 重算覆盖,绝不固化
-    audit = out_dir / "raw" / code.replace(".", "_")
+    # attempts 审计结构(复审#3 Major-3):每次尝试独立目录,失败 raw 永不被覆盖;
+    # 只有完整结果原子发布到 day/<code>.json
+    code_u = code.replace(".", "_")
+    attempts_root = out_dir / "attempts" / code_u
+    attempts_root.mkdir(parents=True, exist_ok=True)
+    attempt_no = 1 + sum(1 for d in attempts_root.iterdir()
+                         if d.is_dir() and d.name.startswith("attempt_"))
+    attempt_dir = attempts_root / f"attempt_{attempt_no:04d}"
+    audit = attempt_dir / "raw"
     audit.mkdir(parents=True, exist_ok=True)
     prompts_dir = Path(__file__).parent / "prompts"
     seat_results = {}
@@ -360,8 +457,26 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
         "evidence_class": "research_summary/" + C.EVIDENCE_CLASS_REPLAY,
     }
     archive["complete"] = archive_complete(archive)
-    arch_path.write_text(json.dumps(archive, ensure_ascii=False, indent=1),
-                         encoding="utf-8")
+    archive["attempt"] = attempt_no
+    # archive_sha256 输出正文封印(复审#3 B2):复用/加载前由正文重算复核
+    archive["archive_sha256"] = _sha16_json({k: v for k, v in archive.items()
+                                             if k != "archive_sha256"})
+    blob = json.dumps(archive, ensure_ascii=False, indent=1)
+    (attempt_dir / "archive.json").write_text(blob, encoding="utf-8")
+    status = {"attempt": attempt_no, "complete": archive["complete"],
+              "artifact_fp": artifact_fp, "manifest_fp": manifest_fp,
+              "seat_errors": {s: r.get("error") for s, r in seat_results.items()
+                              if r.get("error")},
+              "bear_error": bear.get("error"),
+              "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    (attempt_dir / "status.json").write_text(
+        json.dumps(status, ensure_ascii=False, indent=1), encoding="utf-8")
+    _ledger_append(out_dir, {"code": code, **status,
+                             "published": bool(archive["complete"])})
+    if archive["complete"]:
+        tmp = arch_path.with_suffix(".json.tmp")
+        tmp.write_text(blob, encoding="utf-8")
+        os.replace(tmp, arch_path)                 # 原子发布最新完整结果
     return archive
 
 
@@ -391,12 +506,26 @@ def main() -> int:
     manifest_fp = manifest["manifest_fp"]
 
     t0 = time.time()
+    total_failures = 0
     from concurrent.futures import ThreadPoolExecutor, as_completed
     for day in days:
         out_dir = vdir / day
         out_dir.mkdir(parents=True, exist_ok=True)
         todo = pool[: args.names] if args.names else pool
-        done, n = 0, 0
+        # 预检(复审#3 Major-2):提交任何 LLM 调用前,对已有档案做全量指纹+封印验证
+        for c in todo:
+            ap = out_dir / f"{c.replace('.', '_')}.json"
+            if not ap.exists():
+                continue
+            inputs = build_inputs(c, day, facts, pv, retr, biz, regime, series)
+            if inputs is None:
+                continue
+            cards_pre, mc_pre = inputs
+            verify_existing_archive(json.loads(ap.read_text(encoding="utf-8")),
+                                    manifest_fp,
+                                    input_artifact_fp(cards_pre, mc_pre, manifest_fp),
+                                    c, day)
+        done, failures, n = 0, 0, 0
         # 5 线程并发:每股独立文件,LLM 调用线程安全;Ark 无 Tushare 式串行约束
         with ThreadPoolExecutor(max_workers=5) as ex:
             futs = {ex.submit(run_stock, c, day, facts, pv, retr, biz, regime,
@@ -405,13 +534,26 @@ def main() -> int:
             for fut in as_completed(futs):
                 n += 1
                 try:
-                    done += fut.result() is not None
-                except Exception as e:  # noqa: BLE001 — 单股失败不拖全日
+                    result = fut.result()
+                    if result is not None:
+                        if result.get("complete") is True:
+                            done += 1
+                        else:
+                            failures += 1        # 不完整档案=失败,退出码必须非零
+                except VersionCollisionError:
+                    for pending in futs:         # 碰撞=系统性问题:全体撤单并上抛
+                        pending.cancel()
+                    raise
+                except Exception as e:  # noqa: BLE001 — 单股失败不拖全日,但计入失败
+                    failures += 1
                     logger.error("[%s] %s failed: %s", day, futs[fut], str(e)[:150])
                 if n % 10 == 0:
                     logger.info("[%s] %d/%d | %.0fs", day, n, len(todo), time.time() - t0)
-        logger.info("[%s] DONE %d archives | %.0fs", day, done, time.time() - t0)
-    return 0
+        total_failures += failures
+        logger.info("[%s] DONE %d complete / %d failures | %.0fs",
+                    day, done, failures, time.time() - t0)
+    # 残缺月份不得对自动化谎报成功(复审#3 Major-2)
+    return 2 if total_failures else 0
 
 
 if __name__ == "__main__":

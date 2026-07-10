@@ -149,10 +149,18 @@ def validate_scorecard_record(record: dict, *, weights: Mapping[str, float],
             seen.add(name)
             if require_registered_exact:
                 s = entry["score_0_5"]
-                if (not isinstance(s, Number) or isinstance(s, bool)
-                        or not math.isfinite(float(s)) or not 0 <= float(s) <= 5):
+                try:
+                    ok = (isinstance(s, Number) and not isinstance(s, bool)
+                          and math.isfinite(float(s)) and 0 <= float(s) <= 5)
+                except (TypeError, ValueError, OverflowError):
+                    ok = False       # 10**10000 是 Number 但 float() 溢出——不得逃出校验器
+                if not ok:
+                    try:             # repr(10**10000) 本身会触发 int→str 位数上限
+                        sr = repr(s)[:60]
+                    except (ValueError, OverflowError):
+                        sr = f"<{type(s).__name__}: unrepresentable>"
                     raise ScorecardViolation(
-                        f"{key} '{entry['name']}' score_0_5 not a finite number in [0,5]: {s!r}")
+                        f"{key} '{entry['name']}' score_0_5 not a finite number in [0,5]: {sr}")
     if require_registered_exact:
         fnames = {e["name"] for e in record.get("factor_scores", [])}
         missing = sorted(set(weights) - fnames)
@@ -181,7 +189,10 @@ def validate_scorecard_record(record: dict, *, weights: Mapping[str, float],
 
 
 def _valid_score(value) -> bool:
-    return isinstance(value, Number) and 0 <= float(value) <= 5
+    try:
+        return isinstance(value, Number) and 0 <= float(value) <= 5
+    except (TypeError, ValueError, OverflowError):
+        return False                 # 超大合法整数溢出 → NO-SCORE,不得击穿计算器
 
 
 def compute_scorecard_final(
