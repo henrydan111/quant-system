@@ -103,7 +103,9 @@ def _event(event_type: str, subjects: list[str], visible_at, title: str,
     cmap = concept_map()
     concepts = sorted({b for c in subjects for b in cmap.get(c, [])})[:20]
     return {
-        "event_id": sha16(f"{event_type}|{'|'.join(sorted(subjects))}|{day}|{title[:80]}"),
+        # 判同键哈希用完整标题+来源(复审#2 minor:title[:80] 会把不同事件坍缩同 id);
+        # 显示截断只在渲染层
+        "event_id": sha16(f"{event_type}|{'|'.join(sorted(subjects))}|{day}|{title}|{source}"),
         "event_type": event_type, "subject_codes": subjects,
         "industry_tags": inds, "concept_tags": concepts, "hotword_tags": [],
         "keyword_tags": keywords or [],
@@ -492,19 +494,26 @@ def main() -> int:
     days = decision_days(C.PILOT_POOL_MONTH, C.PILOT_MONTH_END)
     t0 = time.time()
 
-    ev = gen_market_events(days)
-    logger.info("market events: %d", len(ev))
-    sus = gen_suspend_events(days)
-    logger.info("suspend events: %d", len(sus))
-    # 文本事件窗 = 决策窗 + 30d 回看(检索热窗一致)
+    # 事件窗 = 决策窗 + 30d 回看(与检索热窗一致)。复审#2 Major:行情/停复牌/修正潮
+    # 生成器此前只跑决策日 → 首决策日的检索回看窗内无行情事件(伪冷启动)。
     win_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    cal = pd.read_parquet(C.TRADE_CAL)
+    opens = cal.loc[cal["is_open"] == 1, "cal_date"].astype(str)
+    event_days = sorted(opens[(opens >= win_start.replace("-", ""))
+                              & (opens <= days[-1])])
+
+    ev = gen_market_events(event_days)
+    logger.info("market events: %d (窗含 %d 个预热交易日)",
+                len(ev), len(event_days) - len(days))
+    sus = gen_suspend_events(event_days)
+    logger.info("suspend events: %d", len(sus))
     anns, stats = gen_anns_events(win_start, days[-1])
     logger.info("anns events: %d | %s", len(anns), stats)
     led = gen_ledger_events(win_start, days[-1])
     logger.info("ledger events (forecast/holdertrade/dividends): %d", len(led))
     rr = gen_research_report_events(win_start, days[-1])
     logger.info("research_report events: %d", len(rr))
-    rc = gen_report_rc_events(days)
+    rc = gen_report_rc_events(event_days)
     logger.info("report_rc surge events: %d", len(rc))
     irm = gen_irm_events()
     logger.info("irm_qa substantive events: %d", len(irm))

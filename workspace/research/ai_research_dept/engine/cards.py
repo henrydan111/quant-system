@@ -265,6 +265,12 @@ def _stars(imp) -> str:
         return "—"
 
 
+def _t70(title) -> str:
+    """canonical 标题截断(复审#2 minor):所有证据行统一 70 字,保证整行 <160
+    与接地上限兼容;event_id 哈希用全文,截断只在显示层。"""
+    return str(title)[:70]
+
+
 def _det_sort(df: pd.DataFrame, has_vis: bool) -> pd.DataFrame:
     """确定性排序:重要性 desc → 新近 desc → event_id asc(GPT minor:动态编号前的平局裁决)。"""
     cols, asc = ["importance"], [False]
@@ -304,7 +310,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
         for k, r in enumerate(shown, 1):
             age = _age_str(day, r["visible_at"]) if has_vis else "—"
             lines.append(f"- [ND{k:02d}][{age}|{_stars(r.get('importance'))}]"
-                         f"{r['event_type']}|{str(r['title'])[:70]}|{r['direction']}")
+                         f"{r['event_type']}|{_t70(r['title'])}|{r['direction']}")
         if over_rows:
             og = pd.DataFrame(over_rows)
             for k, ((t,), grp) in enumerate(og.groupby(["event_type"]), 1):
@@ -347,7 +353,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
             age = _age_str(day, r["visible_at"]) if has_vis else "—"
             lines.append(f"- [NI{k:02d}][{_CHANNEL_CN.get(r['channel'], r['channel'])}"
                          f"|{age}|{_stars(r.get('importance'))}]{r['event_type']}"
-                         f"|{r['title']}|{r['direction']}|相关度{r['relevance']:.2f}")
+                         f"|{_t70(r['title'])}|{r['direction']}|相关度{r['relevance']:.2f}")
         for k, ((ch, t), rows_t) in enumerate(sorted(over.items(),
                                                      key=lambda kv: -len(kv[1])), 1):
             g = pd.DataFrame(rows_t)

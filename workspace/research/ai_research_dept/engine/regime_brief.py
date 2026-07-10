@@ -38,7 +38,7 @@ from ai_layer.ark_client import ArkClientError, parse_json_reply  # noqa: E402
 logger = logging.getLogger("regime")
 OUT = C.OUT_ROOT / "regime" / f"regime_{C.PILOT_POOL_MONTH}.parquet"
 REGIME_ENUM = ["风险偏好扩张", "风险偏好收缩", "结构性轮动", "缩量观望", "普涨修复", "普跌调整"]
-REGIME_CARD_VERSION = "regime_v0.3"  # v0.3: GPT REVISE 修复(全窗 universe/涨停史 bins 直算/
+REGIME_CARD_VERSION = "regime_v0.4"  # v0.4: +M 行ID(空头可引用市场行,复审#2 Major-3)  # v0.3: GPT REVISE 修复(全窗 universe/涨停史 bins 直算/
 #   两融变动分位);v0.2: 三节化
 
 PROMPT = """任务:市场情境归纳。user 消息是 JSON payload:"card" 是某交易日的市场情境卡(三节:当日快照/趋势/持续性,全部数字由代码计算)。
@@ -205,40 +205,40 @@ def main() -> int:
 
         lines = [f"【市场情境卡 {day}】(全部数字由代码计算;三节:当日快照/趋势/持续性)",
                  "◆ 当日快照"]
-        lines.append("- 指数: " + " ".join(f"{n}{v:+.1f}%" for n, v in idx_rows.items()))
-        lines.append(f"- 风格: 沪深300−中证1000 当日差 {style:+.1f}pp"
+        lines.append("- [M01]指数: " + " ".join(f"{n}{v:+.1f}%" for n, v in idx_rows.items()))
+        lines.append(f"- [M02]风格: 沪深300−中证1000 当日差 {style:+.1f}pp"
                      f"({'大盘占优' if style > 0.3 else '小盘占优' if style < -0.3 else '均衡'})")
-        lines.append(f"- 宽度: 上涨 {up} 家 / 下跌 {dn} 家(涨家占比 {up/max(1,up+dn):.0%})")
-        lines.append(f"- 涨跌停温度: 涨停 {lim.get('涨停',0)} 家 · 跌停 {lim.get('跌停',0)} 家"
+        lines.append(f"- [M03]宽度: 上涨 {up} 家 / 下跌 {dn} 家(涨家占比 {up/max(1,up+dn):.0%})")
+        lines.append(f"- [M04]涨跌停温度: 涨停 {lim.get('涨停',0)} 家 · 跌停 {lim.get('跌停',0)} 家"
                      f" · 炸板 {lim.get('炸板',0)} 家")
         top = " ".join(f"{n}{v:+.1f}%" for n, v in rotation[:5])
         bot = " ".join(f"{n}{v:+.1f}%" for n, v in rotation[-5:])
-        lines.append(f"- 行业轮动(当日): 领涨 {top} | 领跌 {bot}")
+        lines.append(f"- [M05]行业轮动(当日): 领涨 {top} | 领跌 {bot}")
         lines.append("◆ 趋势(5d/20d 向后滚动)")
-        lines.append(f"- 指数累计: 沪深300 5d{cum['沪深300'][0]:+.1f}%/20d{cum['沪深300'][1]:+.1f}%;"
+        lines.append(f"- [M06]指数累计: 沪深300 5d{cum['沪深300'][0]:+.1f}%/20d{cum['沪深300'][1]:+.1f}%;"
                      f"中证1000 5d{cum['中证1000'][0]:+.1f}%/20d{cum['中证1000'][1]:+.1f}%")
-        lines.append(f"- 风格累计差(300−1000): 5d{style5:+.1f}pp / 20d{style20:+.1f}pp")
-        lines.append(f"- 指数位置: 沪深300 距60日高 {pos60:+.1%},60日区间分位 {rng60:.0%}")
-        lines.append(f"- 宽度均值: 涨家占比 5d均值 {br5:.0%}(今日 {up/max(1,up+dn):.0%})")
-        lu_line = f"- 涨停温度: 涨停家数 5d均值 {lu5:.0f}(今日 {lim.get('涨停',0)});" \
+        lines.append(f"- [M07]风格累计差(300−1000): 5d{style5:+.1f}pp / 20d{style20:+.1f}pp")
+        lines.append(f"- [M08]指数位置: 沪深300 距60日高 {pos60:+.1%},60日区间分位 {rng60:.0%}")
+        lines.append(f"- [M09]宽度均值: 涨家占比 5d均值 {br5:.0%}(今日 {up/max(1,up+dn):.0%})")
+        lu_line = f"- [M10]涨停温度: 涨停家数 5d均值 {lu5:.0f}(今日 {lim.get('涨停',0)});" \
                   f"最高连板 {max_lianban(ts_day)}"
         if pd.notna(prem):
             lu_line += f";昨日涨停今日平均涨跌 {prem:+.1f}%"
         lines.append(lu_line)
-        lines.append(f"- 成交额: 250日分位 {amt_pctl:.0%};5d均值/20d均值 = {amt_ratio:.2f}"
+        lines.append(f"- [M11]成交额: 250日分位 {amt_pctl:.0%};5d均值/20d均值 = {amt_ratio:.2f}"
                      f"({'放量' if amt_ratio > 1.15 else '缩量' if amt_ratio < 0.85 else '平量'})")
         if pd.notna(vol_p):
-            lines.append(f"- 波动: 沪深300 20日波动 250日分位 {vol_p:.0%}")
+            lines.append(f"- [M12]波动: 沪深300 20日波动 250日分位 {vol_p:.0%}")
         if pd.notna(rz20):
-            lines.append(f"- 两融(截至D-1): 融资余额 20日变动 {rz20:+.1%}(250日分位 {rz_p:.0%})")
+            lines.append(f"- [M13]两融(截至D-1): 融资余额 20日变动 {rz20:+.1%}(250日分位 {rz_p:.0%})")
         lines.append("◆ 持续性")
         if overlap is not None:
             cont_s = "/".join(cont[:3]) if cont else "无"
-            lines.append(f"- 行业主线: 今日领涨前5与前一交易日重合 {overlap}/5(连续领涨: {cont_s})")
-        lines.append(f"- 宽度连续: 涨家占比<45% 已连续 {weak_streak} 个交易日"
-                     if weak_streak else "- 宽度连续: 今日涨家占比不低于45%,无连续弱势")
+            lines.append(f"- [M14]行业主线: 今日领涨前5与前一交易日重合 {overlap}/5(连续领涨: {cont_s})")
+        lines.append(f"- [M15]宽度连续: 涨家占比<45% 已连续 {weak_streak} 个交易日"
+                     if weak_streak else "- [M15]宽度连续: 今日涨家占比不低于45%,无连续弱势")
         if pol_lines:
-            lines.append("◆ 近3日重要政策: " + ";".join(pol_lines))
+            lines.append("- [M16]近3日重要政策: " + ";".join(pol_lines))
         card = "\n".join(lines)
         prev_top5 = top5
 

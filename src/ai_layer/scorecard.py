@@ -132,24 +132,27 @@ def validate_scorecard_record(record: dict, *, weights: Mapping[str, float],
     for key in ("factor_scores", "penalty_scores"):
         if key in record and not isinstance(record[key], list):
             raise ScorecardViolation(f"'{key}' must be a list of typed entries")
-        names: list = []
+        seen: set[str] = set()
         for entry in record.get(key, []):
             if not isinstance(entry, dict) or "name" not in entry or "score_0_5" not in entry:
                 raise ScorecardViolation(f"malformed {key} entry: {entry!r}")
             unknown = set(entry) - ALLOWED_ENTRY_KEYS
             if unknown:
                 raise ScorecardViolation(f"unknown {key} entry fields: {sorted(unknown)}")
-            names.append(entry["name"])
+            name = entry["name"]
+            # name 必须是非空字符串(复审#2 minor:NaN/非字符串名破坏无条件重名契约)
+            if not isinstance(name, str) or not name.strip():
+                raise ScorecardViolation(f"{key} entry name must be a non-empty string: {name!r}")
+            if name in seen:
+                raise ScorecardViolation(
+                    f"duplicate {key} names would double-count weights (C16): {name!r}")
+            seen.add(name)
             if require_registered_exact:
                 s = entry["score_0_5"]
                 if (not isinstance(s, Number) or isinstance(s, bool)
                         or not math.isfinite(float(s)) or not 0 <= float(s) <= 5):
                     raise ScorecardViolation(
                         f"{key} '{entry['name']}' score_0_5 not a finite number in [0,5]: {s!r}")
-        dup = sorted({n for n in names if names.count(n) > 1})
-        if dup:
-            raise ScorecardViolation(
-                f"duplicate {key} names would double-count weights (C16): {dup}")
     if require_registered_exact:
         fnames = {e["name"] for e in record.get("factor_scores", [])}
         missing = sorted(set(weights) - fnames)

@@ -246,10 +246,11 @@ def main() -> int:
 
     start = (pd.Timestamp(days[0]) - pd.Timedelta(days=420)).strftime("%Y-%m-%d")
     mkt_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=110)).strftime("%Y-%m-%d")
-    # GPT Blocker-5(幸存者):universe 必须按"完整历史窗口"解析,而非仅决策月——
-    # 决策月内活跃集会漏掉回看期内退市/长停名字,污染行业 RS/成分等权收益的历史截面
+    # GPT Blocker-5(幸存者,复审#2 修正):universe 按**最长**历史窗(420d start)解析
+    # ——110d 窗实测仍是 5403 只,只有全窗才回收 5455;60d RS 的 D.features 读数
+    # 仍可由 mkt_start 界定(读窗 ≠ universe 解析窗)
     avail = {i.upper(): i for i in D.list_instruments(
-        D.instruments("all"), start_time=mkt_start, end_time=days[-1], as_list=True)}
+        D.instruments("all"), start_time=start, end_time=days[-1], as_list=True)}
     qmap = {c: avail[tushare_to_qlib_canonical(c)] for c in pool
             if tushare_to_qlib_canonical(c) in avail}
     px = D.features(list(qmap.values()), FIELDS, start_time=start,

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,9 +34,24 @@ from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # no
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.1"
+RENDER_VERSION = "chain_v2.2"
 SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
                      "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
+
+_DAY_RE = re.compile(r"^\d{8}$")
+_CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+
+
+def safe_raw_dir(base_dir: Path, chains: set[str], chain: str, day: str,
+                 code: str) -> Path | None:
+    """raw 路径防穿越(复审#2 Major-2):chain 必须在已知集合、day/code 严格格式,
+    解析后路径必须仍在版本根内(day=../chain_v1.0/... 类注入一律拒绝)。"""
+    if chain not in chains or not _DAY_RE.match(day or "") \
+            or not _CODE_RE.match(code or ""):
+        return None
+    base = base_dir.resolve()
+    p = (base / chain / day / "raw" / code.replace(".", "_")).resolve()
+    return p if p.is_relative_to(base / chain) else None
 
 logger = logging.getLogger("platform")
 STATIC = Path(__file__).parent / "static"
@@ -224,16 +240,35 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(DATA.query_events(q))
             if u.path == "/api/archives":
                 chain = q.get("chain", [DATA.default_chain])[0]
+                if DATA.manifests and chain not in DATA.manifests:
+                    return self._send(400, b"unknown chain version", "text/plain")
                 vdays = DATA.archive_days_by_v.get(chain, [])
                 day = q.get("date", [vdays[-1] if vdays else ""])[0]
                 return self._json(DATA.archive_list(day, chain))
             if u.path == "/api/dept":
-                # 投研分析部:每席 输入卡/Prompt/原始输出/档案 —— 按链版本取数(Blocker-1):
-                # 只有 RENDER_VERSION 的输入卡可由现行渲染器重渲;旧版本给档案+raw+说明
+                # 投研分析部:每席 输入卡/Prompt/原始输出/档案 —— 按链版本取数(Blocker-1)。
+                # 完成档案 → 展示**归档快照**(绝不重渲,复审#2 B1);无档案且为现行版本
+                # → 重渲预览;旧版本 → 档案+raw+说明
                 code, day = q["code"][0].upper(), q["date"][0]
                 chain = q.get("chain", [DATA.default_chain])[0]
-                cards, prompts = {}, {}
-                if chain == RENDER_VERSION or not DATA.chain_versions:
+                if (DATA.manifests and chain not in DATA.manifests) \
+                        or not _DAY_RE.match(day) or not _CODE_RE.match(code):
+                    return self._send(400, b"invalid chain/date/code", "text/plain")
+                arch = DATA.archives.get((chain, code, day))
+                cards, prompts, cards_source = {}, {}, ""
+                if arch and arch.get("cards"):
+                    # 归档精确输入快照(v2.2+ 档案自带)
+                    cards = {"fund": arch["cards"].get("fund_card", ""),
+                             "tech": arch["cards"].get("pv_card", ""),
+                             "news": arch["cards"].get("news_card", "")}
+                    if arch.get("market_context"):
+                        cards["market_context"] = arch["market_context"]
+                    cards_source = "archive_snapshot"
+                    prompts = {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
+                               for s, fn in SEAT_PROMPT_FILES.items()} \
+                        if chain == RENDER_VERSION else {}
+                elif chain == RENDER_VERSION or not DATA.chain_versions:
+                    cards_source = "live_preview(无档案,现行渲染器)"
                     f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
                     p = DATA.pv[(DATA.pv.ts_code == code) & (DATA.pv.trade_date == day)]
                     r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
@@ -260,9 +295,9 @@ class Handler(BaseHTTPRequestHandler):
                 att = DATA.attn[(DATA.attn.ts_code == code)
                                 & (DATA.attn.trade_date == day)]
                 raws = {}
-                raw_dir = (C.OUT_ROOT / "analyst_chain" / chain / day / "raw"
-                           / code.replace(".", "_"))
-                for seat in ("fund", "tech", "news", "bear"):
+                raw_dir = safe_raw_dir(C.OUT_ROOT / "analyst_chain",
+                                       set(DATA.manifests), chain, day, code)
+                for seat in ("fund", "tech", "news", "bear") if raw_dir else ():
                     fp = raw_dir / f"{seat}_raw.json"
                     if fp.exists():
                         raw = json.loads(fp.read_text(encoding="utf-8"))
@@ -275,6 +310,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({
                     "ts_code": code, "name": DATA.names.get(code, ""), "date": day,
                     "chain": chain, "chain_versions": DATA.chain_versions,
+                    "cards_source": cards_source,
                     "manifest": DATA.manifests.get(chain, {}),
                     "attention": None if att.empty else float(att.attention.iloc[0]),
                     "cards": cards, "raws": raws,
@@ -288,8 +324,10 @@ class Handler(BaseHTTPRequestHandler):
                 # G5 审计视图:按需从 raw/ 读推理链;只读展示,永不入档案数据
                 code, day = q["code"][0].upper(), q["date"][0]
                 chain = q.get("chain", [DATA.default_chain])[0]
-                raw_dir = (C.OUT_ROOT / "analyst_chain" / chain / day / "raw"
-                           / code.replace(".", "_"))
+                raw_dir = safe_raw_dir(C.OUT_ROOT / "analyst_chain",
+                                       set(DATA.manifests), chain, day, code)
+                if raw_dir is None:
+                    return self._send(400, b"invalid chain/date/code", "text/plain")
                 out = {}
                 for seat in ("fund", "tech", "news", "bear"):
                     p = raw_dir / f"{seat}_raw.json"

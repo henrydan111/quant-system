@@ -43,6 +43,13 @@ class TestDuplicateRejectionUnconditional:
         with pytest.raises(ScorecardViolation, match="double-count"):
             validate_scorecard_record(rec, weights=W)
 
+    @pytest.mark.parametrize("bad", [None, float("nan"), 3, "", "  ", ["a"]])
+    def test_non_string_or_empty_names_rejected_unconditionally(self, bad):
+        """复审#2 minor:NaN/非字符串名会破坏无条件重名契约 → 名称必须非空字符串。"""
+        rec = _rec([{"name": bad, "score_0_5": 3, "evidence_spans": []}])
+        with pytest.raises(ScorecardViolation, match="non-empty string"):
+            validate_scorecard_record(rec, weights=W)
+
     def test_gpt_reproduction_exploit_closed(self):
         """GPT 复现:单条 grounded x=5,w=10 得 50;两条相同曾得 100 —— 现在整卡拒收。"""
         one = _rec([{"name": "a", "score_0_5": 5, "evidence_spans": [SPAN1]}])
