@@ -31,6 +31,9 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
+#: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
+#  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
+RENDER_VERSION = "chain_v2.1"
 SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
                      "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
 
@@ -69,34 +72,47 @@ class Data:
         self.days = sorted(self.attn.trade_date.unique())
         self.pool = sorted(set(self.attn.ts_code))
         self.snapshot = str(self.retr.retrieval_profile_snapshot_id.iloc[0])
-        # 研究档案(分析师链产物;逐日目录,可能只有部分日)
-        self.archives: dict[tuple[str, str], dict] = {}
+        # 研究档案:按链版本目录隔离(GPT Blocker-1);key=(version, code, day)
+        self.archives: dict[tuple[str, str, str], dict] = {}
+        self.manifests: dict[str, dict] = {}
         chain_dir = C.OUT_ROOT / "analyst_chain"
         if chain_dir.exists():
-            for day_dir in chain_dir.iterdir():
-                if not day_dir.is_dir():
+            for vdir in sorted(chain_dir.iterdir()):
+                if not vdir.is_dir() or not vdir.name.startswith("chain_v"):
                     continue
-                for fj in day_dir.glob("*.json"):
-                    a = json.loads(fj.read_text(encoding="utf-8"))
-                    self.archives[(a["ts_code"], a["date"])] = a
-        self.archive_days = sorted({d for _, d in self.archives})
+                mf = vdir / "manifest.json"
+                self.manifests[vdir.name] = (json.loads(mf.read_text(encoding="utf-8"))
+                                             if mf.exists() else {})
+                for day_dir in vdir.iterdir():
+                    if not day_dir.is_dir():
+                        continue
+                    for fj in day_dir.glob("*.json"):
+                        a = json.loads(fj.read_text(encoding="utf-8"))
+                        self.archives[(vdir.name, a["ts_code"], a["date"])] = a
+        self.chain_versions = sorted(self.manifests)          # 字典序=版本序
+        self.default_chain = self.chain_versions[-1] if self.chain_versions else ""
+        self.archive_days_by_v = {v: sorted({d for (vv, _, d) in self.archives if vv == v})
+                                  for v in self.chain_versions}
         logger.info("loaded: %d events / %d facts / %d pv / %d retr / %d attn",
                     len(self.events), len(self.facts), len(self.pv),
                     len(self.retr), len(self.attn))
 
     def meta(self):
         return {"month": MONTH, "days": self.days,
-                "archive_days": self.archive_days,
+                "archive_days": self.archive_days_by_v.get(self.default_chain, []),
+                "chain_versions": self.chain_versions,
+                "default_chain": self.default_chain,
+                "archive_days_by_version": self.archive_days_by_v,
                 "pool": [{"code": c, "name": self.names.get(c, "")} for c in self.pool],
                 "event_types": sorted(self.events.event_type.unique()),
                 "industries": self.ind_names,
                 "evidence_class": C.EVIDENCE_CLASS_REPLAY,
                 "config_hash": C.config_hash(), "snapshot": self.snapshot}
 
-    def archive_list(self, day: str):
+    def archive_list(self, day: str, chain: str):
         out = []
-        for (code, d), a in self.archives.items():
-            if d != day:
+        for (v, code, d), a in self.archives.items():
+            if d != day or v != chain:
                 continue
             j, b = a.get("judge", {}), a.get("bear", {})
             out.append({"ts_code": code, "name": self.names.get(code, ""),
@@ -169,7 +185,7 @@ class Data:
             "retrieval": [{"channel": r.channel, "type": r.event_type, "title": r.title,
                            "direction": r.direction, "relevance": float(r.relevance)}
                           for _, r in retr.iterrows()],
-            "archive": self.archives.get((code, day)),
+            "archive": self.archives.get((self.default_chain, code, day)),
         }
 
 
@@ -207,33 +223,44 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/events":
                 return self._json(DATA.query_events(q))
             if u.path == "/api/archives":
-                day = q.get("date", [DATA.archive_days[-1] if DATA.archive_days else ""])[0]
-                return self._json(DATA.archive_list(day))
+                chain = q.get("chain", [DATA.default_chain])[0]
+                vdays = DATA.archive_days_by_v.get(chain, [])
+                day = q.get("date", [vdays[-1] if vdays else ""])[0]
+                return self._json(DATA.archive_list(day, chain))
             if u.path == "/api/dept":
-                # 投研分析部:每席 输入卡(确定性重渲)/Prompt/原始输出/档案结果
+                # 投研分析部:每席 输入卡/Prompt/原始输出/档案 —— 按链版本取数(Blocker-1):
+                # 只有 RENDER_VERSION 的输入卡可由现行渲染器重渲;旧版本给档案+raw+说明
                 code, day = q["code"][0].upper(), q["date"][0]
-                f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
-                p = DATA.pv[(DATA.pv.ts_code == code) & (DATA.pv.trade_date == day)]
-                r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
-                b = DATA.biz[(DATA.biz.ts_code == code) & (DATA.biz.trade_date == day)]
-                biz_text = b["biz_text"].iloc[0] if len(b) else None
-                ser = DATA.series[(DATA.series.ts_code == code)
-                                  & (DATA.series.trade_date == day)]
-                disc = disclosure_status(r[r["channel"] == "direct"], day) \
-                    if not r.empty else None
-                cards = {"fund": render_fund_card(f, biz_text, ser, disc)
-                         if not f.empty else "",
-                         "tech": render_pv_card(p) if not p.empty else "",
-                         "news": render_news_card(r, day) if not r.empty else ""}
-                # 全席共享的 market_context(chain_v1.2 起进 payload;与链同一构造)
-                rg = DATA.regime[DATA.regime.trade_date == day]
-                if len(rg):
-                    cards["market_context"] = (rg["card_text"].iloc[0]
-                                               + "\nregime: " + rg["regime"].iloc[0])
+                chain = q.get("chain", [DATA.default_chain])[0]
+                cards, prompts = {}, {}
+                if chain == RENDER_VERSION or not DATA.chain_versions:
+                    f = DATA.facts[(DATA.facts.ts_code == code) & (DATA.facts.trade_date == day)]
+                    p = DATA.pv[(DATA.pv.ts_code == code) & (DATA.pv.trade_date == day)]
+                    r = DATA.retr[(DATA.retr.ts_code == code) & (DATA.retr.trade_date == day)]
+                    b = DATA.biz[(DATA.biz.ts_code == code) & (DATA.biz.trade_date == day)]
+                    biz_text = b["biz_text"].iloc[0] if len(b) else None
+                    ser = DATA.series[(DATA.series.ts_code == code)
+                                      & (DATA.series.trade_date == day)]
+                    disc = disclosure_status(r[r["channel"] == "direct"], day) \
+                        if not r.empty else None
+                    cards = {"fund": render_fund_card(f, biz_text, ser, disc)
+                             if not f.empty else "",
+                             "tech": render_pv_card(p) if not p.empty else "",
+                             "news": render_news_card(r, day) if not r.empty else ""}
+                    rg = DATA.regime[DATA.regime.trade_date == day]
+                    if len(rg):
+                        cards["market_context"] = (rg["card_text"].iloc[0]
+                                                   + "\nregime: " + rg["regime"].iloc[0])
+                    prompts = {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
+                               for s, fn in SEAT_PROMPT_FILES.items()}
+                else:
+                    note = DATA.manifests.get(chain, {}).get(
+                        "note", "该版本输入卡不可由现行渲染器重渲;只读档案与 raw 审计文件")
+                    cards = {"fund": f"({chain}:{note})", "tech": "", "news": ""}
                 att = DATA.attn[(DATA.attn.ts_code == code)
                                 & (DATA.attn.trade_date == day)]
                 raws = {}
-                raw_dir = (C.OUT_ROOT / "analyst_chain" / day / "raw"
+                raw_dir = (C.OUT_ROOT / "analyst_chain" / chain / day / "raw"
                            / code.replace(".", "_"))
                 for seat in ("fund", "tech", "news", "bear"):
                     fp = raw_dir / f"{seat}_raw.json"
@@ -247,11 +274,12 @@ class Handler(BaseHTTPRequestHandler):
                             raws[seat] = None
                 return self._json({
                     "ts_code": code, "name": DATA.names.get(code, ""), "date": day,
+                    "chain": chain, "chain_versions": DATA.chain_versions,
+                    "manifest": DATA.manifests.get(chain, {}),
                     "attention": None if att.empty else float(att.attention.iloc[0]),
                     "cards": cards, "raws": raws,
-                    "archive": DATA.archives.get((code, day)),
-                    "prompts": {s: (PROMPTS_DIR / fn).read_text(encoding="utf-8")
-                                for s, fn in SEAT_PROMPT_FILES.items()},
+                    "archive": DATA.archives.get((chain, code, day)),
+                    "prompts": prompts,
                     "routing": {"scoring": TASK_LLM["dimension_scoring"],
                                 "bear": TASK_LLM["bear_rebuttal"]},
                     "weights": SEAT_WEIGHTS, "composite_w": COMPOSITE_W,
@@ -259,7 +287,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/reasoning":
                 # G5 审计视图:按需从 raw/ 读推理链;只读展示,永不入档案数据
                 code, day = q["code"][0].upper(), q["date"][0]
-                raw_dir = (C.OUT_ROOT / "analyst_chain" / day / "raw"
+                chain = q.get("chain", [DATA.default_chain])[0]
+                raw_dir = (C.OUT_ROOT / "analyst_chain" / chain / day / "raw"
                            / code.replace(".", "_"))
                 out = {}
                 for seat in ("fund", "tech", "news", "bear"):

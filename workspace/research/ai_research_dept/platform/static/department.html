@@ -64,9 +64,9 @@ async function load(){
    <p class="dim" style="margin:4px 0">${role.duty}</p>`;
   if(k!=='bear'&&d.weights[k])
    html+=`<p>权重:${Object.entries(d.weights[k]).map(([n,w])=>`<span class="chip">${n}:${w}</span>`).join('')}</p>`;
-  html+=`<details><summary style="cursor:pointer"><b>Prompt(冻结 v1)</b></summary>
+  html+=`<details><summary style="cursor:pointer"><b>Prompt(现行版本)</b></summary>
    <pre style="white-space:pre-wrap;font:12px/1.6 inherit;color:var(--ink2);background:var(--plane);
-    border:1px solid var(--grid);border-radius:8px;padding:10px;max-height:320px;overflow:auto">${esc(d.prompts[k])}</pre></details>`;
+    border:1px solid var(--grid);border-radius:8px;padding:10px;max-height:320px;overflow:auto">${esc(d.prompts?.[k]||'(该链版本的 prompt 快照不可用)')}</pre></details>`;
   if(role.card)
    html+=`<details><summary style="cursor:pointer"><b>输入:该股卡片原文</b></summary>
     <pre style="white-space:pre-wrap;font:12px/1.6 inherit;color:var(--ink2);background:var(--plane);

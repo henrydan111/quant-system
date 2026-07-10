@@ -33,6 +33,7 @@ test_scorecard_evidence_spans_must_be_grounded.py.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from numbers import Number
 
@@ -86,9 +87,34 @@ def _evidence_ok(entry: dict, evidence_context: str) -> bool:
     )
 
 
-def validate_scorecard_record(record: dict, *, weights: Mapping[str, float]) -> None:
+#: strict-mode falsifier schema (chain_v2.x): bounded list of typed conditions
+_FALSIFIER_KEYS = frozenset({"condition", "observable_in"})
+_FALSIFIER_DOMAINS = frozenset({"fund", "tech", "news", "market"})
+_MAX_FALSIFIERS = 5
+_MAX_FALSIFIER_CHARS = 60
+
+
+def validate_scorecard_record(record: dict, *, weights: Mapping[str, float],
+                              require_registered_exact: bool = False,
+                              falsifier_schema: bool = False) -> None:
     """Structural + containment validation (fail-closed). Evidence grounding is
-    enforced in ``compute_scorecard_final`` — it is computed, never marked."""
+    enforced in ``compute_scorecard_final`` — it is computed, never marked.
+
+    Duplicate factor/penalty names are rejected UNCONDITIONALLY (GPT review
+    Blocker-2: duplicates were summed by ``compute_scorecard_final`` — a single
+    grounded x=5,w=10 entry scored 50, two identical entries scored 100, and the
+    archive's name-keyed dict then hid the duplication; that is a C16 breach for
+    every consumer, so the fix is not opt-in).
+
+    Strict extras for chain_v2.x consumers (opt-in so the frozen MVP forward
+    product's validation semantics are untouched):
+    - ``require_registered_exact``: every registered factor appears exactly once
+      (no-data dims stay present with empty evidence) and no unregistered names;
+      ``score_0_5`` must be a finite number in [0, 5] (hard fail, not NO-SCORE).
+    - ``falsifier_schema``: ``what_could_weaken`` is a bounded list of exactly
+      ``{condition, observable_in}`` with observable_in a |-joined subset of
+      {fund, tech, news, market}.
+    """
     if not isinstance(record, dict):
         raise ScorecardViolation("scorecard record must be a dict")
     unknown_top = set(record) - ALLOWED_TOP_LEVEL
@@ -106,12 +132,47 @@ def validate_scorecard_record(record: dict, *, weights: Mapping[str, float]) -> 
     for key in ("factor_scores", "penalty_scores"):
         if key in record and not isinstance(record[key], list):
             raise ScorecardViolation(f"'{key}' must be a list of typed entries")
+        names: list = []
         for entry in record.get(key, []):
             if not isinstance(entry, dict) or "name" not in entry or "score_0_5" not in entry:
                 raise ScorecardViolation(f"malformed {key} entry: {entry!r}")
             unknown = set(entry) - ALLOWED_ENTRY_KEYS
             if unknown:
                 raise ScorecardViolation(f"unknown {key} entry fields: {sorted(unknown)}")
+            names.append(entry["name"])
+            if require_registered_exact:
+                s = entry["score_0_5"]
+                if (not isinstance(s, Number) or isinstance(s, bool)
+                        or not math.isfinite(float(s)) or not 0 <= float(s) <= 5):
+                    raise ScorecardViolation(
+                        f"{key} '{entry['name']}' score_0_5 not a finite number in [0,5]: {s!r}")
+        dup = sorted({n for n in names if names.count(n) > 1})
+        if dup:
+            raise ScorecardViolation(
+                f"duplicate {key} names would double-count weights (C16): {dup}")
+    if require_registered_exact:
+        fnames = {e["name"] for e in record.get("factor_scores", [])}
+        missing = sorted(set(weights) - fnames)
+        extra = sorted(fnames - set(weights))
+        if missing or extra:
+            raise ScorecardViolation(
+                f"registered dims must appear exactly once: missing={missing} extra={extra}")
+    if falsifier_schema:
+        wcw = record.get("what_could_weaken", [])
+        if not isinstance(wcw, list) or len(wcw) > _MAX_FALSIFIERS:
+            raise ScorecardViolation(
+                f"what_could_weaken must be a list of <= {_MAX_FALSIFIERS} typed entries")
+        for w in wcw:
+            if not isinstance(w, dict) or set(w) != _FALSIFIER_KEYS:
+                raise ScorecardViolation(f"falsifier must be exactly {{condition, observable_in}}: {w!r}")
+            if (not isinstance(w["condition"], str)
+                    or not 0 < len(w["condition"]) <= _MAX_FALSIFIER_CHARS):
+                raise ScorecardViolation("falsifier condition must be a bounded non-empty string")
+            parts = [p for p in str(w["observable_in"]).split("|") if p]
+            if not parts or not all(p in _FALSIFIER_DOMAINS for p in parts):
+                raise ScorecardViolation(
+                    f"observable_in must be |-joined subset of {sorted(_FALSIFIER_DOMAINS)}: "
+                    f"{w['observable_in']!r}")
     if not weights:
         raise ScorecardViolation("pre-registered weights must be non-empty")
 

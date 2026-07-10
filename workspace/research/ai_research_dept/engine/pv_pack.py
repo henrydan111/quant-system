@@ -111,10 +111,11 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
     if ind_ctx is not None:
         ind_name, ir5, ir20 = ind_ctx
         add("A", "所属行业", None, str(ind_name))
+        # 命名如实(GPT minor):这是当日成分等权收益,不是官方行业指数
         if ir5 is not None and pd.notna(ir5):
-            add("A", "行业指数5d", float(ir5))
+            add("A", "申万L1成分等权5d", float(ir5))
         if ir20 is not None and pd.notna(ir20):
-            add("A", "行业指数20d", float(ir20))
+            add("A", "申万L1成分等权20d", float(ir20))
     body = (adj - adj_o).abs()
     up_shadow, dn_shadow = adj_h - np.maximum(adj, adj_o), np.minimum(adj, adj_o) - adj_l
     add("A", "连阳连阴", streak(adj.diff() > 0) or -streak(adj.diff() < 0))
@@ -176,11 +177,14 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
     # 两融/北向为次晨披露(§6.3a 类③):D 日值在 D 盘后会话不可知 → 窗口硬截止 D-1(审计 F2)
     g1 = g.iloc[:-1]
     if len(g1) and pd.notna(g1["rzye"].iloc[-1]):
-        add("C", "融资余额20d变动", g1["rzye"].iloc[-1] / g1["rzye"].iloc[-20] - 1
-            if len(g1) > 20 and g1["rzye"].iloc[-20] > 0 else float("nan"),
-            "截至D-1", pctl_last(g1["rzye"].iloc[-250:]))
-        rz_ratio = g1["rzmre"] / g1["amount"].replace(0, np.nan) / 10  # 万元 vs 千元 尺度对齐由分位吸收
-        add("C", "融资买入占比分位", rz_ratio.iloc[-1], "截至D-1", pctl_last(rz_ratio.iloc[-250:]))
+        # GPT Major:分位必须算在"20日变动"序列上,不是余额水平上(水平分位 77% 配 -19% 变动
+        # 是误导);20d 变动用 pct_change(20)=[-21] 基准(整 20 个间隔)
+        rz_chg = g1["rzye"].pct_change(20)
+        add("C", "融资余额20d变动", rz_chg.iloc[-1] if pd.notna(rz_chg.iloc[-1]) else float("nan"),
+            "截至D-1", pctl_last(rz_chg.iloc[-250:]))
+        # rzmre 单位=元(data_dictionary),amount 单位=千元 → 占比 = (rzmre/1000)/amount
+        rz_ratio = (g1["rzmre"] / 1000) / g1["amount"].replace(0, np.nan)
+        add("C", "融资买入占比", rz_ratio.iloc[-1], "截至D-1", pctl_last(rz_ratio.iloc[-250:]))
     if len(g1) and pd.notna(g1["ratio"].iloc[-1]):
         add("C", "北向持股比", g1["ratio"].iloc[-1], "截至D-1", float("nan"))
         add("C", "北向20d变动", g1["ratio"].iloc[-1] - g1["ratio"].iloc[-21]
@@ -199,8 +203,9 @@ def rows_for_stock(code: str, g: pd.DataFrame, day: str,
     shape = ("吸筹形态" if net_big.iloc[-5:].sum() > 0 and net_sm.iloc[-5:].sum() < 0 else
              "派发形态" if net_big.iloc[-5:].sum() < 0 and net_sm.iloc[-5:].sum() > 0 else "同向")
     add("D", "大小单形态", 0, shape)
-    strength = net_big / g["amount"].replace(0, np.nan) / 10
-    add("D", "净流强度分位", strength.iloc[-1], "", pctl_last(strength.iloc[-250:]))
+    # GPT Major:net_big 万元 / (amount 千元 ÷10=万元) —— 旧式 /amount/10 错了 100 倍
+    strength = net_big / (g["amount"].replace(0, np.nan) / 10)
+    add("D", "净流强度", strength.iloc[-1], "", pctl_last(strength.iloc[-250:]))
     # 龙虎榜为交易所晚间披露(§6.3a 类②,与事件库 D+1 晨可见戳对齐)→ 窗口 ≤ D-1
     add("D", "龙虎榜20d", int(g1["top_list__amount"].iloc[-20:].notna().sum())
         if len(g1) else 0, "截至D-1")
@@ -239,20 +244,22 @@ def main() -> int:
     pool = sorted(set(pool_df["ts_code"]))
     t0 = time.time()
 
+    start = (pd.Timestamp(days[0]) - pd.Timedelta(days=420)).strftime("%Y-%m-%d")
+    mkt_start = (pd.Timestamp(days[0]) - pd.Timedelta(days=110)).strftime("%Y-%m-%d")
+    # GPT Blocker-5(幸存者):universe 必须按"完整历史窗口"解析,而非仅决策月——
+    # 决策月内活跃集会漏掉回看期内退市/长停名字,污染行业 RS/成分等权收益的历史截面
     avail = {i.upper(): i for i in D.list_instruments(
-        D.instruments("all"), start_time=days[0], end_time=days[-1], as_list=True)}
+        D.instruments("all"), start_time=mkt_start, end_time=days[-1], as_list=True)}
     qmap = {c: avail[tushare_to_qlib_canonical(c)] for c in pool
             if tushare_to_qlib_canonical(c) in avail}
-    start = (pd.Timestamp(days[0]) - pd.Timedelta(days=420)).strftime("%Y-%m-%d")
     px = D.features(list(qmap.values()), FIELDS, start_time=start,
                     end_time=days[-1], freq="day")
     px.columns = [c.lstrip("$") for c in FIELDS]
     logger.info("pool bins loaded: %d rows %.0fs", len(px), time.time() - t0)
 
-    # 全市场 60d 收益(行业内 RS 分位)+ 基准
+    # 全市场 60d 收益(行业内 RS 分位)+ 基准;universe=回看窗全体,按日 NaN 剔除
     mkt = D.features(list(avail.values()), ["$close", "$adj_factor"],
-                     start_time=(pd.Timestamp(days[0]) - pd.Timedelta(days=110)
-                                 ).strftime("%Y-%m-%d"),
+                     start_time=mkt_start,
                      end_time=days[-1], freq="day")
     mkt_adj = (mkt["$close"] * mkt["$adj_factor"]).unstack(level=0)
     bench = pd.read_parquet(C.PROJECT_ROOT / "data" / "market" / "index"

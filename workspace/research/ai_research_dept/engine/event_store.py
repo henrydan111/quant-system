@@ -262,8 +262,8 @@ def gen_ledger_events(window_start: str, window_end: str) -> list[dict]:
               "轻微利好" if typ in ("预增", "扭亏", "略增", "续盈") else
               "严重利空" if typ in ("首亏",) else
               "间接利空" if typ in ("预减", "略减", "续亏") else "中性")
-        rng = (f"{r.get('p_change_min')}%~{r.get('p_change_max')}%"
-               if pd.notna(r.get("p_change_min")) else "")
+        rng = (f"{float(r.get('p_change_min')):.1f}%~{float(pmax):.1f}%"
+               if pd.notna(r.get("p_change_min")) and pd.notna(pmax) else "")
         ev.append(_event("业绩预告", [r["ts_code"]], r["visible_at"],
                          f"{r['ts_code']} 业绩预告:{typ} {rng}",
                          {"type": typ, "p_change_min": None if pd.isna(r.get("p_change_min")) else float(r["p_change_min"]),
@@ -278,7 +278,8 @@ def gen_ledger_events(window_start: str, window_end: str) -> list[dict]:
         imp = 4 if (pd.notna(ratio) and abs(ratio) >= 0.5) else 3
         ev.append(_event("董监高增减持", [r["ts_code"]], r["visible_at"],
                          f"{r['ts_code']} {str(r.get('holder_type',''))}"
-                         f"{'增持' if inc else '减持'} {ratio if pd.notna(ratio) else '?'}%",
+                         f"{'增持' if inc else '减持'} "
+                         f"{f'{float(ratio):.2f}' if pd.notna(ratio) else '?'}%",
                          {"holder_type": str(r.get("holder_type", "")),
                           "in_de": str(r.get("in_de", "")),
                           "change_ratio": None if pd.isna(ratio) else float(ratio)},

@@ -74,17 +74,22 @@ def _pctl_of_last(series: pd.Series) -> float:
 
 def _grouped_pctl(day_values: pd.Series, industries: pd.Series,
                   min_n: int) -> pd.DataFrame:
-    """行业内分位;样本薄回退全市场。返回 (pctl, n, scope)。"""
+    """行业内分位 + 行业中值/90分位(GPT Q7:分位给位置,对标值给距离);
+    样本薄回退全市场。返回 (pctl, n, scope, med, p90)。"""
     df = pd.DataFrame({"v": day_values, "ind": industries})
     df["mkt_pctl"] = df["v"].rank(pct=True)
     grp = df.groupby("ind")["v"]
     df["ind_pctl"] = grp.rank(pct=True)
     df["ind_n"] = grp.transform("count")
+    df["ind_med"] = grp.transform("median")
+    df["ind_p90"] = grp.transform(lambda s: s.quantile(0.9))
     thin = df["ind_n"].fillna(0) < min_n
     df["pctl"] = np.where(thin, df["mkt_pctl"], df["ind_pctl"])
+    df["med"] = np.where(thin, df["v"].median(), df["ind_med"])
+    df["p90"] = np.where(thin, df["v"].quantile(0.9), df["ind_p90"])
     df["scope"] = np.where(thin, "market_fallback", "industry_L1")
     df.loc[df["ind"].isna(), "scope"] = "market_fallback"
-    return df[["pctl", "ind_n", "scope"]]
+    return df[["pctl", "ind_n", "scope", "med", "p90"]]
 
 
 # ------------------------------------------------------------------ builders
@@ -152,6 +157,8 @@ def build_fund_facts(days: list[str], pool: list[str]) -> tuple[pd.DataFrame, pd
                     "industry_n": int(anchors.loc[code, "ind_n"])
                     if pd.notna(anchors.loc[code, "ind_n"]) else 0,
                     "pctl_scope": anchors.loc[code, "scope"],
+                    "industry_median": float(anchors.loc[code, "med"]),
+                    "industry_p90": float(anchors.loc[code, "p90"]),
                     "hist_pctl": hp, "source": "pit_research_loader/indicators",
                 })
     return pd.DataFrame(rows), pd.DataFrame(series_rows)
@@ -198,8 +205,11 @@ def build_mkt_facts(days: list[str], pool: list[str]) -> pd.DataFrame:
         for f in C.MKT_FIELDS:
             vals = day_slice[f]
             anchors = _grouped_pctl(vals, industries, C.INDUSTRY_MIN_N)
+            # GPT Major(M6):估值字段 NaN 不再静默消失——发行显式 NaN 行,
+            # 渲染层给"亏损/未披露"状态(NaN ≠ 0)
+            nan_keep = f.lstrip("$") in ("pe_ttm", "ps_ttm", "dv_ratio")
             for code in pool:
-                if code not in vals.index or pd.isna(vals[code]):
+                if code not in vals.index or (pd.isna(vals[code]) and not nan_keep):
                     continue
                 qc = avail.get(tushare_to_qlib_canonical(code))
                 hp = float("nan")
@@ -210,14 +220,19 @@ def build_mkt_facts(days: list[str], pool: list[str]) -> pd.DataFrame:
                         hp = _pctl_of_last(hseries)
                     except KeyError:
                         pass
+                isna = pd.isna(vals[code])
                 rows.append({
                     "ts_code": code, "trade_date": day, "field": f.lstrip("$"),
-                    "value": float(vals[code]),
-                    "industry_pctl": float(anchors.loc[code, "pctl"]),
+                    "value": float("nan") if isna else float(vals[code]),
+                    "industry_pctl": float("nan") if isna
+                    else float(anchors.loc[code, "pctl"]),
                     "industry_n": int(anchors.loc[code, "ind_n"])
                     if pd.notna(anchors.loc[code, "ind_n"]) else 0,
                     "pctl_scope": anchors.loc[code, "scope"],
-                    "hist_pctl": hp, "source": "provider/daily_basic",
+                    "industry_median": float(anchors.loc[code, "med"]),
+                    "industry_p90": float(anchors.loc[code, "p90"]),
+                    "hist_pctl": float("nan") if isna else hp,
+                    "source": "provider/daily_basic",
                 })
     return pd.DataFrame(rows)
 

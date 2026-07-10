@@ -6,7 +6,8 @@
 <nav><b>投研情报中心</b><a href="/">热点榜</a><a href="events.html">事件流</a>
 <a href="archives.html">研究档案</a><a class="on" href="analysis.html">个股分析</a>
 <a href="department.html">投研分析部</a>
-<span style="margin-left:auto">股票 <select id="code"></select>
+<span style="margin-left:auto">链版本 <select id="chain"></select>
+股票 <select id="code"></select>
 日期 <select id="day"></select></span></nav>
 <h1 id="title">个股分析</h1>
 <p class="dim">本页 = 该决策会话 <b>LLM 收到的全部输入</b>(下方四张卡原文,一字不多一字不少)
@@ -44,10 +45,11 @@ const SEAT={fund:{label:'基本面席',card:'fund',cardName:'基本面卡(三锚
  news:{label:'消息面席',card:'news',cardName:'消息面卡(检索装配单:直接+间接事件)'}};
 async function load(){
  const code=document.getElementById('code').value,day=document.getElementById('day').value;
- history.replaceState(null,'',`analysis.html?code=${code}&date=${day}`);
+ const chain=document.getElementById('chain').value;
+ history.replaceState(null,'',`analysis.html?code=${code}&date=${day}&chain=${chain}`);
  document.getElementById('deptlink').href=`department.html?code=${code}&date=${day}`;
  document.getElementById('rawlink').href=`stock.html?code=${code}&date=${day}`;
- const d=await j(`/api/dept?code=${code}&date=${day}`);
+ const d=await j(`/api/dept?code=${code}&date=${day}&chain=${chain}`);
  const A=d.archive,j2=A?.judge||{};
  document.getElementById('title').innerHTML=`${d.ts_code} ${esc(d.name)} · ${d.date} 决策会话`+
   (A?` <span class="chip" title="产生该档案时的链版本;本页输入卡为当前渲染器实时重渲,旧档案当时所见卡片可能与本页有出入">${esc(A.chain_version)}</span>`:'');
@@ -102,6 +104,9 @@ async function load(){
  document.getElementById('body').innerHTML=h}
 (async()=>{const m=await j('/api/meta');
  document.getElementById('banner').textContent='⚠ '+m.evidence_class+' — 历史重放,非证据;不得据此调参';
+ const ch=document.getElementById('chain');
+ (m.chain_versions||[]).forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;ch.appendChild(o)});
+ ch.value=P.get('chain')||m.default_chain||'';ch.onchange=load;
  const cs=document.getElementById('code');
  m.pool.forEach(p=>{const o=document.createElement('option');o.value=p.code;
   o.textContent=`${p.code} ${p.name}`;cs.appendChild(o)});

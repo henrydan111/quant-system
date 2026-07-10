@@ -97,9 +97,9 @@ def assemble_for_stock(code: str, day: str, ev: pd.DataFrame,
             out.append({"ts_code": code, "trade_date": day, "event_id": r["event_id"],
                         "event_type": r["event_type"], "title": r["title"],
                         "direction": r["direction"], "importance": r["importance_0_5"],
-                        # visible_at 透传(v0.2 输出加列,选择/排序/配置零变化 —— 渲染层
-                        # 需要事件龄标注,审计 §4.2-1;snapshot/config id 不受影响)
-                        "visible_at": r["visible_at"],
+                        # visible_at/source 透传(v0.2 输出加列,选择/排序/配置零变化 ——
+                        # 渲染层需要事件龄与同源合并,审计 §4.2;snapshot/config id 不受影响)
+                        "visible_at": r["visible_at"], "source": r["source"],
                         "channel": channel, "relevance": round(float(rel), 4)})
     # direct 全保留;非 direct 取 top-K
     direct = [x for x in out if x["channel"] == "direct"]
