@@ -6,7 +6,8 @@
 <nav><b>投研情报中心</b><a href="/">热点榜</a><a href="events.html">事件流</a>
 <a class="on" href="archives.html">研究档案</a><a href="analysis.html">个股分析</a>
 <a href="department.html">投研分析部</a>
-<span style="margin-left:auto">日期 <select id="day"></select></span></nav>
+<span style="margin-left:auto">链版本 <select id="chain"></select>
+日期 <select id="day"></select></span></nav>
 <h1>研究档案榜(五席评分 · 空头调整后排序)</h1>
 <p class="dim">composite = 0.4基本面+0.3技术面+0.3消息面(research_summary,禁入排序/选股决策);
 adj = 空头折减后;分歧度高 = 三席观点冲突(信息,非噪音)。</p>
@@ -18,11 +19,12 @@ adj = 空头折减后;分歧度高 = 三席观点冲突(信息,非噪音)。</p>
 async function j(u){const r=await fetch(u);return r.json()}
 async function load(){
  const day=document.getElementById('day').value;
- const rows=await j('/api/archives?date='+day);
+ const chain=document.getElementById('chain').value;
+ const rows=await j(`/api/archives?date=${day}&chain=${encodeURIComponent(chain)}`);
  const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
  rows.forEach((r,i)=>{const tr=document.createElement('tr');
   tr.innerHTML=`<td class="dim">${i+1}</td>
-   <td><a href="analysis.html?code=${r.ts_code}&date=${day}">${r.ts_code}</a> ${r.name}</td>
+   <td><a href="analysis.html?code=${r.ts_code}&date=${day}&chain=${encodeURIComponent(chain)}">${r.ts_code}</a> ${r.name}</td>
    <td class="num">${r.composite??'—'}</td><td class="num"><b>${r.adj??'—'}</b></td>
    <td class="num">${r.dispersion??'—'}</td>
    <td>${(r.flags||[]).map(f=>`<span class="chip">${f}</span>`).join('')}</td>
@@ -31,10 +33,16 @@ async function load(){
   tb.appendChild(tr)})}
 (async()=>{const m=await j('/api/meta');
  document.getElementById('banner').textContent='⚠ '+m.evidence_class+' — 历史重放,非证据;不得据此调参';
+ const ch=document.getElementById('chain');
+ (m.chain_versions||[]).forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;ch.appendChild(o)});
+ ch.value=m.default_chain||'';
  const sel=document.getElementById('day');
- (m.archive_days.length?m.archive_days:m.days).forEach(d=>{
-  const o=document.createElement('option');o.value=d;o.textContent=d;sel.appendChild(o)});
- sel.value=(m.archive_days.length?m.archive_days[m.archive_days.length-1]:m.days[m.days.length-1]);
+ function fillDays(){sel.innerHTML='';
+  const ds=(m.archive_days_by_version||{})[ch.value]||m.days;
+  (ds.length?ds:m.days).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;sel.appendChild(o)});
+  sel.value=sel.options.length?sel.options[sel.options.length-1].value:''}
+ fillDays();
+ ch.onchange=()=>{fillDays();load()};
  sel.onchange=load;
  document.getElementById('foot').textContent=`config=${m.config_hash} · 只读平台`;
  load()})();

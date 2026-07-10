@@ -177,6 +177,19 @@ class TestBearPerEntryRobustness:
         assert out["validation_dropped"]["strength"] == 1
         assert out["schema_valid"] is True
 
+    def test_nonstring_claim_reason_dropped_individually(self):
+        """复审#4 Major-3:10**10000 的 claim 曾在 _norm(str()) 炸穿;list/dict 曾被
+        接受成文本——现为逐条 text drop,兄弟保留。"""
+        rec = {"refutations": [self._base(claim=10**10000),
+                               self._base(reason=["a", "b"]),
+                               self._base(claim={"x": 1}),
+                               self._base(claim="  "),
+                               self._base()],
+               "kill_switches": ["k"], "blind_spots": []}
+        out = validate_bear_record(rec, CARD, SEAT_W, FALS)
+        assert len(out["refutations"]) == 1
+        assert out["validation_dropped"]["text"] == 4
+
     def test_schema_valid_flag(self):
         """复审#3 B3:顶层容器损坏必须标记 schema_valid=False(不得伪装空但正常)。"""
         out = validate_bear_record({"refutations": {"not": "a list"},

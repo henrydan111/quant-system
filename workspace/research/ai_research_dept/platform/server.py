@@ -31,13 +31,16 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
-    is_sealed, verify_archive_body, verify_manifest_body,
+    verify_archive_body, verify_manifest_body,
 )
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.3"
+RENDER_VERSION = "chain_v2.4"
+#: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
+#  这些历史版本产生于封印 schema 之前,只做结构性校验
+LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})
 SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
                      "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
 
@@ -100,44 +103,76 @@ class Data:
         self.days = sorted(self.attn.trade_date.unique())
         self.pool = sorted(set(self.attn.ts_code))
         self.snapshot = str(self.retr.retrieval_profile_snapshot_id.iloc[0])
-        # 研究档案:按链版本目录隔离(Blocker-1)+ **加载即验证**(复审#3 B2:
-        # 平台同样不得信任磁盘自称——manifest 正文重算、归档封印/结构复核,不符即拒载)
+        # 研究档案:按链版本目录隔离(Blocker-1)+ **加载即验证**(复审#3 B2 + #4 B1:
+        # sealed_required 由 manifest 驱动,legacy=显式 allowlist,验证状态**外置**
+        # 不污染封印正文;拒载计数进 integrity_status)
         self.archives: dict[tuple[str, str, str], dict] = {}
+        self.archive_verification: dict[tuple[str, str, str], str] = {}
         self.manifests: dict[str, dict] = {}
+        self.integrity_status: dict[str, dict] = {}
         chain_dir = C.OUT_ROOT / "analyst_chain"
         if chain_dir.exists():
             for vdir in sorted(chain_dir.iterdir()):
                 if not vdir.is_dir() or not vdir.name.startswith("chain_v"):
                     continue
+                st = {"loaded": 0, "rejected": 0, "reasons": []}
+                self.integrity_status[vdir.name] = st
                 mf = vdir / "manifest.json"
-                manifest = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {}
-                if manifest.get("manifest_fp"):
+                try:
+                    manifest = json.loads(mf.read_text(encoding="utf-8")) \
+                        if mf.exists() else {}
+                except (json.JSONDecodeError, OSError) as e:
+                    st["rejected"] += 1
+                    st["reasons"].append(f"manifest 解析失败: {e}")
+                    continue
+                is_legacy = vdir.name in LEGACY_CHAINS and \
+                    not manifest.get("sealed_required")
+                if not is_legacy:
                     mp = verify_manifest_body(manifest)
                     if mp or manifest.get("chain_version") != vdir.name:
-                        logger.warning("拒载 %s manifest: %s", vdir.name,
-                                       mp or "chain_version 与目录不符")
+                        st["rejected"] += 1
+                        st["reasons"].append(
+                            f"manifest: {';'.join(mp) or 'chain_version 与目录不符'}")
+                        logger.warning("拒载 %s manifest: %s", vdir.name, st["reasons"][-1])
                         continue
+                require_sealed = manifest.get("sealed_required") is True
                 self.manifests[vdir.name] = manifest
                 for day_dir in vdir.iterdir():
                     if not day_dir.is_dir() or day_dir.name == "attempts" \
                             or not day_dir.name.isdigit():
                         continue
                     for fj in day_dir.glob("*.json"):
-                        a = json.loads(fj.read_text(encoding="utf-8"))
-                        sealed = is_sealed(a)
+                        try:
+                            a = json.loads(fj.read_text(encoding="utf-8"))
+                        except (json.JSONDecodeError, OSError) as e:
+                            st["rejected"] += 1
+                            st["reasons"].append(f"{day_dir.name}/{fj.name}: 解析失败 {e}")
+                            continue
                         problems = verify_archive_body(
-                            a, expect_chain=vdir.name, expect_date=day_dir.name,
+                            a, require_sealed=require_sealed,
+                            expect_chain=vdir.name, expect_date=day_dir.name,
                             expect_stem=fj.stem,
                             expect_manifest_fp=manifest.get("manifest_fp")
-                            if sealed and manifest.get("manifest_fp") else None)
+                            if require_sealed else None)
                         if problems:
+                            st["rejected"] += 1
+                            st["reasons"].append(
+                                f"{day_dir.name}/{fj.name}: {';'.join(problems)[:120]}")
                             logger.warning("拒载归档 %s/%s/%s: %s", vdir.name,
                                            day_dir.name, fj.name, ";".join(problems))
                             continue
-                        a["_verify"] = "sealed_ok" if sealed else "legacy_structural"
-                        self.archives[(vdir.name, a["ts_code"], a["date"])] = a
+                        key = (vdir.name, str(a.get("ts_code")), str(a.get("date")))
+                        self.archives[key] = a         # 不写入 a 本体(封印不被污染)
+                        self.archive_verification[key] = \
+                            "sealed_ok" if require_sealed else "legacy_structural"
+                        st["loaded"] += 1
+                st["reasons"] = st["reasons"][:10]
         self.chain_versions = sorted(self.manifests)          # 字典序=版本序
-        self.default_chain = self.chain_versions[-1] if self.chain_versions else ""
+        # 复审#4 Major-4:RENDER_VERSION manifest 损坏时**不得静默回退旧版本**——
+        # default 只认现行版本;不健康则置空并由 integrity_status 暴露
+        self.default_chain = RENDER_VERSION if RENDER_VERSION in self.manifests \
+            else (self.chain_versions[-1] if self.chain_versions
+                  and not (chain_dir / RENDER_VERSION).exists() else "")
         self.archive_days_by_v = {v: sorted({d for (vv, _, d) in self.archives if vv == v})
                                   for v in self.chain_versions}
         logger.info("loaded: %d events / %d facts / %d pv / %d retr / %d attn",
@@ -149,6 +184,8 @@ class Data:
                 "archive_days": self.archive_days_by_v.get(self.default_chain, []),
                 "chain_versions": self.chain_versions,
                 "default_chain": self.default_chain,
+                "render_version": RENDER_VERSION,
+                "integrity_status": self.integrity_status,
                 "archive_days_by_version": self.archive_days_by_v,
                 "pool": [{"code": c, "name": self.names.get(c, "")} for c in self.pool],
                 "event_types": sorted(self.events.event_type.unique()),
@@ -364,6 +401,7 @@ class Handler(BaseHTTPRequestHandler):
                     "chain": chain, "chain_versions": DATA.chain_versions,
                     "cards_source": cards_source,
                     "contract_source": contract_source,
+                    "verification": DATA.archive_verification.get((chain, code, day)),
                     "manifest": {k: v for k, v in mfst.items()
                                  if k != "effective_prompts"},
                     "attention": None if att.empty else float(att.attention.iloc[0]),

@@ -489,6 +489,20 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **Minor**:strength=5 快径增加 **observable_in 域校验**(反证行 ID 前缀→域,须∈证伪声明域;observable_in=fund 引 M 行不再保 5);事件预热窗首多取一个开市日;regime 首日 M14 用前一交易日轮动初始化。
 **测试:92/92**(+19 条复审#3 回归,含篡改正文保留指纹/伪造输出封印识破/单席判完整复现/超大整数)。
 
+### §10.4 复审#4 裁定与处置(2026-07-10,chain_v2.4)
+
+**裁定:REVISE**(3 Blocker + 4 Major + 2 Minor)。处置:
+
+| # | Blocker | chain_v2.4 修复 |
+|---|---|---|
+| B1''' | **删字段降级封印**:删 cards/archive_sha256 重封印后档案被当 legacy 绕过校验;缺 manifest_fp 的 manifest 平台跳过验证 | manifest 声明 `integrity_schema=1`+`sealed_required=True`;`verify_archive_body(require_sealed=True)` 必需字段(manifest_fp/artifact_fp/archive_sha256/cards/market_context)缺失即硬失败,封印**无条件重算**;legacy=平台 `LEGACY_CHAINS` **显式 allowlist**(绝不由缺字段推断);声明 schema 却缺 fp 的 manifest 本身违规 |
+| B2''' | **冻结 prompt 未被执行**:manifest 存快照但每股仍重读磁盘,同一 manifest_fp 下可混用两套 prompt | `read_prompt_bundle()` 只读一次 → `build_manifest(bundle)` → **`ChainContract.from_verified_manifest`**;run_stock 只接受已验证契约(裸 manifest_fp 参数删除),run_seat/run_bear 从契约取有效 prompt(含 SYSTEM_C15,不再拼接) |
+| B3''' | **缺输入静默退出 0**:inputs=None 既不算成功也不算失败;预检逐日,后期碰撞前早期日已花钱 | **全月预检**(全部日×股)先于任何 LLM 提交;缺输入→`run_status.json{status:failed_preflight}`+退出 2;结束时机械断言 `complete==expected` 否则退出 2;`run_status.json` 持久化完成标记(崩溃后部分月与完整月可区分) |
+
+**Major**:①attempts **状态机**(`started→attempt_completed/attempt_failed→published` 全程 ledger 留痕;编号=跨进程 file_lock 下 max(解析编号)+1+`mkdir(exist_ok=False)`,稀疏编号 {0001,0003} 不再重复分配;ledger 跨进程锁+flush+fsync;published 事件在 os.replace **之后**;意外异常写 failed status 后上抛)+ 版本级 `.batch.lock` 单实例(第二实例 BatchInstanceError);②契约文件扩到 **7 个**(+integrity.py/llm_config.py/ark_client.py;项目相对路径前缀;PIT loaders 不入——其产物已由 artifact_fp 绑定,GPT 认可);③claim/reason 类型总函数(10**10000 claim 曾炸穿 `_norm(str())` 波及合法兄弟;list/dict 曾被当文本)+ `_valid_final` 总函数 + archive_complete 全输入 dict 校验;④平台验证状态**外置**(`archive_verification` 字典,不再写 `_verify` 进封印正文——曾使 API 返回的档案不再匹配封印)+ `/api/meta` 暴露 `integrity_status`(loaded/rejected/原因)+ RENDER_VERSION manifest 损坏时**不静默回退旧版本** + JSON 解析异常计入拒载。
+**Minor**:`archive_sha256`/新增 `manifest_sha256` 用**完整 64 位**摘要(语义指纹 manifest_fp 保持 16 位短 ID);archives.html 加链版本选择器,日期按 `archive_days_by_version` 填充,分析链接带 chain。
+**测试:111/111**(+19 条复审#4 回归:逐字段删除降级、稀疏编号、总函数、claim 类型)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

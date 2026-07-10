@@ -154,7 +154,7 @@ def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
                     and isinstance(rec.get("kill_switches"), list)
                     and isinstance(rec.get("blind_spots"), list))
     valid, dropped = [], {"keys": 0, "pairing": 0, "strength": 0, "quote": 0,
-                          "falsifier_downgraded": 0}
+                          "text": 0, "falsifier_downgraded": 0}
     refs = rec.get("refutations", []) if isinstance(rec, dict) else []
     if not isinstance(refs, list):
         refs = []
@@ -189,6 +189,13 @@ def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
         if quote_lid is None:
             dropped["quote"] += 1
             continue
+        # 文本字段类型总函数(复审#4 Major-3):10**10000 的 claim 曾在 _norm(str())
+        # 处炸穿并波及合法兄弟;list/dict 曾被接受成文本
+        claim, reason = r.get("claim"), r.get("reason")
+        if (not isinstance(claim, str) or not claim.strip()
+                or not isinstance(reason, str) or not reason.strip()):
+            dropped["text"] += 1
+            continue
         fid = r.get("falsifier_id")
         # 机械确认命中(复审#3 minor):ID 存在 + 席位绑定 + 反证域 ∈ 证伪声明的
         # observable_in(observable_in=fund 的证伪引用 M 行不再保 5)
@@ -201,10 +208,10 @@ def validate_bear_record(rec: dict, all_cards_text: str, seat_weights: dict,
             strength = 4                       # 自动 5 分仅限机械验证的证伪命中
             dropped["falsifier_downgraded"] += 1
         valid.append({"target_seat": seat, "target_dim": dim,
-                      "claim": _norm(r.get("claim", ""))[:_MAX_CLAIM],
+                      "claim": _norm(claim)[:_MAX_CLAIM],
                       "counter_quote": _norm(r["counter_quote"])[:200],
                       "strength_0_5": strength,
-                      "reason": _norm(r.get("reason", ""))[:_MAX_REASON],
+                      "reason": _norm(reason)[:_MAX_REASON],
                       **({"falsifier_id": fid} if fid_ok else {})})
     ks_raw = rec.get("kill_switches") if isinstance(rec, dict) else None
     bs_raw = rec.get("blind_spots") if isinstance(rec, dict) else None
