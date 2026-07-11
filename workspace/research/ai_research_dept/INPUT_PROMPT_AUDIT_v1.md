@@ -545,6 +545,17 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **R2/R3 采纳**:残余 (a) 席位名不必钉死(不同席位集=不同 manifest 身份)但嵌套权重必须先过 B2 校验 ✔;残余 (b) 原则可接受但实现须过 B3 ✔;残余 (c) 可接受,2384 实弹不前置。
 **测试:185/185**(+26 条复审#7 回归:TASK_LLM 篡改后执行参数冻结/route 缺字段 KeyError/契约携带 llm_config_hash/load 拒破损 routing·缺 llm 哈希/NaN composite 拒收/坏席位 dims 6 例/composite 合计≠1 三例/语义第二道防线/schema_valid=False·席位 error·parse_mode 点名/引擎-平台逐例等价/status 文本冒充 4 例)。
 
+### §10.8 复审#8 裁定与处置(2026-07-11 收到,chain_v2.8;版本再 bump——引擎哈希文件变更,GPT R4 裁定)
+
+**裁定:REVISE**(1 Blocker + 1 Major;GPT 独立探针在 185 全绿之外打开新的档案校验 fail-open)。处置:
+
+| # | 缺陷 | chain_v2.8 修复 |
+|---|---|---|
+| Blocker⁷ | **共享合格判定仍用真值性,fail-open**:真 v2.7 档案改 `schema_valid=NaN` 重封印后 `verify_publishable_archive==[]`+`archive_complete==True`+平台 sealed_ok;`schema_valid="false"`/`1` 同过;falsey 非空错误([]/{}/0/"")被当"无错误"——统一谓词两侧一致但一致地放行 | GPT 精确替换:`error` 只有**字面 None** 算干净(`is not None` 即点名);`schema_valid` 只有**字面 True** 算通过(`is not True` 即点名);回归覆盖 NaN/1/"false"/"true"/[1]/0/None 的 schema_valid 与 []/{}/0/""/False 的席位·空头 error;存量 v2.4-v2.7 档案全存字面 True/None——兼容性回归 `literal_none_error_is_clean` |
+| Major⁷ | **路由值类型未校验**:`thinking:"False"`(truthy 字符串)的自洽 manifest 过 `ChainContract.load`,Ark 按 thinking 开启解释——静默语义反转 | **`verify_llm_route`**(integrity.py 共享,三处消费点同一把尺——ChainContract.load / call_with_config / 平台版本门):model 非空 str;thinking 字面 bool 或 None;temperature [0,2] 有限数(bool 除外);max_tokens 正整数(bool 除外);fallback None 或非空 str;`ROUTE_EXEC_KEYS` 规范定义迁入 integrity.py(llm_config 引用);现存 v2.4-v2.7 manifest 路由全过(实测) |
+
+**测试:224/224**(+39 条复审#8 回归:schema_valid 7 例/席位 error falsey 5 例/空头 error falsey 4 例/字面 None 兼容/route 值类型 16 例/字符串 thinking 拒于 load·call_with_config/缺键·非对象)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

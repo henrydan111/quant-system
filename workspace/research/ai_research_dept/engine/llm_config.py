@@ -70,8 +70,11 @@ def llm_config_hash() -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-#: 契约路由必须携带的执行字段(call_with_config 与 ChainContract 加载共用)
-ROUTE_EXEC_KEYS = ("model", "thinking", "temperature", "max_tokens")
+#: 契约路由执行字段与值类型校验的规范定义在 integrity.py(复审#8 Major:
+#  三处消费点——本模块/ChainContract.load/平台版本门——共用同一把尺)
+from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
+    ROUTE_EXEC_KEYS, verify_llm_route,
+)
 
 
 def call(task: str, messages: list[dict], **overrides):
@@ -96,6 +99,9 @@ def call_with_config(messages: list[dict], route, *, task: str = "contract"):
     missing = [k for k in ROUTE_EXEC_KEYS if k not in route]
     if missing:
         raise KeyError(f"route 缺执行字段: {missing}")
+    problems = verify_llm_route(route)   # 复审#8 Major:值类型也必须过共享校验
+    if problems:
+        raise ValueError(f"route 非法: {';'.join(problems)}")
     try:
         return chat(messages, model=route["model"], thinking=route["thinking"],
                     temperature=route["temperature"], max_tokens=route["max_tokens"])

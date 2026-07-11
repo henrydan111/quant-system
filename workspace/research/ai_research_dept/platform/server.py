@@ -31,14 +31,14 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
-    sha256_json, verify_archive_body, verify_manifest_body,
+    sha256_json, verify_archive_body, verify_llm_route, verify_manifest_body,
     verify_publishable_archive, verify_scoring_contract,
 )
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.7"
+RENDER_VERSION = "chain_v2.8"
 #: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
 #  这些历史版本产生于封印 schema 之前,只做结构性校验
 LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})
@@ -190,6 +190,15 @@ class Data:
                     if not mp:
                         mp = verify_scoring_contract(
                             manifest.get("scoring_contract"))
+                    # 复审#8 Major:routing 两腿值类型校验(thinking="False"
+                    # 字符串曾静默反转 thinking 语义)——与引擎同一把尺
+                    if not mp:
+                        for leg in ("scoring", "bear"):
+                            rp = verify_llm_route(
+                                (manifest.get("routing") or {}).get(leg))
+                            if rp:
+                                mp = [f"routing[{leg}]: {';'.join(rp)}"]
+                                break
                     if mp or manifest.get("chain_version") != vdir.name:
                         st["rejected"] += 1
                         st["reasons"].append(

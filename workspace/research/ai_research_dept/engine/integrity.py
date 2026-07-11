@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 
 #: v2.4(integrity_schema=1)起 manifest 声明 sealed_required=True 后,
 #  档案必须携带的封印字段
@@ -123,6 +124,36 @@ def verify_archive_body(a: dict, *, require_sealed: bool = False,
         if stored != a.get("artifact_fp"):
             problems.append("存档输入快照与自称 artifact_fp 不符(疑似篡改)")
     return problems
+
+
+#: LLM 路由腿必备的执行字段(复审#7 B1;规范定义在此,llm_config 引用)
+ROUTE_EXEC_KEYS = ("model", "thinking", "temperature", "max_tokens")
+
+
+def verify_llm_route(route) -> list[str]:
+    """LLM 路由腿的**值类型**校验(复审#8 Major:`thinking="False"` 是 truthy 字符串
+    ——曾静默把 thinking 语义反转;只查键存在不查类型 = fail-open)。
+    ChainContract.load、call_with_config、平台版本门共用同一把尺。
+    model 非空 str;thinking 字面 bool 或 None;temperature [0,2] 有限数(bool 除外);
+    max_tokens 正整数(bool 除外);fallback None 或非空 str。"""
+    if not isinstance(route, Mapping):
+        return ["route 不是对象"]
+    missing = [k for k in ROUTE_EXEC_KEYS if k not in route]
+    if missing:
+        return [f"缺执行字段: {missing}"]
+    if not isinstance(route["model"], str) or not route["model"].strip():
+        return ["model 必须是非空字符串"]
+    if route["thinking"] is not None and not isinstance(route["thinking"], bool):
+        return ["thinking 必须是字面 bool 或 None"]
+    if not _num_ok(route["temperature"], 0, 2):
+        return ["temperature 必须是 [0,2] 有限数(bool 除外)"]
+    mt = route["max_tokens"]
+    if isinstance(mt, bool) or not isinstance(mt, int) or mt <= 0:
+        return ["max_tokens 必须是正整数(bool 除外)"]
+    fb = route.get("fallback")
+    if fb is not None and (not isinstance(fb, str) or not fb.strip()):
+        return ["fallback 必须是 None 或非空字符串"]
+    return []
 
 
 #: 执行契约必备的评分参数(复审#6 B1:缺 bear_discount_strength/divergence_gap 的
@@ -250,14 +281,17 @@ def verify_publishable_archive(a: dict, seat_weights: dict,
     problems = verify_archive_semantics(a, seat_weights, composite_weights)
     if problems:
         return problems
+    # 复审#8 Blocker:严格判定,不用真值性——schema_valid=NaN/1/"false" 曾 sealed_ok,
+    # falsey 非空错误([]/{}/0/"")曾被当"无错误"。error 只有字面 None 算干净,
+    # schema_valid 只有字面 True 算通过。
     for s in sorted(a["seats"]):           # 语义通过后 seats 均为 dict
-        if a["seats"][s].get("error"):
+        if a["seats"][s].get("error") is not None:
             problems.append(f"seats[{s}] 带执行错误")
     bear = a["bear"]
-    if bear.get("error"):
+    if bear.get("error") is not None:
         problems.append("bear 带执行错误")
-    if not bear.get("schema_valid"):
-        problems.append("bear.schema_valid 非真")
+    if bear.get("schema_valid") is not True:
+        problems.append("bear.schema_valid 非严格布尔真")
     if bear.get("parse_mode") not in ("strict", "lenient"):
         problems.append("bear.parse_mode 非法")
     return problems

@@ -46,13 +46,17 @@ from workspace.research.ai_research_dept.engine.validators import (  # noqa: E40
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
     archive_seal, input_artifact_fp, manifest_core_fp, manifest_full_sha256,
     sha16_json as _sha16_json, sha256_json, verify_archive_body,
-    verify_archive_semantics, verify_manifest_body, verify_publishable_archive,
-    verify_scoring_contract,
+    verify_archive_semantics, verify_llm_route, verify_manifest_body,
+    verify_publishable_archive, verify_scoring_contract,
 )
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.7"  # v2.7: 复审#7 修复 —— 冻结 routing 实际执行(run_seat/
+CHAIN_VERSION = "chain_v2.8"  # v2.8: 复审#8 修复 —— 合格判定严格化(error 只有字面
+#   None 算干净、schema_valid 只有字面 True 算通过——NaN/1/"false"/falsey 非空错误全封)
+#   + 共享 verify_llm_route 值类型校验(thinking="False" 字符串曾静默反转语义;
+#   load/call_with_config/平台版本门同一把尺);
+#   v2.7: 复审#7 修复 —— 冻结 routing 实际执行(run_seat/
 #   run_bear 走 call_with_config(contract.routing[leg]),改 TASK_LLM 全局无效;档案
 #   llm_config_hash 从契约)/嵌套权重逐值校验(NaN composite 权重曾让复核 fail-open)
 #   +重算值第二道防线/共享 verify_publishable_archive(引擎与平台同一合格判定,
@@ -159,13 +163,13 @@ class ChainContract:
             raise VersionCollisionError(
                 f"契约构造被拒: {';'.join(sc_problems)}")
         routing = manifest.get("routing") or {}
-        # 复审#7 B1:routing 两腿必须携带完整执行字段——执行只走契约,缺=拒
+        # 复审#7 B1 + #8 Major:routing 两腿必须过共享**值类型**校验(不止键存在)
+        # ——thinking="False" 字符串曾静默反转 thinking 语义
         for leg in ("scoring", "bear"):
-            r = routing.get(leg)
-            if not isinstance(r, dict) \
-                    or any(k not in r for k in L.ROUTE_EXEC_KEYS):
+            rp = verify_llm_route(routing.get(leg))
+            if rp:
                 raise VersionCollisionError(
-                    f"契约构造被拒: routing[{leg}] 缺执行字段")
+                    f"契约构造被拒: routing[{leg}] {';'.join(rp)}")
         if not manifest.get("llm_config_hash"):
             raise VersionCollisionError("契约构造被拒: manifest 缺 llm_config_hash")
         return cls(manifest_fp=manifest["manifest_fp"],
