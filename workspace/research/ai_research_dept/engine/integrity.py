@@ -125,6 +125,34 @@ def verify_archive_body(a: dict, *, require_sealed: bool = False,
     return problems
 
 
+#: 执行契约必备的评分参数(复审#6 B1:缺 bear_discount_strength/divergence_gap 的
+#  manifest 曾通过 ChainContract.load,judge 经 .get 回退到可变模块全局——fail-open)
+REQUIRED_SCORING_KEYS = frozenset({
+    "seat_weights", "composite_weights",
+    "bear_discount_strength", "divergence_gap",
+})
+
+
+def verify_scoring_contract(scoring: object) -> list[str]:
+    """评分契约完备性(复审#6 B1,引擎 ChainContract.load 与平台版本加载共用):
+    四键齐全 + 类型/范围;不完备 = 整版本拒绝,绝不回退到模块常量。"""
+    if not isinstance(scoring, dict):
+        return ["scoring_contract 不是对象"]
+    missing = REQUIRED_SCORING_KEYS - set(scoring)
+    if missing:
+        return [f"scoring_contract 缺字段: {sorted(missing)}"]
+    sw, cw = scoring["seat_weights"], scoring["composite_weights"]
+    if not isinstance(sw, dict) or not sw:
+        return ["seat_weights 非空对象要求失败"]
+    if not isinstance(cw, dict) or set(cw) != set(sw):
+        return ["composite_weights 键集与 seat_weights 不符"]
+    if not _num_ok(scoring["bear_discount_strength"], 0, 5):
+        return ["bear_discount_strength 非 [0,5] 有限数"]
+    if not _num_ok(scoring["divergence_gap"], 0, 100):
+        return ["divergence_gap 非 [0,100] 有限数"]
+    return []
+
+
 def _num_ok(v, lo: float, hi: float) -> bool:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return False

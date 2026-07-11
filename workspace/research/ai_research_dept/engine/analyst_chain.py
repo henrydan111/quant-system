@@ -46,12 +46,16 @@ from workspace.research.ai_research_dept.engine.validators import (  # noqa: E40
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
     archive_seal, input_artifact_fp, manifest_core_fp, manifest_full_sha256,
     sha16_json as _sha16_json, sha256_json, verify_archive_body,
-    verify_archive_semantics, verify_manifest_body,
+    verify_archive_semantics, verify_manifest_body, verify_scoring_contract,
 )
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.5"  # v2.5: 复审#5 修复 —— 契约防伪造(ChainContract.load 对盘
+CHAIN_VERSION = "chain_v2.6"  # v2.6: 复审#6 修复 —— 评分契约 fail-open 封死(共享
+#   verify_scoring_contract 四键齐全+类型范围校验,ChainContract.load 与平台版本加载同拒;
+#   judge/archive_complete 持契约时直接索引、无 .get 回退——改全局在任何缺键情形下均无效)/
+#   平台 full_month_status 验证后才暴露(对照 job_spec+磁盘封印集重算)/schema-1 仅限 chain_v2.4;
+#   v2.5: 复审#5 修复 —— 契约防伪造(ChainContract.load 对盘
 #   构造+深只读+run_stock 与磁盘 manifest 复核 prompt 哈希/评分参数从契约执行,改全局
 #   SEAT_WEIGHTS 无效)/档案必带 executed_contract_sha256/平台非 legacy 版本无条件要求
 #   封印(自声明降级封死)/manifest 绑 job_spec 全月范围+runs_ledger+full_month_status
@@ -143,8 +147,10 @@ class ChainContract:
         if not prompts or got != want:
             raise VersionCollisionError("契约构造被拒: prompt 哈希与 manifest 不符")
         sc = manifest.get("scoring_contract") or {}
-        if not sc.get("seat_weights") or not sc.get("composite_weights"):
-            raise VersionCollisionError("契约构造被拒: manifest 缺评分契约")
+        sc_problems = verify_scoring_contract(sc)   # 复审#6 B1:四键齐全,缺=拒
+        if sc_problems:
+            raise VersionCollisionError(
+                f"契约构造被拒: {';'.join(sc_problems)}")
         return cls(manifest_fp=manifest["manifest_fp"],
                    manifest_sha256=manifest["manifest_sha256"],
                    effective_prompts=_deep_ro(prompts),
@@ -228,14 +234,15 @@ def archive_complete(a: dict, scoring: dict | None = None) -> bool:
     共享 verify_archive_semantics(引擎与平台同一把尺)+ 席位无错误 +
     bear schema_valid/parse_mode/无错误。任意输入返回 bool,永不抛异常。
 
-    scoring:执行契约的评分参数;缺省用模块常量(与契约同源,由引擎代码哈希绑定)。"""
+    scoring:执行契约的评分参数——持契约时**直接索引、无回退**(复审#6 B1);
+    缺键/畸形契约 → False(fail-closed)。scoring=None 仅供测试走模块常量。"""
     if not isinstance(a, dict):
         return False
-    sw = dict((scoring or {}).get("seat_weights", SEAT_WEIGHTS)) \
-        if scoring else SEAT_WEIGHTS
-    cw = dict((scoring or {}).get("composite_weights", COMPOSITE_W)) \
-        if scoring else COMPOSITE_W
     try:
+        if scoring is None:
+            sw, cw = SEAT_WEIGHTS, COMPOSITE_W
+        else:
+            sw, cw = scoring["seat_weights"], scoring["composite_weights"]
         if verify_archive_semantics(a, sw, cw):
             return False
     except Exception:      # noqa: BLE001 — 完整性谓词必须是总函数
@@ -350,12 +357,18 @@ def run_bear(cards: dict, seat_results: dict, falsifiers: dict,
 
 def judge(seat_results: dict, bear: dict, scoring=None) -> dict:
     """确定性裁判:空头折减 → 调整 final → composite/分歧/背离。
-    scoring = 执行契约评分参数(复审#5 B1:从契约执行;缺省模块常量供测试)。"""
-    sc = scoring or {}
-    seat_w = sc.get("seat_weights", SEAT_WEIGHTS)
-    comp_w = sc.get("composite_weights", COMPOSITE_W)
-    discount_th = sc.get("bear_discount_strength", BEAR_DISCOUNT_STRENGTH)
-    gap = sc.get("divergence_gap", DIVERGENCE_GAP)
+    scoring = 执行契约评分参数(复审#5 B1 + #6 B1):持契约时**直接索引、无回退**
+    ——缺键的契约必须在 ChainContract.load 就被拒,此处回退到可变全局曾是 fail-open
+    (GPT 复现:manifest 缺 bear_discount_strength,改全局把 adj 15→30)。
+    scoring=None 仅供测试/legacy 助手走模块常量。"""
+    if scoring is None:
+        seat_w, comp_w = SEAT_WEIGHTS, COMPOSITE_W
+        discount_th, gap = BEAR_DISCOUNT_STRENGTH, DIVERGENCE_GAP
+    else:
+        seat_w = scoring["seat_weights"]
+        comp_w = scoring["composite_weights"]
+        discount_th = scoring["bear_discount_strength"]
+        gap = scoring["divergence_gap"]
     discounts = []
     adj_finals = {}
     for seat, res in seat_results.items():

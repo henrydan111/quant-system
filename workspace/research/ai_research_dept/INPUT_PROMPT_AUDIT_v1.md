@@ -519,6 +519,18 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **Minor**:平台 manifest/档案解析 except 补 `ValueError`;/api/meta 暴露 `full_month_status`(按版本,只信引擎终局重验写下的文件)。
 **测试:134/134**(+22 条复审#5 回归:伪造契约/深只读/降级 manifest 拒作契约/prompt 哈希不符/缺·错 executed_contract/schema 分级/job_spec 范围/烟测范围不匹配/MissingInputError/_safe_error 超大整数/语义校验 6 复现/平台版本断言)。
 
+### §10.6 复审#6 裁定与处置(2026-07-11 收到,chain_v2.6;版本 bump 因修复改变冻结引擎契约——GPT R4 裁定)
+
+**裁定:REVISE**(2 Blocker + 1 Major;R1 确认既往复现全部通过,新缺口如下)。处置:
+
+| # | Blocker | chain_v2.6 修复 |
+|---|---|---|
+| B1⁵ | **评分契约仍 fail-open**:缺 `bear_discount_strength`/`divergence_gap` 的自洽 manifest 通过 `ChainContract.load`,judge 经 `.get(…, 全局)` 回退——改全局把 adj 15→30;平台侧 `scoring.get("seat_weights")` 条件让**无评分契约的版本跳过语义校验**(GPT 复现:schema-2 空档案无 seats/records/bear/judge 被 sealed_ok 加载) | 共享 **`verify_scoring_contract`**(integrity.py,`REQUIRED_SCORING_KEYS` 四键齐全+seat/composite 键集一致+折扣∈[0,5]/背离∈[0,100] 有限数):`ChainContract.load` 与平台版本加载**同拒**(缺=整版本拒);`judge`/`archive_complete` 持契约时**直接索引、无回退**(缺键=KeyError/False,scoring=None 仅测试路径);平台语义校验对封印档案**无条件执行**(评分契约已在版本级验完备) |
+| B2⁵ | **full_month_status 被平台原样信任**:GPT 种下伪造 2384/2384 marker(错 job 哈希+错档案集哈希),平台原样暴露 | **`validate_full_month_status`**(纯函数,server.py):marker 移到**档案加载之后**验证——scope_kind==full_month、job_set_sha256==manifest.job_spec、expected==job_spec、complete==磁盘已验证档案数、archive_set_sha256==已加载档案封印集重算,五重全过才暴露;任何不符 = `{status:"integrity_failed", problems:[…]}` + integrity_status 告警(伪造 marker、事后删档、同数换档全部点名——终局重验→平台链路闭合) |
+
+**Major(残余关切 (a) 被裁定不可接受)**:平台 `SCHEMA1_CHAINS = {"chain_v2.4"}`——`integrity_schema=1` 只承认 v2.4 这一个历史版本,后续版本自声明 schema=1(借以绕过 executed_contract 绑定)= 整版本拒载(GPT 复现 chain_v9.9 schema-1 曾 sealed_ok)。关切 (b)(c)(d) 裁定可接受:对账 report-only 保留、逐股锁 30s 超时、每股一次 manifest 读开销可忽略。
+**测试:159/159**(+25 条复审#6 回归:四键逐一缺失/坏值域/load 拒不完备契约/judge 缺键 KeyError 不回退/持契约改全局 inert/archive_complete 畸形契约 fail-closed/月度 marker 伪造·删档·换档·smoke-scope 全拒/schema-1 allowlist)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

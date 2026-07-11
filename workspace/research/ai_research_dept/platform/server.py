@@ -31,21 +31,55 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
-    verify_archive_body, verify_archive_semantics, verify_manifest_body,
+    sha256_json, verify_archive_body, verify_archive_semantics,
+    verify_manifest_body, verify_scoring_contract,
 )
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.5"
+RENDER_VERSION = "chain_v2.6"
 #: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
 #  这些历史版本产生于封印 schema 之前,只做结构性校验
 LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})
+#: schema-1 封印(无 executed_contract_sha256)只承认 chain_v2.4 这一个历史版本
+#  (复审#6 Major:未来版本自声明 schema=1 曾可绕过执行契约绑定)
+SCHEMA1_CHAINS = frozenset({"chain_v2.4"})
 SEAT_PROMPT_FILES = {"fund": "fund_analyst_v2.txt", "tech": "tech_analyst_v2.txt",
                      "news": "news_analyst_v2.txt", "bear": "bear_analyst_v2.txt"}
 
 _DAY_RE = re.compile(r"^\d{8}$")
 _CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+
+
+def validate_full_month_status(status, manifest, version_archives) -> tuple[bool, list]:
+    """月度完成标记验证(复审#6 B2,纯函数供测试):marker 必须与 manifest.job_spec
+    及**已验证磁盘档案**的封印集重算完全一致——scope/job 哈希/expected/complete 计数/
+    archive_set_sha256 五重对照;任何不符 = 不可信(伪造 2384/2384 或事后删档均被点名)。
+    version_archives: {(ts_code, day): archive}(只含已通过封印+语义验证的档案)。"""
+    js = (manifest or {}).get("job_spec") or {}
+    if not isinstance(status, dict) or not js:
+        return False, ["marker 或 manifest.job_spec 缺失/非对象"]
+    seals = []
+    for day in js.get("days", []):
+        for code in js.get("codes", []):
+            a = version_archives.get((code, day))
+            if a is not None:
+                seals.append([day, str(code).replace(".", "_"),
+                              a.get("archive_sha256")])
+    problems = []
+    if status.get("scope_kind") != "full_month":
+        problems.append("scope_kind 非 full_month")
+    if status.get("job_set_sha256") != js.get("job_set_sha256"):
+        problems.append("job_set_sha256 与 manifest job_spec 不符")
+    if status.get("expected") != js.get("expected"):
+        problems.append("expected 与 job_spec 不符")
+    if status.get("complete") != len(seals):
+        problems.append(f"complete={status.get('complete')} "
+                        f"与磁盘已验证档案数 {len(seals)} 不符")
+    if status.get("archive_set_sha256") != sha256_json(sorted(seals)):
+        problems.append("archive_set_sha256 与磁盘封印集重算不符")
+    return (not problems), problems
 
 
 def safe_raw_dir(base_dir: Path, chains: set[str], chain: str, day: str,
@@ -139,6 +173,16 @@ class Data:
                                    or not manifest.get("manifest_sha256")):
                         mp = ["非 legacy 版本必须声明 sealed_required=True + "
                               "integrity_schema>=1 + manifest_sha256(自声明降级封死)"]
+                    # 复审#6 Major:schema-1 只承认 chain_v2.4——未来版本自声明
+                    # schema=1 不再能绕过 executed_contract 绑定
+                    if not mp and schema == 1 and vdir.name not in SCHEMA1_CHAINS:
+                        mp = ["integrity_schema=1 仅允许 chain_v2.4;"
+                              "后续版本必须 schema>=2"]
+                    # 复审#6 B1:评分契约不完备 = 整版本拒载(语义校验依赖它,
+                    # 缺契约曾让空档案 sealed_ok)
+                    if not mp:
+                        mp = verify_scoring_contract(
+                            manifest.get("scoring_contract"))
                     if mp or manifest.get("chain_version") != vdir.name:
                         st["rejected"] += 1
                         st["reasons"].append(
@@ -149,15 +193,6 @@ class Data:
                 seal_schema = manifest.get("integrity_schema") or 1
                 scoring = manifest.get("scoring_contract") or {}
                 self.manifests[vdir.name] = manifest
-                # 月度完成标记(复审#5 B3):只信引擎按 manifest job_spec 全范围
-                # 终局重验后写下的 full_month_status.json;烟测不会产生此文件
-                fms = vdir / "full_month_status.json"
-                if fms.exists():
-                    try:
-                        self.full_month_status[vdir.name] = json.loads(
-                            fms.read_text(encoding="utf-8"))
-                    except (json.JSONDecodeError, ValueError, OSError):
-                        self.full_month_status[vdir.name] = {"status": "unreadable"}
                 for day_dir in vdir.iterdir():
                     if not day_dir.is_dir() or day_dir.name == "attempts" \
                             or not day_dir.name.isdigit():
@@ -178,12 +213,13 @@ class Data:
                             expect_executed_contract=manifest.get("manifest_sha256")
                             if require_sealed and seal_schema >= 2 else None,
                             seal_schema=seal_schema)
-                        # 复审#5 Major-3:封印版本再过共享语义校验(与引擎同一把尺)
-                        if require_sealed and not problems \
-                                and scoring.get("seat_weights"):
+                        # 复审#5 Major-3 + #6 B1:封印档案**无条件**过共享语义校验
+                        # (评分契约已在版本级验完备;"有 seat_weights 才查"曾让
+                        # 无评分契约的空档案 sealed_ok)
+                        if require_sealed and not problems:
                             problems = verify_archive_semantics(
                                 a, scoring["seat_weights"],
-                                scoring.get("composite_weights") or {})
+                                scoring["composite_weights"])
                         if problems:
                             st["rejected"] += 1
                             st["reasons"].append(
@@ -196,6 +232,29 @@ class Data:
                         self.archive_verification[key] = \
                             "sealed_ok" if require_sealed else "legacy_structural"
                         st["loaded"] += 1
+                # 月度完成标记(复审#5 B3 + #6 B2):**验证后才暴露**——对照
+                # manifest.job_spec + 已加载已验证档案的封印集重算;伪造/过期
+                # marker 一律标 integrity_failed(档案加载之后才能做这一步)
+                fms = vdir / "full_month_status.json"
+                if fms.exists():
+                    try:
+                        raw_status = json.loads(fms.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, ValueError, OSError):
+                        raw_status = None
+                    varch = {(c, d): a for (v, c, d), a in self.archives.items()
+                             if v == vdir.name}
+                    ok, fm_problems = validate_full_month_status(
+                        raw_status, manifest, varch)
+                    if ok:
+                        self.full_month_status[vdir.name] = raw_status
+                    else:
+                        self.full_month_status[vdir.name] = {
+                            "status": "integrity_failed",
+                            "problems": fm_problems[:5]}
+                        st["reasons"].append(
+                            "full_month_status: " + ";".join(fm_problems)[:120])
+                        logger.warning("拒信 %s full_month_status: %s",
+                                       vdir.name, ";".join(fm_problems))
                 st["reasons"] = st["reasons"][:10]
         self.chain_versions = sorted(self.manifests)          # 字典序=版本序
         # 复审#4 Major-4:RENDER_VERSION manifest 损坏时**不得静默回退旧版本**——
