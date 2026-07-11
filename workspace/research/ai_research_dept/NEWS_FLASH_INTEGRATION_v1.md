@@ -1,6 +1,8 @@
-# 新闻快讯接入设计 v1.5(NF 波次 + 宏观席)— 设计稿,GPT round-5 待审
+# 新闻快讯接入设计 v1.6(NF 波次 + 宏观席)— 设计稿,GPT round-6 待审
 
-状态:DESIGN v1.5(2026-07-11)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
+状态:DESIGN v1.6(2026-07-11)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
+0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
+全采纳,含其 R2 严化裁定(同 cutoff 不打破平局 = 完整性违规)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
 ②用户:宏观/市场流是数据资产 → 第四席 + 逐股传导(v1.1);
 ③GPT round-1(v1/0958b07):CHANGES REQUIRED 4B+6M+2m,全采纳(§0);
 ④GPT round-2(v1.2/d843e55):CHANGES REQUIRED 3B+6M+2m,全采纳(§0b);
@@ -8,7 +10,7 @@
 round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c);
 ⑥GPT round-4(v1.4/b6bb084):CHANGES REQUIRED 1B+2M+1m——多决策会话生命周期
 (与前向单发布规则冲突)+ macro_coverage_policy 入契约 + §6 传播,全采纳(§0d)。
-实现前置:B3 热修先行(已获准,持续有效);其余待 GPT round-5 通过。
+实现前置:B3 热修先行(已获准,持续有效);其余待 GPT round-6 通过。
 
 ## §0d GPT round-4 处置表(全采纳)+ 决策谱系与成交绑定合同(B1)
 
@@ -43,14 +45,19 @@ round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c);
 语义、前向 MVP「晚间决策」完全一致;**不存在"D 早盘用 D 收盘卡"的模式**——GPT
 round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全部机械断言照单落地):
 
-- **市场日与决策日历日解耦(round-3 M2:周末/长假陈旧情绪修复)**——逐档案封存:
-  `market_asof_trade_date = 发布前最近开市日`(行情/M 卡锚);
+- **市场日与决策日历日解耦(round-3 M2;round-5 M1 修正:填充权威唯一化)**——
+  逐档案封存:`market_asof_trade_date = 发布前最近开市日`(行情/M 卡锚);
   `decision_calendar_date = 新鲜晚间运行的日历日`(快讯锚);
   `macro_flash_cutoff_at = decision_calendar_date 当晚 cutoff`;
-  `fill_trade_date = decision_published_at 之后的下一开市日`;
-  **`max_flash_age_at_fill ≤ 18h`(预注册)**:超龄则在复市前最后一个日历晚
-  **重跑新鲜决策**或放弃该次成交——0205 开盘用 0127 市场卡 + **0204 晚为止的快讯**,
-  春节 8 天新闻不再被忽略(短期情绪命题守住)。
+  **`fill_trade_date`/`fill_open_at` 属于预冻结的 `fill_intent_id`——任何决策会话
+  不得从自身发布时间派生、更改或顺延它们**;
+  **会话发布只产生不可变审计工件,不授予任何执行权;执行权唯一来自密封的
+  `fill_binding.json`**(§0d);
+  **18h 规则作用于绑定适格性而非发布**:超龄会话保留归档但不适格;无适格会话 →
+  绑定器封 `fill_skipped`——0205 开盘绑定 0204 晚会话(0127 晚会话留档不适格),
+  春节 8 天新闻不再被忽略;
+  **绑定边界不变量**:发布事件与有效档案封印事件都须在 `binding_cutoff_at` 前
+  落账;`binding_at < fill_open_at`。
 - **四时间戳因果链(B2 处置,机械断言 + 违反即终态失败)**:
   `input_cutoff_at < pipeline_frozen_at <= attempt_started_at <
   decision_published_at < fill_open_at`。
@@ -60,9 +67,16 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
   macro_flash_cutoff_at);水位线只在全部子窗与管线记录落盘后推进;
   **盘前门用实际 `decision_published_at`** 对照 fill_open_at,错过 = 终态失败;
   预注册 p99 延迟预算(晚间模式小时级,65.5min 链实测宽裕)。
-- 硬失败断言:market_asof_trade_date ≠ 发布前最近开市日 / 任一成员 effective_at
-  超其 cutoff / decision_published_at ≥ fill_open_at / flash 龄超
-  max_flash_age_at_fill 且未重跑 → 拒绝发布。
+- 硬失败断言(发布侧):market_asof_trade_date ≠ 发布前最近开市日 / 任一成员
+  effective_at 超其 cutoff / decision_published_at ≥ fill_open_at → 拒绝发布
+  (flash 超龄**不再**是发布拒绝理由——它是绑定不适格理由,round-5 M1)。
+- **绑定唯一性与竞态合同(round-5 R2 裁定,替代任何平局规则)**:适格已发布会话在
+  `(fill_intent_id, macro_flash_cutoff_at)` 上**强制唯一**;技术重试属于会话内
+  发布前;已发布档案**永不**技术性重封;同 cutoff 两个适格会话 = **完整性违规**,
+  封 `fill_skipped(reason=duplicate_cutoff_sessions)` + 审计事件;发布或封印
+  账本事件未在 binding_cutoff_at 前落账的会话不适格(无论其 flash cutoff 多早);
+  会话发布与绑定在**同一 fill-intent 锁**下执行,墙钟相等由 append-only 账本
+  序号裁决;余下唯一适格会话中取最大 `macro_flash_cutoff_at`。
 
 ## §0b GPT round-2 处置表(全采纳;B1/B2 以 §0a 声明为锚落地其机械处方)
 
@@ -153,10 +167,18 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
   新 prompt 全进冻结契约);前向前并入 **FORWARD_PREREG.md(精确工件)**。
 - 量与成本:管线后 ~100-300 条/日入库;分型 lite/mini ≈ 100-200 AFP/月,可忽略。
 
-## §5 读质量门(M6,替代全月重放的验证协议)
+## §5 读质量门(M6 完整合同,round-5 M2 整合为唯一权威表;替代全月重放)
 
-分层 3-4 日(涨停潮/大跌/平静/节前)集成验证 + **看结果前冻结的 300-500 条分层盲审
-样本**与硬阈值(§0 M6 行);with/without 日仅诊断。效果/alpha 结论只能来自前向。
+分层 3-4 日(涨停潮/大跌/平静/节前)集成验证。**两类指标、两个冻结分母**:
+
+| 指标类 | 分母(冻结并封存) | 阈值 | 不过的后果 |
+|---|---|---|---|
+| 人工精度类(双独立标注+仲裁,留存分歧率) | **冻结的 300-500 条分层盲审样本**(跨源/直接·行业/重复/传闻/操纵,看结果前抽定) | 直接实体挂钩精度 ≥98%;宏观/行业路由精度 ≥95%;残余同事实重复 ≤5%;传闻/操纵入正向证据 =0;PIT/注入违规 =0;必需覆盖 =100% | **核心安全/精度失败 = 整波不验收** |
+| 机械映射覆盖类 | **选定 3-4 日的完整目标股×决策日总体**(unmapped 计入分母);市值五分位按各会话 `market_asof_trade_date` 的 **PIT 市值**划定(在观察 mapping_status 之前) | 宏观席适格率总体 ≥90%;每市值五分位 ≥80%;五分位最大-最小差 ≤15pp | **仅覆盖/均衡失败 = 宏观席保持 `shadow_only`**,波仍可验收 |
+
+封存:总体 ID 集/计数/五分位边界/分子/分母/结果。`weighted` 模式晋级需:全部 M6
+门通过 + **用户显式授权** + 新 C16b/评分契约 + 链 bump。§7 增阈值边界(90%/80%/
+15pp)与分母回归测试。with/without 日仅诊断;效果/alpha 结论只能来自前向。
 
 ## §6 宏观市场分析师(第四席,v1.3 = round-2 处方全落地)
 
@@ -190,7 +212,7 @@ target_ts_code, input_cutoff_at)`——subject_codes 显式点名的 target → 
 **封存:** `macro_card_snapshot_id`+逐股上下文哈希+生成 ID 注册表+ts_code 进输入
 指纹与档案(B3)。
 **接线:** 四席并列;`macro_analyst_v1.txt` 进 manifest;空头消费四席;composite
-四席化(**round-2 建议先验 fund 0.35/tech 0.25/news 0.30/macro 0.10,待用户终裁**;
+四席化(**冻结候选基础权重 fund 0.35/tech 0.25/news 0.30/macro 0.10;macro 保持 `shadow_only` 直到 §5 weighted 晋级(全 M6 门+用户显式授权+新 C16b+链 bump)**,round-5 M2;
 加权 = 新 C16b 候选 + 链 bump,须在观察评判窗前申报);密封链核心席位无关,但
 **外围代码四席化需端到端测试**(m2:prompt 表/执行环/证伪域/卡装配/平台/重算)。
 **成本:** +1 调用/股 ≈ 12 AFP/股;宏观卡共享 → prompt 缓存摊薄;晚间决策模式下
@@ -210,6 +232,8 @@ p99 延迟预算宽裕(§0a)。
 7. 测试:对抗注入集/簇 as-of/覆盖三态/源家族/证据类算术/席位域/配对证据/
    scoring_owner(target 级/混合主张拆分/重复 owner 硬失败/cutoff 版本)/
    覆盖感知聚合重算(coverage_ratio·not_applicable·生效权重·一次舍入)/
-   决策谱系(会话不可变·谱系账本·绑定选择规则·fill_skipped·fill_binding 哈希)/
+   决策谱系与绑定(会话不可变·谱系账本·绑定唯一性 duplicate_cutoff_sessions·
+   迟封不适格·fill-intent 锁·fill_skipped·fill_binding 哈希)/
+   M6 阈值边界与分母(90%/80%/15pp 边界·人工样本 vs 全总体两分母·PIT 市值五分位)/
    四席端到端(含平台/重算)/四时间戳断言
 8. 链版本 bump → 单日烟测 → §5 读质量门(M5 数值线 + 双标注协议)
