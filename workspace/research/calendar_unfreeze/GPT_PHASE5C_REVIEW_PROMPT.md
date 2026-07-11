@@ -1,6 +1,6 @@
 # GPT 5.5 Pro RE-review #4 — Phase 5-C (post-REWORK-3, full hardening)
 
-Status: ready to send. Branch `calendar-unfreeze` HEAD `425dff7`. Raw links pinned to the commit sha; embedded delta authoritative.
+Status: ready to send. Branch `calendar-unfreeze` HEAD `afa7f35`. Raw links pinned to the commit sha; embedded delta authoritative.
 
 ---
 
@@ -16,20 +16,20 @@ bugs. This RE-REVIEW #4 verifies that closure. The daily job keeps the RAW layer
 human-gated monthly formal bumps and must NEVER touch the Qlib provider/calendar (that advances only via
 the monthly bump). spent_oos_end stays frozen at 2026-02-27; the post-freeze fresh window is born sealed.
 
-REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD 425dff7)
+REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, HEAD afa7f35)
 Files (raw, pinned):
-- tushare_lock:        https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/src/data_infra/tushare_lock.py
-- fetcher proxy:       https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/src/data_infra/fetchers/__init__.py
-- daily updater:       https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/src/data_infra/pipeline/update_daily_data.py
-- daily ops (manifest/watermark): https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/src/data_infra/pipeline/daily_ops.py
-- orchestrator:        https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/daily_raw_job.py
-- watchdog:            https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/daily_job_watchdog.py
-- task manager:        https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/register_daily_raw_task.py
-- daily QA + PRO001:   https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/run_daily_qa.py
-- PRO001 lint (NEW):   https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/lint_no_bare_pro.py
-- monthly bump (barrier): https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/scripts/monthly_calendar_bump.py
-- catch-up (daily/fund): https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/workspace/scripts/catchup_daily_range.py , https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/workspace/scripts/catchup_fundamentals_range.py
-- tests: https://raw.githubusercontent.com/henrydan111/quant-system/425dff7/tests/data_infra/test_daily_update_5c.py
+- tushare_lock:        https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/src/data_infra/tushare_lock.py
+- fetcher proxy:       https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/src/data_infra/fetchers/__init__.py
+- daily updater:       https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/src/data_infra/pipeline/update_daily_data.py
+- daily ops (manifest/watermark): https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/src/data_infra/pipeline/daily_ops.py
+- orchestrator:        https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/daily_raw_job.py
+- watchdog:            https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/daily_job_watchdog.py
+- task manager:        https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/register_daily_raw_task.py
+- daily QA + PRO001:   https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/run_daily_qa.py
+- PRO001 lint (NEW):   https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/lint_no_bare_pro.py
+- monthly bump (barrier): https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/scripts/monthly_calendar_bump.py
+- catch-up (daily/fund): https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/workspace/scripts/catchup_daily_range.py , https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/workspace/scripts/catchup_fundamentals_range.py
+- tests: https://raw.githubusercontent.com/henrydan111/quant-system/afa7f35/tests/data_infra/test_daily_update_5c.py
 Self-review (round 5, REWORK-3 table): workspace/research/calendar_unfreeze/PHASE5C_SELF_REVIEW.md
 
 HOW EACH BLOCKER + MAJOR FROM REWORK-3 WAS CLOSED
@@ -61,11 +61,17 @@ simply OMITTED a trading session [a hole] passed, so the daily loop would silent
 Major 1 (_safe_api_call was the intended Tushare chokepoint but nothing ENFORCED it — any script could
 call `ts.pro_api().xxx()` directly and bypass the account lock + rate spacing, violating "never parallel
 fetchers against the account"):
-  - TushareFetcher.pro is now a _LockedPro PROXY. `self.pro.report_rc(...)` resolves via __getattr__ to a
-    wrapped callable that routes through spaced_call() (holds api_call_lock + waits on a shared cross-
-    process next_allowed timestamp + bumps a global cooldown on a rate-limit error). So EVERY caller —
-    internal fetch methods AND external ad-hoc scripts that do `fetcher.pro.xxx` — is serialized+spaced,
-    with no per-method opt-in. _safe_api_call no longer re-locks (the proxy owns it) to avoid double-lock.
+  - TushareFetcher.pro is now a _LockedPro PROXY. `self.pro.report_rc(...)` resolves to a wrapped
+    callable that routes through spaced_call() (holds api_call_lock + waits on a shared cross-process
+    next_allowed timestamp + bumps a global cooldown on a rate-limit error). So EVERY caller — internal
+    fetch methods AND external ad-hoc scripts that do `fetcher.pro.xxx` — is serialized+spaced, with no
+    per-method opt-in. _safe_api_call no longer re-locks (the proxy owns it) to avoid double-lock.
+  - the proxy uses __getattribute__ + __slots__ (NOT a bare __getattr__): __getattr__ fires only after
+    normal lookup, so the wrapper's own `_real` slot would still be readable via `fetcher.pro._real` — an
+    UNLOCKED handle to the raw client, the exact escape the proxy exists to close (the same §3.3 pre-open-
+    guard lesson). __getattribute__ intercepts every access and refuses `_real` / `_base_sleep` /
+    `__dict__`; endpoints route through the lock, non-callable attrs pass through, dunders resolve on the
+    wrapper. (test_locked_pro_routes_calls_and_refuses_raw_escape asserts all four behaviours.)
   - a NEW AST lint (scripts/lint_no_bare_pro.py, PRO001) bans `ts.pro_api()` / `tushare.pro_api()`
     construction anywhere except fetchers/__init__.py, and is wired into run_daily_qa.py so a bypass fails
     QA. Currently clean.
@@ -113,11 +119,12 @@ RE-REVIEW QUESTIONS
    fetch ever adds SZSE/BSE rows? The calendar is fetched with is_open='1' (open-days-only, closed dates
    ABSENT) — any calendar shape (half-day, exchange-specific holiday, a genuine one-off SSE/SZSE
    divergence) that would FALSE-REJECT a valid calendar?
-3. Major 1: is the _LockedPro proxy an airtight chokepoint? Can any attribute path escape it (e.g.
-   `fetcher.pro.__class__`, a cached bound method, a data attribute vs a callable, `getattr` on a nested
-   client)? Does routing EVERY .pro access through a cross-process lock over-serialize legitimate
-   read-only metadata calls? Is the PRO001 AST lint's allow-list (fetchers/__init__.py only) the right
-   boundary?
+3. Major 1: the proxy now uses __getattribute__ + __slots__ and refuses `_real`/`_base_sleep`/`__dict__`
+   (I closed the `fetcher.pro._real` escape proactively). Is it now airtight, or is there a residual
+   path (a cached bound method captured before wrapping, `object.__getattribute__` from a caller, a data
+   attribute vs a callable, `getattr` on a NESTED client object the endpoint returns)? Does routing
+   EVERY .pro access through a cross-process lock over-serialize legitimate read-only metadata calls? Is
+   the PRO001 AST lint's allow-list (fetchers/__init__.py only) the right boundary?
 4. Major 2: is recompute-from-floor-every-call the right anti-false-green invariant, or does it mask a
    real need to persist progress (cost: O(open-days) manifest reads per call)? Can a floor that moves
    BACKWARD (a botched monthly rollback) cause the watermark to regress dangerously?
