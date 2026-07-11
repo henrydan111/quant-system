@@ -183,7 +183,9 @@ class TestRoutingContainerIsolation:
                 assert ist[name]["rejected"] == 1
                 assert "routing 不是对象" in ist[name]["reasons"][0]
                 assert name not in D.manifests
-            assert D.integrity_status["chain_v2.8"]["loaded"] == 2
+            # 正常版本不受污染(档案数随重放推进增长,只断言健康加载)
+            assert ist["chain_v2.8"]["loaded"] >= 2
+            assert ist["chain_v2.8"]["rejected"] == 0
         finally:
             import shutil
             for vdir in plants:

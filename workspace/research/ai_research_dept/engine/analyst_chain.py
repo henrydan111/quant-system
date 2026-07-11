@@ -52,7 +52,13 @@ from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.8"  # v2.8: 复审#8 修复 —— 合格判定严格化(error 只有字面
+CHAIN_VERSION = "chain_v3.0"  # v3.0: bear max_tokens 5000→12000(根因实测:deepseek
+#   思维链计入 max_tokens,reasoning 4.6-5k 吞掉预算致正文空/截断,v2.9 日跑 28/86 次
+#   bear finish_reason=length——结构性失败,重跑不收敛;doubao 席位不受影响不动);
+#   v2.9: 跨股票并发 5→15(用户裁定 2026-07-11;实测本账户
+#   Agent Plan 并发 30 路零 429,稳态 15 路在册;单股内部保持串行,评分语义零变化——
+#   但引擎文件字节变更 → 契约哈希变 → 按治理必须 bump 版本;
+#   v2.8: 复审#8 修复 —— 合格判定严格化(error 只有字面
 #   None 算干净、schema_valid 只有字面 True 算通过——NaN/1/"false"/falsey 非空错误全封)
 #   + 共享 verify_llm_route 值类型校验(thinking="False" 字符串曾静默反转语义;
 #   load/call_with_config/平台版本门同一把尺);
@@ -886,8 +892,11 @@ def _run_batch(vdir: Path, days: list, full_days: list, pool: list, args,
         out_dir = vdir / day
         day_jobs = [c for c, d in planned if d == day]
         done, failures, n = 0, 0, 0
-        # 5 线程并发:每股独立文件,LLM 调用线程安全;Ark 无 Tushare 式串行约束
-        with ThreadPoolExecutor(max_workers=5) as ex:
+        # 15 线程并发(v2.9,用户裁定):每股独立文件,LLM 调用线程安全;Ark 无
+        # Tushare 式串行约束——2026-07-11 实测本账户 Agent Plan 30 路并发零 429
+        # (doubao-seed-2.0-pro 5/10/20/30 阶梯 + deepseek-v4-pro 10/20 全 200),
+        # 单股内部三席串行,稳态在飞请求 = worker 数 = 15,留 2× 余量
+        with ThreadPoolExecutor(max_workers=15) as ex:
             futs = {ex.submit(run_stock, c, day, facts, pv, retr, biz, regime,
                               series, out_dir, contract): c
                     for c in day_jobs}

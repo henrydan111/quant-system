@@ -57,7 +57,10 @@ TASK_LLM = {
     "relation_extract":      {"model": "doubao-seed-2.0-lite", "thinking": False, "temperature": 0.1, "max_tokens": 1200, "fallback": "deepseek-v4-flash"},    # Pass-R
     # —— 分析师层 ——
     "dimension_scoring":     {"model": "doubao-seed-2.0-pro",  "thinking": True,  "temperature": 0.1, "max_tokens": 4000, "fallback": "deepseek-v4-pro"},   # thinking 吃预算,给足
-    "bear_rebuttal":         {"model": "deepseek-v4-pro",      "thinking": True,  "temperature": 0.1, "max_tokens": 5000, "fallback": "doubao-seed-2.0-pro"},
+    # bear 12000:deepseek 思维链**计入** max_tokens(doubao 不计入)——5000 预算被
+    # reasoning 吃掉 4.6-5k 致正文空/截断(2026-07-11 v2.9 日跑实测 28/86 次
+    # finish_reason=length,结构性非瞬态);观测 reasoning 峰值 ~5k+正文需 ~2-3k
+    "bear_rebuttal":         {"model": "deepseek-v4-pro",      "thinking": True,  "temperature": 0.1, "max_tokens": 12000, "fallback": "doubao-seed-2.0-pro"},
     "chief_synthesis":       {"model": "deepseek-v4-pro",      "thinking": True,  "temperature": 0.1, "max_tokens": 3000, "fallback": "glm-5.2"},              # v2
     # —— 工程辅助(非生产链) ——
     "code_assist":           {"model": "doubao-seed-2.0-code", "thinking": False, "temperature": 0.2, "max_tokens": 4000, "fallback": "kimi-k2.7-code"},
