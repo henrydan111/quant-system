@@ -1,216 +1,237 @@
-# BUILD-0 — Transfer-Coefficient measurement + light-construction PoC — FINDINGS
+# BUILD-0 — Transfer-Coefficient measurement + light-construction screen — FINDINGS (v2)
 
-> **Status:** COMPLETE (2026-07-11). IS-only (2014-2020), no sealed OOS spent, fully reversible.
-> First empirical task of [STRATEGY_DEVELOPMENT_METHODOLOGY_v1.0](STRATEGY_DEVELOPMENT_METHODOLOGY_v1.0.md)
-> (§1.1 TC diagnosis, §S2/§S3 construction). Script: [build0_tc_poc.py](../../scripts/build0_tc_poc.py)
-> (reuses [guorn_optimize_09.py](../../scripts/guorn_optimize_09.py), no edits). Design red-teamed by a
-> 4-lens adversarial review (2026-07-11) — its findings are folded in and the verdict logic was rebuilt as
-> a result (see §7). GPT §10 cross-review still owed before anything here is treated as load-bearing.
+> **Status:** COMPLETE, reworked after GPT §10 = **REWORK** (2026-07-11). IS-only (2014-2020), **no sealed
+> OOS spent**, fully reversible. First empirical task of
+> [STRATEGY_DEVELOPMENT_METHODOLOGY_v1.0](STRATEGY_DEVELOPMENT_METHODOLOGY_v1.0.md) (§1.1 TC diagnosis,
+> §S2/§S3 construction). Script: [build0_tc_poc.py](../../scripts/build0_tc_poc.py) (reuses
+> [guorn_optimize_09.py](../../scripts/guorn_optimize_09.py), no edits). Tests:
+> [test_build0_tc_poc.py](../../../tests/workspace/test_build0_tc_poc.py) +
+> [test_build0_window_isolation.py](../../../tests/workspace/test_build0_window_isolation.py) (19 passed).
+> Design + findings were adversarially reviewed by two internal multi-agent workflows, then by GPT-5.5 Pro
+> (verdict **REWORK**, 5 Blockers). **This v2 folds every GPT finding** (§7). Round-2 GPT prompt:
+> [BUILD0_GPT_REVIEW_PROMPT.md](BUILD0_GPT_REVIEW_PROMPT.md). Not load-bearing until GPT returns SHIP.
 
 ---
 
 ## 1. Verdict (one paragraph)
 
-**ADJUST, not greenlight.** On the s3_core deployable-core book (value+quality+low-vol, top-30,
-non-microcap), **weight construction is a weak, statistically-insignificant lever for net risk-adjusted
-return.** The methodology-faithful light construction (§S3-literal `w ∝ calibrated α = IC·σ·z`) does **not**
-beat equal-weight top-K (ΔSharpe **−0.04**, bootstrap p=0.76; and it does not even raise the book's
-Fundamental-Law transfer coefficient, ΔTC_full **−0.034**). **No** signal-proportional construction clears a
-meaningful-margin + MDD-guard gate; the entire weight-construction family spans just **0.10 Sharpe (0.80–0.90)
-and every difference vs equal-weight is inside bootstrap noise.** The lever this PoC did *not* control —
-**selection** — is corroborated as larger by **one uncontrolled cross-composite** point: the real #9 book
-(different names/factors, *same* sqrt-mv weighting) is Sharpe **1.18**, **+0.28 above the weighting family** —
-subject to the same value-favorable-window caveat below, so *corroborating* (not *measuring*) selection
-dominance; the controlled selection evidence is **external** (the #9 26pp→~1pp deployable-alpha
-decomposition). This **corroborates and extends the parallel #9 result**: not only did a heavy MV optimizer
-fail to beat naive top-K, even a *light* signal-proportional construction fails. **The BUILD-0 construction stack
-should NOT be built as a return engine for this class of book.** It should be built (if at all) for **risk
-reporting / neutralization / MDD control**, and the highest-ROI work stays on **signal-SELECTION
-(deployable-alpha admission) + universe/lane** — the methodology's own §4.5 ranking.
-
-**Scope guard (do not over-read):** this is *one* non-microcap value+quality+low-vol book on *one*
-value-favorable IS window (2014-2020). It is exactly the **well-conditioned case §S3 assigns to the
-optimizer**, and the *opposite* of the micro-tail lane where §S3 *prescribes* light construction. This PoC
-therefore **does not settle** whether construction helps in the micro-tail lane — that is a separate test.
-**Power caveat:** the paired-bootstrap 95% CIs are wide (`sqrtmv` [−0.12, +0.19], `sigcomp` [−0.25, +0.11]) —
-this single IS window cannot detect even the gate's own +0.10 Sharpe margin, so the honest reading is
-*"construction is not a **detectable** return lever here,"* not *"construction has no effect."*
+**INCONCLUSIVE — no greenlight, and no re-scoping of the roadmap on this evidence alone.** This is an
+**exploratory screen** that varies *only the weight vector* over a **fixed top-30 selection** on **one**
+non-microcap value+quality+low-vol book across **one** IS window — it is **not** an equivalence test and it
+does **not** measure selection or universe (the universe never changes). Under **every** tested
+configuration — uncapped / capped-at-5% × total-σ / residual-σ — **no signal-proportional construction
+passes a fail-closed screen** (net Sharpe margin ≥ 0.10 **and** MDD-not-worse **and** finite bootstrap
+tail-mass < 0.10). The methodology-faithful §S3-form (`alpha ∝ σ·z`) is **below** equal-weight in all four
+cells (Sharpe 0.83–0.84 vs 0.87), and **residual σ does not rescue it** (0.83 under both σ modes). But the
+paired-bootstrap 95% CIs are **wide** (they straddle the ±0.10 margin), so the honest reading is
+**"weight construction is not a *detectable* net-return lever for this book/window"**, *not* "weighting has
+no effect" and *not* "selection/universe beat weighting". With a real §S3 concentration cap the constructions
+**collapse toward equal-weight** (Sharpes 0.82–0.89), which is consistent with — but does not prove — a weak
+weighting lever. **Recommendation:** do not build the construction stack expecting a *weighting-driven return*
+lift for this class of book; the properly-scoped next tests are a residual-σ / §S3-*fully-constrained*
+constructor and, above all, a **micro-tail-lane** construction test (the lane §S3 actually prescribes light
+construction for — untested here). Any "selection + universe ≫ weighting" claim must be earned by an
+experiment that *varies* selection and universe, which this is not.
 
 ---
 
-## 2. What was tested, and why (cheaply, before building the stack)
+## 2. What was tested — and the four things it is NOT (read before citing)
 
-The methodology's §1.1 spine is that deployable return is lost at the **portfolio-construction** step: `rank →
-top-K → equal-weight` is a low-**transfer-coefficient** construction that throws away the cardinal signal, so
-a real IC converts to only a fraction of its IR (`IR ≈ TC·IC·√breadth`). That "raise TC via better
-construction" claim was **an unmeasured prior** in this system — and a parallel result had already *falsified
-one form of it* (an MV optimizer, λ=2…100, did not beat naive top-K on #9). The open question: does a
-**lighter** signal-proportional construction (not MVO) beat equal-weight on **net** PnL?
+The methodology's §1.1 prior: deployable return is lost at the **construction** step because
+`rank → top-K → equal-weight` discards the cardinal signal (a transfer-coefficient **TC** collapse), so a
+real IC converts to a fraction of its IR (`IR ≈ TC·IC·√breadth`). A parallel result already showed an **MV
+optimizer** (λ=2…100) did not beat naive top-K on this book; the open question was whether a **lighter**
+signal-proportional construction does.
 
-**Controlled experiment.** All constructions hold the **same 30 names** (top-30 by the shared
-size+industry-neutralized composite `comp`), run through the **identical** event-driven envelope (0.2%/side,
-slippage 0, `volume_limit=0.10`, `hold_on_limit_up`, Model-I 5-day rebalance, benchmark 000300.SH, ¥1M,
-total-return). **Only the weight vector differs** → any net delta is a *construction* effect, not selection.
+**Controlled experiment.** The SAME top-30 names (top of the size+industry-neutralized composite `comp`,
+non-microcap), 5 weight vectors, identical event-driven envelope (0.2%/side, slippage 0, `volume_limit=0.10`,
+`hold_on_limit_up`, Model-I 5-day rebalance, benchmark 000300.SH, ¥1M, total-return). **Only the weight
+vector differs.**
 
 | construction | weights | role |
 |---|---|---|
-| `eqw` | `1/K` | the methodology's low-TC baseline (rank→top-K→EW) |
-| `alpha` | `∝ σ·z` (Grinold `α = IC·σ·z`) | **§S3-literal `target_w ∝ calibrated α` — the methodology-faithful PRIMARY** |
-| `sigcomp` | `∝ (comp − min + ε)` | score-proportional (the harness `wmode="signal"`; `∝ z`, **not** α) |
-| `invvol` | `∝ z/σ` | risk-scaled / MV-diagonal *form* (its holdings-TC = 1 is a tautology) |
-| `sqrtmv` | `∝ √circ_mv` | #9's own weighting — a **size** tilt, not signal; also a reuse cross-check |
+| `eqw` | `1/K` | low-TC baseline (no σ, no orientation dependence) |
+| `alpha` | `∝ σ·z` | Grinold-form; the §S3-*literal* `w ∝ calibrated α` **shape** — but an **unconstrained proxy**, NOT the §S3 constructor (see below) |
+| `sigcomp` | `∝ (comp − min + ε)` | score-proportional (harness `wmode="signal"`; `∝ z`) |
+| `invvol` | `∝ z/σ` | MV-diagonal *form*; its holdings-TC ≈ 1 is a structural near-identity, not an edge |
+| `sqrtmv` | `∝ √circ_mv` | #9's own weighting (a size tilt); also a reuse cross-check |
 
-PIT: factors are `Ref(...,1)`; `comp`, `σ` (trailing-60d vol) and the top-K selection all read data
-`≤ pday = T-1`; the composite IS-IC uses `comp(≤T-1)` vs `fwd_5d[d]` (no overlap). No OOS path exists in the
-script. **Reuse-fidelity is exact**: the `sqrtmv` construction reproduces the cached g09 s3_core baseline
-**bit-for-bit** (`max|Δ daily return| = 0.0`), proving the composite pipeline reuse is faithful.
+**This experiment is NOT:**
+1. **NOT a §S3 light constructor.** `alpha`/`invvol` are *unconstrained σ-proxies*. §S3 additionally mandates
+   **portfolio-level** size/industry neutrality, **single-name + industry caps**, and **ADV / turnover / cost
+   penalties**. This PoC adds only the first-order **single-name cap** (`--max-weight`) and **residual σ**
+   (`--sigma residual`); the rest is untested. Calling `alpha` "the §S3 construction" would be false.
+2. **NOT an equivalence test.** "No construction passed the screen" is *absence of detected effect*, not
+   *evidence of absence* — the bootstrap CIs are wide enough to contain a deployment-relevant +0.10 Sharpe.
+3. **NOT a measurement of selection or universe.** The name set and universe are held fixed. This PoC cannot
+   rank selection/universe against weighting; the #9 contrast (§4) is one uncontrolled cross-composite point.
+4. **NOT a resubstitution artifact on direction.** Factor **values** are `Ref(...,1)` (≤ T-1) and the
+   composite **direction is a-priori** (value/quality long, low-vol short-high-vol). The IS-IC-fit signs
+   **coincide exactly** with those a-priori signs (verified — §3), so the composite carries **no cross-time
+   fitted parameter** and no orientation lookahead. (Its *magnitude* is a neutralized cross-sectional
+   z-score — also point-in-time.)
+
+**Window isolation:** every input is truncated to **≤ IS_END on load** (asserted) — no 2021-2026 row or
+metric enters any computation. The run still *opens* caches that physically contain OOS rows, so it does
+**not certify the window pristine**; treat 2021-2026 as **potentially-observed-for-this-design**, and any
+future virgin-OOS test of the s3_core book must be generated from strictly-windowed inputs.
 
 ---
 
-## 3. Step 1 — Transfer-coefficient measurement
+## 3. Orientation is a-priori — no lookahead (Blocker-2, resolved with evidence)
 
-`TC = corr(μ/σ, Δw·σ)` (Clarke–de-Silva–Thorley), Δw vs an equal-weight-over-eligible benchmark; calibrated
-`μ = IC·σ·z ⇒ μ/σ = IC·z ⇒ TC = corr(z, Δw·σ)` (the IC scalar washes out). **Composite IS rank-IC (5d) =
-+0.057** (IS-fitted, optimistic); **median eligible names/date = 2865**; 342 rebalances.
+The composite orients each factor by its economic prior: **value & quality long, low-volatility
+short-high-vol** (`APRIORI_SIGNS`). Running `--orientation a_priori` vs `--orientation is_fit` (the harness's
+IS-IC-fit signs) over all **342** rebalance dates:
 
-| construction | **TC_full** (headline) | TC_hold* (diagnostic) | eff-N | max_w | wt_turn | w~size | w~vol |
+```
+max|Δ composite| = 0.00e+00 ;  top-30 selection symmetric-difference = 0  →  IDENTICAL
+```
+
+The fitted signs equal the a-priori signs for all 8 factors, so the two orientations produce the **same
+composite bit-for-bit**. The composite therefore has **no fitted-on-the-full-window parameter** — the
+direction concern is empirically nil. `--orientation walk_forward` (expanding IC, label realized ≤ pday,
+a-priori warm-up) is also implemented for completeness; a-priori is the *reported* orientation because it
+removes the fit entirely. (Absolute IC/CAGR/Sharpe are still IS-*characterisations*, not deployable
+estimates — the experiment is on the design window by construction, with no OOS being predicted.)
+
+---
+
+## 4. Results — three configurations (net-of-cost IS)
+
+Composite IS rank-IC(5d) **+0.057**; median eligible/date **2865**; **342** rebalances. Gate = **fail-closed
+screen**: net Sharpe primary (margin ≥ 0.10), MDD-not-worse (≤ +2pp), finite bootstrap tail-mass < 0.10 —
+**missing statistical evidence never passes.** TC is descriptive (the TC benchmark is EW-over-eligible; the
+PnL Sharpe is absolute vs 000300.SH — **not** cross-cited). "Tail-mass" = paired circular-block bootstrap
+`P(Δ*≤0)`, a bootstrap tail probability, **not** a null-calibrated p-value.
+
+**(A) `build0_ref` — a-priori, total σ, uncapped** (reproduces the original run):
+
+| con | CAGR | Sharpe | MDD | eff-N | max_w | TC_full | ΔSharpe vs eqw (tail-mass; 95% CI) |
 |---|---|---|---|---|---|---|---|
-| `eqw` | **0.320** | 0.150 | 30.0 | 0.033 | 0.174 | — (flat) | — (flat) |
-| `alpha` (∝σz) | **0.286** | 0.408 | 26.1 | 0.070 | 0.185 | −0.16 | **+0.86** |
-| `sigcomp` (∝comp) | **0.262** | 0.941 | 15.5 | 0.135 | 0.193 | −0.05 | +0.15 |
-| `invvol` (∝z/σ) | **0.338** | **1.000** | 27.3 | 0.061 | 0.189 | +0.16 | **−0.79** |
-| `sqrtmv` (∝√mv) | **0.284** | 0.032 | 21.8 | 0.113 | 0.198 | **+0.95** | −0.17 |
+| eqw | +22.20% | **0.87** | −40.06% | 30.0 | 0.03 | 0.320 | baseline |
+| alpha | +21.67% | 0.83 | −40.02% | 26.1 | **0.26** | 0.286 | −0.04 (tm 0.76; [−0.15,+0.06]) |
+| sigcomp | +20.96% | 0.80 | −42.22% | **15.5** | **0.26** | 0.262 | −0.07 (tm 0.78; [−0.25,+0.11]) |
+| invvol | +22.57% | 0.89 | −39.68% | 27.3 | 0.13 | 0.338 | +0.02 (tm 0.23; [−0.04,+0.09]) |
+| sqrtmv | +22.87% | **0.90** | −39.74% | 21.8 | 0.24 | 0.284 | +0.04 (tm 0.33; [−0.12,+0.19]) |
+| #9 REPLAY | +30.03% | 1.18 | −33.88% | — | — | — | *different NAMES* (selection, not weighting) |
 
-**Headline (full-eligible, Fundamental-Law) TC does NOT support the §1.1 prior.** For a 30-of-2865 book the
-active-weight TC is **selection-dominated**: it barely moves with construction (all span 0.26–0.34) and
-`eqw` (0.32) sits **near the top**, *above* the faithful `alpha` (0.286, **ΔTC = −0.034**) and `sigcomp`
-(0.262). No construction *materially* raises it — `invvol`'s +0.018 above eqw is inside the 0.26–0.34
-barely-moves band, and the methodology-faithful `alpha` *lowers* it (−0.034).
+*The `max_w` column now reports the true per-day **max** single-name weight (the v1 table mistakenly showed
+the mean-of-daily-maxes = 0.07; the actual uncapped concentration is **26%**, which a §S3 cap must control.)*
 
-**The holdings-only TC is a within-book diagnostic, not evidence.** `TC_hold` (eqw 0.15 → sigcomp 0.94 →
-invvol 1.00) is **tautological for any signal-proportional weight**: `invvol ∝ z/σ ⇒ Δw·σ ∝ z ⇒
-corr(z, Δw·σ) = 1` by construction. It measures "did the weights track the score", never realized return, so
-it **cannot be used to select a construction** and must **not** be recorded as an edge. (Its inclusion in the
-first-cut verdict was the review's headline blocker — see §7.)
+**(B) `build0_cap` — a-priori, total σ, single-name cap 0.05** (the concentration §S3 mandates):
 
-**The confound diagnostics are consistent with what the net table shows.** `w~size`/`w~vol` (corr of the
-weight with log-mktcap / σ) show each non-eqw construction is an **incidental style tilt**: `alpha`
-tilts into **high-vol** (+0.86), `invvol` into **low-vol** (−0.79), `sqrtmv` into **large-cap** (+0.95).
-`sigcomp` instead **halves effective breadth** (eff-N 15.5, top-name 13.5% — which would breach a 10% cap).
+| con | CAGR | Sharpe | MDD | eff-N | max_w | ΔSharpe vs eqw (tm; CI) |
+|---|---|---|---|---|---|---|
+| eqw | +22.20% | 0.87 | −40.06% | 30.0 | 0.03 | baseline |
+| alpha | +21.70% | 0.84 | −40.40% | 27.6 | 0.05 | −0.03 (tm 0.80; [−0.11,+0.04]) |
+| sigcomp | +20.78% | 0.82 | −40.01% | 23.2 | 0.05 | −0.05 (tm 0.85; [−0.16,+0.04]) |
+| invvol | +22.55% | 0.89 | −39.71% | 27.9 | 0.05 | +0.02 (tm 0.24; [−0.04,+0.09]) |
+| sqrtmv | +22.01% | 0.87 | −40.00% | 27.2 | 0.05 | +0.00 (tm 0.50; [−0.08,+0.08]) |
 
----
+**(C) `build0_res` — a-priori, RESIDUAL σ, single-name cap 0.05** (identical to B except σ, per the GPT contract):
 
-## 4. Step 2 — Net-of-cost IS returns (the decision metric)
+| con | CAGR | Sharpe | MDD | eff-N | ΔSharpe vs eqw (tm; CI) |
+|---|---|---|---|---|---|
+| eqw | +22.20% | 0.87 | −40.06% | 30.0 | baseline |
+| alpha | +21.46% | 0.83 | −41.04% | 27.0 | −0.04 (tm 0.83; [−0.12,+0.04]) |
+| sigcomp | +20.78% | 0.82 | −40.01% | 23.2 | −0.05 (tm 0.85; [−0.16,+0.04]) |
+| invvol | +22.33% | 0.88 | −39.67% | 27.2 | +0.01 (tm 0.34; [−0.06,+0.09]) |
+| sqrtmv | +22.01% | 0.87 | −40.00% | 27.2 | +0.00 (tm 0.50; [−0.08,+0.08]) |
 
-Gate = **net Sharpe primary** (meaningful margin ≥ 0.10 **and** paired-bootstrap p < 0.10) **+ MDD guard**
-(no worse by > 2pp). **TC is descriptive, never in the gate.** (Absolute Sharpe; the TC benchmark
-[EW-eligible] ≠ the PnL benchmark [CSI300] — the two are **not** cross-cited.)
+**What the three configs establish (with certainty from the data):**
+1. **No signal-proportional construction passes the fail-closed screen in any config** — `screen_passed =
+   False` throughout. Every ΔSharpe vs eqw is inside its bootstrap CI (tail-mass 0.23–0.85).
+2. **The §S3-faithful `alpha` (∝σz) is below eqw in all four cells** (0.83–0.84 vs 0.87), and **residual σ
+   does not rescue it** (build0_res alpha 0.83 = build0_ref alpha 0.83). This directly answers GPT's residual
+   question: switching to market-residual vol does not turn the faithful form into a winner here.
+3. **A real 5% single-name cap collapses the constructions toward equal-weight** (eff-N rises to 23–28;
+   Sharpes converge to 0.82–0.89) — with the concentration §S3 requires, "how you weight the 30 names"
+   barely differs from equal-weight. This is *consistent with* a weak weighting lever; it is **not** a proof
+   (the CIs are wide).
 
-| construction | CAGR | **Sharpe** | MDD | vol | eff-N | TC_full | TC_hold* | ΔSharpe vs eqw (boot p) |
-|---|---|---|---|---|---|---|---|---|
-| `eqw` | +22.20% | **0.87** | −40.06% | 27.5% | 30.0 | 0.320 | 0.150 | — baseline |
-| `alpha` (faithful) | +21.67% | 0.83 | −40.02% | 28.5% | 26.1 | 0.286 | 0.408 | **−0.04 (p=0.76)** |
-| `sigcomp` | +20.96% | 0.80 | −42.22% | 29.2% | 15.5 | 0.262 | 0.941 | −0.07 (p=0.78) |
-| `invvol` | +22.57% | 0.89 | −39.68% | 27.0% | 27.3 | 0.338 | 1.000 | +0.02 (p=0.23) |
-| `sqrtmv` | +22.87% | **0.90** | −39.74% | 26.8% | 21.8 | 0.284 | 0.032 | +0.04 (p=0.33) |
-| **#9 REPLAY** (selection) | **+30.03%** | **1.18** | −33.88% | 24.8% | — | — | — | *different names* |
-
-Three decisive reads:
-
-1. **No construction beats equal-weight significantly.** The best signal-proportional variant (`invvol`,
-   +0.02 Sharpe) is **inside noise** (bootstrap p=0.23); the faithful `alpha` is **worse** (−0.04, p=0.76);
-   `sigcomp` is the worst on every axis (Sharpe, CAGR, MDD, vol). `premise_holds = False`.
-
-2. **Net-Sharpe is decoupled from holdings-TC.** The **best-Sharpe** book (`sqrtmv`, 0.90) has the
-   **near-lowest** holdings-TC (0.03), while `sigcomp` — the highest-holdings-TC book *excluding* the
-   tautological `invvol`=1.00 — is the **worst** (0.80). Across all five there is **no monotone/inverse
-   TC_hold→Sharpe relation** (`invvol` at holdings-TC 1.00 has the 2nd-best Sharpe, 0.89). If TC drove
-   return this ordering would be impossible. The tiny Sharpe spread is **consistent with the §3 style tilts**
-   (not signal transfer): `sqrtmv`'s large-cap tilt (favorable in 2014-2020), `invvol`'s low-vol tilt;
-   `alpha`'s high-vol tilt and `sigcomp`'s breadth loss (eff-N 15.5) look like the drag — but this positive
-   attribution is a *hypothesis consistent with the tilt signs*, not established (§5 names the resolving test).
-
-3. **Selection ≫ weighting (corroborated here, not measured).** The real #9 dividend book — *different
-   names/factors*, same sqrt-mv weighting — is Sharpe **1.18**, **+0.28 above the entire weight-construction
-   family**. This is **one uncontrolled, window-confounded** cross-composite point (the cleanest internal
-   contrast is `sqrtmv` 0.90 → #9 1.18: same weighting, different selection), so it *corroborates* — it does
-   not *measure* — that "which names" dominates "how to weight them". The controlled selection evidence is the
-   **external** #9 26pp→~1pp tradeability decomposition.
+**What it does NOT establish:** that weighting has no effect (underpowered), or that selection/universe
+dominate weighting (neither was varied).
 
 ---
 
-## 5. Why this is robust (multiple independent corroborations)
+## 5. Honest scope, power, and the #9 contrast
 
-- The **FLA-correct** TC (full-eligible) says weighting doesn't raise the book's TC (eqw near the top).
-- The **net Sharpe** says no construction beats eqw, and every delta is **bootstrap-insignificant**.
-- The **confound diagnostics** show the 0.10 Sharpe spread is **consistent with** style tilts (size/low-vol),
-  not the TC mechanism; the spread is within bootstrap noise, and the tilt *signs* are consistent with — but
-  do not establish — a size/low-vol explanation (resolving test: regress the five books' daily returns on
-  size/low-vol factor returns).
-- It **matches the #9 MVO null** and extends it from "heavy optimizer" to "even light construction".
-- The **reuse cross-check is bit-exact**, so this is not a plumbing artifact.
+- **Power.** On one IS window the paired-bootstrap CIs (e.g. `sqrtmv` [−0.12,+0.19], `sigcomp` [−0.25,+0.11])
+  admit values above the +0.10 margin → this experiment **cannot detect** a deployment-relevant ±0.10 Sharpe
+  construction effect. The screen is conservative; a null is *not demonstrated*.
+- **Scope.** n=1 **non-microcap value+quality+low-vol** book. This is exactly the **well-conditioned case
+  §S3 assigns to the OPTIMIZER**, and the *opposite* of the **micro-tail lane** where §S3 *prescribes* light
+  construction. **This PoC does not settle the micro-tail lane** — the natural, higher-value next test.
+- **The #9 contrast is corroboration, not measurement.** The real #9 dividend book (Sharpe 1.18) differs in
+  *names, factors, and K* from this book — an **uncontrolled** cross-composite point, and it sits in the same
+  window this doc flags as "value-favorable" (a style-timing confound applied here symmetrically). It
+  *corroborates* that "which names" can matter more than "how to weight them" (cleanest internal echo:
+  `sqrtmv` 0.90 → #9 1.18 at fixed sqrt-mv weighting, different selection), but the **controlled** selection
+  evidence is **external** (the #9 26pp→~1pp deployable-alpha decomposition). Durable memory must not read
+  "BUILD-0 measured selection ≫ weighting".
+- **"Value-favorable window"** is *asserted*, not verified in this PoC (no HML/value-book relative-return
+  artifact computed) — treat as an unverified caveat.
+- **Absolute numbers are IS-characterisations**, optimistic, not deployable estimates.
 
----
-
-## 6. Recommendation for BUILD-0 (and the methodology)
-
-- **Do NOT build the construction stack expecting a weighting-driven return lift for this class of book.**
-  The premise that "TC collapse at the weighting step is the operative leak" is **not supported** here.
-- **Re-rank the levers to what is measured (methodology §4.5, now empirically anchored):** the large,
-  *confirmed* lever is **deployable-alpha SELECTION** (the #9 26pp→~1pp gap close) + **universe / lane**;
-  weighting is a weak lever for this book.
-- **If a construction/risk layer is built, build it for RISK, not return:** the §S3 minimal risk model for
-  **MDD control, neutralization, and attribution**, deployed only as a light risk-scaled (low-vol) tilt where
-  it *demonstrably* cuts MDD (`invvol` cut MDD by only 0.4pp here — not compelling). Fail-closed, unlevered.
-- **The micro-tail lane is the untested, higher-value question.** §S3 prescribes light construction *there*
-  (ill-conditioned Σ, where the optimizer is wrong); this PoC tested the *opposite* (well-conditioned value
-  book). A micro-tail construction test is the natural next PoC — but note the micro-tail's own hazards
-  (§1.3: shell-premium decay, −33%/5-week tail risk).
+TC framing (Blockers 2/M2, unchanged from v1's fix): headline = **full-eligible calibrated TC** (which
+*favors* eqw — eqw 0.320 near the top; the faithful `alpha` *lowers* it, ΔTC −0.034; `invvol` +0.018 is
+inside the barely-moves band). **Holdings-only TC is a within-book diagnostic**, a **structural near-identity**
+for any ∝signal weight (`invvol ≈ 1.000` because the benchmark term `σ/N_elig` is tiny — **not** an exact
+algebraic 1, and **not** an edge). Never used to select a construction.
 
 ---
 
-## 7. Design red-team (folded) — what changed, and honest self-correction
+## 6. Recommendation for BUILD-0
 
-A 4-lens adversarial review (TC-formula / PIT-leakage / verdict-stats / methodology-fidelity) verified the
-**instrument** as PIT-clean, reversible, and formula-correct, but flagged the **first-cut verdict as broken**.
-All findings were applied *before* recording this conclusion:
-
-- **[fixed] Verdict logic was vacuous + lenient.** The old gate's TC leg (`ΔTC_full OR ΔTC_hold`) was carried
-  entirely by the **tautological** holdings-TC term (always True for ∝signal), giving TC zero decision
-  weight; the return leg (`ΔSharpe OR ΔCAGR`, **MDD never read**) admitted a concentration-driven CAGR bump
-  with worse Sharpe/MDD. **Rebuilt:** net Sharpe primary + bootstrap significance + MDD guard; **TC removed
-  from the gate.**
-- **[fixed] TC headline was the wrong one.** Now headlines the **full-eligible calibrated** TC (which favors
-  eqw); holdings-TC labeled a diagnostic; `invvol=1.00` labeled an algebraic identity, never "best".
-- **[fixed] "Primary" was mislabeled.** `sigcomp (∝comp = z)` is **not** the §S3-literal `∝ calibrated α`;
-  `alpha (∝σz)` was promoted to the faithful primary. All 5 reported (implicit 5-construction multiplicity;
-  no deflation claimed).
-- **[added] Confound diagnostics + paired bootstrap** (eff-N, max-w, weight-turnover, `w~size`, `w~vol`,
-  Sharpe-diff CI/p) — so a net delta is attributable, and the ~0.10 spread is shown to be noise.
-- **[disclosed] σ is a total-vol PROXY**, not residual/idio vol (handoff permits 先粗后精); this mislabels
-  the `alpha`/`invvol` Grinold/MV *pedigree* and gives `alpha` a beta/high-vol tilt — **residual vol is the
-  BUILD-0b refinement.** Only the **eqw-vs-`sigcomp`** comparison is σ-independent (both use no σ); the
-  faithful **`alpha` (∝σz)** and **`invvol` (∝z/σ)** results ARE computed under the total-vol proxy, which
-  tilts `alpha` into high total-vol — **whether residual/idio vol changes the faithful-`alpha` ΔSharpe/ΔTC
-  is UNTESTED** (resolving test = re-run `alpha`/`invvol` on residual σ, BUILD-0b). The absolute
-  IC/CAGR/Sharpe are **IS-fitted** (sign-orientation on the same window) → optimistic, design-stage, **not
-  deployable estimates**.
+- **Do not build the construction stack expecting a weighting-driven *return* lift for this class of book.**
+  The evidence does not support it; but the evidence is INCONCLUSIVE, so this is a "no positive signal", not
+  a proof against construction.
+- **The two properly-scoped follow-ups** (not run here): (i) a **fully-§S3-constrained** constructor
+  (portfolio-level neutrality + industry caps + ADV + turnover/cost penalties) with a residual-σ risk model,
+  and (ii) — highest value — a **micro-tail-lane** construction test, the lane §S3 actually targets.
+- **If a construction/risk layer is built, build it for RISK, not return** (MDD control, neutralization,
+  attribution), unlevered/fail-closed. The 5% cap already shows the constructions are ~risk-neutral vs eqw
+  here (no MDD win worth the complexity).
+- **The selection lever must be tested by *varying selection*** (it was not here); cite the external #9
+  26pp→~1pp result for that, not this PoC.
 
 ---
 
-## 8. Guardrails honored
+## 7. GPT §10 REWORK response — every Blocker/Major/Minor, and its disposition
 
-IS-only (2014-2020); **no sealed OOS touched** (the script has no OOS path); fully reversible. Reused the
-trusted harness (no edits) + cached panel/returns/IS-IC; metrics via `research_utils.goal_metrics`; MLflow
-opt-in (`--mlflow`). #9 session confirmed stopped before starting (no conflict). Every absolute number is an
-**IS design-stage** figure, not a deployment estimate. The stale E-wave / eps_diffusion deployment magnitudes
-(CLAUDE.md §3.5) are **not** quoted.
+| id | GPT finding | disposition |
+|---|---|---|
+| **B1** | "no sealed OOS spent" unprovable — caches span 2021-26 | **Fixed.** `_setup()` truncates all inputs to ≤ IS_END + asserts (test-pinned); claim reworded to "compute IS-only, but caches opened → 2021-26 potentially-observed, not virgin". |
+| **B2** | full-window IC-fit direction = temporal lookahead | **Resolved with evidence.** Signs are **a-priori economic**; the fit signs *coincide* → `a_priori`==`is_fit` bit-for-bit (§3). No fitted parameter, no lookahead. `walk_forward` also implemented. |
+| **B3** | `alpha` isn't the §S3 constructor; `max_w` table bug | **Fixed.** `alpha` relabeled an *unconstrained σ-proxy* (§2.1); the §S3 gaps enumerated; `--max-weight` + `--sigma residual` added and **tested** (§4B/C); table now shows true **max** (26%) via mean/p95/max. |
+| **B4** | four-layer: signal-layer price gate | **Disclosed.** The `broad` mask uses `cr.notna()` at pday (a PIT last-known-price gate), applied **identically** to all 5 → does not bias the weighting delta; stated, not over-claimed as pristine four-layer. |
+| **B5** | verdict over-claimed (rejected-null → "weak lever") | **Fixed.** `premise_holds`→`screen_passed`; status **INCONCLUSIVE_no_greenlight**; gate is **fail-CLOSED** (missing tail-mass never passes; MDD guard; margin). |
+| **M1** | bootstrap mislabeled p-value; gate fail-open | **Fixed.** Relabeled **tail-mass** (circular-block); gate now `np.isfinite(tm) and … and tm < FWER_ALPHA` — missing evidence fails closed. Familywise threshold noted. |
+| **M2** | `invvol TC_hold=1` not a strict identity | **Fixed.** Reworded "structural near-identity (0.9997) because the benchmark term σ/N is tiny", never "=1 by construction" / never "best". |
+| **M3** | not reproducible; no evidence manifest | **Fixed.** `assemble` emits an **evidence manifest** (git SHA, input/output/dep SHA-256, provider/calendar ids, CLI config, `evidence_class=NON_EVIDENTIARY_IS_DESIGN_PROBE`); the **full local dep chain is content-addressed** (`frozen_local_deps_sha256`); `guorn_optimize_09.py` committed. `manifest_complete=True`. |
+| **M4** | PoC didn't measure selection/universe | **Fixed.** §2 (NOT #3), §5: selection/universe not varied; #9 = one uncontrolled corroborating point; external 26→1pp is the controlled selection evidence. |
+| **Minor-1** | mean columns hide peaks | **Fixed.** eff-N/max_w reported mean/p95/**max**. |
+| **Minor-2** | "value-favorable" unbound | **Fixed.** Flagged as an unverified caveat (§5). |
 
-## 9. Reproduce
+**Verified-clean (GPT):** 342 rebalances × identical 30-name set per date; `000001.SZ`/`000300.SH` code
+forms; weights sum to 1, no leverage; `sqrtmv` bit-exact vs the cached baseline; factor-library PIT tests 25
+passed; ≥53 delisted names in-universe (no survivorship filter); all v1 numbers reconciled.
+
+---
+
+## 8. Guardrails & reproduce
+
+IS-only (2014-2020); **no OOS path exists in the script**; inputs truncated ≤ IS_END; fully reversible;
+reused the trusted harness (no edits); metrics via `research_utils.goal_metrics`; evidence manifest per run;
+19 tests pass. Every absolute number is an **IS design-stage** figure (evidence_class NON_EVIDENTIARY).
 
 ```bash
-venv/Scripts/python.exe workspace/scripts/build0_tc_poc.py --prepare      # Step 1: TC + confounds + schedules
-venv/Scripts/python.exe workspace/scripts/build0_tc_poc.py --run-all      # Step 2: 5 event-driven IS backtests
-venv/Scripts/python.exe workspace/scripts/build0_tc_poc.py --assemble     # Step 3: table + bootstrap + verdict
-# artifacts: workspace/outputs/guorn_parity/optimize09_cache/{build0_tc.json, build0_results.json, sched_build0_*.json, net_build0_*_is.parquet}
+py=venv/Scripts/python.exe
+$py workspace/scripts/build0_tc_poc.py --verify-orientation                                   # a_priori==is_fit
+$py workspace/scripts/build0_tc_poc.py --all --tag build0_ref --orientation a_priori --sigma total    --max-weight 1.0
+$py workspace/scripts/build0_tc_poc.py --all --tag build0_cap --orientation a_priori --sigma total    --max-weight 0.05
+$py workspace/scripts/build0_tc_poc.py --all --tag build0_res --orientation a_priori --sigma residual --max-weight 0.05
+$py -m pytest tests/workspace/test_build0_tc_poc.py tests/workspace/test_build0_window_isolation.py -q
+# artifacts: workspace/outputs/guorn_parity/optimize09_cache/{build0_*_tc.json,build0_*_results.json,sched_build0_*_*.json,net_build0_*_*_is.parquet}
 ```
