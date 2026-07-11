@@ -531,6 +531,20 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **Major(残余关切 (a) 被裁定不可接受)**:平台 `SCHEMA1_CHAINS = {"chain_v2.4"}`——`integrity_schema=1` 只承认 v2.4 这一个历史版本,后续版本自声明 schema=1(借以绕过 executed_contract 绑定)= 整版本拒载(GPT 复现 chain_v9.9 schema-1 曾 sealed_ok)。关切 (b)(c)(d) 裁定可接受:对账 report-only 保留、逐股锁 30s 超时、每股一次 manifest 读开销可忽略。
 **测试:159/159**(+25 条复审#6 回归:四键逐一缺失/坏值域/load 拒不完备契约/judge 缺键 KeyError 不回退/持契约改全局 inert/archive_complete 畸形契约 fail-closed/月度 marker 伪造·删档·换档·smoke-scope 全拒/schema-1 allowlist)。
 
+### §10.7 复审#7 裁定与处置(2026-07-11 收到,chain_v2.7;版本再 bump 因修复改变冻结引擎契约——GPT R4 裁定)
+
+**裁定:REVISE**(4 Blocker,0 Major/Minor;R1 确认复审#6 全部复现通过,新对抗测试打开 4 个新缺口)。处置:
+
+| # | Blocker | chain_v2.7 修复 |
+|---|---|---|
+| B1⁶ | **冻结 routing 未被实际执行**:三席/空头只传任务名,`L.call()` 读可变全局 `TASK_LLM`——GPT 复现:契约冻结 doubao-seed-2.0-pro,实际执行 tampered-model,manifest 复核仍 PASSED;模型/thinking/温度/fallback 可在契约加载后漂移 | `llm_config.call_with_config(messages, route)`(只接受显式路由,`ROUTE_EXEC_KEYS` 缺=KeyError,绝不读 TASK_LLM);run_seat/run_bear 直接收 `contract.routing["scoring"]`/`["bear"]`;`archive["llm_config_hash"]` 从冻结契约取(不再现场调 `L.llm_config_hash()`);ChainContract 增 `llm_config_hash` 字段+load 验 routing 两腿执行字段齐全+对盘复核加比 llm_config_hash;回归:契约加载后篡改 TASK_LLM→捕获执行参数保持冻结值(并对照证明旧 `L.call` 门确实会漂移) |
+| B2⁶ | **嵌套权重未校验,NaN 让 composite 复核 fail-open**:`composite_weights["fund"]=NaN` 过契约校验+语义校验(abs(NaN−x)>0.11 恒假)→ 任意 composite sealed_ok | `verify_scoring_contract` 加嵌套校验(GPT 精确替换):每席 dims 非空 dict+逐值 `_num_ok[0,100]`;composite 逐值 `[0,1]` 有限数+**合计==1(±1e-12)**;语义复核第二道防线 `not _num_ok(recomputed,0,100) or abs(...)>0.11`(重算值本身非有限数=点名) |
+| B3⁶ | **平台与引擎"合格档案"判定不一致**:平台只跑 `verify_archive_semantics`,引擎 `archive_complete` 还要求席位/空头无 error+schema_valid+parse_mode——GPT 复现:`bear.schema_valid=False` 的封印档案引擎判 incomplete、平台 sealed_ok 且计入 full_month complete | **`verify_publishable_archive`**(integrity.py 共享纯函数)=语义一致性+席位无错误+bear 无错误/schema_valid/parse_mode 合法;引擎 `archive_complete` 变成它的 bool 包装,平台加载对封印档案改调它——同一把尺,回归含逐例等价断言 `archive_complete(a) == (not verify_publishable_archive(a,…))` |
+| B4⁶ | **marker 的 status 文本没有验证**:真实 1/2 档案,仅把 `"partial"` 改成 `"complete"`(其余字段全真)仍 `(True, [])` | `validate_full_month_status` 加(GPT 精确替换):`actual_status = complete if len(seals)==expected else partial`,`status.get("status") != actual_status` = 点名;回归覆盖 partial→complete 冒充/complete→partial/缺失/非法 status/真 complete+真 partial 接受 |
+
+**R2/R3 采纳**:残余 (a) 席位名不必钉死(不同席位集=不同 manifest 身份)但嵌套权重必须先过 B2 校验 ✔;残余 (b) 原则可接受但实现须过 B3 ✔;残余 (c) 可接受,2384 实弹不前置。
+**测试:185/185**(+26 条复审#7 回归:TASK_LLM 篡改后执行参数冻结/route 缺字段 KeyError/契约携带 llm_config_hash/load 拒破损 routing·缺 llm 哈希/NaN composite 拒收/坏席位 dims 6 例/composite 合计≠1 三例/语义第二道防线/schema_valid=False·席位 error·parse_mode 点名/引擎-平台逐例等价/status 文本冒充 4 例)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

@@ -31,14 +31,14 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
-    sha256_json, verify_archive_body, verify_archive_semantics,
-    verify_manifest_body, verify_scoring_contract,
+    sha256_json, verify_archive_body, verify_manifest_body,
+    verify_publishable_archive, verify_scoring_contract,
 )
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.6"
+RENDER_VERSION = "chain_v2.7"
 #: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
 #  这些历史版本产生于封印 schema 之前,只做结构性校验
 LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})
@@ -79,6 +79,13 @@ def validate_full_month_status(status, manifest, version_archives) -> tuple[bool
                         f"与磁盘已验证档案数 {len(seals)} 不符")
     if status.get("archive_set_sha256") != sha256_json(sorted(seals)):
         problems.append("archive_set_sha256 与磁盘封印集重算不符")
+    # 复审#7 B4:status 文本本身也必须对照重算——把 "partial" 改成 "complete"
+    # 而不动其余字段曾原样通过
+    actual_status = ("complete" if len(seals) == js.get("expected")
+                     else "partial")
+    if status.get("status") != actual_status:
+        problems.append(
+            f"status={status.get('status')} 与重算状态 {actual_status} 不符")
     return (not problems), problems
 
 
@@ -213,11 +220,12 @@ class Data:
                             expect_executed_contract=manifest.get("manifest_sha256")
                             if require_sealed and seal_schema >= 2 else None,
                             seal_schema=seal_schema)
-                        # 复审#5 Major-3 + #6 B1:封印档案**无条件**过共享语义校验
-                        # (评分契约已在版本级验完备;"有 seat_weights 才查"曾让
-                        # 无评分契约的空档案 sealed_ok)
+                        # 复审#5 Major-3 + #6 B1 + #7 B3:封印档案**无条件**过
+                        # 共享合格判定 verify_publishable_archive——与引擎终局重算
+                        # 同一把尺(平台只跑较弱语义校验曾把 bear.schema_valid=False
+                        # 的档案计入完整月份)
                         if require_sealed and not problems:
-                            problems = verify_archive_semantics(
+                            problems = verify_publishable_archive(
                                 a, scoring["seat_weights"],
                                 scoring["composite_weights"])
                         if problems:

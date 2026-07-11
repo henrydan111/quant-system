@@ -146,6 +146,17 @@ def verify_scoring_contract(scoring: object) -> list[str]:
         return ["seat_weights 非空对象要求失败"]
     if not isinstance(cw, dict) or set(cw) != set(sw):
         return ["composite_weights 键集与 seat_weights 不符"]
+    # 复审#7 B2:嵌套权重必须逐值校验——composite_weights["fund"]=NaN 曾让
+    # 语义复核 fail-open(abs(NaN-x)>0.11 恒假,任意 composite 都通过)
+    for seat, dims in sw.items():
+        if not isinstance(dims, dict) or not dims:
+            return [f"seat_weights[{seat}] 必须是非空对象"]
+        if any(not _num_ok(v, 0, 100) for v in dims.values()):
+            return [f"seat_weights[{seat}] 含非法权重"]
+    if any(not _num_ok(v, 0, 1) for v in cw.values()):
+        return ["composite_weights 必须是 [0,1] 有限数"]
+    if abs(sum(float(v) for v in cw.values()) - 1.0) > 1e-12:
+        return ["composite_weights 合计必须为 1"]
     if not _num_ok(scoring["bear_discount_strength"], 0, 5):
         return ["bear_discount_strength 非 [0,5] 有限数"]
     if not _num_ok(scoring["divergence_gap"], 0, 100):
@@ -217,11 +228,36 @@ def verify_archive_semantics(a: dict, seat_weights: dict,
             recomputed = round(sum(float(composite_weights[s])
                                    * float(verdict["finals"][s])
                                    for s in seat_set), 1)
-            if abs(recomputed - float(comp)) > 0.11:
+            # 复审#7 B2 第二道防线:重算值本身必须是 [0,100] 有限数——
+            # NaN 权重让 abs(NaN-x)>0.11 恒假,曾放行任意 composite
+            if not _num_ok(recomputed, 0, 100) \
+                    or abs(recomputed - float(comp)) > 0.11:
                 problems.append(
                     f"judge.composite={comp} 与按契约权重重算 {recomputed} 不符")
         except (KeyError, TypeError, ValueError, OverflowError):
             problems.append("composite 重算失败(契约权重/finals 异常)")
     if not _num_ok(verdict.get("composite_adj"), 0, 100):
         problems.append("judge.composite_adj 非 [0,100] 有限数")
+    return problems
+
+
+def verify_publishable_archive(a: dict, seat_weights: dict,
+                               composite_weights: dict) -> list[str]:
+    """**合格档案的唯一共享判定**(复审#7 B3):引擎 archive_complete 与平台加载
+    必须调用同一个函数——平台只跑较弱的 verify_archive_semantics 曾把引擎终局
+    重算明确排除的档案(bear.schema_valid=False)计入完整月份。
+    = 语义一致性 + 席位无错误 + bear 无错误/schema_valid/parse_mode 合法。"""
+    problems = verify_archive_semantics(a, seat_weights, composite_weights)
+    if problems:
+        return problems
+    for s in sorted(a["seats"]):           # 语义通过后 seats 均为 dict
+        if a["seats"][s].get("error"):
+            problems.append(f"seats[{s}] 带执行错误")
+    bear = a["bear"]
+    if bear.get("error"):
+        problems.append("bear 带执行错误")
+    if not bear.get("schema_valid"):
+        problems.append("bear.schema_valid 非真")
+    if bear.get("parse_mode") not in ("strict", "lenient"):
+        problems.append("bear.parse_mode 非法")
     return problems

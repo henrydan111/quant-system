@@ -70,26 +70,41 @@ def llm_config_hash() -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+#: 契约路由必须携带的执行字段(call_with_config 与 ChainContract 加载共用)
+ROUTE_EXEC_KEYS = ("model", "thinking", "temperature", "max_tokens")
+
+
 def call(task: str, messages: list[dict], **overrides):
     """引擎统一 LLM 门:按任务路由(model/thinking/温度),失败自动降级到 fallback 一次。
 
     一切调用带 task 名进日志;overrides 仅测试用(生产改路由=改本表=新版本)。
+    ⚠ 本函数读**可变全局** TASK_LLM——正式分析师链(run_seat/run_bear)禁用,
+    必须走 call_with_config(冻结契约路由,复审#7 B1)。
     """
+    return call_with_config(messages, {**TASK_LLM[task], **overrides}, task=task)
+
+
+def call_with_config(messages: list[dict], route, *, task: str = "contract"):
+    """契约执行 LLM 门(复审#7 B1):只接受**显式路由配置**(冻结契约的 routing
+    快照),绝不读可变全局 TASK_LLM——加载契约后篡改路由表对执行无效。
+    route: Mapping,必须含 model/thinking/temperature/max_tokens(可含 fallback)。"""
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src"))
     from ai_layer.ark_client import ArkClientError, chat
 
-    cfg = {**TASK_LLM[task], **overrides}
+    missing = [k for k in ROUTE_EXEC_KEYS if k not in route]
+    if missing:
+        raise KeyError(f"route 缺执行字段: {missing}")
     try:
-        return chat(messages, model=cfg["model"], thinking=cfg["thinking"],
-                    temperature=cfg["temperature"], max_tokens=cfg["max_tokens"])
+        return chat(messages, model=route["model"], thinking=route["thinking"],
+                    temperature=route["temperature"], max_tokens=route["max_tokens"])
     except ArkClientError:
-        fb = cfg.get("fallback")
+        fb = route.get("fallback")
         if not fb:
             raise
         import logging
         logging.getLogger(__name__).warning(
-            "task=%s primary %s failed -> fallback %s", task, cfg["model"], fb)
-        return chat(messages, model=fb, thinking=cfg["thinking"],
-                    temperature=cfg["temperature"], max_tokens=cfg["max_tokens"])
+            "task=%s primary %s failed -> fallback %s", task, route["model"], fb)
+        return chat(messages, model=fb, thinking=route["thinking"],
+                    temperature=route["temperature"], max_tokens=route["max_tokens"])

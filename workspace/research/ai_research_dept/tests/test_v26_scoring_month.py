@@ -142,7 +142,9 @@ def _genuine_status(m, varch):
     return {"scope_kind": "full_month",
             "job_set_sha256": m["job_spec"]["job_set_sha256"],
             "expected": 2, "complete": len(seals),
-            "archive_set_sha256": sha256_json(seals)}
+            "archive_set_sha256": sha256_json(seals),
+            # v2.7 B4:status 文本也被对照重算
+            "status": "complete" if len(seals) == 2 else "partial"}
 
 
 class TestFullMonthStatusValidation:

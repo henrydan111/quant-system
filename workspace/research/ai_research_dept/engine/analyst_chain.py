@@ -46,12 +46,18 @@ from workspace.research.ai_research_dept.engine.validators import (  # noqa: E40
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
     archive_seal, input_artifact_fp, manifest_core_fp, manifest_full_sha256,
     sha16_json as _sha16_json, sha256_json, verify_archive_body,
-    verify_archive_semantics, verify_manifest_body, verify_scoring_contract,
+    verify_archive_semantics, verify_manifest_body, verify_publishable_archive,
+    verify_scoring_contract,
 )
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.6"  # v2.6: 复审#6 修复 —— 评分契约 fail-open 封死(共享
+CHAIN_VERSION = "chain_v2.7"  # v2.7: 复审#7 修复 —— 冻结 routing 实际执行(run_seat/
+#   run_bear 走 call_with_config(contract.routing[leg]),改 TASK_LLM 全局无效;档案
+#   llm_config_hash 从契约)/嵌套权重逐值校验(NaN composite 权重曾让复核 fail-open)
+#   +重算值第二道防线/共享 verify_publishable_archive(引擎与平台同一合格判定,
+#   bear.schema_valid=False 平台不再放行)/月度 marker 的 status 文本对照重算;
+#   v2.6: 复审#6 修复 —— 评分契约 fail-open 封死(共享
 #   verify_scoring_contract 四键齐全+类型范围校验,ChainContract.load 与平台版本加载同拒;
 #   judge/archive_complete 持契约时直接索引、无 .get 回退——改全局在任何缺键情形下均无效)/
 #   平台 full_month_status 验证后才暴露(对照 job_spec+磁盘封印集重算)/schema-1 仅限 chain_v2.4;
@@ -118,6 +124,7 @@ class ChainContract:
     effective_prompts: object = field(default_factory=dict)   # 只读 Mapping
     scoring: object = field(default_factory=dict)             # 只读 Mapping
     routing: object = field(default_factory=dict)             # 只读 Mapping
+    llm_config_hash: str = ""       # 冻结的 LLM 配置指纹(复审#7 B1:档案从此取)
 
     @classmethod
     def load(cls, vdir: Path) -> "ChainContract":
@@ -151,11 +158,22 @@ class ChainContract:
         if sc_problems:
             raise VersionCollisionError(
                 f"契约构造被拒: {';'.join(sc_problems)}")
+        routing = manifest.get("routing") or {}
+        # 复审#7 B1:routing 两腿必须携带完整执行字段——执行只走契约,缺=拒
+        for leg in ("scoring", "bear"):
+            r = routing.get(leg)
+            if not isinstance(r, dict) \
+                    or any(k not in r for k in L.ROUTE_EXEC_KEYS):
+                raise VersionCollisionError(
+                    f"契约构造被拒: routing[{leg}] 缺执行字段")
+        if not manifest.get("llm_config_hash"):
+            raise VersionCollisionError("契约构造被拒: manifest 缺 llm_config_hash")
         return cls(manifest_fp=manifest["manifest_fp"],
                    manifest_sha256=manifest["manifest_sha256"],
                    effective_prompts=_deep_ro(prompts),
                    scoring=_deep_ro(sc),
-                   routing=_deep_ro(manifest.get("routing") or {}))
+                   routing=_deep_ro(routing),
+                   llm_config_hash=manifest["llm_config_hash"])
 
 
 def verify_contract_matches_manifest(contract: "ChainContract", vdir: Path) -> None:
@@ -166,7 +184,8 @@ def verify_contract_matches_manifest(contract: "ChainContract", vdir: Path) -> N
             or fresh.manifest_fp != contract.manifest_fp
             or fresh.effective_prompts != contract.effective_prompts
             or fresh.scoring != contract.scoring
-            or fresh.routing != contract.routing):
+            or fresh.routing != contract.routing
+            or fresh.llm_config_hash != contract.llm_config_hash):
         raise VersionCollisionError(
             "传入契约与磁盘 manifest 不符(疑似伪造契约)——拒绝执行")
 
@@ -235,7 +254,9 @@ def archive_complete(a: dict, scoring: dict | None = None) -> bool:
     bear schema_valid/parse_mode/无错误。任意输入返回 bool,永不抛异常。
 
     scoring:执行契约的评分参数——持契约时**直接索引、无回退**(复审#6 B1);
-    缺键/畸形契约 → False(fail-closed)。scoring=None 仅供测试走模块常量。"""
+    缺键/畸形契约 → False(fail-closed)。scoring=None 仅供测试走模块常量。
+    复审#7 B3:全部判定收敛到 integrity.verify_publishable_archive——引擎与平台
+    对"合格档案"必须用同一个函数,本函数只是它的 bool 包装。"""
     if not isinstance(a, dict):
         return False
     try:
@@ -243,17 +264,9 @@ def archive_complete(a: dict, scoring: dict | None = None) -> bool:
             sw, cw = SEAT_WEIGHTS, COMPOSITE_W
         else:
             sw, cw = scoring["seat_weights"], scoring["composite_weights"]
-        if verify_archive_semantics(a, sw, cw):
-            return False
+        return not verify_publishable_archive(a, sw, cw)
     except Exception:      # noqa: BLE001 — 完整性谓词必须是总函数
         return False
-    seats = a.get("seats", {})
-    if any(not isinstance(v, dict) or v.get("error") for v in seats.values()):
-        return False
-    bear = a.get("bear")
-    return (isinstance(bear, dict) and not bear.get("error")
-            and bool(bear.get("schema_valid"))
-            and bear.get("parse_mode") in ("strict", "lenient"))
 
 
 def _normalize_falsifiers(wcw) -> tuple[list, dict]:
@@ -282,12 +295,13 @@ def _normalize_falsifiers(wcw) -> tuple[list, dict]:
 
 
 def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
-             audit_dir: Path, weights) -> dict:
-    """weights = 执行契约的席位权重(复审#5 B1:从契约执行,改模块全局无效)。"""
+             audit_dir: Path, weights, route) -> dict:
+    """weights/route = 执行契约的席位权重与 LLM 路由(复审#5 B1 + #7 B1:全部从
+    契约执行——改模块全局 SEAT_WEIGHTS/TASK_LLM 均无效)。"""
     # prompt = 契约冻结的**有效** prompt(已含 SYSTEM_C15,复审#4 B2:不再重读磁盘)
     msgs = [{"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
-    r = L.call("dimension_scoring", msgs)
+    r = L.call_with_config(msgs, route, task=f"seat:{seat}")
     (audit_dir / f"{seat}_raw.json").write_text(
         json.dumps(r.raw, ensure_ascii=False), encoding="utf-8")   # G5: raw 只在审计目录
     rec = parse_json_reply(r.text)
@@ -313,10 +327,10 @@ def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
 
 
 def run_bear(cards: dict, seat_results: dict, falsifiers: dict,
-             audit_dir: Path, prompt: str, seat_weights) -> dict:
+             audit_dir: Path, prompt: str, seat_weights, route) -> dict:
     """v2.1:喂全量 scorecard(证据不截断+罚分含证据)+ 带 ID 的证伪条件 + market_context;
     输出经 validate_bear_record typed 校验(GPT Blocker-3),裁判只消费校验后反驳。
-    prompt = 契约冻结的有效 prompt(复审#4 B2:不再重读磁盘)。"""
+    prompt/route = 契约冻结的有效 prompt 与 LLM 路由(复审#4 B2 + #7 B1)。"""
     scorecards = {}
     for seat, res in seat_results.items():
         rec = res["record"]
@@ -328,7 +342,7 @@ def run_bear(cards: dict, seat_results: dict, falsifiers: dict,
     payload = {"cards": cards, "seat_scorecards": scorecards}
     msgs = [{"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
-    r = L.call("bear_rebuttal", msgs)
+    r = L.call_with_config(msgs, route, task="bear")
     (audit_dir / "bear_raw.json").write_text(
         json.dumps(r.raw, ensure_ascii=False), encoding="utf-8")
     parse_mode = "strict"
@@ -636,7 +650,8 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
             payload["market_context"] = mc
         try:
             seat_results[seat] = run_seat(seat, prompt, payload,
-                                          cards[key], audit, seat_w)
+                                          cards[key], audit, seat_w,
+                                          contract.routing["scoring"])
         except (ArkClientError, ScorecardViolation) as e:
             seat_results[seat] = {"final": None, "record": {"factor_scores": [],
                                   "penalty_scores": []}, "scored_dims": 0,
@@ -658,14 +673,16 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
             bear_cards = {**cards, **({"market_context": mc} if mc else {})}
             bear = run_bear(bear_cards, ok_seats, falsifiers, audit,
                             contract.effective_prompts["bear_analyst_v2.txt"],
-                            contract.scoring["seat_weights"])
+                            contract.scoring["seat_weights"],
+                            contract.routing["bear"])
         except (ArkClientError, ScorecardViolation, KeyError, TypeError) as e:
             bear["error"] = _safe_error(e)
     verdict = judge({s: r for s, r in seat_results.items() if r["final"] is not None},
                     bear, dict(contract.scoring)) if ok_seats else {}
     archive = {
         "ts_code": code, "date": day, "chain_version": CHAIN_VERSION,
-        "llm_config_hash": L.llm_config_hash(),
+        # 复审#7 B1:从冻结契约取,不现场调 L.llm_config_hash()(可变全局)
+        "llm_config_hash": contract.llm_config_hash,
         "manifest_fp": contract.manifest_fp, "artifact_fp": artifact_fp,
         "executed_contract_sha256": contract.manifest_sha256,   # #5 B1 必需封印字段
         # 精确输入快照落档(复审#2 B1):平台展示归档快照,不重渲已完成工件
