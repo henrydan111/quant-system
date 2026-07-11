@@ -52,7 +52,11 @@ from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v3.0"  # v3.0: bear max_tokens 5000→12000(根因实测:deepseek
+CHAIN_VERSION = "chain_v3.1"  # v3.1: B3 热修(GPT news-flash R1/R3 放行) —— 渲染边界
+#   净化(NFKC/剥控制符零宽符/方括号全角化,应用于全部外部标题+业务构成)+渲染器
+#   emit-time ID 注册表(封入档案 card_ids,校验只认注册表∩席位域,注入 [F01] 死)+
+#   席位-ID 域强制;现行链活漏洞修复(半可信研报/互动易标题),独立于 news-flash 全波;
+#   v3.0: bear max_tokens 5000→12000(根因实测:deepseek
 #   思维链计入 max_tokens,reasoning 4.6-5k 吞掉预算致正文空/截断,v2.9 日跑 28/86 次
 #   bear finish_reason=length——结构性失败,重跑不收敛;doubao 席位不受影响不动);
 #   v2.9: 跨股票并发 5→15(用户裁定 2026-07-11;实测本账户
@@ -80,8 +84,8 @@ CHAIN_VERSION = "chain_v3.0"  # v3.0: bear max_tokens 5000→12000(根因实测:
 #   v2.4: 必需封印+契约执行+全月预检;v2.3: 契约指纹+验证不信任;v2.2-: 见历史
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
-    COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN, disclosure_status,
-    render_fund_card, render_news_card, render_pv_card,
+    COMPOSITE_W, FIELD_CN, SEAT_ID_DOMAINS, SEAT_WEIGHTS, SUBCARD_CN,
+    disclosure_status, render_fund_card, render_news_card, render_pv_card,
 )
 BEAR_DISCOUNT_STRENGTH = 4      # 反驳强度≥4 且有反证 → 目标维贡献 ×0.5
 DIVERGENCE_GAP = 40             # 席位 final 两两差 > 40 → 背离旗
@@ -305,9 +309,10 @@ def _normalize_falsifiers(wcw) -> tuple[list, dict]:
 
 
 def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
-             audit_dir: Path, weights, route) -> dict:
+             audit_dir: Path, weights, route, registry=None) -> dict:
     """weights/route = 执行契约的席位权重与 LLM 路由(复审#5 B1 + #7 B1:全部从
-    契约执行——改模块全局 SEAT_WEIGHTS/TASK_LLM 均无效)。"""
+    契约执行——改模块全局 SEAT_WEIGHTS/TASK_LLM 均无效)。
+    registry = 渲染器 emit-time ID 注册表(v3.1 B3:注册表∩席位域接地)。"""
     # prompt = 契约冻结的**有效** prompt(已含 SYSTEM_C15,复审#4 B2:不再重读磁盘)
     msgs = [{"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
@@ -322,9 +327,10 @@ def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
     # 严格校验(GPT Blocker-2):重名拒收 + 注册维恰一次 + 分数域 + 证伪 schema
     validate_scorecard_record(rec, weights=weights,
                               require_registered_exact=True, falsifier_schema=True)
-    # 机械围栏(GPT Blocker-4):行ID 精确接地 + ID 独占 + 间接≤3钳位 + 披露围栏。
-    # final 与裁判必须读同一份净化记录(冒烟 adj>final bug 的教训)
-    rec = enforce_v2_evidence(rec, card_text, seat)
+    # 机械围栏(GPT Blocker-4 + v3.1 B3):行ID 精确接地 + 注册表∩席位域 + ID 独占 +
+    # 间接≤3钳位 + 披露围栏。final 与裁判必须读同一份净化记录(冒烟 adj>final bug 的教训)
+    rec = enforce_v2_evidence(rec, card_text, seat, registry,
+                              SEAT_ID_DOMAINS.get(seat))
     fence_stats = rec.pop("_fence_stats", {})
     final = compute_scorecard_final(rec, weights=weights,
                                     evidence_context=card_text)
@@ -512,8 +518,10 @@ def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
 
 def build_inputs(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
                  retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
-                 series: pd.DataFrame) -> tuple[dict, str] | None:
-    """确定性输入装配(run_stock 与预检共用同一份渲染逻辑,防两处口径漂移)。"""
+                 series: pd.DataFrame) -> tuple[dict, str, dict] | None:
+    """确定性输入装配(run_stock 与预检共用同一份渲染逻辑,防两处口径漂移)。
+    返回 (cards, market_context, card_ids)——card_ids 为各卡 emit-time ID 注册表
+    (v3.1 B3:接地只认注册表∩席位域,注入 ID 被拒)。"""
     f = facts[(facts.ts_code == code) & (facts.trade_date == day)]
     p = pv[(pv.ts_code == code) & (pv.trade_date == day)]
     r = retr[(retr.ts_code == code) & (retr.trade_date == day)]
@@ -523,13 +531,16 @@ def build_inputs(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     biz_text = b["biz_text"].iloc[0] if len(b) else None
     ser = series[(series.ts_code == code) & (series.trade_date == day)]
     disclosure = disclosure_status(r[r["channel"] == "direct"], day)
-    cards = {"fund_card": render_fund_card(f, biz_text, ser, disclosure),
-             "pv_card": render_pv_card(p),
-             "news_card": render_news_card(r, day)}
+    fund_t, fund_ids = render_fund_card(f, biz_text, ser, disclosure)
+    pv_t, pv_ids = render_pv_card(p)
+    news_t, news_ids = render_news_card(r, day)
+    cards = {"fund_card": fund_t, "pv_card": pv_t, "news_card": news_t}
+    card_ids = {"fund_card": sorted(fund_ids), "pv_card": sorted(pv_ids),
+                "news_card": sorted(news_ids)}       # 排序 → 确定性封印
     rg = regime[regime.trade_date == day]
     mc = (rg["card_text"].iloc[0] + "\nregime: " + rg["regime"].iloc[0]) \
         if len(rg) else ""
-    return cards, mc
+    return cards, mc, card_ids
 
 
 _LEDGER_LOCK = threading.Lock()
@@ -584,7 +595,7 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     inputs = build_inputs(code, day, facts, pv, retr, biz, regime, series)
     if inputs is None:
         raise MissingInputError(f"{code}@{day}: 缺 fact/pv 输入")
-    cards, mc = inputs
+    cards, mc, card_ids = inputs
     manifest_fp = contract.manifest_fp
     artifact_fp = input_artifact_fp(cards, mc, manifest_fp)
     code_u = code.replace(".", "_")
@@ -607,7 +618,7 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
                                  "manifest_fp": manifest_fp})
         try:
             archive = _execute_attempt(code, day, cards, mc, contract, audit,
-                                       artifact_fp, attempt_no)
+                                       artifact_fp, attempt_no, card_ids)
         except BaseException as exc:  # 意外异常也必须留痕(孤儿 attempt 封死)
             err = _safe_error(exc)
             (attempt_dir / "status.json").write_text(json.dumps(
@@ -648,7 +659,9 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
 
 def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                      contract: ChainContract, audit: Path,
-                     artifact_fp: str, attempt_no: int) -> dict:
+                     artifact_fp: str, attempt_no: int,
+                     card_ids: dict | None = None) -> dict:
+    card_ids = card_ids or {}
     seat_results = {}
     for seat, pfile, key in [("fund", "fund_analyst_v2.txt", "fund_card"),
                               ("tech", "tech_analyst_v2.txt", "pv_card"),
@@ -661,7 +674,8 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
         try:
             seat_results[seat] = run_seat(seat, prompt, payload,
                                           cards[key], audit, seat_w,
-                                          contract.routing["scoring"])
+                                          contract.routing["scoring"],
+                                          frozenset(card_ids.get(key, ())))
         except (ArkClientError, ScorecardViolation) as e:
             seat_results[seat] = {"final": None, "record": {"factor_scores": [],
                                   "penalty_scores": []}, "scored_dims": 0,
@@ -697,6 +711,7 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
         "executed_contract_sha256": contract.manifest_sha256,   # #5 B1 必需封印字段
         # 精确输入快照落档(复审#2 B1):平台展示归档快照,不重渲已完成工件
         "cards": cards, "market_context": mc,
+        "card_ids": card_ids,      # v3.1 B3:渲染器 emit-time 注册表(封入 archive_sha256)
         "records": {s: r["record"] for s, r in seat_results.items()
                     if r.get("final") is not None},
         "seats": {s: {"final": r["final"],
@@ -866,7 +881,7 @@ def _run_batch(vdir: Path, days: list, full_days: list, pool: list, args,
             if inputs is None:
                 missing.append({"code": c, "day": day, "reason": "missing_fact_or_pv"})
                 continue
-            cards_pre, mc_pre = inputs
+            cards_pre, mc_pre, _ = inputs
             fps[(c, day)] = input_artifact_fp(cards_pre, mc_pre, contract.manifest_fp)
             ap = out_dir / f"{c.replace('.', '_')}.json"
             if ap.exists():

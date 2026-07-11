@@ -55,6 +55,19 @@ FIELD_CN = {"roe_waa": "ROE(加权)%", "grossprofit_margin": "毛利率%",
 SUBCARD_CN = {"A": "趋势形态", "B": "量能结构", "C": "筹码持仓",
               "D": "主力行为", "E": "涨停语言"}
 
+#: 席位 → 可引 ID 域(B3 席位-ID 域强制;news 席只能引 N* 域,伪造 [F01] 即使漏过
+#  净化也被域拒;宏观席未来加 market/MS)
+SEAT_ID_DOMAINS = {"fund": {"fund"}, "tech": {"tech"}, "news": {"news"}}
+#: 固定注册表:市场情境卡(regime v0.4)行 ID —— 供宏观/空头席域校验
+MARKET_LINE_IDS = frozenset(f"M{i:02d}" for i in range(1, 17))
+
+
+def _emit(ids: set, lid: str) -> str:
+    """emit-time 注册:渲染器每写一条 `- [lid]` 证据行即登记(GPT B3:校验只认
+    渲染器显式生成的注册表,不从可能被注入的卡片文本重新发现 ID)。"""
+    ids.add(lid)
+    return lid
+
 #: 固定语义 ID 注册表(B4:缺项跳过不移位;新增字段必须先注册)
 FUND_FIELD_ID = {f: f"F{i+1:02d}" for i, f in enumerate([
     "roe_waa", "grossprofit_margin", "netprofit_margin", "ocf_to_or",
@@ -128,7 +141,9 @@ def _series_trend(vals: list[float]) -> str:
 
 def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None,
                      series: pd.DataFrame | None = None,
-                     disclosure: str | None = None) -> str:
+                     disclosure: str | None = None) -> tuple[str, frozenset]:
+    """返回 (卡片文本, emit-time ID 注册表)(v3.1 B3)。"""
+    ids: set[str] = set()
     lines = ["【基本面三锚定事实表】(行ID|字段: 值|行业分位(同业家数)|行业中值/90分位|"
              "自身10年分位;⚑=代码判定焦点行:三锚定背离>50pp或极端分位)"]
     rows = list(facts.iterrows())
@@ -155,7 +170,7 @@ def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None,
                      f"/90分位{_fmt_fund(f, r.get('industry_p90'))}")
         hp = "" if pd.isna(r["hist_pctl"]) else f"10年分位{r['hist_pctl']:.0%}"
         flag = "⚑" if i in flagged else ""
-        lines.append(f"- [{fid}]{flag}{FIELD_CN.get(f, f)}: "
+        lines.append(f"- [{_emit(ids, fid)}]{flag}{FIELD_CN.get(f, f)}: "
                      f"{_fmt_fund(f, r['value'])}|{ip}|{bench}|{hp}")
     if series is not None and len(series):
         lines.append("◆ 关键指标近8季采样(vintage口径:各点=该采样时点已知值,旧→新;"
@@ -169,10 +184,10 @@ def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None,
             dates = [str(d)[:6] for d in s["sample_date"]]
             arrow = " → ".join(f"{v:.1f}({d})" for v, d in zip(vals, dates))
             t = _series_trend(vals)
-            lines.append(f"- [{fid}]{FIELD_CN.get(f, f)}: {arrow}"
+            lines.append(f"- [{_emit(ids, fid)}]{FIELD_CN.get(f, f)}: {arrow}"
                          + (f"【{t}】" if t else ""))
     if disclosure:
-        lines.append(f"- [FD1]披露动态: {disclosure}"
+        lines.append(f"- [{_emit(ids, 'FD1')}]披露动态: {disclosure}"
                      "(本行只可支撑 earnings_inflection)")
     if biz_text:
         # v1.5-A 业务构成节:行加 FB 序号(节内位置编号,节内容有界)
@@ -181,11 +196,11 @@ def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None,
         for ln in bl:
             if ln.strip().startswith("- "):
                 k += 1
-                out_b.append(f"- [FB{k}]{sanitize_text(ln.strip()[2:])}")
+                out_b.append(f"- [{_emit(ids, f'FB{k}')}]{sanitize_text(ln.strip()[2:])}")
             else:
                 out_b.append(sanitize_text(ln))   # v3.1 B3:节头等外部行同净化
         lines.extend(out_b)
-    return "\n".join(lines)
+    return "\n".join(lines), frozenset(ids)
 
 
 #: pv 项目呈现类型
@@ -214,7 +229,9 @@ def _fmt_pv(item: str, v) -> str:
     return f"{v:.1f}{u}" if v % 1 else f"{v:g}{u}"
 
 
-def render_pv_card(pv: pd.DataFrame) -> str:
+def render_pv_card(pv: pd.DataFrame) -> tuple[str, frozenset]:
+    """返回 (卡片文本, emit-time ID 注册表)(v3.1 B3)。"""
+    ids: set[str] = set()
     lines = ["【量价情报包】(行ID|项目: 值「状态」[分位];全部由代码判定;"
              "⚑=极端分位焦点行;「截至D-1」=次晨披露数据滞后一日)"]
     rows = list(pv.iterrows())
@@ -238,8 +255,8 @@ def render_pv_card(pv: pd.DataFrame) -> str:
             p = "" if r["pctl"] is None or pd.isna(r["pctl"]) else f"[分位{r['pctl']:.0%}]"
             flag = "⚑" if i in flagged else ""
             body = f"{v}{s}{p}" if v or s or p else ""
-            lines.append(f"- [{tid}]{flag}{r['item']}: {body}")
-    return "\n".join(lines)
+            lines.append(f"- [{_emit(ids, tid)}]{flag}{r['item']}: {body}")
+    return "\n".join(lines), frozenset(ids)
 
 
 _CHANNEL_CN = {"concept": "概念", "industry": "行业", "relation": "关联"}
@@ -296,7 +313,9 @@ def _det_sort(df: pd.DataFrame, has_vis: bool) -> pd.DataFrame:
     return df.sort_values(cols, ascending=asc, kind="mergesort")
 
 
-def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
+def render_news_card(retr: pd.DataFrame, day: str | None = None) -> tuple[str, frozenset]:
+    """返回 (卡片文本, emit-time ID 注册表)(v3.1 B3)。"""
+    ids: set[str] = set()
     day = day or (str(retr["trade_date"].iloc[0]) if len(retr) else "")
     has_vis = "visible_at" in retr.columns
     has_src = "source" in retr.columns
@@ -306,7 +325,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
     ind = retr[retr["channel"].isin(("concept", "industry", "relation"))]
     tc = d["event_type"].value_counts()
     top_types = "/".join(f"{t}{c}" for t, c in tc.head(3).items())
-    lines.append(f"- [N00]检索窗口全景: 直接事件 {len(d)} 条({top_types or '无'}),"
+    lines.append(f"- [{_emit(ids, 'N00')}]检索窗口全景: 直接事件 {len(d)} 条({top_types or '无'}),"
                  f"间接事件 {len(ind)} 条(检索返回集)")
     # ---- 直接节:确定性排序;同源(类型,来源)≤2 条,溢出并入聚合 ----
     if len(d):
@@ -324,7 +343,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
                      f"{'' if not over_rows else ',超额/同源已聚合'})——")
         for k, r in enumerate(shown, 1):
             age = _age_str(day, r["visible_at"]) if has_vis else "—"
-            lines.append(f"- [ND{k:02d}][{age}|{_stars(r.get('importance'))}]"
+            lines.append(f"- [{_emit(ids, f'ND{k:02d}')}][{age}|{_stars(r.get('importance'))}]"
                          f"{r['event_type']}|{_t70(r['title'])}|{r['direction']}")
         if over_rows:
             og = pd.DataFrame(over_rows)
@@ -335,7 +354,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
                     a_new = _age_str(day, grp["visible_at"].max())
                     a_old = _age_str(day, grp["visible_at"].min())
                     ages = f"|{a_new}~{a_old}"
-                lines.append(f"- [NDA{k}][直接聚合{ages}]{t}: 另有{len(grp)}条({dirs})")
+                lines.append(f"- [{_emit(ids, f'NDA{k}')}][直接聚合{ages}]{t}: 另有{len(grp)}条({dirs})")
     else:
         lines.append("—— 直接事件:无 ——")
     # ---- 红旗缺席声明(谓词判定,M3) ----
@@ -346,7 +365,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
                 hits.add(cat)
     absent = [c for c in _RED_FLAG_PREDICATES if c not in hits]
     if absent:
-        lines.append(f"- [NX01]检索窗口内无以下类别的直接事件(按类型+标题谓词判定): "
+        lines.append(f"- [{_emit(ids, 'NX01')}]检索窗口内无以下类别的直接事件(按类型+标题谓词判定): "
                      f"{'/'.join(absent)}")
     # ---- 间接节:通道×类型 配额≤3 + 聚合(带龄距/星标) ----
     if len(ind):
@@ -366,7 +385,7 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
                      f"明细每通道×类型≤3,余为聚合)——")
         for k, r in enumerate(picked, 1):
             age = _age_str(day, r["visible_at"]) if has_vis else "—"
-            lines.append(f"- [NI{k:02d}][{_CHANNEL_CN.get(r['channel'], r['channel'])}"
+            lines.append(f"- [{_emit(ids, f'NI{k:02d}')}][{_CHANNEL_CN.get(r['channel'], r['channel'])}"
                          f"|{age}|{_stars(r.get('importance'))}]{r['event_type']}"
                          f"|{_t70(r['title'])}|{r['direction']}|相关度{r['relevance']:.2f}")
         for k, ((ch, t), rows_t) in enumerate(sorted(over.items(),
@@ -376,8 +395,8 @@ def render_news_card(retr: pd.DataFrame, day: str | None = None) -> str:
             ages = ""
             if has_vis:
                 ages = f"|{_age_str(day, g['visible_at'].max())}~{_age_str(day, g['visible_at'].min())}"
-            lines.append(f"- [NIA{k}][{_CHANNEL_CN.get(ch, ch)}聚合{ages}]{t}: "
+            lines.append(f"- [{_emit(ids, f'NIA{k}')}][{_CHANNEL_CN.get(ch, ch)}聚合{ages}]{t}: "
                          f"返回集内另有{len(g)}条({dirs})——聚合行属间接证据,封顶3分")
     else:
         lines.append("—— 间接事件:无 ——")
-    return "\n".join(lines)
+    return "\n".join(lines), frozenset(ids)

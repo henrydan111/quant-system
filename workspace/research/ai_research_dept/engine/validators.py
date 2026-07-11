@@ -33,15 +33,19 @@ def _norm(s: str) -> str:
     return _WS.sub(" ", str(s)).strip()
 
 
-def line_map(card_text: str) -> dict[str, str]:
-    """卡片行 ID → 规范化完整行(以「- [ID]」起头的行才是证据行)。"""
+def line_map(card_text: str, registry: frozenset | set | None = None) -> dict[str, str]:
+    """卡片行 ID → 规范化完整行(以「- [ID]」起头的行才是证据行)。
+
+    registry(v3.1 B3):渲染器 emit-time 生成的合法 ID 集。给定时,只承认注册表内的
+    ID——即使净化被绕过,注入的 `- [F01]` 因不在渲染器注册表而被拒(校验不再从可能
+    被污染的卡片文本重新发现任意 ID)。"""
     out = {}
     for line in str(card_text).splitlines():
         t = line.strip()
         if not t.startswith("- ["):
             continue
         m = _ID_RE.search(t[:14])
-        if m:
+        if m and (registry is None or m.group(1) in registry):
             out[m.group(1)] = _norm(t)
     return out
 
@@ -73,15 +77,20 @@ def _news_requires_cap(lid: str) -> bool:
     return lid == "N00" or lid.startswith(("NI", "NDA"))
 
 
-def enforce_v2_evidence(rec: dict, card_text: str, seat: str) -> dict:
-    """行 ID 精确接地 + **两遍**ID 独占 + 间接钳位 + 披露围栏。原地修改并返回 rec。
+def enforce_v2_evidence(rec: dict, card_text: str, seat: str,
+                        registry: frozenset | set | None = None,
+                        allowed_domains: frozenset | set | None = None) -> dict:
+    """行 ID 精确接地 + **两遍**ID 独占 + 间接钳位 + 披露围栏 + **注册表∩席位域**
+    (v3.1 B3)。原地修改并返回 rec。
 
-    统计信息写入 rec['_fence_stats'](档案审计用,进档案前剥离下划线键)。
+    registry:渲染器 emit-time 生成的合法 ID 集(注入 ID 不在其中即拒)。
+    allowed_domains:本席可引证据域(如 news→{news});域外 ID(如 news 席引 F01)
+    即使漏过注册表也被域拒——双保险。统计写入 rec['_fence_stats']。
     """
-    lmap = line_map(card_text)
+    lmap = line_map(card_text, registry)
     entries = rec.get("factor_scores", []) + rec.get("penalty_scores", [])
     # 第一遍:接地/围栏过滤 + 统计每个 ID 的声明次数(跨全部条目)
-    dropped_ungrounded = dropped_fence = 0
+    dropped_ungrounded = dropped_fence = dropped_domain = 0
     claims: dict[str, int] = {}
     per_entry: list[list[tuple[str, str]]] = []
     for entry in entries:
@@ -90,6 +99,9 @@ def enforce_v2_evidence(rec: dict, card_text: str, seat: str) -> dict:
             lid = span_line_id(sp, lmap)
             if lid is None:
                 dropped_ungrounded += 1
+                continue
+            if allowed_domains is not None and _lid_domain(lid) not in allowed_domains:
+                dropped_domain += 1           # 席位-ID 域强制(B3):域外引用即弃
                 continue
             if seat == "fund" and lid == "FD1" and entry.get("name") != "earnings_inflection":
                 dropped_fence += 1            # 披露行只准支撑盈利拐点(§6.4 B 方案围栏)
@@ -120,6 +132,7 @@ def enforce_v2_evidence(rec: dict, card_text: str, seat: str) -> dict:
     rec["_fence_stats"] = {"dropped_ungrounded": dropped_ungrounded,
                            "dropped_exclusive": dropped_exclusive,
                            "dropped_disclosure_fence": dropped_fence,
+                           "dropped_domain": dropped_domain,
                            "contested_ids": sorted(contested),
                            "indirect_clamped": clamped}
     return rec
