@@ -16,7 +16,22 @@ v2.1(GPT REVISE Blocker-4 + Major 修复):
 """
 from __future__ import annotations
 
+import re as _re
+import unicodedata as _ud
+
 import pandas as pd
+
+
+def sanitize_text(s) -> str:
+    """渲染边界净化(chain_v3.1 B3 热修,GPT round-1 复现:标题含换行+`- [F01]`
+    曾被 line_map 注册为合法证据行)。外部文本(事件标题/业务构成/任何非本模块
+    生成的字符串)进卡前:NFKC 规范化 → 剥控制/格式符(Cc/Cf,含 CR/LF/零宽)→
+    折叠空白 → **ASCII 方括号全角化**——证据 token 模式在外部文本中物理不可能
+    成立。raw 原文只存审计目录,卡片/档案一律净化后文本。"""
+    s = _ud.normalize("NFKC", str(s))
+    s = "".join(ch for ch in s if _ud.category(ch) not in ("Cc", "Cf"))
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s.replace("[", "〔").replace("]", "〕")
 
 #: 席位权重(预注册;Σ=20 → final 原生 0-100)
 SEAT_WEIGHTS = {
@@ -166,9 +181,9 @@ def render_fund_card(facts: pd.DataFrame, biz_text: str | None = None,
         for ln in bl:
             if ln.strip().startswith("- "):
                 k += 1
-                out_b.append(f"- [FB{k}]{ln.strip()[2:]}")
+                out_b.append(f"- [FB{k}]{sanitize_text(ln.strip()[2:])}")
             else:
-                out_b.append(ln)
+                out_b.append(sanitize_text(ln))   # v3.1 B3:节头等外部行同净化
         lines.extend(out_b)
     return "\n".join(lines)
 
@@ -266,9 +281,9 @@ def _stars(imp) -> str:
 
 
 def _t70(title) -> str:
-    """canonical 标题截断(复审#2 minor):所有证据行统一 70 字,保证整行 <160
-    与接地上限兼容;event_id 哈希用全文,截断只在显示层。"""
-    return str(title)[:70]
+    """canonical 标题净化+截断(v3.1 B3:先 sanitize_text 再截 70 字——换行/控制符/
+    方括号在标题里不再可能;event_id 哈希用全文,净化与截断只在显示层)。"""
+    return sanitize_text(title)[:70]
 
 
 def _det_sort(df: pd.DataFrame, has_vis: bool) -> pd.DataFrame:
