@@ -70,20 +70,10 @@ def _suspend_d_path(date: str) -> str:
 
 
 def write_suspend_d(updater: DailyDataUpdater, date: str) -> dict:
-    """Fetch suspend_d(date) and write the per-date file DIRECTLY (atomic overwrite) rather than via
-    insert_market_data's merge: suspend_d(date) is a complete same-date snapshot, so a re-fetch
-    REPLACES it, and this preserves suspend_timing (the merge would duplicate rows + drop timing on a
-    schema change). suspend_timing is load-bearing for the monthly-bump full-day-vs-intraday
-    completeness proof (GPT B1-b)."""
-    df_susp = updater.fetcher.fetch_suspend_d(trade_date=date)
-    os.makedirs(os.path.dirname(_suspend_d_path(date)), exist_ok=True)
-    keep = [c for c in ("ts_code", "trade_date", "suspend_type", "suspend_timing") if c in df_susp.columns]
-    out = df_susp[keep] if (not df_susp.empty and keep) else pd.DataFrame(
-        columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
-    tmp = _suspend_d_path(date) + ".tmp"
-    out.to_parquet(tmp, index=False)
-    os.replace(tmp, _suspend_d_path(date))
-    return {"suspend_rows": int(len(df_susp)), "suspend_timing_present": "suspend_timing" in keep}
+    """Delegate to the canonical DailyDataUpdater.write_suspend_d (atomic overwrite, timing-
+    preserving) so the daily-raw job and the monthly-bump catch-up share ONE suspend_d writer — the
+    suspend_timing it preserves is load-bearing for the completeness proof (GPT B1-b)."""
+    return updater.write_suspend_d(date)
 
 
 def suspend_d_needs_refetch(date: str) -> bool:

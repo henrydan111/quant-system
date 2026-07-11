@@ -174,6 +174,8 @@ These are the supported entry points. Do not reintroduce or document deprecated 
 - [scripts/fetch_suspend_d_historical.py](scripts/fetch_suspend_d_historical.py) — one-time `suspend_d` historical bootstrap (P1-1; not wired into automation)
 - [scripts/refresh_namechange.py](scripts/refresh_namechange.py) — idempotent refresh of `data/reference/namechange.parquet` (P1-2; not wired into automation)
 - [scripts/run_daily_qa.py](scripts/run_daily_qa.py) — manual QA orchestrator (see §6.2a below)
+- [scripts/monthly_calendar_bump.py](scripts/monthly_calendar_bump.py) — Phase 5-B monthly formal calendar bump (the ONLY provider-calendar-advancing path): catch-up → new policy → full rebuild → frozen-prefix + fresh-window completeness audits → dry-run → §13 human-gated publish
+- [scripts/register_daily_raw_task.py](scripts/register_daily_raw_task.py) + [scripts/daily_raw_update.bat](scripts/daily_raw_update.bat) — Phase 5-C `QuantDailyRawUpdate` daily raw-only job (see §6.2b); dry-run by default, `--register` is a §13 machine mutation
 - [scripts/fetch_new_alpha_endpoints.py](scripts/fetch_new_alpha_endpoints.py) — one-time bootstrap for 5 new alpha endpoints (top_list, top_inst, block_trade, stk_holdertrade, cyq_perf); not wired into automation
 - [src/dashboard/build_dashboard.py](src/dashboard/build_dashboard.py) — rebuild the centralized HTML dashboard: a **read-only projection** of the registries / field governance / factor catalog / research artifacts / `project_state.md`, plus a full collection of Claude Code session transcripts, into **`index.html` at the project root** (self-contained, gitignored; `data.json` + session cache under `workspace/outputs/dashboard/`). Code is the auxiliary package [src/dashboard/](src/dashboard/) (a read-only reporting tool, NOT one of the six research modules — do not import it from any formal path). Auto-rebuilt by a `SessionEnd` hook (`.claude/settings.json`) + the hourly `QuantDashboardRefresh` scheduled task; human-curated overlay in [workspace/configs/dashboard_board.yaml](workspace/configs/dashboard_board.yaml). Never mutates project data. Full design: [src/dashboard/README.md](src/dashboard/README.md).
 
@@ -188,9 +190,27 @@ venv/Scripts/python.exe scripts/run_daily_qa.py
 This orchestrates `DataAuditor.audit_daily_files` → `audit_qlib.py` smoke →
 `tests/data_infra/test_provider_boundary.py` → `tests/data_infra/test_pit_live_provider.py`.
 It writes a structured report to `logs/qa_report_<ts>.json` and exits
-non-zero on any failure. It is intentionally NOT a scheduler / alerter
-at this stage (because the trade calendar is intentionally frozen at
-2026-02-27 while the system is being built).
+non-zero on any failure. On failure it also writes `logs/qa_alert_<date>.flag`
+(cleared on a recovered same-day run) — the lightweight Phase 5-C alert;
+no email/webhook by design.
+
+### 6.2b Steady-state calendar mechanism (Phase 5, calendar unfroze 2026-07-01)
+
+The trade calendar is **no longer frozen** (it was intentionally frozen at 2026-02-27
+during construction; published forward to 2026-07-01 on 2026-07-04). The two-tier
+steady-state mechanism (design: [PHASE5_DESIGN.md](workspace/research/calendar_unfreeze/PHASE5_DESIGN.md)):
+
+- **Daily raw job (5-C)**: [daily_raw_update.bat](scripts/daily_raw_update.bat) runs
+  `update_daily_data.py --no-qlib --last-complete-session` + `run_daily_qa.py`. Raw-only —
+  it NEVER touches the Qlib provider/calendar/manifest (D1/D2: the incremental provider path
+  neither advances the calendar nor should rotate `build_id` daily). `--last-complete-session`
+  picks the last CST-complete trading day, never a partial calendar-today. Register the
+  `QuantDailyRawUpdate` Windows task via [register_daily_raw_task.py](scripts/register_daily_raw_task.py)
+  (dry-run by default; `--register` is the §13 machine mutation).
+- **Monthly formal bump (5-B)**: [monthly_calendar_bump.py](scripts/monthly_calendar_bump.py) is the
+  ONLY path that advances the provider calendar — a human-gated full rebuild + audits + publish.
+  `spent_oos_end` stays frozen at 2026-02-27 across every bump (D3); the born-sealed fresh window
+  `[2026-02-28, calendar_end]` grows monotonically until a Phase-6 spend event releases it.
 
 ### 6.3 Backend Rebuild Discipline
 

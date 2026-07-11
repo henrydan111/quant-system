@@ -436,6 +436,20 @@ def main() -> int:
                 print(f"  - tail: `{tail[-3:] if isinstance(tail, list) else tail}`")
     print()
 
+    # QA failure alert (Phase 5-C/C3): on failure, write a per-day flag file the daily scheduled
+    # task + an operator can watch; on success, clear any stale flag so a recovered run resolves the
+    # alert. Lightweight by design — no email/webhook (out of scope); the Windows task also records
+    # the native exit code.
+    alert_path = LOGS_DIR / f"qa_alert_{timestamp[:8]}.flag"
+    if not all_ok:
+        failed = [c["label"] for c in checks if not c["ok"]]
+        alert_path.write_text(
+            f"QA FAILED {timestamp}\nfailed_checks: {failed}\nreport: {report_path}\n", encoding="utf-8")
+        logger.error("QA FAILED - wrote alert flag %s (failed: %s)", alert_path, failed)
+    elif alert_path.exists():
+        alert_path.unlink()
+        logger.info("QA recovered - cleared stale alert flag %s", alert_path)
+
     return 0 if all_ok else 1
 
 

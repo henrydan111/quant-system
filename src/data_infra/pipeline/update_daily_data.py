@@ -426,7 +426,34 @@ class DailyDataUpdater:
             except Exception as e:
                 logger.error("Error fetching %s for %s: %s", name, target_date, e)
 
+        # suspend_d (Phase 5-C/C2): a complete same-date snapshot, stored via ATOMIC OVERWRITE (not
+        # the merge path) so it preserves suspend_timing — load-bearing for the monthly-bump
+        # full-day-vs-intraday daily-completeness proof (Phase 5-B). Cheap, per trade_date.
+        try:
+            susp = self.write_suspend_d(target_date)
+            affected_datasets.add("suspend_d")
+            logger.info("  suspend_d: %d rows (timing=%s)", susp["suspend_rows"], susp["suspend_timing_present"])
+        except Exception as e:
+            logger.error("Error fetching suspend_d for %s: %s", target_date, e)
+
         return touched_symbols, affected_datasets
+
+    def write_suspend_d(self, target_date: str) -> dict:
+        """Fetch + store suspend_d(target_date) as a complete same-date snapshot via ATOMIC OVERWRITE
+        (not insert_market_data's merge, which would duplicate rows + drop suspend_timing on a schema
+        change). suspend_timing distinguishes a full-day suspension from an intraday halt — the
+        monthly-bump daily-completeness proof (Phase 5-B) fails closed without it. Cheap, per date."""
+        df = self.fetcher.fetch_suspend_d(trade_date=target_date)
+        year_dir = os.path.join(self.data_dir, 'market', 'suspend_d', target_date[:4])
+        os.makedirs(year_dir, exist_ok=True)
+        path = os.path.join(year_dir, f"suspend_d_{target_date}.parquet")
+        keep = [c for c in ('ts_code', 'trade_date', 'suspend_type', 'suspend_timing') if c in df.columns]
+        out = df[keep] if (not df.empty and keep) else pd.DataFrame(
+            columns=['ts_code', 'trade_date', 'suspend_type', 'suspend_timing'])
+        tmp = path + '.tmp'
+        out.to_parquet(tmp, index=False)
+        os.replace(tmp, path)
+        return {"suspend_rows": int(len(df)), "suspend_timing_present": "suspend_timing" in keep}
 
     def update_index_weights(self, target_date: str):
         """
@@ -508,12 +535,40 @@ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
         logger.error(f"Incremental Qlib update failed: {e}")
 
 
+def resolve_last_complete_session(ref_dir: str, close_hour: int = 16, now=None) -> str:
+    """The last COMPLETE trading day as of now (CST). A trading day is complete once we are past the
+    vendor daily close hour (~16:00 CST); before that, today's data is partial, so fall back to the
+    prior trading day. Uses China time — the vendor close is CST, not the host's local time. This is
+    the LENIENT daily-job readiness (idempotent, non-publishing, retry-tolerant); the FORMAL provider
+    bump's target_end uses the stricter multi-endpoint readiness contract (Phase 5-B). `now` is
+    injectable for tests."""
+    if now is None:
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        except Exception:  # pragma: no cover — zoneinfo present on 3.9+
+            now = datetime.now()
+    today = now.strftime('%Y%m%d')
+    cal = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
+    opens = sorted(cal[cal['is_open'] == 1]['cal_date'].astype(str).tolist())
+    cands = [d for d in opens if d <= today]
+    if not cands:
+        raise SystemExit("resolve_last_complete_session: no open trading day <= today in trade_cal")
+    latest = cands[-1]
+    if latest == today and now.hour < close_hour:  # today not yet closed -> prior session
+        return cands[-2] if len(cands) >= 2 else latest
+    return latest
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Daily Data Updater (Market + Fundamentals + Index Weights)"
     )
     parser.add_argument('--date', type=str, default=None,
                         help='Date to update (YYYYMMDD). Defaults to today.')
+    parser.add_argument('--last-complete-session', action='store_true',
+                        help='Update the last COMPLETE trading day (CST close-aware) instead of the '
+                             'calendar today — the unattended daily-raw job (Phase 5-C).')
     parser.add_argument('--data-root', type=str, default=None,
                         help='Override data root directory (default: from config.yaml)')
     parser.add_argument('--skip-fundamentals', action='store_true',
@@ -527,10 +582,16 @@ def main():
 
     args = parser.parse_args()
 
-    target_date = args.date if args.date else datetime.now().strftime('%Y%m%d')
-
     config_path = os.path.join(project_root, 'config.yaml')
     updater = DailyDataUpdater(config_path=config_path, data_root=args.data_root)
+
+    if args.date:
+        target_date = args.date
+    elif args.last_complete_session:
+        target_date = resolve_last_complete_session(updater.ref_dir)
+        logger.info("--last-complete-session resolved to %s (CST close-aware)", target_date)
+    else:
+        target_date = datetime.now().strftime('%Y%m%d')
 
     result = updater.update_for_date(
         target_date,
