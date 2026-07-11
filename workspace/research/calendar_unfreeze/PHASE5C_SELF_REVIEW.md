@@ -42,3 +42,29 @@
 38 单测绿（5 新 5-C daily + 24 monthly + 8 catchup range-safety + 1 needs_refetch）；4 文件 py_compile OK；register `--dry-run` 实测打印正确 schtasks 命令；resolve 三例（收盘前回退/收盘后今日/周末回退）+ write_suspend_d 保 timing+覆写+空快照。
 
 **结论：clean for GPT。5-C 实现 PHASE5_DESIGN.md 已 SHIP 的设计；不触 §3 load-bearing（日更纯 raw）；C-4 注册=§13 留用户；5 个宽松度/范围判断显式留审。**
+
+---
+
+## REWORK round 2（GPT §10 实现审查 REWORK 后修复自审）— 2026-07-04
+
+GPT 审 1e6db9a：**REWORK**（2 Blocker + 4 Major + 2 Minor，全部部署级真问题，38 测试没覆盖）。逐条修复：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** 首日日更截断日历→选择器卡死 | `update_reference_data` 改：抓**前向 horizon**（次年末）+ 按(exchange,cal_date)**合并**（原子 os.replace），永不用 target-bounded 覆写；`resolve_last_complete_session` 加**fail-closed**（日历末 < today→拒） | 新增 merge-not-truncate 连续会话回归（周一跑→周二选择器返周二）+ stale-calendar fail 单测 |
+| **B2** .bat 在 cp936 下 `cd E:\量化系统` 乱码→退 1 | 重写 .bat：**纯 ASCII + 自相对** `cd /d "%~dp0.."`（%~dp0 由 OS 运行时编码，不受 cp936 影响）+ 组合退出码 | 结构审 |
+| **M1** 更新失败不返退出码给任务计划 | `main()` 返 0/1 + `sys.exit(main())`；交易日缺 daily / suspend_d 错→非零（`is_trading_day`+`errors`）；.bat 传播 update/QA 组合退出码 | is_trading_day/errors 路径 |
+| **M2** "18:30 CST" 未真编码（宿主 EST）+ 漏跑不恢复 | register 改**Task Scheduler XML**：StartBoundary 带 **+08:00**（真 CST）+ StartWhenAvailable + RestartOnFailure×3 + IgnoreNew；QA 时间戳/cutoff 改 **Asia/Shanghai**；QA 成功写 **heartbeat**；新增独立 **watchdog**（次晨 10:00 CST 检 heartbeat vs 最后完整会话，漏跑→告警） | register dry-run XML 实测（+08:00/StartWhenAvailable/restart）；watchdog compile |
+| **M3** suspend_d writer 可被畸形数据毁掉有效快照 | 写前**校验**：非空须四列齐 + 每行 trade_date==target，否则 **raise**（保留旧快照）；**唯一临时文件** tempfile.mkstemp（定长 .tmp 与月度 job 冲突）+ 原子 replace | 新增 wrong-date-preserves-prior + missing-timing raise 单测 |
+| **M4** 下游 suspend 消费者看不到年分区文件 | event_store.py `glob("*.parquet")`→`rglob("suspend_d_*.parquet")`（活体：root 0 → recursive 85） | 1 行修（该文件 git clean，安全） |
+| **m1** catchup 双写 suspend_d（两次 API） | run_one_day 删显式 write_suspend_d（update_phase3_daily_market 已写） | 结构审 |
+| **m2** close_hour=16 不够（daily_basic 到 17:00）+ 唯一 today-preclose 应 fail | cutoff 改 **17:30**（close_hhmm）；唯一候选是 pre-close today→**raise** | 新增 only-preclose-fail 单测 |
+
+### §3/D 复核（REWORK 后）
+- **D1/D2 仍纯 raw**：所有修复不改 `--no-qlib` 语义；日历**合并**仍只写 `data/reference/trade_cal.parquet`（原始参考层），不碰 provider/manifest/ledger。GPT 确认"harmful write 是原始参考日历，非 provider"。
+- **B1 是本 REWORK 最危**：日更截断它自己用来选下一会话的日历——单会话即卡死，且 QA 读截断日历误报 PASS。已修（前向合并 + 选择器 fail-closed）。
+
+### 验证汇总
+88 绿（11 daily-5c + 7 catchup + 36 monthly + 34 report_rc）；6 文件 py_compile OK；register dry-run XML（+08:00/StartWhenAvailable/restart×3）；event_store rglob 修。
+
+**结论：clean for GPT（re-review）。2 Blocker + 4 Major + 2 Minor 全修（含 XML-CST 任务 + heartbeat/watchdog + 日历合并 + suspend_d 校验）；C-4 注册仍 §13 留用户。**

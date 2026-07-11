@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -47,6 +48,43 @@ def test_last_complete_session_on_weekend_uses_last_trading_day(tmp_path):
     assert resolve_last_complete_session(ref, now=datetime(2026, 7, 4, 12, 0)) == "20260703"
 
 
+def test_last_complete_session_fails_closed_on_stale_calendar(tmp_path):
+    # GPT B1: a calendar not future-aware through today (e.g. truncated by a prior buggy run) must
+    # FAIL, not silently pick a stale session.
+    ref = _trade_cal(tmp_path, OPEN)  # calendar ends 20260705
+    with pytest.raises(SystemExit, match="future-aware|stale"):
+        resolve_last_complete_session(ref, now=datetime(2026, 7, 10, 18, 0))  # today > calendar end
+
+
+def test_last_complete_session_fails_when_only_preclose_today(tmp_path):
+    # m2: if the only candidate is a pre-close today, refuse a partial session rather than return it.
+    ref = _trade_cal(tmp_path, {"20260629"})  # only one open day, which is "today"
+    with pytest.raises(SystemExit, match="pre-close|partial"):
+        resolve_last_complete_session(ref, now=datetime(2026, 6, 29, 9, 0))
+
+
+def test_update_reference_data_merges_calendar_not_truncate(tmp_path):
+    # GPT B1 regression: a daily run must NOT truncate the future-aware calendar to target_date (which
+    # freezes the selector). update_reference_data fetches a forward horizon and MERGES; a Monday run
+    # must leave Tuesday selectable.
+    ref = tmp_path / "reference"
+    ref.mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE",
+                  "cal_date": pd.bdate_range("20260101", "20261231").strftime("%Y%m%d"),
+                  "is_open": 1, "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
+    fetched = pd.DataFrame({"exchange": "SSE",
+                            "cal_date": pd.bdate_range("20260101", "20271231").strftime("%Y%m%d"),
+                            "is_open": 1, "pretrade_date": ""})
+    stub = types.SimpleNamespace(ref_dir=str(ref), fetcher=types.SimpleNamespace(
+        fetch_stock_basic=lambda: pd.DataFrame(),
+        fetch_trade_cal=lambda end_date: fetched))
+    DailyDataUpdater.update_reference_data(stub, "20260706")  # a "Monday" run
+    cal = pd.read_parquet(ref / "trade_cal.parquet")
+    assert cal["cal_date"].astype(str).max() > "20260706", "future calendar must NOT be truncated"
+    # Tuesday selector (post-close) returns Tuesday — the job advances, not stuck on Monday
+    assert resolve_last_complete_session(str(ref), now=datetime(2026, 7, 7, 18, 0)) == "20260707"
+
+
 def test_write_suspend_d_preserves_timing_atomic_overwrite(tmp_path):
     # the canonical writer keeps suspend_timing and overwrites (replaces) the same-date snapshot.
     df = pd.DataFrame({"ts_code": ["000001.SZ", "600000.SH"], "trade_date": ["20260703", "20260703"],
@@ -77,3 +115,30 @@ def test_write_suspend_d_empty_day_writes_schema(tmp_path):
     assert res["suspend_rows"] == 0
     out = pd.read_parquet(tmp_path / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet")
     assert len(out) == 0 and "suspend_timing" in out.columns  # empty snapshot with the expected schema
+
+
+def test_write_suspend_d_rejects_wrong_date_and_preserves_prior(tmp_path):
+    # GPT M3: a response carrying the WRONG trade_date must RAISE and preserve the prior valid snapshot.
+    good = pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"],
+                         "suspend_timing": [""]})
+    stub = types.SimpleNamespace(data_dir=str(tmp_path),
+                                 fetcher=types.SimpleNamespace(fetch_suspend_d=lambda trade_date: good))
+    DailyDataUpdater.write_suspend_d(stub, "20260703")
+    path = tmp_path / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet"
+    assert len(pd.read_parquet(path)) == 1
+    bad = pd.DataFrame({"ts_code": ["000002.SZ"], "trade_date": ["20260702"], "suspend_type": ["S"],
+                        "suspend_timing": [""]})  # wrong date
+    stub.fetcher = types.SimpleNamespace(fetch_suspend_d=lambda trade_date: bad)
+    with pytest.raises(ValueError, match="trade_date"):
+        DailyDataUpdater.write_suspend_d(stub, "20260703")
+    assert list(pd.read_parquet(path)["ts_code"]) == ["000001.SZ"]  # prior snapshot intact
+
+
+def test_write_suspend_d_rejects_missing_timing(tmp_path):
+    # GPT M3: a nonempty response without suspend_timing is ambiguous -> RAISE (don't write).
+    bad = pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20260703"], "suspend_type": ["S"]})
+    stub = types.SimpleNamespace(data_dir=str(tmp_path),
+                                 fetcher=types.SimpleNamespace(fetch_suspend_d=lambda trade_date: bad))
+    with pytest.raises(ValueError, match="missing columns|suspend_timing"):
+        DailyDataUpdater.write_suspend_d(stub, "20260703")
+    assert not (tmp_path / "market" / "suspend_d" / "2026" / "suspend_d_20260703.parquet").exists()

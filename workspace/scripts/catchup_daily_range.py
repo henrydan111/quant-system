@@ -106,12 +106,11 @@ def run_one_day(updater: DailyDataUpdater, date: str) -> dict:
     updater.update_index_data(date)
     detail["index"] = "ok"
 
+    # update_phase3_daily_market now writes suspend_d (with timing) itself (Phase 5-C/C2), so it is
+    # NOT re-fetched here — a second call would double the Tushare hit per session (GPT m1).
     _, phase3_sets = updater.update_phase3_daily_market(date)
     detail["phase3"] = sorted(phase3_sets)
-
-    # suspend_d is not wired into the daily updater (bootstrap-only historically); fetch per
-    # trade_date here so the suspension proxy stays exact over the gap.
-    detail.update(write_suspend_d(updater, date))
+    detail["suspend_d"] = "suspend_d" in phase3_sets
 
     return detail
 

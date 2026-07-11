@@ -39,6 +39,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VENV_PYTHON = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
+
+def _now_cst():
+    """China wall-clock — the market/vendor calendar is CST, so QA's cutoff + report/alert dates
+    must use it, not the host's local time (this host may run in a US timezone — GPT 5-C M2)."""
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(ZoneInfo("Asia/Shanghai"))
+    except Exception:  # pragma: no cover
+        return _dt.now()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -282,7 +293,7 @@ def _audit_daily_files_inprocess() -> dict:
         # steady-state anchor (UNFREEZE_PLAN Phase 5) is
         # min(provider_calendar_end, last_complete_trade_date, endpoint-ready
         # date), owned by the monthly bump driver's readiness check.
-        now = pd.Timestamp.now()
+        now = pd.Timestamp(_now_cst().replace(tzinfo=None))  # CST, not host-local (GPT 5-C M2)
         cutoff = now.strftime("%Y%m%d") if now.hour >= 16 else (now - pd.Timedelta(days=1)).strftime("%Y%m%d")
         cal = cal[cal["cal_date"].astype(str) <= cutoff]
         end_date = str(cal["cal_date"].iloc[-1])
@@ -406,7 +417,7 @@ def main() -> int:
 
     # Report
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = _now_cst().strftime("%Y%m%d_%H%M%S")  # CST — report/alert keyed by China date (M2)
     report_path = LOGS_DIR / f"qa_report_{timestamp}.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -441,14 +452,20 @@ def main() -> int:
     # alert. Lightweight by design — no email/webhook (out of scope); the Windows task also records
     # the native exit code.
     alert_path = LOGS_DIR / f"qa_alert_{timestamp[:8]}.flag"
+    heartbeat_path = LOGS_DIR / "daily_job_heartbeat.json"
     if not all_ok:
         failed = [c["label"] for c in checks if not c["ok"]]
         alert_path.write_text(
             f"QA FAILED {timestamp}\nfailed_checks: {failed}\nreport: {report_path}\n", encoding="utf-8")
         logger.error("QA FAILED - wrote alert flag %s (failed: %s)", alert_path, failed)
-    elif alert_path.exists():
-        alert_path.unlink()
-        logger.info("QA recovered - cleared stale alert flag %s", alert_path)
+    else:
+        if alert_path.exists():
+            alert_path.unlink()
+            logger.info("QA recovered - cleared stale alert flag %s", alert_path)
+        # success heartbeat (CST) so the independent watchdog can detect a MISSED daily run (the
+        # main task cannot report that it never launched — GPT 5-C M2).
+        heartbeat_path.write_text(json.dumps(
+            {"last_success_cst": timestamp, "report": str(report_path)}, ensure_ascii=False), encoding="utf-8")
 
     return 0 if all_ok else 1
 

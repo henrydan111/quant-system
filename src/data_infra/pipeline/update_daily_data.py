@@ -18,6 +18,7 @@ import sys
 import os
 import argparse
 import logging
+import tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 import pandas as pd
@@ -126,8 +127,10 @@ class DailyDataUpdater:
                 logger.info(f"{target_date} is not a trading day. Skipping market data.")
                 return {
                     "market_ok": False,
+                    "is_trading_day": False,  # legitimate skip — not a failure (M1 exit-code)
                     "touched_symbols": set(),
                     "affected_datasets": {"stock_basic", "trade_cal"},
+                    "errors": [],
                 }
 
         # 3. Update Daily Market Data
@@ -147,6 +150,7 @@ class DailyDataUpdater:
             fundamental_symbols, fundamental_datasets = self.update_fundamentals(target_date)
             affected_datasets.update(fundamental_datasets)
 
+        self._suspend_error = None
         phase3_symbols = set()
         if not skip_phase3:
             if market_ok:
@@ -161,10 +165,17 @@ class DailyDataUpdater:
         if self.update_index_weights(target_date):
             affected_datasets.add("index_weights")
 
+        errors = []
+        if not market_ok:
+            errors.append(f"daily market data missing for trading day {target_date}")
+        if self._suspend_error:
+            errors.append(self._suspend_error)
         return {
             "market_ok": market_ok,
+            "is_trading_day": True,
             "touched_symbols": set(market_symbols) | set(fundamental_symbols) | set(phase3_symbols),
             "affected_datasets": affected_datasets,
+            "errors": errors,
         }
 
     def _expected_empty_dates(self, dataset_name: str) -> set[str]:
@@ -185,9 +196,24 @@ class DailyDataUpdater:
             if not df_basic.empty:
                 df_basic.to_parquet(os.path.join(self.ref_dir, "stock_basic.parquet"), index=False)
 
-            df_cal = self.fetcher.fetch_trade_cal(end_date=target_date)
+            # trade_cal: fetch a FORWARD horizon and MERGE by (exchange, cal_date) — NEVER overwrite
+            # with a target-bounded response. A target-bounded fetch truncates the future-aware
+            # calendar that resolve_last_complete_session + QA depend on, freezing the daily job on
+            # its first run (Monday's run -> calendar ends Monday -> Tuesday selector stuck on
+            # Monday). GPT B1. end_date = next year-end so the calendar always extends past today.
+            horizon_end = f"{int(target_date[:4]) + 1}1231"
+            df_cal = self.fetcher.fetch_trade_cal(end_date=horizon_end)
             if not df_cal.empty:
-                df_cal.to_parquet(os.path.join(self.ref_dir, "trade_cal.parquet"), index=False)
+                cal_path = os.path.join(self.ref_dir, "trade_cal.parquet")
+                key = [c for c in ("exchange", "cal_date") if c in df_cal.columns] or None
+                if os.path.exists(cal_path):
+                    old = pd.read_parquet(cal_path)
+                    df_cal = (pd.concat([old, df_cal], ignore_index=True)
+                              .drop_duplicates(subset=key, keep="last"))  # fresh fetch wins on overlap
+                df_cal = df_cal.sort_values("cal_date")
+                tmp = cal_path + ".tmp"
+                df_cal.to_parquet(tmp, index=False)
+                os.replace(tmp, cal_path)
         except Exception as e:
             logger.error(f"Error updating reference data: {e}")
 
@@ -435,6 +461,7 @@ class DailyDataUpdater:
             logger.info("  suspend_d: %d rows (timing=%s)", susp["suspend_rows"], susp["suspend_timing_present"])
         except Exception as e:
             logger.error("Error fetching suspend_d for %s: %s", target_date, e)
+            self._suspend_error = f"suspend_d {target_date}: {e}"  # surfaced to the M1 exit code
 
         return touched_symbols, affected_datasets
 
@@ -442,18 +469,37 @@ class DailyDataUpdater:
         """Fetch + store suspend_d(target_date) as a complete same-date snapshot via ATOMIC OVERWRITE
         (not insert_market_data's merge, which would duplicate rows + drop suspend_timing on a schema
         change). suspend_timing distinguishes a full-day suspension from an intraday halt — the
-        monthly-bump daily-completeness proof (Phase 5-B) fails closed without it. Cheap, per date."""
+        monthly-bump daily-completeness proof (Phase 5-B) fails closed without it. Cheap, per date.
+
+        VALIDATES before replacing a valid snapshot (GPT M3): a nonempty response must carry all four
+        columns AND every row's trade_date == target_date; otherwise RAISE (preserving the prior
+        snapshot) — never silently overwrite with malformed/wrong-date data. Uses a UNIQUE temp file
+        (a fixed .tmp would collide with an overlapping monthly job) + atomic replace."""
         df = self.fetcher.fetch_suspend_d(trade_date=target_date)
         year_dir = os.path.join(self.data_dir, 'market', 'suspend_d', target_date[:4])
         os.makedirs(year_dir, exist_ok=True)
         path = os.path.join(year_dir, f"suspend_d_{target_date}.parquet")
-        keep = [c for c in ('ts_code', 'trade_date', 'suspend_type', 'suspend_timing') if c in df.columns]
-        out = df[keep] if (not df.empty and keep) else pd.DataFrame(
-            columns=['ts_code', 'trade_date', 'suspend_type', 'suspend_timing'])
-        tmp = path + '.tmp'
-        out.to_parquet(tmp, index=False)
-        os.replace(tmp, path)
-        return {"suspend_rows": int(len(df)), "suspend_timing_present": "suspend_timing" in keep}
+        if not df.empty:
+            missing = {'ts_code', 'trade_date', 'suspend_type', 'suspend_timing'} - set(df.columns)
+            if missing:
+                raise ValueError(f"suspend_d {target_date}: response missing columns {sorted(missing)} "
+                                 "— prior snapshot preserved")
+            td = set(df['trade_date'].astype(str).str.replace('-', '', regex=False).unique())
+            if td != {target_date}:
+                raise ValueError(f"suspend_d {target_date}: response carries other trade_dates "
+                                 f"{sorted(td)[:5]} — prior snapshot preserved")
+            out = df[['ts_code', 'trade_date', 'suspend_type', 'suspend_timing']]
+        else:
+            out = pd.DataFrame(columns=['ts_code', 'trade_date', 'suspend_type', 'suspend_timing'])
+        fd, tmp = tempfile.mkstemp(dir=year_dir, prefix=f".suspend_d_{target_date}_", suffix=".tmp")
+        os.close(fd)
+        try:
+            out.to_parquet(tmp, index=False)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        return {"suspend_rows": int(len(df)), "suspend_timing_present": True}
 
     def update_index_weights(self, target_date: str):
         """
@@ -535,13 +581,15 @@ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
         logger.error(f"Incremental Qlib update failed: {e}")
 
 
-def resolve_last_complete_session(ref_dir: str, close_hour: int = 16, now=None) -> str:
+def resolve_last_complete_session(ref_dir: str, close_hhmm: str = "1730", now=None) -> str:
     """The last COMPLETE trading day as of now (CST). A trading day is complete once we are past the
-    vendor daily close hour (~16:00 CST); before that, today's data is partial, so fall back to the
-    prior trading day. Uses China time — the vendor close is CST, not the host's local time. This is
-    the LENIENT daily-job readiness (idempotent, non-publishing, retry-tolerant); the FORMAL provider
-    bump's target_end uses the stricter multi-endpoint readiness contract (Phase 5-B). `now` is
-    injectable for tests."""
+    vendor daily-file close (~17:30 CST — kline ~16:00, daily_basic to ~17:00, + margin); before
+    that, today's file is partial, so fall back to the prior trading day. Uses China time (the vendor
+    close is CST, not the host's local time). This is the LENIENT daily-job readiness (idempotent,
+    non-publishing, retry-tolerant); the FORMAL bump's target_end uses the stricter multi-endpoint
+    contract (Phase 5-B). FAILS CLOSED if the calendar is not future-aware through today (a truncated
+    calendar would otherwise freeze the selector on a stale session — GPT B1) or if the only
+    candidate is a pre-close today. `now` injectable for tests."""
     if now is None:
         try:
             from zoneinfo import ZoneInfo
@@ -550,13 +598,20 @@ def resolve_last_complete_session(ref_dir: str, close_hour: int = 16, now=None) 
             now = datetime.now()
     today = now.strftime('%Y%m%d')
     cal = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
+    all_days = sorted(cal['cal_date'].astype(str).tolist())
+    if not all_days or all_days[-1] < today:
+        raise SystemExit(f"trade_cal coverage ends {all_days[-1] if all_days else 'EMPTY'} < today "
+                         f"{today} (CST) — calendar not future-aware; refusing a stale session")
     opens = sorted(cal[cal['is_open'] == 1]['cal_date'].astype(str).tolist())
     cands = [d for d in opens if d <= today]
     if not cands:
         raise SystemExit("resolve_last_complete_session: no open trading day <= today in trade_cal")
     latest = cands[-1]
-    if latest == today and now.hour < close_hour:  # today not yet closed -> prior session
-        return cands[-2] if len(cands) >= 2 else latest
+    if latest == today and now.strftime('%H%M') < close_hhmm:  # today still pre-close -> prior session
+        if len(cands) < 2:
+            raise SystemExit(f"today {today} is the only candidate and it is pre-close "
+                             f"({now.strftime('%H%M')} < {close_hhmm}); refusing a partial session")
+        return cands[-2]
     return latest
 
 
@@ -618,6 +673,16 @@ def main():
     logger.info(f"  Qlib: {'⏭️ Skipped' if args.no_qlib else ('🔄 Full rebuild' if args.rebuild_qlib else '✅ Incremental')}")
     logger.info(f"{'='*50}")
 
+    # M1: propagate a real EXIT CODE so Task Scheduler / the wrapper see a failed run (logging a
+    # swallowed error then exiting 0 hides an updater crash behind QA's exit code). A non-trading day
+    # is a legitimate skip (exit 0); a trading day with missing daily data or a suspend_d error fails.
+    errors = result.get("errors", [])
+    if result.get("is_trading_day", True) and errors:
+        for e in errors:
+            logger.error("DAILY UPDATE FAILURE: %s", e)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

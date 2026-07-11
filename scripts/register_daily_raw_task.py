@@ -1,65 +1,122 @@
-# SCRIPT_STATUS: ACTIVE — calendar-unfreeze Phase 5-C: QuantDailyRawUpdate scheduled-task manager
-"""Register / inspect / delete the QuantDailyRawUpdate Windows scheduled task (Phase 5-C).
+# SCRIPT_STATUS: ACTIVE — calendar-unfreeze Phase 5-C: QuantDailyRawUpdate + watchdog task manager
+"""Register / inspect / delete the Phase 5-C Windows scheduled tasks.
 
-The task runs [daily_raw_update.bat](daily_raw_update.bat) every day at 18:30 CST: raw-only daily
-update (`update_daily_data.py --no-qlib --last-complete-session`) + `run_daily_qa.py`. It never
-touches the Qlib provider/calendar (D1/D2); the calendar advances only via the monthly formal bump
-([monthly_calendar_bump.py](monthly_calendar_bump.py)). Non-trading days skip internally.
+- QuantDailyRawUpdate (18:30 CHINA time): [daily_raw_update.bat](daily_raw_update.bat) — raw-only
+  daily update (`update_daily_data.py --no-qlib --last-complete-session`) + `run_daily_qa.py`. Never
+  touches the Qlib provider/calendar (D1/D2); the calendar advances only via the monthly bump (5-B).
+- QuantDailyRawWatchdog (10:00 CHINA time next morning): [daily_job_watchdog.py](daily_job_watchdog.py)
+  — alerts if the daily job silently missed a run (the main task cannot report it never launched).
 
-DRY-RUN by default (prints the schtasks command, executes nothing). Actually creating/deleting the
-task mutates the machine (§13) — pass --register / --delete explicitly.
+Registered via Task Scheduler XML so the trigger carries an explicit +08:00 (CHINA) StartBoundary —
+`schtasks /ST` uses the HOST's local time, and this host may run in a US timezone, so a naive "18:30"
+would fire ~06:30 China time (GPT M2). The XML also sets StartWhenAvailable=true (catch a run missed
+while asleep/offline), a bounded RestartOnFailure, and MultipleInstancesPolicy=IgnoreNew.
 
-    venv/Scripts/python.exe scripts/register_daily_raw_task.py            # dry-run (print only)
-    venv/Scripts/python.exe scripts/register_daily_raw_task.py --register # create the task (§13)
-    venv/Scripts/python.exe scripts/register_daily_raw_task.py --query    # show the task
-    venv/Scripts/python.exe scripts/register_daily_raw_task.py --delete   # remove the task (§13)
+DRY-RUN by default (prints the XML, executes nothing). --register / --delete mutate the machine (§13).
+
+    venv/Scripts/python.exe scripts/register_daily_raw_task.py            # dry-run (print XML)
+    venv/Scripts/python.exe scripts/register_daily_raw_task.py --register # create both tasks (§13)
+    venv/Scripts/python.exe scripts/register_daily_raw_task.py --query    # show the tasks
+    venv/Scripts/python.exe scripts/register_daily_raw_task.py --delete   # remove both tasks (§13)
 """
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-TASK_NAME = "QuantDailyRawUpdate"
+PY = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
+
+DAILY_TASK = "QuantDailyRawUpdate"
+WATCHDOG_TASK = "QuantDailyRawWatchdog"
 WRAPPER = PROJECT_ROOT / "scripts" / "daily_raw_update.bat"
-RUN_TIME = "18:30"  # CST: after the ~16:00 vendor daily close + margin (matches design §5.3)
+WATCHDOG_SCRIPT = PROJECT_ROOT / "scripts" / "daily_job_watchdog.py"
+# 18:30 / 10:00 CHINA time — the +08:00 offset is what pins it to CST regardless of host timezone.
+# The date part only anchors a DAILY recurrence; a fixed past anchor is fine.
+DAILY_START = "2026-01-01T18:30:00+08:00"
+WATCHDOG_START = "2026-01-02T10:00:00+08:00"
+
+_XML = '''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>{desc}</Description></RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>{start}</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+  </Principals>
+  <Settings>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure><Interval>PT30M</Interval><Count>3</Count></RestartOnFailure>
+    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec><Command>{cmd}</Command>{args}<WorkingDirectory>{cwd}</WorkingDirectory></Exec>
+  </Actions>
+</Task>'''
 
 
-def _create_cmd() -> list[str]:
-    # DAILY trigger; the updater's internal is_open check skips non-trading days. /RL LIMITED = least
-    # privilege; /F overwrites so re-registration is idempotent.
-    return ["schtasks", "/Create", "/TN", TASK_NAME, "/TR", f'"{WRAPPER}"',
-            "/SC", "DAILY", "/ST", RUN_TIME, "/RL", "LIMITED", "/F"]
+def _task_xml(desc: str, start: str, cmd: str, arguments: str = "") -> str:
+    args_el = f"<Arguments>{arguments}</Arguments>" if arguments else ""
+    return _XML.format(desc=desc, start=start, cmd=cmd, args=args_el, cwd=str(PROJECT_ROOT))
+
+
+def _register(task_name: str, xml_str: str) -> int:
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    os.close(fd)
+    Path(path).write_text(xml_str, encoding="utf-16")  # UTF-16 handles the Chinese repo path safely
+    try:
+        return subprocess.run(["schtasks", "/Create", "/TN", task_name, "/XML", path, "/F"]).returncode
+    finally:
+        os.remove(path)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Manage the QuantDailyRawUpdate scheduled task (Phase 5-C)")
-    ap.add_argument("--register", action="store_true", help="Create the task (§13 machine mutation)")
-    ap.add_argument("--delete", action="store_true", help="Delete the task (§13 machine mutation)")
-    ap.add_argument("--query", action="store_true", help="Show the task definition")
+    ap = argparse.ArgumentParser(description="Manage the Phase 5-C scheduled tasks")
+    ap.add_argument("--register", action="store_true", help="Create both tasks (§13 machine mutation)")
+    ap.add_argument("--delete", action="store_true", help="Delete both tasks (§13 machine mutation)")
+    ap.add_argument("--query", action="store_true", help="Show the task definitions")
     args = ap.parse_args()
 
-    if not WRAPPER.exists():
-        print(f"ERROR: wrapper not found: {WRAPPER}", file=sys.stderr)
+    if not WRAPPER.exists() or not WATCHDOG_SCRIPT.exists():
+        print("ERROR: wrapper or watchdog script not found", file=sys.stderr)
         return 2
 
-    if args.delete:
-        cmd = ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"]
-    elif args.query:
-        cmd = ["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"]
-    else:
-        cmd = _create_cmd()
+    daily_xml = _task_xml("Phase 5-C daily raw-layer update + QA (18:30 CST)", DAILY_START, str(WRAPPER))
+    watchdog_xml = _task_xml("Phase 5-C missed-run watchdog (10:00 CST)", WATCHDOG_START,
+                             str(PY), f"&quot;{WATCHDOG_SCRIPT}&quot;")
 
-    print("schtasks command:\n  " + " ".join(cmd))
-    if not (args.register or args.delete or args.query):
-        print(f"\n[dry-run] nothing executed. Trigger: DAILY {RUN_TIME} CST -> {WRAPPER.name} "
-              f"(update --no-qlib --last-complete-session + run_daily_qa). Non-trading days skip "
-              f"internally.\nRe-run with --register to create it (§13).")
+    if args.query:
+        for t in (DAILY_TASK, WATCHDOG_TASK):
+            subprocess.run(["schtasks", "/Query", "/TN", t, "/V", "/FO", "LIST"])
         return 0
-    result = subprocess.run(cmd)
-    return result.returncode
+    if args.delete:
+        rc = 0
+        for t in (DAILY_TASK, WATCHDOG_TASK):
+            rc |= subprocess.run(["schtasks", "/Delete", "/TN", t, "/F"]).returncode
+        return rc
+    if args.register:
+        rc = _register(DAILY_TASK, daily_xml)
+        rc |= _register(WATCHDOG_TASK, watchdog_xml)
+        return rc
+
+    print("=== " + DAILY_TASK + " XML ===\n" + daily_xml)
+    print("\n=== " + WATCHDOG_TASK + " XML ===\n" + watchdog_xml)
+    print(f"\n[dry-run] nothing executed. --register creates {DAILY_TASK} (18:30 CST, StartWhenAvailable, "
+          f"restart x3) + {WATCHDOG_TASK} (10:00 CST). §13 machine mutation.")
+    return 0
 
 
 if __name__ == "__main__":

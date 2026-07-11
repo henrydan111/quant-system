@@ -192,7 +192,9 @@ def gen_market_events(days: list[str]) -> list[dict]:
 
 def gen_suspend_events(days: list[str]) -> list[dict]:
     """G4:停复牌(suspend_d reference)。"""
-    files = sorted(SUSPEND_DIR.glob("*.parquet"))
+    # suspend_d is YEAR-PARTITIONED (data/market/suspend_d/<year>/suspend_d_<date>.parquet), so a
+    # root-level glob("*.parquet") finds ZERO files — recurse (GPT 5-C M4).
+    files = sorted(SUSPEND_DIR.rglob("suspend_d_*.parquet"))
     if not files:
         return []
     sd = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
