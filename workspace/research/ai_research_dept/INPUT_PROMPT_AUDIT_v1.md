@@ -503,6 +503,22 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 **Minor**:`archive_sha256`/新增 `manifest_sha256` 用**完整 64 位**摘要(语义指纹 manifest_fp 保持 16 位短 ID);archives.html 加链版本选择器,日期按 `archive_days_by_version` 填充,分析链接带 chain。
 **测试:111/111**(+19 条复审#4 回归:逐字段删除降级、稀疏编号、总函数、claim 类型)。
 
+### §10.5 复审#5 裁定与处置(2026-07-10 收到,chain_v2.5;此前一次贴回为复审#4 旧裁定
+原文——已机械核对其全部条目在 HEAD 已修复,未采取行动;本节处置对 66a33e6 的真实复审)
+
+**裁定:REVISE**(3 Blocker + 3 Major + 1 Minor;R2 追加裁定:评分参数**必须**从不可变契约
+执行、单文件互覆盖 run_status 不可接受、直跑写正式目录需逐股锁、非 legacy 无条件要求封印)。处置:
+
+| # | Blocker | chain_v2.5 修复 |
+|---|---|---|
+| B1⁗ | **ChainContract 可伪造 + 评分参数仍从可变全局执行**:直接实例化 dataclass 配真 manifest_fp 即通过;运行中改 SEAT_WEIGHTS 全局即改分,档案无从自证执行契约 | 契约**只能 `ChainContract.load(vdir)` 对盘构造**(验 chain_version/schema=2/sealed_required/manifest_sha256/prompt 逐文件哈希/评分契约存在);`_deep_ro`(MappingProxyType 深只读——frozen dataclass 挡不住改内部字典);run_stock 入口 `verify_contract_matches_manifest`(与磁盘 manifest 五项逐比,伪造构造器+真指纹组合识破);**评分参数从契约执行**(run_seat weights / run_bear seat_weights / judge scoring / archive_complete scoring 全走 `contract.scoring`,改模块全局无效);档案新增必带封印字段 **`executed_contract_sha256`**(=契约 manifest_sha256,复用/平台加载均与版本 manifest 对照) |
+| B2⁗ | **平台自声明降级**:manifest 写 `sealed_required:false` 即让新版本只过结构检查(自声明字段决定校验强度) | 非 legacy 版本**无条件要求封印**:manifest 必须声明 sealed_required=True + integrity_schema≥1 + manifest_sha256,否则**整版本拒载**(降级=拒载理由,不是校验开关);封印字段集按 `integrity_schema` 分级(schema1=v2.4 五字段,schema2=v2.5 +executed_contract_sha256——新字段不追溯拒掉 v2.4 真封印档案,引擎侧只产/只验 schema2);封印版本加载再过共享 `verify_archive_semantics` |
+| B3⁗ | **完成范围无绑定**:烟测(--day/--names)同样写 run_status.json 覆盖月度标记;"complete" 只是对本次参数的断言,无从区分全月 | manifest 绑 **`job_spec` 全月范围**(完整 日×股 集合 + `job_set_sha256`,预检/参数无关);运行范围摘要==job_spec 才算 full_month,否则 scope_kind=smoke;**`full_month_status.json` 只由全月范围运行写**(烟测机械不可能触碰);新增 append-only **`runs_ledger.jsonl`**(run_started/run_failed_preflight/run_aborted_collision/run_finished,file_lock+fsync,run_id 逐次);**终局重验**:完成度不用内存计数——对每个计划名·日从磁盘重读+全封印验证+`archive_complete` 后计数,并算 `archive_set_sha256`(全部通过档案封印的集合摘要)落台账;run_status.json 降级为"最近一次运行"便捷指针 |
+
+**Major**:①缺输入=**MissingInputError**(直接调用不得静默 None;批预检仍先行过滤)+ run_stock 全程**逐(日,股)跨进程锁**(`.{code}.stock.lock`,从档案检查持有到发布结束——并发双跑互覆盖窗口关闭);②`_safe_error` 错误格式化总函数(`RuntimeError(10**10000)` 曾让 except 路径的 f-string 二次爆炸)全 except 路径统一 + **publish_failed** ledger 事件(os.replace 失败留痕后上抛)+ **启动对账** `_reconcile_ledger`(published 事件↔磁盘档案互相印证,单侧存在=异常,记 runs_ledger 后开跑);③`verify_archive_semantics` 共享语义校验(integrity.py,引擎 archive_complete 与平台加载同一把尺):seats/records 键集==评分契约、final/finals [0,100] 有限、judge.finals 逐席==seats.final、composite 按契约权重**重算复核**(±0.11)、bear.refutations dict 列表、kill_switches 非空**字符串**列表——空 records 条目/字符串 kill_switches/伪造 composite 全部点名。
+**Minor**:平台 manifest/档案解析 except 补 `ValueError`;/api/meta 暴露 `full_month_status`(按版本,只信引擎终局重验写下的文件)。
+**测试:134/134**(+22 条复审#5 回归:伪造契约/深只读/降级 manifest 拒作契约/prompt 哈希不符/缺·错 executed_contract/schema 分级/job_spec 范围/烟测范围不匹配/MissingInputError/_safe_error 超大整数/语义校验 6 复现/平台版本断言)。
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

@@ -31,13 +31,13 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
 )
 from workspace.research.ai_research_dept.engine.llm_config import TASK_LLM  # noqa: E402
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
-    verify_archive_body, verify_manifest_body,
+    verify_archive_body, verify_archive_semantics, verify_manifest_body,
 )
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v2.4"
+RENDER_VERSION = "chain_v2.5"
 #: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
 #  这些历史版本产生于封印 schema 之前,只做结构性校验
 LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})
@@ -110,6 +110,7 @@ class Data:
         self.archive_verification: dict[tuple[str, str, str], str] = {}
         self.manifests: dict[str, dict] = {}
         self.integrity_status: dict[str, dict] = {}
+        self.full_month_status: dict[str, dict] = {}
         chain_dir = C.OUT_ROOT / "analyst_chain"
         if chain_dir.exists():
             for vdir in sorted(chain_dir.iterdir()):
@@ -121,22 +122,42 @@ class Data:
                 try:
                     manifest = json.loads(mf.read_text(encoding="utf-8")) \
                         if mf.exists() else {}
-                except (json.JSONDecodeError, OSError) as e:
+                except (json.JSONDecodeError, ValueError, OSError) as e:
                     st["rejected"] += 1
                     st["reasons"].append(f"manifest 解析失败: {e}")
                     continue
+                # 复审#5 B2:legacy 只认显式 allowlist;**非 legacy 版本无条件要求
+                # 封印**——manifest 自声明 sealed_required=False 不是降级许可,而是
+                # 整版本拒载理由(自声明字段不得决定校验强度)
                 is_legacy = vdir.name in LEGACY_CHAINS and \
                     not manifest.get("sealed_required")
                 if not is_legacy:
                     mp = verify_manifest_body(manifest)
+                    schema = manifest.get("integrity_schema")
+                    if not mp and (manifest.get("sealed_required") is not True
+                                   or not isinstance(schema, int) or schema < 1
+                                   or not manifest.get("manifest_sha256")):
+                        mp = ["非 legacy 版本必须声明 sealed_required=True + "
+                              "integrity_schema>=1 + manifest_sha256(自声明降级封死)"]
                     if mp or manifest.get("chain_version") != vdir.name:
                         st["rejected"] += 1
                         st["reasons"].append(
                             f"manifest: {';'.join(mp) or 'chain_version 与目录不符'}")
                         logger.warning("拒载 %s manifest: %s", vdir.name, st["reasons"][-1])
                         continue
-                require_sealed = manifest.get("sealed_required") is True
+                require_sealed = not is_legacy
+                seal_schema = manifest.get("integrity_schema") or 1
+                scoring = manifest.get("scoring_contract") or {}
                 self.manifests[vdir.name] = manifest
+                # 月度完成标记(复审#5 B3):只信引擎按 manifest job_spec 全范围
+                # 终局重验后写下的 full_month_status.json;烟测不会产生此文件
+                fms = vdir / "full_month_status.json"
+                if fms.exists():
+                    try:
+                        self.full_month_status[vdir.name] = json.loads(
+                            fms.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, ValueError, OSError):
+                        self.full_month_status[vdir.name] = {"status": "unreadable"}
                 for day_dir in vdir.iterdir():
                     if not day_dir.is_dir() or day_dir.name == "attempts" \
                             or not day_dir.name.isdigit():
@@ -144,7 +165,7 @@ class Data:
                     for fj in day_dir.glob("*.json"):
                         try:
                             a = json.loads(fj.read_text(encoding="utf-8"))
-                        except (json.JSONDecodeError, OSError) as e:
+                        except (json.JSONDecodeError, ValueError, OSError) as e:
                             st["rejected"] += 1
                             st["reasons"].append(f"{day_dir.name}/{fj.name}: 解析失败 {e}")
                             continue
@@ -153,7 +174,16 @@ class Data:
                             expect_chain=vdir.name, expect_date=day_dir.name,
                             expect_stem=fj.stem,
                             expect_manifest_fp=manifest.get("manifest_fp")
-                            if require_sealed else None)
+                            if require_sealed else None,
+                            expect_executed_contract=manifest.get("manifest_sha256")
+                            if require_sealed and seal_schema >= 2 else None,
+                            seal_schema=seal_schema)
+                        # 复审#5 Major-3:封印版本再过共享语义校验(与引擎同一把尺)
+                        if require_sealed and not problems \
+                                and scoring.get("seat_weights"):
+                            problems = verify_archive_semantics(
+                                a, scoring["seat_weights"],
+                                scoring.get("composite_weights") or {})
                         if problems:
                             st["rejected"] += 1
                             st["reasons"].append(
@@ -186,6 +216,7 @@ class Data:
                 "default_chain": self.default_chain,
                 "render_version": RENDER_VERSION,
                 "integrity_status": self.integrity_status,
+                "full_month_status": self.full_month_status,
                 "archive_days_by_version": self.archive_days_by_v,
                 "pool": [{"code": c, "name": self.names.get(c, "")} for c in self.pool],
                 "event_types": sorted(self.events.event_type.unique()),

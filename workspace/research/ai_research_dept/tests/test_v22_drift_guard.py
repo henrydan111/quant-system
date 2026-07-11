@@ -48,6 +48,7 @@ def _sealed_archive(manifest_fp="mfp1", **overrides):
     a = {"ts_code": "688981.SH", "date": "20250127", "chain_version": CHAIN_VERSION,
          "manifest_fp": manifest_fp,
          "artifact_fp": input_artifact_fp(cards, mc, manifest_fp),
+         "executed_contract_sha256": "ec1",        # v2.5 schema2 必需封印字段
          "cards": cards, "market_context": mc}
     a.update(overrides)
     a["archive_sha256"] = archive_seal(a)
@@ -154,7 +155,10 @@ def _full_arch(**mut):
          "records": {s: {"factor_scores": []} for s in SEAT_WEIGHTS},
          "bear": {"refutations": [], "kill_switches": ["k"], "blind_spots": [],
                   "schema_valid": True, "parse_mode": "strict"},
-         "judge": {"finals": {s: 50.0 for s in SEAT_WEIGHTS}}}
+         # v2.5 语义校验:judge.finals 必须与 seats 一致,composite 必须可按契约
+         # 权重重算(全席 50 → composite 50)
+         "judge": {"finals": {s: 50.0 for s in SEAT_WEIGHTS},
+                   "composite": 50.0, "composite_adj": 50.0}}
     for k, v in mut.items():
         a[k] = v
     return a

@@ -45,17 +45,19 @@ from workspace.research.ai_research_dept.engine.validators import (  # noqa: E40
 )
 from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
     archive_seal, input_artifact_fp, manifest_core_fp, manifest_full_sha256,
-    sha16_json as _sha16_json, verify_archive_body, verify_manifest_body,
+    sha16_json as _sha16_json, sha256_json, verify_archive_body,
+    verify_archive_semantics, verify_manifest_body,
 )
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v2.4"  # v2.4: 复审#4 修复 —— 必需封印 schema(sealed_required,
-#   删字段降级旁路封死)/ChainContract(冻结 prompt 只读一次并实际执行,run_stock 必须持
-#   已验证契约)/全月预检+缺输入=失败+run_status 完成标记/attempts 跨进程锁+状态机 ledger
-#   +批级单实例锁/契约文件扩到 7 个(含 integrity/llm_config/ark_client)/claim·reason
-#   类型总函数/平台验证状态外置+legacy 显式 allowlist/封印全长 sha256;
-#   v2.3: 评分契约指纹+验证不信任;v2.2: 漂移封死;v2.1: 首轮修复;v2.0: 输入升级
+CHAIN_VERSION = "chain_v2.5"  # v2.5: 复审#5 修复 —— 契约防伪造(ChainContract.load 对盘
+#   构造+深只读+run_stock 与磁盘 manifest 复核 prompt 哈希/评分参数从契约执行,改全局
+#   SEAT_WEIGHTS 无效)/档案必带 executed_contract_sha256/平台非 legacy 版本无条件要求
+#   封印(自声明降级封死)/manifest 绑 job_spec 全月范围+runs_ledger+full_month_status
+#   (烟测不得覆盖月度状态,终局重验计数+archive_set_sha256)/缺输入=MissingInputError+
+#   逐股跨进程锁/_safe_error+publish_failed+启动对账/共享语义校验 verify_archive_semantics;
+#   v2.4: 必需封印+契约执行+全月预检;v2.3: 契约指纹+验证不信任;v2.2-: 见历史
 #: 席位权重/复合权重/渲染器统一住 cards.py(链与平台共用一份,防漂移)
 from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     COMPOSITE_W, FIELD_CN, SEAT_WEIGHTS, SUBCARD_CN, disclosure_status,
@@ -83,26 +85,84 @@ class BatchInstanceError(RuntimeError):
     """版本级批处理单实例锁被占(复审#4 Major-1:注释不算机械保证)。"""
 
 
+class MissingInputError(RuntimeError):
+    """run_stock 缺输入(复审#5 Major-1:直接调用不得静默 None)。"""
+
+
+import hashlib as _hashlib  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
+from types import MappingProxyType  # noqa: E402
+
+
+def _deep_ro(obj):
+    """深度只读视图(复审#5 B1:frozen dataclass 挡不住改内部字典)。"""
+    if isinstance(obj, dict):
+        return MappingProxyType({k: _deep_ro(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(_deep_ro(v) for v in obj)
+    return obj
 
 
 @dataclass(frozen=True)
 class ChainContract:
-    """已验证的执行契约(复审#4 B2):LLM 实际执行的 prompt 必须来自冻结 manifest,
-    不得每股重读磁盘——一次长运行曾可在同一 manifest_fp 下混用两套 prompt。
-    run_stock 只接受本契约,不能凭裸 manifest_fp 生成未绑定档案。"""
+    """已验证的执行契约(复审#4 B2 + #5 B1):**只能经 `ChainContract.load(vdir)` 从
+    该版本的真实 manifest.json 构造**;prompt/评分参数/路由深度只读;run_stock 会把
+    传入契约与磁盘 manifest 复核(prompt 逐文件哈希对照),伪造构造器 + 真 manifest_fp
+    的组合无法通过。评分执行读本契约,改模块全局 SEAT_WEIGHTS 无效。"""
     manifest_fp: str
-    effective_prompts: dict = field(default_factory=dict)   # 文件名 → SYSTEM_C15+正文
+    manifest_sha256: str
+    effective_prompts: object = field(default_factory=dict)   # 只读 Mapping
+    scoring: object = field(default_factory=dict)             # 只读 Mapping
+    routing: object = field(default_factory=dict)             # 只读 Mapping
 
     @classmethod
-    def from_verified_manifest(cls, manifest: dict) -> "ChainContract":
+    def load(cls, vdir: Path) -> "ChainContract":
+        mf_path = Path(vdir) / "manifest.json"
+        if not mf_path.exists():
+            raise VersionCollisionError(f"契约构造被拒: {mf_path} 不存在")
+        manifest = json.loads(mf_path.read_text(encoding="utf-8"))
+        return cls._from_verified_manifest(manifest)
+
+    @classmethod
+    def _from_verified_manifest(cls, manifest: dict) -> "ChainContract":
         problems = verify_manifest_body(manifest)
         if problems:
             raise VersionCollisionError(f"契约构造被拒: {';'.join(problems)}")
-        if not manifest.get("effective_prompts"):
-            raise VersionCollisionError("契约构造被拒: manifest 缺 effective_prompts")
+        if manifest.get("chain_version") != CHAIN_VERSION:
+            raise VersionCollisionError(
+                f"契约构造被拒: manifest 版本 {manifest.get('chain_version')} "
+                f"≠ 运行版本 {CHAIN_VERSION}")
+        if (manifest.get("integrity_schema") != 2
+                or manifest.get("sealed_required") is not True
+                or not manifest.get("manifest_sha256")):
+            raise VersionCollisionError(
+                "契约构造被拒: 非 sealed(schema=2) manifest 不可作为执行契约")
+        prompts = manifest.get("effective_prompts") or {}
+        want = manifest.get("effective_prompt_sha256_by_file") or {}
+        got = {p: _hashlib.sha256(v.encode()).hexdigest() for p, v in prompts.items()}
+        if not prompts or got != want:
+            raise VersionCollisionError("契约构造被拒: prompt 哈希与 manifest 不符")
+        sc = manifest.get("scoring_contract") or {}
+        if not sc.get("seat_weights") or not sc.get("composite_weights"):
+            raise VersionCollisionError("契约构造被拒: manifest 缺评分契约")
         return cls(manifest_fp=manifest["manifest_fp"],
-                   effective_prompts=dict(manifest["effective_prompts"]))
+                   manifest_sha256=manifest["manifest_sha256"],
+                   effective_prompts=_deep_ro(prompts),
+                   scoring=_deep_ro(sc),
+                   routing=_deep_ro(manifest.get("routing") or {}))
+
+
+def verify_contract_matches_manifest(contract: "ChainContract", vdir: Path) -> None:
+    """run_stock 端对盘复核(复审#5 B1):不信任调用方传入的契约——与
+    out_dir.parent/manifest.json 逐项比对(manifest_sha256 + prompt 逐文件哈希)。"""
+    fresh = ChainContract.load(vdir)
+    if (fresh.manifest_sha256 != contract.manifest_sha256
+            or fresh.manifest_fp != contract.manifest_fp
+            or fresh.effective_prompts != contract.effective_prompts
+            or fresh.scoring != contract.scoring
+            or fresh.routing != contract.routing):
+        raise VersionCollisionError(
+            "传入契约与磁盘 manifest 不符(疑似伪造契约)——拒绝执行")
 
 
 def ensure_immutable_manifest(vdir: Path, manifest: dict) -> dict:
@@ -135,14 +195,16 @@ def ensure_immutable_manifest(vdir: Path, manifest: dict) -> dict:
 
 
 def verify_existing_archive(existing: dict, manifest_fp: str,
-                            artifact_fp: str, code: str, day: str) -> None:
-    """归档复用前的**验证不信任**(复审#3 B2 + #4 B1):require_sealed 无条件——
-    删字段降级旁路封死;任何不一致 = 硬失败,绝不静默复用伪造/漂移结果。"""
+                            artifact_fp: str, code: str, day: str,
+                            executed_contract: str | None = None) -> None:
+    """归档复用前的**验证不信任**(复审#3 B2 + #4 B1 + #5 B1):require_sealed 无条件,
+    executed_contract_sha256 与版本 manifest 对照;任何不一致 = 硬失败。"""
     problems = verify_archive_body(existing, require_sealed=True,
                                    expect_chain=CHAIN_VERSION,
                                    expect_date=day,
                                    expect_stem=code.replace(".", "_"),
-                                   expect_manifest_fp=manifest_fp)
+                                   expect_manifest_fp=manifest_fp,
+                                   expect_executed_contract=executed_contract)
     if not problems and existing.get("artifact_fp") != artifact_fp:
         problems.append("archive 输入指纹与当前输入不一致(同版本漂移)")
     if problems:
@@ -161,32 +223,30 @@ def _valid_final(value) -> bool:
     return math.isfinite(number) and 0 <= number <= 100
 
 
-def archive_complete(a: dict) -> bool:
-    """严格完整性(复审#3 B3 + #4 Major-3 总函数化):三席**恰好齐全**且每席/每 record
-    为 dict、final 为 [0,100] 有限实数(超大整数不炸)、bear schema_valid+parse_mode
-    合法+至少一条 kill_switch、judge finals 齐全。任意输入返回 bool,永不抛异常。"""
+def archive_complete(a: dict, scoring: dict | None = None) -> bool:
+    """严格完整性(复审#3 B3 + #4 总函数化 + #5 Major-3 语义一致性):
+    共享 verify_archive_semantics(引擎与平台同一把尺)+ 席位无错误 +
+    bear schema_valid/parse_mode/无错误。任意输入返回 bool,永不抛异常。
+
+    scoring:执行契约的评分参数;缺省用模块常量(与契约同源,由引擎代码哈希绑定)。"""
     if not isinstance(a, dict):
         return False
-    seats = a.get("seats")
-    records = a.get("records")
+    sw = dict((scoring or {}).get("seat_weights", SEAT_WEIGHTS)) \
+        if scoring else SEAT_WEIGHTS
+    cw = dict((scoring or {}).get("composite_weights", COMPOSITE_W)) \
+        if scoring else COMPOSITE_W
+    try:
+        if verify_archive_semantics(a, sw, cw):
+            return False
+    except Exception:      # noqa: BLE001 — 完整性谓词必须是总函数
+        return False
+    seats = a.get("seats", {})
+    if any(not isinstance(v, dict) or v.get("error") for v in seats.values()):
+        return False
     bear = a.get("bear")
-    verdict = a.get("judge")
-    if not isinstance(seats, dict) or set(seats) != set(SEAT_WEIGHTS):
-        return False
-    if not isinstance(records, dict) or set(records) != set(SEAT_WEIGHTS):
-        return False
-    for seat in SEAT_WEIGHTS:
-        if not isinstance(seats[seat], dict) or not isinstance(records[seat], dict):
-            return False
-        if seats[seat].get("error") or not _valid_final(seats[seat].get("final")):
-            return False
-    if (not isinstance(bear, dict) or bear.get("error")
-            or not bear.get("schema_valid")
-            or bear.get("parse_mode") not in ("strict", "lenient")
-            or not bear.get("kill_switches")):     # prompt 明确要求至少一条
-        return False
-    return (isinstance(verdict, dict) and isinstance(verdict.get("finals"), dict)
-            and set(verdict.get("finals", {})) == set(SEAT_WEIGHTS))
+    return (isinstance(bear, dict) and not bear.get("error")
+            and bool(bear.get("schema_valid"))
+            and bear.get("parse_mode") in ("strict", "lenient"))
 
 
 def _normalize_falsifiers(wcw) -> tuple[list, dict]:
@@ -215,7 +275,8 @@ def _normalize_falsifiers(wcw) -> tuple[list, dict]:
 
 
 def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
-             audit_dir: Path) -> dict:
+             audit_dir: Path, weights) -> dict:
+    """weights = 执行契约的席位权重(复审#5 B1:从契约执行,改模块全局无效)。"""
     # prompt = 契约冻结的**有效** prompt(已含 SYSTEM_C15,复审#4 B2:不再重读磁盘)
     msgs = [{"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
@@ -228,24 +289,24 @@ def run_seat(seat: str, prompt: str, payload: dict, card_text: str,
     rec["what_could_weaken"], falsifier_norm = \
         _normalize_falsifiers(rec.get("what_could_weaken"))
     # 严格校验(GPT Blocker-2):重名拒收 + 注册维恰一次 + 分数域 + 证伪 schema
-    validate_scorecard_record(rec, weights=SEAT_WEIGHTS[seat],
+    validate_scorecard_record(rec, weights=weights,
                               require_registered_exact=True, falsifier_schema=True)
     # 机械围栏(GPT Blocker-4):行ID 精确接地 + ID 独占 + 间接≤3钳位 + 披露围栏。
     # final 与裁判必须读同一份净化记录(冒烟 adj>final bug 的教训)
     rec = enforce_v2_evidence(rec, card_text, seat)
     fence_stats = rec.pop("_fence_stats", {})
-    final = compute_scorecard_final(rec, weights=SEAT_WEIGHTS[seat],
+    final = compute_scorecard_final(rec, weights=weights,
                                     evidence_context=card_text)
-    n_dims = len(SEAT_WEIGHTS[seat])
+    n_dims = len(weights)
     n_scored = sum(1 for fs in rec["factor_scores"]
-                   if fs.get("evidence_spans") and fs["name"] in SEAT_WEIGHTS[seat])
+                   if fs.get("evidence_spans") and fs["name"] in weights)
     return {"final": final, "record": rec, "scored_dims": n_scored, "total_dims": n_dims,
             "fence_stats": fence_stats, "falsifier_norm": falsifier_norm,
             "model": r.model, "usage": r.usage}
 
 
 def run_bear(cards: dict, seat_results: dict, falsifiers: dict,
-             audit_dir: Path, prompt: str) -> dict:
+             audit_dir: Path, prompt: str, seat_weights) -> dict:
     """v2.1:喂全量 scorecard(证据不截断+罚分含证据)+ 带 ID 的证伪条件 + market_context;
     输出经 validate_bear_record typed 校验(GPT Blocker-3),裁判只消费校验后反驳。
     prompt = 契约冻结的有效 prompt(复审#4 B2:不再重读磁盘)。"""
@@ -282,20 +343,26 @@ def run_bear(cards: dict, seat_results: dict, falsifiers: dict,
     # 证伪注册表元数据:{fid: {seat, observable_in}} —— strength=5 快径要求席位绑定
     fid_meta = {f["falsifier_id"]: {"seat": s, "observable_in": f.get("observable_in", "")}
                 for s, fl in falsifiers.items() for f in fl}
-    out = validate_bear_record(rec, all_cards, SEAT_WEIGHTS, fid_meta)
+    out = validate_bear_record(rec, all_cards, seat_weights, fid_meta)
     out["parse_mode"] = parse_mode
     return out
 
 
-def judge(seat_results: dict, bear: dict) -> dict:
-    """确定性裁判:空头折减 → 调整 final → composite/分歧/背离。"""
+def judge(seat_results: dict, bear: dict, scoring=None) -> dict:
+    """确定性裁判:空头折减 → 调整 final → composite/分歧/背离。
+    scoring = 执行契约评分参数(复审#5 B1:从契约执行;缺省模块常量供测试)。"""
+    sc = scoring or {}
+    seat_w = sc.get("seat_weights", SEAT_WEIGHTS)
+    comp_w = sc.get("composite_weights", COMPOSITE_W)
+    discount_th = sc.get("bear_discount_strength", BEAR_DISCOUNT_STRENGTH)
+    gap = sc.get("divergence_gap", DIVERGENCE_GAP)
     discounts = []
     adj_finals = {}
     for seat, res in seat_results.items():
-        w = SEAT_WEIGHTS[seat]
+        w = seat_w[seat]
         total = 0.0
         strong = {r["target_dim"] for r in bear["refutations"]
-                  if r["target_seat"] == seat and r["strength_0_5"] >= BEAR_DISCOUNT_STRENGTH}
+                  if r["target_seat"] == seat and r["strength_0_5"] >= discount_th}
         for fs in res["record"]["factor_scores"]:
             if fs["name"] not in w or not fs.get("evidence_spans"):
                 continue
@@ -308,15 +375,15 @@ def judge(seat_results: dict, bear: dict) -> dict:
                 total -= 2 * p["score_0_5"]
         adj_finals[seat] = max(0.0, min(100.0, total))
     finals = {s: r["final"] for s, r in seat_results.items()}
-    composite = sum(COMPOSITE_W[s] * finals[s] for s in finals)
-    composite_adj = sum(COMPOSITE_W[s] * adj_finals[s] for s in adj_finals)
+    composite = sum(comp_w[s] * finals[s] for s in finals)
+    composite_adj = sum(comp_w[s] * adj_finals[s] for s in adj_finals)
     vals = list(finals.values())
     dispersion = float(pd.Series(vals).std()) if len(vals) > 1 else 0.0
     flags = []
     seats = list(finals)
     for i in range(len(seats)):
         for k in range(i + 1, len(seats)):
-            if abs(finals[seats[i]] - finals[seats[k]]) > DIVERGENCE_GAP:
+            if abs(finals[seats[i]] - finals[seats[k]]) > gap:
                 flags.append(f"{seats[i]}_{seats[k]}_divergence")
     return {"finals": finals, "adj_finals": adj_finals,
             "composite": round(composite, 1), "composite_adj": round(composite_adj, 1),
@@ -338,11 +405,14 @@ def read_prompt_bundle() -> dict:
 
 
 def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
-                   regime: pd.DataFrame, prompt_bundle: dict) -> dict:
+                   regime: pd.DataFrame, prompt_bundle: dict,
+                   full_days: list, full_codes: list) -> dict:
     """链版本 manifest = **完整评分契约指纹**(复审#3 B1 + #4):绑定有效 prompt 全文
     (由调用方一次性读取的 bundle)、确定性引擎代码字节(7 文件,项目相对路径前缀)、
     评分参数、LLM 路由快照;声明 integrity_schema=1 + sealed_required=True(档案必需
-    封印,删字段降级旁路封死)。平台归档视图从此处读冻结契约,不读当前进程。"""
+    封印,删字段降级旁路封死)。平台归档视图从此处读冻结契约,不读当前进程。
+    复审#5 B3:manifest 绑 **job_spec 全月范围**(完整 日×股 集合)——"完成"只能
+    对照这一冻结范围判定,烟测参数永远不可能被记成月度完成。"""
     pfiles = PROMPT_FILES
     ph = hashlib.sha256(b"".join(prompt_bundle[p].encode() for p in pfiles)).hexdigest()[:16]
     # 确定性评分/校验/传输引擎契约(复审#4 Major-2:integrity 决定封印规则、
@@ -364,10 +434,18 @@ def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
         h.update(b"\0")
         h.update(path.read_bytes())
     effective_prompts = dict(prompt_bundle)
+    job_days = [str(d) for d in full_days]
+    job_codes = [str(c) for c in full_codes]
     return {
         "chain_version": CHAIN_VERSION,
-        "integrity_schema": 1,
+        "integrity_schema": 2,     # schema2 = 封印必带 executed_contract_sha256
         "sealed_required": True,
+        "job_spec": {
+            "scope_kind": "full_month",
+            "days": job_days, "codes": job_codes,
+            "expected": len(job_days) * len(job_codes),
+            "job_set_sha256": sha256_json({"days": job_days, "codes": job_codes}),
+        },
         "config_hash": C.config_hash(),
         "llm_config_hash": L.llm_config_hash(),
         "prompt_files": pfiles, "prompts_sha16": ph,
@@ -449,64 +527,85 @@ def _allocate_attempt(attempts_root: Path) -> tuple[int, Path]:
     return attempt_no, attempt_dir
 
 
+def _safe_error(exc: BaseException) -> str:
+    """错误格式化总函数(复审#5 Major-2:RuntimeError(10**10000) 曾让格式化二次爆炸)。"""
+    try:
+        return f"{type(exc).__name__}: {str(exc)[:200]}"
+    except Exception:      # noqa: BLE001
+        return f"{type(exc).__name__}: <unformattable>"
+
+
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
               retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
               series: pd.DataFrame, out_dir: Path,
-              contract: ChainContract) -> dict | None:
-    """必须持已验证 ChainContract(复审#4 B2:不能凭裸 manifest_fp 生成未绑定档案)。"""
+              contract: ChainContract) -> dict:
+    """必须持已验证 ChainContract;进入时与磁盘 manifest 复核(复审#5 B1:调用方传入
+    的契约不被信任);缺输入=MissingInputError(复审#5 Major-1:不得静默 None);
+    逐(日,股)跨进程锁从档案检查持有到发布结束(并发双跑不再互覆盖)。"""
+    from research_orchestrator.file_lock import file_lock
+    verify_contract_matches_manifest(contract, out_dir.parent)
     inputs = build_inputs(code, day, facts, pv, retr, biz, regime, series)
     if inputs is None:
-        return None
+        raise MissingInputError(f"{code}@{day}: 缺 fact/pv 输入")
     cards, mc = inputs
     manifest_fp = contract.manifest_fp
     artifact_fp = input_artifact_fp(cards, mc, manifest_fp)
-    arch_path = out_dir / f"{code.replace('.', '_')}.json"
-    if arch_path.exists():
-        existing = json.loads(arch_path.read_text(encoding="utf-8"))
-        # 验证不信任(复审#3 B2 + #4 B1 require_sealed):封印/指纹全重算
-        verify_existing_archive(existing, manifest_fp, artifact_fp, code, day)
-        if archive_complete(existing):
-            return existing
-    # attempts 状态机(复审#4 Major-1):跨进程锁分配编号,started→completed/failed
-    # →published 全程留痕;失败 raw 永不被覆盖;只有完整结果原子发布
-    attempt_no, attempt_dir = _allocate_attempt(out_dir / "attempts"
-                                                / code.replace(".", "_"))
-    audit = attempt_dir / "raw"
-    audit.mkdir(parents=True, exist_ok=True)
-    _ledger_append(out_dir, {"event": "started", "code": code, "day": day,
-                             "attempt": attempt_no, "artifact_fp": artifact_fp,
-                             "manifest_fp": manifest_fp})
-    try:
-        archive = _execute_attempt(code, day, cards, mc, contract, audit,
-                                   artifact_fp, attempt_no)
-    except BaseException as exc:      # 意外异常也必须留痕(孤儿 attempt 封死)
-        err = f"{type(exc).__name__}: {str(exc)[:200]}"
-        (attempt_dir / "status.json").write_text(json.dumps(
-            {"attempt": attempt_no, "complete": False, "error": err,
-             "ts": time.strftime("%Y-%m-%dT%H:%M:%S")},
-            ensure_ascii=False, indent=1), encoding="utf-8")
-        _ledger_append(out_dir, {"event": "attempt_failed", "code": code,
-                                 "attempt": attempt_no, "error": err})
-        raise
-    blob = json.dumps(archive, ensure_ascii=False, indent=1)
-    (attempt_dir / "archive.json").write_text(blob, encoding="utf-8")
-    status = {"attempt": attempt_no, "complete": archive["complete"],
-              "artifact_fp": artifact_fp, "manifest_fp": manifest_fp,
-              "seat_errors": {s: v.get("error")
-                              for s, v in archive["seats"].items() if v.get("error")},
-              "bear_error": archive["bear"].get("error"),
-              "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    (attempt_dir / "status.json").write_text(
-        json.dumps(status, ensure_ascii=False, indent=1), encoding="utf-8")
-    _ledger_append(out_dir, {"event": "attempt_completed", "code": code,
-                             **{k: v for k, v in status.items() if k != "ts"}})
-    if archive["complete"]:
-        tmp = arch_path.with_suffix(".json.tmp")
-        tmp.write_text(blob, encoding="utf-8")
-        os.replace(tmp, arch_path)                 # 原子发布最新完整结果
-        _ledger_append(out_dir, {"event": "published", "code": code,
-                                 "attempt": attempt_no,
-                                 "archive_sha256": archive["archive_sha256"]})
+    code_u = code.replace(".", "_")
+    arch_path = out_dir / f"{code_u}.json"
+    with file_lock(out_dir / f".{code_u}.stock.lock"):
+        if arch_path.exists():
+            existing = json.loads(arch_path.read_text(encoding="utf-8"))
+            # 验证不信任(#3 B2/#4 B1/#5 B1):封印/指纹/执行契约全重算比对
+            verify_existing_archive(existing, manifest_fp, artifact_fp, code, day,
+                                    contract.manifest_sha256)
+            if archive_complete(existing, dict(contract.scoring)):
+                return existing
+        # attempts 状态机(复审#4 Major-1):跨进程锁分配编号,started→completed/
+        # failed→published 全程留痕;失败 raw 永不被覆盖;只有完整结果原子发布
+        attempt_no, attempt_dir = _allocate_attempt(out_dir / "attempts" / code_u)
+        audit = attempt_dir / "raw"
+        audit.mkdir(parents=True, exist_ok=True)
+        _ledger_append(out_dir, {"event": "started", "code": code, "day": day,
+                                 "attempt": attempt_no, "artifact_fp": artifact_fp,
+                                 "manifest_fp": manifest_fp})
+        try:
+            archive = _execute_attempt(code, day, cards, mc, contract, audit,
+                                       artifact_fp, attempt_no)
+        except BaseException as exc:  # 意外异常也必须留痕(孤儿 attempt 封死)
+            err = _safe_error(exc)
+            (attempt_dir / "status.json").write_text(json.dumps(
+                {"attempt": attempt_no, "complete": False, "error": err,
+                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                ensure_ascii=False, indent=1), encoding="utf-8")
+            _ledger_append(out_dir, {"event": "attempt_failed", "code": code,
+                                     "attempt": attempt_no, "error": err})
+            raise
+        blob = json.dumps(archive, ensure_ascii=False, indent=1)
+        (attempt_dir / "archive.json").write_text(blob, encoding="utf-8")
+        status = {"attempt": attempt_no, "complete": archive["complete"],
+                  "artifact_fp": artifact_fp, "manifest_fp": manifest_fp,
+                  "seat_errors": {s: v.get("error")
+                                  for s, v in archive["seats"].items()
+                                  if v.get("error")},
+                  "bear_error": archive["bear"].get("error"),
+                  "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        (attempt_dir / "status.json").write_text(
+            json.dumps(status, ensure_ascii=False, indent=1), encoding="utf-8")
+        _ledger_append(out_dir, {"event": "attempt_completed", "code": code,
+                                 **{k: v for k, v in status.items() if k != "ts"}})
+        if archive["complete"]:
+            try:
+                tmp = arch_path.with_suffix(".json.tmp")
+                tmp.write_text(blob, encoding="utf-8")
+                os.replace(tmp, arch_path)         # 原子发布最新完整结果
+            except BaseException as exc:  # 发布失败必须留痕(复审#5 Major-2)
+                _ledger_append(out_dir, {"event": "publish_failed", "code": code,
+                                         "attempt": attempt_no,
+                                         "error": _safe_error(exc)})
+                raise
+            _ledger_append(out_dir, {"event": "published", "code": code,
+                                     "attempt": attempt_no,
+                                     "archive_sha256": archive["archive_sha256"]})
     return archive
 
 
@@ -518,17 +617,18 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                               ("tech", "tech_analyst_v2.txt", "pv_card"),
                               ("news", "news_analyst_v2.txt", "news_card")]:
         prompt = contract.effective_prompts[pfile]     # 冻结契约,不重读磁盘(#4 B2)
+        seat_w = contract.scoring["seat_weights"][seat]   # 评分参数从契约执行(#5 B1)
         payload = {key: cards[key]}
         if mc:
             payload["market_context"] = mc
         try:
             seat_results[seat] = run_seat(seat, prompt, payload,
-                                          cards[key], audit)
+                                          cards[key], audit, seat_w)
         except (ArkClientError, ScorecardViolation) as e:
             seat_results[seat] = {"final": None, "record": {"factor_scores": [],
                                   "penalty_scores": []}, "scored_dims": 0,
-                                  "total_dims": len(SEAT_WEIGHTS[seat]),
-                                  "error": f"{type(e).__name__}: {str(e)[:150]}"}
+                                  "total_dims": len(seat_w),
+                                  "error": _safe_error(e)}
     ok_seats = {s: r for s, r in seat_results.items() if r["final"] is not None}
     # 证伪条件注册表(带 ID;空头 strength=5 快径的机械校验基础)
     falsifiers = {}
@@ -544,15 +644,17 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
             # regime 卡 v0.4 起带 M 行ID,反证可引用市场行)
             bear_cards = {**cards, **({"market_context": mc} if mc else {})}
             bear = run_bear(bear_cards, ok_seats, falsifiers, audit,
-                            contract.effective_prompts["bear_analyst_v2.txt"])
+                            contract.effective_prompts["bear_analyst_v2.txt"],
+                            contract.scoring["seat_weights"])
         except (ArkClientError, ScorecardViolation, KeyError, TypeError) as e:
-            bear["error"] = f"{type(e).__name__}: {str(e)[:150]}"
+            bear["error"] = _safe_error(e)
     verdict = judge({s: r for s, r in seat_results.items() if r["final"] is not None},
-                    bear) if ok_seats else {}
+                    bear, dict(contract.scoring)) if ok_seats else {}
     archive = {
         "ts_code": code, "date": day, "chain_version": CHAIN_VERSION,
         "llm_config_hash": L.llm_config_hash(),
         "manifest_fp": contract.manifest_fp, "artifact_fp": artifact_fp,
+        "executed_contract_sha256": contract.manifest_sha256,   # #5 B1 必需封印字段
         # 精确输入快照落档(复审#2 B1):平台展示归档快照,不重渲已完成工件
         "cards": cards, "market_context": mc,
         "records": {s: r["record"] for s, r in seat_results.items()
@@ -572,7 +674,7 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
         "bear": bear, "judge": verdict,
         "evidence_class": "research_summary/" + C.EVIDENCE_CLASS_REPLAY,
     }
-    archive["complete"] = archive_complete(archive)
+    archive["complete"] = archive_complete(archive, dict(contract.scoring))
     archive["attempt"] = attempt_no
     # archive_sha256 输出正文封印(复审#3 B2;#4 minor:完整 64 位摘要)
     archive["archive_sha256"] = archive_seal(archive)
@@ -586,9 +688,8 @@ def main() -> int:
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    days = decision_days(C.PILOT_POOL_MONTH, C.PILOT_MONTH_END)
-    if args.day:
-        days = [args.day]
+    full_days = decision_days(C.PILOT_POOL_MONTH, C.PILOT_MONTH_END)
+    days = [args.day] if args.day else full_days
     pool = sorted(set(pd.read_parquet(
         C.POOL_DIR / f"broker_recommend_{C.PILOT_POOL_MONTH}.parquet")["ts_code"]))
     facts = pd.read_parquet(C.FACT_DIR / f"fact_table_{C.PILOT_POOL_MONTH}.parquet")
@@ -604,31 +705,119 @@ def main() -> int:
     from research_orchestrator.file_lock import LockTimeoutError, file_lock
     try:
         with file_lock(vdir / ".batch.lock", timeout_seconds=1.0):
-            return _run_batch(vdir, days, pool, args, facts, pv, retr, biz,
-                              regime, series)
+            return _run_batch(vdir, days, full_days, pool, args, facts, pv,
+                              retr, biz, regime, series)
     except LockTimeoutError as e:
         raise BatchInstanceError(
             f"另一批处理实例正持有 {vdir / '.batch.lock'} —— 拒绝并发运行") from e
 
 
 def _write_run_status(vdir: Path, payload: dict) -> None:
+    """最近一次运行的便捷指针(历史真相在 runs_ledger.jsonl,append-only)。"""
     payload = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **payload}
     tmp = vdir / "run_status.json.tmp"
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, vdir / "run_status.json")
 
 
-def _run_batch(vdir: Path, days: list, pool: list, args, facts, pv, retr,
-               biz, regime, series) -> int:
+def _runs_ledger_append(vdir: Path, entry: dict) -> None:
+    """版本级运行台账(复审#5 B3:单文件互覆盖的 run_status 不可作完成依据)。"""
+    from research_orchestrator.file_lock import file_lock
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **entry}
+    with file_lock(vdir / ".runs_ledger.lock"):
+        with (vdir / "runs_ledger.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
+def _reconcile_ledger(vdir: Path, days: list) -> list[dict]:
+    """启动对账(复审#5 Major-2):attempts ledger 的 published 事件 ↔ 磁盘档案
+    互相印证;单侧存在即异常(published 无档案 = 发布后被删;档案无 published =
+    os.replace 与 ledger 写之间崩溃的窗口)。只报告,不自动修复。"""
+    anomalies: list[dict] = []
+    for day in days:
+        out_dir = vdir / str(day)
+        led = out_dir / "attempts_ledger.jsonl"
+        published: set[str] = set()
+        if led.exists():
+            for line in led.read_text(encoding="utf-8").splitlines():
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    anomalies.append({"day": str(day), "kind": "ledger_corrupt_line"})
+                    continue
+                if ev.get("event") == "published" and ev.get("code"):
+                    published.add(str(ev["code"]).replace(".", "_"))
+        on_disk = {p.stem for p in out_dir.glob("*.json")
+                   if p.name not in ("run_status.json",)} if out_dir.exists() else set()
+        for stem in sorted(published - on_disk):
+            anomalies.append({"day": str(day), "code": stem,
+                              "kind": "published_but_missing"})
+        for stem in sorted(on_disk - published):
+            anomalies.append({"day": str(day), "code": stem,
+                              "kind": "archive_without_published_event"})
+    return anomalies
+
+
+def _recount_published(vdir: Path, planned: list, fps: dict,
+                       contract: ChainContract) -> tuple[int, list, str]:
+    """终局重验(复审#5 B3):完成度不用内存计数器自报——对每个计划名·日重新从磁盘
+    读档、全封印验证 + 输入指纹比对,通过者才计数;返回(计数, 缺失清单,
+    archive_set_sha256 = 全部通过档案封印的集合摘要)。"""
+    ok, missing, seals = 0, [], []
+    for c, day in planned:
+        ap = vdir / day / f"{c.replace('.', '_')}.json"
+        if not ap.exists():
+            missing.append({"code": c, "day": day, "kind": "no_archive"})
+            continue
+        try:
+            a = json.loads(ap.read_text(encoding="utf-8"))
+            verify_existing_archive(a, contract.manifest_fp, fps[(c, day)],
+                                    c, day, contract.manifest_sha256)
+        except (json.JSONDecodeError, VersionCollisionError) as e:
+            missing.append({"code": c, "day": day, "kind": "verify_failed",
+                            "error": _safe_error(e)})
+            continue
+        if not archive_complete(a, dict(contract.scoring)):
+            missing.append({"code": c, "day": day, "kind": "incomplete"})
+            continue
+        ok += 1
+        seals.append([day, c.replace(".", "_"), a["archive_sha256"]])
+    return ok, missing, sha256_json(sorted(seals))
+
+
+def _run_batch(vdir: Path, days: list, full_days: list, pool: list, args,
+               facts, pv, retr, biz, regime, series) -> int:
     prompt_bundle = read_prompt_bundle()           # prompt 只读一次(复审#4 B2)
     manifest = ensure_immutable_manifest(
-        vdir, build_manifest(pv, retr, regime, prompt_bundle))
-    contract = ChainContract.from_verified_manifest(manifest)
+        vdir, build_manifest(pv, retr, regime, prompt_bundle, full_days, pool))
+    contract = ChainContract.load(vdir)   # 对盘构造(复审#5 B1):契约=磁盘 manifest
     todo = pool[: args.names] if args.names else pool
+    run_id = f"{time.strftime('%Y%m%dT%H%M%S')}_pid{os.getpid()}"
+    # 本次运行范围 == manifest 冻结的全月 job_spec 才是"月度"运行(复审#5 B3):
+    # 烟测(--day/--names)只写运行台账,绝不触碰 full_month_status.json
+    this_scope_sha = sha256_json({"days": [str(d) for d in days],
+                                  "codes": [str(c) for c in todo]})
+    is_full_scope = this_scope_sha == manifest["job_spec"]["job_set_sha256"]
+    scope_kind = "full_month" if is_full_scope else "smoke"
+
+    # 启动对账(复审#5 Major-2):ledger ↔ 档案 互相印证,异常先记台账再开跑
+    anomalies = _reconcile_ledger(vdir, days)
+    if anomalies:
+        logger.warning("启动对账发现 %d 处 ledger/档案不一致(详见 runs_ledger)",
+                       len(anomalies))
+    _runs_ledger_append(vdir, {"event": "run_started", "run_id": run_id,
+                               "scope_kind": scope_kind,
+                               "scope_sha256": this_scope_sha,
+                               "days": [str(d) for d in days],
+                               "codes_n": len(todo),
+                               "reconcile_anomalies": anomalies[:20],
+                               "reconcile_anomaly_n": len(anomalies)})
 
     # 全月预检(复审#4 B3):缺输入=失败;全部日×股通过后才提交任何 LLM ——
     # 逐日预检曾让第一天先花钱,第二天才发现碰撞
-    planned, missing = [], []
+    planned, missing, fps = [], [], {}
     for day in days:
         out_dir = vdir / day
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -638,14 +827,19 @@ def _run_batch(vdir: Path, days: list, pool: list, args, facts, pv, retr,
                 missing.append({"code": c, "day": day, "reason": "missing_fact_or_pv"})
                 continue
             cards_pre, mc_pre = inputs
+            fps[(c, day)] = input_artifact_fp(cards_pre, mc_pre, contract.manifest_fp)
             ap = out_dir / f"{c.replace('.', '_')}.json"
             if ap.exists():
                 verify_existing_archive(
                     json.loads(ap.read_text(encoding="utf-8")), contract.manifest_fp,
-                    input_artifact_fp(cards_pre, mc_pre, contract.manifest_fp), c, day)
+                    fps[(c, day)], c, day, contract.manifest_sha256)
             planned.append((c, day))
     if missing:
-        _write_run_status(vdir, {"status": "failed_preflight", "missing": missing,
+        _runs_ledger_append(vdir, {"event": "run_failed_preflight",
+                                   "run_id": run_id, "missing_n": len(missing),
+                                   "missing": missing[:50]})
+        _write_run_status(vdir, {"status": "failed_preflight", "run_id": run_id,
+                                 "scope_kind": scope_kind, "missing": missing,
                                  "expected": len(days) * len(todo)})
         logger.error("预检失败:%d 个名·日缺输入 —— 残缺月份不得开跑", len(missing))
         return 2
@@ -670,18 +864,22 @@ def _run_batch(vdir: Path, days: list, pool: list, args, facts, pv, retr,
                     if result is not None and result.get("complete") is True:
                         done += 1
                     else:
-                        failures += 1    # None(预检后不应出现)与不完整均计失败
+                        failures += 1    # 不完整档案计失败(缺输入现在必然 raise)
                 except VersionCollisionError:
                     for pending in futs:         # 碰撞=系统性问题:全体撤单并上抛
                         pending.cancel()
+                    _runs_ledger_append(vdir, {"event": "run_aborted_collision",
+                                               "run_id": run_id, "day": day})
                     _write_run_status(vdir, {"status": "aborted_collision",
-                                             "day": day, "expected": expected,
+                                             "run_id": run_id, "day": day,
+                                             "expected": expected,
                                              "complete": complete_n + done,
                                              "failed": failed_n + failures})
                     raise
                 except Exception as e:  # noqa: BLE001 — 单股失败不拖全日,但计入失败
                     failures += 1
-                    logger.error("[%s] %s failed: %s", day, futs[fut], str(e)[:150])
+                    logger.error("[%s] %s failed: %s", day, futs[fut],
+                                 _safe_error(e))
                 if n % 10 == 0:
                     logger.info("[%s] %d/%d | %.0fs", day, n, len(day_jobs),
                                 time.time() - t0)
@@ -689,13 +887,28 @@ def _run_batch(vdir: Path, days: list, pool: list, args, facts, pv, retr,
         failed_n += failures
         logger.info("[%s] DONE %d complete / %d failures | %.0fs",
                     day, done, failures, time.time() - t0)
-    # 完成度机械断言 + 持久化完成标记(复审#4 B3/R3:残缺月份不得谎报成功,
-    # 崩溃后的部分档案必须与完整月份可区分)
-    _write_run_status(vdir, {
-        "status": "complete" if complete_n == expected else "partial",
-        "expected": expected, "complete": complete_n, "failed": failed_n,
-        "days": list(days), "pool_size": len(todo)})
-    return 0 if complete_n == expected else 2
+    # 终局重验(复审#5 B3/R3):不信内存计数——从磁盘全量重读+全封印验证后计数,
+    # 完成判定与 archive_set_sha256 一并落台账;全月范围运行才写月度完成标记
+    verified_n, verify_missing, set_sha = _recount_published(
+        vdir, planned, fps, contract)
+    status = "complete" if verified_n == expected else "partial"
+    summary = {"run_id": run_id, "scope_kind": scope_kind, "status": status,
+               "expected": expected, "complete": verified_n,
+               "failed_in_run": failed_n, "archive_set_sha256": set_sha,
+               "days": [str(d) for d in days], "pool_size": len(todo)}
+    _runs_ledger_append(vdir, {"event": "run_finished", **summary,
+                               "missing": verify_missing[:50]})
+    _write_run_status(vdir, summary)
+    if is_full_scope:
+        tmp = vdir / "full_month_status.json.tmp"
+        tmp.write_text(json.dumps(
+            {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "job_set_sha256": manifest["job_spec"]["job_set_sha256"], **summary},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, vdir / "full_month_status.json")
+    if complete_n != verified_n:
+        logger.warning("内存计数 %d ≠ 磁盘重验 %d(以重验为准)", complete_n, verified_n)
+    return 0 if verified_n == expected else 2
 
 
 if __name__ == "__main__":
