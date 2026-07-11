@@ -1,12 +1,12 @@
-# 新闻快讯接入设计 v1.3(NF 波次 + 宏观席)— 设计稿,GPT round-3 待审
+# 新闻快讯接入设计 v1.4(NF 波次 + 宏观席)— 设计稿,GPT round-4 待审
 
-状态:DESIGN v1.3(2026-07-11)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
-②用户:宏观/市场流是数据资产 → 第四席「宏观市场分析师」+ 逐股传导(v1.1);
-③GPT round-1(对 v1/0958b07):CHANGES REQUIRED 4B+6M+2m,**全采纳**(§0);
-④GPT round-2(对 v1.2/d843e55):CHANGES REQUIRED 3B+6M+2m,round-1 处置全数确认
-faithful,新发现集中在宏观席与决策时间线,**全采纳**(§0b)。
-实现前置:GPT round-3 通过;**B3 净化/ID 注册表/席位域按 GPT R6 裁定作为独立热修
-先行落地**(现行链活漏洞;热修本身 bump 链版本)。
+状态:DESIGN v1.4(2026-07-11)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
+②用户:宏观/市场流是数据资产 → 第四席 + 逐股传导(v1.1);
+③GPT round-1(v1/0958b07):CHANGES REQUIRED 4B+6M+2m,全采纳(§0);
+④GPT round-2(v1.2/d843e55):CHANGES REQUIRED 3B+6M+2m,全采纳(§0b);
+⑤GPT round-3(v1.3/4437185):CHANGES REQUIRED **0B**+3M+2m——晚间决策声明关闭
+round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c)。
+实现前置:B3 热修先行(已获准);其余待 GPT round-4 通过。
 
 ---
 
@@ -16,19 +16,26 @@ faithful,新发现集中在宏观席与决策时间线,**全采纳**(§0b)。
 语义、前向 MVP「晚间决策」完全一致;**不存在"D 早盘用 D 收盘卡"的模式**——GPT
 round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全部机械断言照单落地):
 
-- 字段四元组(逐档案封存):`decision_date=D`、`market_asof_trade_date=D`(收盘卡,
-  晚间决策合法)、`market_data_cutoff_at`(D 收盘)、`macro_flash_cutoff_at`
-  (预注册,如 D 18:00)。
+- **市场日与决策日历日解耦(round-3 M2:周末/长假陈旧情绪修复)**——逐档案封存:
+  `market_asof_trade_date = 发布前最近开市日`(行情/M 卡锚);
+  `decision_calendar_date = 新鲜晚间运行的日历日`(快讯锚);
+  `macro_flash_cutoff_at = decision_calendar_date 当晚 cutoff`;
+  `fill_trade_date = decision_published_at 之后的下一开市日`;
+  **`max_flash_age_at_fill ≤ 18h`(预注册)**:超龄则在复市前最后一个日历晚
+  **重跑新鲜决策**或放弃该次成交——0205 开盘用 0127 市场卡 + **0204 晚为止的快讯**,
+  春节 8 天新闻不再被忽略(短期情绪命题守住)。
 - **四时间戳因果链(B2 处置,机械断言 + 违反即终态失败)**:
   `input_cutoff_at < pipeline_frozen_at <= attempt_started_at <
-  decision_published_at < fill_open_at(=next_open(D) 开盘)`。
-  查询窗止于 input_cutoff_at,抓取/分型在其后完成(覆盖证明需要 cutoff 后的终查);
-  水位线只在全部子窗与管线记录落盘后推进;**盘前门用实际 `decision_published_at`**
-  (不是 attempt 开始时间)对照 fill_open_at,错过 = 终态失败,该开盘不可交易;
-  预注册 p99 延迟预算(晚间决策模式下预算为小时级,65.5min 链实测轻松满足;
-  若未来引入盘早模式,须按 GPT 处方另择更早 cutoff/次日执行/混合快路)。
-- 硬失败断言:M 卡日期 ≠ decision_date(晚间模式)/任一成员 effective_at 超其
-  cutoff / decision_published_at ≥ fill_open_at → 拒绝发布。
+  decision_published_at < fill_open_at`。
+  **成员 `effective_at ≤ input_cutoff_at`;管线完成 ≤ `pipeline_frozen_at`**
+  (round-3 m1 措辞修正:查询窗止于 cutoff,抓取/分型/覆盖终查在 cutoff 之后、
+  冻结之前完成);`input_cutoff_at` 显式定义 = 各通道 cutoff 的最晚者(通常 =
+  macro_flash_cutoff_at);水位线只在全部子窗与管线记录落盘后推进;
+  **盘前门用实际 `decision_published_at`** 对照 fill_open_at,错过 = 终态失败;
+  预注册 p99 延迟预算(晚间模式小时级,65.5min 链实测宽裕)。
+- 硬失败断言:market_asof_trade_date ≠ 发布前最近开市日 / 任一成员 effective_at
+  超其 cutoff / decision_published_at ≥ fill_open_at / flash 龄超
+  max_flash_age_at_fill 且未重跑 → 拒绝发布。
 
 ## §0b GPT round-2 处置表(全采纳;B1/B2 以 §0a 声明为锚落地其机械处方)
 
@@ -45,14 +52,24 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
 | M6 | 未测量且相关的新席 20% 权重过高 | 采纳 GPT 建议先验:**fund 0.35 / tech 0.25 / news 0.30 / macro 0.10**(待用户终裁);M6 只授权席位运行、不授权加权;试 0.20 = 新 C16b 候选 + 新评分契约 + 链 bump,且须在观察其评判收益窗**之前**申报 |
 | m1 | 「情绪位置」与技术/消息重叠且无拥挤度输入 | 第五维改为 **`external_shock_transmission`**(利率/商品/汇率/地缘外部冲击传导);拥挤度留待有确定性输入后另议 |
 | m2 | 完整性核心席位无关但外围代码不是;数据字典义务 | 加**四席端到端测试**(prompt 表/执行环/证伪域/卡装配/平台展示/重算);fetcher 动工前把 news 端点契约写入 [data/data_dictionary.md](../../../data/data_dictionary.md),采集后更新 data_tracker(§6.1 家规本就要求,纳入清单) |
-| R6 | B3 是现行链活漏洞 | **裁定采纳:B3 窄热修先行**(净化+ID 注册表+席位域+对抗测试,独立链 bump);热修落地前 chain_v3.0 不执行任何运行(当前无计划任务、重放已停,敞口为零;恢复运行必须先热修) |
+| R6 | B3 是现行链活漏洞 | **裁定采纳:B3 窄热修先行**(净化+ID 注册表+席位域+对抗测试,独立链 bump);热修落地前 chain_v3.0 不执行任何运行(当前无计划任务、重放已停,敞口为零;恢复运行必须先热修)——**round-3 R5 已获准立即开工** |
+
+## §0c GPT round-3 处置表(0 Blocker;3 Major + 2 Minor 全采纳)
+
+| # | 发现 | v1.4 处置 |
+|---|---|---|
+| M1 | **no-MS → no-score 把映射缺口变成看空信号**:无分维度贡献 0,映射稀疏的小盘股宏观分被系统性压低 | **不加分数地板**(那是造证据)。`mapping_status ∈ {mapped, mapped_no_exposure, unmapped}`;`coverage_ratio = 有效配对维度权重 / 宏观总维度权重`;覆盖 ≥ **预注册 0.60** → 宏观 final 按有分维度归一:`macro_final = 100×Σ(w×s)/(5×Σw_有效配对维)`;低于线 → **`macro_status=not_applicable` + 其余三席 composite 权重确定性重归一**(绝不用宏观 final 0);`coverage_ratio`/`macro_status`/生效 composite 权重**封入档案**供完整性重算;**M6 增映射覆盖线**:宏观席适格率总体 ≥90%、每个市值五分位 ≥80%、五分位最大-最小差 ≤15pp,否则宏观席 shadow-only |
+| M2 | **晚间锚在周末/长假产生陈旧情绪决策**(0127 决策 0205 成交,8 天新闻被忽略——顶撞短期情绪命题) | 市场日与决策日历日**解耦**(§0a 重写):market_asof=发布前最近开市日,快讯 cutoff 在 decision_calendar_date 当晚,fill=发布后下一开市日;**`max_flash_age_at_fill ≤18h` 预注册**,超龄在复市前最后日历晚重跑或弃单——0205 开盘用 0127 市场卡+0204 晚快讯 |
+| M3 | **scoring_owner 必须按目标股细化**:中芯出口管制头条对中芯是直接、对半导体同业是系统性——全局归属任一席都丢一半 | **`scoring_owner(claim_id, target_ts_code, cutoff)`**:target 在 subject_codes 中显式点名 → news 所有;经批准的系统性暴露触达的同业 → macro 所有;一文含直接+系统两类主张 → 拆**原子 claim_id**(共享 fact_cluster_id);每 (claim, target) 恰一席可计分;**重复所有权硬失败**(不用折减兜底——折减会掩盖所有权错误) |
+| m1 | §0/§3 残留"cutoff 前完成全部拉取"旧措辞,与 §0a 正确时序矛盾 | 全文统一为:成员 `effective_at ≤ input_cutoff_at`;管线完成 ≤ `pipeline_frozen_at`;`input_cutoff_at` 显式定义 = 各通道 cutoff 最晚者(已改) |
+| m2 | MS 行字段不足;缺席行未标注确切 cutoff | MS 行增 `mapping_id`/映射版本哈希/`mapping_status`/暴露类型/可测时的暴露档位·值;缺席行显示确切 cutoff(「截至 18:00 确认无」),不得暗示覆盖整晚 |
 
 ## §0 GPT round-1 处置表(全采纳,零拒绝)
 
 | # | 发现 | v1.2 处置 |
 |---|---|---|
 | B1 | **佐证回填 = lookahead**:簇保最早 visible_at 却带最终 n_sources——后到的转载让早先决策"提前知道"佐证 | 簇改**append-only 修订版本化**:成员各带 `effective_at=max(source_published_at, first_ingested_at)`;`cluster_first_visible_at` 与 `cluster_state_effective_at` 分开存;每个新到源 = 新簇修订;检索取 `cluster_state_effective_at <= cutoff` 的最新修订;n_sources/novelty/importance 只用 cutoff 前可见成员 |
-| B2 | **固定 5h 抓取窗有覆盖洞,缺席声明不安全**:漏日间/隔夜流;1500 触顶截断;零行可能是权限而非无新闻——却仍渲染「无池内快讯」 | **每源成功水位线**,从 `watermark−overlap` 抓到决策 cutoff;响应触 1500 递归二分时间窗(分钟级源用重叠边界);全部必需拉取在 cutoff 前完成才冻结决策;写**源×窗覆盖清单**(查询窗/行数/触顶/状态/原始载荷哈希);**缺席三态**:`confirmed_absent`(唯一可作证据)/`coverage_incomplete`/`source_unavailable`;**cls 保持 disabled(非 required)直到权限与覆盖验证** |
+| B2 | **固定 5h 抓取窗有覆盖洞,缺席声明不安全**:漏日间/隔夜流;1500 触顶截断;零行可能是权限而非无新闻——却仍渲染「无池内快讯」 | **每源成功水位线**,从 `watermark−overlap` 抓到决策 cutoff;响应触 1500 递归二分时间窗(分钟级源用重叠边界);成员 effective_at ≤ input_cutoff_at,管线完成 ≤ pipeline_frozen_at(覆盖终查在 cutoff 后运行);写**源×窗覆盖清单**(查询窗/行数/触顶/状态/原始载荷哈希);**缺席三态**:`confirmed_absent`(唯一可作证据)/`coverage_incomplete`/`source_unavailable`;**cls 保持 disabled(非 required)直到权限与覆盖验证** |
 | B3 | **不可信标题伪造机械合法证据行**(已在现行链复现:标题含换行+`- [F01]`,line_map 把伪造 F01 注册为合法行;news 席无席位-ID 域限制) | raw 原文只留审计档;渲染前 **Unicode 规范化 + 剥 CR/LF/控制符/零宽符 + 折叠空白 + 中和证据 token 模式**;渲染器返回**显式生成 ID 注册表**,校验器只对注册表校验、不从卡片文本重新发现 ID;**席位-ID 域强制**(news 只能引 news 域 ID,fund 只能引 F 域……);对抗测试:换行/`[F01]`/`[NF99]`/指令注入/控制符 |
 | B4 | **转载洗白操纵**:四站转同一 PR/通稿/黑嘴 ≠ 四个独立确认;改写话术绕词表 + 转载得 n_sources>1 绕单源封顶 → importance 5 | `n_outlets`(展示)与 **`n_independent_sources`(计分)分离**;同措辞/同时序/同署名/同源头 = 一个**源家族**;独立性无法确立 → **默认 1**;多站转载**永不清除**操纵/未证实旗;确定性操纵特征 + 分型化识别(紧迫话术/保收益/加群邀约/匿名信源/推广祈使);冻结带标注对抗集(含改写+转载黑嘴) |
 | M1 | 传闻与事件语义混在一个 enum | 三维分离:`event_type`(订单/产品/融资/异动/政策…)× `verification_status`(官方证实/署名媒体/未证实/传闻/观点)× `content_kind`(事实/行情/评论/推广);传闻入专属 **NFR## 隔离/风险节**,可喂罚分与空头,**不得支撑正向 factor_scores**;不走 NDA-only(会洗掉来源) |
@@ -98,7 +115,7 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
 ## §3 PIT 合同
 
 - 成员级 `effective_at = max(source_published_at, first_ingested_at)`;簇修订 as-of 检索
-  (B1);决策 cutoff 前全部必需拉取完成(B2)。
+  (B1);成员 effective_at ≤ input_cutoff_at,管线完成 ≤ pipeline_frozen_at(B2/round-3 m1)。
 - **history_bulk 物理隔离**(R2 裁定):历史批次存独立目录 + 消费端强制的证据类标记,
   不与前向流混储;重放消费历史批次 = NON_EVIDENTIARY(本就如此)。
 
