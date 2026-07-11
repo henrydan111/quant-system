@@ -17,19 +17,34 @@ DEFAULT_STATEMENT_LIMIT = 2000
 class _LockedPro:
     """Wrap the raw Tushare client so EVERY endpoint call — internal (via _safe_api_call) OR external
     (a script doing `fetcher.pro.xxx`) — flows through the cross-process account lock + global rate
-    spacing. There is NO unlocked path to the client (GPT 5-C Major 1)."""
+    spacing. There is NO unlocked path to the client (GPT 5-C Major 1).
+
+    Implemented with ``__getattribute__`` + ``__slots__`` (NOT a bare ``__getattr__``): ``__getattr__``
+    fires only after normal lookup fails, so the wrapper's own ``_real`` would still be readable via
+    ``fetcher.pro._real`` — an UNLOCKED handle to the raw client, the exact side channel this wrapper
+    exists to close (mirrors the §3.3 pre-open guard; GPT 5-C re-review #4). ``__getattribute__``
+    intercepts every access and refuses the private slots, so no unlocked client can escape."""
+
+    __slots__ = ("_real", "_base_sleep")
 
     def __init__(self, real, base_sleep):
-        self.__dict__["_real"] = real
-        self.__dict__["_base_sleep"] = base_sleep
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "_base_sleep", base_sleep)
 
-    def __getattr__(self, name):
-        fn = getattr(self.__dict__["_real"], name)
+    def __getattribute__(self, name):
+        # refuse the wrapper's own private slots / __dict__ so the raw client can never escape unlocked
+        if name == "__dict__" or (name.startswith("_") and not name.startswith("__")):
+            raise AttributeError(f"_LockedPro: {name!r} is refused (no unlocked client handle)")
+        if name.startswith("__"):  # dunders (repr/class/pickle) resolve on the wrapper itself
+            return object.__getattribute__(self, name)
+        real = object.__getattribute__(self, "_real")
+        fn = getattr(real, name)  # a Tushare endpoint (no endpoint name starts with '_')
         if not callable(fn):
             return fn
+        base_sleep = object.__getattribute__(self, "_base_sleep")
 
         def _wrapped(*args, **kwargs):
-            return spaced_call(fn, self.__dict__["_base_sleep"], *args, **kwargs)
+            return spaced_call(fn, base_sleep, *args, **kwargs)
 
         _wrapped.__name__ = name
         return _wrapped

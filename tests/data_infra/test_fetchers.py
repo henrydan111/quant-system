@@ -88,3 +88,30 @@ def test_fina_indicator_vip_keeps_offset_pagination_as_fallback():
     indicator_calls = [kwargs for name, kwargs in fetcher.pro.calls if name == "fina_indicator_vip"]
     assert [call["offset"] for call in indicator_calls] == [0, 10000]
     assert all(call["limit"] == 10000 for call in indicator_calls)
+
+
+def test_locked_pro_routes_calls_and_refuses_raw_escape(tmp_path, monkeypatch):
+    # GPT 5-C Major 1 + re-review #4: the _LockedPro proxy routes EVERY endpoint call through the
+    # cross-process lock (spaced_call) AND leaves no unlocked handle — `fetcher.pro._real` must NOT
+    # return the raw client (a bare __getattr__ would leak it; __getattribute__ + __slots__ closes it).
+    import pytest
+    from data_infra.fetchers import _LockedPro
+    monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "locks"))
+
+    captured = []
+
+    class _FakeRaw:
+        data_attr = 42
+
+        def report_rc(self, **kw):
+            captured.append(kw)
+            return "OK"
+
+    proxy = _LockedPro(_FakeRaw(), 0.0)
+    assert proxy.report_rc(ts_code="000001.SZ") == "OK"       # routed, real result returned
+    assert captured == [{"ts_code": "000001.SZ"}]
+    assert proxy.data_attr == 42                               # non-callable attrs pass through
+    assert proxy.__class__.__name__ == "_LockedPro"           # dunders resolve on the wrapper
+    for private in ("_real", "_base_sleep", "__dict__"):       # no unlocked client can escape
+        with pytest.raises(AttributeError):
+            getattr(proxy, private)
