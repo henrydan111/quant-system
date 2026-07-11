@@ -1,12 +1,39 @@
-# 新闻快讯接入设计 v1.4(NF 波次 + 宏观席)— 设计稿,GPT round-4 待审
+# 新闻快讯接入设计 v1.5(NF 波次 + 宏观席)— 设计稿,GPT round-5 待审
 
-状态:DESIGN v1.4(2026-07-11)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
+状态:DESIGN v1.5(2026-07-11)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
 ②用户:宏观/市场流是数据资产 → 第四席 + 逐股传导(v1.1);
 ③GPT round-1(v1/0958b07):CHANGES REQUIRED 4B+6M+2m,全采纳(§0);
 ④GPT round-2(v1.2/d843e55):CHANGES REQUIRED 3B+6M+2m,全采纳(§0b);
 ⑤GPT round-3(v1.3/4437185):CHANGES REQUIRED **0B**+3M+2m——晚间决策声明关闭
-round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c)。
-实现前置:B3 热修先行(已获准);其余待 GPT round-4 通过。
+round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c);
+⑥GPT round-4(v1.4/b6bb084):CHANGES REQUIRED 1B+2M+1m——多决策会话生命周期
+(与前向单发布规则冲突)+ macro_coverage_policy 入契约 + §6 传播,全采纳(§0d)。
+实现前置:B3 热修先行(已获准,持续有效);其余待 GPT round-5 通过。
+
+## §0d GPT round-4 处置表(全采纳)+ 决策谱系与成交绑定合同(B1)
+
+| # | 发现 | v1.5 处置 |
+|---|---|---|
+| B1 | **刷新与"单发布决策"规则冲突**:前向合同禁止同 cycle 二次决策,fill resolver 取首个已发布 attempt——节假日刷新会变成未密封的事后择优 | 见下方**决策谱系合同**(GPT 处方逐条落地) |
+| M1 | 档案封值只证"没被改",不证"算对了"——错误实现可封错误权重并复现自己的错 composite | **`macro_coverage_policy` 版本化入 scoring_contract**:formula_id/最低覆盖率 0.60/有效配对定义/基础权重 {fund .35, tech .25, news .30, macro .10}/not_applicable 政策/生效权重公式/舍入阶段与精度/`macro_deployment_mode ∈ {shadow_only, weighted}`/M6 覆盖阈值。规范公式:`Vᵢ` = mapping_status=mapped 且有注册 M·MF↔MS 有效证据对的维度集;`coverage_ratioᵢ = Σ_{d∈Vᵢ} w_d / Σ_{d∈D} w_d`;<0.60 → `macro_status=not_applicable` 且 **`macro_final=null`(绝非 0)**;适格时按有效维公式;macro 只在 `applicable ∧ weighted` 时入席集;`effective_weightᵢ,ₛ = base_s / Σ base_适格席`(无 macro ≈ .3888889/.2777778/.3333333/0);全精度计算、**声明的最终阶段一次舍入**;**verify_archive_semantics 从封存的原始维度/映射/证据记录重算**覆盖率/状态/macro final/生效权重/composite——不信封值 |
+| M2 | §0c 的 target 级 scoring_owner 正确,但 §6 仍是被取代的全局归属旧文 | §6 已替换为完整规则(见 §6);§7 增 target 级/混合主张拆分/重复 owner/cutoff 版本回归测试 |
+| m1 | MS 字段与确切缺席 cutoff 只在处置表、未进操作性 §6 | §6 MS 行 schema 补全:`mapping_id/mapping_version/mapping_sha256/mapping_status/exposure_type/exposure_bucket/exposure_value/snapshot_effective_at/目标代码/维度/来源`;`mapped_no_exposure → exposure_value=null`(不造 0);缺席渲染必带 `confirmed_absent_through=<确切通道 cutoff>`,测试拒绝暗示整晚覆盖的措辞 |
+
+**决策谱系与成交绑定合同(B1 处方逐条):**
+- 首个会话前冻结 `fill_intent_id / fill_trade_date / fill_open_at / binding_cutoff_at`;
+  刷新**不得**把交易滚到另一个开盘;
+- `decision_session_id` 与技术重试 attempt 分离——"单发布 attempt"规则作用于
+  **会话内**,不作用于整个 fill intent;
+- 每个会话档案不可变;**新**档案封 `supersedes_session_id`(向前指);
+  **绝不回写旧档案**加 superseded_by——追加 `decision_superseded` 事件到
+  append-only 谱系账本,UI 从账本派生视图;
+- 在预注册 `binding_cutoff_at` **自动**选择:已完整密封、`macro_flash_cutoff_at`
+  最大、且 `fill_open_at − macro_flash_cutoff_at ≤ 18h` 的会话;
+  **无人工选择、无按分选择、无陈旧回退、无自动顺延**;无适格会话 → 封
+  `fill_skipped`;
+- 开盘前写并密封 **`fill_binding.json`**(fill_intent_id/选中 session_id/档案封印
+  哈希/cutoff/龄/选择规则 ID/binding_at),哈希钉入账本;`record_fills`
+  **只消费该绑定**。
 
 ---
 
@@ -141,14 +168,25 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
   **MFD/MFI/MFA/MFR**(M1;类属性进 ID 注册表),带 `n_independent_sources` 与
   事件龄——同受 §2 全部机制(簇修订 as-of/覆盖三态/净化/席位域);
 - 政策事件节(政策细节行有注册宏观 ID);
-- **MS01-MS05 维度专属股票暴露行**(B3):as-of,含股票代码/适用行业·概念·风格
-  暴露/来源/`snapshot_effective_at`(M4:THS 概念无同期快照即省略;标签束哈希入
-  C16b)。
+- **MS01-MS05 维度专属股票暴露行**(B3 + round-4 m1 完整 schema):每行含
+  `mapping_id / mapping_version / mapping_sha256 / mapping_status / exposure_type /
+  exposure_bucket / exposure_value / snapshot_effective_at / 目标代码 / 维度 / 来源`;
+  `mapped_no_exposure → exposure_value=null`(不造 0);THS 概念无同期快照即省略
+  (M4);标签束哈希入 C16b。缺席渲染必带 `confirmed_absent_through=<确切通道
+  cutoff>`。
 **输出 = 宏观传导 scorecard,五维**(每分都需 **M/MF 事实 + 对应 MS 暴露行配对
-证据**,缺 MS = no-score):风险偏好环境适配/流动性·资金面传导/行业·概念景气传导/
+证据**):风险偏好环境适配/流动性·资金面传导/行业·概念景气传导/
 **policy_alignment(居中评分,M2)**/**external_shock_transmission(m1)**。
-**跨席防双计(M3):** 事实修订带 `scoring_owner`(发行人直接 → news,系统广谱 →
-macro);非 owner 席上下文可见、不可计分。
+**覆盖感知聚合(round-4 M1,公式钉入 scoring_contract.macro_coverage_policy):**
+coverage_ratio < 0.60 → `macro_status=not_applicable`、`macro_final=null`、
+其余席位按 base 权重确定性重归一;完整规范公式见 §0d M1 行;完整性层从封存
+原始记录重算全链。
+**跨席防双计(M3,round-4 M2 完整规则):** `scoring_owner(claim_id,
+target_ts_code, input_cutoff_at)`——subject_codes 显式点名的 target → news 所有;
+经**批准的、cutoff 时有效的**系统性暴露触达的非 subject 同业 → macro 所有;
+混合文本拆原子 claim_id(共享 fact_cluster_id);每个计分 `(claim_id, target)`
+校验器要求**恰一**计分席,零或重复所有权**硬失败**;非 owner 席只能以显式
+不可计分上下文消费。
 **封存:** `macro_card_snapshot_id`+逐股上下文哈希+生成 ID 注册表+ts_code 进输入
 指纹与档案(B3)。
 **接线:** 四席并列;`macro_analyst_v1.txt` 进 manifest;空头消费四席;composite
@@ -170,5 +208,8 @@ p99 延迟预算宽裕(§0a)。
 5. 宏观卡 + MS 暴露行 + 宏观席 + 四席 composite(§6;§0a 四时间戳链入引擎断言)
 6. 运行清单对账 + C16b 指纹全集 + FORWARD_PREREG.md 更新(M5)
 7. 测试:对抗注入集/簇 as-of/覆盖三态/源家族/证据类算术/席位域/配对证据/
-   scoring_owner/四席端到端(含平台/重算)/四时间戳断言
+   scoring_owner(target 级/混合主张拆分/重复 owner 硬失败/cutoff 版本)/
+   覆盖感知聚合重算(coverage_ratio·not_applicable·生效权重·一次舍入)/
+   决策谱系(会话不可变·谱系账本·绑定选择规则·fill_skipped·fill_binding 哈希)/
+   四席端到端(含平台/重算)/四时间戳断言
 8. 链版本 bump → 单日烟测 → §5 读质量门(M5 数值线 + 双标注协议)
