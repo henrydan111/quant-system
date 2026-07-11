@@ -1,6 +1,6 @@
-# 新闻快讯接入设计 v1.6(NF 波次 + 宏观席)— 设计稿,GPT round-6 待审
+# 新闻快讯接入设计 v1.6(NF 波次 + 宏观席)— **APPROVED(GPT round-6,2026-07-11)**
 
-状态:DESIGN v1.6(2026-07-11)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
+状态:**APPROVED FOR IMPLEMENTATION**(GPT round-6 对 f86543f:0B/0M/1m 编辑项,R2=可以开工;前向证据与 macro weighted 另行授权——见 §4 哈希绑定清单)。⑧round-6 Minor(规范性优先级横幅)已落;selection_rule 除 id 外其**不可变政策内容哈希**须由会话档案/绑定与链 manifest 携带(round-6 追加处方,已入 §0d)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
 0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
 全采纳,含其 R2 严化裁定(同 cutoff 不打破平局 = 完整性违规)。裁定史:①用户:快讯必须进决策框架 + 硬性噪音去除;
 ②用户:宏观/市场流是数据资产 → 第四席 + 逐股传导(v1.1);
@@ -34,7 +34,7 @@ round-2 B1/B2;**B3 热修获准立即开工**(R5);三 Major 全采纳(§0c);
   **无人工选择、无按分选择、无陈旧回退、无自动顺延**;无适格会话 → 封
   `fill_skipped`;
 - 开盘前写并密封 **`fill_binding.json`**(fill_intent_id/选中 session_id/档案封印
-  哈希/cutoff/龄/选择规则 ID/binding_at),哈希钉入账本;`record_fills`
+  哈希/cutoff/龄/选择规则 ID **及其不可变政策内容哈希(round-6 追加)**/binding_at),哈希钉入账本并进链 manifest;`record_fills`
   **只消费该绑定**。
 
 ---
@@ -78,7 +78,9 @@ round-2 按盘前决策模式推导的 lookahead 在声明后不成立,但其全
   会话发布与绑定在**同一 fill-intent 锁**下执行,墙钟相等由 append-only 账本
   序号裁决;余下唯一适格会话中取最大 `macro_flash_cutoff_at`。
 
-## §0b GPT round-2 处置表(全采纳;B1/B2 以 §0a 声明为锚落地其机械处方)
+> **规范性优先级:§0a、§0d、§5、§6 为 v1.6 唯一现行合同;§0、§0b、§0c 处置表仅作历史审计,任何冲突文字均视为已取代,不得生成实现规则。**
+
+## §0b GPT round-2 处置表(历史审计)
 
 | # | 发现 | v1.3 处置 |
 |---|---|---|
