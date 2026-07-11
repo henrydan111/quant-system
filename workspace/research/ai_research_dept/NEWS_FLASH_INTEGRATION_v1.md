@@ -1,4 +1,5 @@
-# 新闻快讯接入设计 v1.6(NF 波次 + 宏观席)— **APPROVED(GPT round-6,2026-07-11)**
+# 新闻快讯接入设计 v1.7(NF 波次 + 宏观席 + 新闻价值提取增强)
+**v1.6 主体 APPROVED(GPT round-6);§6b 增强 v1.7 待 GPT round-7**
 
 状态:**APPROVED FOR IMPLEMENTATION**(GPT round-6 对 f86543f:0B/0M/1m 编辑项,R2=可以开工;前向证据与 macro weighted 另行授权——见 §4 哈希绑定清单)。⑧round-6 Minor(规范性优先级横幅)已落;selection_rule 除 id 外其**不可变政策内容哈希**须由会话档案/绑定与链 manifest 携带(round-6 追加处方,已入 §0d)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
 0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
@@ -220,16 +221,50 @@ target_ts_code, input_cutoff_at)`——subject_codes 显式点名的 target → 
 **成本:** +1 调用/股 ≈ 12 AFP/股;宏观卡共享 → prompt 缓存摊薄;晚间决策模式下
 p99 延迟预算宽裕(§0a)。
 
+## §6b 新闻价值提取增强(v1.7,用户裁定 A;分析师/交易员视角)—— GPT round-7 待审
+
+**动机(用户 + Claude 分析师复盘):** v1.6 的去噪扎实、PIT 密封,但价值提取是
+"分析师读标题"框架,未用足快讯数据最可交易的维度。**根本张力:快讯价值分钟级衰减,
+而本系统节奏是晚间决策/次开盘成交**——盘中快速反应我们天然吃不到。故 news 席应
+瞄准日频节奏下**真正可捕获**的四类:①收盘后未定价快讯(唯一真信息优势窗,对齐晚间
+决策)②隔夜消化的次日延续/反转 ③新闻流动态(速率/广度)预示的多日注意力régime
+④叙事/仓位多日演变。以下增强全部 as-of 决策 cutoff、独立源去重(B4)、history_bulk
+排除(§3),**且注意力≠方向:流/热度特征只作研究输入喂 LLM,绝不直接支撑正向分,
+composite 仍 research_summary(禁入选股除非 C16 注册)**。
+
+| # | 增强 | 机制(确定性、代码计算、PIT-as-of) | 落点 | 状态 |
+|---|---|---|---|---|
+| E1 | **新闻流动态**(单名 velocity/acceleration/breadth) | 从簇流按 cutoff 前可见修订算:`flow_count_{1,5,20}d`(独立源去重事件数,窗口止于 input_cutoff_at)/`flow_velocity=count_1d / mean_20d`(注意力爆发比)/`flow_acceleration`/`coverage_breadth`(独立源家族数)。**新卡行类 NFV##**(派生/聚合类,证据类=aggregate 上限=NFA 的 3);喂 news 席 novelty 维 + **空头席 crowding/blow-off 风险**,不喂正向 materiality | news 卡 + 空头 | 契合管线,新特征 |
+| E2 | **收盘后/停市未定价特权** | 每快讯按发布时刻 vs 交易日历 session 边界(09:30–11:30/13:00–15:00,日历=真相)确定性打 `market_state_at_publish ∈ {intraday, after_close, pre_open, overnight}`;`freshness_class ∈ {unpriced_since_close(上次收盘后发、停市至决策), intraday_priced(盘中发、市场已有机会反应)}` | news 卡行属性 + catalyst_timing 维 | 纯发布时刻×日历,PIT 铁安全 |
+| E3 | **horizon-aware 可交易性**(news 席维度细化) | 拆分 `event_materiality`(重不重要)与 `tradeability_at_horizon`(我们次开盘成交还吃不吃得到):后者接地到 freshness_class(E2)+ 该股 D 日价量反应行(晚间决策下 D 收盘已知,一条 10:00 快讯 + 该股 D 日异动/收盘 = 是否已 price in);已被盘中定价的重大快讯 materiality 高但 tradeability 低 | news 席 scorecard 维(改评分契约,新 C16b + 链 bump) | 维度变更 |
+| E4 | **题材注意力动量**(横截面流) | 每概念/行业标签算 `theme_flow_velocity`=该题材今日独立源新闻数 vs 尾部基线(as-of cutoff,独立源去重);A 股题材驱动,此为强轮动信号 | 宏观卡行业聚合侧(**新行类喂宏观席 industry-transmission 维**)+ news 席 theme 维 | 契合管线,新特征 |
+| E5 | **超预期/预期锚(可行性存疑,最谨慎)** | 无干净一致预期源。自有代理:`direction_surprise`=今日净新闻方向 vs 该股尾部20d净方向(今日语气是否背离近期叙事,纯自有流、PIT 安全)。report_rc 分析师修正广度是更强锚**但踩 eps_diffusion 撤销区**([[project_tushare_15000_expansion]]:广度/二阶差分形态有回填重述残留泄漏)——**任何预期特征不得重新引入该泄漏**;E5 只用自有净方向背离的弱代理 | news 席 novelty/surprise 维(若采纳) | **feasibility-flagged**,弱代理 |
+| E6 | **pump/协同→逆向输入(空头侧重构)** | 管线已检测源家族协同(B4)+ 黑嘴模式(现在=丢弃/钳)。新增 `coordination_flag`(与传闻区分:多个貌似独立媒体、同措辞、突发爆量、无结构化事件背书)→ **路由到空头席作反转/blow-off 风险输入**(仍不支撑正向分)。把"检测到操纵→逆向"从纯过滤变成可交易逆向读 | 空头席(已消费传闻旗) | 现有机制重构 |
+
+**治理:** E1/E2/E4 派生特征的**窗口/参数进 C16b 冻结指纹全集**;新卡行类(NFV/theme-heat)
+注册进 emit-time ID 注册表(复用 B3 机制)+ 席位域;E3 的 scorecard 维度变更进
+scoring_contract + 链 bump。**红线:流/热度/surprise 全是给 LLM 的研究输入,不得成为
+未注册的隐形选股信号**(与全系统同一 C16 纪律)。
+**PIT(GPT 会重锤,预先声明):** 每个 velocity/breadth/theme/surprise 特征——尾部窗口
+止于 `input_cutoff_at`、独立源去重(B4)、**history_bulk 成员排除**(回填行会污染
+velocity;前向流只用真时间戳成员,`effective_at ≤ cutoff`)。
+
 ## §7 实现清单(round-3 通过后;第 0 项按 R6 裁定先行)
 
 0. **B3 窄热修(先行,独立链 bump)**:渲染净化 + 生成 ID 注册表(封入档案)+
    席位-ID 域 + 对抗注入测试;落地前 chain_v3.0 不执行任何运行
-1. news 端点契约入 data_dictionary → 抓取层:`fetch_news` + 水位线 + 递归窗 +
-   覆盖清单(B2)→ 采集后更新 data_tracker(m2)
-2. `news_ingest.py`:净化/预过滤/簇修订/源家族/三路路由/三维分型(B1/B4/M1)
+1. news 端点契约入 data_dictionary(**含 `fields='datetime,content,title,channels'`——
+   channels 默认不返回,必须显式请求;`src` 为我方注入列**)→ 抓取层:`fetch_news` +
+   水位线 + 递归窗 + 覆盖清单(B2)→ 采集后更新 data_tracker(m2)
+2. `news_ingest.py`:净化/预过滤/簇修订/源家族/三路路由/三维分型(B1/B4/M1)+
+   **§6b 派生特征**:flow velocity/breadth(E1)、freshness_class(E2)、
+   theme_flow_velocity(E4)、coordination_flag(E6)、direction_surprise(E5,若采纳)
 3. 别名注册表(独立审批工件)+ fact_cluster_id + scoring_owner(M3/M4)
-4. 渲染:证据类上限算术 NFD/NFI/NFA/NFR + MFD/MFI/MFA/MFR(M2/round2-M1)
-5. 宏观卡 + MS 暴露行 + 宏观席 + 四席 composite(§6;§0a 四时间戳链入引擎断言)
+4. 渲染:证据类上限算术 NFD/NFI/NFA/NFR + MFD/MFI/MFA/MFR(M2/round2-M1)+
+   **NFV 流动态行 + theme-heat 行 + freshness_class 属性(§6b E1/E2/E4)**
+5. 宏观卡 + MS 暴露行 + 宏观席 + 四席 composite(§6;§0a 四时间戳链入引擎断言);
+   news 席 tradeability_at_horizon 维(§6b E3,进评分契约)+ 空头席 coordination/
+   crowding 输入(§6b E1/E6)
 6. 运行清单对账 + C16b 指纹全集 + FORWARD_PREREG.md 更新(M5)
 7. 测试:对抗注入集/簇 as-of/覆盖三态/源家族/证据类算术/席位域/配对证据/
    scoring_owner(target 级/混合主张拆分/重复 owner 硬失败/cutoff 版本)/
@@ -237,5 +272,7 @@ p99 延迟预算宽裕(§0a)。
    决策谱系与绑定(会话不可变·谱系账本·绑定唯一性 duplicate_cutoff_sessions·
    迟封不适格·fill-intent 锁·fill_skipped·fill_binding 哈希)/
    M6 阈值边界与分母(90%/80%/15pp 边界·人工样本 vs 全总体两分母·PIT 市值五分位)/
-   四席端到端(含平台/重算)/四时间戳断言
+   四席端到端(含平台/重算)/四时间戳断言/
+   **§6b:flow velocity as-of+history_bulk 排除/freshness_class×日历/theme 动量 as-of/
+   coordination→空头/流特征不入正向分(注意力≠方向断言)**
 8. 链版本 bump → 单日烟测 → §5 读质量门(M5 数值线 + 双标注协议)
