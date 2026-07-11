@@ -146,3 +146,45 @@ class TestRouteValueValidation:
         ensure_immutable_manifest(tmp_path, m)          # 正文自洽
         with pytest.raises(VersionCollisionError, match="thinking"):
             ChainContract.load(tmp_path)
+
+
+# --------------------------------------------- SHIP-Minor 路由容器类型隔离
+
+class TestRoutingContainerIsolation:
+    def test_non_mapping_routing_rejects_version_not_platform(self):
+        """SHIP-Minor 回归(GPT 精确要求):truthy 非 Mapping routing 容器
+        (list/str)只拒该版本,绝不 AttributeError 炸掉整个 Data() 初始化。"""
+        from workspace.research.ai_research_dept.engine import config as C
+        from workspace.research.ai_research_dept.engine.integrity import (
+            manifest_core_fp, manifest_full_sha256)
+        chain_dir = C.OUT_ROOT / "analyst_chain"
+        base = json.loads(
+            (chain_dir / "chain_v2.8" / "manifest.json").read_text(
+                encoding="utf-8"))
+        plants = []
+        try:
+            for name, bad_routing in (("chain_v9.9routelist", [{"bad": "c"}]),
+                                      ("chain_v9.9routestr", "scoring")):
+                vdir = chain_dir / name
+                vdir.mkdir(exist_ok=True)
+                m = {k: v for k, v in base.items()
+                     if k not in ("manifest_fp", "manifest_sha256")}
+                m["chain_version"] = name
+                m["routing"] = bad_routing
+                m["manifest_fp"] = manifest_core_fp(m)
+                m["manifest_sha256"] = manifest_full_sha256(m)
+                (vdir / "manifest.json").write_text(
+                    json.dumps(m, ensure_ascii=False), encoding="utf-8")
+                plants.append(vdir)
+            from workspace.research.ai_research_dept.platform.server import Data
+            D = Data()                     # 不得 AttributeError 中断
+            ist = D.integrity_status
+            for name in ("chain_v9.9routelist", "chain_v9.9routestr"):
+                assert ist[name]["rejected"] == 1
+                assert "routing 不是对象" in ist[name]["reasons"][0]
+                assert name not in D.manifests
+            assert D.integrity_status["chain_v2.8"]["loaded"] == 2
+        finally:
+            import shutil
+            for vdir in plants:
+                shutil.rmtree(vdir, ignore_errors=True)

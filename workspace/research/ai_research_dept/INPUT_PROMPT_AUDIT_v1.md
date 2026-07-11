@@ -556,6 +556,12 @@ Q11 ⚑ 旗保留但准则冻结且方向中性,消费率进过程指标)。
 
 **测试:224/224**(+39 条复审#8 回归:schema_valid 7 例/席位 error falsey 5 例/空头 error falsey 4 例/字面 None 兼容/route 值类型 16 例/字符串 thinking 拒于 load·call_with_config/缺键·非对象)。
 
+### §10.9 复审#9 终裁:**SHIP**(2026-07-11 收到;0 Blocker / 0 Major / 1 Minor)
+
+GPT 对 669a33d 复核:R1 全部复现通过(NaN/1/"false" 重封印档案 archive_complete=False+平台 loaded=0/rejected=1;falsey 非空错误全点名;"False"/1/"true" thinking 双端拒;温度/token/fallback 滥用全拒,call_with_config 在 chat 前抛,捕获 LLM 调用=0;v2.4-v2.8 存量路由全过);R2 共享谓词无残余承重真值性;R3 完整性与完成链在对抗输入下闭合(类型化评分+路由绑 manifest/契约 load 校验+深只读+逐字执行/档案必带封印+引擎平台单一严格谓词/真两档终局重算=2 无缺失且重现集合哈希/月度 marker 只能计入平台已验证档案);**R4:chain_v2.8 适合执行 149×16 NON_EVIDENTIARY 全月重放**。
+**Minor(唯一发现,server-only 硬化,不需再 bump 链版本,已同日落地)**:平台版本门先解引用 `(manifest.get("routing") or {}).get(leg)`——truthy 非 Mapping 容器(list/str)曾 AttributeError 炸掉整个 Data() 初始化而非只拒该版本(fail-closed:无档案可执行/发布/计数,故不阻塞重放)。修复=GPT 精确替换(容器先验 `isinstance(routing, Mapping)` 再逐腿校验)+回归(list/str 容器只拒该版本、Data() 正常完成、v2.8 照常加载)。ChainContract.load/call_with_config 的同类崩溃 GPT 裁定 fail-closed 可接受,且改引擎文件会再 bump 版本——不动。**测试:225/225**。
+**八轮跨审终局:chain_v2.0→v2.8,5+4+3+3+3+2+4+1 = 25 Blocker 全闭,#10 全月重放解锁。**
+
 ---
 
 ## 附录 A:现行输入原文(审计基线,2026-07-09 实查 688981.SH @ 20250127)

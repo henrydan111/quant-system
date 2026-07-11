@@ -15,6 +15,7 @@ import json
 import re
 import logging
 import sys
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -190,15 +191,19 @@ class Data:
                     if not mp:
                         mp = verify_scoring_contract(
                             manifest.get("scoring_contract"))
-                    # 复审#8 Major:routing 两腿值类型校验(thinking="False"
-                    # 字符串曾静默反转 thinking 语义)——与引擎同一把尺
+                    # 复审#8 Major + SHIP-Minor:routing 容器先验类型再解引用
+                    # (truthy 非 Mapping 容器曾 AttributeError 炸掉整个 Data()
+                    # 初始化,而不是只拒该版本)——两腿值类型与引擎同一把尺
                     if not mp:
-                        for leg in ("scoring", "bear"):
-                            rp = verify_llm_route(
-                                (manifest.get("routing") or {}).get(leg))
-                            if rp:
-                                mp = [f"routing[{leg}]: {';'.join(rp)}"]
-                                break
+                        routing = manifest.get("routing")
+                        if not isinstance(routing, Mapping):
+                            mp = ["routing: routing 不是对象"]
+                        else:
+                            for leg in ("scoring", "bear"):
+                                rp = verify_llm_route(routing.get(leg))
+                                if rp:
+                                    mp = [f"routing[{leg}]: {';'.join(rp)}"]
+                                    break
                     if mp or manifest.get("chain_version") != vdir.name:
                         st["rejected"] += 1
                         st["reasons"].append(
