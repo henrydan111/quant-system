@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PY = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
@@ -74,25 +75,27 @@ def _principal(user: str | None) -> str:
     # task uses InteractiveToken: it runs only while that user is interactively logged on, and
     # StartWhenAvailable + the watchdog cover a missed run (GPT M3).
     if user:
-        return (f'<Principal id="Author"><UserId>{user}</UserId>'
+        return (f'<Principal id="Author"><UserId>{escape(user)}</UserId>'
                 '<LogonType>Password</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>')
     return ('<Principal id="Author"><LogonType>InteractiveToken</LogonType>'
             '<RunLevel>LeastPrivilege</RunLevel></Principal>')
 
 
 def _task_xml(desc: str, start: str, cmd: str, arguments: str = "", user: str | None = None) -> str:
-    args_el = f"<Arguments>{arguments}</Arguments>" if arguments else ""
-    return _XML.format(desc=desc, start=start, cmd=cmd, args=args_el,
-                       cwd=str(PROJECT_ROOT), principal=_principal(user))
+    args_el = f"<Arguments>{escape(arguments)}</Arguments>" if arguments else ""
+    return _XML.format(desc=escape(desc), start=start, cmd=escape(cmd), args=args_el,
+                       cwd=escape(str(PROJECT_ROOT)), principal=_principal(user))
 
 
-def _register(task_name: str, xml_str: str, user: str | None = None, password: str | None = None) -> int:
+def _register(task_name: str, xml_str: str, user: str | None = None) -> int:
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     Path(path).write_text(xml_str, encoding="utf-16")  # UTF-16 handles the Chinese repo path safely
     cmd = ["schtasks", "/Create", "/TN", task_name, "/XML", path, "/F"]
     if user:
-        cmd += ["/RU", user] + (["/RP", password] if password is not None else [])
+        # NEVER put the password on the command line (it leaks into process args/history — GPT M4).
+        # `/RP *` makes schtasks prompt for it interactively (--register is an operator §13 action).
+        cmd += ["/RU", user, "/RP", "*"]
     try:
         return subprocess.run(cmd).returncode
     finally:
@@ -106,8 +109,8 @@ def main() -> int:
     ap.add_argument("--query", action="store_true", help="Show the task definitions")
     ap.add_argument("--user", default=None,
                     help="Run as this account with Password logon (UNATTENDED across logout/reboot, "
-                         "keeps network for Tushare). Omit -> InteractiveToken (runs only when logged on).")
-    ap.add_argument("--password", default=None, help="Password for --user (schtasks /RP)")
+                         "keeps network for Tushare). Omit -> InteractiveToken (runs only when logged on). "
+                         "schtasks prompts for the password interactively (/RP *) — never on the cmdline.")
     args = ap.parse_args()
 
     if not WRAPPER.exists() or not WATCHDOG_SCRIPT.exists():
@@ -117,7 +120,7 @@ def main() -> int:
     daily_xml = _task_xml("Phase 5-C daily raw-layer update + QA (18:30 CST)", DAILY_START,
                           str(WRAPPER), user=args.user)
     watchdog_xml = _task_xml("Phase 5-C missed-run watchdog (10:00 CST)", WATCHDOG_START,
-                             str(PY), f"&quot;{WATCHDOG_SCRIPT}&quot;", user=args.user)
+                             str(PY), f'"{WATCHDOG_SCRIPT}"', user=args.user)
 
     if args.query:
         rc = 0
@@ -130,8 +133,8 @@ def main() -> int:
             rc |= subprocess.run(["schtasks", "/Delete", "/TN", t, "/F"]).returncode
         return rc
     if args.register:
-        rc = _register(DAILY_TASK, daily_xml, args.user, args.password)
-        rc |= _register(WATCHDOG_TASK, watchdog_xml, args.user, args.password)
+        rc = _register(DAILY_TASK, daily_xml, args.user)
+        rc |= _register(WATCHDOG_TASK, watchdog_xml, args.user)
         return rc
 
     print("=== " + DAILY_TASK + " XML ===\n" + daily_xml)

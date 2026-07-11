@@ -9,6 +9,8 @@ import logging
 import time
 import os
 
+from data_infra.tushare_lock import api_call_lock  # cross-process account lock (§6.1, GPT 5-C B1)
+
 DEFAULT_STATEMENT_LIMIT = 2000
 VIP_ALL_STOCK_LIMIT = 10000
 FINE_INDICATOR_LIMIT = 100
@@ -46,8 +48,12 @@ class TushareFetcher:
         """Wrapper for Tushare API calls to handle rate limits and temporary failures."""
         for attempt in range(self.max_retries):
             try:
-                df = api_func(**kwargs)
-                time.sleep(self.base_sleep) # proactive sleep to respect 2000 points rate limit (e.g. 100/min)
+                # Hold the cross-process account lock for the call + the proactive sleep, so no two
+                # sanctioned callers ever hit Tushare simultaneously and the rate-limit sleep applies
+                # GLOBALLY across processes (CLAUDE.md §6.1; GPT 5-C Blocker 1).
+                with api_call_lock():
+                    df = api_func(**kwargs)
+                    time.sleep(self.base_sleep) # proactive sleep to respect 2000 points rate limit (e.g. 100/min)
                 return df
             except Exception as e:
                 error_msg = str(e).lower()

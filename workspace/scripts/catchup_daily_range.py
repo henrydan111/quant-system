@@ -144,13 +144,13 @@ def main() -> None:
 
     updater = DailyDataUpdater(config_path=os.path.join(PROJECT_ROOT, "config.yaml"))
 
-    # cross-process Tushare-account lock (CLAUDE.md §6.1) so the monthly catch-up serializes with the
-    # daily raw job / any manual fetch (GPT 5-C M4).
-    from data_infra.pipeline.daily_ops import account_lock
+    # process-exclusive raw-maintenance lock (kernel-held; §6.1) so the monthly catch-up serializes
+    # with the daily raw job / any manual fetch (GPT 5-C Blocker 1).
+    from data_infra.tushare_lock import raw_maintenance_lock
 
     started = time.time()
     failed: list[str] = []
-    with account_lock(os.path.join(PROJECT_ROOT, "logs")):
+    with raw_maintenance_lock():
         for date in suspend_refresh:
             try:
                 detail = write_suspend_d(updater, date)

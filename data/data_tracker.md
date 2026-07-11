@@ -14,7 +14,7 @@ Contains basic metadata and trading calendars for the market.
 | File | Rows | Description | Required Columns Available |
 |------|------|-------------|----------------------------|
 | `stock_basic.parquet` | 5,852 | Contains all historical listed A-shares, including delisted and ST stocks. (2026-06-08: re-fetched with `act_name`/`act_ent_type` → 17 cols.) | `ts_code`, `list_date`, `delist_date`, `industry`, `exchange`, `act_name`, `act_ent_type` |
-| `trade_cal.parquet` | 4,410 | Core trading calendar representing every day the market was explicitly open or closed. | `cal_date`, `is_open`, `pretrade_date` |
+| `trade_cal.parquet` | 8,797 | Core trading calendar. Fetched with `is_open='1'` so the live store is OPEN-days-only (1990-12-19→next-year-end); a closed date is ABSENT. The daily raw job merges a forward horizon (never truncates) and refreshes it. | `exchange`, `cal_date`, `is_open`, `pretrade_date` |
 | `namechange.parquet` | 18,237 | All historical stock name changes, including ST designation/removal events. | `ts_code`, `name`, `start_date`, `end_date`, `ann_date`, `change_reason` |
 | `stock_st_daily.parquet` | 307,696 | Daily ST stock list (2016-08-09 to 2026-03-23). Each row = one stock being ST on that trading day. **⚠ Known gap: 2020-01-02 missing (Tushare server-side issue, confirmed on re-download).** | `ts_code`, `name`, `trade_date`, `type`, `type_name` |
 | `moneyflow_known_empty_dates.txt` | 5 dates | Curated source-empty moneyflow trading dates confirmed against the live API. Used by the staged PIT integrity gate. | `YYYYMMDD` line-delimited |

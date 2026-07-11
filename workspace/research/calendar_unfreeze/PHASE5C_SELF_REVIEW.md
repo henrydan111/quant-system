@@ -97,3 +97,27 @@ GPT 复审 7f1fb1d：**REVISE**（0 Blocker，4 prior fully fixed，4 partial）
 92 绿（22 daily-5c+catchup [含 Saturday/beyond-coverage/account_lock/gap-walker] + 36 monthly + 34 report_rc）；8 py 文件 compile；.bat 0 非 ASCII；register --user Password XML 实测；account_lock serialize/steal 实测。
 
 **结论：clean for GPT（re-review 2）。4 Major + 3 Minor 全修（orchestrator heartbeat 绑定 + 成员制交易日 + Password-logon/gap-walker + 跨进程账号锁 + 纯 ASCII .bat + 精准读 + 文档）；C-4 注册仍 §13 留用户。**
+
+---
+
+## REWORK round 4（GPT re-review #2 REWORK 后修复自审）— 2026-07-04
+
+GPT 复审 a8778ca：**REWORK**（2 Blocker + 4 Major + 3 Minor）——四个 partial 未真正闭合。逐条重修（子系统级硬化）：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** account_lock 按年龄偷走活体多小时 catch-up 的锁 + 覆盖不全 | 全换 **filelock（内核持有，进程死自动释放，零年龄偷锁）**：`tushare_lock.raw_maintenance_lock`（daily/monthly/manual 入口互斥）+ `api_call_lock` **进内 `_safe_api_call`**（覆盖每个 sanctioned caller）；**catchup_fundamentals 补锁**（原裸奔）；QUANT_LOCK_DIR 可覆盖 | 新增 kernel-held 多进程单测（子进程持锁→父超时→kill→父可得，非年龄） |
+| **B2** 日历"归一"把非法 is_open 静默转 0 | `_normalize`→**`_validate_trade_cal`**（缺列/空值/非 8 位日期/is_open∉{0,1}/dup key/**fresh 必全 1** → **raise**，不 coerce）；空 stock_basic/trade_cal fetch = 错误 | 新增 reject-BAD/reject-empty/reject-8digit/reject-missing-col 单测 |
+| **M1** heartbeat 越过不完整早会话 | **完成清单**（`session_status/<date>.json`，required_ok=全必需端点成功）+ **连续 watermark**（首个不完整即止，heartbeat=watermark 非 target）；orchestrator is_trading_day=False→标不完整；顶层异常边界 + 原子写 | 新增 manifest/watermark/backlog 单测（hole 处止步，填后跳 0704） |
+| **M2** "零错误"漏多端点 | phase3 REQUIRED（moneyflow/stk_limit）失败/空 → errors；reference 错误即使闭市日也上报；空 reference=错误 | reference/phase3 错误路径 |
+| **M3** 15 会话滑窗=永久盲区 | backlog 从 **watermark floor**（月度发布边界）发现，非滑窗；`max_sessions_per_run=10`；orchestrator 一次性 floor+watermark | backlog/watermark 单测 |
+| **M4** --password 泄漏命令行 | 删 --password，用 **`schtasks /RP *`**（交互提示）；UserId/desc/cmd/cwd/args **XML-escape** | register --user 实测（DOM\quant 保留） |
+| **minor** watchdog/monitor 不健壮 | watchdog **精确校验**（`re.fullmatch \d{8}`，不 [:8] 截断；查 manifest required_ok）+ 写 **daily_job_alert**（非 qa_alert）；orchestrator 原子 heartbeat + 顶层边界；event_store 只读请求日期；data_tracker 8,797 / data_dictionary per-date store | 结构审 |
+
+### 关键：跨进程锁的死锁分析
+入口先取 `raw_maintenance_lock`（路径 A），API 调用逐次取/放 `api_call_lock`（路径 B）——**顺序恒定**（A 后 B），无进程反向取，无锁序死锁。QA 子进程在 maintenance 锁**释放后**跑。api_call_lock 只序列化 ingestion（研究/回测读 Qlib 不 fetch），blast radius 小。
+
+### 验证汇总
+99 绿（15 daily-5c[含 kernel-lock 多进程/manifest-watermark/validate-reject] + 8 catchup + 76 regression[含 provider_boundary，证 fetcher 改动无回归]）；11 py 文件 compile；fetcher+locks import 干净；register --user Password XML 实测。
+
+**结论：clean for GPT（re-review 3）。2 Blocker + 4 Major + 3 Minor 全修（filelock 内核锁全覆盖 + 严格日历校验 + manifest/watermark 完整性 + 端点传播 + /RP* + 精确 watchdog）；C-4 注册仍 §13 留用户。**

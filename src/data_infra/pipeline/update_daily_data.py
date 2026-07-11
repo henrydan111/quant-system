@@ -134,7 +134,9 @@ class DailyDataUpdater:
                     return {
                         "market_ok": False, "is_trading_day": False,  # legit skip -> exit 0
                         "touched_symbols": set(),
-                        "affected_datasets": {"stock_basic", "trade_cal"}, "errors": [],
+                        "affected_datasets": {"stock_basic", "trade_cal"},
+                        # a reference-refresh failure is still surfaced even on a closed date (M2)
+                        "errors": [self._reference_error] if getattr(self, '_reference_error', None) else [],
                     }
                 logger.error("%s is BEYOND trade_cal coverage [%s..%s] — insufficient calendar",
                              target_date, dates.min() if not dates.empty else "?",
@@ -184,6 +186,7 @@ class DailyDataUpdater:
             errors.append(f"daily market data missing for trading day {target_date}")
         if self._suspend_error:
             errors.append(self._suspend_error)
+        errors.extend(getattr(self, '_phase3_errors', []))  # required moneyflow/stk_limit failures
         return {
             "market_ok": market_ok,
             "is_trading_day": True,
@@ -213,20 +216,22 @@ class DailyDataUpdater:
         logger.info("Updating reference data...")
         try:
             df_basic = self.fetcher.fetch_stock_basic()
-            if not df_basic.empty:
-                _atomic_write_parquet(df_basic, os.path.join(self.ref_dir, "stock_basic.parquet"))
+            if df_basic.empty:  # an empty ground-truth response is an ERROR, not a successful no-op
+                raise ValueError("stock_basic fetch returned EMPTY")
+            _atomic_write_parquet(df_basic, os.path.join(self.ref_dir, "stock_basic.parquet"))
 
             horizon_end = f"{int(target_date[:4]) + 1}1231"  # always extend past today
             df_cal = self.fetcher.fetch_trade_cal(end_date=horizon_end)
-            if not df_cal.empty:
-                cal_path = os.path.join(self.ref_dir, "trade_cal.parquet")
-                df_cal = _normalize_trade_cal(df_cal)
-                if os.path.exists(cal_path):
-                    old = _normalize_trade_cal(pd.read_parquet(cal_path))
-                    df_cal = (pd.concat([old, df_cal], ignore_index=True)
-                              .drop_duplicates(subset=["exchange", "cal_date"], keep="last"))
-                df_cal = df_cal.sort_values(["exchange", "cal_date"]).reset_index(drop=True)
-                _atomic_write_parquet(df_cal, cal_path)
+            if df_cal.empty:
+                raise ValueError("trade_cal fetch returned EMPTY")
+            cal_path = os.path.join(self.ref_dir, "trade_cal.parquet")
+            df_cal = _validate_trade_cal(df_cal, fresh=True)
+            if os.path.exists(cal_path):
+                old = _validate_trade_cal(pd.read_parquet(cal_path), fresh=False)
+                df_cal = (pd.concat([old, df_cal], ignore_index=True)
+                          .drop_duplicates(subset=["exchange", "cal_date"], keep="last"))
+            df_cal = df_cal.sort_values(["exchange", "cal_date"]).reset_index(drop=True)
+            _atomic_write_parquet(df_cal, cal_path)
         except Exception as e:
             logger.error(f"Error updating reference data: {e}")
             self._reference_error = f"reference data update failed: {e}"
@@ -422,9 +427,15 @@ class DailyDataUpdater:
 
         return touched_symbols, affected_datasets
 
+    # Phase-3 endpoints whose ABSENCE on a trading day is a deployment-relevant failure (surfaced to
+    # the exit contract, GPT M2). The event-like ones (top_list/top_inst/block_trade) + northbound
+    # (partial/declining coverage) are legitimately sparse and are NOT required.
+    REQUIRED_PHASE3 = {"moneyflow", "stk_limit"}
+
     def update_phase3_daily_market(self, target_date: str):
         """Fetch Phase 3 daily market datasets for the target trade date."""
         logger.info("Fetching Phase 3 daily market data for %s...", target_date)
+        self._phase3_errors = []
 
         categories = [
             ("moneyflow", self.fetcher.fetch_moneyflow),
@@ -463,8 +474,12 @@ class DailyDataUpdater:
                     logger.info("  %s: expected source-empty date %s", name, target_date)
                 else:
                     logger.info("  %s: no rows returned for %s", name, target_date)
+                    if name in self.REQUIRED_PHASE3:
+                        self._phase3_errors.append(f"{name} empty for trading day {target_date}")
             except Exception as e:
                 logger.error("Error fetching %s for %s: %s", name, target_date, e)
+                if name in self.REQUIRED_PHASE3:
+                    self._phase3_errors.append(f"{name} failed for {target_date}: {e}")
 
         # suspend_d (Phase 5-C/C2): a complete same-date snapshot, stored via ATOMIC OVERWRITE (not
         # the merge path) so it preserves suspend_timing — load-bearing for the monthly-bump
@@ -610,17 +625,30 @@ def _atomic_write_parquet(df, path: str) -> None:
             os.remove(tmp)
 
 
-def _normalize_trade_cal(df):
-    """Require + normalize the trade_cal schema (exchange/cal_date str, is_open int) so a mixed
-    int/string cal_date cannot crash the merge sort — that exception was swallowed, leaving a stale
-    calendar (GPT M4)."""
+def _validate_trade_cal(df, *, fresh: bool):
+    """Validate + normalize trade_cal STRICTLY — REJECT malformed ground truth, never coerce it. The
+    prior normalizer turned is_open='BAD' -> 0 (an open day silently becomes closed) and every
+    consumer (selector, gap walker, QA, watchdog, monthly bump) then agrees on the same wrong result
+    (GPT 5-C Blocker 2). `fresh`=True for a just-fetched frame (fetched with is_open='1', so every
+    row MUST be open); False for an on-disk merge base (may hold historical is_open=0 rows)."""
+    missing = {"exchange", "cal_date", "is_open"} - set(df.columns)
+    if missing:
+        raise ValueError(f"trade_cal missing required columns {sorted(missing)}")
     out = df.copy()
-    if "exchange" not in out.columns:
-        out["exchange"] = "SSE"
-    out["exchange"] = out["exchange"].astype(str)
-    out["cal_date"] = out["cal_date"].astype(str).str.replace("-", "", regex=False)
-    out["is_open"] = pd.to_numeric(out["is_open"], errors="coerce").fillna(0).astype(int) \
-        if "is_open" in out.columns else 1
+    out["exchange"] = out["exchange"].astype(str).str.strip()
+    if (out["exchange"].isin(["", "nan", "None"])).any():
+        raise ValueError("trade_cal has null/blank exchange")
+    out["cal_date"] = out["cal_date"].astype(str).str.replace("-", "", regex=False).str.strip()
+    if not out["cal_date"].str.fullmatch(r"\d{8}").all():
+        raise ValueError("trade_cal has non-8-digit cal_date values")
+    io = pd.to_numeric(out["is_open"], errors="coerce")
+    if io.isna().any() or not io.isin([0, 1]).all():
+        raise ValueError("trade_cal has is_open outside {0,1}")
+    out["is_open"] = io.astype(int)
+    if fresh and not (out["is_open"] == 1).all():
+        raise ValueError("fresh trade_cal (fetched is_open='1') contains non-open rows")
+    if out.duplicated(subset=["exchange", "cal_date"]).any():
+        raise ValueError("trade_cal has duplicate (exchange, cal_date) keys")
     if "pretrade_date" not in out.columns:
         out["pretrade_date"] = ""
     out["pretrade_date"] = out["pretrade_date"].astype(str)
@@ -694,10 +722,11 @@ def main():
     else:
         target_date = datetime.now().strftime('%Y%m%d')
 
-    # cross-process Tushare-account lock (CLAUDE.md §6.1: never parallel fetchers) so a direct run
-    # serializes with the monthly bump's catch-up + the daily orchestrator (GPT M4).
-    from data_infra.pipeline.daily_ops import account_lock
-    with account_lock(os.path.join(project_root, "logs")):
+    # process-exclusive raw-maintenance lock (kernel-held; §6.1) so a direct run serializes with the
+    # monthly bump's catch-up + the daily orchestrator (GPT 5-C Blocker 1). Per-call account safety is
+    # additionally enforced inside TushareFetcher._safe_api_call.
+    from data_infra.tushare_lock import raw_maintenance_lock
+    with raw_maintenance_lock():
         result = updater.update_for_date(
             target_date,
             skip_fundamentals=args.skip_fundamentals,

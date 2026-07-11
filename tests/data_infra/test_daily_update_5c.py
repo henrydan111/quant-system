@@ -13,8 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 from data_infra.pipeline.update_daily_data import (  # noqa: E402
-    DailyDataUpdater, resolve_last_complete_session)
-from data_infra.pipeline.daily_ops import account_lock, missing_open_sessions  # noqa: E402
+    DailyDataUpdater, resolve_last_complete_session, _validate_trade_cal)
+from data_infra.pipeline import daily_ops  # noqa: E402
 
 
 def _stub_updater(ref_dir):
@@ -45,32 +45,79 @@ def test_update_for_date_beyond_coverage_is_error(tmp_path):
     assert res["is_trading_day"] is True and res["errors"]
 
 
-def test_account_lock_serializes(tmp_path):
-    # GPT M4: the account lock is cross-process — a second acquire blocks until release; a stale lock
-    # is stolen. Here: acquire, verify a fast re-acquire times out, then release + re-acquire.
-    logs = str(tmp_path / "logs")
-    import pytest as _pytest
-    with account_lock(logs):
-        with _pytest.raises(TimeoutError):
-            with account_lock(logs, timeout=0.2, poll=0.05):
+def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatch):
+    # GPT B1: the lock is KERNEL-held (filelock) — a second acquirer blocks while the first holds it,
+    # and the OS releases it when the holder process DIES (no age-based stealing). A subprocess holds
+    # it; the parent must time out; after the holder is killed, the parent acquires.
+    import subprocess as _sp
+    import time as _time
+    import filelock
+    lockdir = tmp_path / "locks"
+    monkeypatch.setenv("QUANT_LOCK_DIR", str(lockdir))
+    holder_code = (
+        "import os, sys, time\n"
+        f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
+        f"os.environ['QUANT_LOCK_DIR'] = r'{lockdir}'\n"
+        "from data_infra.tushare_lock import raw_maintenance_lock\n"
+        "with raw_maintenance_lock():\n"
+        f"    open(r'{tmp_path / 'acq'}', 'w').close()\n"
+        "    time.sleep(30)\n"
+    )
+    holder = _sp.Popen([sys.executable, "-c", holder_code])
+    try:
+        for _ in range(200):  # wait until the holder has acquired
+            if (tmp_path / "acq").exists():
+                break
+            _time.sleep(0.05)
+        assert (tmp_path / "acq").exists(), "holder never acquired"
+        from data_infra.tushare_lock import raw_maintenance_lock
+        with pytest.raises(filelock.Timeout):
+            with raw_maintenance_lock(timeout=0.3):
                 pass
-    with account_lock(logs):  # released -> re-acquirable
+    finally:
+        holder.kill()
+        holder.wait()
+    with raw_maintenance_lock(timeout=5):  # holder died -> OS released it -> acquirable (not age-based)
         pass
 
 
-def test_missing_open_sessions_oldest_first(tmp_path):
-    # GPT M3: the gap walker returns open sessions with no daily file, oldest-first (bounded).
+def test_session_status_watermark_and_backlog(tmp_path):
+    # GPT M1/M3: completion is manifest-based; the watermark advances only over a CONTIGUOUS run of
+    # complete sessions; backlog is discovered from the watermark (floor), oldest-first.
     ref = tmp_path / "reference"
     ref.mkdir(parents=True)
-    opens = ["20260701", "20260702", "20260703"]
+    opens = ["20260701", "20260702", "20260703", "20260704"]
     pd.DataFrame({"exchange": "SSE", "cal_date": opens, "is_open": 1,
                   "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
-    daily_root = tmp_path / "daily"
-    (daily_root / "2026").mkdir(parents=True)
-    # only 20260703 has a file -> 0701, 0702 are the gaps
-    pd.DataFrame({"ts_code": ["A"]}).to_parquet(daily_root / "2026" / "daily_20260703.parquet")
-    gaps = missing_open_sessions(str(ref), str(daily_root), "20260703")
-    assert gaps == ["20260701", "20260702"]
+    logs = str(tmp_path / "logs")
+    floor = "20260701"  # provider boundary; daily job owns 0702..0704
+    # nothing done yet -> backlog = 0702,0703,0704
+    assert daily_ops.backlog_sessions(str(ref), logs, "20260704", floor) == ["20260702", "20260703", "20260704"]
+    # 0702 complete, 0703 INCOMPLETE (daily ok but a required endpoint failed), 0704 complete
+    daily_ops.write_session_status(logs, "20260702", True)
+    daily_ops.write_session_status(logs, "20260703", False)
+    daily_ops.write_session_status(logs, "20260704", True)
+    # watermark advances only to 0702 (0703 breaks the contiguous run) — NOT past the hole to 0704
+    assert daily_ops.advance_watermark(str(ref), logs, "20260704", floor) == "20260702"
+    # backlog now = ONLY the incomplete 0703 (0704 already complete, 0702 done + watermark at 0702)
+    assert daily_ops.backlog_sessions(str(ref), logs, "20260704", floor) == ["20260703"]
+    # fill the hole -> watermark jumps contiguously to 0704
+    daily_ops.write_session_status(logs, "20260703", True)
+    assert daily_ops.advance_watermark(str(ref), logs, "20260704", floor) == "20260704"
+
+
+def test_validate_trade_cal_rejects_malformed():
+    # GPT B2: reject malformed ground truth, do NOT coerce it.
+    good = pd.DataFrame({"exchange": ["SSE"], "cal_date": ["20260703"], "is_open": [1], "pretrade_date": [""]})
+    _validate_trade_cal(good, fresh=True)  # ok
+    with pytest.raises(ValueError, match="is_open"):
+        _validate_trade_cal(pd.DataFrame({"exchange": ["SSE"], "cal_date": ["20260703"], "is_open": ["BAD"]}), fresh=False)
+    with pytest.raises(ValueError, match="non-open"):  # fresh fetch must be all is_open=1
+        _validate_trade_cal(pd.DataFrame({"exchange": ["SSE"], "cal_date": ["20260703"], "is_open": [0]}), fresh=True)
+    with pytest.raises(ValueError, match="8-digit"):
+        _validate_trade_cal(pd.DataFrame({"exchange": ["SSE"], "cal_date": ["2026-7-3"], "is_open": [1]}), fresh=True)
+    with pytest.raises(ValueError, match="required columns"):
+        _validate_trade_cal(pd.DataFrame({"cal_date": ["20260703"], "is_open": [1]}), fresh=True)
 
 
 def _trade_cal(tmp_path, open_days):

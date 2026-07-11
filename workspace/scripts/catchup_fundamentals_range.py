@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -427,9 +428,15 @@ def main() -> None:
                     allow_empty_report_rc=args.allow_empty_report_rc,
                     allow_empty_report_rc_months=months_ok)
     started = time.time()
-    for stage in args.stages.upper():
-        logger.info("===== STAGE %s =====", stage)
-        getattr(runner, f"stage_{stage.lower()}")()
+    # process-exclusive raw-maintenance lock (kernel-held; §6.1) — the fundamentals catch-up owns a
+    # Tushare fetcher and must serialize with the daily raw job / catchup_daily / any manual fetch
+    # (GPT 5-C Blocker 1: this path was previously UNLOCKED while the daily job was free to run).
+    from data_infra.tushare_lock import raw_maintenance_lock
+    lock_cm = raw_maintenance_lock() if not args.dry_run else contextlib.nullcontext()
+    with lock_cm:
+        for stage in args.stages.upper():
+            logger.info("===== STAGE %s =====", stage)
+            getattr(runner, f"stage_{stage.lower()}")()
     logger.info("FUND CATCHUP %s in %.0f min, %d failed keys%s",
                 "DRY-RUN" if args.dry_run else "COMPLETE", (time.time() - started) / 60,
                 len(runner.failed), f" -> {runner.failed[:20]}" if runner.failed else "")
