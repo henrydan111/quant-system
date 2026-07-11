@@ -17,6 +17,19 @@ authoritative source, with `vol == 0` as the legacy fallback only.
 The high-level `EventDrivenBacktester` passes this range file into `Exchange`
 automatically when it exists and logs the `vol == 0` fallback when it does not.
 
+**Live per-date store (Phase 5-C)**: the daily raw job + the monthly bump's catch-up
+write a per-date snapshot at `data/market/suspend_d/<year>/suspend_d_<YYYYMMDD>.parquet`
+(columns `ts_code, trade_date, suspend_type, suspend_timing`) via
+`DailyDataUpdater.write_suspend_d` — an atomic overwrite that PRESERVES `suspend_timing`
+(a full-day suspension has empty timing; an intraday halt is timed like `09:30-10:00`).
+This timing is load-bearing for the monthly-bump daily-completeness proof
+(`monthly_calendar_bump.assert_endpoints_complete_range`), which fails closed on a
+`suspend_d` file that has `S` rows but no `suspend_timing` column. Consumers of the
+per-date store must recurse the year partitions (e.g. `ai_research_dept` reads
+`suspend_d/<year>/suspend_d_<date>.parquet` per requested day), NOT a root-level glob.
+The `data/market/suspension/` range store above is the separate historical-bootstrap
+layout; reconciling the two is a follow-up.
+
 | Column | English | Chinese |
 |--------|---------|---------|
 | `ts_code` | TS Stock Code | TS代码 |

@@ -451,21 +451,19 @@ def main() -> int:
     # task + an operator can watch; on success, clear any stale flag so a recovered run resolves the
     # alert. Lightweight by design — no email/webhook (out of scope); the Windows task also records
     # the native exit code.
+    # QA owns ONLY the qa_alert flag (its own pass/fail). It does NOT write the daily-job heartbeat:
+    # that is bound to BOTH the raw update AND QA succeeding, and is written by the orchestrator
+    # (daily_raw_job.py) — a generic QA pass must not advance the heartbeat and green the watchdog
+    # after a failed update (GPT 5-C M1).
     alert_path = LOGS_DIR / f"qa_alert_{timestamp[:8]}.flag"
-    heartbeat_path = LOGS_DIR / "daily_job_heartbeat.json"
     if not all_ok:
         failed = [c["label"] for c in checks if not c["ok"]]
         alert_path.write_text(
             f"QA FAILED {timestamp}\nfailed_checks: {failed}\nreport: {report_path}\n", encoding="utf-8")
         logger.error("QA FAILED - wrote alert flag %s (failed: %s)", alert_path, failed)
-    else:
-        if alert_path.exists():
-            alert_path.unlink()
-            logger.info("QA recovered - cleared stale alert flag %s", alert_path)
-        # success heartbeat (CST) so the independent watchdog can detect a MISSED daily run (the
-        # main task cannot report that it never launched — GPT 5-C M2).
-        heartbeat_path.write_text(json.dumps(
-            {"last_success_cst": timestamp, "report": str(report_path)}, ensure_ascii=False), encoding="utf-8")
+    elif alert_path.exists():
+        alert_path.unlink()
+        logger.info("QA recovered - cleared stale alert flag %s", alert_path)
 
     return 0 if all_ok else 1
 

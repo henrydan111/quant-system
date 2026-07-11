@@ -51,7 +51,7 @@ _XML = '''<?xml version="1.0" encoding="UTF-16"?>
     </CalendarTrigger>
   </Triggers>
   <Principals>
-    <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+    {principal}
   </Principals>
   <Settings>
     <StartWhenAvailable>true</StartWhenAvailable>
@@ -68,17 +68,33 @@ _XML = '''<?xml version="1.0" encoding="UTF-16"?>
 </Task>'''
 
 
-def _task_xml(desc: str, start: str, cmd: str, arguments: str = "") -> str:
+def _principal(user: str | None) -> str:
+    # A dedicated least-privilege account with Password logon runs UNATTENDED across logout/reboot
+    # AND keeps network access (Tushare needs it — S4U tasks have no network). Without --user the
+    # task uses InteractiveToken: it runs only while that user is interactively logged on, and
+    # StartWhenAvailable + the watchdog cover a missed run (GPT M3).
+    if user:
+        return (f'<Principal id="Author"><UserId>{user}</UserId>'
+                '<LogonType>Password</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>')
+    return ('<Principal id="Author"><LogonType>InteractiveToken</LogonType>'
+            '<RunLevel>LeastPrivilege</RunLevel></Principal>')
+
+
+def _task_xml(desc: str, start: str, cmd: str, arguments: str = "", user: str | None = None) -> str:
     args_el = f"<Arguments>{arguments}</Arguments>" if arguments else ""
-    return _XML.format(desc=desc, start=start, cmd=cmd, args=args_el, cwd=str(PROJECT_ROOT))
+    return _XML.format(desc=desc, start=start, cmd=cmd, args=args_el,
+                       cwd=str(PROJECT_ROOT), principal=_principal(user))
 
 
-def _register(task_name: str, xml_str: str) -> int:
+def _register(task_name: str, xml_str: str, user: str | None = None, password: str | None = None) -> int:
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     Path(path).write_text(xml_str, encoding="utf-16")  # UTF-16 handles the Chinese repo path safely
+    cmd = ["schtasks", "/Create", "/TN", task_name, "/XML", path, "/F"]
+    if user:
+        cmd += ["/RU", user] + (["/RP", password] if password is not None else [])
     try:
-        return subprocess.run(["schtasks", "/Create", "/TN", task_name, "/XML", path, "/F"]).returncode
+        return subprocess.run(cmd).returncode
     finally:
         os.remove(path)
 
@@ -88,28 +104,34 @@ def main() -> int:
     ap.add_argument("--register", action="store_true", help="Create both tasks (§13 machine mutation)")
     ap.add_argument("--delete", action="store_true", help="Delete both tasks (§13 machine mutation)")
     ap.add_argument("--query", action="store_true", help="Show the task definitions")
+    ap.add_argument("--user", default=None,
+                    help="Run as this account with Password logon (UNATTENDED across logout/reboot, "
+                         "keeps network for Tushare). Omit -> InteractiveToken (runs only when logged on).")
+    ap.add_argument("--password", default=None, help="Password for --user (schtasks /RP)")
     args = ap.parse_args()
 
     if not WRAPPER.exists() or not WATCHDOG_SCRIPT.exists():
         print("ERROR: wrapper or watchdog script not found", file=sys.stderr)
         return 2
 
-    daily_xml = _task_xml("Phase 5-C daily raw-layer update + QA (18:30 CST)", DAILY_START, str(WRAPPER))
+    daily_xml = _task_xml("Phase 5-C daily raw-layer update + QA (18:30 CST)", DAILY_START,
+                          str(WRAPPER), user=args.user)
     watchdog_xml = _task_xml("Phase 5-C missed-run watchdog (10:00 CST)", WATCHDOG_START,
-                             str(PY), f"&quot;{WATCHDOG_SCRIPT}&quot;")
+                             str(PY), f"&quot;{WATCHDOG_SCRIPT}&quot;", user=args.user)
 
     if args.query:
+        rc = 0
         for t in (DAILY_TASK, WATCHDOG_TASK):
-            subprocess.run(["schtasks", "/Query", "/TN", t, "/V", "/FO", "LIST"])
-        return 0
+            rc |= subprocess.run(["schtasks", "/Query", "/TN", t, "/V", "/FO", "LIST"]).returncode
+        return rc
     if args.delete:
         rc = 0
         for t in (DAILY_TASK, WATCHDOG_TASK):
             rc |= subprocess.run(["schtasks", "/Delete", "/TN", t, "/F"]).returncode
         return rc
     if args.register:
-        rc = _register(DAILY_TASK, daily_xml)
-        rc |= _register(WATCHDOG_TASK, watchdog_xml)
+        rc = _register(DAILY_TASK, daily_xml, args.user, args.password)
+        rc |= _register(WATCHDOG_TASK, watchdog_xml, args.user, args.password)
         return rc
 
     print("=== " + DAILY_TASK + " XML ===\n" + daily_xml)

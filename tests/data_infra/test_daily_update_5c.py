@@ -14,6 +14,63 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 from data_infra.pipeline.update_daily_data import (  # noqa: E402
     DailyDataUpdater, resolve_last_complete_session)
+from data_infra.pipeline.daily_ops import account_lock, missing_open_sessions  # noqa: E402
+
+
+def _stub_updater(ref_dir):
+    stub = DailyDataUpdater.__new__(DailyDataUpdater)  # bypass __init__ (no Tushare/config)
+    stub.ref_dir = str(ref_dir)
+    stub.update_reference_data = lambda d: None  # no-op the fetch
+    return stub
+
+
+def test_update_for_date_saturday_is_non_trading_skip(tmp_path):
+    # GPT M2: the calendar holds ONLY open days (is_open='1' fetch); a Saturday is ABSENT -> a
+    # legitimate non-trading skip (exit 0), NOT "missing daily data".
+    ref = tmp_path / "reference"
+    ref.mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": ["20260703", "20260706", "20260707"], "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
+    res = DailyDataUpdater.update_for_date(_stub_updater(ref), "20260704")  # Saturday
+    assert res["is_trading_day"] is False and res["errors"] == []
+
+
+def test_update_for_date_beyond_coverage_is_error(tmp_path):
+    # GPT M2: a date beyond calendar coverage is an ERROR (insufficient calendar), not a silent skip.
+    ref = tmp_path / "reference"
+    ref.mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": ["20260703"], "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
+    res = DailyDataUpdater.update_for_date(_stub_updater(ref), "20260710")  # > max 20260703
+    assert res["is_trading_day"] is True and res["errors"]
+
+
+def test_account_lock_serializes(tmp_path):
+    # GPT M4: the account lock is cross-process — a second acquire blocks until release; a stale lock
+    # is stolen. Here: acquire, verify a fast re-acquire times out, then release + re-acquire.
+    logs = str(tmp_path / "logs")
+    import pytest as _pytest
+    with account_lock(logs):
+        with _pytest.raises(TimeoutError):
+            with account_lock(logs, timeout=0.2, poll=0.05):
+                pass
+    with account_lock(logs):  # released -> re-acquirable
+        pass
+
+
+def test_missing_open_sessions_oldest_first(tmp_path):
+    # GPT M3: the gap walker returns open sessions with no daily file, oldest-first (bounded).
+    ref = tmp_path / "reference"
+    ref.mkdir(parents=True)
+    opens = ["20260701", "20260702", "20260703"]
+    pd.DataFrame({"exchange": "SSE", "cal_date": opens, "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
+    daily_root = tmp_path / "daily"
+    (daily_root / "2026").mkdir(parents=True)
+    # only 20260703 has a file -> 0701, 0702 are the gaps
+    pd.DataFrame({"ts_code": ["A"]}).to_parquet(daily_root / "2026" / "daily_20260703.parquet")
+    gaps = missing_open_sessions(str(ref), str(daily_root), "20260703")
+    assert gaps == ["20260701", "20260702"]
 
 
 def _trade_cal(tmp_path, open_days):

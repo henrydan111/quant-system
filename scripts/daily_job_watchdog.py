@@ -36,24 +36,29 @@ def _alert(msg: str) -> None:
 def main() -> int:
     from data_infra.pipeline.update_daily_data import resolve_last_complete_session
     ref_dir = str(PROJECT_ROOT / "data" / "reference")
+    daily_root = PROJECT_ROOT / "data" / "market" / "daily"
     try:
         expected = resolve_last_complete_session(ref_dir)
-    except SystemExit as exc:  # calendar not future-aware / no session — itself alert-worthy
+    except (SystemExit, Exception) as exc:  # noqa: BLE001 — a missing/corrupt calendar is alert-worthy
         _alert(f"watchdog: cannot resolve last complete session: {exc}")
         return 1
 
-    last_success = None
+    # the heartbeat's completed_session is bound to a SUCCESSFUL raw update + QA (orchestrator M1).
+    completed = None
     if HEARTBEAT.exists():
         try:
-            last_success = str(json.loads(HEARTBEAT.read_text(encoding="utf-8")).get("last_success_cst", ""))[:8]
+            completed = str(json.loads(HEARTBEAT.read_text(encoding="utf-8")).get("completed_session", ""))[:8]
         except Exception:  # noqa: BLE001 — corrupt heartbeat -> treat as missing
-            last_success = None
+            completed = None
+    # validate: a plausible 8-digit date, not in the future, and a real raw daily file exists for it
+    valid = bool(completed) and completed.isdigit() and len(completed) == 8 and completed <= expected \
+        and (daily_root / completed[:4] / f"daily_{completed}.parquet").exists()
 
-    if not last_success or last_success < expected:
-        _alert(f"watchdog: daily job STALE - last QA success {last_success or 'NEVER'} < last complete "
-               f"session {expected} (missed run?)")
+    if not valid or completed < expected:
+        _alert(f"watchdog: daily job STALE - last completed session {completed or 'NEVER'} vs expected "
+               f"{expected} (missed/failed run?)")
         return 1
-    print(f"watchdog OK: last QA success {last_success} covers last complete session {expected}")
+    print(f"watchdog OK: completed session {completed} covers last complete session {expected}")
     return 0
 
 

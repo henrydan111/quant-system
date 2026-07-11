@@ -110,7 +110,9 @@ def run_one_day(updater: DailyDataUpdater, date: str) -> dict:
     # NOT re-fetched here — a second call would double the Tushare hit per session (GPT m1).
     _, phase3_sets = updater.update_phase3_daily_market(date)
     detail["phase3"] = sorted(phase3_sets)
-    detail["suspend_d"] = "suspend_d" in phase3_sets
+    if "suspend_d" not in phase3_sets:  # write failed -> RAISE so the day is marked failed + retried
+        raise RuntimeError(f"suspend_d write failed for {date}: {getattr(updater, '_suspend_error', '?')}")
+    detail["suspend_d"] = True
 
     return detail
 
@@ -142,35 +144,41 @@ def main() -> None:
 
     updater = DailyDataUpdater(config_path=os.path.join(PROJECT_ROOT, "config.yaml"))
 
-    for date in suspend_refresh:
-        try:
-            detail = write_suspend_d(updater, date)
-            state.setdefault(date, {}).update({"suspend_d_schema": "timing_required_v1", **detail})
-            logger.info("suspend_d timing-refresh %s: rows=%d timing=%s",
-                        date, detail["suspend_rows"], detail["suspend_timing_present"])
-        except Exception as exc:  # noqa: BLE001 — non-fatal; the gate stays fail-closed for this date
-            logger.error("suspend_d refresh FAILED %s: %s", date, exc)
-        save_state(state)
+    # cross-process Tushare-account lock (CLAUDE.md §6.1) so the monthly catch-up serializes with the
+    # daily raw job / any manual fetch (GPT 5-C M4).
+    from data_infra.pipeline.daily_ops import account_lock
 
     started = time.time()
     failed: list[str] = []
-    for idx, date in enumerate(pending, 1):
-        day_started = time.time()
-        try:
-            detail = run_one_day(updater, date)
-            state[date] = {"status": "done", "at": datetime.now().isoformat(timespec="seconds"), **detail}
-        except Exception as exc:  # noqa: BLE001 — per-day isolation, rerun retries
-            logger.error("FAILED %s: %s", date, exc)
-            state[date] = {"status": "failed", "error": str(exc), "at": datetime.now().isoformat(timespec="seconds")}
-            failed.append(date)
-        save_state(state)
+    with account_lock(os.path.join(PROJECT_ROOT, "logs")):
+        for date in suspend_refresh:
+            try:
+                detail = write_suspend_d(updater, date)
+                state.setdefault(date, {}).update({"suspend_d_schema": "timing_required_v1", **detail})
+                logger.info("suspend_d timing-refresh %s: rows=%d timing=%s",
+                            date, detail["suspend_rows"], detail["suspend_timing_present"])
+            except Exception as exc:  # noqa: BLE001 — a refresh failure IS a failure (GPT M2)
+                logger.error("suspend_d refresh FAILED %s: %s", date, exc)
+                failed.append(f"suspend_refresh:{date}")
+            save_state(state)
 
-        elapsed = time.time() - started
-        eta_min = (elapsed / idx) * (len(pending) - idx) / 60
-        logger.info(
-            "PROGRESS %d/%d %s status=%s day_secs=%.0f eta_min=%.0f",
-            idx, len(pending), date, state[date]["status"], time.time() - day_started, eta_min,
-        )
+        for idx, date in enumerate(pending, 1):
+            day_started = time.time()
+            try:
+                detail = run_one_day(updater, date)
+                state[date] = {"status": "done", "at": datetime.now().isoformat(timespec="seconds"), **detail}
+            except Exception as exc:  # noqa: BLE001 — per-day isolation, rerun retries
+                logger.error("FAILED %s: %s", date, exc)
+                state[date] = {"status": "failed", "error": str(exc), "at": datetime.now().isoformat(timespec="seconds")}
+                failed.append(date)
+            save_state(state)
+
+            elapsed = time.time() - started
+            eta_min = (elapsed / idx) * (len(pending) - idx) / 60
+            logger.info(
+                "PROGRESS %d/%d %s status=%s day_secs=%.0f eta_min=%.0f",
+                idx, len(pending), date, state[date]["status"], time.time() - day_started, eta_min,
+            )
 
     done = sum(1 for d in days if state.get(d, {}).get("status") == "done")
     logger.info("CATCHUP COMPLETE: %d/%d done, %d failed%s",

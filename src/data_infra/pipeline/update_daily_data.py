@@ -118,19 +118,31 @@ class DailyDataUpdater:
         # 1. Update Reference Data (stock_basic, trade_cal)
         self.update_reference_data(target_date)
 
-        # 2. Check if target_date is a trading day
+        # 2. Trading-day membership (GPT M2). trade_cal is fetched with is_open='1', so it holds ONLY
+        # open days — a closed date is ABSENT (not present with is_open==0). Absence WITHIN calendar
+        # coverage = non-trading (legit skip, exit 0); a date BEYOND coverage = insufficient calendar
+        # (an error, not a silent skip).
         trade_cal_path = os.path.join(self.ref_dir, "trade_cal.parquet")
         if os.path.exists(trade_cal_path):
             cal = pd.read_parquet(trade_cal_path)
-            day_info = cal[cal['cal_date'] == target_date]
-            if not day_info.empty and day_info.iloc[0]['is_open'] == 0:
-                logger.info(f"{target_date} is not a trading day. Skipping market data.")
+            dates = cal['cal_date'].astype(str)
+            open_days = set(dates[cal['is_open'] == 1]) if 'is_open' in cal.columns else set(dates)
+            if target_date not in open_days:
+                covered = not dates.empty and dates.min() <= target_date <= dates.max()
+                if covered:
+                    logger.info(f"{target_date} is not a trading day. Skipping market data.")
+                    return {
+                        "market_ok": False, "is_trading_day": False,  # legit skip -> exit 0
+                        "touched_symbols": set(),
+                        "affected_datasets": {"stock_basic", "trade_cal"}, "errors": [],
+                    }
+                logger.error("%s is BEYOND trade_cal coverage [%s..%s] — insufficient calendar",
+                             target_date, dates.min() if not dates.empty else "?",
+                             dates.max() if not dates.empty else "?")
                 return {
-                    "market_ok": False,
-                    "is_trading_day": False,  # legitimate skip — not a failure (M1 exit-code)
-                    "touched_symbols": set(),
-                    "affected_datasets": {"stock_basic", "trade_cal"},
-                    "errors": [],
+                    "market_ok": False, "is_trading_day": True,  # unknown -> fail (M1 exit-code)
+                    "touched_symbols": set(), "affected_datasets": set(),
+                    "errors": [f"{target_date} beyond trade_cal coverage — refresh the calendar"],
                 }
 
         # 3. Update Daily Market Data
@@ -166,6 +178,8 @@ class DailyDataUpdater:
             affected_datasets.add("index_weights")
 
         errors = []
+        if getattr(self, '_reference_error', None):
+            errors.append(self._reference_error)
         if not market_ok:
             errors.append(f"daily market data missing for trading day {target_date}")
         if self._suspend_error:
@@ -189,33 +203,33 @@ class DailyDataUpdater:
             return {line.strip() for line in handle if line.strip() and not line.lstrip().startswith('#')}
 
     def update_reference_data(self, target_date: str):
-        """Update stock_basic and trade_cal for new IPOs/delistings."""
+        """Update stock_basic and trade_cal for new IPOs/delistings. trade_cal is fetched a FORWARD
+        horizon and MERGED by (exchange, cal_date) — NEVER a target-bounded overwrite, which would
+        truncate the future-aware calendar the selector + QA depend on and freeze the job on its first
+        run (GPT B1). The merge is dtype-normalized + column-validated so a mixed int/string cal_date
+        can't crash the sort (previously swallowed, leaving a stale calendar — GPT M4), and written
+        via a unique temp + atomic replace. A failure is surfaced to the exit contract (GPT M2)."""
+        self._reference_error = None
         logger.info("Updating reference data...")
         try:
             df_basic = self.fetcher.fetch_stock_basic()
             if not df_basic.empty:
-                df_basic.to_parquet(os.path.join(self.ref_dir, "stock_basic.parquet"), index=False)
+                _atomic_write_parquet(df_basic, os.path.join(self.ref_dir, "stock_basic.parquet"))
 
-            # trade_cal: fetch a FORWARD horizon and MERGE by (exchange, cal_date) — NEVER overwrite
-            # with a target-bounded response. A target-bounded fetch truncates the future-aware
-            # calendar that resolve_last_complete_session + QA depend on, freezing the daily job on
-            # its first run (Monday's run -> calendar ends Monday -> Tuesday selector stuck on
-            # Monday). GPT B1. end_date = next year-end so the calendar always extends past today.
-            horizon_end = f"{int(target_date[:4]) + 1}1231"
+            horizon_end = f"{int(target_date[:4]) + 1}1231"  # always extend past today
             df_cal = self.fetcher.fetch_trade_cal(end_date=horizon_end)
             if not df_cal.empty:
                 cal_path = os.path.join(self.ref_dir, "trade_cal.parquet")
-                key = [c for c in ("exchange", "cal_date") if c in df_cal.columns] or None
+                df_cal = _normalize_trade_cal(df_cal)
                 if os.path.exists(cal_path):
-                    old = pd.read_parquet(cal_path)
+                    old = _normalize_trade_cal(pd.read_parquet(cal_path))
                     df_cal = (pd.concat([old, df_cal], ignore_index=True)
-                              .drop_duplicates(subset=key, keep="last"))  # fresh fetch wins on overlap
-                df_cal = df_cal.sort_values("cal_date")
-                tmp = cal_path + ".tmp"
-                df_cal.to_parquet(tmp, index=False)
-                os.replace(tmp, cal_path)
+                              .drop_duplicates(subset=["exchange", "cal_date"], keep="last"))
+                df_cal = df_cal.sort_values(["exchange", "cal_date"]).reset_index(drop=True)
+                _atomic_write_parquet(df_cal, cal_path)
         except Exception as e:
             logger.error(f"Error updating reference data: {e}")
+            self._reference_error = f"reference data update failed: {e}"
 
     def update_index_data(self, target_date: str):
         """Update major index daily data for the target date."""
@@ -581,6 +595,38 @@ def trigger_qlib_incremental(touched_symbols=None, affected_datasets=None):
         logger.error(f"Incremental Qlib update failed: {e}")
 
 
+def _atomic_write_parquet(df, path: str) -> None:
+    """Write via a UNIQUE temp + atomic replace — a fixed `path + '.tmp'` collides with a concurrent
+    writer of the same file (GPT M4)."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    os.close(fd)
+    try:
+        df.to_parquet(tmp, index=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _normalize_trade_cal(df):
+    """Require + normalize the trade_cal schema (exchange/cal_date str, is_open int) so a mixed
+    int/string cal_date cannot crash the merge sort — that exception was swallowed, leaving a stale
+    calendar (GPT M4)."""
+    out = df.copy()
+    if "exchange" not in out.columns:
+        out["exchange"] = "SSE"
+    out["exchange"] = out["exchange"].astype(str)
+    out["cal_date"] = out["cal_date"].astype(str).str.replace("-", "", regex=False)
+    out["is_open"] = pd.to_numeric(out["is_open"], errors="coerce").fillna(0).astype(int) \
+        if "is_open" in out.columns else 1
+    if "pretrade_date" not in out.columns:
+        out["pretrade_date"] = ""
+    out["pretrade_date"] = out["pretrade_date"].astype(str)
+    return out[["exchange", "cal_date", "is_open", "pretrade_date"]]
+
+
 def resolve_last_complete_session(ref_dir: str, close_hhmm: str = "1730", now=None) -> str:
     """The last COMPLETE trading day as of now (CST). A trading day is complete once we are past the
     vendor daily-file close (~17:30 CST — kline ~16:00, daily_basic to ~17:00, + margin); before
@@ -648,11 +694,15 @@ def main():
     else:
         target_date = datetime.now().strftime('%Y%m%d')
 
-    result = updater.update_for_date(
-        target_date,
-        skip_fundamentals=args.skip_fundamentals,
-        skip_phase3=args.skip_phase3,
-    )
+    # cross-process Tushare-account lock (CLAUDE.md §6.1: never parallel fetchers) so a direct run
+    # serializes with the monthly bump's catch-up + the daily orchestrator (GPT M4).
+    from data_infra.pipeline.daily_ops import account_lock
+    with account_lock(os.path.join(project_root, "logs")):
+        result = updater.update_for_date(
+            target_date,
+            skip_fundamentals=args.skip_fundamentals,
+            skip_phase3=args.skip_phase3,
+        )
     success = bool(result["market_ok"])
 
     # Qlib conversion
