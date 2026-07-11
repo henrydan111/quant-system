@@ -326,6 +326,25 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
+def _raw_input_digest(parent_end: str, target_end: str) -> str:
+    """Digest over the fresh-window raw inputs (daily/suspend_d/moneyflow/stk_limit file
+    name+size+mtime) at build time — an input-cut ATTESTATION. Computed under the raw-maintenance
+    barrier (phase_execute holds it), so it describes ONE stable raw cut (GPT 5-C Blocker 1)."""
+    import hashlib
+    opens = [d for d in _open_trading_days(upto=target_end) if parent_end < d <= target_end]
+    h = hashlib.sha256()
+    for d in opens:
+        for sub, ep in (("market/daily", "daily"), ("market/suspend_d", "suspend_d"),
+                        ("market/moneyflow", "moneyflow"), ("market/stk_limit", "stk_limit")):
+            f = PROJECT_ROOT / "data" / sub / d[:4] / f"{ep}_{d}.parquet"
+            try:
+                st = f.stat()
+                h.update(f"{ep}:{d}:{st.st_size}:{int(st.st_mtime)}".encode())
+            except OSError:
+                h.update(f"{ep}:{d}:MISSING".encode())
+    return h.hexdigest()[:16]
+
+
 def _prune_cyq_state(suffix: str) -> None:
     """On a post-catch-up completeness failure, drop the Stage-D cyq_perf resume keys from the
     catch-up state file so a rerun RE-FETCHES cyq (m1): a zero-row cyq fetch from a late endpoint
@@ -634,6 +653,17 @@ def _report_rc_halo_start(target_end: str) -> str:
 
 
 def phase_execute(args) -> int:
+    """Hold ONE parent-owned raw-maintenance barrier across the ENTIRE build (catch-up -> completeness
+    -> rebuild -> audits -> dry-run report), so the scheduled daily job cannot mutate the raw tree
+    while the formal provider is being assembled from it — a formal build_id must describe one stable
+    raw input cut (GPT 5-C Blocker 1). The child catch-up subprocesses inherit QUANT_RAW_MAINT_LOCK_HELD
+    (set by the barrier) and thus NO-OP their own raw_maintenance_lock rather than deadlocking on it."""
+    from data_infra.tushare_lock import raw_maintenance_lock
+    with raw_maintenance_lock():
+        return _phase_execute_impl(args)
+
+
+def _phase_execute_impl(args) -> int:
     """Catch up raw -> new policy YAML -> full rebuild (staged) -> frozen-prefix audit +
     fresh-window survivorship audit -> dry-run report. STOPS before publish. Multi-hour."""
     import subprocess
@@ -781,6 +811,7 @@ def phase_execute(args) -> int:
         "fresh_window_audit_ok": fresh["ok"], "fresh_window_audit_artifact": str(FRESH_AUDIT_PATH.name),
         "report_rc_replay_halo_start": _report_rc_halo_start(target_end),
         "endpoint_completeness": complete_ev,
+        "raw_input_digest": _raw_input_digest(parent_end, target_end),  # input-cut attestation (B1)
         "recurring_exception_types": recurring,
         "generated": datetime.now().isoformat(timespec="seconds"),
         "next": "review this report + both audit artifacts, then --publish-approved --i-reviewed-the-dryrun",

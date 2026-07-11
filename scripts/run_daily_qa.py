@@ -349,6 +349,10 @@ def main() -> int:
         )
     )
 
+    # 0a1c. No-bare-pro_api lint (PRO001, Phase 5-C M1) — every Tushare call must go through the
+    # locked proxy (TushareFetcher.pro); a raw ts.pro_api() bypasses the cross-process account lock.
+    checks.append(_run([python, "scripts/lint_no_bare_pro.py"], "no_bare_pro_api_lint"))
+
     # 0a2. Unsafe-PIT-dates lint (PIT-lookahead prevention, step 10) — bans raw
     # data/pit_ledger reads (PIT002) outside the sanctioned pit_research_loader.
     # Now a HARD gate: the invalidated build_pit_pivot sandbox lineage has been

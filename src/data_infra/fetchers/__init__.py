@@ -9,9 +9,30 @@ import logging
 import time
 import os
 
-from data_infra.tushare_lock import api_call_lock  # cross-process account lock (§6.1, GPT 5-C B1)
+from data_infra.tushare_lock import spaced_call  # cross-process account lock + spacing (§6.1, GPT 5-C)
 
 DEFAULT_STATEMENT_LIMIT = 2000
+
+
+class _LockedPro:
+    """Wrap the raw Tushare client so EVERY endpoint call — internal (via _safe_api_call) OR external
+    (a script doing `fetcher.pro.xxx`) — flows through the cross-process account lock + global rate
+    spacing. There is NO unlocked path to the client (GPT 5-C Major 1)."""
+
+    def __init__(self, real, base_sleep):
+        self.__dict__["_real"] = real
+        self.__dict__["_base_sleep"] = base_sleep
+
+    def __getattr__(self, name):
+        fn = getattr(self.__dict__["_real"], name)
+        if not callable(fn):
+            return fn
+
+        def _wrapped(*args, **kwargs):
+            return spaced_call(fn, self.__dict__["_base_sleep"], *args, **kwargs)
+
+        _wrapped.__name__ = name
+        return _wrapped
 VIP_ALL_STOCK_LIMIT = 10000
 FINE_INDICATOR_LIMIT = 100
 
@@ -30,44 +51,39 @@ class TushareFetcher:
         
         # Resolve token: prefer env var, fall back to config value
         token = os.environ.get("TUSHARE_TOKEN") or self.config["data"]["tushare_token"]
+        self.max_retries = max_retries
+        self.base_sleep = base_sleep
         try:
             ts.set_token(token)
-            self.pro = ts.pro_api()
+            raw = ts.pro_api()
         except PermissionError:
             logging.warning(
                 "tushare.set_token() could not write the local token cache; "
                 "falling back to ts.pro_api(token)"
             )
-            self.pro = ts.pro_api(token)
-        self.max_retries = max_retries
-        self.base_sleep = base_sleep
+            raw = ts.pro_api(token)
+        # LOCKED proxy: every self.pro.xxx call (internal via _safe_api_call OR external direct) is
+        # serialized + globally rate-spaced across processes (§6.1). No unlocked handle exists.
+        self.pro = _LockedPro(raw, base_sleep)
         
         logging.info("Tushare API initialized.")
 
     def _safe_api_call(self, api_func, **kwargs):
-        """Wrapper for Tushare API calls to handle rate limits and temporary failures."""
+        """Retry wrapper. api_func is a LOCKED-proxy method (self.pro.xxx) — the cross-process account
+        lock + GLOBAL rate spacing/cooldown live in the proxy (tushare_lock.spaced_call), so this only
+        handles retries (GPT 5-C Major 1: the lock is enforced at the proxy, not here)."""
         for attempt in range(self.max_retries):
             try:
-                # Hold the cross-process account lock for the call + the proactive sleep, so no two
-                # sanctioned callers ever hit Tushare simultaneously and the rate-limit sleep applies
-                # GLOBALLY across processes (CLAUDE.md §6.1; GPT 5-C Blocker 1).
-                with api_call_lock():
-                    df = api_func(**kwargs)
-                    time.sleep(self.base_sleep) # proactive sleep to respect 2000 points rate limit (e.g. 100/min)
-                return df
+                return api_func(**kwargs)
             except Exception as e:
-                error_msg = str(e).lower()
-                if "daily request" in error_msg or "frequent" in error_msg or "limit" in error_msg:
-                    sleep_time = self.base_sleep * (2 ** attempt) + 30 # Back off significantly if rate limited
-                    logging.warning(f"Rate limit hit. Sleeping for {sleep_time}s... (Attempt {attempt+1}/{self.max_retries})")
-                else:
-                    sleep_time = self.base_sleep * (2 ** attempt)
-                    logging.warning(f"API Error: {e}. Sleeping for {sleep_time}s... (Attempt {attempt+1}/{self.max_retries})")
-                
                 if attempt == self.max_retries - 1:
                     func_name = getattr(api_func, '__name__', str(api_func))
                     logging.error(f"Max retries reached for {func_name} with args {kwargs}")
                     raise
+                # a rate-limit already bumped the global cooldown in the proxy; add a light per-retry
+                # backoff for transient errors (the proxy enforces the actual account-wide spacing).
+                sleep_time = self.base_sleep * (2 ** attempt)
+                logging.warning(f"API Error: {e}. Retrying in {sleep_time}s (attempt {attempt+1}/{self.max_retries})...")
                 time.sleep(sleep_time)
         return pd.DataFrame()
         

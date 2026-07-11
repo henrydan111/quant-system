@@ -28,6 +28,7 @@ def _status_dir(logs_dir: str) -> str:
 
 
 def _atomic_json(path: str, obj) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(obj, fh, ensure_ascii=False)
@@ -41,14 +42,17 @@ def write_session_status(logs_dir: str, date: str, required_ok: bool, detail=Non
 
 
 def session_required_ok(logs_dir: str, date: str) -> bool:
+    """Strict: required_ok must be the JSON boolean True (a string "false" is truthy — GPT M2) AND the
+    embedded date must match the filename (a mislabelled manifest is not evidence)."""
     path = os.path.join(_status_dir(logs_dir), f"{date}.json")
     if not os.path.exists(path):
         return False
     try:
         with open(path, encoding="utf-8") as fh:
-            return bool(json.load(fh).get("required_ok"))
+            obj = json.load(fh)
     except Exception:  # noqa: BLE001 — corrupt manifest -> not complete
         return False
+    return obj.get("required_ok") is True and str(obj.get("date")) == date
 
 
 def _open_days(ref_dir: str, upto: str) -> list[str]:
@@ -72,28 +76,30 @@ def save_watermark(logs_dir: str, date: str) -> None:
 
 
 def backlog_sessions(ref_dir: str, logs_dir: str, target: str, floor: str, max_n: int | None = None) -> list[str]:
-    """Open sessions in (max(floor, watermark), target] whose manifest is NOT required_ok, OLDEST
-    first. `floor` = the monthly-published provider boundary (below it the monthly bump is
-    responsible). Optionally capped at max_n per run so a large backlog doesn't blow the task's time
-    budget — the remainder is picked up on the next run."""
-    wm = load_watermark(logs_dir) or floor
-    start = max(floor, wm)
-    todo = [d for d in _open_days(ref_dir, target) if d > start and not session_required_ok(logs_dir, d)]
+    """Open sessions in the WHOLE (floor, target] interval whose manifest is NOT required_ok, OLDEST
+    first — scanned from the provider floor, NOT only after the cached watermark (a bad/rebased
+    watermark must not hide an earlier incomplete session — GPT M2/M3). `floor` = the monthly-published
+    provider boundary; below it the monthly bump is responsible. Capped at max_n per run."""
+    todo = [d for d in _open_days(ref_dir, target) if d > floor and not session_required_ok(logs_dir, d)]
     return todo[:max_n] if max_n else todo
 
 
-def advance_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
-    """Advance the persistent watermark to the LATEST session W such that every open session in
-    (watermark, W] is required_ok (CONTIGUOUS — the first incomplete session stops it). Returns W."""
-    wm = load_watermark(logs_dir) or floor
-    new = wm
+def contiguous_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
+    """Recompute the watermark FROM THE FLOOR every call (never trusts a cached value — so a poisoned
+    future watermark can't false-green, and it rebases when the provider floor advances): the LATEST
+    session W such that every open session in (floor, W] is required_ok (the first incomplete stops
+    it). Persists + returns W (== floor if the first session after floor is incomplete)."""
+    new = floor
     for d in _open_days(ref_dir, target):
-        if d <= wm:
+        if d <= floor:
             continue
         if session_required_ok(logs_dir, d):
             new = d
         else:
             break
-    if new != wm and new > floor:
-        save_watermark(logs_dir, new)
+    save_watermark(logs_dir, new)
     return new
+
+
+# retained name for callers/tests; recompute-from-floor is the only supported semantics now.
+advance_watermark = contiguous_watermark

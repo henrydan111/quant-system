@@ -1,10 +1,12 @@
 # SCRIPT_STATUS: ACTIVE — calendar-unfreeze Phase 5-C: independent missed-run watchdog
-"""Phase 5-C watchdog (GPT M2): detect a SILENTLY-MISSED daily raw job.
+"""Phase 5-C watchdog: detect a SILENTLY-MISSED-or-INCOMPLETE daily raw job.
 
 The main QuantDailyRawUpdate task cannot report that it never launched — a sleeping/offline machine
-produces no flag at all. This independent morning task (QuantDailyRawWatchdog, ~10:00 CST) reads the
-daily-job heartbeat and, if the last QA success is OLDER than the last complete trading session
-(CST), writes logs/qa_alert_<date>.flag and exits non-zero — surfacing the missed run.
+produces no flag at all. This independent morning task (QuantDailyRawWatchdog, ~10:00 CST) RECOMPUTES
+the contiguous completed-session watermark from the per-session manifests (validating the WHOLE
+(provider_floor, target] interval, not just one date's heartbeat — GPT M2) and, if it does not reach
+the last complete trading session (CST), writes logs/daily_job_alert_<date>.flag and exits non-zero.
+Clears its own alert on success.
 """
 from __future__ import annotations
 
@@ -37,31 +39,30 @@ def _alert(msg: str) -> None:
 
 def main() -> int:
     from data_infra.pipeline.update_daily_data import resolve_last_complete_session
-    from data_infra.pipeline.daily_ops import session_required_ok
+    from data_infra.pipeline.daily_ops import contiguous_watermark
     ref_dir = str(PROJECT_ROOT / "data" / "reference")
+    cal = PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt"
+    if not cal.exists() or not cal.read_text(encoding="utf-8").split():
+        _alert("watchdog: provider calendar missing/empty — cannot establish floor")
+        return 1
+    floor = cal.read_text(encoding="utf-8").split()[-1].replace("-", "")
     try:
         expected = resolve_last_complete_session(ref_dir)
     except (SystemExit, Exception) as exc:  # noqa: BLE001 — a missing/corrupt calendar is alert-worthy
         _alert(f"watchdog: cannot resolve last complete session: {exc}")
         return 1
 
-    # the heartbeat's completed_session is bound to a SUCCESSFUL raw update + QA (orchestrator M1).
-    completed = ""
-    if HEARTBEAT.exists():
-        try:
-            completed = str(json.loads(HEARTBEAT.read_text(encoding="utf-8")).get("completed_session", ""))
-        except Exception:  # noqa: BLE001 — corrupt heartbeat -> treat as missing
-            completed = ""
-    # EXACT validation (no truncation — '20260707GARBAGE' must NOT pass): a plausible past date whose
-    # session manifest is actually complete, and which covers the last complete session.
-    valid = bool(re.fullmatch(r"\d{8}", completed)) and completed <= expected \
-        and session_required_ok(str(LOGS_DIR), completed)
-
-    if not valid or completed < expected:
-        _alert(f"watchdog: daily job STALE - completed session {completed or 'NEVER'} vs expected "
-               f"{expected} (missed/failed/incomplete run?)")
+    # recompute the contiguous watermark from the manifests (validates every session in the interval,
+    # not just the heartbeat's single date). Reaching `expected` means the whole interval is complete.
+    watermark = contiguous_watermark(ref_dir, str(LOGS_DIR), expected, floor)
+    if watermark != expected:
+        _alert(f"watchdog: daily job STALE/INCOMPLETE - contiguous watermark {watermark} != expected "
+               f"{expected} (missed/failed/gap in (provider_floor {floor}, {expected}])")
         return 1
-    print(f"watchdog OK: completed session {completed} covers last complete session {expected}")
+    af = LOGS_DIR / f"daily_job_alert_{_cst_date()}.flag"  # clear our own alert on recovery
+    if af.exists():
+        af.unlink()
+    print(f"watchdog OK: contiguous watermark {watermark} == expected {expected}")
     return 0
 
 

@@ -121,3 +121,29 @@ GPT 复审 a8778ca：**REWORK**（2 Blocker + 4 Major + 3 Minor）——四个 p
 99 绿（15 daily-5c[含 kernel-lock 多进程/manifest-watermark/validate-reject] + 8 catchup + 76 regression[含 provider_boundary，证 fetcher 改动无回归]）；11 py 文件 compile；fetcher+locks import 干净；register --user Password XML 实测。
 
 **结论：clean for GPT（re-review 3）。2 Blocker + 4 Major + 3 Minor 全修（filelock 内核锁全覆盖 + 严格日历校验 + manifest/watermark 完整性 + 端点传播 + /RP* + 精确 watchdog）；C-4 注册仍 §13 留用户。**
+
+---
+
+## REWORK round 5（GPT re-review #3 REWORK 后修复自审，用户裁定"全硬化"）— 2026-07-04
+
+GPT 复审 e295ef6：**REWORK**（2 Blocker + 4 Major + 3 Minor）——子系统未真闭合。用户选"全硬化，全做"。逐条：
+
+| # | GPT finding | 修复 | 校验 |
+|---|---|---|---|
+| **B1** 正式月度构建无不可变原始边界（catch-up 放锁后从活体树构建）| 月度 bump **整个 phase_execute 持一把父级 barrier**（raw_maintenance_lock 包 catch-up→构建→审计→报告）；lock 改**env-reentrant**（QUANT_RAW_MAINT_LOCK_HELD，子 catch-up no-op 不死锁）；报告加 `raw_input_digest`（输入切面证明）| 新增 barrier-reentrant 单测（父持锁→子 no-op）；--plan 实测 |
+| **B2** 日历校验仅句法，漏"缺会话"| `_validate_trade_cal` 加**连续性**（每开市日 pretrade_date==前一开市 cal_date，缺会话断链→raise；活体 8797 天 0 断链已验证安全）；merged 复校；orchestrator **先在锁内刷新日历再 resolve** | 新增 missing-session-reject 单测 |
+| **M1** _safe_api_call 非可强制 chokepoint（脚本裸 .pro）| `self.pro`=**LockedPro 代理**（每次 .pro.xxx 内/外部都走 spaced_call）；_safe_api_call 去重复锁；**PRO001 AST lint**（禁 ts.pro_api() 外部构造）入 daily QA | lint OK；代理路由单测；76 回归无回归 |
+| **M2** manifest/watermark 可假绿+不自愈 | `session_required_ok` **严格** `is True`+date==filename（string "false" 不再真）；backlog 从 **floor 全区间**扫（非只 >watermark）；`contiguous_watermark` **每次从 floor 重算**（忽略缓存→未来 watermark 不假绿+floor 前移自动 rebase）；watchdog 校**整区间**；floor **fail-closed**（去有界回退）；heartbeat 要 **watermark==target** | 新增 strict-manifest + poisoned-future-cache 单测 |
+| **M3** QA/完成发布在事务外 | **全程 raw_maintenance_lock**（刷新→发现→更新→QA→heartbeat）——他人无法插写 | 结构审 |
+| **M4** 必需完成=有些 OHLCV | update_market_data 校 **adj_factor（引擎必需）/daily_basic 覆盖率**（空/薄→_market_error 入 errors） | 新增 empty-adj_factor 单测 |
+| **minor** 全局退避/RP*TTY/watchdog | 全局 next_allowed（锁内共享时戳→跨进程间隔+退避）；/RP* **TTY 预检 + 部分注册回滚**；watchdog 头改 + 成功清自身 alert | 结构审 |
+
+### 关键设计
+- **代理 vs _safe_api_call 双锁避免**：self.pro 是锁代理（内部 fetch 方法 `_safe_api_call(self.pro.xxx)` 传的就是代理方法→锁一次；_safe_api_call 自身去锁）。外部 `fetcher.pro.xxx`→代理→锁。单锁，无重入死锁。
+- **barrier env-reentrant**：父 raw_maintenance_lock 置 QUANT_RAW_MAINT_LOCK_HELD→子进程继承→子 raw_maintenance_lock no-op（否则同锁跨进程死锁）。
+- **fetcher 改动 blast radius**：仅 ingestion fetch Tushare（研究/回测读 Qlib），76 回归（report_rc 重度用 fetcher + provider_boundary）0 回归。
+
+### 验证汇总
+104 绿（20 daily-5c[含 barrier/manifest-strict/poisoned-cache/adj_factor/kernel-lock] + 8 catchup + 36 monthly + 34 report_rc + provider_boundary + calendar_policy）；PRO001 lint OK；12 py 文件 compile；monthly --plan + register dry-run 实测。
+
+**结论：clean for GPT（re-review 4）。2 Blocker + 4 Major + 3 Minor 全修（全硬化：月度 barrier + 日历连续性 + 锁代理全覆盖+lint + manifest/watermark 严格重算 + 端点契约 + 全局退避）；C-4 注册仍 §13 留用户。**

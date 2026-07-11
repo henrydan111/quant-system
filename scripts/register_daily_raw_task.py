@@ -133,9 +133,18 @@ def main() -> int:
             rc |= subprocess.run(["schtasks", "/Delete", "/TN", t, "/F"]).returncode
         return rc
     if args.register:
+        if args.user and not sys.stdin.isatty():
+            print("ERROR: --user uses Password logon whose /RP * password prompt needs an interactive "
+                  "console; no TTY detected. Run --register from a console.", file=sys.stderr)
+            return 2
         rc = _register(DAILY_TASK, daily_xml, args.user)
-        rc |= _register(WATCHDOG_TASK, watchdog_xml, args.user)
-        return rc
+        if rc != 0:
+            return rc
+        rc2 = _register(WATCHDOG_TASK, watchdog_xml, args.user)
+        if rc2 != 0:  # roll back the first so we never leave a half-installed pair
+            subprocess.run(["schtasks", "/Delete", "/TN", DAILY_TASK, "/F"])
+            return rc2
+        return 0
 
     print("=== " + DAILY_TASK + " XML ===\n" + daily_xml)
     print("\n=== " + WATCHDOG_TASK + " XML ===\n" + watchdog_xml)

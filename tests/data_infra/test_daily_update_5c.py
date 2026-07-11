@@ -81,6 +81,19 @@ def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatc
         pass
 
 
+def test_raw_maintenance_lock_env_reentrant(tmp_path, monkeypatch):
+    # GPT Blocker 1 barrier: a parent that holds the lock sets QUANT_RAW_MAINT_LOCK_HELD; a nested/
+    # child acquire is a NO-OP (would deadlock/timeout if it re-acquired the same cross-process lock).
+    import os as _os
+    from data_infra.tushare_lock import raw_maintenance_lock
+    monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "locks"))
+    with raw_maintenance_lock(timeout=5):
+        assert _os.environ.get("QUANT_RAW_MAINT_LOCK_HELD") == "1"
+        with raw_maintenance_lock(timeout=0.2):  # no-op under the barrier (else it would time out)
+            pass
+    assert not _os.environ.get("QUANT_RAW_MAINT_LOCK_HELD")  # cleared on release
+
+
 def test_session_status_watermark_and_backlog(tmp_path):
     # GPT M1/M3: completion is manifest-based; the watermark advances only over a CONTIGUOUS run of
     # complete sessions; backlog is discovered from the watermark (floor), oldest-first.
@@ -104,6 +117,58 @@ def test_session_status_watermark_and_backlog(tmp_path):
     # fill the hole -> watermark jumps contiguously to 0704
     daily_ops.write_session_status(logs, "20260703", True)
     assert daily_ops.advance_watermark(str(ref), logs, "20260704", floor) == "20260704"
+
+
+def test_validate_trade_cal_rejects_missing_session():
+    # GPT Blocker 2: a syntactically-fine fresh calendar MISSING 20260702 (with a dangling
+    # pretrade_date) must be REJECTED by the continuity check.
+    bad = pd.DataFrame({"exchange": ["SSE", "SSE"], "cal_date": ["20260701", "20260703"], "is_open": [1, 1],
+                        "pretrade_date": ["20260630", "20260702"]})  # 0703 references the absent 0702
+    with pytest.raises(ValueError, match="continuity"):
+        _validate_trade_cal(bad, fresh=True)
+    good = pd.DataFrame({"exchange": ["SSE"] * 3, "cal_date": ["20260701", "20260702", "20260703"],
+                         "is_open": [1, 1, 1], "pretrade_date": ["20260630", "20260701", "20260702"]})
+    _validate_trade_cal(good, fresh=True)  # complete chain -> ok
+
+
+def test_session_required_ok_strict(tmp_path):
+    # GPT M2: a string "false" must not be truthy; a mislabelled date must fail.
+    import json
+    logs = str(tmp_path)
+    sd = tmp_path / "session_status"
+    sd.mkdir()
+    (sd / "20260703.json").write_text(json.dumps({"date": "20260703", "required_ok": "false"}))
+    assert daily_ops.session_required_ok(logs, "20260703") is False
+    (sd / "20260703.json").write_text(json.dumps({"date": "20260702", "required_ok": True}))  # wrong date
+    assert daily_ops.session_required_ok(logs, "20260703") is False
+    (sd / "20260703.json").write_text(json.dumps({"date": "20260703", "required_ok": True}))
+    assert daily_ops.session_required_ok(logs, "20260703") is True
+
+
+def test_contiguous_watermark_ignores_poisoned_future_cache(tmp_path):
+    # GPT M2: a cached future watermark (20990101) must NOT false-green; the watermark is recomputed
+    # from the floor every call.
+    ref = tmp_path / "reference"
+    ref.mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": ["20260701", "20260702", "20260703"], "is_open": 1,
+                  "pretrade_date": ""}).to_parquet(ref / "trade_cal.parquet")
+    logs = str(tmp_path / "logs")
+    daily_ops.save_watermark(logs, "20990101")  # poisoned
+    assert daily_ops.contiguous_watermark(str(ref), logs, "20260703", "20260701") == "20260701"
+
+
+def test_update_market_data_flags_empty_adj_factor(tmp_path):
+    # GPT M4: nonempty daily but EMPTY adj_factor (engine-required) -> a session error, not a silent pass.
+    stub = DailyDataUpdater.__new__(DailyDataUpdater)
+    stub.market_daily_dir = str(tmp_path / "daily")
+    daily = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703", "20260703"], "close": [1.0, 2.0]})
+    stub.fetcher = types.SimpleNamespace(
+        fetch_daily_data=lambda trade_date: daily,
+        fetch_fundamentals=lambda trade_date: pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2}),
+        fetch_adj_factor=lambda trade_date: pd.DataFrame())  # empty adj_factor
+    codes = DailyDataUpdater.update_market_data(stub, "20260703")
+    assert codes  # daily still written
+    assert "adj_factor" in getattr(stub, "_market_error", "") and "EMPTY" in stub._market_error
 
 
 def test_validate_trade_cal_rejects_malformed():

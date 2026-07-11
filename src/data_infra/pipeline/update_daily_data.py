@@ -184,6 +184,8 @@ class DailyDataUpdater:
             errors.append(self._reference_error)
         if not market_ok:
             errors.append(f"daily market data missing for trading day {target_date}")
+        if getattr(self, '_market_error', None):  # adj_factor/daily_basic empty-or-thin (M4)
+            errors.append(self._market_error)
         if self._suspend_error:
             errors.append(self._suspend_error)
         errors.extend(getattr(self, '_phase3_errors', []))  # required moneyflow/stk_limit failures
@@ -231,6 +233,7 @@ class DailyDataUpdater:
                 df_cal = (pd.concat([old, df_cal], ignore_index=True)
                           .drop_duplicates(subset=["exchange", "cal_date"], keep="last"))
             df_cal = df_cal.sort_values(["exchange", "cal_date"]).reset_index(drop=True)
+            df_cal = _validate_trade_cal(df_cal, fresh=False)  # revalidate the MERGED result (continuity)
             _atomic_write_parquet(df_cal, cal_path)
         except Exception as e:
             logger.error(f"Error updating reference data: {e}")
@@ -273,6 +276,7 @@ class DailyDataUpdater:
         """
         logger.info(f"Fetching market data for {target_date}...")
 
+        self._market_error = None
         try:
             df_daily = self.fetcher.fetch_daily_data(trade_date=target_date)
             if df_daily.empty:
@@ -281,6 +285,22 @@ class DailyDataUpdater:
 
             df_basic = self.fetcher.fetch_fundamentals(trade_date=target_date)
             df_adj = self.fetcher.fetch_adj_factor(trade_date=target_date)
+
+            # adj_factor is ENGINE-required and daily_basic is required; an empty or thin response is a
+            # session failure ("some OHLCV exists" is not completeness — GPT M4). Coverage vs the daily
+            # universe, not mere emptiness.
+            daily_codes = set(df_daily['ts_code'].dropna().astype(str))
+            problems = []
+            for nm, df, floor in (("adj_factor", df_adj, 0.98), ("daily_basic", df_basic, 0.90)):
+                if df.empty:
+                    problems.append(f"{nm} EMPTY")
+                elif 'ts_code' in df.columns:
+                    cov = len(set(df['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
+                    if cov < floor:
+                        problems.append(f"{nm} coverage {cov:.3f} < {floor}")
+            if problems:
+                self._market_error = f"market data {target_date}: " + "; ".join(problems)
+                logger.error(self._market_error)
 
             df_merged = df_daily
             if not df_basic.empty:
@@ -650,8 +670,23 @@ def _validate_trade_cal(df, *, fresh: bool):
     if out.duplicated(subset=["exchange", "cal_date"]).any():
         raise ValueError("trade_cal has duplicate (exchange, cal_date) keys")
     if "pretrade_date" not in out.columns:
+        if fresh:
+            raise ValueError("fresh trade_cal missing pretrade_date")
         out["pretrade_date"] = ""
-    out["pretrade_date"] = out["pretrade_date"].astype(str)
+    out["pretrade_date"] = out["pretrade_date"].astype(str).str.replace("-", "", regex=False)
+    # CONTINUITY (GPT Blocker 2): per exchange, each OPEN day's pretrade_date must reference the
+    # immediately-preceding OPEN cal_date — a silently-MISSING trading day breaks the chain (a purely
+    # syntactic check would accept 20260701,20260703 with 20260703.pretrade_date=20260702). Enforced
+    # on a fresh fetch, and on any base whose open-day pretrade_dates are populated (8-digit).
+    op = out[out["is_open"] == 1]
+    if not op.empty and (fresh or op["pretrade_date"].str.fullmatch(r"\d{8}").all()):
+        for ex, g in op.groupby("exchange"):
+            g = g.sort_values("cal_date")
+            prev = g["cal_date"].shift(1)
+            mism = (g["pretrade_date"] != prev) & prev.notna()
+            if mism.any():
+                raise ValueError(f"trade_cal continuity break (missing session?) for {ex} at "
+                                 f"{g.loc[mism, 'cal_date'].head(3).tolist()}")
     return out[["exchange", "cal_date", "is_open", "pretrade_date"]]
 
 
