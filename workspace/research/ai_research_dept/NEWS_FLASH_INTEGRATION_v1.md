@@ -1,5 +1,5 @@
-# 新闻快讯接入设计 v1.10(NF 波次 + 宏观席 + 新闻价值提取增强)
-**v1.6 主体 APPROVED(round-6);§6b/§6c/§7 v1.10 = round-9(0B/4M/1m,弧线收敛)全采纳,待 round-10**
+# 新闻快讯接入设计 v1.11(NF 波次 + 宏观席 + 新闻价值提取增强)
+**v1.6 主体 APPROVED(round-6);§6b/§6c/§7 v1.11 = round-10(0B/3M/1m,连续两轮 0B)全采纳,待 round-11**
 
 状态:**APPROVED FOR IMPLEMENTATION**(GPT round-6 对 f86543f:0B/0M/1m 编辑项,R2=可以开工;前向证据与 macro weighted 另行授权——见 §4 哈希绑定清单)。⑧round-6 Minor(规范性优先级横幅)已落;selection_rule 除 id 外其**不可变政策内容哈希**须由会话档案/绑定与链 manifest 携带(round-6 追加处方,已入 §0d)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
 0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
@@ -323,6 +323,61 @@ auction_matching_cutoff_at ≤ fill_at`;预提交限价单**可以**在开盘成
 
 ---
 
+**round-10 裁定(0B/3M/1m)全采纳,taxonomy 纠偏 + horizon 公式钉死:**
+
+**M1‴ 市场状态事实 ≠ 新闻注意力(taxonomy 纠偏):** 我 round-9 按**数学形态**(计数/
+广度/持续)把 M03/04/09/10/14/15 判为 attention_only——**错**。它们是**交易所派生的
+市场状态事实**(不是故事/发布方/重复/叙事扩散的计数)。`attention_only` 只适用于
+**信息流注意力派生**(新闻簇/源家族/叙事/题材扩散的计数/广度/velocity/集中/持续);
+交易所派生的价格/宽度/涨跌停/换手/波动/主线指标 = **`market_state_fact`**,无论表为
+计数/比率/百分位/连续。**M01-M16 权威表(现予发布):**
+
+| IDs | evidence_class | 正向消费域 |
+|---|---|---|
+| M01/M02/M06-M08/M12 | market_state_fact | macro risk_appetite/shock |
+| M03/M09/M15 | `market_breadth_state` | macro `risk_appetite_environment_fit`(technical 仅在单独注册后) |
+| M04/M10 | `market_limit_state` | macro risk-appetite/liquidity;空头 context |
+| M05 | market_state_fact | macro industry_concept_transmission |
+| M11/M13 | market_state_fact | macro liquidity_flows_transmission |
+| M14 | `market_leadership_state` | macro `industry_concept_transmission` |
+| M16 + 政策行 | market_state_fact | macro policy_alignment |
+| MF##(宏观快讯) | MFD/MFI/MFA/MFR | macro(MFR 仅负向) |
+| N00/NDA/NIA + news-flow 派生 | `attention_only` | **永不正向** |
+
+M03/04/09/10 按 **PIT 合格股分母**归一并封 universe ID;M14 封 PIT 行业宇宙+成分 ID;
+每个 macro 正向用途仍需对应 MS 暴露行。**per-consumer 门升级为三元**:
+`factor_positive ∈ allowed_uses ∧ consumer_seat ∈ allowed_consumers ∧
+target_dimension ∈ allowed_dimensions`(不只全局 factor_positive)——fund/news 席**不**
+接收这些 M 行;technical 席消费 M 行须**单独** technical 评分契约修订。
+
+**M2‴ 隔离罚分腿(补进 §7):** news 执行拆 `news_factor_leg` 与 `news_penalty_leg`:
+factor 腿只收 `factor_positive` 记录、出全局/horizon 因子分与论点;penalty 腿只收带
+`penalty` 记录、出 typed `penalty_scores/risk_flags`;各自独立 prompt/route/元数据过滤
+payload/校验器/raw 审计/manifest 哈希;确定性代码在聚合前合并已校验输出。**有 penalty
+适格记录而 penalty 腿失败 → news 结果 not_applicable 或硬失败(按钉定政策),绝不静默
+空罚分**;无适格记录 → 封显式"成功评估的空罚分"。§7/§13 加此接线与失败矩阵。
+
+**M3‴ horizon 公式钉死(不留事后选择自由度):** 保留 news 席 20 分制、只替
+catalyst_timing;`global_weights={event_materiality:6, fundamental_link:5, novelty:5}`,
+`horizon_weights={tradeability_at_horizon:4}`,`penalty_multiplier=2`,v1 全部罚分**全局**、
+每 horizon 同样适用(horizon 特定罚分需新 schema ID)。每 horizon h:
+`raw_h = 6·s_materiality + 5·s_fundamental + 5·s_novelty + 4·s_tradeability,h`;
+`news_final_h = round(clamp(raw_h − 2·Σ s_grounded_global_penalties, 0, 100), 1)`
+(全精度到 clamp,序列化时一次舍入;无效/未接地 = NO-SCORE 贡献 0)。评分契约**校验前
+二选一 hash-bound 模式**:`primary_horizon`(钉一个策略级 `primary_decision_horizon`,
+`news.final` = 该 horizon final 的确定性别名,喂既有 judge/composite)或 `vector_only`
+(无标量 judge/composite/排序/选股/执行,horizon 向量仅 shadow/展示研究)。
+**primary_horizon 不得逐股变、不得在观察验证结果后选,须绑策略持有政策(非仅由次开盘
+fill 时点推断)。**
+
+**m1‴ 附属执行物理非阻塞:** `decision_published_at` = 密封决策核心工件的 append-only
+发布事件;`adjunct_started_at ≥ decision_published_at`;绑定只消费决策核心哈希、**绝不**
+等 chief/display 附属;附属 worker 用独立队列/锁/账本命名空间,**绝不**获取 fill-intent
+发布/绑定锁——四时间戳链不变,chief 可在 binding_cutoff_at 后甚至开盘后完成(可选、
+执行惰性)。
+
+---
+
 
 
 **B1 处置——attention-only 机械隔离(替代口头规则):** NFV/theme-heat/narrative 类记录
@@ -432,33 +487,48 @@ coverage_incomplete, source_unavailable}`;**仅 confirmed_absent 时发旗**,不
    内容(D6)。**D7 原子属性行**:`claim_id/fact_cluster_id/evidence_group_id/
    attribute_type/allowed_dimensions`,每属性只入注册维、每 `(claim_id, attribute_type)`
    至多一行计分。证据类上限算术 NFD/NFI/NFA/NFR/NFC + MFD 系。
-6. **普适每消费者 payload 门(M1″)+ 校验器升级**:每次正向 LLM 调用前从密封元数据
-   注册表**递归构造+校验完整序列化 payload**(每卡/键/嵌套/别名、每条 F/FS/FB/FD/T/N/
-   NF/NFC/M/MF/MS);每个动态可见项解析到恰一带 `factor_positive` 注册项,否则物理
-   省略/硬失败;静态节头不得含动态计数/广度/百分位;**发布 M01-M16 逐 ID 分类**
-   (M03/M04/M09/M10/M14/M15 → attention_only,移出正向席 market_context);封存逐
-   消费者 payload+注册表哈希;attention_only ID 入 factor_scores **硬失败**;证据独占
+6. **普适每消费者 payload 门(M1″/M1‴ 三元 + M-line taxonomy)+ 校验器升级**:每次
+   正向 LLM 调用前从密封元数据注册表**递归构造+校验完整序列化 payload**(每卡/键/嵌套/
+   别名、每条 F/FS/FB/FD/T/N/NF/NFC/M/MF/MS);每个动态可见项**三元授权**
+   `factor_positive ∈ allowed_uses ∧ consumer_seat ∈ allowed_consumers ∧
+   target_dimension ∈ allowed_dimensions`,否则物理省略/硬失败;静态节头不得含动态计数/
+   广度/百分位;**M01-M16 按 §6b M1‴ 权威表分类**(交易所派生=market_state_fact 保留、
+   按 PIT 合格股/行业宇宙归一并封 universe ID;**只有 N00/NDA/NIA + news-flow 派生=
+   attention_only 移出**;fund/news 席不收 M 行,technical 席 M 行须单独契约修订);封存
+   逐消费者 payload+注册表哈希;attention_only ID 入 factor_scores **硬失败**;证据独占
    **全局**跨 factor+horizon+penalty;D7 dimension-scoped + evidence_group 防一事件四
-   贡献;四席全测(真实卡键/嵌套别名/未注册动态节头)。
-7. **horizon scorecard = 版本化 opt-in schema(M2″)**:评分契约加 `scorecard_schema_id`;
-   默认 `c16_v1` **不变、拒所有 horizon 字段**(冻结 MVP 契约不松);另 opt-in
-   `c16_news_horizon_v1`(仅 news 席):typed `horizon_theses`+`horizon_factor_scores`、
-   `(name,horizon)` 笛卡尔精确覆盖、独立 `compute_news_final_by_horizon`、**复用**既有
-   bool/有限数/OverflowError/safe-repr/[0,5] 守卫、证据独占跨所有集合、钉死全局分·罚分
-   如何进各 horizon final+舍入、bear schema 版本化 `(seat,dimension,horizon|null)`;每
-   论点必填**当前最强反证**接地字段(D3);产 `news_final_by_horizon`(无标量 roll-up
-   除非 primary_decision_horizon 入契约)。改 [scorecard.py](../../../src/ai_layer/scorecard.py)
-   **严格附加式**+评分契约+链 bump;**证明 legacy 行为不变、c16_v1 仍拒新字段**。
+   贡献;四席全测(真实卡键/嵌套别名/未注册动态节头/M-line 消费域)。
+7. **双腿 news 执行(M2‴)+ horizon 版本化 schema(M2″/M3‴)**:news 拆
+   `news_factor_leg`(只收 factor_positive,出全局+horizon 因子分与论点)与
+   `news_penalty_leg`(只收 penalty,出 typed penalty_scores/risk_flags);各独立 prompt/
+   route/元数据过滤 payload/校验器/raw 审计/manifest 哈希;确定性代码聚合前合并;有
+   penalty 适格记录而 penalty 腿失败 → not_applicable/硬失败(钉定政策),无适格记录 →
+   封显式空罚分。评分契约加 `scorecard_schema_id`:默认 `c16_v1` **不变、拒所有 horizon
+   字段**;opt-in `c16_news_horizon_v1`(仅 news 席)钉死公式:`global_weights=
+   {event_materiality:6, fundamental_link:5, novelty:5}`、`horizon_weights=
+   {tradeability_at_horizon:4}`、`penalty_multiplier=2`、全部罚分全局;每 horizon h
+   `raw_h=6·materiality+5·fundamental+5·novelty+4·tradeability_h`,
+   `news_final_h=round(clamp(raw_h−2·Σ grounded_global_penalty,0,100),1)`(全精度到
+   clamp、一次舍入);**二选一 hash-bound 模式**:`primary_horizon`(钉策略级
+   `primary_decision_horizon`,`news.final`=其确定性别名喂 judge;**不得逐股变/不得
+   事后选/绑持有政策**)或 `vector_only`(无标量 judge/排序/选股/执行,仅 shadow);
+   复用既有 bool/有限数/OverflowError/safe-repr/[0,5] 守卫,bear schema 版本化
+   `(seat,dimension,horizon|null)`,每论点必填当前最强反证接地字段(D3)。改
+   [scorecard.py](../../../src/ai_layer/scorecard.py) **严格附加式**+评分契约+链 bump;
+   **证明 legacy 恒等、c16_v1 仍拒新字段**。
 8. **prompt 证伪优先**(D3):四席先陈述最强反证再打分;prompt 入 manifest 冻结。
 9. **宏观卡 + MS 暴露行 + 宏观席 + 四席 composite**(§6);§0a 四时间戳链入引擎断言。
-10. **裁判后隔离 + liveness/封印身份/输入时点(M4″)**:**先冻结+封印+发布权威决策
-    核心工件,再调** `chief_synthesis`/`display_flagger`;其输入 allowlist 仅限
-    cutoff-valid 密封卡/已校验席位·空头/冻结裁判——**绝不含 binding/执行门/fill/收益/
-    任何决策后数据**;各写独立可选附属工件(自带封印+`parent_decision_archive_sha256`);
-    typed `research_summary/allowed_uses={display_only}/consumer={archive,platform}`,
-    数值/动作/排名字段硬失败;`display_flagger`(D5)裁判后独立确定性,数值 judge()
-    永不收 attention_context_card;**回归:chief 成功/失败/超时/畸形/缺席下决策哈希·
-    发布态·成交适格恒等**(逐字重算裁判无 chief 数据)。
+10. **裁判后隔离 + liveness/封印身份/输入时点(M4″/m1‴ 物理非阻塞)**:**先冻结+封印+
+    发布权威决策核心工件(`decision_published_at`=其 append-only 发布事件),再调**
+    `chief_synthesis`/`display_flagger`(`adjunct_started_at ≥ decision_published_at`);
+    其输入 allowlist 仅限 cutoff-valid 密封卡/已校验席位·空头/冻结裁判——**绝不含
+    binding/执行门/fill/收益/任何决策后数据**;各写独立可选附属工件(自带封印+
+    `parent_decision_archive_sha256`);typed `research_summary/allowed_uses={display_only}/
+    consumer={archive,platform}`,数值/动作/排名字段硬失败;`display_flagger`(D5)裁判后
+    独立确定性,数值 judge() 永不收 attention_context_card;**绑定只消费决策核心哈希、
+    绝不等附属;附属 worker 用独立队列/锁/账本命名空间、绝不获取 fill-intent 发布/绑定
+    锁**(chief 可在 binding_cutoff_at 后甚至开盘后完成);**回归:chief 成功/失败/超时/
+    畸形/缺席下决策哈希·发布态·成交适格恒等**。
 11. **执行门三分离**(B2′/D1):`fill_binding.json` 只含
     `fill_execution_gate_policy_id/hash`+阈值+执行语义;竞价前提交订单条件(前收盘
     派生开盘限价);执行期另写不可变 `fill_execution_gate.json`(binding 哈希/
@@ -474,5 +544,9 @@ coverage_incomplete, source_unavailable}`;**仅 confirmed_absent 时发旗**,不
     (无开盘价 lookahead)+ horizon exact-once/全局独占 + chief 无 chief 重算相等 +
     display_flagger 不入 judge + D6 冻结分母 + D7 属性作用域(一事件四贡献=0)+
     session 边界×日历(误判=0/收盘后用 D 反应=0)+ coordination 仅 confirmed_absent
-    (覆盖不完整发旗=0)+ M6 §6b 分层 + coordination 精度≥95%。
+    (覆盖不完整发旗=0)+ **M-line taxonomy(market_state_fact 保留可正向接地/N00·NDA·NIA
+    移出/三元消费域)+ 双腿罚分失败矩阵(有适格记录 penalty 腿失败=not_applicable、无
+    则空罚分)+ horizon 公式数值锁(raw_h/舍入)+ primary_horizon 不逐股不事后+
+    vector_only 无标量出口 + 附属非阻塞(binding 不等 chief/独立锁)** + M6 §6b 分层 +
+    coordination 精度≥95%。
 14. 链版本 bump → 单日烟测 → §5 读质量门(M4′ 扩展分层 + 数值线 + 双标注协议)。
