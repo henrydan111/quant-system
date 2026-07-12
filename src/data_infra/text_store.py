@@ -78,6 +78,10 @@ SOURCE_OBJECT_ID_COLUMNS: dict[str, list[str]] = {
     "npr": ["pubtime", "title", "puborg"],
     "monetary_policy": ["pub_date", "title"],
     "cctv_news": ["date", "title"],
+    # 新闻快讯(NF wave, doc 143):src 我方注入。per-source 去重身份 = src+datetime+
+    # **content**——sina 等源 title 常为 None、正文在 content,故身份用 content(可靠载荷)
+    # 而非 title(实测会 null 碰撞);跨源聚簇在 news_ingest 下游
+    "news": ["src", "datetime", "content"],
 }
 SOURCE_CONTENT_COLUMNS: dict[str, list[str]] = {
     "anns_d": ["ann_date", "ts_code", "title", "url"],
@@ -87,6 +91,7 @@ SOURCE_CONTENT_COLUMNS: dict[str, list[str]] = {
     "npr": ["pubtime", "title", "puborg", "ptype"],
     "monetary_policy": ["pub_date", "title", "url"],
     "cctv_news": ["date", "title", "content"],
+    "news": ["src", "datetime", "title", "content", "channels"],
 }
 
 

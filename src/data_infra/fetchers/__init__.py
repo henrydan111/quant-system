@@ -992,6 +992,80 @@ class TushareFetcher:
         """
         return self._safe_api_call(self.pro.cctv_news, date=date)
 
+    #: NF wave (doc 143): whitelisted flash sources (cls disabled pending sub-permission)
+    NEWS_SOURCES = ("sina", "wallstreetcn", "10jqka", "eastmoney")
+    _NEWS_CAP = 1500
+
+    def fetch_news(self, src: str, start: str, end: str) -> pd.DataFrame:
+        """One 新闻快讯 call for [start, end] on one source (doc_id=143).
+
+        `channels` is NON-default → requested explicitly. `src` is an INPUT
+        param not returned as a column → injected here as a stamped column
+        (doc-m2). PIT anchor = `datetime` (ingest with published_col="datetime").
+        The returned frame carries ``df.attrs['cap_hit']`` = True when the row
+        count reached the 1500 cap (the window may be truncated — the caller
+        MUST split, never treat a capped window as complete).
+        """
+        df = self._safe_api_call(
+            self.pro.news, src=src, start_date=start, end_date=end,
+            fields="datetime,content,title,channels")
+        if df is None:
+            df = pd.DataFrame(columns=["datetime", "content", "title", "channels"])
+        df = df.copy()
+        df["src"] = src
+        df.attrs["cap_hit"] = len(df) >= self._NEWS_CAP
+        return df
+
+    def fetch_news_covered(self, src: str, start: str, end: str, *,
+                           min_window_seconds: int = 60,
+                           _depth: int = 0) -> tuple[pd.DataFrame, list[dict]]:
+        """Recursive window-split on the 1500 cap → complete coverage + manifest
+        (NF design B2). Bisects [start, end] whenever a window hits the cap so no
+        flash is silently truncated; a window still capped at the minimum span is
+        recorded with status='cap_at_min_window' (NOT silently accepted as
+        complete — the caller/QA must see it). Serial throughout (family rule).
+
+        Returns (deduped_frame, coverage_manifest) where each manifest entry is
+        {src, start, end, rows, cap_hit, status, depth}. Row-dedup uses the
+        text_store per-source identity (src+datetime+title) so overlapping split
+        boundaries do not double-count.
+        """
+        import hashlib
+        t0 = pd.Timestamp(start)
+        t1 = pd.Timestamp(end)
+        df = self.fetch_news(src, start, end)
+        cap_hit = bool(df.attrs.get("cap_hit"))
+        span = (t1 - t0).total_seconds()
+        if not cap_hit or span <= min_window_seconds:
+            status = "ok" if not cap_hit else "cap_at_min_window"
+            if status == "cap_at_min_window":
+                logging.warning("news %s [%s,%s] capped at min window (%d rows) "
+                                "— possible truncation", src, start, end, len(df))
+            manifest = [{"src": src, "start": start, "end": end, "rows": len(df),
+                         "cap_hit": cap_hit, "status": status, "depth": _depth}]
+            return df, manifest
+        # bisect; +1s overlap on the right half so a flash on the boundary second
+        # is not lost, then dedup by per-source identity absorbs the overlap.
+        # Record the capped parent as a 'split' audit entry so QA sees where the
+        # 1500 cap was hit (not just the leaf windows that succeeded).
+        split_entry = {"src": src, "start": start, "end": end, "rows": len(df),
+                       "cap_hit": True, "status": "split", "depth": _depth}
+        mid = t0 + (t1 - t0) / 2
+        mid_s = mid.strftime("%Y-%m-%d %H:%M:%S")
+        left_df, left_m = self.fetch_news_covered(
+            src, start, mid_s, min_window_seconds=min_window_seconds, _depth=_depth + 1)
+        right_start = (mid + pd.Timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+        right_df, right_m = self.fetch_news_covered(
+            src, right_start, end, min_window_seconds=min_window_seconds, _depth=_depth + 1)
+        both = pd.concat([left_df, right_df], ignore_index=True)
+        if len(both):
+            # per-source identity = src+datetime+content (title is often null for
+            # sina et al.; content is the reliable payload — matches text_store)
+            key = (both["src"].map(str) + "\x1f" + both["datetime"].map(str)
+                   + "\x1f" + both["content"].map(str))
+            both = both[~key.duplicated()].reset_index(drop=True)
+        return both, [split_entry] + left_m + right_m
+
     def fetch_anns_d_paged(self, ann_date: str, *, page_size: int = 2000,
                            max_pages: int = 6) -> pd.DataFrame:
         """anns_d with offset pagination (busy days exceed the 2000/call cap).

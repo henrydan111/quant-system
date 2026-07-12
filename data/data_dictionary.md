@@ -1128,3 +1128,20 @@ Endpoint `anns_d`; 2000 rows/call (loop by `ann_date`). Fields: `ann_date` `ts_c
 `title` `url`(PDF 下载链接) `rec_time`(发布时间, datetime, **NON-default → must request via
 `fields=`**). **PIT anchor = `rec_time`** for the title record; any future PDF-derived text
 needs its OWN `pdf_visible_at` (C1/R5-B1). Title+URL only in v1. Trust tier: 强 (official).
+
+### news (新闻快讯/短讯, doc_id=143) — NF wave (design v1.12 APPROVED 2026-07-12)
+Endpoint `news`; 6+ years history; **单次最大 1500 行,按时间窗循环**(NF fetcher: per-source
+watermark + recursive window split on the 1500 cap). Doc-143 verified 2026-07-11. Inputs
+`start_date`/`end_date`(datetime `'2018-11-20 09:00:00'`, **both required**), `src`(**required
+input, NOT an output column** → the fetcher injects `src` as its own stamped column, doc-m2).
+Sources (whitelist): `sina`/`wallstreetcn`/`10jqka`/`eastmoney`(live-probed 2026-07-11);
+`cls`(财联社) DISABLED pending sub-permission (probe returned 0 rows). Output columns:
+`datetime`(发布时间) `content` `title` `channels`(分类栏, **default N → MUST request via
+`fields='datetime,content,title,channels'`**, doc-143 check). **PIT anchor = `datetime`**
+(publication time; `published_col="datetime"`). ⚠ **No ★ create_time/update_flag field** →
+Tushare history backfill is undetectable from any column → the design's `history_bulk` physical
+separation (forward flow uses only genuinely-timestamped members, effective_at≤cutoff) is the
+required defense. Access: 单独权限 (endpoint-gated). Trust tier: T1 `cls`/`wallstreetcn`,
+T2 `sina`/`eastmoney`/`10jqka` (needs measured reliability evidence per design m2). Ingested
+through `text_store.py` (source=`news`); all NF noise-removal / clustering / routing / typing
+happens downstream in `news_ingest.py`, never in the raw store.
