@@ -66,6 +66,18 @@ class TestAliasRegistry:
         r = _reg()
         assert "国泰" in r.ambiguous and "国泰" not in r.exact
 
+    def test_short_unique_name_not_substring_linked(self):
+        # a unique but SHORT (<4 char) name must NOT link by substring (precision:
+        # "美的" would false-match "完美的季报"); only >=4-char names link by name
+        basic = pd.DataFrame([{"name": "美的", "ts_code": "000333.SZ"}])
+        r = build_alias_registry(basic, version="v", valid_from="2025-01-01")
+        codes, _ = r.resolve_codes("这是一个完美的季度")
+        assert "000333.SZ" not in codes           # no false substring link
+
+    def test_long_name_still_links(self):
+        codes, _ = _reg().resolve_codes("中芯国际公告")   # 4 chars -> links
+        assert "688981.SH" in codes
+
 
 # --------------------------------------------------- 3-way router
 

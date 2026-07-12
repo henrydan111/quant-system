@@ -24,6 +24,9 @@ import pandas as pd
 # A股6位码(带交易所后缀或裸码)、H股5位.HK、精确股名
 _A_CODE_RE = re.compile(r"(?<!\d)([03456789]\d{5})(?:\.(?:SH|SZ|BJ))?(?!\d)")
 _HK_CODE_RE = re.compile(r"(?<!\d)(\d{5})\.HK(?!\d)")
+#: 股名子串链接最小长度(高精度优先,M6 ≥98%):中文无词边界,2-3 字名子串误链风险高
+#: (「中国」「国泰」类),故名链接仅限 ≥4 字;更短名只经 A股码/H股码链接。
+_MIN_NAME_LINK_LEN = 4
 
 
 class AmbiguousAliasError(Exception):
@@ -67,10 +70,10 @@ class AliasRegistry:
             if tc:
                 codes.append(tc)
                 mentions.append({"mentioned": tok, "mapped": tc, "alias_type": "hk_code"})
-        # 3) 精确股名(仅唯一名;子串不匹配以防误链——高精度优先)
+        # 3) 唯一股名子串(仅 ≥4 字名;短名子串误链风险高,只经码链接——高精度优先)
         for name, tc in self.exact.items():
-            if name.isascii():          # 名字都是中文;跳过码类 token
-                continue
+            if name.isascii() or len(name) < _MIN_NAME_LINK_LEN:
+                continue                # 跳过码类 token 与过短名
             if name in self.ambiguous:
                 continue
             if name in s:
