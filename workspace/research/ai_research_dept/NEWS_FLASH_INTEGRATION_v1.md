@@ -1,5 +1,7 @@
-# 新闻快讯接入设计 v1.12(NF 波次 + 宏观席 + 新闻价值提取增强)
-**v1.6 主体 APPROVED(round-6);§6b/§6c/§7 v1.12 = round-11(0B/3M/0m,GPT:完成即无进一步设计缺口)全采纳,待 round-12 终门**
+# 新闻快讯接入设计 v1.12 — **APPROVED FOR IMPLEMENTATION(GPT round-12 终门,2026-07-12)**
+**12 轮设计跨审收敛(v1→v1.12,round-12:0B/0M/0m,收敛检查通过,R3 放行全量 §7 实现)**
+**实现铁律(GPT 终门):双腿终态矩阵必须编码为真状态机——任何必需 factor/penalty 腿失败必须终态阻止发布与绑定,含对该 fill intent 回退到旧决策会话的任何路径。**
+**分离授权仍在:前向证据 + macro weighted 各自 PREREG/评分契约/哈希/链冻结/显式授权门。**
 
 状态:**APPROVED FOR IMPLEMENTATION**(GPT round-6 对 f86543f:0B/0M/1m 编辑项,R2=可以开工;前向证据与 macro weighted 另行授权——见 §4 哈希绑定清单)。⑧round-6 Minor(规范性优先级横幅)已落;selection_rule 除 id 外其**不可变政策内容哈希**须由会话档案/绑定与链 manifest 携带(round-6 追加处方,已入 §0d)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
 0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
