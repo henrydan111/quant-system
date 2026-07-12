@@ -161,3 +161,55 @@ class TestFlowFeaturesAsOf:
         future = _cluster_at("2025-01-27 20:00:00", "future")  # after 18:00 cutoff
         f = flow_features([past, future], "2025-01-27 18:00:00")
         assert f["flow_count_1d"] == 1               # only the past cluster counts
+
+
+# --------------------------------------------------- LLM three-dim typing (fail-closed enum)
+
+from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
+    CONTENT_KIND, EVENT_TYPES, VERIFICATION_STATUS, type_batch,
+)
+
+
+class _Reply:
+    def __init__(self, text):
+        self.text = text
+
+
+def _mock_call(results):
+    import json as _json
+    return lambda msgs: _Reply(_json.dumps({"results": results}, ensure_ascii=False))
+
+
+class TestTypingFailClosed:
+    def test_valid_enums_pass_through(self):
+        out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+            {"idx": 0, "event_type": "订单合同", "verification_status": "官方证实",
+             "content_kind": "事实", "direction": "利好", "is_rumor": False}]))
+        r = out[0]
+        assert r["event_type"] == "订单合同" and r["verification_status"] == "官方证实"
+        assert r["content_kind"] == "事实" and r["direction"] == "利好"
+
+    def test_unregistered_enum_coerced_to_conservative_default(self):
+        out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+            {"idx": 0, "event_type": "ARBITRARY_EVIL", "verification_status": "hacked",
+             "content_kind": "???", "direction": "定涨停", "is_rumor": "yes"}]))
+        r = out[0]
+        assert r["event_type"] in EVENT_TYPES == ("市场评论" in EVENT_TYPES) or True
+        assert r["event_type"] == "市场评论"           # conservative default
+        assert r["verification_status"] == "未证实"     # conservative default
+        assert r["content_kind"] == "评论"
+        assert r["direction"] == "中性"
+        assert r["is_rumor"] is True                    # truthy string -> bool
+
+    def test_unknown_idx_dropped(self):
+        out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+            {"idx": 99, "event_type": "订单合同"}]))   # idx not in the batch
+        assert out == []
+
+    def test_macro_type_only_when_macro(self):
+        out = type_batch([{"idx": 0, "content": "央行逆回购"}], _mock_call([
+            {"idx": 0, "event_type": "政策转述", "macro_type": "货币政策"}]), macro=True)
+        assert out[0]["macro_type"] == "货币政策"
+        out2 = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+            {"idx": 0, "event_type": "公司经营"}]), macro=False)
+        assert out2[0]["macro_type"] is None
