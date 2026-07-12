@@ -1002,10 +1002,12 @@ class TushareFetcher:
         `channels` is NON-default → requested explicitly. `src` is an INPUT
         param not returned as a column → injected here as a stamped column
         (doc-m2). PIT anchor = `datetime` (ingest with published_col="datetime").
-        The returned frame carries ``df.attrs['cap_hit']`` = True when the row
-        count reached the 1500 cap (the window may be truncated — the caller
-        MUST split, never treat a capped window as complete).
+        Only whitelisted sources are accepted (M1). The returned frame carries
+        ``df.attrs['cap_hit']`` = True when the row count reached the 1500 cap
+        (the caller MUST split, never treat a capped window as complete).
         """
+        if src not in self.NEWS_SOURCES:
+            raise ValueError(f"news source {src!r} not in whitelist {self.NEWS_SOURCES}")
         df = self._safe_api_call(
             self.pro.news, src=src, start_date=start, end_date=end,
             fields="datetime,content,title,channels")
@@ -1016,23 +1018,27 @@ class TushareFetcher:
         df.attrs["cap_hit"] = len(df) >= self._NEWS_CAP
         return df
 
+    def _news_content_hashes(self, df: pd.DataFrame):
+        """M5: dedup key via the SHARED text_store canonical hasher — so a
+        fetcher-side overlap dedup is bit-identical to store-side idempotence."""
+        from data_infra.text_store import content_hash_for
+        cols = list(df.columns)
+        return df.apply(lambda r: content_hash_for("news", r, cols), axis=1)
+
     def fetch_news_covered(self, src: str, start: str, end: str, *,
                            min_window_seconds: int = 60,
-                           _depth: int = 0) -> tuple[pd.DataFrame, list[dict]]:
-        """Recursive window-split on the 1500 cap → complete coverage + manifest
-        (NF design B2). Bisects [start, end] whenever a window hits the cap so no
-        flash is silently truncated; a window still capped at the minimum span is
-        recorded with status='cap_at_min_window' (NOT silently accepted as
-        complete — the caller/QA must see it). Serial throughout (family rule).
+                           _depth: int = 0) -> tuple[pd.DataFrame, dict]:
+        """Recursive window-split on the 1500 cap → complete coverage + a TYPED
+        coverage artifact (NF design B2 / review M1). Bisects [start, end] whenever
+        a window hits the cap so no flash is silently truncated. Serial (family rule).
 
-        Returns (deduped_frame, coverage_manifest) where each manifest entry is
-        {src, start, end, rows, cap_hit, status, depth}. Row-dedup uses the
-        text_store per-source identity (src+datetime+title) so overlapping split
-        boundaries do not double-count.
+        Returns (deduped_frame, coverage) where coverage = {src, start, end,
+        rows, complete, windows:[...]}. ``complete`` is False iff any window was
+        still capped at the minimum span (cap_at_min_window) — the caller MUST
+        NOT freeze decision input nor advance a watermark on an incomplete pull.
+        Overlap dedup uses the shared text_store content hash (M5).
         """
-        import hashlib
-        t0 = pd.Timestamp(start)
-        t1 = pd.Timestamp(end)
+        t0, t1 = pd.Timestamp(start), pd.Timestamp(end)
         df = self.fetch_news(src, start, end)
         cap_hit = bool(df.attrs.get("cap_hit"))
         span = (t1 - t0).total_seconds()
@@ -1040,31 +1046,30 @@ class TushareFetcher:
             status = "ok" if not cap_hit else "cap_at_min_window"
             if status == "cap_at_min_window":
                 logging.warning("news %s [%s,%s] capped at min window (%d rows) "
-                                "— possible truncation", src, start, end, len(df))
-            manifest = [{"src": src, "start": start, "end": end, "rows": len(df),
-                         "cap_hit": cap_hit, "status": status, "depth": _depth}]
-            return df, manifest
-        # bisect; +1s overlap on the right half so a flash on the boundary second
-        # is not lost, then dedup by per-source identity absorbs the overlap.
-        # Record the capped parent as a 'split' audit entry so QA sees where the
-        # 1500 cap was hit (not just the leaf windows that succeeded).
-        split_entry = {"src": src, "start": start, "end": end, "rows": len(df),
+                                "— coverage INCOMPLETE", src, start, end, len(df))
+            windows = [{"start": start, "end": end, "rows": len(df),
+                        "cap_hit": cap_hit, "status": status, "depth": _depth}]
+            return df, {"src": src, "start": start, "end": end, "rows": len(df),
+                        "complete": (status == "ok"), "windows": windows}
+        # bisect into two GENUINELY-OVERLAPPING halves that share the boundary
+        # second (right starts at mid, not mid+1s); the shared-hash dedup below
+        # absorbs the overlap so an API that is inclusive on both ends can't lose
+        # or double-count the boundary second. Record the capped parent as 'split'.
+        split_entry = {"start": start, "end": end, "rows": len(df),
                        "cap_hit": True, "status": "split", "depth": _depth}
         mid = t0 + (t1 - t0) / 2
         mid_s = mid.strftime("%Y-%m-%d %H:%M:%S")
-        left_df, left_m = self.fetch_news_covered(
+        left_df, left_c = self.fetch_news_covered(
             src, start, mid_s, min_window_seconds=min_window_seconds, _depth=_depth + 1)
-        right_start = (mid + pd.Timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-        right_df, right_m = self.fetch_news_covered(
-            src, right_start, end, min_window_seconds=min_window_seconds, _depth=_depth + 1)
+        right_df, right_c = self.fetch_news_covered(
+            src, mid_s, end, min_window_seconds=min_window_seconds, _depth=_depth + 1)
         both = pd.concat([left_df, right_df], ignore_index=True)
         if len(both):
-            # per-source identity = src+datetime+content (title is often null for
-            # sina et al.; content is the reliable payload — matches text_store)
-            key = (both["src"].map(str) + "\x1f" + both["datetime"].map(str)
-                   + "\x1f" + both["content"].map(str))
-            both = both[~key.duplicated()].reset_index(drop=True)
-        return both, [split_entry] + left_m + right_m
+            both = both[~self._news_content_hashes(both).duplicated()].reset_index(drop=True)
+        windows = [split_entry] + left_c["windows"] + right_c["windows"]
+        return both, {"src": src, "start": start, "end": end, "rows": len(both),
+                      "complete": left_c["complete"] and right_c["complete"],
+                      "windows": windows}
 
     def fetch_anns_d_paged(self, ann_date: str, *, page_size: int = 2000,
                            max_pages: int = 6) -> pd.DataFrame:

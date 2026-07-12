@@ -36,51 +36,59 @@ def _stream(n, start="2025-01-27 09:00:00", step_s=1):
              f"flash-{i}") for i in range(n)]
 
 
-def test_uncapped_window_single_manifest_entry():
+def test_uncapped_window_complete_artifact():
     f = _FakeFetcher(_stream(100))
-    df, man = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
+    df, cov = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
                                    "2025-01-27 10:00:00")
     assert len(df) == 100
-    assert len(man) == 1 and man[0]["status"] == "ok" and not man[0]["cap_hit"]
+    assert cov["complete"] is True
+    assert len(cov["windows"]) == 1 and cov["windows"][0]["status"] == "ok"
 
 
 def test_capped_window_splits_and_covers_all():
     # 3000 flashes over an hour → exceeds the 1500 cap → must split and recover all
     f = _FakeFetcher(_stream(3000, step_s=1))   # 3000s ≈ 50 min
-    df, man = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
+    df, cov = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
                                    "2025-01-27 10:00:00")
     assert len(df) == 3000                       # no flash lost
-    assert df["title"].is_unique                  # overlap dedup worked
-    assert len(man) > 1                           # actually split
-    assert any(m["cap_hit"] for m in man)         # split parent recorded
-    assert any(m["status"] == "split" for m in man)
-    assert all(m["status"] in ("ok", "split", "cap_at_min_window") for m in man)
-    # every leaf (ok/cap_at_min) is a real coverage window
-    assert any(m["status"] == "ok" for m in man)
+    assert df["content"].is_unique                # overlap dedup worked
+    assert cov["complete"] is True               # every leaf resolved
+    w = cov["windows"]
+    assert any(x["status"] == "split" for x in w)     # split parent recorded
+    assert any(x["status"] == "ok" for x in w)
+    assert all(x["status"] in ("ok", "split", "cap_at_min_window") for x in w)
 
 
 def test_dedup_absorbs_boundary_overlap():
     f = _FakeFetcher(_stream(3000, step_s=1))
     df, _ = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
                                  "2025-01-27 10:00:00")
-    # per-source identity is src+datetime+content → the +1s right-half overlap
-    # must not double-count any row
     key = df["src"] + "|" + df["datetime"] + "|" + df["content"]
-    assert key.is_unique
+    assert key.is_unique                          # no boundary double-count
 
 
-def test_cap_at_min_window_is_flagged_not_silent():
-    # 2000 flashes inside a single 60s window → cannot split below min → must be
-    # RECORDED as cap_at_min_window, never silently accepted as complete
+def test_cap_at_min_window_makes_coverage_incomplete():
+    # 2000 flashes inside a single 60s window → cannot split below min → coverage
+    # MUST be complete=False (M1: caller must not freeze/advance on incomplete)
     burst = [(f"2025-01-27 09:00:{s % 60:02d}", f"b-{i}")
              for i, s in enumerate(range(2000))]
     f = _FakeFetcher(burst)
-    df, man = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
+    df, cov = f.fetch_news_covered("sina", "2025-01-27 09:00:00",
                                    "2025-01-27 09:00:59", min_window_seconds=60)
-    assert any(m["status"] == "cap_at_min_window" for m in man)
+    assert cov["complete"] is False
+    assert any(x["status"] == "cap_at_min_window" for x in cov["windows"])
 
 
 def test_source_whitelist_excludes_cls():
     assert "cls" not in TushareFetcher.NEWS_SOURCES
     assert set(TushareFetcher.NEWS_SOURCES) == {
         "sina", "wallstreetcn", "10jqka", "eastmoney"}
+
+
+def test_non_whitelisted_source_rejected():
+    import pytest
+    f = _FakeFetcher(_stream(1))
+    # override the fake's fetch_news bypass — call the real whitelist guard
+    with pytest.raises(ValueError, match="whitelist"):
+        TushareFetcher.fetch_news(f, "cls", "2025-01-27 09:00:00",
+                                  "2025-01-27 10:00:00")

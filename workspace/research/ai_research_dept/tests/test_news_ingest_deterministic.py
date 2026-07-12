@@ -88,61 +88,71 @@ def _members(rows):
 
 
 class TestClustersAndFamilies:
-    def test_same_content_across_sources_one_cluster(self):
-        # 4 outlets, same wording, same minute -> 1 cluster, 1 independent source
+    def test_same_wording_across_sources_one_family(self):
+        # 4 outlets, same wording -> 1 cluster (source-family), 4 outlets
         v = _members([
             {"src": s, "datetime": "2025-01-27 10:00:00",
              "content": "A公司中标5亿元订单", "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")}
             for s in ("sina", "eastmoney", "10jqka", "wallstreetcn")])
         snaps = build_cluster_snapshots(v, "2025-01-27 18:00:00")
-        assert len(snaps) == 1
-        assert snaps[0].n_outlets == 4
-        assert snaps[0].n_independent_sources == 1   # syndication collapsed
+        assert len(snaps) == 1 and snaps[0].n_outlets == 4
 
-    def test_distinct_content_distinct_clusters(self):
+    def test_staggered_reposts_one_family_not_inflated(self):
+        # review M2: same wording at 10:00/10:01/10:02 -> ONE family (not 3),
+        # regardless of the exact minute
         v = _members([
-            {"src": "sina", "datetime": "2025-01-27 10:00:00", "content": "订单利好",
-             "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")},
-            {"src": "sina", "datetime": "2025-01-27 11:00:00", "content": "高管减持",
-             "decision_visible_at": pd.Timestamp("2025-01-27 11:00:05")}])
-        assert len(build_cluster_snapshots(v, "2025-01-27 18:00:00")) == 2
+            {"src": "sina", "datetime": f"2025-01-27 10:0{m}:00", "content": "同一措辞X",
+             "decision_visible_at": pd.Timestamp(f"2025-01-27 10:0{m}:05")}
+            for m in range(3)])
+        snaps = build_cluster_snapshots(v, "2025-01-27 18:00:00")
+        assert len(snaps) == 1                       # one family, minute ignored
 
-    def test_coordination_flag_on_syndicated_burst(self):
+    def test_immutable_snapshot_frozen_and_content_bound_id(self):
+        v = _members([{"src": "sina", "datetime": "2025-01-27 10:00:00",
+                       "content": "订单利好", "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")}])
+        s = build_cluster_snapshots(v, "2025-01-27 18:00:00")[0]
+        with pytest.raises(Exception):
+            s.n_outlets = 99                          # frozen
+        assert len(s.snapshot_id) == 24               # full-payload SHA-256
+
+    def test_build_rejects_future_member(self):
+        # review B2: a member with effective_at > cutoff HARD-FAILS (no silent keep)
+        v = _members([{"src": "sina", "datetime": "2025-01-27 20:00:00", "content": "future",
+                       "decision_visible_at": pd.Timestamp("2025-01-27 20:00:00")}])
+        with pytest.raises(ValueError, match="cutoff"):
+            build_cluster_snapshots(v, "2025-01-27 18:00:00")
+
+    def test_coordination_only_when_confirmed_absent_backing(self):
         v = _members([
             {"src": s, "datetime": "2025-01-27 10:00:00", "content": "拉升在即主力介入",
              "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")}
             for s in ("sina", "eastmoney", "10jqka")])
         snap = build_cluster_snapshots(v, "2025-01-27 18:00:00")[0]
-        assert coordination_flag(snap)["coordination_flag"] is True
-
-    def test_no_coordination_on_single_genuine(self):
-        v = _members([{"src": "sina", "datetime": "2025-01-27 10:00:00",
-                       "content": "公司公告季报",
-                       "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")}])
-        assert coordination_flag(build_cluster_snapshots(v, "2025-01-27 18:00:00")[0]
+        # only fires with confirmed_absent structured backing
+        assert coordination_flag(snap, structured_backing_status="confirmed_absent"
+                                 )["coordination_flag"] is True
+        assert coordination_flag(snap, structured_backing_status="coverage_incomplete"
+                                 )["coordination_flag"] is False
+        assert coordination_flag(snap, structured_backing_status="present"
                                  )["coordination_flag"] is False
 
 
 # --------------------------------------------------- flow features (E1, as-of)
 
-def _cluster_at(vis_time, content):
+def _cluster_at(vis_time, content, cutoff="2025-01-27 18:00:00"):
     v = pd.DataFrame([{"src": "sina", "datetime": vis_time, "content": content,
                        "decision_visible_at": pd.Timestamp(vis_time)}])
-    return build_cluster_snapshots(v, "2025-01-27 18:00:00")[0]
+    return build_cluster_snapshots(v, cutoff)[0]
 
 
 class TestFlowFeaturesAsOf:
     def test_velocity_null_on_zero_baseline(self):
-        # zero baseline = NO news in the trailing 480h (20d window empty) -> velocity
-        # must be None, NOT a floor. (A cluster today is always in the 20d window, so
-        # the genuine zero-baseline case is an entity with no trailing news at all.)
         f = flow_features([], "2025-01-27 18:00:00")
         assert f["flow_velocity"] is None
         assert f["flow_velocity_status"] == "not_applicable_zero_baseline"
         assert f["flow_count_1d"] == 0 and f["flow_count_20d"] == 0
 
     def test_velocity_null_when_only_old_history(self):
-        # only clusters older than 480h -> count_20d == 0 -> velocity None
         old = _cluster_at("2024-12-01 10:00:00", "old")
         f = flow_features([old], "2025-01-27 18:00:00")
         assert f["flow_count_20d"] == 0 and f["flow_velocity"] is None
@@ -155,18 +165,33 @@ class TestFlowFeaturesAsOf:
         assert f["flow_velocity"] is not None and f["flow_velocity"] > 0
         assert f["flow_velocity_status"] == "ok"
 
-    def test_flow_is_as_of_cutoff_not_future(self):
-        # a cluster first-visible AFTER the cutoff must not count (as-of discipline)
-        past = _cluster_at("2025-01-27 10:00:00", "past")
-        future = _cluster_at("2025-01-27 20:00:00", "future")  # after 18:00 cutoff
-        f = flow_features([past, future], "2025-01-27 18:00:00")
-        assert f["flow_count_1d"] == 1               # only the past cluster counts
+    def test_incomplete_coverage_all_not_applicable(self):
+        # review M2: incomplete required-source coverage -> flow null, not silent data
+        f = flow_features([_cluster_at("2025-01-27 10:00:00", "x")],
+                          "2025-01-27 18:00:00", coverage_complete=False)
+        assert f["flow_count_1d"] is None
+        assert f["flow_velocity_status"] == "not_applicable_incomplete_coverage"
+
+    def test_breadth_is_outlet_union_not_sum(self):
+        # two same-day clusters, one carried by {sina}, one by {sina, eastmoney}
+        # -> breadth = |{sina, eastmoney}| = 2 (union), not 1+2=3
+        v1 = pd.DataFrame([{"src": "sina", "datetime": "2025-01-27 10:00:00",
+                            "content": "事实甲", "decision_visible_at": pd.Timestamp("2025-01-27 10:00:05")}])
+        v2 = pd.DataFrame([
+            {"src": s, "datetime": "2025-01-27 11:00:00", "content": "事实乙",
+             "decision_visible_at": pd.Timestamp("2025-01-27 11:00:05")}
+            for s in ("sina", "eastmoney")])
+        c1 = build_cluster_snapshots(v1, "2025-01-27 18:00:00")[0]
+        c2 = build_cluster_snapshots(v2, "2025-01-27 18:00:00")[0]
+        f = flow_features([c1, c2], "2025-01-27 18:00:00")
+        assert f["coverage_breadth_1d"] == 2
 
 
 # --------------------------------------------------- LLM three-dim typing (fail-closed enum)
 
 from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
-    CONTENT_KIND, EVENT_TYPES, VERIFICATION_STATUS, type_batch,
+    CONTENT_KIND, EVENT_TYPES, MACRO_TYPES, TypingSchemaError,
+    VERIFICATION_STATUS, type_batch,
 )
 
 
@@ -188,28 +213,56 @@ class TestTypingFailClosed:
         r = out[0]
         assert r["event_type"] == "订单合同" and r["verification_status"] == "官方证实"
         assert r["content_kind"] == "事实" and r["direction"] == "利好"
+        assert r["is_rumor"] is False
 
     def test_unregistered_enum_coerced_to_conservative_default(self):
         out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
             {"idx": 0, "event_type": "ARBITRARY_EVIL", "verification_status": "hacked",
-             "content_kind": "???", "direction": "定涨停", "is_rumor": "yes"}]))
+             "content_kind": "???", "direction": "定涨停", "is_rumor": "false"}]))
         r = out[0]
-        assert r["event_type"] in EVENT_TYPES == ("市场评论" in EVENT_TYPES) or True
-        assert r["event_type"] == "市场评论"           # conservative default
-        assert r["verification_status"] == "未证实"     # conservative default
+        assert r["event_type"] == "市场评论"
+        assert r["verification_status"] == "未证实"
         assert r["content_kind"] == "评论"
         assert r["direction"] == "中性"
-        assert r["is_rumor"] is True                    # truthy string -> bool
+        # review M4: is_rumor="false" is NOT a literal bool -> conservative True
+        # (never silently True from a truthy string, never silently passed through)
+        assert r["is_rumor"] is True
 
-    def test_unknown_idx_dropped(self):
+    def test_string_false_is_not_true_passthrough(self):
+        # a literal-bool false stays false; only non-bool coerces to conservative True
         out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
-            {"idx": 99, "event_type": "订单合同"}]))   # idx not in the batch
-        assert out == []
+            {"idx": 0, "is_rumor": False}]))
+        assert out[0]["is_rumor"] is False
 
-    def test_macro_type_only_when_macro(self):
+    def test_duplicate_idx_hard_fails(self):
+        with pytest.raises(TypingSchemaError, match="duplicate"):
+            type_batch([{"idx": 0, "content": "x"}], _mock_call([
+                {"idx": 0}, {"idx": 0}]))
+
+    def test_missing_idx_hard_fails(self):
+        with pytest.raises(TypingSchemaError, match="missing"):
+            type_batch([{"idx": 0, "content": "a"}, {"idx": 1, "content": "b"}],
+                       _mock_call([{"idx": 0}]))     # idx 1 missing
+
+    def test_output_sorted_by_input_order(self):
+        out = type_batch([{"idx": 5, "content": "a"}, {"idx": 2, "content": "b"}],
+                         _mock_call([{"idx": 2}, {"idx": 5}]))
+        assert [r["idx"] for r in out] == [5, 2]
+
+    def test_macro_type_valid(self):
         out = type_batch([{"idx": 0, "content": "央行逆回购"}], _mock_call([
             {"idx": 0, "event_type": "政策转述", "macro_type": "货币政策"}]), macro=True)
-        assert out[0]["macro_type"] == "货币政策"
-        out2 = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+        assert out[0]["macro_type"] == "货币政策" and out[0]["macro_type_status"] == "ok"
+
+    def test_macro_type_missing_is_not_applicable_not_real_dim(self):
+        # review M4: missing macro_type must be not_applicable, NEVER default to 行业景气
+        out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
+            {"idx": 0, "event_type": "政策转述"}]), macro=True)
+        assert out[0]["macro_type"] is None
+        assert out[0]["macro_type_status"] == "not_applicable"
+        assert "行业景气" in MACRO_TYPES     # it IS a real dim -> must not be the default
+
+    def test_no_macro_type_when_not_macro(self):
+        out = type_batch([{"idx": 0, "content": "x"}], _mock_call([
             {"idx": 0, "event_type": "公司经营"}]), macro=False)
-        assert out2[0]["macro_type"] is None
+        assert "macro_type" not in out[0]

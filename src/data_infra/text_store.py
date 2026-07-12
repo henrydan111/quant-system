@@ -136,9 +136,35 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
         raise
 
 
-def _store_path(source: str, store_dir: str | os.PathLike | None) -> Path:
+#: ingest classes with PHYSICAL separation (B1, NF wave): forward accrues the
+#  clean PIT panel; history_bulk is bulk-backfilled history that is invisible to
+#  the forward loader (a bulk row ingested today would otherwise satisfy a
+#  decision_visible_at<=cutoff filter and pollute current flow). Sources not
+#  passing ingest_class use the flat legacy path (unchanged).
+INGEST_CLASSES = ("forward", "history_bulk")
+
+
+def _store_path(source: str, store_dir: str | os.PathLike | None,
+                ingest_class: str | None = None) -> Path:
     base = Path(store_dir) if store_dir is not None else DEFAULT_STORE_DIR
+    if ingest_class is not None:
+        if ingest_class not in INGEST_CLASSES:
+            raise TextStoreError(f"unknown ingest_class {ingest_class!r}")
+        return base / source / ingest_class / f"text_{source}.parquet"
     return base / source / f"text_{source}.parquet"
+
+
+def object_id_hash_for(source: str, row, raw_columns: list[str]) -> str:
+    """Canonical object-id hash (M5: ONE implementation shared by fetcher + store)."""
+    obj_basis, _ = _resolve_bases(source, list(raw_columns))
+    return _hash_row(source, row, obj_basis)
+
+
+def content_hash_for(source: str, row, raw_columns: list[str]) -> str:
+    """Canonical content hash (M5: identical normalization on both layers so a
+    fetcher-side dedup and a store-side dedup are bit-identical)."""
+    _, content_basis = _resolve_bases(source, list(raw_columns))
+    return _hash_row(source, row, content_basis)
 
 
 def _resolve_bases(source: str, raw_columns: list[str]) -> tuple[list[str], list[str]]:
@@ -169,6 +195,7 @@ def ingest_rows(
     published_col: str | None,
     retrieved_at: pd.Timestamp,
     store_dir: str | os.PathLike | None = None,
+    ingest_class: str | None = None,
 ) -> pd.DataFrame:
     """Stamp and append raw text rows (idempotent on content_hash).
 
@@ -221,8 +248,14 @@ def ingest_rows(
     stamped["decision_visible_at"] = (
         stamped[["source_published_at", "first_ingested_at"]].max(axis=1)
     )
+    if ingest_class is not None:
+        stamped["ingest_class"] = ingest_class
+    # M5: dedup WITHIN the incoming batch on content_hash (first occurrence wins)
+    # before touching storage — two identical flashes in one pull must not both
+    # persist (a probe showed two rows with the same content_hash surviving).
+    stamped = stamped[~stamped["content_hash"].duplicated()].reset_index(drop=True)
 
-    path = _store_path(source, store_dir)
+    path = _store_path(source, store_dir, ingest_class)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         existing = pd.read_parquet(path)
@@ -233,6 +266,7 @@ def ingest_rows(
             _atomic_write_parquet(combined, path)
         else:
             combined = existing
+        assert combined["content_hash"].is_unique, "store content_hash not unique"
         # return authoritative stamps for THIS batch's hashes (originals win)
         return combined[combined["content_hash"].isin(set(stamped["content_hash"]))].copy()
     _atomic_write_parquet(stamped, path)
@@ -245,6 +279,7 @@ def load_text(
     *,
     store_dir: str | os.PathLike | None = None,
     require_exists: bool = False,
+    ingest_class: str | None = None,
 ) -> pd.DataFrame:
     """PIT loader: rows with ``decision_visible_at <= decision_time`` only.
 
@@ -252,8 +287,13 @@ def load_text(
     outside ``ingest_rows`` is refused, never guessed at). Formal/forward
     callers MUST pass ``require_exists=True`` — a missing required source is a
     hard error, not silent no-text (R2 Blocker-6).
+
+    ``ingest_class`` (B1): the FORWARD loader passes ``ingest_class='forward'``
+    so it reads ONLY the physically-separated forward panel; bulk history is
+    never reachable from a forward decision. Omitting it reads the flat legacy
+    path (unchanged for pre-NF sources).
     """
-    path = _store_path(source, store_dir)
+    path = _store_path(source, store_dir, ingest_class)
     if not path.exists():
         if require_exists:
             raise TextStoreError(
