@@ -1,5 +1,5 @@
-# 新闻快讯接入设计 v1.9(NF 波次 + 宏观席 + 新闻价值提取增强)
-**v1.6 主体 APPROVED(round-6);§6b/§6c/§7 v1.9 = round-8(2B/5M)全采纳,待 round-9**
+# 新闻快讯接入设计 v1.10(NF 波次 + 宏观席 + 新闻价值提取增强)
+**v1.6 主体 APPROVED(round-6);§6b/§6c/§7 v1.10 = round-9(0B/4M/1m,弧线收敛)全采纳,待 round-10**
 
 状态:**APPROVED FOR IMPLEMENTATION**(GPT round-6 对 f86543f:0B/0M/1m 编辑项,R2=可以开工;前向证据与 macro weighted 另行授权——见 §4 哈希绑定清单)。⑧round-6 Minor(规范性优先级横幅)已落;selection_rule 除 id 外其**不可变政策内容哈希**须由会话档案/绑定与链 manifest 携带(round-6 追加处方,已入 §0d)。⑦GPT round-5(v1.5/d7b0d06):CHANGES REQUIRED
 0B+2M——§0a 残留被取代的填充语义与 §0d 竞争权威 + M6 分母/结果合同未机械单一化;
@@ -276,6 +276,53 @@ cap/penalty/bear,**永不**正向 materiality);每 `(claim_id, attribute_type)` 
 
 ---
 
+**round-9 裁定(0B/4M/1m)全采纳,普适化/版本化收口(弧线收敛,0 Blocker):**
+
+**M1″ 普适每消费者 payload 门(不止 news_card):** B1′ 规则对,但强制边界不穷尽——
+regime 卡 **M03/M04/M09/M10/M14/M15 本身就是计数/广度/聚合/持续性行**,而
+`market_context` 注入**每个**正向席 payload;fund/pv 卡也可能含动态计数/纯百分位;
+动态节头可无 ID 泄计数。修复:**每次正向 LLM 调用前,从密封元数据注册表递归构造+校验
+完整序列化 payload**(覆盖每卡/键/嵌套/别名、每条 F/FS/FB/FD/T/N/NF/NFC/M/MF/MS
+记录):每个动态可见项必须解析到**恰一**条带 `factor_positive` 的注册项;attention_only
+/未注册动态散文/count-only 派生 → 物理省略或硬失败;**静态节头不得含动态计数/广度/
+百分位值**;发布 M01-M16 逐 ID 分类并封存**逐消费者 payload + 注册表哈希**;四席全测
+(真实卡键/嵌套别名攻击/未注册动态节头)。penalty-only 材料若仍 LLM 计分需独立隔离
+罚分腿。
+
+**M2″ horizon = 版本化 opt-in schema(不扩共享校验器):** 评分契约加
+`scorecard_schema_id`;默认 `c16_v1` **保持现有 allowlist 并拒绝所有 horizon 字段**
+(冻结 MVP 契约不被悄悄放松);另加 opt-in `c16_news_horizon_v1`(仅 news 席、新链
+版本下):typed horizon_theses/horizon_factor_scores、注册 horizons/dimensions、精确
+键集、独立 `compute_news_final_by_horizon`;**复用**既有 bool 拒收/有限数/OverflowError/
+safe-repr/[0,5] 守卫;全局 name 唯一 + `(name,horizon)` 笛卡尔精确覆盖;证据独占跨
+所有计分集合;钉死全局分/罚分如何进各 horizon final(含罚分全局 vs horizon 化 + 舍入);
+bear schema 版本化 `(seat, dimension, horizon|null)`;**证明 legacy 行为不变、c16_v1
+仍拒新字段**。
+
+**M3″ 空头 attention 入口 B3 安全:** `run_bear` 收密封逐卡元数据注册表;
+`validate_bear_record` 仅当 counter_quote 的 ID **存在于确切来源注册表 + 卡哈希匹配 +
+`bear ∈ allowed_uses`** 才接受;域来自注册表元数据、**绝不单凭 ID 前缀**;禁文本重发现
+ID。**不泛化** `SEAT_ID_DOMAINS["news"]`——attention 记录若留 `domain=news` 则
+`allowed_uses=bear` 足够;若引入新 `attention` 域,只放宽 bear/context 消费者及其
+证伪 enum。加伪造 ID/跨卡注册表复用/元数据替换测试。
+
+**M4″ chief 隔离覆盖 liveness/封印身份/输入时点:** 逐字重算只证 chief 没改裁判字节,
+**不证** chief 超时/畸形/完成态不会①使决策档案不完整②延迟发布过 binding cutoff
+③改被 fill_binding 绑定的档案封印④把决策后/开盘/成交信息灌进展示工件。修复:
+**先冻结+封印+发布权威决策核心工件,再调** chief_synthesis/display_flagger;其输入
+allowlist 仅限 cutoff-valid 密封卡/已校验席位记录/已校验空头/冻结裁判——**绝不含
+binding/执行门/fill/收益/任何决策后数据**;各写独立可选附属工件(自带封印 +
+`parent_decision_archive_sha256`);失败/超时/重试/缺席**不得**改决策完整性/封印/发布/
+绑定适格/排序/选股/执行。回归:chief 成功/失败/超时/畸形/缺席下决策哈希·发布态·成交
+适格**恒等**。
+
+**m1″:** §6c 下方 D1 旧段(仍说执行门"加在 fill_binding")被 B2′ 取代——改为直接
+引用 B2′ + 断言 `execution_data_effective_at ≤ order_submitted_at <
+auction_matching_cutoff_at ≤ fill_at`;预提交限价单**可以**在开盘成交(开盘价决定
+既有订单是否成交,但未被用于决定是否提交)。
+
+---
+
 
 
 **B1 处置——attention-only 机械隔离(替代口头规则):** NFV/theme-heat/narrative 类记录
@@ -324,10 +371,13 @@ coverage_incomplete, source_unavailable}`;**仅 confirmed_absent 时发旗**,不
 ## §6c DESK VIEW 采纳分诊(round-7 R3/R4;标注=GPT 原判)
 
 **本波纳入(v1.8):**
-- **D1 后隙延续/反转论点 + 预注册开盘执行门**(R3-1,GPT 首推):决策期——news 席
-  对每个重大事件给分 horizon 的情景评估(见 D2);执行期——`fill_binding` 增
-  **预注册执行门**(实际 gap 界限/涨跌停锁/停牌/流动性下限;确定性、参数入
-  C16b),不过门 = 该名字弃单(封 `fill_gate_rejected`);**实际 gap 永不回流决策分**。
+- **D1 后隙延续/反转论点 + 预注册开盘执行门**(R3-1,GPT 首推;**执行合同以 B2′/m1″
+  为准**):决策期——news 席对每个重大事件给分 horizon 的情景评估(见 D2);执行合同
+  见 §6b B2′ 三分离,断言
+  `execution_data_effective_at ≤ order_submitted_at < auction_matching_cutoff_at
+  ≤ fill_at`——预提交限价单(前收盘派生)可在开盘成交(开盘价决定既有订单是否成交,
+  但未被用于决定是否提交);不过门封 `fill_gate_rejected`;**实际 gap/开盘价永不回流
+  决策分**。
 - **D2 horizon/情景化 scorecard schema**(R3-2+R4-3,并入 E3 的评分契约变更):news
   席每论点带 `direction / horizon ∈ {next_open, 1-3d, 5-20d} / 因果链 / priced-in
   状态(=absorption_status 接地)/ 替代解释 / 基准·不利情景 / 可观察证伪条件`;
@@ -373,34 +423,53 @@ coverage_incomplete, source_unavailable}`;**仅 confirmed_absent 时发旗**,不
    `absorption_status`(M2′,方向中性)、theme_flow_velocity/扩散/HHI/生命周期(D6)、
    `coordination_flag`(NFC,仅 confirmed_absent)、`narrative_direction_shift`(延后)。
 4. **别名注册表**(独立审批工件)+ fact_cluster_id + **scoring_owner**(target 级,
-   M3/M4)。
+   M3/M4)。空头 attention 入口 B3 安全(M3″):`run_bear` 收密封逐卡元数据注册表,
+   `validate_bear_record` 仅当 counter_quote ID 存在于确切来源注册表+卡哈希匹配+
+   `bear∈allowed_uses` 才接受,域来自元数据非 ID 前缀,禁文本重发现;不泛化
+   `SEAT_ID_DOMAINS["news"]`。加伪造 ID/跨卡复用/元数据替换测试。
 5. **双卡渲染 + 带元数据注册表**:正向 `news_card`=**去重原子事实,零聚合计数行**
    (B1′:N00/NDA/NIA 移出);独立密封 `attention_context_card`=全部 attention_only
    内容(D6)。**D7 原子属性行**:`claim_id/fact_cluster_id/evidence_group_id/
    attribute_type/allowed_dimensions`,每属性只入注册维、每 `(claim_id, attribute_type)`
    至多一行计分。证据类上限算术 NFD/NFI/NFA/NFR/NFC + MFD 系。
-6. **校验器升级**:attention_only ID 入 factor_scores **硬失败**;payload 序列化断言
-   (news_card/market_context/别名下无缺 factor_positive 权限记录、无 count-only 派生);
-   证据独占**全局**跨 factor+horizon+penalty;D7 dimension-scoped + evidence_group 防
-   一事件四贡献。
-7. **horizon scorecard schema**(M1′/D2):typed `horizon_theses` + `horizon_factor_scores`,
-   `(name, horizon)` exact-once,产 `news_final_by_horizon`(无标量 roll-up 除非
-   primary_decision_horizon 入契约);每论点必填**当前最强反证**接地字段(D3);空头
-   target `(seat, dimension, horizon|null)`。改 [scorecard.py](../../../src/ai_layer/scorecard.py)
-   + 评分契约 + 链 bump。
+6. **普适每消费者 payload 门(M1″)+ 校验器升级**:每次正向 LLM 调用前从密封元数据
+   注册表**递归构造+校验完整序列化 payload**(每卡/键/嵌套/别名、每条 F/FS/FB/FD/T/N/
+   NF/NFC/M/MF/MS);每个动态可见项解析到恰一带 `factor_positive` 注册项,否则物理
+   省略/硬失败;静态节头不得含动态计数/广度/百分位;**发布 M01-M16 逐 ID 分类**
+   (M03/M04/M09/M10/M14/M15 → attention_only,移出正向席 market_context);封存逐
+   消费者 payload+注册表哈希;attention_only ID 入 factor_scores **硬失败**;证据独占
+   **全局**跨 factor+horizon+penalty;D7 dimension-scoped + evidence_group 防一事件四
+   贡献;四席全测(真实卡键/嵌套别名/未注册动态节头)。
+7. **horizon scorecard = 版本化 opt-in schema(M2″)**:评分契约加 `scorecard_schema_id`;
+   默认 `c16_v1` **不变、拒所有 horizon 字段**(冻结 MVP 契约不松);另 opt-in
+   `c16_news_horizon_v1`(仅 news 席):typed `horizon_theses`+`horizon_factor_scores`、
+   `(name,horizon)` 笛卡尔精确覆盖、独立 `compute_news_final_by_horizon`、**复用**既有
+   bool/有限数/OverflowError/safe-repr/[0,5] 守卫、证据独占跨所有集合、钉死全局分·罚分
+   如何进各 horizon final+舍入、bear schema 版本化 `(seat,dimension,horizon|null)`;每
+   论点必填**当前最强反证**接地字段(D3);产 `news_final_by_horizon`(无标量 roll-up
+   除非 primary_decision_horizon 入契约)。改 [scorecard.py](../../../src/ai_layer/scorecard.py)
+   **严格附加式**+评分契约+链 bump;**证明 legacy 行为不变、c16_v1 仍拒新字段**。
 8. **prompt 证伪优先**(D3):四席先陈述最强反证再打分;prompt 入 manifest 冻结。
 9. **宏观卡 + MS 暴露行 + 宏观席 + 四席 composite**(§6);§0a 四时间戳链入引擎断言。
-10. **裁判后隔离**:`chief_synthesis`(M2′/D4)在裁判**冻结后**运行,typed
-    `research_summary/allowed_uses={display_only}/consumer={archive,platform}`,数值/
-    动作/排名字段硬失败,**档案校验在无 chief 数据下重算裁判证逐字相等**;
-    `display_flagger`(D5)裁判后独立确定性,数值 judge() 永不收 attention_context_card。
+10. **裁判后隔离 + liveness/封印身份/输入时点(M4″)**:**先冻结+封印+发布权威决策
+    核心工件,再调** `chief_synthesis`/`display_flagger`;其输入 allowlist 仅限
+    cutoff-valid 密封卡/已校验席位·空头/冻结裁判——**绝不含 binding/执行门/fill/收益/
+    任何决策后数据**;各写独立可选附属工件(自带封印+`parent_decision_archive_sha256`);
+    typed `research_summary/allowed_uses={display_only}/consumer={archive,platform}`,
+    数值/动作/排名字段硬失败;`display_flagger`(D5)裁判后独立确定性,数值 judge()
+    永不收 attention_context_card;**回归:chief 成功/失败/超时/畸形/缺席下决策哈希·
+    发布态·成交适格恒等**(逐字重算裁判无 chief 数据)。
 11. **执行门三分离**(B2′/D1):`fill_binding.json` 只含
     `fill_execution_gate_policy_id/hash`+阈值+执行语义;竞价前提交订单条件(前收盘
     派生开盘限价);执行期另写不可变 `fill_execution_gate.json`(binding 哈希/
     observed_at/执行数据哈希/谓词/accepted|fill_gate_rejected),**绝不改 binding**,
     禁用 D+1 全日量,**观察到的开盘价不得既用于决策又据以成交**。
 12. **运行清单对账 + C16b 指纹全集**(§6b/6c 全参数)+ FORWARD_PREREG.md。
-13. **测试(§§6b-6c 穷尽 + M4′ 边界/对抗)**:既有 v1.6 测试全集 + attention_only
+13. **测试(§§6b-6c 穷尽 + M4′/round-9 边界/对抗)**:普适 payload 门四席×真实卡键×
+    嵌套别名×未注册动态节头(M1″;M01-M16 逐 ID 分类断言)/horizon 版本化(c16_v1 拒
+    新字段·legacy 恒等·(name,horizon) 精确覆盖,M2″)/空头注册表授权(伪造 ID·跨卡
+    复用·元数据替换,M3″)/chief liveness(成功·失败·超时·畸形·缺席下决策哈希恒等,
+    M4″)/既有 v1.6 测试全集 + attention_only
     payload 序列化断言 + 语义计数行分类 + 不可变快照(既有快照改写=0)+ 执行三分离
     (无开盘价 lookahead)+ horizon exact-once/全局独占 + chief 无 chief 重算相等 +
     display_flagger 不入 judge + D6 冻结分母 + D7 属性作用域(一事件四贡献=0)+
