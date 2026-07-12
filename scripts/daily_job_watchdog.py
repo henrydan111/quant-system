@@ -39,51 +39,71 @@ def _alert(msg: str) -> None:
 
 def main() -> int:
     from data_infra.pipeline.update_daily_data import resolve_last_complete_session
-    from data_infra.pipeline.daily_ops import compute_contiguous_watermark, manifest_set_digest
+    from data_infra.pipeline.daily_ops import (compute_contiguous_watermark, manifest_set_digest,
+                                               provider_floor, ProviderFloorError, read_attempt)
     ref_dir = str(PROJECT_ROOT / "data" / "reference")
-    cal = PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt"
-    if not cal.exists() or not cal.read_text(encoding="utf-8").split():
-        _alert("watchdog: provider calendar missing/empty — cannot establish floor")
+    logs = str(LOGS_DIR)
+    try:  # SAME attested floor the daily job uses (GPT REWORK-5 M2.4), not a raw day.txt read
+        floor = provider_floor(PROJECT_ROOT, ref_dir)
+    except ProviderFloorError as exc:
+        _alert(f"watchdog: provider floor attestation failed: {exc}")
         return 1
-    floor = cal.read_text(encoding="utf-8").split()[-1].replace("-", "")
     try:
         expected = resolve_last_complete_session(ref_dir)
     except (SystemExit, Exception) as exc:  # noqa: BLE001 — a missing/corrupt calendar is alert-worthy
         _alert(f"watchdog: cannot resolve last complete session: {exc}")
         return 1
 
-    # Recompute the contiguous watermark PURELY (a monitor must not mutate progress state — GPT M2):
-    # validates every session in (floor, expected], not just one heartbeat date.
-    watermark = compute_contiguous_watermark(ref_dir, str(LOGS_DIR), expected, floor)
+    if floor > expected:  # provider calendar ahead of reality -> poisoned/misbuilt
+        _alert(f"watchdog: provider floor {floor} is AHEAD of the last complete session {expected} "
+               f"(poisoned/misbuilt provider calendar)")
+        return 1
+    if floor == expected:  # provider current (e.g. just after a monthly publish) -> nothing to backfill
+        af = LOGS_DIR / f"daily_job_alert_{_cst_date()}.flag"
+        if af.exists():
+            af.unlink()
+        print(f"watchdog OK: provider floor {floor} == last complete session; nothing to backfill")
+        return 0
+
+    # floor < expected: the daily job MUST have backfilled (floor, expected]. Recompute the contiguous
+    # watermark PURELY (a monitor must not mutate progress state — GPT M2).
+    watermark = compute_contiguous_watermark(ref_dir, logs, expected, floor)
     if watermark != expected:
         _alert(f"watchdog: daily job STALE/INCOMPLETE - contiguous watermark {watermark} != expected "
                f"{expected} (missed/failed/gap in (provider_floor {floor}, {expected}])")
         return 1
 
     # Complete manifests are necessary but NOT sufficient: raw+manifests can succeed while run_daily_qa
-    # FAILS, in which case the orchestrator withholds the QA-bound heartbeat and writes an alert. The
-    # watchdog must therefore ALSO require a heartbeat proving QA passed for THIS target/floor + the
-    # exact manifest set — else it would green a QA-failed run and clear that alert (GPT M2).
+    # FAILS. The success certificate must belong to the LATEST attempt (start_attempt deletes a prior
+    # heartbeat), be qa_ok, and match this target/floor/manifest-set — else a stale PASS would green a
+    # later FAILED run (GPT REWORK-5 M2).
+    attempt = read_attempt(logs)
+    if not attempt:
+        _alert(f"watchdog: manifests complete to {expected} but NO attempt record — cannot confirm a run.")
+        return 1
     if not HEARTBEAT.exists():
-        _alert(f"watchdog: manifests complete to {expected} but NO QA-bound heartbeat — the daily run's "
-               f"QA did not pass (or it never wrote a heartbeat). Holding alert.")
+        _alert(f"watchdog: latest attempt {attempt.get('attempt_id')} has NO QA-bound heartbeat — the "
+               f"daily run's QA did not pass (or it never certified). Holding alert.")
         return 1
     try:
         hb = json.loads(HEARTBEAT.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 — unreadable heartbeat is not proof of a QA pass
         _alert(f"watchdog: heartbeat unreadable ({exc}) — cannot confirm QA; holding alert.")
         return 1
-    want_digest = manifest_set_digest(ref_dir, str(LOGS_DIR), expected, floor)
-    if not (hb.get("qa_ok") is True and str(hb.get("completed_session")) == expected
-            and str(hb.get("floor")) == floor and str(hb.get("manifest_digest")) == want_digest):
-        _alert(f"watchdog: heartbeat does not certify this run (qa_ok={hb.get('qa_ok')} "
-               f"completed={hb.get('completed_session')} floor={hb.get('floor')} vs expected {expected}/"
-               f"{floor}, digest {hb.get('manifest_digest')} vs {want_digest}) — holding alert.")
+    want_digest = manifest_set_digest(ref_dir, logs, expected, floor)
+    if not (str(hb.get("attempt_id")) == str(attempt.get("attempt_id")) and hb.get("qa_ok") is True
+            and str(hb.get("completed_session")) == expected and str(hb.get("floor")) == floor
+            and str(hb.get("manifest_digest")) == want_digest):
+        _alert(f"watchdog: heartbeat does not certify the latest attempt (hb_attempt="
+               f"{hb.get('attempt_id')} vs {attempt.get('attempt_id')}, qa_ok={hb.get('qa_ok')} "
+               f"completed={hb.get('completed_session')}/{expected} floor={hb.get('floor')}/{floor}) — "
+               f"holding alert.")
         return 1
     af = LOGS_DIR / f"daily_job_alert_{_cst_date()}.flag"  # clear our own alert only on a QA-proven run
     if af.exists():
         af.unlink()
-    print(f"watchdog OK: contiguous watermark {watermark} == expected {expected}, QA-bound heartbeat verified")
+    print(f"watchdog OK: contiguous watermark {watermark} == expected {expected}, latest-attempt "
+          f"QA-bound heartbeat verified")
     return 0
 
 

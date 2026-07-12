@@ -102,27 +102,60 @@ def _register(task_name: str, xml_str: str, user: str | None = None) -> int:
         os.remove(path)
 
 
-def _export_task(task_name: str) -> str | None:
-    """The task's current XML definition, or None if it does not exist — captured BEFORE mutating so a
-    pre-existing WORKING task can be RESTORED (not blindly deleted) if the pair install half-fails."""
-    r = subprocess.run(["schtasks", "/Query", "/TN", task_name, "/XML"],
-                       capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+ABSENT, PRESENT, QUERY_FAILED = "ABSENT", "PRESENT", "QUERY_FAILED"
 
 
-def _restore_task(task_name: str, prev_xml: str | None, user: str | None) -> None:
-    """Roll a task back to its PREVIOUS definition (GPT M5): if it did not pre-exist, delete the one we
-    just created; if it did, re-create it from the captured XML. If the restore itself fails (e.g. a
-    Password task's creds must be re-entered), persist the backup so the operator can restore manually."""
-    if prev_xml is None:
+def _task_exists(task_name: str):
+    """True/False if the task is / isn't registered; None if the QUERY ITSELF failed (access-denied /
+    RPC / transient). Uses LIST membership rather than string-matching a localized 'not found' message —
+    a Chinese-Windows error string can't be relied on to tell ABSENT from a real failure (GPT M5)."""
+    r = subprocess.run(["schtasks", "/Query", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    names = {ln.split(",")[0].strip().strip('"').lstrip("\\")
+             for ln in r.stdout.splitlines() if ln.strip()}
+    return task_name in names
+
+
+def _export_task(task_name: str) -> tuple[str, str | None]:
+    """(state, xml) captured BEFORE mutating: ABSENT / (PRESENT, xml) / QUERY_FAILED. QUERY_FAILED must
+    NOT be conflated with ABSENT — a blind rollback would then DELETE a task that actually exists (GPT
+    REWORK-5 M5). The caller aborts before any mutation on QUERY_FAILED."""
+    exists = _task_exists(task_name)
+    if exists is None:
+        return QUERY_FAILED, None
+    if not exists:
+        return ABSENT, None
+    r = subprocess.run(["schtasks", "/Query", "/TN", task_name, "/XML"], capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip():
+        return PRESENT, r.stdout
+    return QUERY_FAILED, None
+
+
+def _restore_task(task_name: str, prev_state: str, prev_xml: str | None, user: str | None) -> bool:
+    """Roll a task back to its PREVIOUS state (GPT M5). ABSENT -> delete the one we just created.
+    PRESENT -> re-create from the captured XML. Returns True on success. A Password-logon prev-task
+    cannot be faithfully recreated without its OLD credentials (the exported XML carries no password),
+    so that is a DISTINCT fatal restore-failure, not a silent success."""
+    if prev_state == ABSENT:
         subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"])
-        return
-    if _register(task_name, prev_xml, user) != 0:
+        return True
+    if prev_xml is not None and "<LogonType>Password</LogonType>" in prev_xml and not user:
         backup = PROJECT_ROOT / "logs" / f"{task_name}.restore_backup.xml"
         backup.parent.mkdir(exist_ok=True)
         backup.write_text(prev_xml, encoding="utf-16")
-        print(f"WARNING: could not auto-restore {task_name}; its previous definition is saved at "
-              f"{backup} — restore it manually (schtasks /Create /XML ...).", file=sys.stderr)
+        print(f"FATAL: {task_name} was a Password-logon task; its old credentials are required to "
+              f"restore it and were not supplied. Previous definition saved at {backup} — restore "
+              f"manually with the old principal.", file=sys.stderr)
+        return False
+    if _register(task_name, prev_xml, user) == 0:
+        return True
+    backup = PROJECT_ROOT / "logs" / f"{task_name}.restore_backup.xml"
+    backup.parent.mkdir(exist_ok=True)
+    backup.write_text(prev_xml or "", encoding="utf-16")
+    print(f"FATAL: could not auto-restore {task_name}; its previous definition is saved at {backup} — "
+          f"restore it manually (schtasks /Create /XML ...).", file=sys.stderr)
+    return False
 
 
 def main() -> int:
@@ -161,15 +194,25 @@ def main() -> int:
                   "console; no TTY detected. Run --register from a console.", file=sys.stderr)
             return 2
         # Capture BOTH current definitions BEFORE mutating (M5): /Create /F may OVERWRITE an existing
-        # task, so on a half-failed pair install we must restore the previous one, never leave the pair
-        # half-installed AND never delete a task that was already working.
-        prev_daily = _export_task(DAILY_TASK)
+        # task, so on a half-failed pair install we must restore the previous one — never leave the pair
+        # half-installed, never delete a task that was already working. ABORT before ANY mutation if the
+        # query itself failed (a blind rollback on a mis-read "absent" would delete a live task).
+        daily_state, prev_daily = _export_task(DAILY_TASK)
+        wd_state, _prev_wd = _export_task(WATCHDOG_TASK)
+        for nm, st in ((DAILY_TASK, daily_state), (WATCHDOG_TASK, wd_state)):
+            if st == QUERY_FAILED:
+                print(f"ERROR: could not query the existing task {nm} (access-denied/transient). "
+                      f"Refusing to mutate — a blind rollback could delete a working task.", file=sys.stderr)
+                return 2
         rc = _register(DAILY_TASK, daily_xml, args.user)
         if rc != 0:  # /Create failed atomically -> a pre-existing daily task is untouched
             return rc
         rc2 = _register(WATCHDOG_TASK, watchdog_xml, args.user)
         if rc2 != 0:
-            _restore_task(DAILY_TASK, prev_daily, args.user)  # restore prior def / delete if it was new
+            if not _restore_task(DAILY_TASK, daily_state, prev_daily, args.user):
+                print("FATAL: watchdog install failed AND the daily task could not be restored — "
+                      "manual intervention required.", file=sys.stderr)
+                return 3
             return rc2
         return 0
 

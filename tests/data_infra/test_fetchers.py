@@ -95,8 +95,9 @@ def test_locked_pro_routes_calls_and_refuses_raw_escape(tmp_path, monkeypatch):
     # cross-process lock (spaced_call) AND leaves no unlocked handle — `fetcher.pro._real` must NOT
     # return the raw client (a bare __getattr__ would leak it; __getattribute__ + __slots__ closes it).
     import pytest
+    from data_infra import tushare_lock
     from data_infra.fetchers import _LockedPro
-    monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
 
     captured = []
 

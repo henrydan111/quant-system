@@ -7,6 +7,7 @@ import types
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from data_infra.pipeline.update_daily_data import (  # noqa: E402
     DailyDataUpdater, resolve_last_complete_session, _validate_trade_cal)
 from data_infra.pipeline import daily_ops  # noqa: E402
+from data_infra import tushare_lock  # noqa: E402 — lock-dir injected via module attr, not an env var
 
 
 def _stub_updater(ref_dir):
@@ -45,6 +47,21 @@ def test_update_for_date_beyond_coverage_is_error(tmp_path):
     assert res["is_trading_day"] is True and res["errors"]
 
 
+def _holder_code(lockdir, marker):
+    # a spawned holder injects the lock dir via the MODULE ATTRIBUTE (not an env var — the env override
+    # is removed), acquires raw_maintenance_lock, and holds it while sleeping.
+    return (
+        "import sys, time, pathlib\n"
+        f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
+        "import data_infra.tushare_lock as tl\n"
+        f"tl._LOCK_DIR = pathlib.Path(r'{lockdir}')\n"
+        "from data_infra.tushare_lock import raw_maintenance_lock\n"
+        "with raw_maintenance_lock():\n"
+        f"    open(r'{marker}', 'w').close()\n"
+        "    time.sleep(30)\n"
+    )
+
+
 def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatch):
     # GPT B1: the lock is KERNEL-held (filelock) — a second acquirer blocks while the first holds it,
     # and the OS releases it when the holder process DIES (no age-based stealing). A subprocess holds
@@ -53,69 +70,49 @@ def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatc
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setenv("QUANT_LOCK_DIR", str(lockdir))
-    holder_code = (
-        "import os, sys, time\n"
-        f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
-        f"os.environ['QUANT_LOCK_DIR'] = r'{lockdir}'\n"
-        "from data_infra.tushare_lock import raw_maintenance_lock\n"
-        "with raw_maintenance_lock():\n"
-        f"    open(r'{tmp_path / 'acq'}', 'w').close()\n"
-        "    time.sleep(30)\n"
-    )
-    holder = _sp.Popen([sys.executable, "-c", holder_code])
+    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # inject via attr, not env
+    holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq")])
     try:
         for _ in range(200):  # wait until the holder has acquired
             if (tmp_path / "acq").exists():
                 break
             _time.sleep(0.05)
         assert (tmp_path / "acq").exists(), "holder never acquired"
-        from data_infra.tushare_lock import raw_maintenance_lock
         with pytest.raises(filelock.Timeout):
-            with raw_maintenance_lock(timeout=0.3):
+            with tushare_lock.raw_maintenance_lock(timeout=0.3):
                 pass
     finally:
         holder.kill()
         holder.wait()
-    with raw_maintenance_lock(timeout=5):  # holder died -> OS released it -> acquirable (not age-based)
+    with tushare_lock.raw_maintenance_lock(timeout=5):  # holder died -> OS released it (not age-based)
         pass
 
 
-def test_raw_maintenance_lock_no_env_bypass(tmp_path, monkeypatch):
-    # GPT REWORK-4 Blocker 1: the env-boolean reentrancy is REMOVED — a forged QUANT_RAW_MAINT_LOCK_HELD
-    # must NOT grant entry while a real holder is active (the forgeable bypass + orphan-child overlap it
-    # enabled are gone). A live subprocess holds the kernel lock; the parent, WITH the env var forged,
-    # still blocks; after the holder dies the OS releases the lock and the parent acquires.
+def test_raw_maintenance_lock_namespace_not_env_forgeable(tmp_path, monkeypatch):
+    # GPT REWORK-5 Blocker 1: the lock namespace must NOT be forgeable via an ambient env var. A live
+    # subprocess holds the lock; the parent — even with QUANT_LOCK_DIR pointed at a DIFFERENT directory
+    # (the old bypass) — must still contend on the SAME immutable lock and time out (the env is ignored).
     import subprocess as _sp
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setenv("QUANT_LOCK_DIR", str(lockdir))
-    holder_code = (
-        "import os, sys, time\n"
-        f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
-        f"os.environ['QUANT_LOCK_DIR'] = r'{lockdir}'\n"
-        "from data_infra.tushare_lock import raw_maintenance_lock\n"
-        "with raw_maintenance_lock():\n"
-        f"    open(r'{tmp_path / 'acq2'}', 'w').close()\n"
-        "    time.sleep(30)\n"
-    )
-    holder = _sp.Popen([sys.executable, "-c", holder_code])
+    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # the real (injected) identity
+    holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq2")])
     try:
         for _ in range(200):
             if (tmp_path / "acq2").exists():
                 break
             _time.sleep(0.05)
         assert (tmp_path / "acq2").exists(), "holder never acquired"
-        from data_infra.tushare_lock import raw_maintenance_lock
-        monkeypatch.setenv("QUANT_RAW_MAINT_LOCK_HELD", "1")  # FORGED — must be ignored now
+        # FORGE a different namespace via the (now-ignored) env var — must NOT grant a second lock
+        monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "ALT_namespace"))
         with pytest.raises(filelock.Timeout):
-            with raw_maintenance_lock(timeout=0.3):
+            with tushare_lock.raw_maintenance_lock(timeout=0.3):
                 pass
     finally:
         holder.kill()
         holder.wait()
-    with raw_maintenance_lock(timeout=5):  # holder gone -> real lock free regardless of the forged env
+    with tushare_lock.raw_maintenance_lock(timeout=5):  # holder gone -> real lock free
         pass
 
 
@@ -143,69 +140,96 @@ def _provider_scaffold(tmp_path, tail_iso="2026-07-01", attested_iso="2026-07-01
     return str(ref)
 
 
-def test_provider_floor_attestation_fail_closed(tmp_path, monkeypatch):
-    # GPT M4: the daily-job floor must be ATTESTED — day.txt tail == provider_build.json
-    # calendar_end_date AND a real open SSE session. A mismatch / unsorted / future floor fails closed.
-    drj = _load_script("daily_raw_job")
-    monkeypatch.setattr(drj, "PROJECT_ROOT", tmp_path)
+def test_provider_floor_attestation_fail_closed(tmp_path):
+    # GPT M4: the floor must be ATTESTED — day.txt tail == provider_build.json calendar_end_date AND a
+    # real open SSE session. Mismatch / unsorted / future floor fails closed. Shared helper (M2.4).
+    from data_infra.pipeline.daily_ops import provider_floor, ProviderFloorError
     ref = _provider_scaffold(tmp_path)
-    assert drj._provider_floor(ref) == "20260701"  # tail == attested == open session
-    # manifest mismatch (tail 0701 vs attested 0630) -> fail closed
-    _provider_scaffold(tmp_path, attested_iso="2026-06-30")
-    with pytest.raises(SystemExit, match="attested|calendar_end"):
-        drj._provider_floor(ref)
-    # unsorted calendar -> fail closed
-    _provider_scaffold(tmp_path, day_txt="2026-07-01\n2026-06-30\n")
-    with pytest.raises(SystemExit, match="sorted"):
-        drj._provider_floor(ref)
-    # a FUTURE tail not present as an open session in trade_cal -> fail closed (poisoned floor)
+    assert provider_floor(tmp_path, ref) == "20260701"  # tail == attested == open session
+    _provider_scaffold(tmp_path, attested_iso="2026-06-30")  # manifest mismatch
+    with pytest.raises(ProviderFloorError, match="attested|calendar_end"):
+        provider_floor(tmp_path, ref)
+    _provider_scaffold(tmp_path, day_txt="2026-07-01\n2026-06-30\n")  # unsorted
+    with pytest.raises(ProviderFloorError, match="sorted"):
+        provider_floor(tmp_path, ref)
     _provider_scaffold(tmp_path, day_txt="2026-06-30\n2026-07-01\n2099-01-01\n", attested_iso="2099-01-01")
-    with pytest.raises(SystemExit, match="open trading session"):
-        drj._provider_floor(ref)
+    with pytest.raises(ProviderFloorError, match="open trading session"):  # future floor not a real session
+        provider_floor(tmp_path, ref)
 
 
-def test_watchdog_requires_qa_bound_heartbeat(tmp_path, monkeypatch):
-    # GPT M2: complete manifests are NOT sufficient — if run_daily_qa failed the orchestrator withholds
-    # the QA-bound heartbeat + writes an alert; the watchdog must stay RED and NOT clear that alert.
+def test_watchdog_requires_latest_attempt_certified(tmp_path, monkeypatch):
+    # GPT REWORK-5 M2: a stale PASS heartbeat must NOT certify a later FAILED run. The heartbeat must
+    # belong to the LATEST attempt (start_attempt deletes a prior one) and prove qa_ok for this cut.
     import json as _json
     from data_infra.pipeline import daily_ops
     from data_infra.pipeline import update_daily_data as udd
     wd = _load_script("daily_job_watchdog")
     logs = tmp_path / "logs"
     logs.mkdir()
+    ref = _provider_scaffold(tmp_path)  # floor attested to 20260701
     monkeypatch.setattr(wd, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(wd, "LOGS_DIR", logs)
     monkeypatch.setattr(wd, "HEARTBEAT", logs / "daily_job_heartbeat.json")
-    (tmp_path / "data" / "qlib_data" / "calendars").mkdir(parents=True)
-    (tmp_path / "data" / "qlib_data" / "calendars" / "day.txt").write_text("2026-07-01\n", encoding="utf-8")
-    # manifests complete to expected; digest deterministic
-    monkeypatch.setattr(udd, "resolve_last_complete_session", lambda ref_dir: "20260702")
+    monkeypatch.setattr(udd, "resolve_last_complete_session", lambda ref_dir: "20260702")  # floor<expected
     monkeypatch.setattr(daily_ops, "compute_contiguous_watermark", lambda *a, **k: "20260702")
     monkeypatch.setattr(daily_ops, "manifest_set_digest", lambda *a, **k: "DIG")
     alert = logs / f"daily_job_alert_{wd._cst_date()}.flag"
+    daily_ops.start_attempt(str(logs), "ATT1", "20260702")  # attempt exists, heartbeat invalidated
 
-    # A) no heartbeat despite complete manifests -> RED, alert written
+    def _hb(attempt, qa):
+        return {"attempt_id": attempt, "completed_session": "20260702", "floor": "20260701",
+                "qa_ok": qa, "manifest_digest": "DIG"}
+
+    # A) latest attempt has NO heartbeat -> RED
     assert wd.main() == 1 and alert.exists()
-    # B) heartbeat with qa_ok False -> RED (QA did not pass)
-    wd.HEARTBEAT.write_text(_json.dumps({"completed_session": "20260702", "floor": "20260701",
-                                         "qa_ok": False, "manifest_digest": "DIG"}), encoding="utf-8")
+    # B) heartbeat from a STALE attempt (ATT0) -> RED (does not certify the latest attempt)
+    wd.HEARTBEAT.write_text(_json.dumps(_hb("ATT0", True)), encoding="utf-8")
     assert wd.main() == 1
-    # C) full QA-bound heartbeat -> GREEN, alert cleared
-    wd.HEARTBEAT.write_text(_json.dumps({"completed_session": "20260702", "floor": "20260701",
-                                         "qa_ok": True, "manifest_digest": "DIG"}), encoding="utf-8")
+    # C) latest-attempt heartbeat but qa_ok False -> RED
+    wd.HEARTBEAT.write_text(_json.dumps(_hb("ATT1", False)), encoding="utf-8")
+    assert wd.main() == 1
+    # D) latest-attempt, qa_ok True -> GREEN, alert cleared
+    wd.HEARTBEAT.write_text(_json.dumps(_hb("ATT1", True)), encoding="utf-8")
     assert wd.main() == 0 and not alert.exists()
+
+
+def test_watchdog_greens_when_provider_current(tmp_path, monkeypatch):
+    # GPT REWORK-5 M2: floor == expected (provider current, e.g. just after a monthly publish) is green
+    # WITHOUT a heartbeat — there was genuinely nothing to backfill (no false-red period).
+    from data_infra.pipeline import update_daily_data as udd
+    wd = _load_script("daily_job_watchdog")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    ref = _provider_scaffold(tmp_path)  # floor attested to 20260701
+    monkeypatch.setattr(wd, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(wd, "LOGS_DIR", logs)
+    monkeypatch.setattr(wd, "HEARTBEAT", logs / "daily_job_heartbeat.json")
+    monkeypatch.setattr(udd, "resolve_last_complete_session", lambda ref_dir: "20260701")  # == floor
+    (logs / f"daily_job_alert_{wd._cst_date()}.flag").write_text("stale", encoding="utf-8")
+    assert wd.main() == 0 and not (logs / f"daily_job_alert_{wd._cst_date()}.flag").exists()
 
 
 def test_spaced_call_fails_closed_when_state_unwritable(tmp_path, monkeypatch):
     # GPT minor 1: if the shared next-allowed timestamp can't be persisted, spacing must be enforced
     # IN-BAND (sleep under the API lock), never silently dropped to zero.
     import time as _time
-    from data_infra import tushare_lock
-    monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
     monkeypatch.setattr(tushare_lock, "_set_next_allowed", lambda delta: False)  # simulate unwritable
     t0 = _time.time()
     tushare_lock.spaced_call(lambda: "ok", 0.4)
     assert _time.time() - t0 >= 0.35  # it slept in-band rather than returning instantly
+
+
+def test_spaced_call_fails_closed_on_nan_state(tmp_path, monkeypatch):
+    # GPT REWORK-5 minor 1: a state file containing `nan` parses via float() but makes delay>0 False and
+    # fires immediately. isfinite-guard must force the conservative in-band sleep.
+    import time as _time
+    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")
+    (tmp_path / "locks").mkdir(parents=True)
+    tushare_lock._next_allowed_path().write_text("nan")
+    t0 = _time.time()
+    tushare_lock.spaced_call(lambda: "ok", 0.4)
+    assert _time.time() - t0 >= 0.35  # NaN treated as unreadable -> conservative in-band sleep
 
 
 def test_session_status_watermark_and_backlog(tmp_path):
@@ -271,37 +295,61 @@ def test_contiguous_watermark_ignores_poisoned_future_cache(tmp_path):
     assert daily_ops.contiguous_watermark(str(ref), logs, "20260703", "20260701") == "20260701"
 
 
-def test_update_market_data_raises_on_empty_adj_factor(tmp_path):
-    # GPT B3: nonempty daily but EMPTY adj_factor (engine-required) must RAISE MarketDataError and NOT
-    # write the file — an incomplete session can't be committed nor read back as success (no side channel).
-    from data_infra.pipeline.update_daily_data import MarketDataError
+def _daily_frame(codes=("A", "B"), date="20260703"):
+    n = len(codes)
+    return pd.DataFrame({"ts_code": list(codes), "trade_date": [date] * n,
+                         "open": [1.0] * n, "high": [1.1] * n, "low": [0.9] * n, "close": [1.0] * n,
+                         "vol": [100.0] * n, "amount": [1000.0] * n, "pre_close": [1.0] * n})
+
+
+def _market_stub(tmp_path, daily, adj, basic):
     stub = DailyDataUpdater.__new__(DailyDataUpdater)
     stub.market_daily_dir = str(tmp_path / "daily")
-    daily = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703", "20260703"], "close": [1.0, 2.0]})
     stub.fetcher = types.SimpleNamespace(
         fetch_daily_data=lambda trade_date: daily,
-        fetch_fundamentals=lambda trade_date: pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2}),
-        fetch_adj_factor=lambda trade_date: pd.DataFrame())  # empty adj_factor
+        fetch_fundamentals=lambda trade_date: basic,
+        fetch_adj_factor=lambda trade_date: adj)
+    return stub
+
+
+def test_update_market_data_raises_on_empty_adj_factor(tmp_path):
+    # GPT B3: nonempty daily but EMPTY adj_factor (engine-required) must RAISE + NOT write.
+    from data_infra.pipeline.update_daily_data import MarketDataError
+    stub = _market_stub(tmp_path, _daily_frame(),
+                        pd.DataFrame(),  # empty adj
+                        pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "pe": [1.0, 2.0]}))
     with pytest.raises(MarketDataError, match="adj_factor EMPTY"):
         DailyDataUpdater.update_market_data(stub, "20260703")
     assert not (tmp_path / "daily" / "2026" / "daily_20260703.parquet").exists()  # prior preserved
 
 
 def test_update_market_data_commits_when_complete(tmp_path):
-    # complete session (daily + full-coverage adj_factor + daily_basic) -> written, codes returned.
-    stub = DailyDataUpdater.__new__(DailyDataUpdater)
-    stub.market_daily_dir = str(tmp_path / "daily")
-    daily = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703", "20260703"], "close": [1.0, 2.0]})
     adj = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "adj_factor": [1.0, 1.2]})
     basic = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "pe": [10.0, 20.0]})
-    stub.fetcher = types.SimpleNamespace(
-        fetch_daily_data=lambda trade_date: daily,
-        fetch_fundamentals=lambda trade_date: basic,
-        fetch_adj_factor=lambda trade_date: adj)
+    stub = _market_stub(tmp_path, _daily_frame(), adj, basic)
     codes = DailyDataUpdater.update_market_data(stub, "20260703")
     assert codes == {"A", "B"}
     out = pd.read_parquet(tmp_path / "daily" / "2026" / "daily_20260703.parquet")
-    assert out["adj_factor"].notna().all()  # no silent 1.0 hole
+    assert out["adj_factor"].notna().all() and out["pe"].notna().all()  # no hole, real payload
+
+
+def test_update_market_data_m1_probes_rejected(tmp_path):
+    # GPT REWORK-5 M1: the three probes that used to slip through must all RAISE.
+    from data_infra.pipeline.update_daily_data import MarketDataError
+    good_adj = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "adj_factor": [1.0, 1.2]})
+    good_basic = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "pe": [1.0, 2.0]})
+    # (a) wrong-date daily_basic -> merges all-null -> rejected (target-date check)
+    wrong_basic = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260702"] * 2, "pe": [1.0, 2.0]})
+    with pytest.raises(MarketDataError, match="daily_basic .*other trade_dates|daily_basic"):
+        DailyDataUpdater.update_market_data(_market_stub(tmp_path, _daily_frame(), good_adj, wrong_basic), "20260703")
+    # (b) duplicate adj keys -> rejected (natural-key uniqueness)
+    dup_adj = pd.DataFrame({"ts_code": ["A", "A", "B"], "trade_date": ["20260703"] * 3, "adj_factor": [1.0, 1.0, 1.2]})
+    with pytest.raises(MarketDataError, match="duplicate"):
+        DailyDataUpdater.update_market_data(_market_stub(tmp_path, _daily_frame(), dup_adj, good_basic), "20260703")
+    # (c) adj covers only 1 of 2 priced codes (a null row) -> rejected (100% coverage)
+    partial_adj = pd.DataFrame({"ts_code": ["A", "B"], "trade_date": ["20260703"] * 2, "adj_factor": [1.0, np.nan]})
+    with pytest.raises(MarketDataError, match="100%|positive adj_factor"):
+        DailyDataUpdater.update_market_data(_market_stub(tmp_path, _daily_frame(), partial_adj, good_basic), "20260703")
 
 
 def test_validate_trade_cal_rejects_malformed():

@@ -21,21 +21,28 @@ re-acquires it (see scripts/monthly_calendar_bump.py).
 """
 from __future__ import annotations
 
+import math
 import os
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from filelock import FileLock, Timeout  # noqa: F401 — Timeout re-exported for callers' soft-skip
 
-# project-root/logs/locks by default; QUANT_LOCK_DIR overrides it (tests, or a shared-volume deploy).
-_DEFAULT_LOCK_DIR = Path(__file__).resolve().parents[2] / "logs" / "locks"
+# ONE immutable lock identity for this workspace — a fixed absolute path under the project root, NOT
+# overridable by an ambient environment variable. A per-process `QUANT_LOCK_DIR` override previously
+# let a second process select a DIFFERENT namespace and acquire immediately while a real holder was
+# live (two raw writers / two parallel Tushare callers — GPT REWORK-5 Blocker 1). Tests INJECT
+# isolation by monkeypatching this module attribute in-process (or reassigning it inside a spawned
+# holder's own code), never via a production-readable env var. A shared-volume deploy that needs a
+# different directory must resolve it centrally (config), not from ambient per-process state.
+_LOCK_DIR = Path(__file__).resolve().parents[2] / "logs" / "locks"
 
 
 def _lock_dir() -> Path:
-    d = Path(os.environ.get("QUANT_LOCK_DIR", str(_DEFAULT_LOCK_DIR)))
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    return _LOCK_DIR
 
 
 def _filelock(name: str, timeout: float) -> FileLock:
@@ -65,21 +72,36 @@ def _next_allowed_path() -> Path:
 
 def _read_next_allowed() -> tuple[float | None, bool]:
     """(value, ok). ABSENT -> (None, True): legitimately the first call, no wait. EXISTS-but-unreadable
-    -> (None, False): the caller must be CONSERVATIVE (fail closed), not skip spacing (GPT minor 1)."""
+    OR a non-finite / out-of-range value -> (None, False): the caller must be CONSERVATIVE (fail closed),
+    not skip spacing. A state file containing `nan` parses via float() but makes `delay>0` False and lets
+    the call fire immediately — so require math.isfinite and a sane timestamp window (GPT minor 1)."""
     p = _next_allowed_path()
     if not p.exists():
         return None, True
     try:
-        return float(p.read_text()), True
+        v = float(p.read_text())
     except Exception:  # noqa: BLE001 — corrupt/locked -> unreadable, force conservative spacing
         return None, False
+    now = time.time()
+    if not math.isfinite(v) or v < 0 or v > now + 86400:  # NaN/inf/negative/absurd-future -> conservative
+        return None, False
+    return v, True
 
 
 def _set_next_allowed(delta: float) -> bool:
-    """Record the next-allowed timestamp. Returns False if it could not be persisted, so the caller
-    enforces the spacing IN-BAND (sleep while holding the API lock) rather than silently dropping it."""
+    """Record the next-allowed timestamp ATOMICALLY (temp + replace). Returns False if it could not be
+    persisted, so the caller enforces the spacing IN-BAND (sleep while holding the API lock) rather than
+    silently dropping it (GPT minor 1)."""
     try:
-        _next_allowed_path().write_text(str(time.time() + max(0.0, delta)))
+        d = _lock_dir()
+        fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".next_allowed.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(str(time.time() + max(0.0, delta)))
+            os.replace(tmp, str(_next_allowed_path()))
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
         return True
     except Exception:  # noqa: BLE001
         return False

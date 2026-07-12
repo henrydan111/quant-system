@@ -14,11 +14,73 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pandas as pd
 
 STATUS_SUBDIR = "session_status"
 WATERMARK_FILE = "daily_watermark.json"
+ATTEMPT_FILE = "daily_job_attempt.json"
+HEARTBEAT_FILE = "daily_job_heartbeat.json"
+
+
+class ProviderFloorError(RuntimeError):
+    """The provider floor could not be ATTESTED (missing/malformed/unsorted calendar, tail != the
+    provider_build.json calendar_end_date, or a floor that is not a real open SSE session)."""
+
+
+def provider_floor(project_root, ref_dir: str) -> str:
+    """The monthly-published provider boundary, ATTESTED (GPT M4, shared by the daily job AND the
+    watchdog — GPT REWORK-5 M2.4). FAIL CLOSED unless data/qlib_data/calendars/day.txt is present,
+    non-empty, 8-digit, sorted ascending, its tail EQUALS provider_build.json provider.calendar_end_date,
+    AND that tail is a real open SSE session in trade_cal. Raises ProviderFloorError."""
+    project_root = str(project_root)
+    cal = os.path.join(project_root, "data", "qlib_data", "calendars", "day.txt")
+    if not os.path.exists(cal):
+        raise ProviderFloorError("provider calendar (day.txt) missing — failing closed")
+    with open(cal, encoding="utf-8") as fh:
+        days = [d.replace("-", "").strip() for d in fh.read().split()]
+    if not days:
+        raise ProviderFloorError("provider calendar is EMPTY — failing closed")
+    if not all(re.fullmatch(r"\d{8}", d) for d in days):
+        raise ProviderFloorError("provider calendar has malformed (non-8-digit) dates — failing closed")
+    if days != sorted(days):
+        raise ProviderFloorError("provider calendar is not sorted ascending — failing closed")
+    floor = days[-1]
+    manifest = os.path.join(project_root, "data", "qlib_data", "metadata", "provider_build.json")
+    if not os.path.exists(manifest):
+        raise ProviderFloorError("provider_build.json missing — cannot attest the floor; failing closed")
+    with open(manifest, encoding="utf-8") as fh:
+        attested = str(json.load(fh).get("provider", {}).get("calendar_end_date", "")).replace("-", "").strip()
+    if attested != floor:
+        raise ProviderFloorError(f"provider calendar tail {floor} != attested calendar_end_date "
+                                 f"{attested} (provider_build.json) — unattested/poisoned floor")
+    tc = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
+    opens = set(tc.loc[tc["is_open"] == 1, "cal_date"].astype(str).str.replace("-", "", regex=False))
+    if floor not in opens:
+        raise ProviderFloorError(f"provider floor {floor} is not an open trading session in trade_cal")
+    return floor
+
+
+def start_attempt(logs_dir: str, attempt_id: str, target: str) -> None:
+    """Record a new run attempt AND invalidate any prior success certificate BEFORE any raw/reference
+    mutation (GPT REWORK-5 M2): a heartbeat left from an earlier PASS must not certify this run if it
+    later FAILS. The heartbeat is re-written only if this attempt reaches watermark==target AND qa_ok."""
+    hb = os.path.join(logs_dir, HEARTBEAT_FILE)
+    if os.path.exists(hb):
+        os.remove(hb)  # invalidate the previous certificate
+    _atomic_json(os.path.join(logs_dir, ATTEMPT_FILE), {"attempt_id": attempt_id, "target": target})
+
+
+def read_attempt(logs_dir: str) -> dict | None:
+    p = os.path.join(logs_dir, ATTEMPT_FILE)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _status_dir(logs_dir: str) -> str:

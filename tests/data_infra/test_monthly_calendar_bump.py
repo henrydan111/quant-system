@@ -22,6 +22,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from src.research_orchestrator.calendar_policy import CalendarPolicy, resolve_spent_oos_boundary  # noqa: E402
 
 
+def _write_valid_cal(path, cal_dates):
+    # a VALID SSE calendar with a proper pretrade_date chain (first row blank; each open day -> the
+    # prior open day) so it passes _validate_trade_cal, which the bump's _open_trading_days now enforces.
+    cal_dates = [str(d) for d in cal_dates]
+    pretrade = [""] + cal_dates[:-1]
+    pd.DataFrame({"exchange": "SSE", "cal_date": cal_dates, "is_open": 1,
+                  "pretrade_date": pretrade}).to_parquet(path)
+
+
 # ── M1: determine_target_end ─────────────────────────────────────────────────
 def _ready(ok: bool, **ev):
     return (ok, {"daily_rows": ev.get("daily_rows", 5000), **ev})
@@ -129,8 +138,7 @@ def _mk_fresh_window(tmp_path, ts_codes=("000001.SZ", "000002.SZ")):
     """Scaffold a fresh-window provider: trade_cal + daily raw files carrying ts_codes."""
     (tmp_path / "data" / "reference").mkdir(parents=True)
     days = pd.bdate_range("2026-03-02", "2026-03-06")
-    pd.DataFrame({"exchange": "SSE", "cal_date": days.strftime("%Y%m%d"), "is_open": 1,
-                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    _write_valid_cal(tmp_path / "data" / "reference" / "trade_cal.parquet", days.strftime("%Y%m%d"))
     daily_dir = tmp_path / "data" / "market" / "daily" / "2026"
     daily_dir.mkdir(parents=True)
     for d in days.strftime("%Y%m%d"):
@@ -299,8 +307,7 @@ def test_daily_universe_partial_above_floor_caught(tmp_path, monkeypatch):
     monkeypatch.setattr(mcb, "DAILY_BASELINE_WINDOW", 5)
     days = ["20260622", "20260623", "20260624", "20260625", "20260626", "20260629"]
     (tmp_path / "data" / "reference").mkdir(parents=True)
-    pd.DataFrame({"exchange": "SSE", "cal_date": days, "is_open": 1,
-                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    _write_valid_cal(tmp_path / "data" / "reference" / "trade_cal.parquet", days)
     for d in days[:-1]:                                   # prior sessions: full universe of 20
         _write_endpoint(tmp_path, "market/daily", "daily", d, 20)
     _write_endpoint(tmp_path, "market/daily", "daily", days[-1], 12)  # target: partial (>= floor 5)
@@ -314,8 +321,7 @@ def test_daily_universe_partial_above_floor_caught(tmp_path, monkeypatch):
 
 def _mk_continuity_scaffold(tmp_path, *, sb_rows, susp_rows, prev_codes, prev="20260702", today="20260703"):
     (tmp_path / "data" / "reference").mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"exchange": "SSE", "cal_date": [prev, today], "is_open": 1,
-                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    _write_valid_cal(tmp_path / "data" / "reference" / "trade_cal.parquet", [prev, today])
     pd.DataFrame(sb_rows).to_parquet(tmp_path / "data" / "reference" / "stock_basic.parquet")
     sd = tmp_path / "data" / "market" / "suspend_d" / today[:4]
     sd.mkdir(parents=True, exist_ok=True)
@@ -454,8 +460,7 @@ def test_assert_endpoints_complete_range_chains_from_anchor(tmp_path, monkeypatc
     monkeypatch.setattr(mcb, "MIN_ENDPOINT_ROWS", 3)
     monkeypatch.setattr(mcb, "DAILY_BASELINE_FLOOR", 0.5)  # let the continuity be the failing check
     (tmp_path / "data" / "reference").mkdir(parents=True)
-    pd.DataFrame({"exchange": "SSE", "cal_date": ["20260701", "20260702"], "is_open": 1,
-                  "pretrade_date": ""}).to_parquet(tmp_path / "data" / "reference" / "trade_cal.parquet")
+    _write_valid_cal(tmp_path / "data" / "reference" / "trade_cal.parquet", ["20260701", "20260702"])
     pd.DataFrame({"ts_code": ["A.SZ", "B.SZ", "C.SZ", "D.SZ"], "list_date": ["20200101"] * 4,
                   "delist_date": [None] * 4}).to_parquet(tmp_path / "data" / "reference" / "stock_basic.parquet")
     sd = tmp_path / "data" / "market" / "suspend_d" / "2026"
@@ -476,18 +481,26 @@ def test_assert_endpoints_complete_range_chains_from_anchor(tmp_path, monkeypatc
     assert ok is True, ev
 
 
-def test_raw_input_manifest_content_hash_detects_byte_swap(tmp_path, monkeypatch):
-    # GPT M3: the raw-input manifest is a full-CONTENT SHA-256 over the fresh-window per-date files, so
-    # a SAME-SIZE byte-swap changes the root (the old name+size+int-mtime digest collided on exactly
-    # that). A missing file is recorded as MISSING, not silently skipped.
-    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mcb, "_open_trading_days", lambda upto=None: ["20260301"])
-    f = tmp_path / "data" / "market" / "daily" / "2026" / "daily_20260301.parquet"
-    f.parent.mkdir(parents=True)
-    f.write_bytes(b"AAAA")
-    m1 = mcb._raw_input_manifest("20260228", "20260301")
-    f.write_bytes(b"BBBB")  # same byte length, different content
-    m2 = mcb._raw_input_manifest("20260228", "20260301")
-    assert m1["algo"] == "sha256" and m1["file_count"] >= 1
-    assert m1["root"] != m2["root"], "content hash must catch a same-size byte swap"
-    assert any(r["sha256"] == "MISSING" for r in m2["files"]), "absent per-date file recorded as MISSING"
+def test_full_raw_manifest_covers_readset_and_detects_mutation(tmp_path):
+    # GPT REWORK-5 Blocker 3: the manifest must cover the builder's FULL read set (every DATASET_SPECS
+    # dataset + reference), not a 6-dataset subset — mutating an `income` file (which the old manifest
+    # ignored) must change the root AND fail verify-before-publish. Full-CONTENT SHA-256, so a same-size
+    # byte-swap is caught.
+    data_root = tmp_path / "data"
+    income = data_root / "fundamentals" / "income" / "income_2020.parquet"
+    income.parent.mkdir(parents=True)
+    income.write_bytes(b"AAAA")
+    (data_root / "reference").mkdir(parents=True)
+    (data_root / "reference" / "trade_cal.parquet").write_bytes(b"CAL0")
+
+    m1 = mcb._full_raw_manifest(data_root)
+    assert m1["algo"] == "sha256" and m1["file_count"] >= 2
+    assert any(r["path"].startswith("fundamentals/income/") for r in m1["files"]), "income must be covered"
+    ok, _ = mcb._verify_raw_manifest(m1, data_root)
+    assert ok  # unchanged -> verifies
+
+    income.write_bytes(b"BBBB")  # same size, different content
+    m2 = mcb._full_raw_manifest(data_root)
+    assert m1["root"] != m2["root"], "a mutated income file MUST change the manifest root"
+    bad, why = mcb._verify_raw_manifest(m1, data_root)
+    assert not bad and "income" in why  # verify-before-publish catches the out-of-band mutation

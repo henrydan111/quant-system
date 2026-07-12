@@ -22,6 +22,9 @@ ALLOWED = {ROOT / "src" / "data_infra" / "fetchers" / "__init__.py"}
 SCAN_DIRS = [ROOT / "src", ROOT / "scripts", ROOT / "workspace" / "scripts"]
 _RAW_CTORS = {"pro_api", "DataApi"}
 _RAW_SLOTS = {"_real", "_base_sleep"}
+# raw-slot + closure names that, passed as a string to a getattr-like call, reach the wrapped client
+# (object.__getattribute__(x, "_real") / getter(x, "_real") / x.__getattribute__("__closure__"))
+_INTROSPECT_STRINGS = _RAW_SLOTS | {"__closure__"}
 
 
 def _violations(path: Path) -> list[tuple[int, str]]:
@@ -31,25 +34,30 @@ def _violations(path: Path) -> list[tuple[int, str]]:
         return []
     out = []
     for node in ast.walk(tree):
-        # 1. raw-client construction: pro_api(...) / DataApi(...) as attribute or bare name
-        if isinstance(node, ast.Call):
+        # 1. ANY tushare import outside the fetcher. The fetcher is the ONLY legitimate importer, so a
+        # blanket ban defeats aliasing the lint can't otherwise follow (`import tushare as ts; make =
+        # ts.pro_api; make()`) — GPT REWORK-5 M4.
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "tushare" or alias.name.startswith("tushare."):
+                    out.append((node.lineno, f"`import {alias.name}` outside the fetcher — Tushare may "
+                                             f"only be imported by data_infra/fetchers/__init__.py"))
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "tushare":
+            out.append((node.lineno, "`from tushare import ...` outside the fetcher — Tushare may only "
+                                     "be imported by data_infra/fetchers/__init__.py"))
+        # 2. raw-client construction: pro_api(...) / DataApi(...) as attribute or bare name
+        elif isinstance(node, ast.Call):
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr in _RAW_CTORS:
                 out.append((node.lineno, f"{f.attr}() constructs a raw Tushare client (bypasses the proxy)"))
             elif isinstance(f, ast.Name) and f.id in _RAW_CTORS:
                 out.append((node.lineno, f"{f.id}() constructs a raw Tushare client (bypasses the proxy)"))
-            # 2. object.__getattribute__(x, "_real") raw-slot introspection
-            elif isinstance(f, ast.Attribute) and f.attr == "__getattribute__":
-                for a in node.args:
-                    if isinstance(a, ast.Constant) and a.value in _RAW_SLOTS:
-                        out.append((node.lineno, f"object.__getattribute__(..., {a.value!r}) reaches the "
-                                                 f"raw client behind the proxy"))
-        # 3. from tushare import pro_api|DataApi (catches aliasing: `pro_api as make; make()`)
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "tushare":
-            for alias in node.names:
-                if alias.name in _RAW_CTORS:
-                    out.append((node.lineno, f"`from tushare import {alias.name}` imports a raw-client "
-                                             f"constructor (alias it and the lint can't follow it)"))
+            # 3. a raw-slot / closure string passed to ANY call — catches object.__getattribute__(x,
+            # "_real"), an aliased getter(x, "_real"), and x.__getattribute__("__closure__")
+            for a in node.args:
+                if isinstance(a, ast.Constant) and a.value in _INTROSPECT_STRINGS:
+                    out.append((node.lineno, f"a call with the introspection literal {a.value!r} reaches "
+                                             f"the raw client behind the proxy"))
         # 4. .__closure__ introspection (reaching the wrapped raw method out of the proxy closure)
         elif isinstance(node, ast.Attribute) and node.attr == "__closure__":
             out.append((node.lineno, ".__closure__ access can extract the raw method from the proxy closure"))

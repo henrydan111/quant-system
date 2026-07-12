@@ -14,13 +14,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-
-import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -29,6 +26,7 @@ HEARTBEAT = LOGS_DIR / "daily_job_heartbeat.json"
 PY = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
 MAX_SESSIONS_PER_RUN = 10  # bound the backlog per run so a long outage can't blow the task time limit
 DAILY_LOCK_TIMEOUT_SEC = 900  # 15min: fail-fast + retry, never block for hours behind a monthly build (m3)
+DEFER_EXIT = 75  # EX_TEMPFAIL: lock contention -> RETRYABLE (nonzero so Task Scheduler RestartOnFailure fires)
 
 
 def _cst() -> datetime:
@@ -52,38 +50,6 @@ def _alert(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def _provider_floor(ref_dir: str) -> str:
-    """The monthly-published provider boundary — ATTESTED, not guessed (GPT M4). FAIL CLOSED unless
-    day.txt is present, non-empty, syntactically valid, sorted ascending, its tail EQUALS the attested
-    provider_build.json `calendar_end_date`, AND that tail is a real open SSE session in trade_cal. A
-    poisoned/future/unsorted calendar would otherwise let the job return SUCCESS having checked nothing
-    (a future floor > target short-circuits the run)."""
-    cal = PROJECT_ROOT / "data" / "qlib_data" / "calendars" / "day.txt"
-    if not cal.exists():
-        raise SystemExit("provider calendar (data/qlib_data/calendars/day.txt) missing — failing closed")
-    days = [d.replace("-", "").strip() for d in cal.read_text(encoding="utf-8").split()]
-    if not days:
-        raise SystemExit("provider calendar is EMPTY — failing closed")
-    if not all(re.fullmatch(r"\d{8}", d) for d in days):
-        raise SystemExit("provider calendar has malformed (non-8-digit) dates — failing closed")
-    if days != sorted(days):
-        raise SystemExit("provider calendar is not sorted ascending — failing closed")
-    floor = days[-1]
-    manifest = PROJECT_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json"
-    if not manifest.exists():
-        raise SystemExit("provider_build.json missing — cannot attest the floor; failing closed")
-    attested = str(json.loads(manifest.read_text(encoding="utf-8"))
-                   .get("provider", {}).get("calendar_end_date", "")).replace("-", "").strip()
-    if attested != floor:
-        raise SystemExit(f"provider calendar tail {floor} != attested calendar_end_date {attested} "
-                         f"(provider_build.json) — unattested/poisoned floor; failing closed")
-    tc = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
-    opens = set(tc.loc[tc["is_open"] == 1, "cal_date"].astype(str).str.replace("-", "", regex=False))
-    if floor not in opens:
-        raise SystemExit(f"provider floor {floor} is not an open trading session in trade_cal — failing closed")
-    return floor
-
-
 def _run() -> int:
     from data_infra.pipeline.update_daily_data import DailyDataUpdater
     from data_infra.tushare_lock import raw_maintenance_lock, Timeout
@@ -97,32 +63,56 @@ def _run() -> int:
         with raw_maintenance_lock(timeout=DAILY_LOCK_TIMEOUT_SEC):
             return _run_locked(updater, ref_dir, str(LOGS_DIR))
     except Timeout:
+        # RETRYABLE (m3): return a dedicated NONZERO code so Task Scheduler's RestartOnFailure retries in
+        # ~30min (a monthly build finishes and releases the lock) instead of waiting a full day. Write a
+        # structured deferral record (NOT an alert — this is expected contention, not a failure).
+        _atomic_json(LOGS_DIR / "daily_job_deferred.json",
+                     {"reason": "raw_maintenance_lock busy (monthly build?)",
+                      "timeout_sec": DAILY_LOCK_TIMEOUT_SEC, "at_cst": _cst().strftime("%Y%m%d_%H%M%S")})
         print(f"daily job: raw-maintenance lock busy after {DAILY_LOCK_TIMEOUT_SEC}s (monthly build in "
-              f"progress?) — soft-skipping this run; next run retries", file=sys.stderr)
-        return 0
+              f"progress?) — DEFERRED (exit {DEFER_EXIT}, scheduler will retry)", file=sys.stderr)
+        return DEFER_EXIT
 
 
 def _run_locked(updater, ref_dir: str, logs: str) -> int:
+    import uuid
     from data_infra.pipeline.update_daily_data import resolve_last_complete_session
-    from data_infra.pipeline.daily_ops import (backlog_sessions, contiguous_watermark,
-                                               manifest_set_digest, write_session_status)
+    from data_infra.pipeline.daily_ops import (backlog_sessions, contiguous_watermark, manifest_set_digest,
+                                               provider_floor, ProviderFloorError, start_attempt,
+                                               write_session_status)
 
     # ONE full-attempt transaction (refresh -> attest floor -> backfill -> QA -> heartbeat) under the
     # held lock: no other writer interleaves and QA reads a consistent raw cut (GPT M3/M4). Refresh the
-    # calendar FIRST so a stale stored calendar cannot abort resolution (B2); attest the floor INSIDE.
-    updater.update_reference_data(_cst().strftime("%Y%m%d"))
-    if getattr(updater, "_reference_error", None):
-        _alert(f"calendar/reference refresh failed: {updater._reference_error}")
+    # calendar FIRST so a stale stored calendar cannot abort resolution (B2); attest the floor INSIDE via
+    # the SHARED helper (same attestation the watchdog uses — GPT REWORK-5 M2.4).
+    try:
+        floor = provider_floor(PROJECT_ROOT, ref_dir)
+    except ProviderFloorError as exc:
+        _alert(f"provider floor attestation failed: {exc}")
         return 2
-    floor = _provider_floor(ref_dir)  # attested; SystemExit -> caught by main() boundary
     target = resolve_last_complete_session(ref_dir)
     if floor > target:  # provider calendar extends PAST the last real complete session -> poisoned
         _alert(f"provider floor {floor} is AHEAD of the last complete session {target} — the provider "
                f"calendar extends past reality (poisoned/misbuilt); failing closed")
         return 2
-    if floor == target:  # provider already current -> nothing to backfill (legit)
-        print(f"daily job: provider floor {floor} == last complete session; nothing to backfill")
+
+    # Open a NEW attempt + invalidate any prior success certificate BEFORE any mutation (GPT REWORK-5
+    # M2): if this run later fails, no stale heartbeat can certify it. (floor==target is handled AFTER
+    # this — a post-publish 'nothing to backfill' still supersedes the old attempt.)
+    attempt_id = uuid.uuid4().hex
+    start_attempt(logs, attempt_id, target)
+
+    if floor == target:  # provider already current -> nothing to backfill; the watchdog greens on
+        print(f"daily job: provider floor {floor} == last complete session; nothing to backfill")  # floor==expected
+        af = LOGS_DIR / f"daily_job_alert_{_cst().strftime('%Y%m%d')}.flag"
+        if af.exists():
+            af.unlink()
         return 0
+
+    updater.update_reference_data(_cst().strftime("%Y%m%d"))
+    if getattr(updater, "_reference_error", None):
+        _alert(f"calendar/reference refresh failed: {updater._reference_error}")
+        return 2
     backlog = backlog_sessions(ref_dir, logs, target, floor, max_n=MAX_SESSIONS_PER_RUN)
     for d in backlog:
         try:
@@ -138,13 +128,17 @@ def _run_locked(updater, ref_dir: str, logs: str) -> int:
     qa_ok = subprocess.run([str(PY), str(PROJECT_ROOT / "scripts" / "run_daily_qa.py")]).returncode == 0
     watermark = contiguous_watermark(ref_dir, logs, target, floor)  # recomputed from floor + persisted
 
-    # heartbeat ONLY when the contiguous watermark EXACTLY reaches the target AND QA passed. It is
-    # QA-BOUND (qa_ok) + carries the floor + the manifest-set digest, so the watchdog can prove THIS
-    # target/floor's completeness set was QA-certified — a bare complete-manifest set is NOT enough
-    # (QA can fail while raw+manifests succeed; the watchdog must not green that — GPT M2).
+    # Success certificate ONLY when watermark==target AND QA passed. Bound to THIS attempt_id + the
+    # attested provider ids + floor + manifest-set digest, so the watchdog can prove the LATEST attempt
+    # was QA-certified — a stale heartbeat (older attempt_id, deleted at start_attempt) cannot green a
+    # later failed run (GPT REWORK-5 M2).
     if watermark == target and qa_ok:
-        _atomic_json(HEARTBEAT, {"completed_session": watermark, "floor": floor, "qa_ok": True,
-                                 "manifest_digest": manifest_set_digest(ref_dir, logs, target, floor),
+        pb = json.loads((PROJECT_ROOT / "data" / "qlib_data" / "metadata" / "provider_build.json")
+                        .read_text(encoding="utf-8"))
+        _atomic_json(HEARTBEAT, {"attempt_id": attempt_id, "completed_session": watermark, "floor": floor,
+                                 "qa_ok": True, "manifest_digest": manifest_set_digest(ref_dir, logs, target, floor),
+                                 "provider_build_id": pb.get("provider_build_id"),
+                                 "calendar_policy_id": pb.get("calendar_policy_id"),
                                  "at_cst": _cst().strftime("%Y%m%d_%H%M%S")})
         af = LOGS_DIR / f"daily_job_alert_{_cst().strftime('%Y%m%d')}.flag"
         if af.exists():

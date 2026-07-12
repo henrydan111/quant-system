@@ -683,10 +683,10 @@ def test_publish_refuses_cross_volume_atomic_replace():
             raise AssertionError("publish() should have raised BuildGateError for cross-volume")
 
 
-def test_load_price_frame_fails_closed_on_null_adj_factor():
-    """GPT 5-C Blocker 3: a NaN adj_factor on a priced raw row (or a missing adj_factor column) must
-    RAISE BuildGateError, never be silently coerced to 1.0 (which treats raw prices as adjusted and
-    corrupts every cross-day return). The 1.0 default is permitted ONLY under the test escape hatch."""
+def test_load_price_frame_fails_closed_on_invalid_adj_factor():
+    """GPT REWORK-5 Blocker 2: a null / non-positive adj_factor on a priced raw row, or a MISSING
+    adj_factor column, must RAISE BuildGateError — never be coerced to 1.0 (which treats raw prices as
+    adjusted and corrupts every cross-day return). NO env escape: nothing proves a process is a test."""
     import os as _os
     import pytest
     from data_infra.pit_backend import BuildGateError, StagedQlibBackendBuilder
@@ -700,20 +700,21 @@ def test_load_price_frame_fails_closed_on_null_adj_factor():
     df = pd.DataFrame({"ts_code": ["A", "A"], "trade_date": ["20260701", "20260702"],
                        "close": [1.0, 2.0], "adj_factor": [1.0, np.nan]})
     b._read_raw_file = lambda ds, p: df.copy()
-    with pytest.raises(BuildGateError, match="null.*adj_factor|adjustment-history hole"):
+    with pytest.raises(BuildGateError, match="null/non-numeric/non-positive|adjustment-history hole"):
         b._load_price_frame()
 
-    # missing adj_factor column, no escape -> fail closed
+    # non-positive adj_factor -> fail closed (adjustment factors are strictly positive)
+    df_np = df.copy(); df_np.loc[1, "adj_factor"] = 0.0
+    b._read_raw_file = lambda ds, p: df_np.copy()
+    with pytest.raises(BuildGateError, match="non-positive|adjustment-history hole"):
+        b._load_price_frame()
+
+    # missing adj_factor column -> fail closed, and the advertised "test" env var must NOT bypass it
     b._read_raw_file = lambda ds, p: df.drop(columns=["adj_factor"]).copy()
-    _os.environ.pop("QUANT_ALLOW_UNIT_ADJ_FACTOR", None)
-    with pytest.raises(BuildGateError, match="missing the adj_factor"):
-        b._load_price_frame()
-
-    # missing column WITH the explicit test escape -> defaults to 1.0
-    _os.environ["QUANT_ALLOW_UNIT_ADJ_FACTOR"] = "1"
+    _os.environ["QUANT_ALLOW_UNIT_ADJ_FACTOR"] = "1"  # a formal run could carry this — must be ignored
     try:
-        out = b._load_price_frame()
-        assert (out["factor"] == 1.0).all()
+        with pytest.raises(BuildGateError, match="missing the adj_factor"):
+            b._load_price_frame()
     finally:
         _os.environ.pop("QUANT_ALLOW_UNIT_ADJ_FACTOR", None)
 

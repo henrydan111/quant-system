@@ -77,6 +77,29 @@ class MarketDataError(RuntimeError):
     Blocker 3). The prior daily file is preserved (the validated write is atomic temp+replace)."""
 
 
+# canonical daily raw fields the engine needs from the `daily` endpoint (up_limit/down_limit come from
+# stk_limit, adj_factor from fetch_adj_factor — validated separately). A session missing any of these is
+# NOT complete just because "some OHLCV exists" (GPT REWORK-5 M1).
+DAILY_REQUIRED_COLS = ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount", "pre_close")
+
+
+def _validate_endpoint_frame(df, *, name: str, target_date: str, required_cols, key_cols=("ts_code", "trade_date")):
+    """One shared required-frame validator (GPT REWORK-5 M1): schema (required columns present), TARGET
+    DATE (every trade_date == target_date — a wrong-date frame merged all-null before), and natural-key
+    UNIQUENESS (duplicate keys wrote duplicate output). Raises MarketDataError; never coerces."""
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise MarketDataError(f"market {target_date}: {name} missing required columns {missing}")
+    if "trade_date" in df.columns:
+        td = df["trade_date"].astype(str).str.replace("-", "", regex=False)
+        stray = sorted(set(td) - {target_date})
+        if stray:
+            raise MarketDataError(f"market {target_date}: {name} carries other trade_dates {stray[:3]} "
+                                  f"(stale/mispartitioned response)")
+    if all(k in df.columns for k in key_cols) and df.duplicated(subset=list(key_cols)).any():
+        raise MarketDataError(f"market {target_date}: {name} has duplicate {tuple(key_cols)} keys")
+
+
 class DailyDataUpdater:
     """
     Daily incremental updater for market data, fundamentals, and index weights.
@@ -299,47 +322,59 @@ class DailyDataUpdater:
             logger.warning(f"No daily market data for {target_date}. API may not be updated yet.")
             return set()
 
-        # schema + target-date + unique-key validation on the daily frame BEFORE anything commits.
-        for col in ("ts_code", "trade_date"):
-            if col not in df_daily.columns:
-                raise MarketDataError(f"market {target_date}: daily frame missing required column {col!r}")
-        td = df_daily["trade_date"].astype(str).str.replace("-", "", regex=False)
-        stray = sorted(set(td) - {target_date})
-        if stray:
-            raise MarketDataError(f"market {target_date}: daily frame carries other trade_dates {stray[:3]} "
-                                  f"(stale/mispartitioned response)")
-        if df_daily.duplicated(subset=["ts_code", "trade_date"]).any():
-            raise MarketDataError(f"market {target_date}: daily frame has duplicate (ts_code, trade_date) keys")
+        # full daily schema + target-date + key uniqueness BEFORE anything commits (GPT REWORK-5 M1: a
+        # daily frame omitting open/high/low/vol/amount/pre_close is NOT a complete session).
+        _validate_endpoint_frame(df_daily, name="daily", target_date=target_date,
+                                 required_cols=DAILY_REQUIRED_COLS)
 
         df_basic = self.fetcher.fetch_fundamentals(trade_date=target_date)
         df_adj = self.fetcher.fetch_adj_factor(trade_date=target_date)
 
-        # adj_factor is ENGINE-required and daily_basic is required; empty/thin is a session FAILURE
-        # ("some OHLCV exists" is not completeness — GPT M4/B3). Coverage vs the daily universe.
+        # adj_factor (ENGINE-required) + daily_basic (required): validate schema/date/keys, then coverage.
+        if df_adj.empty:
+            raise MarketDataError(f"market {target_date}: adj_factor EMPTY (required field)")
+        if df_basic.empty:
+            raise MarketDataError(f"market {target_date}: daily_basic EMPTY (required field)")
+        _validate_endpoint_frame(df_adj, name="adj_factor", target_date=target_date,
+                                 required_cols=("ts_code", "trade_date", "adj_factor"))
+        _validate_endpoint_frame(df_basic, name="daily_basic", target_date=target_date,
+                                 required_cols=("ts_code", "trade_date"))
+
         daily_codes = set(df_daily['ts_code'].dropna().astype(str))
-        for nm, df, floor in (("adj_factor", df_adj, 0.98), ("daily_basic", df_basic, 0.90)):
-            if df.empty:
-                raise MarketDataError(f"market {target_date}: {nm} EMPTY (required field)")
-            if 'ts_code' not in df.columns:
-                raise MarketDataError(f"market {target_date}: {nm} missing ts_code column")
-            cov = len(set(df['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
-            if cov < floor:
-                raise MarketDataError(f"market {target_date}: {nm} coverage {cov:.3f} < {floor} (required)")
+        # adj_factor must cover 100% of priced daily codes with a positive value — every priced row needs
+        # real adjustment history (the builder rejects any missing/non-positive row; GPT REWORK-5 M1).
+        adj_pos = df_adj.loc[pd.to_numeric(df_adj['adj_factor'], errors='coerce') > 0, 'ts_code']
+        adj_codes = set(adj_pos.dropna().astype(str))
+        missing_adj = daily_codes - adj_codes
+        if missing_adj:
+            raise MarketDataError(f"market {target_date}: {len(missing_adj)} priced daily codes lack a "
+                                  f"positive adj_factor (must be 100%); e.g. {sorted(missing_adj)[:5]}")
+        basic_cov = len(set(df_basic['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
+        if basic_cov < 0.90:
+            raise MarketDataError(f"market {target_date}: daily_basic code coverage {basic_cov:.3f} < 0.90")
 
         df_merged = df_daily
-        if not df_basic.empty:
-            df_basic = df_basic.drop(columns=['close'], errors='ignore')
-            df_merged = pd.merge(df_merged, df_basic, on=['ts_code', 'trade_date'], how='left')
+        basic_payload = [c for c in df_basic.columns if c not in ("ts_code", "trade_date", "close")]
+        df_basic = df_basic.drop(columns=['close'], errors='ignore')
+        df_merged = pd.merge(df_merged, df_basic, on=['ts_code', 'trade_date'], how='left')
         df_merged = pd.merge(df_merged, df_adj, on=['ts_code', 'trade_date'], how='left')
 
-        # post-merge non-null adj_factor coverage for the PRICED rows — a merge that silently dropped
-        # adj is a hole that pit_backend would (used to) turn into a corrupting 1.0 (GPT B3).
+        # POST-merge validation (a wrong-date/mis-keyed aux frame merges to all-null even at 100% code
+        # overlap — GPT REWORK-5 M1): adj_factor non-null 100%, daily_basic payload non-null >= floor,
+        # and the OUTPUT keys unique.
         if 'adj_factor' not in df_merged.columns:
             raise MarketDataError(f"market {target_date}: merged frame lost the adj_factor column")
-        nn = float(pd.to_numeric(df_merged['adj_factor'], errors='coerce').notna().mean())
-        if nn < 0.98:
-            raise MarketDataError(f"market {target_date}: post-merge non-null adj_factor {nn:.3f} < 0.98 "
-                                  f"(adjustment history hole)")
+        adj_nn = float(pd.to_numeric(df_merged['adj_factor'], errors='coerce').notna().mean())
+        if adj_nn < 1.0:
+            raise MarketDataError(f"market {target_date}: post-merge non-null adj_factor {adj_nn:.4f} < 1.0 "
+                                  f"(merge dropped adjustment rows)")
+        if basic_payload:
+            payload_nn = float(df_merged[basic_payload].notna().any(axis=1).mean())
+            if payload_nn < 0.90:
+                raise MarketDataError(f"market {target_date}: post-merge daily_basic payload coverage "
+                                      f"{payload_nn:.3f} < 0.90 (wrong-date/mis-keyed daily_basic?)")
+        if df_merged.duplicated(subset=["ts_code", "trade_date"]).any():
+            raise MarketDataError(f"market {target_date}: merged output has duplicate (ts_code, trade_date) keys")
 
         file_path = os.path.join(self.market_daily_dir, target_date[:4], f"daily_{target_date}.parquet")
         _atomic_write_parquet(df_merged, file_path)  # validated -> atomic temp+replace (prior preserved)

@@ -795,6 +795,29 @@ class BuildGateError(RuntimeError):
     """Raised when strict integrity gates fail."""
 
 
+def _require_valid_adj_factor(df: "pd.DataFrame", *, context: str) -> "pd.Series":
+    """Return a validated adjustment-factor Series or RAISE BuildGateError. adj_factor is ENGINE-required
+    (§3.3 / §2a.4 adjusted-vs-raw invariant): a MISSING column, or a null / non-numeric / non-positive
+    value on a (long-format, always priced) raw daily row, was silently coerced to 1.0 — raw prices then
+    read as ADJUSTED and every cross-day return is corrupted. There is NO production default and NO
+    environment escape (a "test" env var could reach a formal run — GPT REWORK-5 Blocker 2); tests must
+    construct valid fixtures, and any legacy repair is a separate audited data-correction workflow."""
+    if "adj_factor" not in df.columns:
+        raise BuildGateError(
+            f"{context}: market daily raw is missing the adj_factor column — refusing to substitute 1.0 "
+            f"(would treat raw prices as adjusted). This is a data hole, not 'no adjustment'.")
+    factor = pd.to_numeric(df["adj_factor"], errors="coerce")
+    bad = factor.isna() | (factor <= 0)
+    if bad.any():
+        n = int(bad.sum())
+        cols = [c for c in ("ts_code", "trade_date") if c in df.columns]
+        sample = df.loc[bad, cols].head(5).to_dict("records") if cols else []
+        raise BuildGateError(
+            f"{context}: {n} raw daily rows have a null/non-numeric/non-positive adj_factor "
+            f"(adjustment-history hole) — refusing to coerce to 1.0; sample={sample}")
+    return factor
+
+
 def _project_root_from_file() -> str:
     current = os.path.abspath(__file__)
     return os.path.abspath(os.path.join(os.path.dirname(current), "..", ".."))
@@ -2257,12 +2280,10 @@ class StagedQlibBackendBuilder:
                 work = work.rename(columns=NORTHBOUND_RENAMES)
 
         if dataset_name == "daily":
-            # ``.get(..., 1.0)`` returns a scalar when the column is missing, and
-            # ``pd.to_numeric(1.0)`` returns a scalar ``1.0`` with no ``.fillna``
-            # method. Use an index-matched Series default so the chained call
-            # works both in production (column present) and in mocks (absent).
-            adj_raw = work.get("adj_factor", pd.Series(1.0, index=work.index))
-            work["factor"] = pd.to_numeric(adj_raw, errors="coerce").fillna(1.0)
+            # adj_factor is ENGINE-required — fail closed on a missing column or a null/non-positive row
+            # (no silent 1.0, no env escape — GPT REWORK-5 Blocker 2). Shared validator with the price
+            # loader so both raw-consuming paths enforce identically.
+            work["factor"] = _require_valid_adj_factor(work, context="_normalize_daily_partition")
             if "volume" not in work.columns and "vol" in work.columns:
                 work["volume"] = work["vol"]
 
@@ -2825,28 +2846,10 @@ class StagedQlibBackendBuilder:
         price = self._standardize_common_columns(price)
         price["date"] = price["trade_date"]
         price["symbol"] = price["ts_code"]
-        # adj_factor is ENGINE-required (§3.3). A MISSING column or a NaN on a (long-format, always
-        # priced) raw daily row was silently coerced to 1.0 here — raw prices treated as ADJUSTED,
-        # corrupting every cross-day return + the whole factor chain. Fail CLOSED; the 1.0 default is
-        # permitted ONLY under an explicit test escape hatch (GPT 5-C Blocker 3). update_market_data now
-        # refuses to commit a session whose adj_factor coverage is thin, so real raw is hole-free.
-        if "adj_factor" not in price.columns:
-            if os.environ.get("QUANT_ALLOW_UNIT_ADJ_FACTOR") == "1":
-                price["factor"] = 1.0
-            else:
-                raise BuildGateError(
-                    "market daily raw is missing the adj_factor column — refusing to substitute 1.0 "
-                    "(would treat raw prices as adjusted). Set QUANT_ALLOW_UNIT_ADJ_FACTOR=1 only in tests.")
-        else:
-            factor = pd.to_numeric(price["adj_factor"], errors="coerce")
-            if factor.isna().any():
-                n = int(factor.isna().sum())
-                cols = [c for c in ("ts_code", "trade_date") if c in price.columns]
-                sample = price.loc[factor.isna(), cols].head(5).to_dict("records") if cols else []
-                raise BuildGateError(
-                    f"{n} raw daily rows have a null/non-numeric adj_factor (adjustment-history hole) — "
-                    f"refusing to coerce to 1.0 (would corrupt adjusted prices); sample={sample}")
-            price["factor"] = factor
+        # adj_factor is ENGINE-required (§3.3): fail closed on a missing column or null/non-positive row
+        # (no silent 1.0, no env escape — GPT REWORK-5 Blocker 2). update_market_data refuses to commit a
+        # session whose adj_factor coverage is thin, so real raw is hole-free.
+        price["factor"] = _require_valid_adj_factor(price, context="_load_price_frame")
         if "volume" not in price.columns and "vol" in price.columns:
             price["volume"] = price["vol"]
         return price

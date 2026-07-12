@@ -63,11 +63,16 @@ MIN_PLAUSIBLE_DAILY_ROWS = 4000  # A-share市场级 daily should carry ~5k names
 
 
 def _open_trading_days(upto: str | None = None) -> list[str]:
+    # The formal bump must NOT trust an invalid on-disk calendar merely because a prior writer was
+    # expected to validate it (GPT REWORK-5 m2): route through the SAME canonical validator the daily
+    # job uses (_validate_trade_cal — SSE-only, continuity, real 8-digit dates) and return UNIQUE ordered
+    # open dates.
+    from data_infra.pipeline.update_daily_data import _validate_trade_cal
     f = PROJECT_ROOT / "data" / "reference" / "trade_cal.parquet"
     if not f.exists():
         return []
-    cal = pd.read_parquet(f)
-    days = cal[cal["is_open"] == 1]["cal_date"].astype(str).sort_values().tolist()
+    cal = _validate_trade_cal(pd.read_parquet(f), fresh=False)
+    days = sorted({d for d in cal.loc[cal["is_open"] == 1, "cal_date"].astype(str)})
     return [d for d in days if (upto is None or d <= upto)]
 
 
@@ -326,17 +331,7 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
-# fresh-window per-date raw inputs, hashed by CONTENT. These files are IMMUTABLE once a session is
-# complete (the daily job writes strictly forward, never backfills a completed past session), so a
-# content manifest computed at build time re-verifies identically at publish UNLESS the cut moved
-# out-of-band -> tamper-evidence. cyq_perf is INCLUDED (the old digest wrongly dropped it). report_rc
-# is a window-anchored year-file, added below.
-_MANIFEST_DATE_DATASETS = (("market/daily", "daily"), ("market/suspend_d", "suspend_d"),
-                           ("market/moneyflow", "moneyflow"), ("market/stk_limit", "stk_limit"),
-                           ("market/cyq_perf", "cyq_perf"))
-
-
-def _sha256_file(path: Path) -> str:
+def _sha256_file(path) -> str:
     import hashlib
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -345,36 +340,56 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _raw_input_manifest(parent_end: str, target_end: str) -> dict:
-    """Full SHA-256 CONTENT manifest over the fresh-window raw inputs the build consumes — a complete,
-    collision-resistant, provider-bindable input-cut ATTESTATION (GPT 5-C M3: the old digest used
-    name+size+int-mtime [collides on a same-size byte-swap], covered only 4 datasets, and lived only in
-    the dry-run report). Each per-date file is hashed by content; a per-file sidecar is written and the
-    256-bit `root` is recorded in the report + handoff + re-verified before publish. Scoped to
-    (parent_end, target_end] so legitimate forward daily progress after target_end never false-fails the
-    re-verify; the frozen prefix is separately proven byte-identical by the frozen-prefix audit, and the
-    build itself runs UNDER raw_maintenance_lock so no writer can move the cut mid-build."""
+def _manifest_root(files: list) -> str:
     import hashlib
-    opens = [d for d in _open_trading_days(upto=target_end) if parent_end < d <= target_end]
+    return hashlib.sha256("\n".join(f"{r['path']}:{r['sha256']}:{r['size']}"
+                                    for r in files).encode()).hexdigest()
+
+
+def _full_raw_manifest(data_root=None) -> dict:
+    """Full-CONTENT SHA-256 manifest over the builder's ACTUAL read set — EVERY raw dataset file
+    (DATASET_SPECS.raw_pattern) PLUS every reference/universe file under data/reference. This is the
+    exact data generation the formal provider consumes; the old hand-maintained 6-dataset subset let a
+    mutated income/statements/reference file pass unattested (GPT REWORK-5 Blocker 3). The result is a
+    FIXED list snapshotted under the raw lock at build time; verify-before-publish re-hashes exactly
+    these paths (NOT a re-glob), so legitimate forward daily progress after target_end adds files that
+    aren't in the list and cannot false-fail the re-verify."""
+    import glob as _glob
+    from data_infra.pit_backend import DATASET_SPECS
+    root_dir = Path(data_root) if data_root is not None else (PROJECT_ROOT / "data")
+    paths = set()
+    for spec in DATASET_SPECS.values():
+        pattern = getattr(spec, "raw_pattern", None)
+        if pattern:
+            paths.update(_glob.glob(str(root_dir / pattern), recursive=True))
+    ref = root_dir / "reference"
+    if ref.exists():
+        paths.update(str(p) for p in ref.rglob("*") if p.is_file())
     files = []
-    for d in opens:
-        for sub, ep in _MANIFEST_DATE_DATASETS:
-            f = PROJECT_ROOT / "data" / sub / d[:4] / f"{ep}_{d}.parquet"
-            rel = f"{sub}/{f.name}"
-            if f.exists():
-                files.append({"path": rel, "sha256": _sha256_file(f), "size": f.stat().st_size})
-            else:
-                files.append({"path": rel, "sha256": "MISSING", "size": 0})
-    # report_rc window year-file(s) touched by the fresh window (availability-boundary halo dataset).
-    for yr in sorted({d[:4] for d in opens}):
-        f = PROJECT_ROOT / "data" / "market" / "report_rc" / f"report_rc_{yr}.parquet"
-        if f.exists():
-            files.append({"path": f"market/report_rc/{f.name}", "sha256": _sha256_file(f),
-                          "size": f.stat().st_size})
+    for f in sorted(paths):
+        p = Path(f)
+        if not p.is_file():
+            continue
+        files.append({"path": os.path.relpath(f, root_dir).replace("\\", "/"),
+                      "sha256": _sha256_file(p), "size": p.stat().st_size})
     files.sort(key=lambda r: r["path"])
-    root = hashlib.sha256("\n".join(f"{r['path']}:{r['sha256']}:{r['size']}" for r in files).encode()).hexdigest()
-    return {"algo": "sha256", "root": root, "file_count": len(files),
-            "window": [parent_end, target_end], "files": files}
+    return {"algo": "sha256", "root": _manifest_root(files), "file_count": len(files), "files": files}
+
+
+def _verify_raw_manifest(manifest: dict, data_root=None) -> tuple[bool, str]:
+    """Re-hash exactly the files the manifest lists and confirm the recorded root — a mismatch means the
+    raw cut the staged build consumed moved out-of-band since the build (GPT REWORK-5 Blocker 3)."""
+    root_dir = Path(data_root) if data_root is not None else (PROJECT_ROOT / "data")
+    for r in manifest.get("files", []):
+        p = root_dir / r["path"]
+        if not p.is_file():
+            return False, f"missing consumed file {r['path']}"
+        if _sha256_file(p) != r["sha256"]:
+            return False, f"changed consumed file {r['path']}"
+    recomputed = _manifest_root(manifest.get("files", []))
+    if recomputed != manifest.get("root"):
+        return False, "manifest sidecar root does not match its own file list (tampered sidecar)"
+    return True, "ok"
 
 
 def _prune_cyq_state(suffix: str) -> None:
@@ -849,12 +864,14 @@ def _build_impl(args, parent_build, parent_policy, parent_end, target_end) -> in
                      "--allow-migration-exception once migrated.", recurring)
         return 1
 
-    # 4d. full-content raw-input manifest (M3) — computed here UNDER the lock, so it attests the exact
-    # cut the staged build just consumed. Sidecar carries the per-file hashes; the 256-bit root is
-    # recorded in the report + re-verified before publish + bound into the published provider_build.json.
-    raw_manifest = _raw_input_manifest(parent_end, target_end)
+    # 4d. full-read-set raw-input manifest (Blocker 3) — computed here UNDER the lock, so it attests the
+    # exact cut the staged build just consumed (EVERY DATASET_SPECS file + reference, not a 6-dataset
+    # subset). Sidecar carries the per-file hashes; the 256-bit root is recorded in the report +
+    # re-verified before publish + (manual step) bound into the published provider_build.json.
+    raw_manifest = _full_raw_manifest()
     RAW_MANIFEST_PATH.write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=1), encoding="utf-8")
-    logger.info("raw-input manifest: %d files, root=%s", raw_manifest["file_count"], raw_manifest["root"])
+    logger.info("raw-input manifest: %d files (full read set), root=%s",
+                raw_manifest["file_count"], raw_manifest["root"])
 
     # 5. dry-run report -> STOP for human sign-off.
     report = {
@@ -894,25 +911,39 @@ def phase_publish(args) -> int:
         return 2
     rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
 
-    # M3 verify-before-publish: re-hash the fresh-window raw inputs UNDER the lock and compare to the
-    # root the staged build attested. A mismatch means the raw cut moved out-of-band between execute
-    # and publish (a manual edit, a bypassed writer) — the staged provider no longer represents the
-    # live raw, so refuse the handoff (fail closed). The fresh window's per-date files are immutable
-    # once complete, so legitimate forward daily progress after target_end does NOT change this root.
+    # Verify-before-publish gate (Blocker 3), all UNDER the raw lock so nothing moves during the check:
+    #  (a) COMPARE-AND-SWAP the parent — the live provider_build/policy MUST still be the report's parent
+    #      (else the report was computed against a since-replaced provider; refuse).
+    #  (b) RE-HASH the full read-set manifest (exactly the files the staged build consumed) and confirm
+    #      the recorded root — a mismatch means the raw cut moved out-of-band since the build.
+    # This still precedes the MANUAL §13 swap (see the residual note in required_manual_steps): the swap
+    # itself must re-run this check immediately before os.replace to be fully atomic — that automated
+    # transaction is the remaining B3 work.
     from data_infra.tushare_lock import raw_maintenance_lock
-    from research_orchestrator.calendar_policy import load_calendar_policy
-    parent_end = load_calendar_policy(rep["parent_policy_id"]).calendar_end_date.replace("-", "")
-    target_end = rep["target_end"]
-    with raw_maintenance_lock():
-        live_manifest = _raw_input_manifest(parent_end, target_end)
-    if live_manifest["root"] != rep.get("raw_input_manifest_root"):
-        logger.error("RAW-INPUT MANIFEST MISMATCH — the raw cut changed since the staged build "
-                     "(execute root=%s, live root=%s over (%s, %s]). The staged provider no longer "
-                     "attests the live raw; re-run --execute. Refusing publish (fail closed).",
-                     rep.get("raw_input_manifest_root"), live_manifest["root"], parent_end, target_end)
+    if not RAW_MANIFEST_PATH.exists():
+        logger.error("no raw-input manifest sidecar at %s — re-run --execute. Refusing publish.", RAW_MANIFEST_PATH)
         return 2
-    logger.info("raw-input manifest re-verified (root=%s, %d files) — cut is stable since the build.",
-                live_manifest["root"], live_manifest["file_count"])
+    manifest = json.loads(RAW_MANIFEST_PATH.read_text(encoding="utf-8"))
+    if manifest.get("root") != rep.get("raw_input_manifest_root"):
+        logger.error("manifest sidecar root %s != report root %s — inconsistent artifacts; refusing.",
+                     manifest.get("root"), rep.get("raw_input_manifest_root"))
+        return 2
+    with raw_maintenance_lock():
+        live_build, live_policy = live_provider_ids()
+        if live_build != rep.get("parent_build_id") or live_policy != rep.get("parent_policy_id"):
+            logger.error("PARENT DRIFT — the live provider is now build=%s/policy=%s but the reviewed "
+                         "report was computed against parent build=%s/policy=%s. The staged build no "
+                         "longer extends the live provider; re-run --execute. Refusing publish.",
+                         live_build, live_policy, rep.get("parent_build_id"), rep.get("parent_policy_id"))
+            return 2
+        ok, why = _verify_raw_manifest(manifest)
+    if not ok:
+        logger.error("RAW-INPUT MANIFEST MISMATCH (%s) — the raw cut the staged build consumed changed "
+                     "since the build; the staged provider no longer attests the live raw. Re-run "
+                     "--execute. Refusing publish (fail closed).", why)
+        return 2
+    logger.info("verify-before-publish OK: parent unchanged (%s/%s) + raw manifest re-verified "
+                "(root=%s, %d files).", live_build, live_policy, manifest["root"], manifest["file_count"])
 
     # m1: the live swap/rebind/QA are deliberately not auto-wired (they mutate the live
     # provider — §13 — and follow the proven depth9/sharecap precedents). Emit an explicit
@@ -924,12 +955,16 @@ def phase_publish(args) -> int:
         "staged_provider_dir": rep.get("staged_provider_dir"),
         "new_policy_id": rep.get("new_policy_id"),
         "parent_build_id": rep.get("parent_build_id"),
-        "raw_input_manifest_root": live_manifest["root"],  # bind the verified cut into the publish
+        "raw_input_manifest_root": manifest["root"],  # bind the verified cut into the publish
+        "raw_input_manifest_file_count": manifest["file_count"],
         "required_manual_steps": [
+            "RESIDUAL (B3, not yet automated): the swap below must re-run _verify_raw_manifest + the "
+            "parent compare-and-swap IMMEDIATELY before os.replace, so verification is atomic with the "
+            "swap (a manual interval after verification is not the integrity boundary — GPT REWORK-5)",
             "safe atomic swap (staged->adjacent->live, backup old live) per _depth9_safe_publish.py",
             "rebind ~25 approval YAMLs to the new build+policy id per _rebind_approvals_*.py",
             "write raw_input_manifest_root into the published data/qlib_data/metadata/provider_build.json "
-            "(bind provider_build_id -> the attested raw cut, M3)",
+            "(bind provider_build_id -> the attested raw cut, B3)",
             "run scripts/run_daily_qa.py — must be Overall PASS (manifest + approval binding + POLICY001)",
             "write parent-build metadata + retain the referenced old live as .bak",
         ],
