@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-07-12): round-2 also returned REWORK. By user decision, BUILD-0 is finalized as a
+> NON-EVIDENTIARY negative screen (correctness findings fixed, over-claims removed, B2/B4 documented as known
+> limitations) rather than pursued to SHIP. No round-3 is planned; the formal construction experiment is
+> deferred to BUILD-0b. This prompt is retained as the review record. See
+> [BUILD0_TC_POC_FINDINGS.md](BUILD0_TC_POC_FINDINGS.md) §5.**
+
 # BUILD-0 TC PoC — GPT §10 cross-review prompt (ROUND 2, post-REWORK)
 
 Round 1 verdict = **REWORK** (5 Blockers + 4 Majors + 2 Minors). Every finding is folded (see the

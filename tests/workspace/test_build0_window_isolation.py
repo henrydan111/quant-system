@@ -39,10 +39,23 @@ def test_no_oos_window_path_in_cli():
     assert "oos" not in rb.lower(), "the run path references OOS"
 
 
-def test_orientation_equivalence_no_lookahead():
-    # a_priori (economic-prior signs) reproduces is_fit (IS-IC-fit signs) bit-for-bit -> the composite
-    # has no fitted orientation parameter, so there is no cross-time (resubstitution) lookahead in it.
+def test_orientation_equivalence_retrospective_consistency():
+    # a_priori (economic-prior signs) reproduces is_fit (IS-IC-fit signs) bit-for-bit. NOTE: this is a
+    # RETROSPECTIVE consistency check (the a-priori sign map was committed after is_ic.json existed), not
+    # proof of no orientation lookahead — the recipe is a_priori_is_informed (FINDINGS §7 B2).
     r = b0.verify_orientation_equivalence()
     assert r["identical"] is True
     assert r["max_abs_comp_diff"] < 1e-9
     assert r["topk_selection_symdiff"] == 0
+
+
+def test_ic_labels_realized_within_is_window():
+    # B1: the composite IS rank-IC must use only labels realized <= IS_END. prepare() records the max
+    # label-realization date; assert it never crosses the boundary (skip if the tag has not been prepared).
+    import json
+    p = CACHE / "build0_ref_tc.json"
+    if not p.exists():
+        pytest.skip("build0_ref_tc.json not present — run prepare first")
+    j = json.loads(p.read_text())
+    mr = j.get("max_ic_label_realization")
+    assert mr is not None and mr <= b0.IS_END, f"IC used a label realized {mr} > IS_END"

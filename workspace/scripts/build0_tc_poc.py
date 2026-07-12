@@ -77,7 +77,7 @@ LABELS = {
 }
 SHARPE_MARGIN = 0.10                      # a Sharpe lift below this is not deployment-relevant
 MDD_TOL = 0.02
-FWER_ALPHA = 0.10                         # familywise fail-CLOSED screen threshold on bootstrap tail mass
+SCREEN_ALPHA = 0.10                       # per-construction bootstrap tail-mass threshold (UNADJUSTED; not FWER)
 SIGMA_WIN, SIGMA_MINOBS = 60, 40
 WF_MIN_OBS = 12                           # walk-forward: min past ICs before trusting a fitted sign
 CACHE = g09.CACHE
@@ -90,6 +90,14 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _realization_date(grid, d, h=5):
+    """The trading day on which a factor-date-d, h-day-forward label REALIZES (open_days[pos(d)+h]).
+    Used to enforce the label-realization boundary: an IC/orientation may only use dates whose label is
+    realized <= IS_END, else it reads returns from the sealed OOS window (CLAUDE.md §3.5 IsEndLeakage)."""
+    pos = grid.searchsorted(pd.Timestamp(d))
+    return grid[pos + h] if pos + h < len(grid) else None
 
 
 # ================================================================ shared preamble (window-isolated) ==
@@ -123,11 +131,11 @@ def _walkforward_signs(cfg, cols, frames, fwd5, grid, rebal, pmap):
     """Per-rebalance-date sign for each factor from an EXPANDING IC over past rebalance dates whose 5d
     label is REALIZED by pday(d) (real(d')=grid[pos(d')+5] <= pday(d)); a-priori fallback below MIN_OBS."""
     ic_by_date = {f: {} for f in cfg["pool"]}
-    real = {}
+    real, end = {}, pd.Timestamp(IS_END)
     for d in rebal:
-        pos = grid.searchsorted(pd.Timestamp(d))
-        real[d] = grid[pos + 5] if pos + 5 < len(grid) else pd.Timestamp("2100-01-01")
-        if d not in fwd5.index:
+        rz = _realization_date(grid, d, 5)
+        real[d] = rz if rz is not None else pd.Timestamp("2100-01-01")
+        if d not in fwd5.index or real[d] > end:             # B1: never even COMPUTE an OOS-realized IC
             continue
         f5 = fwd5.loc[d]
         for f in cfg["pool"]:
@@ -227,24 +235,37 @@ def _sigma_asof(ret, mkt, pday, cols, mode):
 
 
 # ================================================================ weights + concentration cap =========
+class InfeasibleCapError(ValueError):
+    """cap too tight for a fully-invested long-only book: n * cap < 1."""
+
+
 def _cap_simplex(w: pd.Series, cap: float) -> pd.Series:
-    """Project long-only w (sums to 1) onto {w>=0, sum=1, w<=cap} by iterative water-filling."""
-    if cap >= 1.0 or len(w) == 0:
-        return w / w.sum()
-    w = (w / w.sum()).clip(lower=0.0)
-    if len(w) * cap < 1.0 - 1e-9:                             # infeasible -> uniform at cap (best effort)
-        return pd.Series(1.0 / len(w), index=w.index)
-    for _ in range(100):
-        over = w > cap + 1e-12
+    """Project long-only w onto {w>=0, sum=1, w<=cap} by water-filling. Redistributes over-cap mass to
+    EVERY coordinate with headroom (including zero-weight ones), never fails open: raises
+    InfeasibleCapError if a fully-invested book cannot satisfy the cap (n*cap<1); asserts sum & cap."""
+    if not (0.0 < cap <= 1.0):
+        raise ValueError(f"cap must be in (0,1]; got {cap}")
+    n = len(w)
+    if n == 0:
+        return w
+    if n * cap < 1.0 - 1e-12:
+        raise InfeasibleCapError(f"n*cap = {n}*{cap} < 1 — cannot fully invest under the cap")
+    w = w.clip(lower=0.0).astype(float)
+    w = pd.Series(1.0 / n, index=w.index) if w.sum() <= 0 else w / w.sum()
+    if cap >= 1.0:
+        return w
+    for _ in range(2000):
+        over = w > cap + 1e-15
         if not over.any():
             break
         excess = float((w[over] - cap).sum())
         w[over] = cap
-        free = ~over & (w > 0)
-        if not free.any():
+        head = w < cap - 1e-15                                # coordinates with headroom (INCLUDING zeros)
+        if not head.any():
             break
-        w[free] = w[free] + excess * w[free] / w[free].sum()
-    return w / w.sum()
+        w[head] = w[head] + excess / int(head.sum())         # add equally; sum conserved; re-loop caps overflow
+    assert abs(w.sum() - 1.0) < 1e-9 and (w <= cap + 1e-9).all(), "cap-simplex postcondition violated"
+    return w
 
 
 def _weight_vectors(comp_top, sigma_top, circ_top, max_weight) -> dict:
@@ -285,10 +306,11 @@ def _agg(v):
 # ================================================================ prepare (TC + schedules + confounds) =
 def prepare(orientation, sigma_mode, max_weight, tag):
     cfg, cols, close, circ, ret, fwd5, mkt, frames, efr, ind_asof, bounds, rebal, pmap = _setup()
+    grid, end = close.index, pd.Timestamp(IS_END)
     scheds = {c: {} for c in CONSTRUCTIONS}
     tc_acc = {c: {"full_calib": [], "full_raw": [], "hold_calib": [], "hold_raw": []} for c in CONSTRUCTIONS}
     dg = {c: {"eff_n": [], "max_w": [], "corr_w_logmv": [], "corr_w_sigma": []} for c in CONSTRUCTIONS}
-    ic_comp, n_elig_hist = [], []
+    ic_comp, n_elig_hist, max_ic_real = [], [], None
     for d, pday, comp, broad in _composite_oriented(orientation, cfg, cols, close, circ, frames, efr,
                                                     ind_asof, bounds, rebal, pmap, fwd5):
         elig = comp.notna(); n_elig = int(elig.sum()); dkey = str(d.date())
@@ -299,10 +321,12 @@ def prepare(orientation, sigma_mode, max_weight, tag):
         n_elig_hist.append(n_elig)
         sigma = _sigma_asof(ret, mkt, pday, cols, sigma_mode)
         z_all = comp.where(elig); logmv = np.log(circ.loc[pday].where(circ.loc[pday] > 0))
-        if d in fwd5.index:
+        rz = _realization_date(grid, d, 5)                   # B1: only ICs whose label realizes <= IS_END
+        if d in fwd5.index and rz is not None and rz <= end:
             f5 = fwd5.loc[d]; m = z_all.notna() & f5.notna()
             if m.sum() >= 100:
                 ic_comp.append(z_all[m].rank().corr(f5[m].rank()))
+                max_ic_real = rz if max_ic_real is None else max(max_ic_real, rz)
         top = z_all.dropna().sort_values(ascending=False).head(K); top_idx = top.index
         wv = _weight_vectors(top, sigma.reindex(top_idx), circ.loc[pday].reindex(top_idx), max_weight)
         bench = pd.Series(0.0, index=cols); bench[elig] = 1.0 / n_elig
@@ -333,6 +357,7 @@ def prepare(orientation, sigma_mode, max_weight, tag):
            "orientation": orientation, "sigma": sigma_mode, "max_weight": max_weight,
            "n_rebal": len(rebal), "n_elig_median": float(np.median(n_elig_hist)) if n_elig_hist else None,
            "composite_is_rank_ic_5d": float(np.nanmean(ic_comp)) if ic_comp else None,
+           "max_ic_label_realization": (str(max_ic_real.date()) if max_ic_real is not None else None),
            "tc": tc_summary, "diag": diag}
     (CACHE / f"{tag}_tc.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
     _print_tc(out)
@@ -432,6 +457,11 @@ def _evidence_manifest(tag, tc, rows):
     for n in ("e_close_raw", "e_circ_mv"):
         pth = CACHE.parent / "verify09_cache" / f"{n}.parquet"
         in_hashes[f"verify09_cache/{n}.parquet"] = _sha256(pth) if pth.exists() else None
+    for rel in ("data/reference/trade_cal.parquet",                        # rebalance grid / calendar
+                "data/qlib_data/instruments/st_stocks.txt",                # ST membership (broad mask)
+                "data/universe/industry_sw2021_members/industry_sw2021_members.parquet"):  # SW L1 neutralization
+        pth = ROOT / rel
+        in_hashes[rel] = _sha256(pth) if pth.exists() else None
     out_hashes = {}
     for c in CONSTRUCTIONS:
         for f in (f"sched_{tag}_{c}.json", f"net_{tag}_{c}_is.parquet"):
@@ -461,13 +491,21 @@ def _evidence_manifest(tag, tc, rows):
                                     capture_output=True, text=True).stdout.strip())
     except Exception:                                         # noqa: BLE001
         sha, dirty = None, None
-    complete = (sha is not None and all(v for v in in_hashes.values())
-                and all(v for v in out_hashes.values()) and all(v for v in frozen_deps.values())
-                and bool(pinfo))
+    provider_ok = bool(pinfo.get("provider_build_id")) and bool(pinfo.get("calendar_policy_id"))
+    reproducible = (sha is not None and dirty is False                     # generated from a CLEAN commit
+                    and all(v for v in in_hashes.values())
+                    and all(v for v in out_hashes.values()) and all(v for v in frozen_deps.values())
+                    and provider_ok)
     return {"evidence_class": "NON_EVIDENTIARY_IS_DESIGN_PROBE",
-            "manifest_complete": bool(complete), "git_head": sha, "build0_script_dirty": dirty,
-            "config": {"tag": tag, "orientation": tc["orientation"], "sigma": tc["sigma"],
-                       "max_weight": tc["max_weight"], "window": [IS_START, IS_END], "variant": VARIANT},
+            # This is a PARTIAL, host-local reproducibility bundle: all listed SHA-256 reconcile on this host,
+            # but the results JSONs live under gitignored workspace/outputs (no external root hash) and full
+            # execution config / env-lock are not captured. `reproducible_from_clean_commit` is True only when
+            # git is clean AND every listed hash + provider id is present; it is NOT a durable evidence manifest.
+            "reproducible_from_clean_commit": bool(reproducible), "git_head": sha, "worktree_dirty": dirty,
+            "cli_config": {"tag": tag, "orientation": tc["orientation"], "sigma": tc["sigma"],
+                           "max_weight": tc["max_weight"], "window": [IS_START, IS_END], "variant": VARIANT,
+                           "screen_alpha": SCREEN_ALPHA, "sharpe_margin": SHARPE_MARGIN, "mdd_tol": MDD_TOL,
+                           "boot_block": 20, "boot_nboot": 2000, "sigma_win": SIGMA_WIN},
             "provider": pinfo, "python": sys.version.split()[0],
             "frozen_local_deps_sha256": frozen_deps,
             "input_sha256": in_hashes, "output_sha256": out_hashes}
@@ -492,11 +530,12 @@ def assemble(tag, do_mlflow=False):
     verdict = _verdict(rows, tc, boot)
     manifest = _evidence_manifest(tag, tc, rows)
     (CACHE / f"{tag}_results.json").write_text(json.dumps(
-        {"config": manifest["config"], "metrics": rows, "tc": tc["tc"], "diag": tc["diag"],
+        {"config": manifest["cli_config"], "metrics": rows, "tc": tc["tc"], "diag": tc["diag"],
          "bar_is": bar, "boot_vs_eqw": boot, "verdict": verdict, "evidence_manifest": manifest},
         indent=1), encoding="utf-8")
-    print(f"\n  evidence manifest: complete={manifest['manifest_complete']} "
-          f"class={manifest['evidence_class']} git={str(manifest['git_head'])[:12]} "
+    print(f"\n  reproducibility bundle: reproducible_from_clean_commit="
+          f"{manifest['reproducible_from_clean_commit']} (git={str(manifest['git_head'])[:12]} "
+          f"dirty={manifest['worktree_dirty']}) class={manifest['evidence_class']} "
           f"provider={manifest['provider'].get('provider_build_id','?')}", flush=True)
     if do_mlflow:
         _mlflow(tag, rows, tc)
@@ -527,31 +566,40 @@ def _print_table(tag, tc, rows, bar, boot):
 
 
 def _verdict(rows, tc, boot):
-    """SCREEN (not equivalence test). Gate is FAIL-CLOSED: a construction 'passes the screen' only with a
-    finite tail mass < FWER_ALPHA AND ΔSharpe ≥ margin AND MDD not worse. Missing evidence NEVER passes."""
-    if BASELINE not in rows:
-        return {"status": "incomplete"}
+    """EXPLORATORY, UNADJUSTED screen (NOT an equivalence test, NO familywise/FWER control — `tail_mass`
+    is a bootstrap tail probability, not a null-calibrated p-value). Fail-CLOSED at BOTH levels: a
+    construction passes only with finite tail-mass < SCREEN_ALPHA AND ΔSharpe ≥ margin AND MDD-not-worse;
+    and the FAMILY result is `incomplete` (never a pass) unless every declared SIGNAL_PROP member is present
+    with a finite tail-mass — a missing/degenerate member can never yield a family-level positive."""
+    family_ok = (BASELINE in rows and all(n in rows and n in boot for n in SIGNAL_PROP))
+    if not family_ok:
+        return {"status": "incomplete", "screen_passed": False,
+                "reason": "a declared family member (baseline or a signal-proportional construction) is "
+                          "missing — fail-closed (no family-level positive is possible)",
+                "baseline": BASELINE, "per_construction": {}}
     b = rows[BASELINE]
     def screen(name):
         m = rows[name]; d_sh = m["sharpe"] - b["sharpe"]; d_mdd = m["mdd"] - b["mdd"]
         tm = boot.get(name, {}).get("tail_mass_le_0", float("nan"))
-        passed = bool(np.isfinite(tm) and d_sh >= SHARPE_MARGIN and d_mdd >= -MDD_TOL and tm < FWER_ALPHA)
+        passed = bool(np.isfinite(tm) and d_sh >= SHARPE_MARGIN and d_mdd >= -MDD_TOL and tm < SCREEN_ALPHA)
         return {"d_sharpe": d_sh, "d_mdd": d_mdd, "d_cagr": m["cagr"] - b["cagr"],
                 "tail_mass_le_0": tm, "d_tc_full": tc["tc"][name]["full_calib"] - tc["tc"][BASELINE]["full_calib"],
                 "screen_passed": passed}
-    per = {n: screen(n) for n in SIGNAL_PROP if n in rows}
+    per = {n: screen(n) for n in SIGNAL_PROP}
     any_passed = any(v["screen_passed"] for v in per.values())
-    v = {"gate": "SCREEN, fail-closed: finite bootstrap tail-mass < %.2f AND ΔSharpe ≥ %.2f AND MDD not worse "
-                 ">%.0fpp; TC descriptive only" % (FWER_ALPHA, SHARPE_MARGIN, MDD_TOL * 100),
+    v = {"gate": "EXPLORATORY UNADJUSTED screen (no FWER control; tail-mass is not a p-value), fail-closed: "
+                 "finite tail-mass < %.2f AND ΔSharpe ≥ %.2f AND MDD no more than %.0fpp worse; family "
+                 "incomplete unless all members present. TC descriptive only" % (SCREEN_ALPHA, SHARPE_MARGIN, MDD_TOL * 100),
          "baseline": BASELINE, "per_construction": per, "any_signalprop_passed_screen": any_passed,
          "screen_passed": any_passed, "status": "INCONCLUSIVE_no_greenlight",
-         "call": ("A signal-proportional construction passed the exploratory screen — investigate further "
-                  "(still not a deployment decision)." if any_passed else
-                  "INCONCLUSIVE / no greenlight. No signal-proportional proxy passed the exploratory screen; "
-                  "this single-window, post-hoc, NON-equivalence screen does NOT establish that weighting is "
-                  "a weak lever, and does NOT rank selection/universe ahead of weighting (universe never "
-                  "varied). Residual-σ / §S3-constrained construction is tested here only as unconstrained "
-                  "proxies + a single-name cap.")}
+         "call": ("A signal-proportional proxy passed the UNADJUSTED exploratory screen — a positive family "
+                  "claim would still require a preregistered primary contrast or a joint null-calibrated "
+                  "max-statistic across all configs; not a deployment decision." if any_passed else
+                  "INCONCLUSIVE / no greenlight. No signal-proportional proxy produced a screen-qualified "
+                  "positive result; record only that there is NO positive evidence. This single-window, "
+                  "post-hoc, NON-equivalence, unadjusted screen does NOT establish that weighting is a weak "
+                  "lever, and does NOT rank selection/universe ahead of weighting (universe never varied). "
+                  "Only unconstrained σ-proxies + a single-name cap were tested — NOT the §S3 constructor.")}
     print("\n" + "=" * 100, flush=True)
     print("STEP 3 — SCREEN RESULT (" + v["gate"] + ")", flush=True)
     print("=" * 100, flush=True)

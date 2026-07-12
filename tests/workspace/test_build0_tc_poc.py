@@ -31,16 +31,30 @@ class TestConcentrationCap:
         assert (capped <= 0.30 + 1e-9).all()
         assert (capped >= 0.0).all()
 
-    def test_cap_simplex_infeasible_falls_back_uniform(self):
-        w = pd.Series([0.6, 0.4], index=list("ab"))       # 2 * 0.10 < 1 -> infeasible
-        capped = b0._cap_simplex(w, 0.10)
-        assert abs(capped.sum() - 1.0) < 1e-9
-        assert np.allclose(capped.values, 0.5)
+    def test_cap_simplex_infeasible_raises(self):
+        w = pd.Series([0.6, 0.4], index=list("ab"))       # 2 * 0.10 < 1 -> cannot fully invest under cap
+        with pytest.raises(b0.InfeasibleCapError):
+            b0._cap_simplex(w, 0.10)
+
+    def test_cap_simplex_redistributes_to_zero_headroom(self):
+        # GPT's counter-example: one coord at 1.0, rest zero, cap 0.10 on 20 names is FEASIBLE (20*.1=2>=1).
+        # The old code returned max=1.0 (redistributed proportional to current weight -> nothing to zeros).
+        idx = [f"n{i}" for i in range(20)]
+        w = pd.Series([1.0] + [0.0] * 19, index=idx)
+        out = b0._cap_simplex(w, 0.10)
+        assert abs(out.sum() - 1.0) < 1e-9
+        assert (out <= 0.10 + 1e-9).all(), f"cap violated: max={out.max()}"
 
     def test_uncapped_is_noop_normalize(self):
         w = pd.Series([2.0, 1.0, 1.0], index=list("abc"))
         out = b0._cap_simplex(w, 1.0)
         assert np.allclose(out.values, [0.5, 0.25, 0.25])
+
+    def test_cap_out_of_range_raises(self):
+        w = pd.Series([1.0, 1.0], index=list("ab"))
+        for bad in (0.0, -0.1, 1.5):
+            with pytest.raises(ValueError):
+                b0._cap_simplex(w, bad)
 
 
 class TestWeightVectors:
@@ -112,6 +126,15 @@ class TestScreenFailClosed:
         v = b0._verdict(rows, tc, boot)
         assert v["status"] == "INCONCLUSIVE_no_greenlight"
 
+    def test_missing_family_member_is_incomplete_not_pass(self):
+        # If a declared signal-proportional member is absent, the family result must be incomplete and
+        # can NEVER be a family-level pass (GPT M1/B5: the gate must fail closed at the FAMILY level).
+        rows, tc, boot = self._inputs(0.02, d_sharpe=0.20)
+        del rows["invvol"]; del boot["invvol"]             # drop a family member
+        v = b0._verdict(rows, tc, boot)
+        assert v["status"] == "incomplete"
+        assert v["screen_passed"] is False
+
 
 class TestTCAlgebra:
     def test_ic_scalar_washes_out(self):
@@ -147,3 +170,21 @@ class TestAprioriSigns:
     def test_low_vol_is_short_high_vol(self):
         assert b0.APRIORI_SIGNS["risk_vol_20d"] == -1.0    # low-volatility anomaly
         assert all(v == 1.0 for f, v in b0.APRIORI_SIGNS.items() if f != "risk_vol_20d")
+
+
+class TestLabelRealization:
+    """B1: a factor-date-d, 5-day-forward label realizes on open_days[pos(d)+5] — an IC may only use it
+    when that realization date is <= IS_END, else it reads returns from the sealed OOS window."""
+
+    def test_realization_is_h_days_forward(self):
+        grid = pd.DatetimeIndex(pd.bdate_range("2020-01-01", periods=40))
+        assert b0._realization_date(grid, grid[10], 5) == grid[15]
+        assert b0._realization_date(grid, grid[-1], 5) is None      # off the end of the grid
+
+    def test_last_is_day_label_would_cross_is_end(self):
+        # A rebalance on the last IS grid day has its 5d label realize AFTER IS_END -> must be excluded.
+        grid = pd.DatetimeIndex(pd.bdate_range("2020-12-01", "2021-01-31"))
+        is_end = pd.Timestamp("2020-12-31")
+        last_is = grid[grid <= is_end][-1]
+        rz = b0._realization_date(grid, last_is, 5)
+        assert rz is not None and rz > is_end                       # confirms the boundary the guard enforces
