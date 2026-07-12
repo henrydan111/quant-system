@@ -102,6 +102,29 @@ def _register(task_name: str, xml_str: str, user: str | None = None) -> int:
         os.remove(path)
 
 
+def _export_task(task_name: str) -> str | None:
+    """The task's current XML definition, or None if it does not exist — captured BEFORE mutating so a
+    pre-existing WORKING task can be RESTORED (not blindly deleted) if the pair install half-fails."""
+    r = subprocess.run(["schtasks", "/Query", "/TN", task_name, "/XML"],
+                       capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+
+
+def _restore_task(task_name: str, prev_xml: str | None, user: str | None) -> None:
+    """Roll a task back to its PREVIOUS definition (GPT M5): if it did not pre-exist, delete the one we
+    just created; if it did, re-create it from the captured XML. If the restore itself fails (e.g. a
+    Password task's creds must be re-entered), persist the backup so the operator can restore manually."""
+    if prev_xml is None:
+        subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"])
+        return
+    if _register(task_name, prev_xml, user) != 0:
+        backup = PROJECT_ROOT / "logs" / f"{task_name}.restore_backup.xml"
+        backup.parent.mkdir(exist_ok=True)
+        backup.write_text(prev_xml, encoding="utf-16")
+        print(f"WARNING: could not auto-restore {task_name}; its previous definition is saved at "
+              f"{backup} — restore it manually (schtasks /Create /XML ...).", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Manage the Phase 5-C scheduled tasks")
     ap.add_argument("--register", action="store_true", help="Create both tasks (§13 machine mutation)")
@@ -137,12 +160,16 @@ def main() -> int:
             print("ERROR: --user uses Password logon whose /RP * password prompt needs an interactive "
                   "console; no TTY detected. Run --register from a console.", file=sys.stderr)
             return 2
+        # Capture BOTH current definitions BEFORE mutating (M5): /Create /F may OVERWRITE an existing
+        # task, so on a half-failed pair install we must restore the previous one, never leave the pair
+        # half-installed AND never delete a task that was already working.
+        prev_daily = _export_task(DAILY_TASK)
         rc = _register(DAILY_TASK, daily_xml, args.user)
-        if rc != 0:
+        if rc != 0:  # /Create failed atomically -> a pre-existing daily task is untouched
             return rc
         rc2 = _register(WATCHDOG_TASK, watchdog_xml, args.user)
-        if rc2 != 0:  # roll back the first so we never leave a half-installed pair
-            subprocess.run(["schtasks", "/Delete", "/TN", DAILY_TASK, "/F"])
+        if rc2 != 0:
+            _restore_task(DAILY_TASK, prev_daily, args.user)  # restore prior def / delete if it was new
             return rc2
         return 0
 

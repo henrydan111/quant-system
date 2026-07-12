@@ -474,3 +474,20 @@ def test_assert_endpoints_complete_range_chains_from_anchor(tmp_path, monkeypatc
     _write_endpoint(tmp_path, "market/daily", "daily", "20260702", 0, codes=all4)
     ok, ev = mcb.assert_endpoints_complete("20260701", "20260702")
     assert ok is True, ev
+
+
+def test_raw_input_manifest_content_hash_detects_byte_swap(tmp_path, monkeypatch):
+    # GPT M3: the raw-input manifest is a full-CONTENT SHA-256 over the fresh-window per-date files, so
+    # a SAME-SIZE byte-swap changes the root (the old name+size+int-mtime digest collided on exactly
+    # that). A missing file is recorded as MISSING, not silently skipped.
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mcb, "_open_trading_days", lambda upto=None: ["20260301"])
+    f = tmp_path / "data" / "market" / "daily" / "2026" / "daily_20260301.parquet"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"AAAA")
+    m1 = mcb._raw_input_manifest("20260228", "20260301")
+    f.write_bytes(b"BBBB")  # same byte length, different content
+    m2 = mcb._raw_input_manifest("20260228", "20260301")
+    assert m1["algo"] == "sha256" and m1["file_count"] >= 1
+    assert m1["root"] != m2["root"], "content hash must catch a same-size byte swap"
+    assert any(r["sha256"] == "MISSING" for r in m2["files"]), "absent per-date file recorded as MISSING"

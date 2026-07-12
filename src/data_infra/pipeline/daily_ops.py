@@ -36,9 +36,14 @@ def _atomic_json(path: str, obj) -> None:
 
 
 def write_session_status(logs_dir: str, date: str, required_ok: bool, detail=None) -> None:
-    """Atomic per-session manifest. required_ok = every declared-required endpoint for `date` OK."""
+    """Atomic per-session manifest. required_ok = every declared-required endpoint for `date` OK.
+    STRICT: required_ok must be a real bool (a caller passing the string "false" — truthy — would else
+    be stored as JSON true and the strict reader would accept it, GPT minor 2). `detail` should carry
+    per-endpoint evidence (row counts / datasets), not just a boolean, so a manifest is auditable."""
+    if not isinstance(required_ok, bool):
+        raise TypeError(f"required_ok must be bool, got {type(required_ok).__name__} {required_ok!r}")
     _atomic_json(os.path.join(_status_dir(logs_dir), f"{date}.json"),
-                 {"date": date, "required_ok": bool(required_ok), "detail": detail or {}})
+                 {"date": date, "required_ok": required_ok, "detail": detail or {}})
 
 
 def session_required_ok(logs_dir: str, date: str) -> bool:
@@ -56,8 +61,11 @@ def session_required_ok(logs_dir: str, date: str) -> bool:
 
 
 def _open_days(ref_dir: str, upto: str) -> list[str]:
+    # DEDUP via set: if trade_cal ever carries >1 exchange (SSE+SZSE), the same open date appears twice
+    # and every consumer double-counts — a duplicated tail makes `cands[-2]` still-today in the pre-close
+    # selector (GPT B2). trade_cal is enforced SSE-only upstream, but dedup here defensively.
     cal = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
-    return sorted(d for d in cal.loc[cal['is_open'] == 1, 'cal_date'].astype(str) if d <= upto)
+    return sorted({d for d in cal.loc[cal['is_open'] == 1, 'cal_date'].astype(str) if d <= upto})
 
 
 def load_watermark(logs_dir: str) -> str | None:
@@ -84,11 +92,11 @@ def backlog_sessions(ref_dir: str, logs_dir: str, target: str, floor: str, max_n
     return todo[:max_n] if max_n else todo
 
 
-def contiguous_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
-    """Recompute the watermark FROM THE FLOOR every call (never trusts a cached value — so a poisoned
-    future watermark can't false-green, and it rebases when the provider floor advances): the LATEST
-    session W such that every open session in (floor, W] is required_ok (the first incomplete stops
-    it). Persists + returns W (== floor if the first session after floor is incomplete)."""
+def compute_contiguous_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
+    """PURE (no persistence): recompute the watermark FROM THE FLOOR — the LATEST session W such that
+    every open session in (floor, W] is required_ok (the first incomplete stops it). Never trusts a
+    cached value, so a poisoned future watermark can't false-green and it rebases when the provider
+    floor advances. A MONITOR (the watchdog) must use this and NOT mutate progress state (GPT M2)."""
     new = floor
     for d in _open_days(ref_dir, target):
         if d <= floor:
@@ -97,8 +105,27 @@ def contiguous_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -
             new = d
         else:
             break
+    return new
+
+
+def contiguous_watermark(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
+    """The WRITER path (orchestrator): compute + PERSIST the contiguous watermark. Returns W."""
+    new = compute_contiguous_watermark(ref_dir, logs_dir, target, floor)
     save_watermark(logs_dir, new)
     return new
+
+
+def manifest_set_digest(ref_dir: str, logs_dir: str, target: str, floor: str) -> str:
+    """A digest over the (date, required_ok) completeness set for every open session in (floor, target].
+    Binds a heartbeat to the EXACT manifest set it certified, so a stale heartbeat can't green a later
+    run whose completeness set differs (GPT M2)."""
+    import hashlib
+    h = hashlib.sha256()
+    for d in _open_days(ref_dir, target):
+        if d <= floor:
+            continue
+        h.update(f"{d}:{session_required_ok(logs_dir, d)}\n".encode())
+    return h.hexdigest()[:16]
 
 
 # retained name for callers/tests; recompute-from-floor is the only supported semantics now.

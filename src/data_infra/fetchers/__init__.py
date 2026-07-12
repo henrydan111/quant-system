@@ -17,13 +17,16 @@ DEFAULT_STATEMENT_LIMIT = 2000
 class _LockedPro:
     """Wrap the raw Tushare client so EVERY endpoint call — internal (via _safe_api_call) OR external
     (a script doing `fetcher.pro.xxx`) — flows through the cross-process account lock + global rate
-    spacing. There is NO unlocked path to the client (GPT 5-C Major 1).
+    spacing (GPT 5-C Major 1).
 
-    Implemented with ``__getattribute__`` + ``__slots__`` (NOT a bare ``__getattr__``): ``__getattr__``
-    fires only after normal lookup fails, so the wrapper's own ``_real`` would still be readable via
-    ``fetcher.pro._real`` — an UNLOCKED handle to the raw client, the exact side channel this wrapper
-    exists to close (mirrors the §3.3 pre-open guard; GPT 5-C re-review #4). ``__getattribute__``
-    intercepts every access and refuses the private slots, so no unlocked client can escape."""
+    This is DISCIPLINE, not a security boundary (GPT REWORK-4 Major 1): Python introspection can always
+    reach the wrapped client (the returned closure's ``__closure__``, ``object.__getattribute__`` on the
+    slot). ``__getattribute__`` + ``__slots__`` closes the CASUAL escape (``fetcher.pro._real`` no longer
+    returns the client — a bare ``__getattr__`` would leave it readable), and the PRO001 lint
+    (scripts/lint_no_bare_pro.py, in daily QA) fails the deliberate bypasses (raw construction, aliased
+    imports, ``__closure__`` / slot introspection). The account-safety guarantee rests on the lint +
+    convention, not on making the object tamper-proof. NOTE: external ``.pro`` calls get the lock +
+    spacing but NOT the ``_safe_api_call`` RETRY — prefer the ``fetch_*`` methods for retrying reads."""
 
     __slots__ = ("_real", "_base_sleep")
 
@@ -32,10 +35,11 @@ class _LockedPro:
         object.__setattr__(self, "_base_sleep", base_sleep)
 
     def __getattribute__(self, name):
-        # refuse the wrapper's own private slots / __dict__ so the raw client can never escape unlocked
+        # refuse the wrapper's own private slots / __dict__ so the raw client can't escape via the
+        # CASUAL path (fetcher.pro._real). Determined introspection still can — that's the lint's job.
         if name == "__dict__" or (name.startswith("_") and not name.startswith("__")):
-            raise AttributeError(f"_LockedPro: {name!r} is refused (no unlocked client handle)")
-        if name.startswith("__"):  # dunders (repr/class/pickle) resolve on the wrapper itself
+            raise AttributeError(f"_LockedPro: {name!r} is refused (no casual unlocked client handle)")
+        if name.startswith("__"):  # dunders (repr/class/reduce) resolve on the wrapper itself
             return object.__getattribute__(self, name)
         real = object.__getattribute__(self, "_real")
         fn = getattr(real, name)  # a Tushare endpoint (no endpoint name starts with '_')
@@ -48,6 +52,14 @@ class _LockedPro:
 
         _wrapped.__name__ = name
         return _wrapped
+
+    def __reduce__(self):
+        # EXPLICITLY unpicklable (GPT REWORK-4 Major 1): a live Tushare client handle must never cross a
+        # process boundary (Windows multiprocessing uses spawn -> pickle). Construct a fresh
+        # TushareFetcher per process instead. Without this, pickling failed with an obscure missing-slot
+        # error; make the refusal clear.
+        raise TypeError("_LockedPro is not picklable — do not pass a Tushare client across processes; "
+                        "build a fresh TushareFetcher in each process.")
 VIP_ALL_STOCK_LIMIT = 10000
 FINE_INDICATOR_LIMIT = 100
 

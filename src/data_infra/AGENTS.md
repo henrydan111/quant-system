@@ -5,7 +5,13 @@ These rules apply to everything under `src/data_infra/`.
 ## 1. API Safety
 
 - Never run parallel Tushare fetchers against the same account.
-- All Tushare requests must go through `TushareFetcher._safe_api_call()`.
+- All Tushare requests must flow through `TushareFetcher.pro`, which is the `_LockedPro` proxy: EVERY
+  `.pro.<endpoint>(...)` call — internal or from an ad-hoc script — is serialized + globally rate-spaced
+  across processes via the cross-process account lock (`data_infra/tushare_lock.spaced_call`). The
+  `PRO001` lint (`scripts/lint_no_bare_pro.py`, in daily QA) fails any raw-client construction/aliasing
+  that would bypass it. NOTE: the proxy guarantees the account lock + spacing but NOT retry — the retry
+  lives in `_safe_api_call`, so prefer the `fetch_*` methods (which call `_safe_api_call`) for reads;
+  a bare external `.pro.<endpoint>` is locked + spaced but not retried.
 - Do not reduce the default `base_sleep=1.5` without evidence that the endpoint and quota can handle it safely.
 - On repeated 429s or timeouts, slow down instead of retrying aggressively.
 

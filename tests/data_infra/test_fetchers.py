@@ -112,6 +112,9 @@ def test_locked_pro_routes_calls_and_refuses_raw_escape(tmp_path, monkeypatch):
     assert captured == [{"ts_code": "000001.SZ"}]
     assert proxy.data_attr == 42                               # non-callable attrs pass through
     assert proxy.__class__.__name__ == "_LockedPro"           # dunders resolve on the wrapper
-    for private in ("_real", "_base_sleep", "__dict__"):       # no unlocked client can escape
+    for private in ("_real", "_base_sleep", "__dict__"):       # no CASUAL unlocked client handle
         with pytest.raises(AttributeError):
             getattr(proxy, private)
+    import pickle                                              # unpicklable (Windows spawn) — GPT M1
+    with pytest.raises(TypeError):
+        pickle.dumps(proxy)

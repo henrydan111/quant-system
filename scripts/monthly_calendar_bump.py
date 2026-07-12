@@ -326,23 +326,55 @@ def _disk_free_gb() -> int:
     return shutil.disk_usage(str(PROJECT_ROOT))[2] // 2**30
 
 
-def _raw_input_digest(parent_end: str, target_end: str) -> str:
-    """Digest over the fresh-window raw inputs (daily/suspend_d/moneyflow/stk_limit file
-    name+size+mtime) at build time — an input-cut ATTESTATION. Computed under the raw-maintenance
-    barrier (phase_execute holds it), so it describes ONE stable raw cut (GPT 5-C Blocker 1)."""
+# fresh-window per-date raw inputs, hashed by CONTENT. These files are IMMUTABLE once a session is
+# complete (the daily job writes strictly forward, never backfills a completed past session), so a
+# content manifest computed at build time re-verifies identically at publish UNLESS the cut moved
+# out-of-band -> tamper-evidence. cyq_perf is INCLUDED (the old digest wrongly dropped it). report_rc
+# is a window-anchored year-file, added below.
+_MANIFEST_DATE_DATASETS = (("market/daily", "daily"), ("market/suspend_d", "suspend_d"),
+                           ("market/moneyflow", "moneyflow"), ("market/stk_limit", "stk_limit"),
+                           ("market/cyq_perf", "cyq_perf"))
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _raw_input_manifest(parent_end: str, target_end: str) -> dict:
+    """Full SHA-256 CONTENT manifest over the fresh-window raw inputs the build consumes — a complete,
+    collision-resistant, provider-bindable input-cut ATTESTATION (GPT 5-C M3: the old digest used
+    name+size+int-mtime [collides on a same-size byte-swap], covered only 4 datasets, and lived only in
+    the dry-run report). Each per-date file is hashed by content; a per-file sidecar is written and the
+    256-bit `root` is recorded in the report + handoff + re-verified before publish. Scoped to
+    (parent_end, target_end] so legitimate forward daily progress after target_end never false-fails the
+    re-verify; the frozen prefix is separately proven byte-identical by the frozen-prefix audit, and the
+    build itself runs UNDER raw_maintenance_lock so no writer can move the cut mid-build."""
     import hashlib
     opens = [d for d in _open_trading_days(upto=target_end) if parent_end < d <= target_end]
-    h = hashlib.sha256()
+    files = []
     for d in opens:
-        for sub, ep in (("market/daily", "daily"), ("market/suspend_d", "suspend_d"),
-                        ("market/moneyflow", "moneyflow"), ("market/stk_limit", "stk_limit")):
+        for sub, ep in _MANIFEST_DATE_DATASETS:
             f = PROJECT_ROOT / "data" / sub / d[:4] / f"{ep}_{d}.parquet"
-            try:
-                st = f.stat()
-                h.update(f"{ep}:{d}:{st.st_size}:{int(st.st_mtime)}".encode())
-            except OSError:
-                h.update(f"{ep}:{d}:MISSING".encode())
-    return h.hexdigest()[:16]
+            rel = f"{sub}/{f.name}"
+            if f.exists():
+                files.append({"path": rel, "sha256": _sha256_file(f), "size": f.stat().st_size})
+            else:
+                files.append({"path": rel, "sha256": "MISSING", "size": 0})
+    # report_rc window year-file(s) touched by the fresh window (availability-boundary halo dataset).
+    for yr in sorted({d[:4] for d in opens}):
+        f = PROJECT_ROOT / "data" / "market" / "report_rc" / f"report_rc_{yr}.parquet"
+        if f.exists():
+            files.append({"path": f"market/report_rc/{f.name}", "sha256": _sha256_file(f),
+                          "size": f.stat().st_size})
+    files.sort(key=lambda r: r["path"])
+    root = hashlib.sha256("\n".join(f"{r['path']}:{r['sha256']}:{r['size']}" for r in files).encode()).hexdigest()
+    return {"algo": "sha256", "root": root, "file_count": len(files),
+            "window": [parent_end, target_end], "files": files}
 
 
 def _prune_cyq_state(suffix: str) -> None:
@@ -635,6 +667,7 @@ def phase_plan(args) -> dict:
 DRYRUN_REPORT_PATH = OUT_DIR / "monthly_bump_dryrun_report.json"
 FRESH_AUDIT_PATH = OUT_DIR / "fresh_window_survivorship_audit.json"
 PUBLISH_HANDOFF_PATH = OUT_DIR / "publish_handoff.json"
+RAW_MANIFEST_PATH = OUT_DIR / "raw_input_manifest.json"
 
 
 def _report_rc_halo_start(target_end: str) -> str:
@@ -653,19 +686,19 @@ def _report_rc_halo_start(target_end: str) -> str:
 
 
 def phase_execute(args) -> int:
-    """Hold ONE parent-owned raw-maintenance barrier across the ENTIRE build (catch-up -> completeness
-    -> rebuild -> audits -> dry-run report), so the scheduled daily job cannot mutate the raw tree
-    while the formal provider is being assembled from it — a formal build_id must describe one stable
-    raw input cut (GPT 5-C Blocker 1). The child catch-up subprocesses inherit QUANT_RAW_MAINT_LOCK_HELD
-    (set by the barrier) and thus NO-OP their own raw_maintenance_lock rather than deadlocking on it."""
-    from data_infra.tushare_lock import raw_maintenance_lock
-    with raw_maintenance_lock():
-        return _phase_execute_impl(args)
+    """Catch up raw -> new policy -> full staged rebuild -> audits -> dry-run report (multi-hour;
+    STOPS before publish). The catch-up subprocesses each SELF-acquire raw_maintenance_lock; there is
+    NO parent env-barrier (that was a forgeable + orphan-prone bypass — a boolean env var isn't tied to
+    the kernel-lock holder, so a forged value or an orphaned inheriting child could enter raw
+    maintenance while a real writer holds the lock; GPT REWORK-4 Blocker 1). The build + input manifest
+    + audits then run UNDER a single IN-PROCESS raw_maintenance_lock (no lock-acquiring subprocess is
+    nested inside it), so the raw cut the formal build reads and attests cannot be mutated mid-build."""
+    return _phase_execute_impl(args)
 
 
 def _phase_execute_impl(args) -> int:
-    """Catch up raw -> new policy YAML -> full rebuild (staged) -> frozen-prefix audit +
-    fresh-window survivorship audit -> dry-run report. STOPS before publish. Multi-hour."""
+    """Pre-lock leg: parent-policy guard -> target_end -> disk floor -> catch-up (each subprocess
+    self-locks). Then hands off to _build_under_lock."""
     import subprocess
 
     parent_build, parent_policy = live_provider_ids()
@@ -724,6 +757,22 @@ def _phase_execute_impl(args) -> int:
                         "--state-suffix", target_end], check=True)
     else:
         logger.info("raw already current through %s", target_end)
+
+    # catch-ups (above) have self-locked + returned. The build + audits now run under ONE in-process
+    # raw_maintenance_lock so no daily/manual writer can mutate the raw cut the formal build reads.
+    return _build_under_lock(args, parent_build, parent_policy, parent_end, target_end)
+
+
+def _build_under_lock(args, parent_build, parent_policy, parent_end, target_end) -> int:
+    from data_infra.tushare_lock import raw_maintenance_lock
+    with raw_maintenance_lock():  # real kernel lock; the in-process build below re-acquires nothing
+        return _build_impl(args, parent_build, parent_policy, parent_end, target_end)
+
+
+def _build_impl(args, parent_build, parent_policy, parent_end, target_end) -> int:
+    """UNDER raw_maintenance_lock: completeness gate -> new policy YAML -> full staged rebuild + raw
+    input manifest -> frozen-prefix + fresh-window audits -> dry-run report. STOPS before publish."""
+    import subprocess
 
     # 1b. POST-catch-up completeness gate (B1): the catch-up just fetched the lagging endpoints
     # (cyq_perf) through target_end — VERIFY the FINAL target_end data is complete across all
@@ -800,6 +849,13 @@ def _phase_execute_impl(args) -> int:
                      "--allow-migration-exception once migrated.", recurring)
         return 1
 
+    # 4d. full-content raw-input manifest (M3) — computed here UNDER the lock, so it attests the exact
+    # cut the staged build just consumed. Sidecar carries the per-file hashes; the 256-bit root is
+    # recorded in the report + re-verified before publish + bound into the published provider_build.json.
+    raw_manifest = _raw_input_manifest(parent_end, target_end)
+    RAW_MANIFEST_PATH.write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    logger.info("raw-input manifest: %d files, root=%s", raw_manifest["file_count"], raw_manifest["root"])
+
     # 5. dry-run report -> STOP for human sign-off.
     report = {
         "target_end": target_end, "new_policy_id": policy_id, "staged_build_id": build_id,
@@ -811,7 +867,10 @@ def _phase_execute_impl(args) -> int:
         "fresh_window_audit_ok": fresh["ok"], "fresh_window_audit_artifact": str(FRESH_AUDIT_PATH.name),
         "report_rc_replay_halo_start": _report_rc_halo_start(target_end),
         "endpoint_completeness": complete_ev,
-        "raw_input_digest": _raw_input_digest(parent_end, target_end),  # input-cut attestation (B1)
+        "raw_input_manifest_root": raw_manifest["root"],  # full-content input-cut attestation (M3)
+        "raw_input_manifest_algo": raw_manifest["algo"],
+        "raw_input_manifest_file_count": raw_manifest["file_count"],
+        "raw_input_manifest_artifact": str(RAW_MANIFEST_PATH.name),
         "recurring_exception_types": recurring,
         "generated": datetime.now().isoformat(timespec="seconds"),
         "next": "review this report + both audit artifacts, then --publish-approved --i-reviewed-the-dryrun",
@@ -833,20 +892,44 @@ def phase_publish(args) -> int:
     if not DRYRUN_REPORT_PATH.exists():
         logger.error("no dry-run report at %s — run the execute phase first.", DRYRUN_REPORT_PATH)
         return 2
+    rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
+
+    # M3 verify-before-publish: re-hash the fresh-window raw inputs UNDER the lock and compare to the
+    # root the staged build attested. A mismatch means the raw cut moved out-of-band between execute
+    # and publish (a manual edit, a bypassed writer) — the staged provider no longer represents the
+    # live raw, so refuse the handoff (fail closed). The fresh window's per-date files are immutable
+    # once complete, so legitimate forward daily progress after target_end does NOT change this root.
+    from data_infra.tushare_lock import raw_maintenance_lock
+    from research_orchestrator.calendar_policy import load_calendar_policy
+    parent_end = load_calendar_policy(rep["parent_policy_id"]).calendar_end_date.replace("-", "")
+    target_end = rep["target_end"]
+    with raw_maintenance_lock():
+        live_manifest = _raw_input_manifest(parent_end, target_end)
+    if live_manifest["root"] != rep.get("raw_input_manifest_root"):
+        logger.error("RAW-INPUT MANIFEST MISMATCH — the raw cut changed since the staged build "
+                     "(execute root=%s, live root=%s over (%s, %s]). The staged provider no longer "
+                     "attests the live raw; re-run --execute. Refusing publish (fail closed).",
+                     rep.get("raw_input_manifest_root"), live_manifest["root"], parent_end, target_end)
+        return 2
+    logger.info("raw-input manifest re-verified (root=%s, %d files) — cut is stable since the build.",
+                live_manifest["root"], live_manifest["file_count"])
+
     # m1: the live swap/rebind/QA are deliberately not auto-wired (they mutate the live
     # provider — §13 — and follow the proven depth9/sharecap precedents). Emit an explicit
     # handoff artifact the proven scripts consume, and return NON-ZERO so a caller/scheduler
     # never mistakes this manual-handoff gate for a completed publish.
-    rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
     handoff = {
         "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
         "staged_build_id": rep.get("staged_build_id"),
         "staged_provider_dir": rep.get("staged_provider_dir"),
         "new_policy_id": rep.get("new_policy_id"),
         "parent_build_id": rep.get("parent_build_id"),
+        "raw_input_manifest_root": live_manifest["root"],  # bind the verified cut into the publish
         "required_manual_steps": [
             "safe atomic swap (staged->adjacent->live, backup old live) per _depth9_safe_publish.py",
             "rebind ~25 approval YAMLs to the new build+policy id per _rebind_approvals_*.py",
+            "write raw_input_manifest_root into the published data/qlib_data/metadata/provider_build.json "
+            "(bind provider_build_id -> the attested raw cut, M3)",
             "run scripts/run_daily_qa.py — must be Overall PASS (manifest + approval binding + POLICY001)",
             "write parent-build metadata + retain the referenced old live as .bak",
         ],

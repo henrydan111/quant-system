@@ -683,6 +683,46 @@ def test_publish_refuses_cross_volume_atomic_replace():
             raise AssertionError("publish() should have raised BuildGateError for cross-volume")
 
 
+def test_load_price_frame_fails_closed_on_null_adj_factor():
+    """GPT 5-C Blocker 3: a NaN adj_factor on a priced raw row (or a missing adj_factor column) must
+    RAISE BuildGateError, never be silently coerced to 1.0 (which treats raw prices as adjusted and
+    corrupts every cross-day return). The 1.0 default is permitted ONLY under the test escape hatch."""
+    import os as _os
+    import pytest
+    from data_infra.pit_backend import BuildGateError, StagedQlibBackendBuilder
+
+    b = StagedQlibBackendBuilder.__new__(StagedQlibBackendBuilder)
+    b.raw_files = lambda ds: ["f1"]
+    b._apply_price_repair_overrides = lambda ds, raw, source_name=None: (raw, None)
+    b._standardize_common_columns = lambda x: x
+
+    # priced row with a NaN adj_factor -> fail closed
+    df = pd.DataFrame({"ts_code": ["A", "A"], "trade_date": ["20260701", "20260702"],
+                       "close": [1.0, 2.0], "adj_factor": [1.0, np.nan]})
+    b._read_raw_file = lambda ds, p: df.copy()
+    with pytest.raises(BuildGateError, match="null.*adj_factor|adjustment-history hole"):
+        b._load_price_frame()
+
+    # missing adj_factor column, no escape -> fail closed
+    b._read_raw_file = lambda ds, p: df.drop(columns=["adj_factor"]).copy()
+    _os.environ.pop("QUANT_ALLOW_UNIT_ADJ_FACTOR", None)
+    with pytest.raises(BuildGateError, match="missing the adj_factor"):
+        b._load_price_frame()
+
+    # missing column WITH the explicit test escape -> defaults to 1.0
+    _os.environ["QUANT_ALLOW_UNIT_ADJ_FACTOR"] = "1"
+    try:
+        out = b._load_price_frame()
+        assert (out["factor"] == 1.0).all()
+    finally:
+        _os.environ.pop("QUANT_ALLOW_UNIT_ADJ_FACTOR", None)
+
+    # clean adj_factor -> passed through verbatim (no coercion)
+    clean = pd.DataFrame({"ts_code": ["A"], "trade_date": ["20260701"], "close": [1.0], "adj_factor": [1.5]})
+    b._read_raw_file = lambda ds, p: clean.copy()
+    assert list(b._load_price_frame()["factor"]) == [1.5]
+
+
 def test_publish_staged_first_swap_success(tmp_path):
     """Staged-first publish success: staged provider is promoted into qlib_dir and
     the old live provider is moved to the backup dir."""

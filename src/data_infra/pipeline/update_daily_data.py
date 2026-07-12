@@ -18,6 +18,7 @@ import sys
 import os
 import argparse
 import logging
+import re
 import tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -67,6 +68,13 @@ EXPECTED_EMPTY_DATE_FILES = {
     "moneyflow": "moneyflow_known_empty_dates.txt",
     "northbound": "northbound_nonconnect_days.txt",
 }
+
+
+class MarketDataError(RuntimeError):
+    """A PRESENT trading session is incomplete/invalid for a required field (adj_factor is
+    ENGINE-required; daily_basic required) — raised by update_market_data so an incomplete session can
+    NEVER be silently committed and NEVER read back as success via an optional side channel (GPT 5-C
+    Blocker 3). The prior daily file is preserved (the validated write is atomic temp+replace)."""
 
 
 class DailyDataUpdater:
@@ -147,9 +155,16 @@ class DailyDataUpdater:
                     "errors": [f"{target_date} beyond trade_cal coverage — refresh the calendar"],
                 }
 
-        # 3. Update Daily Market Data
-        market_symbols = self.update_market_data(target_date)
-        market_ok = bool(market_symbols)
+        # 3. Update Daily Market Data. A required-field failure RAISES MarketDataError (non-ignorable,
+        # no side channel) — capture it into the errors so market_ok is False + the session is incomplete.
+        market_error = None
+        try:
+            market_symbols = self.update_market_data(target_date)
+        except MarketDataError as exc:
+            market_symbols = set()
+            market_error = str(exc)
+            logger.error(market_error)
+        market_ok = bool(market_symbols) and market_error is None
 
         # 4. Update Indices
         self.update_index_data(target_date)
@@ -182,10 +197,10 @@ class DailyDataUpdater:
         errors = []
         if getattr(self, '_reference_error', None):
             errors.append(self._reference_error)
-        if not market_ok:
+        if market_error:  # required-field incomplete (adj_factor/daily_basic) — typed, non-ignorable (B3)
+            errors.append(market_error)
+        elif not market_ok:
             errors.append(f"daily market data missing for trading day {target_date}")
-        if getattr(self, '_market_error', None):  # adj_factor/daily_basic empty-or-thin (M4)
-            errors.append(self._market_error)
         if self._suspend_error:
             errors.append(self._suspend_error)
         errors.extend(getattr(self, '_phase3_errors', []))  # required moneyflow/stk_limit failures
@@ -268,59 +283,68 @@ class DailyDataUpdater:
                 logger.error(f"Error updating index {name}: {e}")
 
     def update_market_data(self, target_date: str):
-        """
-        Fetch and merge daily OHLCV + valuation + adj_factor for the target date.
+        """Fetch + merge daily OHLCV + valuation + adj_factor for `target_date`, VALIDATING every
+        required field BEFORE committing.
 
-        Returns:
-            set[str]: Updated stock ts_codes.
-        """
+        Returns set[str] of ts_codes on success. Returns an EMPTY set when the daily endpoint itself is
+        empty (vendor not ready / non-trading — the caller decides via is_trading_day). RAISES
+        MarketDataError — and does NOT write the file, preserving the prior — when a PRESENT session is
+        incomplete/invalid: wrong trade_date, duplicate keys, or adj_factor (ENGINE-required) /
+        daily_basic below coverage, or post-merge adj_factor non-null coverage below floor. There is NO
+        `_market_error` side channel — an incomplete session cannot be read back as success (GPT B3)."""
         logger.info(f"Fetching market data for {target_date}...")
 
-        self._market_error = None
-        try:
-            df_daily = self.fetcher.fetch_daily_data(trade_date=target_date)
-            if df_daily.empty:
-                logger.warning(f"No daily market data for {target_date}. API may not be updated yet.")
-                return set()
-
-            df_basic = self.fetcher.fetch_fundamentals(trade_date=target_date)
-            df_adj = self.fetcher.fetch_adj_factor(trade_date=target_date)
-
-            # adj_factor is ENGINE-required and daily_basic is required; an empty or thin response is a
-            # session failure ("some OHLCV exists" is not completeness — GPT M4). Coverage vs the daily
-            # universe, not mere emptiness.
-            daily_codes = set(df_daily['ts_code'].dropna().astype(str))
-            problems = []
-            for nm, df, floor in (("adj_factor", df_adj, 0.98), ("daily_basic", df_basic, 0.90)):
-                if df.empty:
-                    problems.append(f"{nm} EMPTY")
-                elif 'ts_code' in df.columns:
-                    cov = len(set(df['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
-                    if cov < floor:
-                        problems.append(f"{nm} coverage {cov:.3f} < {floor}")
-            if problems:
-                self._market_error = f"market data {target_date}: " + "; ".join(problems)
-                logger.error(self._market_error)
-
-            df_merged = df_daily
-            if not df_basic.empty:
-                df_basic = df_basic.drop(columns=['close'], errors='ignore')
-                df_merged = pd.merge(df_merged, df_basic, on=['ts_code', 'trade_date'], how='left')
-            if not df_adj.empty:
-                df_merged = pd.merge(df_merged, df_adj, on=['ts_code', 'trade_date'], how='left')
-
-            year = target_date[:4]
-            year_dir = os.path.join(self.market_daily_dir, year)
-            os.makedirs(year_dir, exist_ok=True)
-
-            file_path = os.path.join(year_dir, f"daily_{target_date}.parquet")
-            df_merged.to_parquet(file_path, index=False)
-            logger.info(f"Saved daily data ({len(df_merged)} stocks) to {file_path}")
-            return set(df_merged['ts_code'].dropna().astype(str).tolist())
-
-        except Exception as e:
-            logger.error(f"Error fetching market data for {target_date}: {e}")
+        df_daily = self.fetcher.fetch_daily_data(trade_date=target_date)
+        if df_daily.empty:
+            logger.warning(f"No daily market data for {target_date}. API may not be updated yet.")
             return set()
+
+        # schema + target-date + unique-key validation on the daily frame BEFORE anything commits.
+        for col in ("ts_code", "trade_date"):
+            if col not in df_daily.columns:
+                raise MarketDataError(f"market {target_date}: daily frame missing required column {col!r}")
+        td = df_daily["trade_date"].astype(str).str.replace("-", "", regex=False)
+        stray = sorted(set(td) - {target_date})
+        if stray:
+            raise MarketDataError(f"market {target_date}: daily frame carries other trade_dates {stray[:3]} "
+                                  f"(stale/mispartitioned response)")
+        if df_daily.duplicated(subset=["ts_code", "trade_date"]).any():
+            raise MarketDataError(f"market {target_date}: daily frame has duplicate (ts_code, trade_date) keys")
+
+        df_basic = self.fetcher.fetch_fundamentals(trade_date=target_date)
+        df_adj = self.fetcher.fetch_adj_factor(trade_date=target_date)
+
+        # adj_factor is ENGINE-required and daily_basic is required; empty/thin is a session FAILURE
+        # ("some OHLCV exists" is not completeness — GPT M4/B3). Coverage vs the daily universe.
+        daily_codes = set(df_daily['ts_code'].dropna().astype(str))
+        for nm, df, floor in (("adj_factor", df_adj, 0.98), ("daily_basic", df_basic, 0.90)):
+            if df.empty:
+                raise MarketDataError(f"market {target_date}: {nm} EMPTY (required field)")
+            if 'ts_code' not in df.columns:
+                raise MarketDataError(f"market {target_date}: {nm} missing ts_code column")
+            cov = len(set(df['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
+            if cov < floor:
+                raise MarketDataError(f"market {target_date}: {nm} coverage {cov:.3f} < {floor} (required)")
+
+        df_merged = df_daily
+        if not df_basic.empty:
+            df_basic = df_basic.drop(columns=['close'], errors='ignore')
+            df_merged = pd.merge(df_merged, df_basic, on=['ts_code', 'trade_date'], how='left')
+        df_merged = pd.merge(df_merged, df_adj, on=['ts_code', 'trade_date'], how='left')
+
+        # post-merge non-null adj_factor coverage for the PRICED rows — a merge that silently dropped
+        # adj is a hole that pit_backend would (used to) turn into a corrupting 1.0 (GPT B3).
+        if 'adj_factor' not in df_merged.columns:
+            raise MarketDataError(f"market {target_date}: merged frame lost the adj_factor column")
+        nn = float(pd.to_numeric(df_merged['adj_factor'], errors='coerce').notna().mean())
+        if nn < 0.98:
+            raise MarketDataError(f"market {target_date}: post-merge non-null adj_factor {nn:.3f} < 0.98 "
+                                  f"(adjustment history hole)")
+
+        file_path = os.path.join(self.market_daily_dir, target_date[:4], f"daily_{target_date}.parquet")
+        _atomic_write_parquet(df_merged, file_path)  # validated -> atomic temp+replace (prior preserved)
+        logger.info(f"Saved daily data ({len(df_merged)} stocks) to {file_path}")
+        return set(df_merged['ts_code'].dropna().astype(str).tolist())
 
     def update_fundamentals(self, target_date: str):
         """
@@ -669,24 +693,39 @@ def _validate_trade_cal(df, *, fresh: bool):
         raise ValueError("fresh trade_cal (fetched is_open='1') contains non-open rows")
     if out.duplicated(subset=["exchange", "cal_date"]).any():
         raise ValueError("trade_cal has duplicate (exchange, cal_date) keys")
+    # SSE-only (GPT Blocker 2): this system stores a SINGLE market calendar. A second exchange (SZSE/
+    # BSE) would double every date and make `_open_days`/`cands[-2]` double-count; a genuine per-exchange
+    # holiday divergence cannot be represented by one calendar and must fail closed until an explicit
+    # per-instrument calendar policy exists. SSE is the canonical A-share trading calendar.
+    exchanges = set(out["exchange"].unique())
+    if exchanges - {"SSE"}:
+        raise ValueError(f"trade_cal contains non-SSE exchange(s) {sorted(exchanges - {'SSE'})} — this "
+                         f"system stores a single SSE market calendar; refusing (GPT B2)")
     if "pretrade_date" not in out.columns:
         if fresh:
             raise ValueError("fresh trade_cal missing pretrade_date")
         out["pretrade_date"] = ""
     out["pretrade_date"] = out["pretrade_date"].astype(str).str.replace("-", "", regex=False)
-    # CONTINUITY (GPT Blocker 2): per exchange, each OPEN day's pretrade_date must reference the
-    # immediately-preceding OPEN cal_date — a silently-MISSING trading day breaks the chain (a purely
-    # syntactic check would accept 20260701,20260703 with 20260703.pretrade_date=20260702). Enforced
-    # on a fresh fetch, and on any base whose open-day pretrade_dates are populated (8-digit).
-    op = out[out["is_open"] == 1]
-    if not op.empty and (fresh or op["pretrade_date"].str.fullmatch(r"\d{8}").all()):
-        for ex, g in op.groupby("exchange"):
-            g = g.sort_values("cal_date")
-            prev = g["cal_date"].shift(1)
-            mism = (g["pretrade_date"] != prev) & prev.notna()
-            if mism.any():
-                raise ValueError(f"trade_cal continuity break (missing session?) for {ex} at "
-                                 f"{g.loc[mism, 'cal_date'].head(3).tolist()}")
+    # CONTINUITY (GPT Blocker 2): per exchange, each OPEN day (after the first) must carry a valid
+    # pretrade_date EQUAL to the immediately-preceding OPEN cal_date — a silently-MISSING trading day
+    # breaks the chain (a purely syntactic check would accept 20260701,20260703 with
+    # 20260703.pretrade_date=20260702). Validate EACH subsequent row INDEPENDENTLY; do NOT gate the
+    # whole chain on `.all()` of the pretrade_date format — the live calendar's FIRST pretrade_date is
+    # None, so `.all()` was False and the entire continuity check was silently skipped for every
+    # fresh=False validation (the exact defect GPT reproduced). The first open row is exempt (its
+    # predecessor may legitimately sit outside the frame / be blank on the earliest historical row).
+    for ex, g in out[out["is_open"] == 1].groupby("exchange"):
+        g = g.sort_values("cal_date").reset_index(drop=True)
+        cal_dates = g["cal_date"].tolist()
+        pretrades = g["pretrade_date"].tolist()
+        for i in range(1, len(g)):
+            pt = pretrades[i]
+            if not re.fullmatch(r"\d{8}", pt):
+                raise ValueError(f"trade_cal {ex}: open day {cal_dates[i]} has malformed pretrade_date "
+                                 f"{pt!r} (continuity unverifiable)")
+            if pt != cal_dates[i - 1]:
+                raise ValueError(f"trade_cal continuity break (missing session?) {ex}: {cal_dates[i]} "
+                                 f"pretrade_date={pt} != prior open session {cal_dates[i - 1]}")
     return out[["exchange", "cal_date", "is_open", "pretrade_date"]]
 
 
@@ -707,11 +746,14 @@ def resolve_last_complete_session(ref_dir: str, close_hhmm: str = "1730", now=No
             now = datetime.now()
     today = now.strftime('%Y%m%d')
     cal = pd.read_parquet(os.path.join(ref_dir, "trade_cal.parquet"))
-    all_days = sorted(cal['cal_date'].astype(str).tolist())
+    # DEDUP (GPT B2): a multi-exchange calendar repeats each date, so a duplicated `today` would make
+    # cands[-2] STILL today (a pre-close run would then not fall back to the prior session). trade_cal
+    # is SSE-only by enforcement, but dedup defensively so this selector is correct regardless.
+    all_days = sorted(set(cal['cal_date'].astype(str)))
     if not all_days or all_days[-1] < today:
         raise SystemExit(f"trade_cal coverage ends {all_days[-1] if all_days else 'EMPTY'} < today "
                          f"{today} (CST) — calendar not future-aware; refusing a stale session")
-    opens = sorted(cal[cal['is_open'] == 1]['cal_date'].astype(str).tolist())
+    opens = sorted(set(cal[cal['is_open'] == 1]['cal_date'].astype(str)))
     cands = [d for d in opens if d <= today]
     if not cands:
         raise SystemExit("resolve_last_complete_session: no open trading day <= today in trade_cal")

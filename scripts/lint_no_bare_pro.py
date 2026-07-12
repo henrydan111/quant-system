@@ -1,11 +1,15 @@
-# SCRIPT_STATUS: ACTIVE — Phase 5-C: ban raw Tushare-client construction that bypasses the locked proxy
-"""AST lint (GPT 5-C Major 1): forbid `ts.pro_api(...)` / `tushare.pro_api(...)` outside the fetcher.
+# SCRIPT_STATUS: ACTIVE — Phase 5-C: ban raw Tushare-client construction/introspection outside the proxy
+"""AST lint (GPT 5-C Major 1): forbid every realistic way to obtain an UNLOCKED Tushare client.
 
-Every sanctioned Tushare call must flow through `TushareFetcher.pro`, which is a locked proxy that
-serializes + rate-spaces calls across processes (CLAUDE.md §6.1). Constructing a RAW client directly
-(`ts.pro_api(token)`) creates an UNLOCKED handle that bypasses the account lock. The one allowed
-construction site is data_infra/fetchers/__init__.py (which wraps it in the proxy). Exit 1 on any
-other. Wired into run_daily_qa.
+`TushareFetcher.pro` is a locked proxy that serializes + rate-spaces calls across processes (CLAUDE.md
+§6.1). Python privacy is DISCIPLINE, not a security boundary (a determined caller can still reach the
+raw client via closures/introspection) — this lint makes the bypasses a QA failure. The only allowed
+construction site is data_infra/fetchers/__init__.py. Flags, outside it:
+  - `ts.pro_api(...)` / `tushare.pro_api(...)` / bare `pro_api(...)` (attribute OR name call)
+  - `DataApi(...)` construction (the underlying tushare client class)
+  - `from tushare import pro_api|DataApi` (import — catches later aliasing, `pro_api as make; make()`)
+  - `.__closure__` access + `object.__getattribute__(x, "_real"|"_base_sleep")` (raw-client introspection)
+Exit 1 on any. Wired into run_daily_qa.
 """
 from __future__ import annotations
 
@@ -16,18 +20,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED = {ROOT / "src" / "data_infra" / "fetchers" / "__init__.py"}
 SCAN_DIRS = [ROOT / "src", ROOT / "scripts", ROOT / "workspace" / "scripts"]
+_RAW_CTORS = {"pro_api", "DataApi"}
+_RAW_SLOTS = {"_real", "_base_sleep"}
 
 
-def _violations(path: Path) -> list[int]:
+def _violations(path: Path) -> list[tuple[int, str]]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (SyntaxError, UnicodeDecodeError):
         return []
     out = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "pro_api":
-            out.append(node.lineno)
+        # 1. raw-client construction: pro_api(...) / DataApi(...) as attribute or bare name
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Attribute) and f.attr in _RAW_CTORS:
+                out.append((node.lineno, f"{f.attr}() constructs a raw Tushare client (bypasses the proxy)"))
+            elif isinstance(f, ast.Name) and f.id in _RAW_CTORS:
+                out.append((node.lineno, f"{f.id}() constructs a raw Tushare client (bypasses the proxy)"))
+            # 2. object.__getattribute__(x, "_real") raw-slot introspection
+            elif isinstance(f, ast.Attribute) and f.attr == "__getattribute__":
+                for a in node.args:
+                    if isinstance(a, ast.Constant) and a.value in _RAW_SLOTS:
+                        out.append((node.lineno, f"object.__getattribute__(..., {a.value!r}) reaches the "
+                                                 f"raw client behind the proxy"))
+        # 3. from tushare import pro_api|DataApi (catches aliasing: `pro_api as make; make()`)
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "tushare":
+            for alias in node.names:
+                if alias.name in _RAW_CTORS:
+                    out.append((node.lineno, f"`from tushare import {alias.name}` imports a raw-client "
+                                             f"constructor (alias it and the lint can't follow it)"))
+        # 4. .__closure__ introspection (reaching the wrapped raw method out of the proxy closure)
+        elif isinstance(node, ast.Attribute) and node.attr == "__closure__":
+            out.append((node.lineno, ".__closure__ access can extract the raw method from the proxy closure"))
     return out
 
 
@@ -37,15 +62,15 @@ def main() -> int:
         for py in d.rglob("*.py"):
             if py.resolve() in ALLOWED or "archive" in py.parts:
                 continue
-            for ln in _violations(py):
-                bad.append(f"{py.relative_to(ROOT)}:{ln}: bare pro_api() bypasses the locked proxy")
+            for ln, why in _violations(py):
+                bad.append(f"{py.relative_to(ROOT)}:{ln}: {why}")
     if bad:
-        print("PRO001 lint FAILED — construct Tushare via TushareFetcher(...).pro (locked proxy), "
-              "not a raw ts.pro_api():", file=sys.stderr)
+        print("PRO001 lint FAILED — every Tushare call must flow through TushareFetcher.pro (locked "
+              "proxy) / fetch_* methods; do not construct or reach a raw client:", file=sys.stderr)
         for b in bad:
             print("  " + b, file=sys.stderr)
         return 1
-    print("PRO001 lint OK: no bare pro_api() construction outside the fetcher")
+    print("PRO001 lint OK: no raw Tushare-client construction/introspection outside the fetcher")
     return 0
 
 

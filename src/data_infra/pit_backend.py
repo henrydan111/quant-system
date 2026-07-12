@@ -2825,11 +2825,28 @@ class StagedQlibBackendBuilder:
         price = self._standardize_common_columns(price)
         price["date"] = price["trade_date"]
         price["symbol"] = price["ts_code"]
-        # Same scalar-default bug pattern as _normalize_daily_partition: use an
-        # index-matched Series so the chained ``.fillna`` survives a missing
-        # column (only hits test mocks; real Tushare daily always has adj_factor).
-        adj_raw = price.get("adj_factor", pd.Series(1.0, index=price.index))
-        price["factor"] = pd.to_numeric(adj_raw, errors="coerce").fillna(1.0)
+        # adj_factor is ENGINE-required (§3.3). A MISSING column or a NaN on a (long-format, always
+        # priced) raw daily row was silently coerced to 1.0 here — raw prices treated as ADJUSTED,
+        # corrupting every cross-day return + the whole factor chain. Fail CLOSED; the 1.0 default is
+        # permitted ONLY under an explicit test escape hatch (GPT 5-C Blocker 3). update_market_data now
+        # refuses to commit a session whose adj_factor coverage is thin, so real raw is hole-free.
+        if "adj_factor" not in price.columns:
+            if os.environ.get("QUANT_ALLOW_UNIT_ADJ_FACTOR") == "1":
+                price["factor"] = 1.0
+            else:
+                raise BuildGateError(
+                    "market daily raw is missing the adj_factor column — refusing to substitute 1.0 "
+                    "(would treat raw prices as adjusted). Set QUANT_ALLOW_UNIT_ADJ_FACTOR=1 only in tests.")
+        else:
+            factor = pd.to_numeric(price["adj_factor"], errors="coerce")
+            if factor.isna().any():
+                n = int(factor.isna().sum())
+                cols = [c for c in ("ts_code", "trade_date") if c in price.columns]
+                sample = price.loc[factor.isna(), cols].head(5).to_dict("records") if cols else []
+                raise BuildGateError(
+                    f"{n} raw daily rows have a null/non-numeric adj_factor (adjustment-history hole) — "
+                    f"refusing to coerce to 1.0 (would corrupt adjusted prices); sample={sample}")
+            price["factor"] = factor
         if "volume" not in price.columns and "vol" in price.columns:
             price["volume"] = price["vol"]
         return price
