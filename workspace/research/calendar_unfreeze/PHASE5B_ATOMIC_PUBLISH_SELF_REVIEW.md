@@ -150,3 +150,32 @@ GPT 确认前七探针全过，但新探针再破三处。逐条：
 焦点电池 **200 绿**（monthly 62 + gate 25 + daily-5c/fetchers 锁迁移 + 其余）；四套件 **1076 绿+16 skip**（环境失败集逐文件同基线）。封存产生的只读残留由测试级 autouse unseal 清理。**本会话仍零次触碰活体 provider。**
 
 **结论：clean for GPT（re-review #4）。** 3 P0+3 Major 全闭且每条探针复刻；"已发布字节可在认证后被改写"这一最重残余风险由**封存只读 generation** 机械关闭；suspect/restore-parent 给出了被验证的恢复路径。真实 241GB 首跑（§13+前置清单 2/3/5）与 GPT 复审 #4 仍是 final 前置。
+
+---
+
+## REWORK round 5（GPT 复审 #4 再 REWORK：5 P0 + 1 Major，跨 checkout/伪造/锁资源/封存范围）— 2026-07-13
+
+GPT 确认前七 + disk-truth + 普通篡改 + 真 SIGINT + QA lease 探针全过，新对抗探针再破五处（+1 Major）。逐条：
+
+| # | GPT finding（探针复现） | 修复 | 探针测试 |
+|---|---|---|---|
+| **P0-A** 事务态 checkout-local（A 崩溃后 B 看不到 A 的 intent→把 A 未 QA 的 child 当 parent 发布，B 返 6）| intent + 每事务 record + **报告快照**迁到**共享 store 事务目录** `_tx_dir()`=`<data_root>/qlib_transactions/`；marker 绑 transaction_id；finalize/restore 走 `_load_tx_report()` 从快照读 pin（任何 checkout 可续接）；未决 intent 阻断每个 checkout | `test_unresolved_intent_blocks_new_publish_cross_checkout`（断言 intent 在共享 store 内 + 阻断）|
+| **P0-B** --restore-parent 中断半重绑（两反向审批间 KeyboardInterrupt→child live+审批不统一+内建恢复拒）| restore 整体进 `_defer_sigint`+`except BaseException` 域；中断→`_restore_approval_files` 撤销已写反向审批（byte-verified 回统一 child-bound）+intent `restore_interrupted`+重抛；可直接重跑 | `test_restore_parent_interrupt_rolls_back_partial_rebind`（中断→撤销→重跑 exit 0→parent live）|
+| **P0-C** finalize 审批 CAS 可由可变 record 伪造（改审批到 forged_build + 改 record 的 approvals_root→ready，绑定检查仍报 1 drift）| marker 钉 **record_sha256**（publish 时；record 改写即破）+核对 record 全字段（txid/build/policy/parent/raw/content/commit）+**直接跑 `evaluate_approval_evidence_bindings` 语义绑定**（伪造 root 骗不过；任何 binding drift=tamper→suspect）| `test_finalize_refuses_forged_record`（digest 破）+ `test_finalize_refuses_binding_drift_even_with_consistent_forge`（连 digest 一起重钉→语义绑定仍抓）|
+| **P0-D** provider 锁按 data_root 但 config 允许 qlib_data_dir 分离（两 raw root 同 provider→两锁）+driver 硬编码 `PROJECT_ROOT/data` | `provider_publish_lock(qlib_dir=…)` 按**规范 live provider 目录**取锁（`<qlib_parent>/.locks/provider_publish__<name>.lock`）；builder/emitter 传各自 qlib_dir；driver 全 live/raw 路径走单一 `_live_paths()`（BuildPaths）+`_tx_dir()`；非标准/分离布局 `_assert_standard_layout()` **开始前拒** | `test_provider_lock_keyed_by_qlib_dir_not_raw_root`（两 raw root 同 provider→同锁）+ `test_publish_refuses_nonstandard_layout` |
+| **P0-E** 封存按 basename 豁免（嵌套 `metadata/audit_payload/publish_state.json` ready 后可改）| `_seal_tree_readonly` 改**精确 tree-relative** 豁免（仅 `metadata/publish_state.json`）；外部 build manifest（在内容根内）一并 chmod 只读 | `test_seal_covers_nested_control_plane_basename_and_build_manifest`（嵌套同名 + build manifest ready 后 PermissionError；真 marker 仍可写）|
+| **Major-F** Tushare API 锁 repo-anchored（两 clone 同 token 并发抓）| 账号锁 + rate-spacing 迁 **per-user token 指纹目录** `~/.quant_tushare_locks/<fp>/`（TUSHARE_TOKEN env/.env→sha256[:16]；token 只作不可逆指纹）| `test_account_lock_is_per_token_not_per_checkout`（同 token 跨 checkout 同目录、跨 token 不同、明文不出现）|
+
+### 本轮自查发现并已修
+- `_write_publish_state` 状态转移会丢 `record_sha256`/`parent_build_id`（marker 每次重写只带 transaction_id/active_qa_attempt）→ 补进 carried-forward 集合（否则 pending_qa→lease 重写就把 digest 绑定丢了，happy-path 直接踩 suspect——自测当场抓到）。
+- 锁模块拆分：`_LOCK_DIR`→`_ACCOUNT_LOCK_DIR`（账号）+`_DATA_LOCK_DIR`（raw）+`_resolve_provider_lock_path`（provider，按 qlib_dir）；三处测试注入点同步迁移。
+
+### 已知残余（诚实披露，留 GPT 裁 — 均在 re-review #4 prompt 的开放问题里提过，本轮 GPT 未升级为 P0）
+- **封存只挡改/删既有文件，不挡在已封存目录内新建文件**（新增 bin 不改既有认证字节但可加一列 provider 会serve）——L2 可信操作员/意外威胁模型下的残余，是否 in-scope 留 GPT。
+- **.bak 树现带只读文件**，D2 修剪工具须先清属性（`_unseal_tree` 可复用；已在文档注记）。
+- **QA lease 活性**：worker 在另一 worker 的 QA-pass 与其 `_finalize_ready` 取锁之间抢 lease→finalize 见外来 lease 返 7 留 pending_qa（需再 finalize）——正确性安全、活性可接受。
+
+### 验证汇总（本轮）
+焦点电池 **207 绿**（+9 新探针）；四套件 **1083 绿+16 skip**（环境失败集逐文件同基线）；provider_context 门接线消费者（cache/r4/d3/spent-oos）隔离复跑 **55 绿**。封存只读残留由 autouse unseal fixture 清理。**本会话仍零次触碰活体 provider。**
+
+**结论：clean for GPT（re-review #5）。** 5 P0+1 Major 全闭且每条探针复刻；"跨 checkout 硬崩溃后未 QA child 被静默继承"这一最重残余风险由**共享 store 事务目录 + 未决 intent 全 checkout 阻断**关闭；伪造 record 由 digest+语义绑定双闭；锁按真实资源取值。真实 241GB 首跑（§13+前置清单）与 GPT 复审 #5 仍是 final 前置。
