@@ -107,7 +107,7 @@ class TestMFDerivation:
         assert "factor_positive" not in r.allowed_uses
 
     def test_mfr_penalty_bear_only(self):
-        r = build_mf_record("MFR1", "MFR")
+        r = build_mf_record("MFR01", "MFR")
         assert r.allowed_uses == frozenset({"penalty", "bear"})
         assert authorize(r, use="factor_positive", consumer_seat="macro",
                          target_dimension="risk_appetite_environment_fit") is False
@@ -115,3 +115,38 @@ class TestMFDerivation:
     def test_unknown_class_rejected(self):
         with pytest.raises(RegistryError, match="MF 记录类"):
             build_mf_record("MF01", "NFD", macro_type="货币政策")
+
+
+class TestReservedNamespaces:
+    # re-review Major-3: policy/MF factories can NEVER borrow a reserved M-line id
+    def test_policy_factory_rejects_reserved_m16(self):
+        with pytest.raises(RegistryError, match="越界"):
+            build_policy_row_record("M16")
+
+    def test_policy_factory_rejects_arbitrary_id(self):
+        with pytest.raises(RegistryError, match="越界"):
+            build_policy_row_record("POLICY1")
+
+    def test_policy_namespace_accepted(self):
+        assert build_policy_row_record("MP01").record_id == "MP01"
+
+    def test_mf_factory_rejects_reserved_m03(self):
+        with pytest.raises(RegistryError, match="越界"):
+            build_mf_record("M03", "MFD", macro_type="货币政策")
+
+    def test_mf_factory_rejects_short_id(self):
+        with pytest.raises(RegistryError, match="越界"):
+            build_mf_record("MFR1", "MFR")              # needs 2+ digits
+
+    def test_kernel_factory_rejects_deviant_reserved_mint(self):
+        # even bypassing the taxonomy factories, the KERNEL factory refuses a
+        # reserved id with non-canonical metadata (the original probe:
+        # a factor-positive M16 policy record)
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            build_card_record,
+        )
+        with pytest.raises(RegistryError, match="保留 ID"):
+            build_card_record("M16", domain="macro", evidence_class="market_state_fact",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"policy_alignment"})

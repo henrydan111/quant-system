@@ -100,6 +100,37 @@ class TestEvidenceFence:
             {"verification_status": "传闻", "content_kind": "事实", "is_rumor": True},
             "stock") == "NFR"
 
+    # re-review Major-1: the fence is INDEPENDENTLY fail-closed (no type_batch help)
+    def test_unknown_route_never_defaults_positive(self):
+        with pytest.raises(RegistryError, match="primary_route"):
+            assign_evidence_class(
+                {"verification_status": "官方证实", "content_kind": "事实",
+                 "is_rumor": False}, "stok")            # typo'd route
+
+    def test_malformed_status_never_defaults_positive(self):
+        with pytest.raises(RegistryError, match="verification_status"):
+            assign_evidence_class(
+                {"verification_status": "hacked", "content_kind": "事实",
+                 "is_rumor": False}, "stock")
+
+    def test_malformed_kind_rejected(self):
+        with pytest.raises(RegistryError, match="content_kind"):
+            assign_evidence_class(
+                {"verification_status": "官方证实", "content_kind": "?",
+                 "is_rumor": False}, "stock")
+
+    def test_non_bool_rumor_rejected(self):
+        with pytest.raises(RegistryError, match="is_rumor"):
+            assign_evidence_class(
+                {"verification_status": "官方证实", "content_kind": "事实",
+                 "is_rumor": "false"}, "stock")
+
+    def test_assess_flash_validates_display_fields(self):
+        with pytest.raises(RegistryError, match="event_type"):
+            assess_flash(_cluster("x"), _typing(event_type="EVIL"), _route("stock"))
+        with pytest.raises(RegistryError, match="importance"):
+            assess_flash(_cluster("x"), _typing(importance="5"), _route("stock"))
+
 
 # --------------------------------------------------- positive section + leg slices
 
@@ -147,6 +178,35 @@ class TestFlashSection:
         card, records = render_news_flash_section([a1, a2], CUT)
         assert card.factor_payload_text.count("重复事实文") == 1
 
+    def test_conflicting_fact_assessments_hard_fail(self):
+        # re-review BLOCKER: NFD imp=5 + NFR imp=1 on the SAME fact must never let
+        # importance pick the class (the rumor flag was silently erased before)
+        good = _assessed("同一事实文", status="官方证实", importance=5)
+        rumor = _assessed("同一事实文", status="传闻", rumor=True, importance=1)
+        with pytest.raises(RegistryError, match="冲突评定"):
+            render_news_flash_section([good, rumor], CUT)
+
+    def test_conflicting_direction_hard_fails(self):
+        # identity covers direction too — same fact typed 利好 and 利空 = conflict
+        a1 = _assessed("同事实方向冲突", status="官方证实")
+        a2 = assess_flash(_cluster("同事实方向冲突"),
+                          _typing(status="官方证实", direction="利空"),
+                          _route("stock", content="同事实方向冲突"))
+        with pytest.raises(RegistryError, match="冲突评定"):
+            render_news_flash_section([a1, a2], CUT)
+
+    def test_coordination_ored_across_group(self):
+        # re-review BLOCKER: metadata-identical duplicates, coordination on the
+        # LOW-importance one -> merged row + NFC still emitted (OR, never erased)
+        plain = _assessed("同事实协同", status="官方证实", importance=5)
+        flagged = _assessed("同事实协同", status="官方证实", importance=1,
+                            coordination=True)
+        card, records = render_news_flash_section([plain, flagged], CUT)
+        assert card.factor_payload_text.count("同事实协同") == 1
+        assert "NFC01" in card.restricted_text          # the safety flag survives
+        # merged importance = max(5, 1) -> 5 stars on the fact line
+        assert "★★★★★" in card.factor_payload_text
+
     def test_deterministic_order_and_numbering(self):
         items = [_assessed("低重要", importance=1, dt="2025-01-27 09:00:00"),
                  _assessed("高重要", importance=5, dt="2025-01-27 08:00:00"),
@@ -172,6 +232,20 @@ class TestFlashSection:
     def test_macro_route_rejected_from_news_card(self):
         with pytest.raises(RegistryError, match="宏观"):
             render_news_flash_section([_assessed("央行降准", primary="macro")], CUT)
+
+    def test_macro_route_commentary_rejected_by_route_not_class(self):
+        # re-review Major-1: macro-route 评论 becomes news_context CLASS — the old
+        # class-based check missed it; the renderer must reject by ROUTE
+        with pytest.raises(RegistryError, match="宏观路"):
+            render_news_flash_section(
+                [_assessed("大盘宽幅震荡点评", kind="评论", primary="macro")], CUT)
+
+    def test_forged_evidence_class_rejected(self):
+        # Major-1 verify-not-trust: a hand-tampered class is recomputed and refused
+        a = _assessed("传闻重组", status="传闻", rumor=True)
+        a["evidence_class"] = "NFD"                     # forge rumor -> positive
+        with pytest.raises(RegistryError, match="伪造"):
+            render_news_flash_section([a], CUT)
 
     def test_injection_sanitized(self):
         # a flash whose content embeds a fake evidence token cannot mint an id
@@ -228,6 +302,12 @@ class TestAttentionCard:
         assert "N00" in card.restricted_text
         n00 = [r for r in records if r.record_id == "N00"][0]
         assert n00.evidence_class == "attention_only"
+
+    def test_duplicate_extra_row_id_rejected(self):
+        # re-review Major-2: extra_rows colliding with NFV01 must not seal
+        with pytest.raises(RegistryError, match="重复 record_id"):
+            render_attention_context_card(
+                self._flow(), CUT, extra_rows=(("NFV01", "撞号行"),))
 
 
 # --------------------------------------------------- D7 attribute rows
@@ -289,6 +369,86 @@ class TestD7Attributes:
             AttributeRow(row_id=row.row_id, claim_id="EVIL", fact_cluster_id="f1",
                          evidence_group_id=row.evidence_group_id,
                          attribute_type="fact", text=row.text, row_hash=row.row_hash)
+
+
+# --------------------------------------------------- D7 batch bundle (Major-4)
+
+class TestAttributeBundle:
+    def _base(self):
+        card, records = render_news_flash_section(
+            [_assessed("重大订单甲", status="官方证实", importance=5),
+             _assessed("重大订单乙", status="官方证实", importance=4,
+                       dt="2025-01-27 09:00:00")], CUT)
+        return records
+
+    def _split(self, base_id, claim="c1"):
+        return {"base_record_id": base_id, "claim_id": claim, "fact_cluster_id": "f1",
+                "evidence_class": "NFD", "importance": 5,
+                "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}}
+
+    def test_base_demoted_attributes_positive(self):
+        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
+        base = self._base()
+        bundle, rows, final = build_attribute_bundle([self._split("NFD01")], base)
+        by_id = {r.record_id: r for r in final}
+        # the split event's broad base row can no longer score positively...
+        assert authorize(by_id["NFD01"], use="factor_positive", consumer_seat="news",
+                         target_dimension="event_materiality") is False
+        # ...its scoped attribute rows can (each only toward its own dimension)
+        assert authorize(by_id["NFD01.fact"], use="factor_positive",
+                         consumer_seat="news",
+                         target_dimension="event_materiality") is True
+        # untouched sibling stays positive
+        assert authorize(by_id["NFD02"], use="factor_positive", consumer_seat="news",
+                         target_dimension="event_materiality") is True
+        # the final set builds a valid registry (no duplicate identities)
+        build_card_registry(CUT, final)
+
+    def test_duplicate_claim_across_calls_rejected(self):
+        # re-review Major-4: (claim, attribute) exact-once is GLOBAL — the bundle
+        # is the single entry point, and a claim split twice (even via two bases)
+        # is refused
+        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
+        base = self._base()
+        with pytest.raises(RegistryError, match="全局重复拆分"):
+            build_attribute_bundle([self._split("NFD01", claim="c1"),
+                                    self._split("NFD02", claim="c1")], base)
+
+    def test_unknown_base_rejected(self):
+        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
+        with pytest.raises(RegistryError, match="不在快讯节记录集"):
+            build_attribute_bundle([self._split("NFD99")], self._base())
+
+    def test_bundle_sealed(self):
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            AttributeBundle, build_attribute_bundle,
+        )
+        bundle, _, _ = build_attribute_bundle([self._split("NFD01")], self._base())
+        assert len(bundle.bundle_hash) == 64
+        from workspace.research.ai_research_dept.engine.news_seal import SealError as SE
+        with pytest.raises(SE):
+            AttributeBundle(claim_ids=("EVIL",), row_hashes=bundle.row_hashes,
+                            record_ids=bundle.record_ids,
+                            demoted_base_ids=bundle.demoted_base_ids,
+                            bundle_hash=bundle.bundle_hash)
+
+
+# --------------------------------------------------- macro precedence (Major-5)
+
+class TestMacroPrecedence:
+    def test_prompt_pins_external_shock_precedence(self):
+        # re-review Major-5: discrete external shocks take precedence over
+        # 地缘外围/商品汇率/货币政策 — pinned in the typing prompt verbatim
+        from workspace.research.ai_research_dept.engine.news_ingest import (
+            _MACRO_TYPE_APPENDIX,
+        )
+        assert "归类优先级" in _MACRO_TYPE_APPENDIX
+        assert "一律归 external_shock" in _MACRO_TYPE_APPENDIX
+        assert "优先于 地缘外围/商品汇率/货币政策" in _MACRO_TYPE_APPENDIX
+
+    def test_derivation_doc_states_precedence(self):
+        import workspace.research.ai_research_dept.engine.news_taxonomy as tax
+        assert "离散外部冲击" in (tax.__doc__ or "")
 
 
 # --------------------------------------------------- B1′ legacy classification

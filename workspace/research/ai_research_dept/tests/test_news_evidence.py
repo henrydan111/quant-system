@@ -43,8 +43,10 @@ def _coordination(rid="NFC01"):
 
 
 def _macro(rid="M01"):
+    # M01-M16 是冻结保留 ID(re-review Major-3)——mint 必须与权威表逐字一致
     return build_card_record(rid, domain="macro", evidence_class="market_state_fact",
-                             allowed_uses={"factor_positive"}, allowed_consumers={"macro"},
+                             allowed_uses={"factor_positive", "context_only"},
+                             allowed_consumers={"macro"},
                              allowed_dimensions={"risk_appetite_environment_fit"})
 
 
@@ -98,6 +100,56 @@ class TestCardRecord:
             CardRecord(record_id=r.record_id, domain=r.domain, evidence_class=r.evidence_class,
                        allowed_uses=r.allowed_uses, allowed_consumers=r.allowed_consumers,
                        allowed_dimensions=r.allowed_dimensions, content_hash="0" * 64)
+
+
+class TestReservedMLine:
+    # re-review Major-3: the factory itself refuses a reserved M-id minted with
+    # ANY metadata deviating from the frozen authoritative table
+    def test_m16_with_factor_positive_rejected(self):
+        with pytest.raises(RegistryError, match="保留 ID"):
+            build_card_record("M16", domain="macro", evidence_class="market_state_fact",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"policy_alignment"})
+
+    def test_m01_with_wrong_dimension_rejected(self):
+        with pytest.raises(RegistryError, match="保留 ID"):
+            build_card_record("M01", domain="macro", evidence_class="market_state_fact",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"liquidity_flows_transmission"})
+
+    def test_m04_with_extra_consumer_rejected(self):
+        with pytest.raises(RegistryError, match="保留 ID"):
+            build_card_record("M04", domain="macro", evidence_class="market_limit_state",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro", "news"},
+                              allowed_dimensions={"risk_appetite_environment_fit",
+                                                  "liquidity_flows_transmission"})
+
+    def test_canonical_mint_accepted(self):
+        assert _macro("M01").record_id == "M01"        # 逐字规范 → 可铸
+
+
+class TestHierarchicalIdScan:
+    # re-review Major-2: one token resolves to exactly ONE record (longest-first)
+    def test_d7_child_does_not_double_resolve_parent(self):
+        from workspace.research.ai_research_dept.engine.news_evidence import scan_payload_ids
+        parent = _nfd("NFD01")
+        child = build_card_record("NFD01.economic_linkage", domain="news",
+                                  evidence_class="NFD",
+                                  allowed_uses={"factor_positive"},
+                                  allowed_consumers={"news"},
+                                  allowed_dimensions={"fundamental_link"})
+        reg = build_card_registry(CUT, [parent, child])
+        # the child token alone must resolve ONLY the child, never also the parent
+        assert scan_payload_ids("引用 NFD01.economic_linkage 支撑", reg) \
+            == {"NFD01.economic_linkage"}
+        # both tokens present -> both found
+        assert scan_payload_ids("NFD01 与 NFD01.economic_linkage", reg) \
+            == {"NFD01", "NFD01.economic_linkage"}
+        # parent followed by a period (sentence end) is still the parent
+        assert scan_payload_ids("see NFD01.", reg) == {"NFD01"}
 
 
 # --------------------------------------------------- sealed registry

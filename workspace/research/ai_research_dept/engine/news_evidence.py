@@ -90,6 +90,41 @@ def is_positive_class(evidence_class: str) -> bool:
     return EVIDENCE_CEILING.get(evidence_class, 0) > 0
 
 
+#: M01-M16 冻结权威表(§6b M1⁴/M1‴;record_id → (evidence_class, allowed_dimensions))。
+#  定义在 kernel(而非 news_taxonomy)——工厂级保留 ID 锁直接对照它,凡 mint M01-M16
+#  的记录必须与本表逐字一致(re-review Major-3:build_policy_row_record("M16") 曾能
+#  铸出 factor_positive 的 M16——公开工厂自铸冲突元数据,现从工厂层封死)。
+M_LINE_TAXONOMY: dict[str, tuple[str, frozenset]] = {
+    "M01": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M02": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M03": ("market_breadth_state", frozenset({"risk_appetite_environment_fit"})),
+    "M04": ("market_limit_state", frozenset({"risk_appetite_environment_fit",
+                                             "liquidity_flows_transmission"})),
+    "M05": ("market_state_fact", frozenset({"industry_concept_transmission"})),
+    "M06": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M07": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M08": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M09": ("market_breadth_state", frozenset({"risk_appetite_environment_fit"})),
+    "M10": ("market_limit_state", frozenset({"risk_appetite_environment_fit",
+                                             "liquidity_flows_transmission"})),
+    "M11": ("market_state_fact", frozenset({"liquidity_flows_transmission"})),
+    "M12": ("market_state_fact", frozenset({"risk_appetite_environment_fit"})),
+    "M13": ("market_state_fact", frozenset({"liquidity_flows_transmission"})),
+    "M14": ("market_leadership_state", frozenset({"industry_concept_transmission"})),
+    "M15": ("market_breadth_state", frozenset({"risk_appetite_environment_fit"})),
+    "M16": ("market_state_fact", frozenset()),   # 聚合:context_only 永不正向(M1⁴)
+}
+_M_LINE_RESERVED_RE = re.compile(r"^M(0[1-9]|1[0-6])$")
+
+
+def _m_line_expected(record_id: str) -> tuple:
+    """保留 M-line ID 的规范元数据:(class, uses, consumers, dims)。"""
+    ec, dims = M_LINE_TAXONOMY[record_id]
+    uses = frozenset({"factor_positive", "context_only"}) if dims \
+        else frozenset({"context_only"})
+    return ec, uses, frozenset({"macro"}), dims
+
+
 # --------------------------------------------------- 逐卡注册记录(封印)
 
 class RegistryError(Exception):
@@ -164,6 +199,16 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
                 f"factor_positive 记录须有非空 allowed_dimensions ⊆ 注册维;越界 {sorted(bad_dim)}")
         if not consumers:
             raise RegistryError("factor_positive 记录须有非空 allowed_consumers")
+    # re-review Major-3:M01-M16 是冻结保留 ID——任何 mint 必须与权威表逐字一致,
+    # 政策/MF/任意工厂借用保留 ID 铸出偏离元数据在此(工厂层)即拒。
+    if _M_LINE_RESERVED_RE.match(record_id):
+        exp_ec, exp_uses, exp_consumers, exp_dims = _m_line_expected(record_id)
+        if (evidence_class, uses, consumers, dims) != (exp_ec, exp_uses,
+                                                       exp_consumers, exp_dims):
+            raise RegistryError(
+                f"{record_id} 是冻结 M-line 保留 ID(§6b M1⁴)——元数据必须与权威表"
+                f"逐字一致(期望 class={exp_ec}, uses={sorted(exp_uses)}, "
+                f"consumers={sorted(exp_consumers)}, dims={sorted(exp_dims)})")
     payload = {"record_id": record_id, "domain": domain, "evidence_class": evidence_class,
                "allowed_uses": sorted(uses), "allowed_consumers": sorted(consumers),
                "allowed_dimensions": sorted(dims)}
@@ -253,16 +298,21 @@ def dimension_ceiling(cited_ids, registry: SealedCardRegistry, *,
 
 def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
     """递归扫描完整序列化 payload(dict/list/tuple/str 任意嵌套),返回其中出现的**任何
-    已注册 record_id 集合**——覆盖每卡/键/嵌套/别名/散文内联(M1″ line 286)。"""
-    known = set(registry.records)
+    已注册 record_id 集合**——覆盖每卡/键/嵌套/别名/散文内联(M1″ line 286)。
+    re-review Major-2:**最长优先 alternation 单趟扫描**——一个 token 恰解析为一条
+    记录:`NFD01.economic_linkage`(D7 子行)不再同时命中父 `NFD01`(旧逐 ID 搜索里
+    `.` 是词边界导致父子双解析);词边界仍防 `M1` 命中 `M16`、`NFD1` 命中 `NFD11`。"""
+    known = sorted(registry.records, key=len, reverse=True)   # 最长优先
+    if not known:
+        return set()
+    pat = re.compile(r"(?<![A-Za-z0-9_])(?:"
+                     + "|".join(re.escape(k) for k in known)
+                     + r")(?![A-Za-z0-9_])")
     found: set = set()
 
     def walk(o):
         if isinstance(o, str):
-            for rid in known:
-                # 词边界匹配,防 'M1' 命中 'M16'(record_id 用非字母数字/边界隔开)
-                if re.search(r"(?<![A-Za-z0-9_])" + re.escape(rid) + r"(?![A-Za-z0-9_])", o):
-                    found.add(rid)
+            found.update(pat.findall(o))
         elif isinstance(o, dict):
             for k, v in o.items():
                 walk(k)
