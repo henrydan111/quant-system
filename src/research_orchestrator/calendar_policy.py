@@ -47,6 +47,13 @@ class CalendarPolicy:
     # fallback in resolve_spent_oos_boundary(). When present, BOTH must be set.
     spent_oos_end: Optional[str] = None
     fresh_holdout_start: Optional[str] = None
+    # Phase 5-B (B3.2): when True, formal runs under this policy REQUIRE the live
+    # provider_build.json to carry raw_input_manifest_root (the attested raw-input cut) —
+    # enforced by release_gate.assert_provider_raw_attestation at the formal-run
+    # provider-validation chokepoint. Default False so pre-thaw / legacy policies (whose
+    # providers predate the attestation) stay valid; every policy minted by the monthly
+    # bump sets it true.
+    require_raw_input_attestation: bool = False
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CalendarPolicy":
@@ -110,6 +117,7 @@ class CalendarPolicy:
             notes=tuple(str(n) for n in payload.get("notes", ())),
             spent_oos_end=str(spent) if spent is not None else None,
             fresh_holdout_start=str(fresh) if fresh is not None else None,
+            require_raw_input_attestation=payload.get("require_raw_input_attestation") is True,
         )
 
     def permits_calendar_mismatch(self, run_mode: str) -> bool:

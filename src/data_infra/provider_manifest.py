@@ -121,6 +121,13 @@ class ProviderManifest:
     validation: Optional[dict[str, Any]] = None
     retroactive_manifest: bool = False
     retroactive_manifest_evidence: tuple[str, ...] = field(default_factory=tuple)
+    # Phase 5-B (calendar unfreeze, B3.2): bind the published build to the exact raw-input
+    # cut it consumed (sha256 root of the full-readset raw_input_manifest) and to its parent
+    # build. OPTIONAL — pre-thaw manifests lack them and must keep loading; presence for
+    # formal runs is enforced by the release gate when the calendar policy requires it
+    # (require_raw_input_attestation), NOT by this loader.
+    raw_input_manifest_root: Optional[str] = None
+    parent_provider_build_id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ProviderManifest":
@@ -155,6 +162,24 @@ class ProviderManifest:
                 "retroactive_manifest_evidence array."
             )
 
+        # Phase 5-B: when present, raw_input_manifest_root must be a sha256 hex root — a
+        # malformed value is a corrupted attestation, not a legacy manifest (fail closed).
+        raw_root = payload.get("raw_input_manifest_root")
+        if raw_root is not None:
+            raw_root = str(raw_root)
+            if len(raw_root) != 64 or any(c not in "0123456789abcdef" for c in raw_root):
+                raise ProviderManifestError(
+                    f"raw_input_manifest_root must be a 64-char lowercase sha256 hex root, "
+                    f"got {raw_root!r}."
+                )
+        parent_build = payload.get("parent_provider_build_id")
+        if parent_build is not None:
+            parent_build = str(parent_build)
+            if not parent_build.strip():
+                raise ProviderManifestError(
+                    "parent_provider_build_id, when present, must be a non-blank string."
+                )
+
         return cls(
             schema_version=schema_version,
             provider_build_id=str(payload["provider_build_id"]),
@@ -179,6 +204,8 @@ class ProviderManifest:
             validation=payload.get("validation"),
             retroactive_manifest=retroactive,
             retroactive_manifest_evidence=evidence,
+            raw_input_manifest_root=raw_root,
+            parent_provider_build_id=parent_build,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -198,6 +225,12 @@ class ProviderManifest:
         }
         if self.retroactive_manifest:
             out["retroactive_manifest_evidence"] = list(self.retroactive_manifest_evidence)
+        # Emit the Phase 5-B attestation bindings only when present, so pre-thaw manifests
+        # round-trip byte-stable (schema keeps them optional).
+        if self.raw_input_manifest_root is not None:
+            out["raw_input_manifest_root"] = self.raw_input_manifest_root
+        if self.parent_provider_build_id is not None:
+            out["parent_provider_build_id"] = self.parent_provider_build_id
         return out
 
 
@@ -419,6 +452,8 @@ def emit_manifest_at_publish(
     builder_stage: str = "full",
     canonical_kline_hash: Optional[dict[str, Any]] = None,
     validation: Optional[dict[str, Any]] = None,
+    raw_input_manifest_root: Optional[str] = None,
+    parent_provider_build_id: Optional[str] = None,
 ) -> Path:
     """Emit a fresh manifest for a provider that is being published right now.
 
@@ -426,6 +461,10 @@ def emit_manifest_at_publish(
     Distinct from :func:`emit_retroactive_manifest` because no evidence array
     is required (the manifest is being produced contemporaneously with the
     publish).
+
+    ``raw_input_manifest_root`` / ``parent_provider_build_id`` (Phase 5-B B3.2)
+    bind the published build to the attested raw-input cut and its parent build;
+    the monthly atomic publish transaction supplies them, legacy callers omit.
     """
     qlib_dir = Path(qlib_dir)
     now_iso = datetime.utcnow().replace(microsecond=0).isoformat()
@@ -459,6 +498,8 @@ def emit_manifest_at_publish(
         canonical_kline_hash=canonical_kline_hash,
         validation=validation,
         retroactive_manifest=False,
+        raw_input_manifest_root=raw_input_manifest_root,
+        parent_provider_build_id=parent_provider_build_id,
     )
 
     target = manifest_path_for(qlib_dir)

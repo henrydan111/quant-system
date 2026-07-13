@@ -428,6 +428,111 @@ def assert_field_dependencies_eligible(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Provider raw-input attestation gate (Phase 5-B, calendar unfreeze B3.2)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The monthly atomic publish binds every new provider build to the exact raw-input
+# cut it consumed (provider_build.json.raw_input_manifest_root = sha256 root of the
+# full-readset raw_input_manifest). This gate makes that binding LOAD-BEARING for
+# formal runs: when the run's calendar policy declares
+# ``require_raw_input_attestation: true`` (every policy minted by the monthly bump
+# does), a live manifest WITHOUT a valid root fails the formal run. Legacy/pre-thaw
+# policies leave the flag unset, so providers that predate the attestation keep
+# working — enforcement rolls forward with the policies, never retroactively.
+
+_SHA256_HEX_ALPHABET = frozenset("0123456789abcdef")
+
+
+class ProviderAttestationError(RuntimeError):
+    """A formal run's calendar policy requires a raw-input attestation the live
+    provider manifest does not carry (or carries malformed)."""
+
+
+@dataclass(frozen=True)
+class ProviderAttestationGateResult:
+    eligible: bool
+    required: bool
+    policy_id: str | None
+    provider_build_id: str | None
+    raw_input_manifest_root: str | None
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_provider_raw_attestation(
+    *,
+    manifest: Any,
+    policy: Any,
+) -> ProviderAttestationGateResult:
+    """Decide whether the live provider manifest satisfies the policy's raw-input
+    attestation requirement.
+
+    ``manifest`` is a ``ProviderManifest`` (attribute access) or a plain mapping of
+    the on-disk ``provider_build.json``; ``policy`` is a ``CalendarPolicy`` (or any
+    object with ``policy_id`` + ``require_raw_input_attestation``). Duck-typed on
+    purpose so this module adds no data_infra import edges.
+    """
+    def _get(obj: Any, key: str) -> Any:
+        if isinstance(obj, Mapping):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    policy_id = _get(policy, "policy_id")
+    required = _get(policy, "require_raw_input_attestation") is True
+    build_id = _get(manifest, "provider_build_id")
+    root = _get(manifest, "raw_input_manifest_root")
+
+    reasons: list[str] = []
+    if required:
+        if root is None or not str(root).strip():
+            reasons.append(
+                f"calendar policy {policy_id!r} requires a raw-input attestation but the "
+                f"live provider manifest (build {build_id!r}) carries no "
+                "raw_input_manifest_root — the build was not published through the "
+                "attested monthly transaction (or the manifest was replaced)."
+            )
+        else:
+            root_s = str(root)
+            if len(root_s) != 64 or any(c not in _SHA256_HEX_ALPHABET for c in root_s):
+                reasons.append(
+                    f"raw_input_manifest_root on build {build_id!r} is not a 64-char sha256 "
+                    f"hex root ({root_s!r}) — corrupted attestation."
+                )
+
+    return ProviderAttestationGateResult(
+        eligible=len(reasons) == 0,
+        required=required,
+        policy_id=str(policy_id) if policy_id is not None else None,
+        provider_build_id=str(build_id) if build_id is not None else None,
+        raw_input_manifest_root=str(root) if root is not None else None,
+        reasons=tuple(reasons),
+    )
+
+
+def assert_provider_raw_attestation(
+    *,
+    manifest: Any,
+    policy: Any,
+    artifact_label: str = "formal run",
+) -> ProviderAttestationGateResult:
+    """Strict variant of :func:`evaluate_provider_raw_attestation` for formal paths.
+
+    Wired at the formal-run provider-validation chokepoint
+    (``backtest_engine.event_driven._validate_provider_at_runtime``), where both the
+    loaded manifest and the calendar policy are in hand.
+    """
+    result = evaluate_provider_raw_attestation(manifest=manifest, policy=policy)
+    if not result.eligible:
+        raise ProviderAttestationError(
+            f"Provider raw-input attestation gate blocked {artifact_label}: "
+            f"{list(result.reasons)}"
+        )
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Promotion gate — independent PIT-correct reproduction (PIT-prevention step 11)
 # ─────────────────────────────────────────────────────────────────────────
 #

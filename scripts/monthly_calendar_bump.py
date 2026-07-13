@@ -8,9 +8,13 @@ UNFREEZE_PLAN.md Phase 5-B (GPT §10 SHIP). Three modes:
   (default execute) Catch up raw -> new policy YAML -> full rebuild (staged) -> frozen-prefix
                     audit + FRESH-WINDOW SURVIVORSHIP audit -> dry-run report. STOPS before
                     publish (prints the --publish-approved instruction).
-  --publish-approved  The publish leg (only after a human reviewed the dry-run report):
-                    safe atomic swap -> approvals rebind -> post-publish QA -> parent-build
-                    metadata. §13 risk action — NEVER in the automated flow.
+  --publish-approved  The ATOMIC publish transaction (Phase 5-B B3; only after a human
+                    reviewed the dry-run report): under raw+publish locks, re-verify
+                    parent CAS + raw manifest + audit/staged attestations IMMEDIATELY
+                    before the safe staged-first swap, emit provider_build.json with
+                    raw_input_manifest_root + parent binding, rebind the approval YAMLs
+                    (rollback-on-failure), then post-publish QA. §13 risk action —
+                    human-invoked only, NEVER in the automated flow.
 
 Design invariants honored:
   - spent_oos_end STAYS 2026-02-27 across every bump (D3 §6); only calendar_end advances,
@@ -42,10 +46,16 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+# ROOT itself is needed for the `src.`-prefixed import form. research_orchestrator MUST be
+# imported as `src.research_orchestrator...` here: the plain top-level name is shadowed in
+# any pytest process that collects tests/research_orchestrator/ (that dir has an
+# __init__.py, so pytest binds sys.modules['research_orchestrator'] to the TESTS package).
+sys.path.insert(0, str(PROJECT_ROOT))
 
 SPENT_OOS_END = "2026-02-27"        # D3 §6: FROZEN across every bump
 FRESH_HOLDOUT_START = "2026-02-28"  # must equal REPORT_RC_FRESH_HOLDOUT_START
 POLICY_DIR = PROJECT_ROOT / "config" / "calendar_policies"
+APPROVALS_DIR = PROJECT_ROOT / "config" / "field_registry" / "approvals"
 OUT_DIR = PROJECT_ROOT / "workspace" / "outputs" / "calendar_unfreeze"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s",
@@ -144,6 +154,10 @@ def generate_thaw_policy(target_end: str, parent_build_id: str, *, write: bool) 
         "frozen": True, "reason": f"thaw_step{step}_monthly_freeze_bump",
         "established_at": end_iso,
         "spent_oos_end": SPENT_OOS_END, "fresh_holdout_start": FRESH_HOLDOUT_START,
+        # Phase 5-B B3.2: every bump-minted policy makes the raw-input attestation
+        # LOAD-BEARING — formal runs under it require the live provider_build.json to
+        # carry raw_input_manifest_root (release_gate.assert_provider_raw_attestation).
+        "require_raw_input_attestation": True,
         "allowed_modes": ["sandbox", "joinquant_replication", "formal_research_with_explicit_freeze",
                           "joinquant_daily", "joinquant_open_close_replica", "formal", "oos_test"],
         "default_formal_behavior": "require_explicit_policy",
@@ -390,6 +404,236 @@ def _verify_raw_manifest(manifest: dict, data_root=None) -> tuple[bool, str]:
     if recomputed != manifest.get("root"):
         return False, "manifest sidecar root does not match its own file list (tampered sidecar)"
     return True, "ok"
+
+
+# ── Phase 5-B B3.3-5: atomic publish transaction helpers ─────────────────────
+class PublishTransactionError(RuntimeError):
+    """A publish-transaction invariant failed (fail closed; nothing durable mutated
+    unless the message says otherwise)."""
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, str(path))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _staged_attestation(staged_provider) -> dict:
+    """Cheap tamper-evidence over the staged provider's IDENTITY-bearing small files:
+    calendars/day.txt + every instruments/*.txt (full content SHA-256) + the build
+    manifest.json at <build_root>/manifest.json + the features top-level dir count.
+    Recomputed at publish and compared to the execute-time root, so a staged tree whose
+    calendar/universe/build-record moved between the audited build and the swap refuses.
+    DELIBERATE LIMIT (disclosed): the 241GB features/*.bin content is attested by the
+    execute-time frozen-prefix + fresh-window audits, not re-hashed here — a full
+    content re-hash at publish would take longer than the build itself."""
+    prov = Path(staged_provider)
+    comp: dict = {}
+    cal = prov / "calendars" / "day.txt"
+    comp["calendars/day.txt"] = _sha256_file(cal) if cal.is_file() else "MISSING"
+    inst = prov / "instruments"
+    if inst.is_dir():
+        for p in sorted(inst.glob("*.txt")):
+            comp[f"instruments/{p.name}"] = _sha256_file(p)
+    else:
+        comp["instruments"] = "MISSING"
+    build_manifest = prov.parent / "manifest.json"
+    comp["build_manifest.json"] = _sha256_file(build_manifest) if build_manifest.is_file() else "MISSING"
+    feats = prov / "features"
+    comp["features_top_level_dir_count"] = (
+        sum(1 for p in feats.iterdir() if p.is_dir()) if feats.is_dir() else 0
+    )
+    import hashlib
+    root = hashlib.sha256(json.dumps(comp, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"algo": "sha256", "root": root, "components": comp}
+
+
+def _approvals_all_bound_to(pb: str, cp: str) -> tuple[bool, str]:
+    """Approvals compare-and-swap precondition: every NON-exempt approval YAML must be
+    bound to exactly the parent (pb, cp) so the post-swap rebind is a clean two-token
+    rewrite. Any other binding means an approval was added/rebound out-of-band since
+    the report — refuse (fail closed). Uses the strict governance loader, so a
+    malformed approval also refuses here."""
+    from data_infra.approval_evidence import ApprovalEvidenceConfigError, load_approval_bindings
+    try:
+        bindings = load_approval_bindings(APPROVALS_DIR)
+    except ApprovalEvidenceConfigError as exc:
+        return False, f"approvals directory fails the governance loader: {exc}"
+    bad = [b for b in bindings
+           if b.declared_provider_build_id != pb or b.declared_calendar_policy_id != cp]
+    if bad:
+        detail = "; ".join(
+            f"{Path(b.approval_file).name}=({b.declared_provider_build_id}/"
+            f"{b.declared_calendar_policy_id})" for b in bad[:5])
+        return False, (f"{len(bad)}/{len(bindings)} approval YAML(s) are NOT bound to the "
+                       f"parent ({pb}/{cp}): {detail}")
+    return True, f"{len(bindings)} bound approval YAML(s) verified against the parent ids"
+
+
+def _sub_binding_token(data: bytes, key: str, old: str, new: str, path: Path) -> bytes:
+    """Replace the single `key: <old>` binding VALUE in a YAML's raw bytes, preserving
+    every other byte (quoting style, EOLs, comments). Requires exactly ONE such line —
+    zero or multiple means the file drifted from the loader-validated shape (refuse)."""
+    import re
+    pat = re.compile(
+        rb"(?m)^(" + key.encode("utf-8") + rb":[ \t]*)([\"']?)"
+        + re.escape(old.encode("utf-8")) + rb"([\"']?)([ \t]*\r?)$"
+    )
+    hits = pat.findall(data)
+    if len(hits) != 1:
+        raise PublishTransactionError(
+            f"{path.name}: expected exactly 1 '{key}: {old}' binding line, found {len(hits)} "
+            "— the file drifted from its loader-validated shape; refusing the rebind."
+        )
+    return pat.sub(rb"\g<1>\g<2>" + new.encode("utf-8") + rb"\g<3>\g<4>", data, count=1)
+
+
+def _rebind_approval_files(old_pb: str, old_cp: str, new_pb: str, new_cp: str,
+                           ) -> tuple[list[Path], dict[Path, bytes]]:
+    """Two-phase byte-preserving rebind of every bound approval YAML (mirrors the
+    _rebind_approvals_depth9/thaw precedents, generalized). Phase 1 plans EVERY
+    substitution in memory and re-parses each result (the rebound YAML must parse to
+    exactly the new ids) — any failure writes NOTHING. Phase 2 writes atomically
+    per-file and restores already-written files if a write fails, then re-raises.
+    Returns (changed_paths, originals) so the caller can restore on later failures."""
+    from data_infra.approval_evidence import load_approval_bindings
+    bindings = load_approval_bindings(APPROVALS_DIR)
+    plan: list[tuple[Path, bytes]] = []
+    originals: dict[Path, bytes] = {}
+    for b in bindings:
+        p = Path(b.approval_file)
+        data = p.read_bytes()
+        nd = _sub_binding_token(data, "provider_build_id", old_pb, new_pb, p)
+        nd = _sub_binding_token(nd, "calendar_policy_id", old_cp, new_cp, p)
+        parsed = yaml.safe_load(nd.decode("utf-8"))
+        if (not isinstance(parsed, dict) or parsed.get("provider_build_id") != new_pb
+                or parsed.get("calendar_policy_id") != new_cp):
+            raise PublishTransactionError(
+                f"{p.name}: rebound YAML does not parse back to the new ids — refusing."
+            )
+        originals[p] = data
+        plan.append((p, nd))
+    written: list[Path] = []
+    try:
+        for p, nd in plan:
+            _atomic_write_bytes(p, nd)
+            written.append(p)
+    except Exception:
+        for p in written:
+            _atomic_write_bytes(p, originals[p])
+        raise
+    return [p for p, _ in plan], originals
+
+
+def _restore_approval_files(originals: dict[Path, bytes]) -> None:
+    for p, data in originals.items():
+        _atomic_write_bytes(p, data)
+
+
+def _make_publish_builder(staged_build_id: str):
+    """Builder handle for the proven safe staged-first swap primitive
+    (StagedQlibBackendBuilder.publish). Tests inject a tmp-rooted builder here."""
+    from data_infra.pit_backend import StagedQlibBackendBuilder
+    return StagedQlibBackendBuilder(build_id=staged_build_id)
+
+
+def _rollback_swap(builder) -> tuple[bool, str]:
+    """Best-effort inverse of StagedQlibBackendBuilder.publish(): NEW live -> adjacent,
+    backup -> live (parent restored), NEW tree -> back to the staged provider_dir.
+    Returns (live_restored, message). Only the middle rename is CRITICAL — after it the
+    parent provider is live again; a stranded NEW tree is loudly named, never silent."""
+    qlib = str(builder.paths.qlib_dir)
+    bak = f"{qlib}.bak_{builder.build_id}"
+    staging = f"{qlib}.new_{builder.build_id}"
+    if not os.path.isdir(bak):
+        return False, f"cannot roll back: parent backup missing at {bak}"
+    if os.path.exists(staging):
+        return False, f"cannot roll back: stale {staging} exists — resolve manually"
+    try:
+        os.replace(qlib, staging)  # NEW live -> adjacent (parent still safe in bak)
+    except OSError as exc:
+        return False, f"rollback live->staging rename failed ({exc}); the NEW build is still live"
+    try:
+        os.replace(bak, qlib)  # backup -> live: the CRITICAL restore
+    except OSError as exc:
+        return False, (f"CRITICAL: live provider MISSING — recover manually: move {bak!r} -> "
+                       f"{qlib!r} (the NEW build sits at {staging!r}); restore rename failed: {exc}")
+    try:
+        os.replace(staging, builder.paths.provider_dir)
+        note = "the NEW tree is back at the staged provider_dir for a clean retry"
+    except OSError:
+        note = (f"parent live restored; the NEW tree remains at {staging} — move it back to "
+                f"{builder.paths.provider_dir} before retrying")
+    return True, f"rolled back to the parent live provider; {note}"
+
+
+def _verify_live_manifest(qlib_dir, *, build_id: str, policy_id: str, raw_root: str,
+                          parent_pb: str) -> tuple[bool, str]:
+    """Post-swap check: the LIVE provider_build.json must attest exactly this
+    transaction (build id, policy, raw-input root, parent). Catches the emit path
+    failing silently (it is deliberately non-raising for legacy callers)."""
+    from data_infra.provider_manifest import ProviderManifestError, load_provider_manifest
+    try:
+        m = load_provider_manifest(qlib_dir)
+    except ProviderManifestError as exc:
+        return False, f"live manifest absent/unreadable after the swap: {exc}"
+    problems = []
+    if m.provider_build_id != build_id:
+        problems.append(f"provider_build_id={m.provider_build_id!r} != {build_id!r}")
+    if m.calendar_policy_id != policy_id:
+        problems.append(f"calendar_policy_id={m.calendar_policy_id!r} != {policy_id!r}")
+    if m.raw_input_manifest_root != raw_root:
+        problems.append(f"raw_input_manifest_root={m.raw_input_manifest_root!r} != {raw_root!r}")
+    if m.parent_provider_build_id != parent_pb:
+        problems.append(f"parent_provider_build_id={m.parent_provider_build_id!r} != {parent_pb!r}")
+    return (not problems), ("; ".join(problems) or "ok")
+
+
+def _write_journal(journal: dict) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    journal["updated_cst"] = now_cst().isoformat(timespec="seconds")
+    _atomic_write_bytes(TRANSACTION_JOURNAL_PATH,
+                        json.dumps(journal, ensure_ascii=False, indent=1).encode("utf-8"))
+
+
+def _run_post_publish_qa() -> int:
+    import subprocess
+    py = str(PROJECT_ROOT / "venv" / "Scripts" / "python.exe")
+    return subprocess.run([py, str(PROJECT_ROOT / "scripts" / "run_daily_qa.py")]).returncode
+
+
+def _write_rebind_record(*, new_pb: str, new_cp: str, old_pb: str, old_cp: str,
+                         n_files: int, raw_root: str, raw_files: int, backup_dir: str) -> Path:
+    """Committed governance record of the rebind (mirrors the 2026-07-01/2026-07-04
+    precedent .md files). Same-build-id retries overwrite their own record."""
+    date = now_cst().strftime("%Y-%m-%d")
+    path = APPROVALS_DIR / f"{date}_rebind_to_{new_pb}.md"
+    body = (
+        f"# Re-bind to the monthly thaw publish ({new_pb} / {new_cp})\n\n"
+        f"Written by the ATOMIC publish transaction (`scripts/monthly_calendar_bump.py "
+        f"--publish-approved`, Phase 5-B B3) on {now_cst().isoformat(timespec='seconds')}.\n\n"
+        f"{n_files} approval YAMLs re-bound on BOTH ids (provider `{old_pb}` -> `{new_pb}`; "
+        f"policy `{old_cp}` -> `{new_cp}`) inside the same lock scope as the swap: the parent "
+        f"compare-and-swap, the full-readset raw-input manifest re-hash (root `{raw_root}`, "
+        f"{raw_files} files), the audit-artifact hashes, and the staged attestation were all "
+        f"re-verified IMMEDIATELY before the safe staged-first swap "
+        f"(StagedQlibBackendBuilder.publish), under raw_maintenance_lock + "
+        f"provider_publish_lock.\n\n"
+        f"`raw_input_manifest_root` + `parent_provider_build_id` are bound into the published "
+        f"`data/qlib_data/metadata/provider_build.json`. "
+        f"`evaluate_approval_evidence_bindings()` -> 0 drift after the rebind. Prior live "
+        f"retained as `{backup_dir}` (one rename from restore). Transaction record: "
+        f"`workspace/outputs/calendar_unfreeze/publish_record.json`; journal: "
+        f"`publish_transaction_journal.json`.\n"
+    )
+    _atomic_write_bytes(path, body.encode("utf-8"))
+    return path
 
 
 def _prune_cyq_state(suffix: str) -> None:
@@ -681,7 +925,8 @@ def phase_plan(args) -> dict:
 
 DRYRUN_REPORT_PATH = OUT_DIR / "monthly_bump_dryrun_report.json"
 FRESH_AUDIT_PATH = OUT_DIR / "fresh_window_survivorship_audit.json"
-PUBLISH_HANDOFF_PATH = OUT_DIR / "publish_handoff.json"
+PUBLISH_RECORD_PATH = OUT_DIR / "publish_record.json"
+TRANSACTION_JOURNAL_PATH = OUT_DIR / "publish_transaction_journal.json"
 RAW_MANIFEST_PATH = OUT_DIR / "raw_input_manifest.json"
 
 
@@ -723,7 +968,7 @@ def _phase_execute_impl(args) -> int:
     # policy must not be silently regressed. Route through the typed loader so the YAML-parsed
     # ISO dates are normalized to strings (a bare yaml.safe_load yields datetime.date objects,
     # which would false-fail a string compare) and the loader's own validation runs.
-    from research_orchestrator.calendar_policy import load_calendar_policy
+    from src.research_orchestrator.calendar_policy import load_calendar_policy
     parent_pol = load_calendar_policy(parent_policy)
     if parent_pol.spent_oos_end != SPENT_OOS_END:
         logger.error("parent policy spent_oos_end %s != Phase-5 constant %s — refusing",
@@ -734,6 +979,16 @@ def _phase_execute_impl(args) -> int:
                      parent_pol.fresh_holdout_start, FRESH_HOLDOUT_START)
         return 2
     parent_end = parent_pol.calendar_end_date.replace("-", "")
+
+    # Approvals compare-and-swap PRECONDITION (Phase 5-B): surface a stale/out-of-band
+    # approval binding BEFORE the multi-hour build, not at publish time. The publish
+    # transaction re-checks the same condition under its locks.
+    ok_bind, bind_msg = _approvals_all_bound_to(parent_build, parent_policy)
+    if not ok_bind:
+        logger.error("approval-binding precondition FAILED: %s — commit/repair the approval "
+                     "rebind to the live parent before bumping.", bind_msg)
+        return 2
+    logger.info("approval-binding precondition OK: %s", bind_msg)
 
     # B2: target_end via the multi-endpoint readiness contract; validate any override.
     ready_target, ev = determine_target_end(now_cst(), probe_ready=endpoint_ready)
@@ -866,12 +1121,17 @@ def _build_impl(args, parent_build, parent_policy, parent_end, target_end) -> in
 
     # 4d. full-read-set raw-input manifest (Blocker 3) — computed here UNDER the lock, so it attests the
     # exact cut the staged build just consumed (EVERY DATASET_SPECS file + reference, not a 6-dataset
-    # subset). Sidecar carries the per-file hashes; the 256-bit root is recorded in the report +
-    # re-verified before publish + (manual step) bound into the published provider_build.json.
+    # subset). Sidecar carries the per-file hashes; the 256-bit root is recorded in the report, re-verified
+    # by the publish transaction under its locks, and bound into the published provider_build.json (B3.2).
     raw_manifest = _full_raw_manifest()
     RAW_MANIFEST_PATH.write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=1), encoding="utf-8")
     logger.info("raw-input manifest: %d files (full read set), root=%s",
                 raw_manifest["file_count"], raw_manifest["root"])
+
+    # 4e. transaction attestations (Phase 5-B): pin the audit artifacts + the staged tree's
+    # identity files at execute time; the publish transaction re-verifies all of them under
+    # its locks IMMEDIATELY before the swap and refuses on any drift.
+    staged_att = _staged_attestation(staged_provider)
 
     # 5. dry-run report -> STOP for human sign-off.
     report = {
@@ -881,7 +1141,11 @@ def _build_impl(args, parent_build, parent_policy, parent_end, target_end) -> in
         "spent_oos_end": SPENT_OOS_END, "fresh_holdout_start": FRESH_HOLDOUT_START,
         "disk_free_gb": _disk_free_gb(),
         "frozen_prefix_audit_ok": True, "frozen_prefix_audit_artifact": "frozen_prefix_audit.json",
+        "frozen_prefix_audit_sha256": _sha256_file(fp_artifact),
         "fresh_window_audit_ok": fresh["ok"], "fresh_window_audit_artifact": str(FRESH_AUDIT_PATH.name),
+        "fresh_window_audit_sha256": _sha256_file(FRESH_AUDIT_PATH),
+        "staged_attestation_root": staged_att["root"],
+        "staged_attestation_components": staged_att["components"],
         "report_rc_replay_halo_start": _report_rc_halo_start(target_end),
         "endpoint_completeness": complete_ev,
         "raw_input_manifest_root": raw_manifest["root"],  # full-content input-cut attestation (M3)
@@ -899,9 +1163,29 @@ def _build_impl(args, parent_build, parent_policy, parent_end, target_end) -> in
 
 
 def phase_publish(args) -> int:
-    """§13 human-gated publish leg. Requires a reviewed dry-run report. Safe swap -> rebind ->
-    QA -> parent-build metadata. This driver refuses to run publish unless the operator passes
-    --i-reviewed-the-dryrun AND the report exists (belt: the report is the approval evidence)."""
+    """§13 human-gated ATOMIC publish transaction (Phase 5-B B3.3-5: verification and the
+    swap are inseparable — "a manual interval after verification cannot be the integrity
+    boundary", GPT REWORK-5). Under raw_maintenance_lock + provider_publish_lock, in one
+    scope with nothing released in between:
+
+      verify: parent compare-and-swap (live build/policy == report parent) + full-readset
+              raw-input manifest re-hash + audit-artifact hashes + staged attestation +
+              new-policy re-validation + approvals compare-and-swap
+      swap:   StagedQlibBackendBuilder.publish() — the proven safe staged-first 3-rename
+              swap (single-failure self-rollback), emitting provider_build.json WITH
+              raw_input_manifest_root + parent_provider_build_id (B3.2)
+      bind:   re-load + verify the live manifest, byte-preserving rebind of every bound
+              approval YAML (two-phase, restore-on-failure), 0-drift assertion, committed
+              rebind record, publish record
+
+    then post-publish QA (run_daily_qa) OUTSIDE the locks. Any post-swap failure restores
+    the approval bytes AND rolls the swap back to the parent live provider.
+
+    Exit codes: 0 = published + rebound + QA pass; 2 = refused pre-swap (nothing mutated);
+    4 = post-swap failure, fully rolled back (nothing durably mutated); 5 = CRITICAL
+    inconsistent state (see publish_transaction_journal.json for the exact recovery move);
+    6 = published + consistent, but post-publish QA failed (investigate before any formal
+    run; the provider stays live, parent retained as .bak)."""
     if not args.i_reviewed_the_dryrun:
         logger.error("publish requires --i-reviewed-the-dryrun (you must have read %s). Refusing.",
                      DRYRUN_REPORT_PATH)
@@ -911,70 +1195,220 @@ def phase_publish(args) -> int:
         return 2
     rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
 
-    # Verify-before-publish gate (Blocker 3), all UNDER the raw lock so nothing moves during the check:
-    #  (a) COMPARE-AND-SWAP the parent — the live provider_build/policy MUST still be the report's parent
-    #      (else the report was computed against a since-replaced provider; refuse).
-    #  (b) RE-HASH the full read-set manifest (exactly the files the staged build consumed) and confirm
-    #      the recorded root — a mismatch means the raw cut moved out-of-band since the build.
-    # This still precedes the MANUAL §13 swap (see the residual note in required_manual_steps): the swap
-    # itself must re-run this check immediately before os.replace to be fully atomic — that automated
-    # transaction is the remaining B3 work.
-    from data_infra.tushare_lock import raw_maintenance_lock
+    # The transaction refuses a pre-Phase-5-B report (no attestation fields): the whole
+    # point is that publish verifies EXACTLY what execute attested.
+    required_keys = ("target_end", "new_policy_id", "staged_build_id", "staged_provider_dir",
+                     "parent_build_id", "parent_policy_id", "raw_input_manifest_root",
+                     "frozen_prefix_audit_sha256", "fresh_window_audit_sha256",
+                     "staged_attestation_root")
+    missing = [k for k in required_keys if not rep.get(k)]
+    if missing:
+        logger.error("dry-run report lacks the Phase-5-B transaction attestations %s — re-run "
+                     "--execute with the current driver. Refusing publish.", missing)
+        return 2
     if not RAW_MANIFEST_PATH.exists():
         logger.error("no raw-input manifest sidecar at %s — re-run --execute. Refusing publish.", RAW_MANIFEST_PATH)
         return 2
     manifest = json.loads(RAW_MANIFEST_PATH.read_text(encoding="utf-8"))
-    if manifest.get("root") != rep.get("raw_input_manifest_root"):
+    if manifest.get("root") != rep["raw_input_manifest_root"]:
         logger.error("manifest sidecar root %s != report root %s — inconsistent artifacts; refusing.",
-                     manifest.get("root"), rep.get("raw_input_manifest_root"))
+                     manifest.get("root"), rep["raw_input_manifest_root"])
         return 2
-    with raw_maintenance_lock():
+
+    from data_infra.tushare_lock import provider_publish_lock, raw_maintenance_lock
+    from src.research_orchestrator.calendar_policy import CalendarPolicyError, load_calendar_policy
+
+    journal: dict = {"transaction": "monthly_provider_publish",
+                     "staged_build_id": rep["staged_build_id"],
+                     "new_policy_id": rep["new_policy_id"],
+                     "parent_build_id": rep["parent_build_id"], "steps": []}
+
+    def j(step: str, status: str, **info) -> None:
+        journal["steps"].append({"step": step, "status": status,
+                                 "ts_cst": now_cst().isoformat(timespec="seconds"), **info})
+        _write_journal(journal)
+
+    # LOCK ORDER (fixed everywhere): raw_maintenance_lock FIRST, then provider_publish_lock.
+    with raw_maintenance_lock(), provider_publish_lock():
+        # ── VERIFY: every attestation re-checked here, IMMEDIATELY before the swap, with
+        # no lock release in between (the verify↔swap inseparability is the transaction).
         live_build, live_policy = live_provider_ids()
-        if live_build != rep.get("parent_build_id") or live_policy != rep.get("parent_policy_id"):
-            logger.error("PARENT DRIFT — the live provider is now build=%s/policy=%s but the reviewed "
-                         "report was computed against parent build=%s/policy=%s. The staged build no "
-                         "longer extends the live provider; re-run --execute. Refusing publish.",
-                         live_build, live_policy, rep.get("parent_build_id"), rep.get("parent_policy_id"))
+        if live_build != rep["parent_build_id"] or live_policy != rep["parent_policy_id"]:
+            logger.error("PARENT DRIFT — live provider is build=%s/policy=%s but the reviewed report "
+                         "was computed against parent build=%s/policy=%s. Re-run --execute. Refusing.",
+                         live_build, live_policy, rep["parent_build_id"], rep["parent_policy_id"])
+            j("verify", "refused", reason="parent_drift")
+            return 2
+        for artifact, key in (("frozen_prefix_audit.json", "frozen_prefix_audit_sha256"),
+                              (FRESH_AUDIT_PATH.name, "fresh_window_audit_sha256")):
+            p = OUT_DIR / artifact
+            if not p.is_file() or _sha256_file(p) != rep[key]:
+                logger.error("AUDIT-ARTIFACT DRIFT — %s missing or hash != the reviewed report's %s. "
+                             "Re-run --execute. Refusing.", p, key)
+                j("verify", "refused", reason=f"audit_artifact_drift:{artifact}")
+                return 2
+        staged_dir = Path(rep["staged_provider_dir"])
+        if not staged_dir.is_dir():
+            logger.error("staged provider missing at %s — refusing.", staged_dir)
+            j("verify", "refused", reason="staged_missing")
+            return 2
+        att = _staged_attestation(staged_dir)
+        if att["root"] != rep["staged_attestation_root"]:
+            logger.error("STAGED-TREE DRIFT — staged attestation root %s != the reviewed report's %s "
+                         "(calendar/instruments/build-manifest moved since the audited build). "
+                         "Re-run --execute. Refusing.", att["root"], rep["staged_attestation_root"])
+            j("verify", "refused", reason="staged_attestation_drift")
             return 2
         ok, why = _verify_raw_manifest(manifest)
-    if not ok:
-        logger.error("RAW-INPUT MANIFEST MISMATCH (%s) — the raw cut the staged build consumed changed "
-                     "since the build; the staged provider no longer attests the live raw. Re-run "
-                     "--execute. Refusing publish (fail closed).", why)
-        return 2
-    logger.info("verify-before-publish OK: parent unchanged (%s/%s) + raw manifest re-verified "
-                "(root=%s, %d files).", live_build, live_policy, manifest["root"], manifest["file_count"])
+        if not ok:
+            logger.error("RAW-INPUT MANIFEST MISMATCH (%s) — the raw cut the staged build consumed "
+                         "changed since the build. Re-run --execute. Refusing (fail closed).", why)
+            j("verify", "refused", reason=f"raw_manifest:{why}")
+            return 2
+        try:
+            pol = load_calendar_policy(rep["new_policy_id"], root=POLICY_DIR)
+        except CalendarPolicyError as exc:
+            logger.error("new policy %s no longer loads: %s — refusing.", rep["new_policy_id"], exc)
+            j("verify", "refused", reason="policy_load_failed")
+            return 2
+        end_iso = f"{rep['target_end'][:4]}-{rep['target_end'][4:6]}-{rep['target_end'][6:]}"
+        if (pol.spent_oos_end != SPENT_OOS_END or pol.fresh_holdout_start != FRESH_HOLDOUT_START
+                or not pol.frozen or pol.calendar_end_date != end_iso
+                or pol.require_raw_input_attestation is not True):
+            logger.error("new policy %s drifted from the minted contract (spent=%s fresh=%s frozen=%s "
+                         "end=%s require_raw_input_attestation=%s) — refusing.", pol.policy_id,
+                         pol.spent_oos_end, pol.fresh_holdout_start, pol.frozen,
+                         pol.calendar_end_date, pol.require_raw_input_attestation)
+            j("verify", "refused", reason="policy_drift")
+            return 2
+        ok_bind, bind_msg = _approvals_all_bound_to(live_build, live_policy)
+        if not ok_bind:
+            logger.error("APPROVALS DRIFT — %s. Refusing (the post-swap rebind would not be a clean "
+                         "parent->child rewrite).", bind_msg)
+            j("verify", "refused", reason=f"approvals:{bind_msg}")
+            return 2
+        builder = _make_publish_builder(rep["staged_build_id"])
+        if Path(builder.paths.provider_dir).resolve() != staged_dir.resolve():
+            logger.error("report staged_provider_dir %s is not the canonical staged path %s for "
+                         "build_id %s — refusing.", staged_dir, builder.paths.provider_dir,
+                         rep["staged_build_id"])
+            j("verify", "refused", reason="staged_path_mismatch")
+            return 2
+        j("verify", "ok", raw_files=manifest["file_count"], approvals=bind_msg)
+        logger.info("verify OK under locks: parent (%s/%s), raw root %s (%d files), audits + staged "
+                    "attestation + policy + approvals — swapping now.", live_build, live_policy,
+                    manifest["root"], manifest["file_count"])
 
-    # m1: the live swap/rebind/QA are deliberately not auto-wired (they mutate the live
-    # provider — §13 — and follow the proven depth9/sharecap precedents). Emit an explicit
-    # handoff artifact the proven scripts consume, and return NON-ZERO so a caller/scheduler
-    # never mistakes this manual-handoff gate for a completed publish.
-    handoff = {
-        "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
-        "staged_build_id": rep.get("staged_build_id"),
-        "staged_provider_dir": rep.get("staged_provider_dir"),
-        "new_policy_id": rep.get("new_policy_id"),
-        "parent_build_id": rep.get("parent_build_id"),
-        "raw_input_manifest_root": manifest["root"],  # bind the verified cut into the publish
-        "raw_input_manifest_file_count": manifest["file_count"],
-        "required_manual_steps": [
-            "RESIDUAL (B3, not yet automated): the swap below must re-run _verify_raw_manifest + the "
-            "parent compare-and-swap IMMEDIATELY before os.replace, so verification is atomic with the "
-            "swap (a manual interval after verification is not the integrity boundary — GPT REWORK-5)",
-            "safe atomic swap (staged->adjacent->live, backup old live) per _depth9_safe_publish.py",
-            "rebind ~25 approval YAMLs to the new build+policy id per _rebind_approvals_*.py",
-            "write raw_input_manifest_root into the published data/qlib_data/metadata/provider_build.json "
-            "(bind provider_build_id -> the attested raw cut, B3)",
-            "run scripts/run_daily_qa.py — must be Overall PASS (manifest + approval binding + POLICY001)",
-            "write parent-build metadata + retain the referenced old live as .bak",
-        ],
-        "generated_cst": now_cst().isoformat(timespec="seconds"),
-    }
-    PUBLISH_HANDOFF_PATH.write_text(json.dumps(handoff, ensure_ascii=False, indent=1), encoding="utf-8")
-    logger.warning("Publish is MANUAL (§13). Wrote handoff %s. Execute the required_manual_steps "
-                   "with the proven scripts, then run_daily_qa. This gate confirmed the review; it "
-                   "did NOT publish.", PUBLISH_HANDOFF_PATH)
-    return 3  # non-zero: a manual-handoff gate, not a completed publish
+        # ── SWAP: the proven primitive; single-rename failures self-roll-back inside it,
+        # leaving the pre-publish state — so a bounded retry vs transient Windows handle
+        # locks (indexer/Defender; the depth9 publish hit exactly this, WinError 5) is
+        # safe. A double failure (live missing) is NEVER retried.
+        from data_infra.pit_backend import BuildGateError
+        import time as _time
+        swap_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                builder.publish(calendar_policy_id=rep["new_policy_id"],
+                                raw_input_manifest_root=manifest["root"],
+                                parent_provider_build_id=live_build)
+                swap_exc = None
+                break
+            except BuildGateError as exc:
+                swap_exc = exc
+                break  # deterministic refusal (cross-volume / missing staged / double failure)
+            except OSError as exc:
+                swap_exc = exc
+                if not os.path.isdir(builder.paths.qlib_dir):
+                    break  # double failure — do NOT retry over a missing live provider
+                logger.warning("swap attempt %d failed (%s) — pre-publish state restored by the "
+                               "primitive; retrying in 5s", attempt, exc)
+                _time.sleep(5)
+        if swap_exc is not None:
+            live_intact = os.path.isdir(builder.paths.qlib_dir)
+            j("swap", "failed", error=str(swap_exc), live_provider_intact=live_intact)
+            if live_intact:
+                logger.error("swap failed after retries and the primitive rolled back — live "
+                             "provider intact: %s", swap_exc)
+                return 2
+            logger.critical("swap DOUBLE failure — live provider MISSING; follow the recovery move "
+                            "in the error: %s", swap_exc)
+            return 5
+        j("swap", "ok", backup=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+
+        # ── BIND: live manifest verification -> approvals rebind -> 0-drift -> records.
+        # Any failure here restores the approval bytes and rolls the swap back.
+        originals: dict[Path, bytes] = {}
+        try:
+            okm, why_m = _verify_live_manifest(
+                builder.paths.qlib_dir, build_id=rep["staged_build_id"],
+                policy_id=rep["new_policy_id"], raw_root=manifest["root"], parent_pb=live_build)
+            if not okm:
+                raise PublishTransactionError(f"post-swap live manifest verification failed: {why_m}")
+            changed, originals = _rebind_approval_files(
+                live_build, live_policy, rep["staged_build_id"], rep["new_policy_id"])
+            from data_infra.approval_evidence import evaluate_approval_evidence_bindings
+            drifts = evaluate_approval_evidence_bindings(
+                approvals_dir=APPROVALS_DIR,
+                manifest_path=Path(builder.paths.qlib_dir) / "metadata" / "provider_build.json")
+            still = [d for d in drifts if d.drift]
+            if still:
+                raise PublishTransactionError(
+                    f"{len(still)} approval(s) still drift after the rebind: {still[0].reasons()}")
+            record_md = _write_rebind_record(
+                new_pb=rep["staged_build_id"], new_cp=rep["new_policy_id"], old_pb=live_build,
+                old_cp=live_policy, n_files=len(changed), raw_root=manifest["root"],
+                raw_files=manifest["file_count"],
+                backup_dir=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+            record = {
+                "published_build_id": rep["staged_build_id"],
+                "calendar_policy_id": rep["new_policy_id"],
+                "parent_build_id": live_build, "parent_policy_id": live_policy,
+                "raw_input_manifest_root": manifest["root"],
+                "raw_input_manifest_file_count": manifest["file_count"],
+                "staged_attestation_root": att["root"],
+                "approvals_rebound": len(changed),
+                "rebind_record": str(record_md),
+                "backup_dir": f"{builder.paths.qlib_dir}.bak_{builder.build_id}",
+                "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
+                "published_cst": now_cst().isoformat(timespec="seconds"),
+            }
+            _atomic_write_bytes(PUBLISH_RECORD_PATH,
+                                json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 — every post-swap failure must roll back
+            logger.error("post-swap step failed (%s) — restoring approvals + rolling the swap back.", exc)
+            try:
+                _restore_approval_files(originals)
+            except Exception as rexc:  # noqa: BLE001
+                j("bind", "failed", error=str(exc), approvals_restore_error=str(rexc))
+                logger.critical("approval restore ALSO failed (%s) — repair the approval YAMLs from "
+                                "git before retrying.", rexc)
+                _rollback_swap(builder)
+                return 5
+            ok_rb, msg = _rollback_swap(builder)
+            j("bind", "failed_rolled_back" if ok_rb else "failed_rollback_failed",
+              error=str(exc), rollback=msg)
+            if ok_rb:
+                logger.error("ROLLED BACK to the parent live provider (%s). Fix the cause and re-run "
+                             "--publish-approved. Cause: %s", msg, exc)
+                return 4
+            logger.critical("ROLLBACK FAILED: %s — resolve manually per the journal (%s). Cause: %s",
+                            msg, TRANSACTION_JOURNAL_PATH, exc)
+            return 5
+        j("bind", "ok", approvals_rebound=len(changed))
+    # ── locks released: swap + rebind + metadata are consistent and durable.
+
+    logger.info("ATOMIC PUBLISH COMPLETE: %s live under %s (parent %s retained as .bak). Running "
+                "post-publish QA ...", rep["staged_build_id"], rep["new_policy_id"], live_build)
+    qa_rc = _run_post_publish_qa()
+    if qa_rc != 0:
+        j("qa", "failed", returncode=qa_rc)
+        logger.critical("PUBLISHED but post-publish QA FAILED (exit %d) — investigate before any "
+                        "formal run. The provider stays live; parent retained at %s.bak_%s.",
+                        qa_rc, builder.paths.qlib_dir, builder.build_id)
+        return 6
+    j("qa", "ok")
+    logger.info("post-publish QA PASS. Publish record: %s", PUBLISH_RECORD_PATH)
+    return 0
 
 
 def main() -> int:
@@ -982,7 +1416,9 @@ def main() -> int:
     ap.add_argument("--plan", action="store_true", help="Preflight + target_end + plan only")
     ap.add_argument("--execute", action="store_true",
                     help="Run catch-up->rebuild->audits->dry-run report (multi-hour); STOPS before publish")
-    ap.add_argument("--publish-approved", action="store_true", help="Run the publish leg")
+    ap.add_argument("--publish-approved", action="store_true",
+                    help="Run the ATOMIC publish transaction (verify+swap+rebind+QA; §13, "
+                         "requires --i-reviewed-the-dryrun)")
     ap.add_argument("--i-reviewed-the-dryrun", action="store_true",
                     help="Attest the dry-run report was reviewed (required for --publish-approved)")
     ap.add_argument("--target-end", type=str, default=None, help="Override target_end (YYYYMMDD)")

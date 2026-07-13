@@ -4597,6 +4597,8 @@ class StagedQlibBackendBuilder:
         *,
         calendar_policy_id: str,
         emit_manifest: bool = True,
+        raw_input_manifest_root: str | None = None,
+        parent_provider_build_id: str | None = None,
     ) -> None:
         """Atomically promote the staged provider into ``data/qlib_data``.
 
@@ -4699,9 +4701,19 @@ class StagedQlibBackendBuilder:
         logger.info("Published staged provider to %s (safe staged-first swap)", self.paths.qlib_dir)
 
         if emit_manifest:
-            self._emit_provider_manifest_at_publish(calendar_policy_id=calendar_policy_id)
+            self._emit_provider_manifest_at_publish(
+                calendar_policy_id=calendar_policy_id,
+                raw_input_manifest_root=raw_input_manifest_root,
+                parent_provider_build_id=parent_provider_build_id,
+            )
 
-    def _emit_provider_manifest_at_publish(self, *, calendar_policy_id: str) -> None:
+    def _emit_provider_manifest_at_publish(
+        self,
+        *,
+        calendar_policy_id: str,
+        raw_input_manifest_root: str | None = None,
+        parent_provider_build_id: str | None = None,
+    ) -> None:
         """Emit data/qlib_data/metadata/provider_build.json after publish.
 
         Pulls calendar bounds from the freshly-published Qlib provider's
@@ -4743,8 +4755,14 @@ class StagedQlibBackendBuilder:
                 source_git_commit=source_commit,
                 builder_mode="all",
                 builder_stage="full",
+                raw_input_manifest_root=raw_input_manifest_root,
+                parent_provider_build_id=parent_provider_build_id,
             )
         except Exception as exc:  # noqa: BLE001
+            # Deliberately non-raising for legacy callers (the provider IS live; the manifest
+            # can be re-emitted). The monthly atomic transaction does NOT rely on this leniency:
+            # it re-loads and verifies the live manifest post-swap and rolls the swap back if
+            # the expected attestation is absent (scripts/monthly_calendar_bump.py Phase 5-B).
             logger.error("Failed to emit provider manifest at publish: %s", exc)
 
     def run(

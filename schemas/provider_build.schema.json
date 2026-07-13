@@ -108,6 +108,16 @@
       "type": "array",
       "items": {"type": "string"},
       "description": "When retroactive_manifest is true, list the evidence sources (e.g., 'README status snapshot', 'project_state downstream revalidation note', 'tests/data_infra/test_event_like_daily_namespace.py output', 'provider field inventory hash'). Required when retroactive_manifest is true."
+    },
+    "raw_input_manifest_root": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Phase 5-B (calendar unfreeze, B3.2): sha256 root of the full-readset raw-input manifest the staged build consumed (workspace/outputs/calendar_unfreeze/raw_input_manifest.json sidecar carries the per-file hashes). Binds provider_build_id -> the attested raw cut. OPTIONAL: pre-thaw builds lack it and must keep loading; presence for formal runs is enforced by the release gate when the calendar policy sets require_raw_input_attestation."
+    },
+    "parent_provider_build_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Phase 5-B: the provider_build_id this build was verified against and atomically replaced (the monthly bump's parent compare-and-swap anchor). OPTIONAL for pre-thaw builds."
     }
   },
   "allOf": [

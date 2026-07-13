@@ -65,6 +65,17 @@ def raw_maintenance_lock(timeout: float = 21600.0):  # 6h default — a monthly 
         yield
 
 
+@contextmanager
+def provider_publish_lock(timeout: float = 7200.0):
+    """Process-exclusive LIVE-provider publish/swap (the monthly bump's atomic verify->swap->rebind
+    transaction, Phase 5-B B3). Serializes anything that replaces ``data/qlib_data`` or rewrites its
+    ``provider_build.json`` so two publishers can never interleave renames. LOCK ORDER: acquire
+    ``raw_maintenance_lock`` FIRST, then this — every holder follows that one order (the publish
+    transaction), so there is no reverse-order path and no lock-order deadlock."""
+    with _filelock("provider_publish.lock", timeout):
+        yield
+
+
 # ── global cross-process rate spacing (a shared next-allowed timestamp, held under the API lock) ──
 def _next_allowed_path() -> Path:
     return _lock_dir() / "tushare_next_allowed.txt"

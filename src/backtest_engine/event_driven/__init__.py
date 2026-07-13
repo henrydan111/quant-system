@@ -238,6 +238,15 @@ def _validate_provider_at_runtime(
             manifest, live_calendar_end, allow_calendar_mismatch=False,
         )
 
+    # Phase 5-B (B3.2): policies minted by the monthly bump require the live manifest
+    # to carry raw_input_manifest_root (the attested raw-input cut of the publish).
+    # Legacy policies leave the flag unset and skip cleanly inside the gate.
+    from src.research_orchestrator.release_gate import assert_provider_raw_attestation
+    assert_provider_raw_attestation(
+        manifest=manifest, policy=policy,
+        artifact_label=f"run_mode={run_mode!r} under policy {calendar_policy_id!r}",
+    )
+
 
 class EventDrivenBacktester:
     """High-level API for running event-driven backtests.
