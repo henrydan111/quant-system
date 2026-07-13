@@ -54,7 +54,7 @@ def _holder_code(lockdir, marker):
         "import sys, time, pathlib\n"
         f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
         "import data_infra.tushare_lock as tl\n"
-        f"tl._LOCK_DIR = pathlib.Path(r'{lockdir}')\n"
+        f"tl._DATA_LOCK_DIR = pathlib.Path(r'{lockdir}')\n"
         "from data_infra.tushare_lock import raw_maintenance_lock\n"
         "with raw_maintenance_lock():\n"
         f"    open(r'{marker}', 'w').close()\n"
@@ -70,7 +70,7 @@ def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatc
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # inject via attr, not env
+    monkeypatch.setattr(tushare_lock, "_DATA_LOCK_DIR", lockdir)  # inject via attr, not env
     holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq")])
     try:
         for _ in range(200):  # wait until the holder has acquired
@@ -96,7 +96,7 @@ def test_raw_maintenance_lock_namespace_not_env_forgeable(tmp_path, monkeypatch)
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # the real (injected) identity
+    monkeypatch.setattr(tushare_lock, "_DATA_LOCK_DIR", lockdir)  # the real (injected) identity
     holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq2")])
     try:
         for _ in range(200):

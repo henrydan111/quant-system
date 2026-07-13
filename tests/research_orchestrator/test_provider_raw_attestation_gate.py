@@ -175,6 +175,9 @@ def test_publish_state_gate_quarantines_until_ready(tmp_path):
             assert_provider_publish_state(qlib_dir=tmp_path, policy=pol, manifest=m)
     _write_state(tmp_path, "qa_failed")
     assert not evaluate_provider_publish_state(qlib_dir=tmp_path, policy=flagged, manifest=m).eligible
+    _write_state(tmp_path, "suspect")  # tamper quarantine (re-review #3) — refused everywhere
+    for pol in (flagged, legacy):
+        assert not evaluate_provider_publish_state(qlib_dir=tmp_path, policy=pol, manifest=m).eligible
     _write_state(tmp_path, "ready")
     assert evaluate_provider_publish_state(qlib_dir=tmp_path, policy=flagged, manifest=m).eligible
     # a marker naming a DIFFERENT build is stale/foreign -> refuse

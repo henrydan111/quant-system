@@ -43,7 +43,19 @@ from filelock import FileLock, Timeout  # noqa: F401 — Timeout re-exported for
 _SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
+class LockIdentityError(RuntimeError):
+    """The shared-store lock identity could not be resolved — data-root-guarding locks
+    REFUSE instead of degrading to a per-checkout namespace (GPT re-review #3 P0: two
+    independent clones configured onto ONE data root must share one lock; when the
+    identity is unknowable the safe action is to not mutate the store at all)."""
+
+
 def _resolve_lock_root(source_root: Path) -> Path:
+    """Repo-scoped lock root for the ACCOUNT-level lock (api_call_lock + rate spacing):
+    the git COMMON dir's parent — identical for every worktree of a repo, equal to the
+    checkout root for a plain clone. Best-effort by design (the Tushare account is a
+    per-machine resource, not a per-store one); data-store-guarding locks use
+    :func:`_resolve_data_lock_dir` instead, which is FAIL-CLOSED."""
     import logging
     import subprocess
     try:
@@ -60,9 +72,8 @@ def _resolve_lock_root(source_root: Path) -> Path:
         return common.parent
     except Exception:  # noqa: BLE001 — degraded per-checkout namespace, loudly
         logging.getLogger(__name__).warning(
-            "git common-dir resolution failed under %s — lock namespace degrades to this "
-            "checkout only (cross-worktree publishers would NOT exclude each other).",
-            source_root,
+            "git common-dir resolution failed under %s — the ACCOUNT lock namespace "
+            "degrades to this checkout only.", source_root,
         )
         return source_root
 
@@ -70,9 +81,55 @@ def _resolve_lock_root(source_root: Path) -> Path:
 _LOCK_DIR = _resolve_lock_root(_SOURCE_ROOT) / "logs" / "locks"
 
 
+def _resolve_data_lock_dir(source_root: Path) -> Path:
+    """Lock directory for locks that guard the SHARED DATA STORE (raw maintenance +
+    provider publish): derived from the CANONICAL RESOLVED data root in config.yaml, and
+    physically located INSIDE it (``<data_root>/.locks``) — so any checkout (worktree,
+    independent clone, moved copy) configured onto the same store resolves the same lock
+    files (GPT re-review #3 P0: git-common-dir only unifies worktrees of one repo; two
+    clones sharing a data root still got two namespaces). FAIL-CLOSED: an unreadable
+    config / unresolvable data root raises :class:`LockIdentityError` — a store-mutating
+    caller must refuse, never proceed under a private lock namespace."""
+    try:
+        import yaml
+        with open(source_root / "config.yaml", "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+        raw = ((cfg.get("storage") or {}).get("data_root"))
+        if not raw or not str(raw).strip():
+            raise LockIdentityError(
+                f"config.yaml under {source_root} declares no storage.data_root — cannot "
+                "derive the shared-store lock identity; refusing (fail closed)."
+            )
+        root = Path(str(raw))
+        if not root.is_absolute():
+            root = (source_root / root)
+        return root.resolve() / ".locks"
+    except LockIdentityError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — unreadable config = unknowable identity
+        raise LockIdentityError(
+            f"cannot resolve the shared data root from {source_root / 'config.yaml'}: {exc} "
+            "— store-mutating locks refuse (fail closed)."
+        ) from exc
+
+
 def _lock_dir() -> Path:
     _LOCK_DIR.mkdir(parents=True, exist_ok=True)
     return _LOCK_DIR
+
+
+# Resolved lazily from config.yaml storage.data_root (see _resolve_data_lock_dir). Tests
+# inject isolation by assigning this module attribute directly (a Path), never via env.
+_DATA_LOCK_DIR = None
+
+
+def _data_lock_dir() -> Path:
+    global _DATA_LOCK_DIR
+    if _DATA_LOCK_DIR is None:
+        _DATA_LOCK_DIR = _resolve_data_lock_dir(_SOURCE_ROOT)
+    d = Path(_DATA_LOCK_DIR)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _filelock(name: str, timeout: float) -> FileLock:
@@ -87,18 +144,25 @@ def api_call_lock(timeout: float = 1800.0):
 
 @contextmanager
 def raw_maintenance_lock(timeout: float = 21600.0):  # 6h default — a monthly catch-up can run hours
-    """Process-exclusive raw-layer maintenance, held on the REAL kernel lock (no env barrier). Pass a
-    SHORT timeout in an unattended job (the daily raw job) so it fails fast + retries instead of
-    blocking behind a multi-hour monthly build until its own task time-limit kills it (GPT m3); on
-    timeout FileLock raises `Timeout` (re-exported above)."""
-    with _filelock("raw_maintenance.lock", timeout):
+    """Process-exclusive raw-layer maintenance, held on the REAL kernel lock (no env barrier).
+    Lock identity = the SHARED DATA ROOT (``<data_root>/.locks/raw_maintenance.lock``), so any
+    checkout configured onto the same store excludes any other; an unresolvable identity
+    raises :class:`LockIdentityError` (fail closed). Pass a SHORT timeout in an unattended job
+    (the daily raw job) so it fails fast + retries instead of blocking behind a multi-hour
+    monthly build until its own task time-limit kills it (GPT m3); on timeout FileLock raises
+    `Timeout` (re-exported above)."""
+    with FileLock(str(_data_lock_dir() / "raw_maintenance.lock"), timeout=timeout):
         yield
 
 
 @contextmanager
 def provider_publish_lock(timeout: float = 7200.0):
     """Process-exclusive LIVE-provider publish/swap + manifest writes (Phase 5-B B3; GPT
-    re-review Blocker 7 made this a GLOBAL publish lock, not a driver-private one).
+    re-review Blocker 7 made this a GLOBAL publish lock, not a driver-private one; re-review
+    #3 P0 anchored its identity to the SHARED DATA ROOT — ``<data_root>/.locks/`` — so two
+    independent clones configured onto one store share ONE lock; an unresolvable identity
+    raises :class:`LockIdentityError` and the publish REFUSES, never proceeds under a
+    private namespace).
 
     Held at the COMMON CHOKEPOINTS — ``StagedQlibBackendBuilder.publish()`` and the
     ``provider_build.json`` emitters in ``provider_manifest`` acquire it themselves — so ANY
@@ -111,7 +175,7 @@ def provider_publish_lock(timeout: float = 7200.0):
     deadlocking, while a second process still blocks. LOCK ORDER: any holder that also needs
     ``raw_maintenance_lock`` acquires raw FIRST, then this; publish-lock-only holders (the
     builder/emitters) never take the raw lock afterwards — no reverse-order path exists."""
-    lock = FileLock(str(_lock_dir() / "provider_publish.lock"), is_singleton=True)
+    lock = FileLock(str(_data_lock_dir() / "provider_publish.lock"), is_singleton=True)
     lock.acquire(timeout=timeout)
     try:
         yield

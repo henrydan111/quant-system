@@ -520,6 +520,20 @@ class _PubArgs:
     i_reviewed_the_dryrun = True
 
 
+@pytest.fixture(autouse=True)
+def _unseal_tmp_after(tmp_path):
+    # the READY gate seals trees read-only; unseal before the tmp cleanup so rmtree works
+    yield
+    import os as _os
+    import stat as _stat
+    for p in tmp_path.rglob("*"):
+        if p.is_file():
+            try:
+                _os.chmod(p, _stat.S_IREAD | _stat.S_IWRITE)
+            except OSError:
+                pass
+
+
 def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     root = tmp_path
     data = root / "data"
@@ -536,7 +550,10 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     monkeypatch.setattr(mcb, "RAW_MANIFEST_PATH", out / "raw_input_manifest.json")
     monkeypatch.setattr(mcb, "PUBLISH_RECORD_PATH", out / "publish_record.json")
     monkeypatch.setattr(mcb, "TRANSACTION_JOURNAL_PATH", out / "publish_transaction_journal.json")
+    monkeypatch.setattr(mcb, "TRANSACTION_INTENT_PATH", out / "publish_intent.json")
     monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: qa_rc)
+    import data_infra.tushare_lock as _tl
+    monkeypatch.setattr(_tl, "_DATA_LOCK_DIR", root / "locks")
 
     parent_pb, parent_cp = "parent_build_1", "frozen_20260701_thaw_step1"
     new_pb, new_cp = "thaw_20990101_120000", "frozen_20990101_thaw_step2"
@@ -1008,8 +1025,8 @@ def test_publish_systemexit_mid_rebind_rolls_back(tmp_path, monkeypatch):
 
 def test_ready_gate_refuses_bytes_changed_after_swap(tmp_path, monkeypatch):
     # P0 probe (hash->swap TOCTOU): bytes changed AFTER the pre-swap attestation — here
-    # while QA runs — must NOT reach 'ready'. The READY gate re-hashes the FULL live tree
-    # and refuses; the provider stays quarantined.
+    # while QA runs — must NOT reach 'ready'. The READY gate seals + re-hashes the FULL
+    # live tree, refuses, and transitions the provider to 'suspect' (tamper class).
     env = _publish_env(tmp_path, monkeypatch)
 
     def tampering_qa():
@@ -1018,27 +1035,39 @@ def test_ready_gate_refuses_bytes_changed_after_swap(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mcb, "_run_post_publish_qa", tampering_qa)
     assert mcb.phase_publish(_PubArgs()) == 5
-    assert _publish_state_of(env.qlib) == "pending_qa", "quarantine must persist"
+    assert _publish_state_of(env.qlib) == "suspect", "tamper-class refusal must quarantine as suspect"
     steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
-    ready = [s for s in steps if s["step"] == "ready" and s["status"] == "refused"]
+    ready = [s for s in steps if s["step"] == "ready" and s["status"] == "refused_suspect"]
     assert ready and any("content root" in p for p in ready[0]["problems"])
+    # suspect BLOCKS finalize (only --restore-parent applies)
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 2
 
 
-def test_finalize_qa_cannot_green_changed_bytes(tmp_path, monkeypatch):
+def test_finalize_qa_cannot_green_changed_bytes_then_restore_parent(tmp_path, monkeypatch):
     # P0 probe: QA fails first (qa_failed), the live bin is then rewritten, QA is made to
-    # pass — finalize must still REFUSE ready (full pin re-verification), and succeed only
-    # once the original bytes are restored.
+    # pass — finalize must still refuse (suspect), and the EXPLICIT --restore-parent
+    # recovery must bring the verified parent back with approvals re-bound (0 drift).
     env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
     assert mcb.phase_publish(_PubArgs()) == 6
     live_bin = env.qlib / "features" / "000001_sz" / "close.day.bin"
-    original = live_bin.read_bytes()
     live_bin.write_bytes(b"\x0b\x0b\x0b\x0b")
     monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
     assert mcb.phase_finalize_qa(_PubArgs()) == 5
-    assert _publish_state_of(env.qlib) == "qa_failed", "tampered bytes must stay quarantined"
-    live_bin.write_bytes(original)
-    assert mcb.phase_finalize_qa(_PubArgs()) == 0
-    assert _publish_state_of(env.qlib) == "ready"
+    assert _publish_state_of(env.qlib) == "suspect", "tampered bytes must be quarantined as suspect"
+    assert mcb.phase_finalize_qa(_PubArgs()) == 2, "suspect blocks finalize"
+    assert mcb.phase_publish(_PubArgs()) == 2, "suspect blocks a new publish"
+    # explicit verified recovery: parent live again, approvals back on parent, 0 drift
+    assert mcb.phase_restore_parent(_PubArgs()) == 0
+    assert (env.qlib / "LIVE_MARKER.txt").exists()
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert f'provider_build_id: "{env.parent_pb}"' in env.a1.read_text(encoding="utf-8")
+    from data_infra.approval_evidence import evaluate_approval_evidence_bindings
+    drifts = evaluate_approval_evidence_bindings(
+        approvals_dir=env.root / "approvals",
+        manifest_path=env.qlib / "metadata" / "provider_build.json")
+    assert drifts and not any(d.drift for d in drifts)
+    assert (env.staged / "STAGED_MARKER.txt").exists(), "child back at the staged path"
 
 
 def test_publish_refuses_raw_provenance_mismatch(tmp_path, monkeypatch):
@@ -1057,26 +1086,137 @@ def test_publish_refuses_raw_provenance_mismatch(tmp_path, monkeypatch):
     _assert_untouched(env)
 
 
-def test_lock_root_is_shared_across_worktrees(tmp_path):
-    # P0 probe: two worktrees of the same repo previously resolved DIFFERENT lock dirs and
-    # could publish concurrently. The lock root is anchored to the git COMMON dir's parent
-    # — identical from the main checkout and from any linked worktree.
-    import subprocess
-
+def test_data_lock_identity_shared_across_checkouts(tmp_path):
+    # Re-review #3 P0: TWO INDEPENDENT CLONES (not just worktrees) configured onto ONE
+    # shared data root must resolve the SAME store-mutating lock files — the identity is
+    # derived from the canonical resolved storage.data_root, not from any git path.
     import data_infra.tushare_lock as tl
 
-    main = tmp_path / "mainrepo"
-    main.mkdir()
-    subprocess.run(["git", "init", "-q", str(main)], check=True)
-    (main / "x.txt").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "-C", str(main), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(main), "-c", "user.email=t@t", "-c", "user.name=t",
-                    "commit", "-qm", "init"], check=True)
-    wt = tmp_path / "wt1"
-    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], check=True)
-    root_main = tl._resolve_lock_root(main)
-    root_wt = tl._resolve_lock_root(wt)
-    assert root_main.resolve() == root_wt.resolve() == main.resolve()
+    shared_data = tmp_path / "shared_store" / "data"
+    shared_data.mkdir(parents=True)
+    clone_a, clone_b = tmp_path / "cloneA", tmp_path / "cloneB"
+    for c in (clone_a, clone_b):
+        c.mkdir()
+        (c / "config.yaml").write_text(
+            f"storage:\n  data_root: {_json.dumps(str(shared_data))}\n", encoding="utf-8")
+    lock_a = tl._resolve_data_lock_dir(clone_a)
+    lock_b = tl._resolve_data_lock_dir(clone_b)
+    assert lock_a == lock_b == shared_data.resolve() / ".locks"
+    # relative data roots resolve against each checkout — genuinely separate stores get
+    # separate (correct) lock namespaces
+    (clone_a / "config.yaml").write_text("storage:\n  data_root: ./data\n", encoding="utf-8")
+    assert tl._resolve_data_lock_dir(clone_a) == (clone_a / "data").resolve() / ".locks"
+
+
+def test_data_lock_identity_unresolvable_refuses(tmp_path):
+    # Re-review #3 P0: when the shared lock identity is unknowable, store-mutating locks
+    # REFUSE (LockIdentityError) — never a warn-and-continue private namespace.
+    import data_infra.tushare_lock as tl
+
+    empty = tmp_path / "no_config"
+    empty.mkdir()
+    with pytest.raises(tl.LockIdentityError):
+        tl._resolve_data_lock_dir(empty)
+    blank = tmp_path / "blank_root"
+    blank.mkdir()
+    (blank / "config.yaml").write_text("storage:\n  data_root: ''\n", encoding="utf-8")
+    with pytest.raises(tl.LockIdentityError):
+        tl._resolve_data_lock_dir(blank)
+
+
+def test_publish_systemexit_right_after_swap_rolls_back_via_disk_truth(tmp_path, monkeypatch):
+    # Re-review #3 P0 probe: SystemExit raised IMMEDIATELY after the real publish()
+    # completes — before any in-process flag could be set. The handler must classify the
+    # state from DISK (child live + backup present), run the full verified rollback, and
+    # only then re-raise.
+    env = _publish_env(tmp_path, monkeypatch)
+    real_factory = mcb._make_publish_builder
+
+    def wrapping_factory(build_id):
+        builder = real_factory(build_id)
+        real_publish = builder.publish
+
+        def exploding_publish(**kwargs):
+            real_publish(**kwargs)
+            raise SystemExit(9)  # lands exactly in the publish->flag gap
+
+        builder.publish = exploding_publish
+        return builder
+
+    monkeypatch.setattr(mcb, "_make_publish_builder", wrapping_factory)
+    with pytest.raises(SystemExit):
+        mcb.phase_publish(_PubArgs())
+    assert (env.qlib / "LIVE_MARKER.txt").exists(), "parent must be restored (disk-truth undo)"
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert (env.staged / "STAGED_MARKER.txt").exists()
+    intent = _json.loads((env.out / "publish_intent.json").read_text(encoding="utf-8"))
+    assert intent["status"] == "aborted"
+
+
+def test_real_sigint_defers_commits_core_then_finalize(tmp_path, monkeypatch):
+    # Re-review #3 Major: a REAL SIGINT (delivered via raise_signal, not a hand-raised
+    # exception) is DEFERRED: the consistent core transaction COMMITS (swap + rebind +
+    # pending_qa), KeyboardInterrupt raises at span exit, and --finalize-qa completes the
+    # publish afterwards. This pins the documented semantics with a true signal.
+    import signal as _signal
+
+    env = _publish_env(tmp_path, monkeypatch)
+    real = mcb._atomic_write_bytes
+    fired: list[int] = []
+
+    def signal_during_rebind(path, data):
+        if Path(path).suffix == ".yaml" and Path(path).parent == env.root / "approvals" and not fired:
+            fired.append(1)
+            _signal.raise_signal(_signal.SIGINT)  # the REAL signal — recorded, deferred
+        real(path, data)
+
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", signal_during_rebind)
+    with pytest.raises(KeyboardInterrupt):
+        mcb.phase_publish(_PubArgs())
+    # the core committed consistently and is quarantined:
+    assert (env.qlib / "STAGED_MARKER.txt").exists(), "child stays live (core committed)"
+    assert _publish_state_of(env.qlib) == "pending_qa"
+    assert f'provider_build_id: "{env.new_pb}"' in env.a1.read_text(encoding="utf-8")
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", real)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 0
+    assert _publish_state_of(env.qlib) == "ready"
+
+
+def test_ready_seal_blocks_later_writes(tmp_path, monkeypatch):
+    # Re-review #3 P0: the certified generation is SEALED read-only before the certifying
+    # hash — an attribute-respecting writer can no longer modify published bytes at all.
+    env = _publish_env(tmp_path, monkeypatch)
+    assert mcb.phase_publish(_PubArgs()) == 0
+    with pytest.raises(PermissionError):
+        (env.qlib / "features" / "000001_sz" / "close.day.bin").write_bytes(b"\x0c\x0c\x0c\x0c")
+
+
+def test_unresolved_intent_blocks_new_publish(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    mcb._write_intent({"transaction_id": "deadbeef", "status": "swapping"})
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_stale_qa_worker_cannot_overwrite_ready(tmp_path, monkeypatch):
+    # Re-review #3 Major: worker A begins a QA attempt; worker B begins a NEWER attempt
+    # (taking the lease) and reaches ready; A's delayed failure must record 'superseded'
+    # (exit 7) and change nothing.
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6  # qa_failed, quarantined
+    rep = _json.loads((env.out / "monthly_bump_dryrun_report.json").read_text(encoding="utf-8"))
+    builder = mcb._make_publish_builder(rep["staged_build_id"])
+    stale_attempt = mcb._begin_qa_attempt(builder, rep)
+    assert stale_attempt
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 0  # a newer worker takes the lease -> ready
+    assert _publish_state_of(env.qlib) == "ready"
+    steps: list = []
+    rc = mcb._record_qa_failure(builder, rep, stale_attempt, 1,
+                                lambda step, status, **info: steps.append((step, status)))
+    assert rc == 7 and ("qa", "superseded") in steps
+    assert _publish_state_of(env.qlib) == "ready", "a stale failure must not overwrite ready"
 
 
 def test_builder_publish_acquires_global_lock(tmp_path, monkeypatch):

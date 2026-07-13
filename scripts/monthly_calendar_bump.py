@@ -417,12 +417,15 @@ from contextlib import contextmanager
 
 @contextmanager
 def _defer_sigint(span: str):
-    """Defer Ctrl-C across the CRITICAL transaction span (re-review P0: an interrupt
-    landing between two approval writes previously bypassed the `except Exception`
-    rollback and left a half-rebound live provider). SIGINT received inside the span is
-    recorded and re-raised as KeyboardInterrupt at span exit — after the swap+bind (or
-    their verified rollback) completed. No-op outside the main thread (signal handlers
-    are main-thread-only; the BaseException handler remains the belt there)."""
+    """Defer Ctrl-C across the CRITICAL transaction span. SEMANTICS (re-review #3,
+    documented honestly): a REAL SIGINT during the span does NOT roll back — the span
+    runs to completion (the consistent core transaction COMMITS: swap + rebind +
+    pending_qa marker + records), and KeyboardInterrupt is raised at span exit; the
+    operator resumes with --finalize-qa. This is deliberate: aborting mid-span is the
+    hazard, a committed-but-quarantined core is safe. In-flow exceptions/interrupts
+    RAISED inside the span (crash-like: SystemExit, injected KeyboardInterrupt) are
+    handled by the BaseException rollback instead. No-op outside the main thread
+    (signal handlers are main-thread-only; the BaseException belt still applies)."""
     import signal
     import threading
     if threading.current_thread() is not threading.main_thread():
@@ -730,15 +733,136 @@ def _write_journal(journal: dict) -> None:
         logger.error("journal write failed (non-fatal breadcrumb): %s", exc)
 
 
+def _read_publish_state(qlib_dir) -> dict:
+    """The parsed marker, or {} when absent/unreadable (callers treat unknown as refusal)."""
+    p = Path(qlib_dir) / "metadata" / "publish_state.json"
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def _write_publish_state(qlib_dir, state: str, build_id: str, **extra) -> None:
     """Atomic publish-state marker write (<qlib_dir>/metadata/publish_state.json — the B6
-    QA quarantine read by release_gate.assert_provider_publish_state)."""
+    QA quarantine read by release_gate.assert_provider_publish_state). Carries the
+    transaction id and the active QA attempt forward from the current marker unless the
+    caller overrides them (re-review #3: state transitions must stay attributable)."""
     meta = Path(qlib_dir) / "metadata"
     meta.mkdir(parents=True, exist_ok=True)
+    current = _read_publish_state(qlib_dir)
     payload = {"state": state, "provider_build_id": build_id,
-               "updated_cst": now_cst().isoformat(timespec="seconds"), **extra}
+               "updated_cst": now_cst().isoformat(timespec="seconds")}
+    for carried in ("transaction_id", "active_qa_attempt"):
+        if carried in current:
+            payload[carried] = current[carried]
+    payload.update(extra)
     _atomic_write_bytes(meta / "publish_state.json",
                         json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"))
+
+
+# ── re-review #3: durable intent journal + disk-truth swap classification ────
+def _read_intent() -> dict:
+    try:
+        payload = json.loads(TRANSACTION_INTENT_PATH.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_intent(payload: dict) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {**payload, "updated_cst": now_cst().isoformat(timespec="seconds")}
+    _atomic_write_bytes(TRANSACTION_INTENT_PATH,
+                        json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"))
+
+
+def _disk_swap_state(builder, parent_pb: str) -> str:
+    """'child_live' | 'parent_live' | 'unknown' — classified from DISK FACTS (live
+    manifest + backup dir), never from in-process booleans (re-review #3 P0: an exception
+    landing between publish() returning and a flag assignment mis-classified a live child
+    as pre-swap and skipped the rollback)."""
+    qlib = Path(builder.paths.qlib_dir)
+    backup = os.path.isdir(f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+    try:
+        live = json.loads((qlib / "metadata" / "provider_build.json")
+                          .read_text(encoding="utf-8")).get("provider_build_id")
+    except (OSError, json.JSONDecodeError):
+        live = None  # post-swap pre-emit: the child tree carries no manifest yet
+    if backup and live != parent_pb:
+        return "child_live"
+    if not backup and live == parent_pb:
+        return "parent_live"
+    return "unknown"
+
+
+# ── re-review #3: read-only generation seal (the READY-gate immutability) ────
+def _seal_tree_readonly(qlib_dir, exclude_names: tuple = ("publish_state.json",)) -> int:
+    """Set every file in the tree read-only EXCEPT the control-plane marker. Sealing
+    happens BEFORE the READY-gate content hash, so the certified bytes cannot be modified
+    by any attribute-respecting writer after certification (re-review #3 P0: 'one more
+    hash' cannot close the hash->ready window on a mutable tree). Returns files sealed."""
+    import stat
+    n = 0
+    for p in Path(qlib_dir).rglob("*"):
+        if p.is_file() and p.name not in exclude_names:
+            os.chmod(p, stat.S_IREAD)
+            n += 1
+    return n
+
+
+def _unseal_tree(qlib_dir) -> int:
+    """Clear the read-only seal (used by --restore-parent before undoing a publish)."""
+    import stat
+    n = 0
+    for p in Path(qlib_dir).rglob("*"):
+        if p.is_file():
+            os.chmod(p, stat.S_IREAD | stat.S_IWRITE)
+            n += 1
+    return n
+
+
+# ── re-review #3: QA attempt lease (a stale worker must never overwrite state) ─
+def _begin_qa_attempt(builder, rep: dict) -> str | None:
+    """Register THIS worker as the active QA attempt (last-starter-wins lease) under the
+    publish lock. Returns the attempt id, or None when the marker/build state does not
+    admit a QA attempt."""
+    import uuid
+    from data_infra.tushare_lock import provider_publish_lock
+    with provider_publish_lock():
+        marker = _read_publish_state(builder.paths.qlib_dir)
+        if (marker.get("state") not in ("pending_qa", "qa_failed")
+                or marker.get("provider_build_id") != rep["staged_build_id"]):
+            return None
+        attempt = uuid.uuid4().hex[:16]
+        _write_publish_state(builder.paths.qlib_dir, marker["state"], rep["staged_build_id"],
+                             active_qa_attempt=attempt)
+        return attempt
+
+
+def _record_qa_failure(builder, rep: dict, attempt: str, qa_rc: int, j) -> int:
+    """Persist qa_failed ONLY if this worker still holds the lease and the live state is
+    still non-ready for the same build — a stale worker records 'superseded' and changes
+    NOTHING (re-review #3 Major: a delayed failing QA overwrote a newer 'ready')."""
+    from data_infra.tushare_lock import provider_publish_lock
+    with provider_publish_lock():
+        marker = _read_publish_state(builder.paths.qlib_dir)
+        if (marker.get("active_qa_attempt") != attempt
+                or marker.get("provider_build_id") != rep["staged_build_id"]
+                or marker.get("state") not in ("pending_qa", "qa_failed")):
+            j("qa", "superseded", attempt=attempt, marker_state=marker.get("state"),
+              marker_attempt=marker.get("active_qa_attempt"))
+            logger.warning("stale QA attempt %s superseded (marker state=%r attempt=%r) — "
+                           "recording nothing.", attempt, marker.get("state"),
+                           marker.get("active_qa_attempt"))
+            return 7
+        _write_publish_state(builder.paths.qlib_dir, "qa_failed", rep["staged_build_id"],
+                             qa_returncode=qa_rc)
+    j("qa", "failed", returncode=qa_rc, attempt=attempt)
+    logger.critical("PUBLISHED but post-publish QA FAILED (exit %d) — the provider stays live "
+                    "but publish-state 'qa_failed' QUARANTINES gated reads until "
+                    "--finalize-qa passes. Parent retained as .bak.", qa_rc)
+    return 6
 
 
 def _run_post_publish_qa() -> int:
@@ -747,12 +871,11 @@ def _run_post_publish_qa() -> int:
     return subprocess.run([py, str(PROJECT_ROOT / "scripts" / "run_daily_qa.py")]).returncode
 
 
-def _write_rebind_record(*, new_pb: str, new_cp: str, old_pb: str, old_cp: str,
+def _write_rebind_record(*, path: Path, new_pb: str, new_cp: str, old_pb: str, old_cp: str,
                          n_files: int, raw_root: str, raw_files: int, backup_dir: str) -> Path:
     """Committed governance record of the rebind (mirrors the 2026-07-01/2026-07-04
-    precedent .md files). Same-build-id retries overwrite their own record."""
-    date = now_cst().strftime("%Y-%m-%d")
-    path = APPROVALS_DIR / f"{date}_rebind_to_{new_pb}.md"
+    precedent .md files). The PATH is computed once by the transaction (before the
+    protected domain) so rollback cleanup can address it from disk without booleans."""
     body = (
         f"# Re-bind to the monthly thaw publish ({new_pb} / {new_cp})\n\n"
         f"Written by the ATOMIC publish transaction (`scripts/monthly_calendar_bump.py "
@@ -1066,6 +1189,7 @@ DRYRUN_REPORT_PATH = OUT_DIR / "monthly_bump_dryrun_report.json"
 FRESH_AUDIT_PATH = OUT_DIR / "fresh_window_survivorship_audit.json"
 PUBLISH_RECORD_PATH = OUT_DIR / "publish_record.json"
 TRANSACTION_JOURNAL_PATH = OUT_DIR / "publish_transaction_journal.json"
+TRANSACTION_INTENT_PATH = OUT_DIR / "publish_intent.json"
 RAW_MANIFEST_PATH = OUT_DIR / "raw_input_manifest.json"
 
 
@@ -1401,6 +1525,24 @@ def phase_publish(args) -> int:
     with raw_maintenance_lock(), provider_publish_lock():
         # ── VERIFY: every attestation re-checked here, IMMEDIATELY before the swap, with
         # no lock release in between (the verify↔swap inseparability is the transaction).
+        # re-review #3: refuse over an UNRESOLVED prior transaction (durable intent journal)
+        # or a live provider whose marker is not settled — a suspect/pending/qa_failed
+        # provider must be finalized or restored before any new publish.
+        intent = _read_intent()
+        if intent.get("status") in ("swapping", "rollback_incomplete", "failed_state_unknown"):
+            logger.error("UNRESOLVED prior transaction %s (status=%s) — resolve it first "
+                         "(--finalize-qa / --restore-parent / manual per %s). Refusing.",
+                         intent.get("transaction_id"), intent.get("status"),
+                         TRANSACTION_JOURNAL_PATH)
+            j("verify", "refused", reason="unresolved_intent")
+            return 2
+        live_marker = _read_publish_state(PROJECT_ROOT / "data" / "qlib_data")
+        if live_marker and live_marker.get("state") != "ready":
+            logger.error("live provider publish-state is %r — finalize (--finalize-qa) or "
+                         "restore (--restore-parent) before a new publish. Refusing.",
+                         live_marker.get("state"))
+            j("verify", "refused", reason=f"live_state_{live_marker.get('state')}")
+            return 2
         live_build, live_policy = live_provider_ids()
         if live_build != rep["parent_build_id"] or live_policy != rep["parent_policy_id"]:
             logger.error("PARENT DRIFT — live provider is build=%s/policy=%s but the reviewed report "
@@ -1542,21 +1684,34 @@ def phase_publish(args) -> int:
                     live_build, live_policy, manifest["root"], manifest["file_count"],
                     att["root"], att["file_count"], git_head[:12])
 
-        # ── SWAP + BIND under DEFERRED SIGINT (re-review P0: a Ctrl-C between two approval
-        # writes previously bypassed the `except Exception` rollback). The swap primitive
-        # self-rolls-back single-rename failures, so a bounded retry vs transient Windows
-        # handle locks is safe; a double failure (live missing) is NEVER retried. From
-        # swap-success onward EVERY operation runs inside ONE protected domain whose
-        # handler catches BaseException — interrupts included — restores the approval
-        # bytes, deletes this transaction's artifacts, strips the post-swap files from the
-        # new tree, rolls the swap back, and VERIFIES every restoration before claiming
-        # exit 4; interrupts re-raise AFTER the verified rollback.
+        # ── SWAP + BIND. Interrupt semantics (re-review #3, documented honestly): a REAL
+        # SIGINT during this span is DEFERRED — the consistent core transaction (swap +
+        # rebind + pending_qa marker + records) COMMITS first, then KeyboardInterrupt is
+        # raised at span exit; the operator resumes with --finalize-qa. An in-flow
+        # exception/interrupt raised INSIDE the domain (crash-like) triggers the verified
+        # rollback and then re-raises. The handler classifies swap completion from DISK
+        # FACTS (live manifest + backup dir), never from an in-process boolean, and a
+        # durable INTENT journal is written before the first rename so an unresolved
+        # transaction blocks any later publish until recovered.
         from data_infra.pit_backend import BuildGateError
         import time as _time
-        swap_completed = False
+        import uuid
+        txid = uuid.uuid4().hex[:16]
+        journal["transaction_id"] = txid
+        record_path = OUT_DIR / f"publish_record_{txid}.json"
+        md_path = APPROVALS_DIR / f"{now_cst().strftime('%Y-%m-%d')}_rebind_to_{rep['staged_build_id']}.md"
+        try:
+            _write_intent({"transaction_id": txid, "status": "swapping",
+                           "parent_build_id": live_build, "parent_policy_id": live_policy,
+                           "child_build_id": rep["staged_build_id"],
+                           "backup_dir": f"{builder.paths.qlib_dir}.bak_{builder.build_id}",
+                           "staged_provider_dir": str(staged_dir),
+                           "record_path": str(record_path), "rebind_record_path": str(md_path)})
+        except Exception as exc:  # noqa: BLE001 — the durable intent MUST land before any rename
+            logger.error("cannot write the durable intent journal (%s) — refusing pre-swap.", exc)
+            j("verify", "refused", reason="intent_write_failed")
+            return 2
         written: list[Path] = []
-        record_md: Path | None = None
-        record_written = False
         with _defer_sigint("swap+bind"):
             try:
                 swap_exc: Exception | None = None
@@ -1582,13 +1737,14 @@ def phase_publish(args) -> int:
                     live_intact = os.path.isdir(builder.paths.qlib_dir)
                     j("swap", "failed", error=str(swap_exc), live_provider_intact=live_intact)
                     if live_intact:
+                        _write_intent({**_read_intent(), "status": "aborted"})
                         logger.error("swap failed after retries and the primitive rolled back — "
                                      "live provider intact: %s", swap_exc)
                         return 2
+                    _write_intent({**_read_intent(), "status": "failed_state_unknown"})
                     logger.critical("swap DOUBLE failure — live provider MISSING; follow the "
                                     "recovery move in the error: %s", swap_exc)
                     return 5
-                swap_completed = True
                 j("swap", "ok", backup=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
                 okm, why_m = _verify_live_manifest(
                     builder.paths.qlib_dir, build_id=rep["staged_build_id"],
@@ -1610,10 +1766,13 @@ def phase_publish(args) -> int:
                         f"{len(still)} approval(s) still drift after the rebind: {still[0].reasons()}")
                 # B6 QA quarantine: the provider is durable but NOT ready — gated reads
                 # refuse until the READY gate (QA pass + full pin re-verification) flips it.
+                # The marker carries the transaction id: finalize locates this
+                # transaction's record through it, and cleanup is disk-driven by txid.
                 _write_publish_state(builder.paths.qlib_dir, "pending_qa", rep["staged_build_id"],
-                                     parent_build_id=live_build)
+                                     parent_build_id=live_build, transaction_id=txid)
                 appr_post = _approvals_attestation()  # post-rebind pin the READY gate re-checks
                 record = {
+                    "transaction_id": txid,
                     "published_build_id": rep["staged_build_id"],
                     "calendar_policy_id": rep["new_policy_id"],
                     "parent_build_id": live_build, "parent_policy_id": live_policy,
@@ -1628,36 +1787,59 @@ def phase_publish(args) -> int:
                     "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
                     "published_cst": now_cst().isoformat(timespec="seconds"),
                 }
-                _atomic_write_bytes(PUBLISH_RECORD_PATH,
-                                    json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8"))
-                record_written = True
+                record_bytes = json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8")
+                _atomic_write_bytes(record_path, record_bytes)   # canonical, per-transaction
+                _atomic_write_bytes(PUBLISH_RECORD_PATH, record_bytes)  # human convenience copy
                 # the committed governance record is written LAST — nothing may claim a
                 # completed rebind before every durable step above proved out (Blocker 2b).
-                record_md = _write_rebind_record(
+                _write_rebind_record(
+                    path=md_path,
                     new_pb=rep["staged_build_id"], new_cp=rep["new_policy_id"], old_pb=live_build,
                     old_cp=live_policy, n_files=len(written), raw_root=staged_raw["root"],
                     raw_files=staged_raw.get("file_count") or 0,
                     backup_dir=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+                _write_intent({**_read_intent(), "status": "committed_core"})
                 j("bind", "ok", approvals_rebound=len(written))
             except BaseException as exc:  # noqa: BLE001 — interrupts included (re-review P0)
-                if not swap_completed:
+                # DISK-TRUTH classification (re-review #3 P0): never infer swap completion
+                # from an in-process boolean — an exception between publish() returning and
+                # a flag assignment would mis-classify a live child as pre-swap.
+                dstate = _disk_swap_state(builder, live_build)
+                if dstate == "parent_live":
                     # the primitive self-rolled-back (or the failure landed before any
                     # rename) — nothing durable mutated by THIS transaction.
+                    _write_intent({**_read_intent(), "status": "aborted"})
                     j("swap", "aborted_pre_completion", error=repr(exc))
-                    logger.critical("aborted before the swap completed (%r) — the primitive's "
-                                    "self-rollback applies; data/qlib_data is the parent.", exc)
+                    logger.critical("aborted before the swap completed (%r) — verified from "
+                                    "disk: data/qlib_data is the parent.", exc)
                     raise
+                if dstate == "unknown":
+                    j("swap", "failed_state_unknown", error=repr(exc))
+                    logger.critical("DISK STATE UNKNOWN after failure (%r) — neither parent-live "
+                                    "nor child-live signature matches; recover manually per the "
+                                    "intent journal (%s) + transaction journal (%s).",
+                                    exc, TRANSACTION_INTENT_PATH, TRANSACTION_JOURNAL_PATH)
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    return 5
                 logger.error("post-swap step failed (%r) — restoring approvals + artifacts + "
                              "rolling the swap back.", exc)
                 problems: list[str] = []
                 problems += _restore_approval_files(written, originals)
-                for artifact, present in ((record_md, record_md is not None),
-                                          (PUBLISH_RECORD_PATH, record_written)):
-                    if present:
-                        try:
-                            Path(artifact).unlink(missing_ok=True)
-                        except OSError as uexc:
-                            problems.append(f"could not remove {artifact}: {uexc}")
+                # artifact cleanup is DISK-DRIVEN by transaction id — never gated on
+                # in-process booleans (re-review #3 Major: an interrupt after the record's
+                # atomic replace but before a flag left a false 'published' record behind).
+                for artifact in (record_path, md_path):
+                    try:
+                        Path(artifact).unlink(missing_ok=True)
+                    except OSError as uexc:
+                        problems.append(f"could not remove {artifact}: {uexc}")
+                try:  # the fixed-name copy: delete ONLY if it belongs to THIS transaction
+                    fixed = json.loads(PUBLISH_RECORD_PATH.read_text(encoding="utf-8"))
+                    if fixed.get("transaction_id") == txid:
+                        PUBLISH_RECORD_PATH.unlink(missing_ok=True)
+                except (OSError, json.JSONDecodeError):
+                    pass  # absent or foreign — nothing of ours to clean
                 # strip THIS transaction's post-swap files from the new tree so the returned
                 # staged tree matches its content attestation again for a clean retry
                 for name in ("provider_build.json", "publish_state.json"):
@@ -1677,6 +1859,8 @@ def phase_publish(args) -> int:
                         problems.append(f"post-rollback live manifest unreadable: {vexc}")
                 else:
                     problems.append(f"swap rollback failed: {rb_msg}")
+                _write_intent({**_read_intent(),
+                               "status": "aborted" if not problems else "rollback_incomplete"})
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     j("bind", "interrupted_rolled_back" if not problems
                       else "interrupted_rollback_incomplete", error=repr(exc),
@@ -1711,93 +1895,124 @@ _LIVE_PUBLISH_FILES = ("metadata/provider_build.json", "metadata/publish_state.j
 
 
 def _run_and_record_qa(builder, rep: dict, j) -> int:
-    """Run run_daily_qa, then hand the READY decision to :func:`_finalize_ready` (PASS) or
-    persist the quarantine (FAIL -> 'qa_failed', exit 6)."""
-    from data_infra.tushare_lock import provider_publish_lock
+    """Register a QA attempt LEASE, run run_daily_qa, then hand the READY decision to
+    :func:`_finalize_ready` (PASS) or persist the quarantine through the lease-checked
+    :func:`_record_qa_failure` (FAIL -> 'qa_failed', exit 6; stale worker -> 7)."""
+    attempt = _begin_qa_attempt(builder, rep)
+    if attempt is None:
+        logger.error("cannot begin a QA attempt — the marker/build state does not admit one.")
+        return 2
     qa_rc = _run_post_publish_qa()
     if qa_rc != 0:
-        with provider_publish_lock():
-            _write_publish_state(builder.paths.qlib_dir, "qa_failed", rep["staged_build_id"],
-                                 qa_returncode=qa_rc)
-        j("qa", "failed", returncode=qa_rc)
-        logger.critical("PUBLISHED but post-publish QA FAILED (exit %d) — the provider stays live "
-                        "but publish-state 'qa_failed' QUARANTINES gated reads until "
-                        "--finalize-qa passes. Parent retained as .bak.", qa_rc)
-        return 6
-    j("qa", "passed", returncode=0)
-    return _finalize_ready(builder, rep, j)
+        return _record_qa_failure(builder, rep, attempt, qa_rc, j)
+    j("qa", "passed", returncode=0, attempt=attempt)
+    return _finalize_ready(builder, rep, j, attempt)
 
 
-def _finalize_ready(builder, rep: dict, j) -> int:
-    """The ONLY transition to publish-state 'ready' (re-review P0-3 + P0-4). Under the
-    transaction locks, EVERY pin is re-verified against the LIVE tree: the manifest CAS
-    (build/policy/raw-root/parent/execute-commit), the minted-policy file hash, the
-    post-rebind approvals set (vs the publish record), the in-tree raw manifest
-    self-consistency, and the FULL live content root vs the reviewed staged root
-    (excluding exactly the two files the publish itself adds). QA is a sampling check —
-    THIS is the proof; it closes the hash->swap TOCTOU window: a byte changed at ANY point
-    between the pre-swap attestation and this gate refuses 'ready' (quarantine persists,
-    exit 5)."""
+def _finalize_ready(builder, rep: dict, j, attempt: str) -> int:
+    """The ONLY transition to publish-state 'ready' (re-review #2 P0-3/P0-4 + #3 P0-2).
+    Under the transaction locks: (0) the QA-attempt LEASE is CAS-checked (a stale worker
+    records 'superseded' and changes nothing, exit 7); (1) every cheap pin is re-verified
+    against the LIVE tree — manifest CAS (build/policy/raw-root/parent/execute-commit),
+    minted-policy file hash, post-rebind approvals set (vs this transaction's record,
+    located via the marker's transaction id), in-tree raw manifest (root AND file-list
+    self-root); (2) the payload is SEALED read-only (every file except the control-plane
+    marker) so no attribute-respecting writer can mutate it afterwards; (3) the FULL
+    sealed content is re-hashed and must equal the reviewed staged root. Tamper-class
+    failures (manifest CAS / content root) transition the marker to 'suspect' — which
+    blocks publish AND finalize until --restore-parent — and exit 5; softer pin problems
+    (records/policy/approvals) keep the current state for a retryable finalize, exit 5.
+    QA is a sampling check; THIS gate is the proof."""
     from data_infra.tushare_lock import provider_publish_lock, raw_maintenance_lock
     qlib_dir = Path(builder.paths.qlib_dir)
     with raw_maintenance_lock(), provider_publish_lock():
-        problems: list[str] = []
+        marker = _read_publish_state(qlib_dir)
+        if (marker.get("active_qa_attempt") != attempt
+                or marker.get("provider_build_id") != rep["staged_build_id"]
+                or marker.get("state") not in ("pending_qa", "qa_failed")):
+            j("ready", "superseded", attempt=attempt, marker_state=marker.get("state"),
+              marker_attempt=marker.get("active_qa_attempt"))
+            logger.warning("stale READY attempt %s superseded (marker state=%r attempt=%r) — "
+                           "changing nothing.", attempt, marker.get("state"),
+                           marker.get("active_qa_attempt"))
+            return 7
+        tamper: list[str] = []
+        soft: list[str] = []
         okm, why_m = _verify_live_manifest(
             qlib_dir, build_id=rep["staged_build_id"], policy_id=rep["new_policy_id"],
             raw_root=rep["raw_input_manifest_root"], parent_pb=rep["parent_build_id"],
             source_git_commit=rep["source_git_commit"])
         if not okm:
-            problems.append(f"live manifest CAS failed: {why_m}")
+            tamper.append(f"live manifest CAS failed: {why_m}")
         policy_file = POLICY_DIR / f"{rep['new_policy_id']}.yaml"
         if not policy_file.is_file() or _sha256_file(policy_file) != rep["new_policy_sha256"]:
-            problems.append("minted policy file hash drifted since the reviewed report")
-        try:
-            record = json.loads(PUBLISH_RECORD_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            record = {}
-            problems.append(f"publish record unreadable: {exc}")
-        if record.get("published_build_id") != rep["staged_build_id"]:
-            problems.append("publish record does not describe this build")
+            soft.append("minted policy file hash drifted since the reviewed report")
+        txid = marker.get("transaction_id")
+        record: dict = {}
+        if not txid:
+            soft.append("marker carries no transaction_id — cannot locate this publish's record")
+        else:
+            try:
+                record = json.loads((OUT_DIR / f"publish_record_{txid}.json")
+                                    .read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                soft.append(f"publish record for transaction {txid} unreadable: {exc}")
+        if record and record.get("published_build_id") != rep["staged_build_id"]:
+            soft.append("publish record does not describe this build")
         appr = _approvals_attestation()
         if appr["bound_count"] < 1 or appr["root"] != record.get("approvals_post_rebind_root"):
-            problems.append("approvals governance set drifted since the rebind")
+            soft.append("approvals governance set drifted since the rebind")
         try:
             live_raw = json.loads((qlib_dir / "metadata" / "raw_input_manifest.json")
                                   .read_text(encoding="utf-8"))
-            if live_raw.get("root") != rep["raw_input_manifest_root"]:
-                problems.append("in-tree raw manifest root != the reviewed raw root")
+            if (live_raw.get("root") != rep["raw_input_manifest_root"]
+                    or _manifest_root(live_raw.get("files", [])) != live_raw.get("root")):
+                tamper.append("in-tree raw manifest root/file-list inconsistent with the review")
         except (OSError, json.JSONDecodeError) as exc:
-            problems.append(f"in-tree raw manifest unreadable: {exc}")
-        if not problems:
-            logger.info("READY gate: FULL live-content re-verification (%s files) ...",
+            tamper.append(f"in-tree raw manifest unreadable: {exc}")
+        if not tamper and not soft:
+            # SEAL the generation BEFORE the certifying hash (re-review #3 P0-2: one more
+            # hash cannot close the hash->ready window on a mutable tree). The marker file
+            # stays writable — it is the control plane the pointer lives in.
+            sealed = _seal_tree_readonly(qlib_dir)
+            logger.info("READY gate: sealed %d files read-only; FULL sealed-content "
+                        "re-verification (%s files) ...", sealed,
                         rep.get("staged_content_file_count"))
             att = _staged_content_attestation(
                 qlib_dir, exclude=_LIVE_PUBLISH_FILES,
                 build_manifest_path=Path(builder.paths.build_root) / "manifest.json")
             if att["root"] != rep["staged_content_root"]:
-                problems.append(
-                    f"LIVE content root {att['root']} != reviewed {rep['staged_content_root']} — "
-                    "the published bytes changed since the audited build")
-        if problems:
-            j("ready", "refused", problems=problems)
-            logger.critical("READY REFUSED — the provider STAYS QUARANTINED. Problems: %s. "
-                            "Investigate; if the published bytes are compromised, restore the "
-                            "parent from the .bak per the journal (%s).",
-                            problems, TRANSACTION_JOURNAL_PATH)
+                tamper.append(
+                    f"SEALED content root {att['root']} != reviewed {rep['staged_content_root']}"
+                    " — the published bytes changed since the audited build")
+        if tamper:
+            _write_publish_state(qlib_dir, "suspect", rep["staged_build_id"],
+                                 reason=tamper[0])
+            j("ready", "refused_suspect", problems=tamper + soft)
+            logger.critical("READY REFUSED — TAMPER-CLASS failure; publish-state 'suspect' now "
+                            "BLOCKS publish AND finalize until --restore-parent. Problems: %s "
+                            "(journal %s).", tamper + soft, TRANSACTION_JOURNAL_PATH)
             return 5
-        _write_publish_state(qlib_dir, "ready", rep["staged_build_id"], qa_returncode=0)
-    j("ready", "ok")
-    logger.info("publish-state 'ready' — QA passed AND every pin re-verified against the live "
-                "tree. Publish record: %s", PUBLISH_RECORD_PATH)
+        if soft:
+            j("ready", "refused", problems=soft)
+            logger.critical("READY REFUSED — records/pins incomplete (state unchanged; fix and "
+                            "re-run --finalize-qa). Problems: %s.", soft)
+            return 5
+        _write_publish_state(qlib_dir, "ready", rep["staged_build_id"], qa_returncode=0,
+                             qa_attempt=attempt)
+    j("ready", "ok", attempt=attempt)
+    logger.info("publish-state 'ready' — QA passed AND every pin re-verified against the SEALED "
+                "live tree. Publish record: %s", PUBLISH_RECORD_PATH)
     return 0
 
 
 def phase_finalize_qa(args) -> int:
     """Re-run the QA + READY-gate leg for a provider stuck in 'pending_qa'/'qa_failed'
-    (crash between swap and QA, or a QA failure now resolved). CAS-verifies the live
-    manifest against the reviewed report BEFORE running QA, and the full READY gate
-    (:func:`_finalize_ready` — content root included) decides afterwards; a provider whose
-    bytes changed since the review can NEVER be marked ready by this path."""
+    (crash between swap and QA — including a deferred-SIGINT commit-core — or a QA failure
+    now resolved). CAS-verifies the live manifest against the reviewed report BEFORE
+    running QA; the full READY gate (:func:`_finalize_ready` — lease + seal + content root)
+    decides afterwards; a provider whose bytes changed since the review can NEVER be
+    marked ready by this path (it transitions to 'suspect' instead)."""
     if not DRYRUN_REPORT_PATH.exists():
         logger.error("no dry-run report at %s — nothing to finalize.", DRYRUN_REPORT_PATH)
         return 2
@@ -1818,14 +2033,10 @@ def phase_finalize_qa(args) -> int:
                          "finishes the publish this report describes. Refusing.",
                          live_build, rep["staged_build_id"])
             return 2
-        state_file = Path(builder.paths.qlib_dir) / "metadata" / "publish_state.json"
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8")).get("state")
-        except (OSError, json.JSONDecodeError):
-            state = None
+        state = _read_publish_state(builder.paths.qlib_dir).get("state")
         if state not in ("pending_qa", "qa_failed"):
-            logger.error("publish-state is %r — --finalize-qa only applies to pending_qa/qa_failed.",
-                         state)
+            logger.error("publish-state is %r — --finalize-qa only applies to pending_qa/"
+                         "qa_failed (a 'suspect' provider requires --restore-parent).", state)
             return 2
         okm, why_m = _verify_live_manifest(
             builder.paths.qlib_dir, build_id=rep["staged_build_id"],
@@ -1846,6 +2057,118 @@ def phase_finalize_qa(args) -> int:
     return _run_and_record_qa(builder, rep, j)
 
 
+def phase_restore_parent(args) -> int:
+    """EXPLICIT recovery from a quarantined/suspect publish (re-review #3 disposition:
+    never silently auto-restore; provide a verified command instead). Under the
+    transaction locks: verifies the live build is the report's child AND the .bak parent's
+    manifest matches the report's parent ids; unseals the (possibly sealed) child tree;
+    reverse-rebinds the approval YAMLs child->parent (pure plan first, byte-verified);
+    strips the publish-added files; swaps the parent back; verifies parent ids live +
+    0 binding drift; clears the marker (it travels back with the child tree) and marks the
+    intent 'aborted'. Exit 0 only when every check passes; else 5 with the journal."""
+    if not DRYRUN_REPORT_PATH.exists():
+        logger.error("no dry-run report at %s — cannot verify the restore against a review.",
+                     DRYRUN_REPORT_PATH)
+        return 2
+    rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
+    builder = _make_publish_builder(rep["staged_build_id"])
+    from data_infra.tushare_lock import provider_publish_lock, raw_maintenance_lock
+
+    journal: dict = {"transaction": "restore_parent", "staged_build_id": rep["staged_build_id"],
+                     "steps": []}
+
+    def j(step: str, status: str, **info) -> None:
+        journal["steps"].append({"step": step, "status": status,
+                                 "ts_cst": now_cst().isoformat(timespec="seconds"), **info})
+        _write_journal(journal)
+
+    with raw_maintenance_lock(), provider_publish_lock():
+        qlib_dir = Path(builder.paths.qlib_dir)
+        live_build, live_policy = live_provider_ids()
+        if live_build != rep["staged_build_id"]:
+            logger.error("live build %s is not the report's child %s — nothing to restore.",
+                         live_build, rep["staged_build_id"])
+            return 2
+        state = _read_publish_state(qlib_dir).get("state")
+        if state not in ("suspect", "pending_qa", "qa_failed"):
+            logger.error("publish-state is %r — --restore-parent only undoes an uncertified "
+                         "publish (suspect/pending_qa/qa_failed).", state)
+            return 2
+        backup_dir = Path(f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+        try:
+            bak_manifest = json.loads((backup_dir / "metadata" / "provider_build.json")
+                                      .read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.error("backup parent manifest unreadable at %s (%s) — refusing.", backup_dir, exc)
+            return 2
+        if (bak_manifest.get("provider_build_id") != rep["parent_build_id"]
+                or bak_manifest.get("calendar_policy_id") != rep["parent_policy_id"]):
+            logger.error("backup at %s is NOT the report's parent (%s/%s) — refusing.",
+                         backup_dir, rep["parent_build_id"], rep["parent_policy_id"])
+            return 2
+        try:
+            reverse_plan, current_bytes = _plan_rebind(
+                rep["staged_build_id"], rep["new_policy_id"],
+                rep["parent_build_id"], rep["parent_policy_id"])
+        except PublishTransactionError as exc:
+            logger.error("reverse rebind planning refused (%s) — approvals are not uniformly "
+                         "bound to the child; repair from git first.", exc)
+            return 2
+        j("restore", "verified_preconditions", state=state)
+        problems: list[str] = []
+        unsealed = _unseal_tree(qlib_dir)
+        j("restore", "unsealed", files=unsealed)
+        written: list[Path] = []
+        try:
+            for p, nd in reverse_plan:
+                _atomic_write_bytes(p, nd)
+                written.append(p)
+        except Exception as exc:  # noqa: BLE001
+            problems += _restore_approval_files(written, current_bytes)
+            problems.append(f"reverse rebind failed: {exc}")
+        if not problems:
+            txid = _read_publish_state(qlib_dir).get("transaction_id")
+            for name in ("provider_build.json", "publish_state.json"):
+                try:
+                    (qlib_dir / "metadata" / name).unlink(missing_ok=True)
+                except OSError as uexc:
+                    problems.append(f"could not remove new-tree {name}: {uexc}")
+            ok_rb, rb_msg = _rollback_swap(builder)
+            if not ok_rb:
+                problems.append(f"swap-back failed: {rb_msg}")
+            else:
+                try:
+                    rb_build, rb_policy = live_provider_ids()
+                    if (rb_build, rb_policy) != (rep["parent_build_id"], rep["parent_policy_id"]):
+                        problems.append(f"post-restore live ids ({rb_build}/{rb_policy}) != parent")
+                except Exception as vexc:  # noqa: BLE001
+                    problems.append(f"post-restore live manifest unreadable: {vexc}")
+                from data_infra.approval_evidence import evaluate_approval_evidence_bindings
+                drifts = evaluate_approval_evidence_bindings(
+                    approvals_dir=APPROVALS_DIR,
+                    manifest_path=qlib_dir / "metadata" / "provider_build.json")
+                still = [d for d in drifts if d.drift]
+                if still:
+                    problems.append(f"{len(still)} approvals still drift after the restore")
+                if txid:
+                    for artifact in (OUT_DIR / f"publish_record_{txid}.json",):
+                        try:
+                            artifact.unlink(missing_ok=True)
+                        except OSError as uexc:
+                            problems.append(f"could not remove {artifact}: {uexc}")
+        _write_intent({**_read_intent(), "status": "aborted" if not problems
+                       else "rollback_incomplete"})
+        if problems:
+            j("restore", "incomplete", problems=problems)
+            logger.critical("RESTORE INCOMPLETE — resolve manually per the journal (%s): %s",
+                            TRANSACTION_JOURNAL_PATH, problems)
+            return 5
+        j("restore", "ok")
+    logger.info("RESTORED: the parent provider is live again; the child sits back at the staged "
+                "path for investigation. Approvals re-bound to the parent (0 drift).")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Monthly calendar freeze-bump driver")
     ap.add_argument("--plan", action="store_true", help="Preflight + target_end + plan only")
@@ -1857,9 +2180,14 @@ def main() -> int:
     ap.add_argument("--i-reviewed-the-dryrun", action="store_true",
                     help="Attest the dry-run report was reviewed (required for --publish-approved)")
     ap.add_argument("--finalize-qa", action="store_true",
-                    help="Re-run the post-publish QA leg for a provider quarantined at "
-                         "pending_qa/qa_failed (crash between swap and QA, or a resolved QA "
-                         "failure); flips publish-state to 'ready' on PASS")
+                    help="Re-run the post-publish QA + READY-gate leg for a provider "
+                         "quarantined at pending_qa/qa_failed (crash/deferred-SIGINT between "
+                         "swap and QA, or a resolved QA failure); flips publish-state to "
+                         "'ready' only after the full sealed-content re-verification")
+    ap.add_argument("--restore-parent", action="store_true",
+                    help="EXPLICIT verified recovery: undo an uncertified publish "
+                         "(suspect/pending_qa/qa_failed) — reverse-rebind approvals, swap the "
+                         ".bak parent back live, verify parent ids + 0 binding drift")
     ap.add_argument("--target-end", type=str, default=None, help="Override target_end (YYYYMMDD)")
     ap.add_argument("--allow-migration-exception", action="store_true",
                     help="Acknowledge that a frozen-prefix exception type recurring 2+ bumps has "
@@ -1876,8 +2204,10 @@ def main() -> int:
         return phase_publish(args)
     if args.finalize_qa:
         return phase_finalize_qa(args)
+    if args.restore_parent:
+        return phase_restore_parent(args)
     logger.error("choose a mode: --plan (review) | --execute (multi-hour, stops before publish) | "
-                 "--publish-approved --i-reviewed-the-dryrun | --finalize-qa")
+                 "--publish-approved --i-reviewed-the-dryrun | --finalize-qa | --restore-parent")
     return 2
 
 
