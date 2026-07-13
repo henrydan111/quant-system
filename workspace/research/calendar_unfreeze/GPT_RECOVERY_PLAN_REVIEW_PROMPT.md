@@ -1,121 +1,121 @@
-# GPT 5.5 Pro RE-review #2 — raw-store RECOVERY design (plan v3 + coordinator v2, post-REWORK)
+# GPT 5.5 Pro RE-review #3 — raw-store RECOVERY design (plan v4 + coordinator v3, post re-review #2 REWORK)
 
-Status: ready to send. Branch `calendar-unfreeze`, artifacts pinned to commit `ee94dc5`. Still NO fetch executed; this re-review gates adapter construction + the fetch authorization.
+Status: ready to send. Branch `calendar-unfreeze`, artifacts pinned to commit `49573f3`. Still NO fetch executed; adapters still deliberately unbuilt (your M3 sequencing: contracts first).
 
-**Self-review (§10, done):** every REWORK claim re-verified against code before folding (broker/quarterly scripts exist — `ls`; margin_detail canonical path — data_dictionary L750; init_fundamentals dataset set — grep; init_market main() reference call — read; 4×base_sleep=1.0 — grep). Central floor implemented + test-pinned (`test_spaced_call_floors_base_sleep_centrally`); lock/fetcher batteries 34/34; the 20 data-dependent test failures in tests/data_infra are the incident blast radius (empty pit_ledger/caches), verified unrelated to the floor change (no failing test touches fetcher/lock). Coordinator v2 smoke: run `20260713a` created; inventory 21 lost / 77,516,755 rows; preflight 234 survivor files (whole trees, hashed) + 18 evidence files; `--plan` = 10/10 legs doc-gate-blocked; `--fetch` exit 3; duplicate run refused. Verdict: clean for GPT.
+**Self-review (§10, done):** your `..\escape` / `..\..\Users\...` probes reproduced locally against v2, then pinned as tests against v3 (both refuse at the run_id regex); the junction probe initially PASSED against my v3 draft — the guard never inspected the leaf component it was handed (`_lex_components` built ancestors only) — fixed and now pinned (`test_reparse_point_in_ancestry_refused` creates a real `_winapi.CreateJunction` inside the run root). Driver facts re-verified before encoding (dividends inside `download_fundamentals` per-stock — grep L207; `FactorDataInitializer` has zero dividend refs; per-stock swallow at `fetch_new_alpha_endpoints` L143; cashflow/forecast/holder scope = init_factor per CLAUDE §6.2). 13-test coordinator battery (was zero at the last pin) + 47 green total; no Tushare call. Verdict: clean for GPT.
 
 ---
 
 ```text
 ROLE
-Senior reviewer for an A-share quant system where research validity outranks code that runs. You
-reviewed the recovery design for the 2026-07-13 junction-deletion incident (user's `git worktree
-remove --force` recursed through junctions into the live raw store; 21/27 provider-input datasets
-deleted, ~77.5M rows; live Qlib provider + reference/ + universe/ + registries INTACT) and returned
-REWORK with 6 Blockers + 4 Majors + 2 Minors. This RE-REVIEW verifies the fold. Fetch remains
-REFUSED: adapters are deliberately NOT built yet — this review gates their construction.
+Senior reviewer for an A-share quant system where research validity outranks code that runs. Recovery
+context: the operator's `git worktree remove --force` deleted 21/27 raw provider-input datasets
+(~77.5M rows) through junctions; live provider + reference/ + universe/ intact; recovery = C:-staged
+re-fetch. Your re-review #2 (commit ee94dc5) returned REWORK: B1 run-root escape (../ probes accepted,
+resolve-before-scan erased junction evidence), B2 spec/driver mismatches, B3 unchecked ledger, B4
+placeholder-passable doc gate, B5 unrecoverable window between the two promotion renames, M1 builder
+containment, M2 loose first-seen evidence, M3 contracts-before-adapters, minors (non-finite throttle,
+physical-disk identity). This RE-REVIEW #3 verifies the fold. Fetch remains REFUSED; adapters remain
+unbuilt pending your verdict + signed contracts.
 
-REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, commit ee94dc5)
-- Plan v3:           https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/workspace/research/calendar_unfreeze/RAW_STORE_RECOVERY_PLAN.md
-- Coordinator v2:    https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/scripts/raw_recovery_coordinator.py
-- Endpoint doc-gate: https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/workspace/configs/recovery_endpoint_contracts.yaml
-- Central throttle floor: https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/src/data_infra/tushare_lock.py  (MIN_BASE_SLEEP in spaced_call)
-  + https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/src/data_infra/fetchers/__init__.py  (constructor floor)
-  + the four raised constructors: init_market_data / init_fundamentals_data / init_factor_data /
-    scripts/fetch_quarterly_statements.py (all at the same pin)
-- Floor regression test: https://raw.githubusercontent.com/henrydan111/quant-system/ee94dc5/tests/data_infra/test_daily_update_5c.py  (test_spaced_call_floors_base_sleep_centrally)
+REPO https://github.com/henrydan111/quant-system  (branch calendar-unfreeze, commit 49573f3)
+- Plan v4:        https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/workspace/research/calendar_unfreeze/RAW_STORE_RECOVERY_PLAN.md
+- Coordinator v3: https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/scripts/raw_recovery_coordinator.py
+- NEW test battery (13): https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/tests/data_infra/test_raw_recovery_coordinator.py
+- Throttle (isfinite + central floor): https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/src/data_infra/tushare_lock.py
+  + https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/src/data_infra/fetchers/__init__.py
+- Contracts scaffold (unreviewed, gate blocks): https://raw.githubusercontent.com/henrydan111/quant-system/49573f3/workspace/configs/recovery_endpoint_contracts.yaml
 
 HOW EACH FINDING WAS FOLDED
 
-B1 (containment not end-to-end): RecoveryPaths per immutable run (C:\quant_recovery\runs\<run_id>);
-assert_write = Path.relative_to(run_root) [kills the quant_recovery_evil prefix bypass] + reparse-point
-rejection over the FULL ancestry (is_symlink/is_junction on every parent) + E:-prefix refusal; fsync'd
-journal/report writes; ledger under a file lock. The DRIVEN scripts are declared UNTRUSTED — every one
-of your verified E: leak points (import-time log handlers, fetch_bucket_a DATA/LOGS, alpha-endpoint
-roots, suspend/broker hard-coding, indicator logs-despite--data-root, catch-up state + bare
-StorageManager, pit_backend profiling reports) is recorded as an adapter GAP in ADAPTER_SPECS, and the
-plan requires every adapter to take ALL paths injected (no defaults) + pass an E:-write-denied
-integration test BEFORE wiring.
-B2 (wrong leg matrix): free-text drivers replaced by ADAPTER_SPECS with verified gaps: L1 bypasses
-init_market_data.main() (it unconditionally downloads reference); L2 split — statements core vs
-L2b (cashflow/forecast/quarterlies via scripts/fetch_quarterly_statements.py, which EXISTS and was
-omitted); industry+index_weights refetch (survivors) marked as a must-skip gap; broker leg uses the
-EXISTING scripts/fetch_broker_recommend_historical.py (v2's "no script existed" claim retracted);
-margin_detail folded into market/margin (same manifest dataset); L9 tail = NEW adapter (catch-ups
-can't target C:), cadence documented as NOT uniformly session-based (ann_date calendar windows /
-monthly broker / report_rc TTL halo).
-B3 (metadata-only throttle): the floor is now CENTRAL — tushare_lock.MIN_BASE_SLEEP=1.5 applied INSIDE
-spaced_call (callers cannot lower it) + floored in TushareFetcher.__init__; the four 1.0s constructors
-raised to 1.5; a regression test pins the chokepoint floor (cooldown written >= 1.5s ahead for a 0.1s
-caller).
-B4 (no operational ledger): RecoveryPaths.ledger_append implements the row schema
-(LEDGER_REQUEST_FIELDS: query params, page count, raw rows, confirmed_empty [positive-proof-only],
-schema fingerprint, key null/dup stats, output sha256, first-fetch ts, exception, doc hash, state);
-consolidation only after all partitions verified; dataset-level proof = ledger 100% + the dataset
-profiler re-run on C: compared to the manifest's schema_variants/null/dup/warnings — counts demoted to
-a coarse presence scan (labeled).
-B5 (oracle could bless drift): plan §5 — full raw->normalized->ledger->provider chain ON C: before any
-promotion; recovery-specific FULL-BIN frozen-prefix comparison with NO sampling and NO exception
-auto-excusals; builder pinned to the live provider's source commit f93cb9d2...; canonical_kline_hash
-computed directly on BOTH providers (live manifest's stored value is null); a diff BLOCKS promotion
-until its cause is PROVEN (explicitly not auto-attributed to vendor restatement); report_rc: explicit
-create_time + per-content raw_fetch_ts, first-seen reconstructed from the July catch-up state/logs
-where provable else recovery-time floor or quarantine, revision baseline re-established only after
-exact live-provider parity; raw-only data = NEW raw generation identity, never claimed byte-equivalent.
-B6 (impossible atomic promotion): your 10-step journaled sequence adopted verbatim in plan §6
-(freeze C: manifest -> locks -> reparse rescan -> incident-empty fingerprint check -> robocopy /E /XJ
-to .recovery_incoming -> per-file sha256 verify -> PREPARED -> same-volume tombstone+rename -> SWAPPED
-+ re-hash -> per family; tombstones retained until QA + first verified backup).
-M1 (inventory): whole reference/+universe/ trees copied+hashed (234 files, incl.
-industry_sw2021_members, ths_concept, stock_basic .bak); evidence snapshot (raw_cache manifests,
-calendar-unfreeze state, July logs — 18 files); explicit yearly market/suspension files; margin_detail
-correction; balancesheet_quarterly known-empty preserved; indicator archives + report_rc revision
-baseline + first-seen stamps classified IRRECOVERABLE EVIDENCE (never "restored").
-M2 (stale contamination): immutable runs/<run_id>; new run refuses existing id; no dirs_exist_ok
-merging; fsync + file-locked ledger.
-M3 (doc gate): workspace/configs/recovery_endpoint_contracts.yaml — 30 endpoints, each requiring
-doc_path/doc_sha256/fields/limits/cadence/PIT semantics/human reviewed_by+at; --plan BLOCKS any leg
-with an incomplete contract (today 10/10 blocked — the gate is active before any adapter exists).
-M4 (backup): manifest-based non-regression (path/size/sha256 per generation; ZERO tolerance for an
-unexplained missing historical path), 14 daily + 8 weekly + 12 monthly verified generations, >=3
-independently restorable, no hardlink dedup, offline generation, prune as a SEPARATE job that
-preserves good generations on guard failure.
-Minors: presence labeled "count scan only"; baseline manifest sha256-pinned (fbc4aec0..., refused on
-drift).
+B1: run_id must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ (separators/UNC/device/ADS/traversal refuse
+before any path exists — your two escape probes are pinned tests); the run-root candidate is checked
+LEXICALLY against RECOVERY_ROOT before anything resolves; _reject_reparse_lexical inspects every
+component INCLUDING THE LEAF with lstat semantics (no resolve first — resolve() following the junction
+was exactly how evidence got erased), inspection failure refuses; assert_write = lexical normpath ->
+relative_to(run root) -> reparse scan -> realpath cross-check belt; root creation, temp files and the
+ledger .lock all route through the authority; resume requires the original run_created ledger record
+matching run id + the pinned baseline hash (tamper test pinned). Honest disclosure: my first v3 draft
+FAILED the junction test because the guard inspected only ancestors, not the handed leaf — fixed, test
+pinned. The fresh-subprocess ALLOWLIST write monitor (run-root + api-lock namespace only, incl. the
+ts.set_token token-cache write) is specified in plan §2 as an adapter-gating test.
+B2: ENDPOINT_MATRIX replaces prose — one machine-readable row per endpoint/output family with
+callable, physical outputs, partition enumerator, pagination rule, natural key, empty policy,
+consolidation rule, tail rule, UNIQUE owner (test-enforced), and sidecars. Corrections encoded:
+dividends are fetched INSIDE FundamentalsInitializer.download_fundamentals per stock (A03 owns
+income+balancesheet+dividends together); cashflow/forecast/holder_number are init_factor scope (A05/
+A06/A09); index_daily is per-index RANGE (A02); stk_holdertrade (A12) and cyq_perf (A13) are per-stock
+with explicit consolidation/repartition rules and the swallow-at-line-143 gap noted; indicators have
+ONE owner (A07 refresh_indicator_history); generic L9 is GONE — every row carries its own tail_rule;
+known-empty sidecars (moneyflow/northbound) + raw_cache ingest manifests are FIRST-CLASS outputs.
+Exact method binding happens at adapter build AFTER that endpoint's contract is signed (M3).
+B3: RecoveryLedger — freeze_plan writes a hashed request_plan.json ONCE (tamper -> everything
+refuses); typed kinds (lifecycle/attempt/verdict) schema-checked on load; stable request ids
+(sha256 over endpoint+canonical params+partition); transitions planned->fetched|failed->
+verified|confirmed_empty enforced under the file lock with read-check-append; 'verified' requires a
+CONTAINED output whose sha256 matches + schema fingerprint + key stats (a verdict for a missing file
+refuses — your exact probe); dense datasets can NEVER be confirmed_empty; sparse confirmed_empty
+requires a same-session nonempty canary request id AND repeat confirmation; torn/malformed tails fail
+closed; consolidation_allowed(dataset) requires every planned constituent terminal-valid. All pinned
+by tests (invalid transition, unplanned request, plan tamper, torn tail, dense-empty, canary,
+consolidation).
+B4: contract_errors validates structure: doc_path resolved under the offline mirror with traversal +
+reparse rejection, doc_sha256 recomputed against the actual file, required_fields/natural_key as real
+lists, empty_policy enum, reviewed_by length + placeholder set rejection, reviewed_at ISO-parsed and
+not in the future. Your "eight x values" probe is a pinned negative test alongside wrong-hash,
+path-escape and future-timestamp cases.
+B5 (plan §6): per-family state machine COPYING -> PREPARED -> OLD_MOVED -> NEW_INSTALLED ->
+LIVE_VERIFIED -> SWAPPED, journal fsync'd before each transition, resume inspects all three paths +
+hashes for deterministic roll-forward/rollback; durable E:-side RECOVERY_IN_PROGRESS sentinel written
+BEFORE the first swap with all raw readers/jobs/builders failing closed on it; pre-existing
+incoming/tombstone destinations refused; recursive reparse scans on C: source AND E: incoming BEFORE
+and AFTER copying (an /XJ skip is not success); incoming + tombstones at the data\ top level outside
+every dataset glob; crash injection around every rename/transition is a pre-promotion test gate.
+M1 (plan §5): the pinned C-side build runs from a hash-verified `git archive` of f93cb9d2 extracted
+under the immutable run root (no worktree/junction; E:-checkout execution banned because of its
+data_profiles + import-time log writes); tree hash, dependencies, command recorded; a path-injection
+patch, if unavoidable, gets its own recorded diff hash separate from the semantic pin; the oracle
+holds the provider-publish lock (or hashes the live provider before AND after) and covers calendars,
+instruments, and EVERY feature bin.
+M2 (plan §5): prior first-seen admissible ONLY with retained evidence cryptographically binding
+natural key + CONTENT HASH to a timestamp; aggregate state flags/log lines inadmissible; default =
+recovery-time floor; quarantine when even the floor is ambiguous (collision/prefix mismatch); a proven
+vendor restatement never auto-authorizes rewriting sealed provider output.
+M3 (plan §8): contracts are reviewed + signed BEFORE that endpoint's partitioning/fetch logic exists;
+only generic containment/ledger infra proceeds in parallel. Your 9-step sequence + minimum pre-fetch
+test matrix are adopted verbatim in §8.
+Minors: spaced_call + TushareFetcher validate float()+isfinite before flooring (nan/inf/negative/None
+-> MIN_BASE_SLEEP; max(nan,1.5) noted as the trap; pinned across all five inputs); backup destination
+must be verified by Windows volume + physical-disk identity, not asserted (plan §7).
 
-DISCLOSED LIMITS OF THIS FOLD
-- The fetch ADAPTERS themselves are not built (that construction is what this re-review gates); the
-  E:-write-denied integration test harness therefore does not exist yet either.
-- The endpoint contracts are scaffolded empty — the 30 human doc reviews are pending.
-- The C:-side provider build + full-bin oracle are specified (plan §5) but not implemented; they land
-  with the adapters.
-- ~20 data-dependent tests in tests/data_infra fail against the empty live store (pit_ledger/caches)
-  — the incident's expected blast radius until restoration, not regressions (no failing test touches
-  the changed fetcher/lock code; the lock/fetcher batteries pass 34/34).
+VERIFICATION AT THIS PIN
+13-test coordinator battery (traversal probes, sibling-prefix escape, junction-in-run-root via real
+CreateJunction, resume tamper, plan freeze/tamper, unplanned request, verified-without-file,
+dense-empty/canary, torn tail, consolidation gate, contract placeholders/hash/escape/future-ts,
+unique-owner matrix, non-finite throttle floor) + lock/fetcher/5-C batteries = 47 green. Coordinator
+smoke on the real tree: inventory + preflight + plan (all rows contract-BLOCKED) + fetch refusal
+(exit 3). No Tushare call. E: writes remain plan/code/test text only.
 
 RE-REVIEW QUESTIONS
-1. Is the containment design now correct-in-principle AND correctly sequenced (adapters gated on an
-   E:-write-denied integration test)? Anything still missing from RecoveryPaths' write-surface
-   coverage (build output, profiler reports, quarantine)?
-2. Is ADAPTER_SPECS now factually accurate and complete against the drivers at this pin? Any remaining
-   dataset/store missing from inventory+specs?
-3. Is the central MIN_BASE_SLEEP floor airtight at the chokepoint (spaced_call) — any Tushare call
-   path that bypasses spaced_call entirely (thus the floor) besides raw-client construction already
-   banned by PRO001?
-4. Does the B4 ledger schema + profiler-comparison protocol constitute sufficient restoration proof?
-   What would you add for the sparse/event datasets (confirmed_empty discipline)?
-5. Is the §5 oracle protocol + report_rc first-seen policy adequate against the headline risk
-   (backdating reconstructed revisions into sealed history)? Is "recovery-time floor or quarantine"
-   the right default when July catch-up logs cannot prove first-seen?
-6. Promotion §6: any hole left in the 10-step journaled sequence (crash windows between PREPARED and
-   SWAPPED; tombstone retention; the .recovery_incoming staging dir's own reparse exposure)?
-7. Sequencing: we propose GPT-verdict -> contract reviews + adapter construction (parallel) -> fetch
-   authorization -> C:-build + oracle -> promotion authorization. Correct order? What is the minimal
-   adapter test matrix you require before the fetch go-ahead?
+1. B1: is the lexical-first + leaf-inclusive reparse inspection + realpath belt now sound? Remaining
+   races you'd require the adapter-phase monitor to catch (TOCTOU between scan and write) — is the
+   allowlist-monitor spec sufficient for that, or do you want open-handle-relative writes
+   (dirfd-style) mandated?
+2. B2: any remaining factual error in ENDPOINT_MATRIX rows vs the drivers at this pin? Is deferring
+   exact method binding to post-contract adapter build acceptable, or must the callable be pinned now?
+3. B3: is the ledger now sufficient as the restoration-proof substrate (with the profiler comparison
+   from §4)? Anything missing in the transition set (e.g. an explicit 'skipped' terminal for
+   plan-superseded requests)?
+4. B4/M3: does the contract gate + contracts-first sequencing satisfy the repo's doc-before-fetch
+   rule as you intended?
+5. B5: any hole left in the promotion state machine or its resume semantics?
+6. Are we ready to START the two §8 steps that need no fetch authorization — (a) the 30 endpoint
+   contract reviews, (b) generic containment/ledger test infrastructure hardening — while the user
+   considers the fetch gate? If not, what blocks them?
 
 OUTPUT FORMAT
 - Issues ranked Blocker / Major / Minor, each with the offending text/code quoted + exact fix.
-- Answer the 7 questions explicitly.
-- Final line: SHIP / REVISE / REWORK + the single most important residual risk before authorizing
-  adapter construction + fetch.
+- Answer the 6 questions explicitly.
+- Final line: SHIP / REVISE / REWORK + the single most important residual risk before contract review
+  + adapter construction begin.
 ```
