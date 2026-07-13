@@ -1,82 +1,94 @@
-# RAW STORE RECOVERY PLAN — 2026-07-13 deletion incident
+# RAW STORE RECOVERY PLAN v2 — 2026-07-13 junction-deletion incident
 
-**Status: PLAN ONLY — nothing here has been executed. Every fetch/restore step is §13-gated on the user.**
+**Status: PLAN + C:-staged coordinator prepared. NO Tushare call has been made; every fetch is §13-gated on the user. E: writes minimized (this doc + coordinator code only).**
 
-## 0. Incident summary (forensics complete, actor unidentified)
+v1 is SUPERSEDED — it was unsafe as written (would overwrite intact reference data, wrote directly to E:, missed datasets, wrong paths, over-claimed resume-safety). Every v1 defect the user identified is folded in below.
 
-2026-07-13 **04:06:16–04:06:29** local: a programmatic alphabetical sweep emptied `data/analyst`, `data/corporate`, `data/fundamentals`, `data/market`, `data/normalized`, `data/pit_ledger`, and was deleting inside `data/qlib_builds/phase1_qfields_holdertrade_20260623` when it stopped.
+## 0. Incident record (final, user-confirmed)
 
-**Ruled out:** the Phase 5-B B3 worktree session (tests fully tmp-isolated — verified its diff), all repo `rmtree` sites (provider/staging-scoped only), the 04:01 dashboard refresh (read-only), the 04:44 PR3 pytest battery (after the fact). No deleter process alive by 04:45; no matching session transcript. Recycle Bin / VSS require elevation (user step, §1).
+At **04:06:16** the user ran `git worktree remove --force C:\Users\henry\AppData\Local\Temp\quant-review-3d2ac0f`. That temp worktree contained **Windows junctions into the live `E:\量化系统\data` family dirs**; git recursed through them and deleted live data until killed ~04:11. Consistent with all forensics (alphabetical enumeration, children-deleted / parents-kept, `phase1_qfields` partial).
 
-**Intact (verified):**
-- `data/qlib_data` — the LIVE provider (research/backtests unaffected), + `qlib_data.bak_thaw_step1_20260703c` (370.8 GB) + `qlib_data.bak_phasec_profit_dedt_sq_20260624` (224.3 GB) + staged `qlib_builds/thaw_step1_20260703c`
-- `data/reference/` (trade_cal 8,797 rows / stock_basic / namechange / suspension_ranges…)
-- all 5 registries, governance, holdout_seals, testing_ledger, text_store, `data_tracker.md` + `data_dictionary.md` (= the restoration checklist)
-- `data/backups/` — but it holds **no raw-parquet backup** (only factor-registry + share_capital bins)
+- **The temp worktree still exists — incident evidence. DO NOT delete it, `git worktree remove` it, or run any recursive operation inside it (it may still contain junctions into live data).** Also run `git worktree prune` NOWHERE until it is dismantled deliberately (junctions unlinked first, then removed).
+- VSS shadows on E:: **none**. Recycle Bin: **empty**. E: is NVMe with TRIM; ~hours have passed with ongoing writes from other sessions — file-carving recovery is effectively hopeless. Re-fetch is the path unless the user produces an external backup.
+- **E: write discipline until recovery completes:** no bulk writes, no CHKDSK, no defrag, no fetch-to-E:. Staging happens on **C: (separate physical SSD, ~3 TB free)**.
 
-**Blocked until recovery:** daily raw job (5-C), monthly bump (5-B), PIT-ledger rebuilds, `pit_research_loader` sandbox research (fail-closed on the empty ledger — correct behavior). Provider-based formal research continues to work.
+## 1. Ground truth: what survived, what was lost
 
-## 1. FIRST — user-run elevated recovery checks (cheap, before any re-fetch)
+**Reconciliation baseline = [data/qlib_builds/thaw_step1_20260703c/manifest.json](E:/量化系统/data/qlib_builds/thaw_step1_20260703c/manifest.json)** — the July-3 build profile of all **27 provider inputs, 78,948,729 rows total** (e.g. `daily` = 4,493 files / 14,821,292 rows, 20080102–20260701). It supersedes data_tracker.md's approximate counts. Note that dir holds ONLY the manifest — it is NOT a spare staged provider.
 
-Run from an **elevated** console:
+**SURVIVED (6/27 + provider layer):**
+| What | Detail |
+|---|---|
+| `data/qlib_data` | LIVE provider, build `thaw_step1_20260703c`, 5,809 feature dirs — all provider-based research keeps working |
+| `qlib_data.bak_thaw_step1_20260703c` / `.bak_phasec_…0624` | 370.8 GB / 224.3 GB provider backups |
+| `reference/` | trade_cal (8,797) · stock_basic (5,861) · stock_st_daily (307,696) · namechange (18,237) + the HAND-CURATED irreplaceables: daily_price_repair_overrides.csv · moneyflow_known_empty_dates.txt · northbound_nonconnect_days.txt · ths_concept/ (NOTE: suspension_ranges.parquet was NOT here — it was in the deleted tree; DERIVED, rebuilt post-suspend_d-refetch via `--ranges-only`) |
+| `universe/` | index_weights (1,090,872) · industry_sw2021 (511) |
+| registries / governance / seals / ledger / text_store | untouched |
 
-```bat
-:: 1) VSS shadow copies on E: (if any exist, we can copy the whole raw tree back)
-vssadmin list shadows /for=E:
+**LOST — 21/27 datasets (~77.5M rows) + non-spec stores:**
+| Family | Datasets (manifest rows) |
+|---|---|
+| `market/` (10) | daily 14.82M · stk_limit 17.37M · moneyflow 14.14M · cyq_perf 9.19M · margin 6.60M · northbound 5.60M · top_inst 2.64M · block_trade 0.32M · top_list 0.25M · index_daily 27.9K |
+| `fundamentals/` (7) | indicators 557.7K · income_quarterly 472.6K · cashflow_quarterly 468.5K · balancesheet 398.6K · income 360.6K · cashflow 365.8K · forecast 136.3K |
+| `corporate/` (3) | holder_number 524.7K · stk_holdertrade 183.6K · dividends 163.6K |
+| `analyst/` (1) | report_rc 2.94M |
+| **Non-DATASET_SPECS stores (v1 missed these)** | per-date `suspend_d` store (`market/suspend_d/<yr>/suspend_d_<date>.parquet` — timing-preserving, load-bearing for the monthly completeness proof) · `broker_recommend` (`analyst/broker_recommend/broker_recommend_{YYYYMM}.parquet` — the 金股 production TUD) · Bucket-A siblings (express / disclosure_date / fina_mainbz / fina_audit / repurchase / pledge_stat / top10_floatholders) · staged indicator-history archives · `margin_detail` |
+| Derived (rebuild, don't fetch) | `normalized/` · `pit_ledger/` |
+| Damaged staged build | `qlib_builds/phase1_qfields_holdertrade_20260623` — 3,217 feature dirs remain, INCOMPLETE; quarantine as abandoned, never publish |
 
-:: 2) Recycle Bin usage on E: (programmatic deletes usually bypass it, but confirm)
-dir /a E:\$RECYCLE.BIN
+## 2. Architecture: C:-staged recovery (never fetch-to-E:)
 
-:: 3) "Previous Versions" GUI equivalent: right-click E:\量化系统\data -> Properties -> Previous Versions
+```
+C:\quant_recovery\
+  staging_data\        <- full data_root layout (market/, fundamentals/, corporate/, analyst/, reference/, universe/)
+  ledger\recovery_ledger.jsonl   <- append-only per-(dataset,partition) fetch/verify records
+  reports\             <- inventory / reconciliation JSON
 ```
 
-Also check any personal backup surface: BaiduNetdisk, cloud drives, another machine, an old disk image. **If ANY copy of `data/market` + `data/fundamentals` + `data/analyst` + `data/corporate` exists, restore beats re-fetch** (hours vs days) — then jump to §4 verification.
+1. **Fetch → C: staging only.** The coordinator refuses any target under `E:\` structurally.
+2. **Reference/universe survivors are COPIED E:→C: (read-only from E:)** so staged fetchers have the calendar/stock_basic they need — the live copies are never re-fetched or overwritten (v1's `init_market_data` would have clobbered `stock_basic` and truncated the authoritative 1990–2026 `trade_cal`; that path is banned).
+3. **Verify in staging** against the manifest baseline (§4) — `verify_database.py` lacks `--data-root`, so verification runs via the coordinator's own reconciliation plus targeted checks pointed at C:.
+4. **Promote C:→E: once, atomically, per family**, only after reconciliation passes and with the user's explicit go-ahead (one bulk write pass to E:, not thousands of incremental ones).
+5. Then rebuild derived layers (`build_qlib_backend --stage upstream-only`) and run the frozen-prefix / canonical-kline oracle vs the intact live provider.
 
-Also worth 2 minutes: if you ran ANY cleanup/prune/migration around 04:06 (or an elevated tool did), say so — it changes nothing about recovery but closes the incident.
+## 3. Script-capability matrix (verified against code — why the coordinator exists)
 
-## 2. Re-fetch scope (what was lost, from the surviving data_tracker.md)
+| Script | Gap for recovery use | Coordinator handling |
+|---|---|---|
+| `init_market_data.py` | fetches + OVERWRITES `stock_basic`/`trade_cal` (window-truncated); `base_sleep=1.0` (<1.5 §6.1); logs hard-coded to E:\logs | reference leg SKIPPED (survivors copied); market legs driven with staging data-root + `base_sleep≥1.5` enforced |
+| `init_fundamentals_data.py` | `base_sleep=1.0`; has `--data-root` (usable) | driven with C: data-root + spacing floor |
+| `init_factor_data.py` | `base_sleep=1.0`; continues past failed dates and can still exit 0 (NOT resume-safe as v1 claimed) | per-date ledger rows; a failed partition stays `failed` and blocks reconciliation until refetched |
+| `fetch_suspend_d_historical.py` | year files only; the per-date store is written by the daily updater | coordinator adds an explicit per-date `suspend_d` leg (canonical `write_suspend_d`, timing-preserving) |
+| `fetch_new_alpha_endpoints.py` | E:-rooted paths | staging data-root |
+| `scripts/fetch_bucket_a.py` (v1 had the wrong path) | E:-rooted | staging data-root; covers report_rc deep history + the 7 siblings |
+| `refresh_indicator_history.py` | has `--data-root` | staged leg incl. history archives |
+| `verify_database.py` | **no `--data-root`** — would inspect the empty live store | replaced in-staging by coordinator reconciliation (§4); run on E: only AFTER promotion |
+| (new) broker_recommend leg | no bootstrap script existed | coordinator leg fetching `broker_recommend_{YYYYMM}` months per the data_dictionary spec |
 
-| Dataset family | Path | Approx rows (tracker) | Fetcher |
-|---|---|---|---|
-| daily OHLCV+basic+adj (2008/2010→2026-06-30) | `market/daily/` | ~14.8M rows / 4,495 files | `init_market_data.py` |
-| index daily | `market/index/` | 7 indices | `init_market_data.py` |
-| moneyflow / stk_limit / hk_hold / margin / margin_detail | `market/…` | per-day since ~2010 | `init_factor_data.py` |
-| suspend_d per-date store | `market/suspend_d/` | per-day | `fetch_suspend_d_historical.py` |
-| top_list / top_inst / block_trade / stk_holdertrade / cyq_perf | `market/…` | 5 endpoints | `fetch_new_alpha_endpoints.py` |
-| statements (income/balancesheet/cashflow ×cumulative+quarterly), indicators (167-field), forecast, dividends, holder_number, index_weights, industry | `fundamentals/` | ~10M+ rows | `init_fundamentals_data.py` + `refresh_indicator_history.py` |
-| report_rc deep history (2010-01→2026-06, 2.87M rows) + express/disclosure_date/fina_mainbz/fina_audit/repurchase/pledge_stat/top10_floatholders | `analyst/`, `fundamentals/`, `corporate/` | Bucket A ~10M rows | `workspace/scripts/fetch_bucket_a.py` |
-| dividends/corporate actions | `corporate/` | — | `init_fundamentals_data.py` |
-| `normalized/` + `pit_ledger/` | — | DERIVED | rebuilt in §4, not fetched |
+**Global fetch rules (§6.1):** one serial fetcher, `base_sleep ≥ 1.5` (coordinator asserts a hard floor and refuses lower), the machine-global api lock already serializes across every session/worktree, all other quant sessions pause their Tushare-capable work during recovery, backoff on 429s — never parallelize.
 
-## 3. Re-fetch sequence (STRICTLY SERIAL — §6.1, one fetcher, never parallel; machine-global api lock now enforces this across every session)
+## 4. Verification & the vendor-history caveat (honest scope)
 
-Preflight: `git stash`-free tree not required; but **stop/pause all other quant sessions' fetch-capable work first** (the api lock will serialize anyway, but quota is shared).
+1. **Reconciliation (staging, per dataset):** file/row counts + date-range vs the manifest baseline; per-partition ledger must be 100% `verified` — no `failed`/`missing` rows. The post-manifest tail (2026-07-02 → last complete session) is reconciled separately via the calendar (expected-session enumeration), since the manifest ends at 20260701.
+2. **Oracle check (after promotion):** staged full rebuild (NOT published) + frozen-prefix audit + `canonical_kline_hash` vs the intact live provider — proves the re-fetched raw REGENERATES the provider byte-identically for everything the provider serves.
+3. **Honest limitation (user-stated, correct):** a fresh Tushare download reflects TODAY's vendor tables. The oracle validates provider-SERVED outputs; it CANNOT prove raw-only columns / superseded revision rows are byte-identical to the originals (e.g. collapsed restatement intermediates). Any oracle diff = vendor restatement → typed exception process, documented per dataset. Research consequences: PIT anchors derive from served date fields, so ledger semantics survive; but raw-level provenance for pre-incident revisions is attested only by the manifest counts, not content hashes (we never stored raw content hashes before this incident — the Phase 5-B full-content manifest closes that hole going forward).
 
-1. `venv/Scripts/python.exe src/data_infra/pipeline/init_market_data.py --start_date 20080101 --end_date 20260630`
-2. `venv/Scripts/python.exe src/data_infra/pipeline/init_fundamentals_data.py --start_year 2008`
-3. `venv/Scripts/python.exe src/data_infra/pipeline/init_factor_data.py --start-date 20080101 --end-date 20260630`
-4. `venv/Scripts/python.exe src/data_infra/pipeline/refresh_indicator_history.py` (staged; captures update_flag revisions)
-5. `venv/Scripts/python.exe scripts/fetch_suspend_d_historical.py` then `--ranges-only` sanity
-6. `venv/Scripts/python.exe scripts/fetch_new_alpha_endpoints.py` (top_list/top_inst/block_trade/stk_holdertrade/cyq_perf; cyq_perf is 2018+ only — expected)
-7. `venv/Scripts/python.exe workspace/scripts/fetch_bucket_a.py` (report_rc deep history + the 7 sibling endpoints)
-8. Daily-window catch-up to today: `workspace/scripts/catchup_daily_range.py --start 20260701 --end <last session>` + `catchup_fundamentals_range.py` (ann_date-window per UNFREEZE_PLAN)
+## 5. Backup design v2 (replaces v1's unsafe nightly /MIR)
 
-**Estimate:** 3–5 days wall-clock at 15000-积分 quotas (the original bootstrap + Bucket A took comparable time), single serial fetcher, `base_sleep=1.5` untouched. Each script is resume-safe/idempotent; on 429s slow down, never parallelize.
+v1's `robocopy /MIR` mirror inside `data/backups` was doubly wrong: same physical drive, and `/MIR` propagates deletions into the backup. Replacement:
 
-**PIT integrity of a re-fetch (why this is safe):** all our PIT anchors come from SERVED date fields (`ann_date`/`f_ann_date`/`update_flag`/`report_date`/`create_time`), not from our capture time — the ledger rebuild re-derives identical anchors. report_rc keeps the validated `max(report_date, create_time)` / `+2 open days` anchoring (REPORT_RC_PIT_ANCHOR_VALIDATION). The one caveat: if the VENDOR has restated any history since our original download, §4's oracle check will catch it as a diff — those become typed exceptions, not silent drift.
+- **Versioned copies on a DIFFERENT physical disk** (`C:\quant_backups\raw\<YYYYMMDD>\`), `robocopy /E` (never `/MIR`), N-generation retention.
+- **Large-deletion guard** before each backup run: if the source raw tree's file count dropped >2% vs the last generation, REFUSE to back up and alert (a deletion must never age out the good generations).
+- Wire into the 5-C daily job only after recovery; design reviewed with the Phase 5-C GPT thread.
+- Plus the already-committed prevention: audit SACL on `data/` (user's elevated command, when convenient) and — root cause — **never junction live data into disposable trees; worktree removal must be preceded by a junction scan** (`dir /AL /S` inside the worktree).
 
-## 4. Verification (the intact provider is the oracle)
+## 6. Execution order (everything below §13-gated, in this order)
 
-1. `verify_database.py` — raw integrity gate + PIT live regression harness.
-2. Row-count reconciliation vs the surviving `data_tracker.md` per-dataset table (exact counts recorded pre-incident).
-3. Rebuild derived layers: `build_qlib_backend.py --stage upstream-only` → regenerates `normalized/` + `pit_ledger/` (NO provider publish — the live provider is intact and stays untouched).
-4. **Oracle check:** stage a full provider build (`--mode all`, staged, NOT published) and run the frozen-prefix audit + `canonical_kline_hash` against the LIVE provider — if the re-fetched raw regenerates a byte-identical frozen prefix, the re-fetch provably reproduces the pre-incident cut. Any diff = vendor restatement → typed exception process.
-5. `run_daily_qa.py` full pass; then unblock 5-C daily job.
-
-Disk: staged build needs the usual ≥400GB floor — currently 1354GB free, fine.
-
-## 5. Prevention (fold into the standing plan)
-
-- **Raw mirror backup**: the whole raw parquet layer is only ~6 GiB / ~35k files — add a nightly `robocopy /MIR` of `data/{market,fundamentals,analyst,corporate}` to `data/backups/raw_mirror/` (or another drive) at the end of the 5-C daily job. Trivial cost, removes this entire failure mode. (Add to the 5-C hardening.)
-- The Phase 5-B **B3 attestation chain** (in-flight parallel session) would have made this tamper-EVIDENT at the next publish gate; it does not PREVENT deletion — the mirror does.
-- Identify-the-actor follow-up: enable file-audit (SACL) on `data/` if the user wants attribution for a recurrence.
+1. User reviews this plan + coordinator; user pauses other sessions' Tushare-capable work.
+2. `raw_recovery_coordinator.py --inventory` (no network) — gap report vs manifest.
+3. `--preflight` (no network) — staging disk, survivors copy, spacing floor, script matrix.
+4. User authorizes fetch → coordinator legs run serially on C: (days; resumable via ledger).
+5. Reconciliation report → user reviews.
+6. User authorizes promotion → one C:→E: atomic pass per family.
+7. Derived rebuild (`--stage upstream-only`) + oracle check + `run_daily_qa`.
+8. Backup v2 goes live; daily 5-C job resumes; incident closed in project_state.
