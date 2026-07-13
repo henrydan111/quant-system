@@ -31,8 +31,8 @@ reviewer: henrydan111
 related_pr: guorn deployed-20 replication -> catalog integration (grn_* wave)
 related_findings_id: null
 
-provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
-calendar_policy_id: frozen_20260227_system_build
+provider_build_id: "thaw_step1_20260703c"
+calendar_policy_id: frozen_20260701_thaw_step1
 
 source_class: same_family_enumeration_extension
 coverage_tier: full                          # statement slots; q5..q7 legs inherit reporting-history coverage

@@ -23,8 +23,8 @@ related_findings_id: null
 # Bound to the additive provider publish (workspace/scripts/_publish_phasec_additive.py). The matching
 # data/qlib_data/metadata/provider_build.json (provider_build_id below) + the additive_build_provenance.json
 # sidecar fully describe how this field was added (robocopy stage, unchanged-bin integrity, new-field parity).
-provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
-calendar_policy_id: frozen_20260227_system_build
+provider_build_id: "thaw_step1_20260703c"
+calendar_policy_id: frozen_20260701_thaw_step1
 
 # Source/derivation classification (GPT Phase-C Major-2):
 source_dataset: indicators

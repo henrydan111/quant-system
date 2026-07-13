@@ -23,8 +23,8 @@ related_findings_id: null
 # which the on-disk verification was performed. A future provider rebuild
 # whose `calendar_policy_id` or `provider_build_id` differs from these
 # values means the approval evidence must be re-verified before formal use.
-provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
-calendar_policy_id: frozen_20260227_system_build
+provider_build_id: "thaw_step1_20260703c"
+calendar_policy_id: frozen_20260701_thaw_step1
 
 # Per-stage scope — every flag here mirrors the `approved` status row in
 # config/field_registry/field_status.yaml. Listed explicitly so this YAML

@@ -25,8 +25,8 @@ related_findings_id: null
 # filenames are written per dir, existing bins untouched by construction) -> binds to the current live
 # provider_build_id. Provenance: workspace/outputs/guorn_parity/quality_stability_inplace_provenance.json
 # (PRE/POST bin counts proving additive + the full-universe parity vs the deepslot truth).
-provider_build_id: "depth9_20260630_sharecap_reanchor_20260701"
-calendar_policy_id: frozen_20260227_system_build
+provider_build_id: "thaw_step1_20260703c"
+calendar_policy_id: frozen_20260701_thaw_step1
 
 # Source/derivation classification:
 source_dataset: quality_stability
