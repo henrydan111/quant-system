@@ -87,20 +87,30 @@ def assign_evidence_class(typing_rec: dict, primary_route: str) -> str:
     return "MFD" if status == "官方证实" else "MFI"
 
 
-def assess_flash(cluster, typing_rec: dict, route: dict, *,
-                 coordination_fired: bool = False) -> dict:
-    """组装一条簇的确定性证据评定(渲染输入单元)。re-review Major-1:全部展示/排序
-    字段也在此校验(event_type/direction ∈ 注册 enum,importance 字面 int 0-5)。"""
+def _validate_typing(typing_rec: dict) -> dict:
+    """集中式分型校验(re-review#2 M3:assess 与渲染器入口共用同一校验器,渲染层
+    不再 int() 强转)。返回规范化副本:importance 缺省 2,否则须**字面** int ∈ [0,5]
+    (bool/float/str 一律拒);event_type/direction ∈ 注册 enum。围栏字段
+    (status/kind/rumor)由 assign_evidence_class 校验。"""
     from workspace.research.ai_research_dept.engine.news_ingest import EVENT_TYPES
-    if typing_rec.get("event_type") not in EVENT_TYPES:
-        raise RegistryError(f"未注册 event_type {typing_rec.get('event_type')!r}")
-    if typing_rec.get("direction") not in _DIRECTIONS:
-        raise RegistryError(f"未注册 direction {typing_rec.get('direction')!r}")
-    imp = typing_rec.get("importance", 2)
+    t = dict(typing_rec)
+    if t.get("event_type") not in EVENT_TYPES:
+        raise RegistryError(f"未注册 event_type {t.get('event_type')!r}")
+    if t.get("direction") not in _DIRECTIONS:
+        raise RegistryError(f"未注册 direction {t.get('direction')!r}")
+    imp = t.get("importance", 2)
     if type(imp) is not int or not 0 <= imp <= 5:
         raise RegistryError(f"importance 须字面 int ∈ [0,5](得 {imp!r})")
-    return {"cluster": cluster, "typing": dict(typing_rec), "route": dict(route),
-            "evidence_class": assign_evidence_class(typing_rec, route["primary_route"]),
+    t["importance"] = imp
+    return t
+
+
+def assess_flash(cluster, typing_rec: dict, route: dict, *,
+                 coordination_fired: bool = False) -> dict:
+    """组装一条簇的确定性证据评定(渲染输入单元)。全部字段经集中校验器(M3)。"""
+    t = _validate_typing(typing_rec)
+    return {"cluster": cluster, "typing": t, "route": dict(route),
+            "evidence_class": assign_evidence_class(t, route["primary_route"]),
             "coordination_fired": bool(coordination_fired)}
 
 
@@ -117,6 +127,9 @@ class RenderedCard:
     restricted_text: str
     record_ids: tuple
     records_hash: str
+    #: 本卡铸出的 D7BaseFact 总体哈希集(re-review#2 B1:束校验描述符成员资格——
+    #  自铸描述符不在卡封总体内,直接拒)
+    base_fact_hashes: tuple = ()
     card_hash: str = field(default="")
 
     def __post_init__(self):
@@ -129,11 +142,39 @@ class RenderedCard:
         return {"card": self.card_name, "cutoff": self.cutoff_iso,
                 "factor_text": self.factor_payload_text,
                 "restricted_text": self.restricted_text,
-                "record_ids": list(self.record_ids), "records_hash": self.records_hash}
+                "record_ids": list(self.record_ids), "records_hash": self.records_hash,
+                "base_fact_hashes": list(self.base_fact_hashes)}
 
 
 def _records_hash(records: list) -> str:
     return seal_hash(sorted(r.content_hash for r in records))
+
+
+@dataclass(frozen=True)
+class D7BaseFact:
+    """密封 D7 基事实描述符(re-review#2 B1:拆行的证据类/importance/claim/事实
+    血缘**只能**来自渲染器铸的本描述符——调用方无权提供,NFI 基行洗成 NFD 子行、
+    imp-1 谎报过 ≥4 门的路径从源头封死)。由 render_news_flash_section 对每条
+    正向行(NFD/NFI/NFA)铸出;base_content_hash 绑对应 CardRecord。"""
+    base_record_id: str
+    base_content_hash: str
+    claim_id: str
+    fact_cluster_id: str
+    evidence_class: str
+    importance: int
+    fact_hash: str = field(default="")
+
+    def __post_init__(self):
+        if self.fact_hash:
+            verify_sealed(self._payload(), self.fact_hash, field_name="D7BaseFact fact_hash")
+        else:
+            object.__setattr__(self, "fact_hash", seal_hash(self._payload()))
+
+    def _payload(self) -> dict:
+        return {"base_record_id": self.base_record_id,
+                "base_content_hash": self.base_content_hash,
+                "claim_id": self.claim_id, "fact_cluster_id": self.fact_cluster_id,
+                "evidence_class": self.evidence_class, "importance": self.importance}
 
 
 def _age_str(cutoff, first_visible_iso: str) -> str:
@@ -159,8 +200,9 @@ def _fact_identity(a: dict) -> tuple:
             *(t.get(f) for f in _FACT_IDENTITY_FIELDS))
 
 
-def render_news_flash_section(assessed: list[dict], cutoff) -> tuple[RenderedCard, list]:
-    """渲染快讯双切片(§7 step 5)。返回 (密封卡, 全部 CardRecord)。
+def render_news_flash_section(assessed: list[dict], cutoff) -> tuple:
+    """渲染快讯双切片(§7 step 5)。返回 (密封卡, 全部 CardRecord, 正向行的密封
+    D7BaseFact 列表——D7 拆行的唯一权威来源, re-review#2 B1)。
     - factor 切片:仅 NFD/NFI/NFA 行(去重原子事实,零聚合计数行,B1′);
     - restricted 切片:风险节(NFR + NFC)+ 上下文节(NFU);
     - **宏观路直接拒**(re-review Major-1:查 primary_route 而非类——宏观路评论
@@ -173,17 +215,24 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple[RenderedCar
     - 排序 (importance↓, visible↓, fact↑) 只作用于**已合并**的事实。
     自检:factor 切片过 assert_factor_payload(渲染器不信自己)。"""
     cutoff_iso = pd.Timestamp(cutoff).isoformat()
+    validated = []
     for a in assessed:
+        # re-review#2 M3:渲染器入口**完整**重校验分型(不止围栏字段)——assess 后
+        # 被改的 event_type/direction/importance("5"/5.0/True)在此拒,层内无 int() 强转
+        t = _validate_typing(a["typing"])
         if a["route"].get("primary_route") == "macro":
             raise RegistryError("宏观路快讯不入 news 卡——进宏观卡(§6,Major-1 按路由拒)")
-        recomputed = assign_evidence_class(a["typing"], a["route"]["primary_route"])
+        recomputed = assign_evidence_class(t, a["route"]["primary_route"])
         if recomputed != a["evidence_class"]:
             raise RegistryError(
                 f"evidence_class 伪造:携带 {a['evidence_class']!r} 围栏重算 "
                 f"{recomputed!r}——拒绝渲染(Major-1 verify-not-trust)")
+        v = dict(a)
+        v["typing"] = t
+        validated.append(v)
     # Blocker:先按事实分组,身份冲突硬失败,一致则合并(imp=max, coord=OR)
     groups: dict[str, list] = {}
-    for a in assessed:
+    for a in validated:
         groups.setdefault(a["cluster"].fact_occurrence_id, []).append(a)
     deduped = []
     for fid, grp in groups.items():
@@ -193,21 +242,21 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple[RenderedCar
                 f"事实 {fid} 存在冲突评定 {sorted(idents)}——拒绝渲染(Blocker:"
                 f"importance 不得选择证据类/安全旗,冲突必须上游解决)")
         rep = sorted(grp, key=lambda g: (
-            -int(g["typing"].get("importance", 2)),
+            -g["typing"]["importance"],
             g["cluster"].cluster_first_visible_at_iso,
             str(g["route"].get("content", ""))))[0]
         merged = dict(rep)
         merged["typing"] = dict(rep["typing"])
-        merged["typing"]["importance"] = max(
-            int(g["typing"].get("importance", 2)) for g in grp)
+        merged["typing"]["importance"] = max(g["typing"]["importance"] for g in grp)
         merged["coordination_fired"] = any(g["coordination_fired"] for g in grp)
         deduped.append(merged)
     deduped.sort(key=lambda a: (
-        -int(a["typing"].get("importance", 2)),
+        -a["typing"]["importance"],
         -pd.Timestamp(a["cluster"].cluster_first_visible_at_iso).value,
         a["cluster"].fact_occurrence_id))
 
     records: list = []
+    base_facts: list = []
     counters: dict[str, int] = {}
     fact_lines, risk_lines, ctx_lines = [], [], []
 
@@ -220,13 +269,20 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple[RenderedCar
         ec = a["evidence_class"]
         content = _c70(_member_content(a))
         age = _age_str(cutoff_iso, c.cluster_first_visible_at_iso)
-        stars = "★" * int(t.get("importance", 2))
+        stars = "★" * t["importance"]
         if ec in ("NFD", "NFI", "NFA"):
             rid = _next_id(ec)
-            records.append(build_card_record(
+            rec = build_card_record(
                 rid, domain="news", evidence_class=ec,
                 allowed_uses={"factor_positive", "context_only"},
-                allowed_consumers={"news"}, allowed_dimensions=_NEWS_POSITIVE_DIMS))
+                allowed_consumers={"news"}, allowed_dimensions=_NEWS_POSITIVE_DIMS)
+            records.append(rec)
+            # re-review#2 B1:D7 拆行权威 = 渲染器铸的密封基事实描述符
+            base_facts.append(D7BaseFact(
+                base_record_id=rid, base_content_hash=rec.content_hash,
+                claim_id=f"CLAIM:{c.fact_occurrence_id}",
+                fact_cluster_id=c.fact_occurrence_id,
+                evidence_class=ec, importance=t["importance"]))
             fact_lines.append(f"- [{rid}][{age}|{stars}|{ec}]{t['event_type']}"
                               f"|{content}|{t['direction']}")
         elif ec == "NFR":
@@ -272,8 +328,9 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple[RenderedCar
     card = RenderedCard(card_name="news_flash_section", cutoff_iso=cutoff_iso,
                         factor_payload_text=factor_text, restricted_text=restricted_text,
                         record_ids=tuple(sorted(r.record_id for r in records)),
-                        records_hash=_records_hash(records))
-    return card, records
+                        records_hash=_records_hash(records),
+                        base_fact_hashes=tuple(sorted(bf.fact_hash for bf in base_facts)))
+    return card, records, base_facts
 
 
 def _member_content(a: dict) -> str:
@@ -366,13 +423,13 @@ class AttributeRow:
                 "attribute_type": self.attribute_type, "text": self.text}
 
 
-def build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_id: str,
-                            evidence_class: str, importance: int,
-                            attributes: dict) -> list[tuple]:
-    """把 importance≥4 的重大直接事件拆为原子属性行(D7)。返回
-    [(AttributeRow, CardRecord)];每行 record_id = `{base}.{attr}`,维收窄到
-    该属性的注册维。强制:importance≥4 才拆;≤4 行;attribute_type 注册;
-    每 (claim_id, attribute_type) 恰一;source_status 行 uses={penalty, bear}
+def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_id: str,
+                             evidence_class: str, importance: int,
+                             attributes: dict) -> list[tuple]:
+    """(私有,re-review#2 M1:唯一入口是 build_attribute_bundle)把 importance≥4 的
+    重大直接事件拆为原子属性行(D7)。返回 [(AttributeRow, CardRecord)];每行
+    record_id = `{base}.{attr}`,维收窄到该属性的注册维。强制:importance≥4 才拆;
+    ≤4 行;attribute_type 注册;source_status 行 uses={penalty, bear}
     (**永不 factor_positive**,§6b M4′)。"""
     if importance < D7_IMPORTANCE_FLOOR:
         raise RegistryError(
@@ -407,14 +464,20 @@ def build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_
 
 @dataclass(frozen=True)
 class AttributeBundle:
-    """D7 **批级**密封束(re-review Major-4:exact-once 从"每次调用内"升为全局)。
-    一个决策 payload 的全部属性拆行经此一束:claim 全局恰一拆分、(claim, attribute)
-    全局恰一、被拆事件的**基行在最终记录集中降级 context_only**(broad 基行与其
-    属性行绝不同时正向计分)。"""
+    """D7 **决策级**密封束(re-review#2 B1/M1)。一个决策的**完整**拆分总体经恰一束:
+    - 拆行权威(类/importance/claim/事实)只来自渲染器铸的密封 D7BaseFact——束封
+      **每个子行与降级基行的 content_hash**(授权元数据入印:NFI-子 与 NFD-子 变体
+      绝不可能同哈希)+ 源注册表哈希 + **最终注册表哈希**(在工厂内构造并验证);
+    - decision_id + cutoff 绑定:下游注册表须恰一匹配 final_registry_hash
+      (`verify_bundle_registry`),两个束/两次调用无法都成为同一决策的权威。"""
+    decision_id: str
+    cutoff_iso: str
+    source_registry_hash: str
     claim_ids: tuple
     row_hashes: tuple
-    record_ids: tuple
-    demoted_base_ids: tuple
+    child_record_hashes: tuple
+    demoted_record_hashes: tuple
+    final_registry_hash: str
     bundle_hash: str = field(default="")
 
     def __post_init__(self):
@@ -424,60 +487,120 @@ class AttributeBundle:
             object.__setattr__(self, "bundle_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"claim_ids": list(self.claim_ids), "row_hashes": list(self.row_hashes),
-                "record_ids": list(self.record_ids),
-                "demoted_base_ids": list(self.demoted_base_ids)}
+        return {"decision_id": self.decision_id, "cutoff": self.cutoff_iso,
+                "source_registry_hash": self.source_registry_hash,
+                "claim_ids": list(self.claim_ids), "row_hashes": list(self.row_hashes),
+                "child_record_hashes": list(self.child_record_hashes),
+                "demoted_record_hashes": list(self.demoted_record_hashes),
+                "final_registry_hash": self.final_registry_hash}
 
 
-def build_attribute_bundle(splits: list[dict], base_records: list) -> tuple:
-    """把一个决策 payload 的**全部** D7 拆分收进一个密封束(re-review Major-4)。
+def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: list,
+                           *, card: RenderedCard, decision_id: str, cutoff) -> tuple:
+    """一个决策的**完整** D7 拆分总体 → 恰一密封束(re-review#2 B1/M1)。
 
-    splits 每项:{base_record_id, claim_id, fact_cluster_id, evidence_class,
-    importance, attributes};base_records = 快讯节产出的全部 CardRecord。
-    强制(全局,跨调用不可绕——束是注册表唯一许可的拆行入口):
-    - claim_id 全局恰一拆分(同 claim 两次拆分 = 两个 base 也拒);
-    - base_record_id 必须存在于 base_records 且为正向类(不存在=拒);
-    - 被拆事件的基行**重铸为 context_only**(与其属性行绝不同时正向计分);
-    - 每 split 内部仍由 build_attribute_records 强制(≥4 门/≤4 行/类型注册)。
-    返回 (bundle, rows, final_records):final_records = 降级后的基行 + 未拆记录 +
-    全部属性记录——调用侧用它(而非原 records)构造注册表。"""
-    by_id = {r.record_id: r for r in base_records}
-    seen_claims: set = set()
+    splits 每项**只许** {base_record_id, attributes}——证据类/importance/claim/事实
+    血缘一律取自渲染器铸的密封 D7BaseFact(B1:调用方无权提供,NFI→NFD 洗类、
+    imp 谎报过 ≥4 门在源头封死;多余键=拒)。强制:
+    - **card 绑定**:base_records 总体哈希 == card.records_hash、cutoff == 卡 cutoff、
+      每个描述符 fact_hash ∈ 卡封 base_fact_hashes(自铸描述符直接拒);
+    - 描述符 evidence_class 与基行记录逐字一致(洗类双保险);
+    - base_record_id 全局恰一(同基两拆=拒)+ claim 全局恰一;
+    - D7BaseFact 密封自验、base_content_hash 与快讯节记录逐字一致;
+    - 基行须为正向记录;被拆基行**重铸 context_only**(broad 行与属性行绝不同时正向);
+    - **最终注册表在工厂内构造并验证**(重复身份在此拒,不留给下游);
+    - 束封 decision_id/cutoff/源注册表哈希/全部子行与降级行 content_hash/最终注册表
+      哈希——下游用 `verify_bundle_registry` 要求恰一匹配。
+    返回 (bundle, rows, final_registry)。"""
+    cutoff_iso = pd.Timestamp(cutoff).isoformat()
+    if not isinstance(card, RenderedCard):
+        raise RegistryError("card 必须是密封 RenderedCard(B1:束绑定其铸出卡)")
+    if cutoff_iso != card.cutoff_iso:
+        raise RegistryError(f"cutoff {cutoff_iso} 与卡 cutoff {card.cutoff_iso} 不符")
+    if _records_hash(base_records) != card.records_hash:
+        raise RegistryError("base_records 与卡封记录总体不符(B1:束只认卡的记录集)")
+    sealed_fact_hashes = set(card.base_fact_hashes)
+    source_registry = build_card_registry(cutoff_iso, base_records)
+    facts_by_id: dict = {}
+    for bf in base_facts:
+        if not isinstance(bf, D7BaseFact):
+            raise RegistryError("base_facts 只收渲染器铸的密封 D7BaseFact(B1)")
+        if bf.fact_hash not in sealed_fact_hashes:
+            raise RegistryError(
+                f"D7BaseFact {bf.base_record_id}({bf.fact_hash[:12]})不在卡封基事实"
+                f"总体内——自铸描述符拒(B1:类/importance 权威只来自渲染器)")
+        facts_by_id[bf.base_record_id] = bf
+    recs_by_id = {r.record_id: r for r in base_records}
+    seen_bases, seen_claims = set(), set()
     rows, attr_records, demoted_ids = [], [], []
     for sp in splits:
-        cid = sp["claim_id"]
-        if cid in seen_claims:
-            raise RegistryError(f"claim {cid!r} 全局重复拆分——(claim, attribute) "
-                                f"exact-once 是全局契约(Major-4)")
-        seen_claims.add(cid)
-        base = by_id.get(sp["base_record_id"])
+        extra = set(sp) - {"base_record_id", "attributes"}
+        if extra:
+            raise RegistryError(
+                f"split 只许 {{base_record_id, attributes}}——多余键 {sorted(extra)} "
+                f"(B1:证据类/importance/血缘无调用方权威)")
+        bid = sp["base_record_id"]
+        if bid in seen_bases:
+            raise RegistryError(f"base {bid!r} 全局重复拆分(M1)")
+        seen_bases.add(bid)
+        bf = facts_by_id.get(bid)
+        if bf is None:
+            raise RegistryError(f"{bid!r} 无密封 D7BaseFact——非渲染器正向行不可拆(B1)")
+        base = recs_by_id.get(bid)
         if base is None:
-            raise RegistryError(f"base_record_id {sp['base_record_id']!r} 不在快讯节记录集")
+            raise RegistryError(f"base_record_id {bid!r} 不在快讯节记录集")
+        if bf.base_content_hash != base.content_hash:
+            raise RegistryError(f"D7BaseFact 与基行记录不符({bid}):描述符哈希 "
+                                f"{bf.base_content_hash[:12]} ≠ 记录 {base.content_hash[:12]}")
+        if bf.evidence_class != base.evidence_class:
+            raise RegistryError(f"D7BaseFact 类 {bf.evidence_class!r} ≠ 基行记录类 "
+                                f"{base.evidence_class!r}——洗类拒(B1)")
         if "factor_positive" not in base.allowed_uses:
             raise RegistryError(f"基行 {base.record_id} 非正向记录——无从拆分")
-        pairs = build_attribute_records(
-            sp["base_record_id"], claim_id=cid, fact_cluster_id=sp["fact_cluster_id"],
-            evidence_class=sp["evidence_class"], importance=sp["importance"],
+        if bf.claim_id in seen_claims:
+            raise RegistryError(f"claim {bf.claim_id!r} 全局重复拆分(M1)")
+        seen_claims.add(bf.claim_id)
+        pairs = _build_attribute_records(
+            bid, claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
+            evidence_class=bf.evidence_class, importance=bf.importance,
             attributes=sp["attributes"])
         rows.extend(r for r, _ in pairs)
         attr_records.extend(rec for _, rec in pairs)
         demoted_ids.append(base.record_id)
     # 被拆事件的基行降级 context_only(broad 行与属性行绝不同时正向)
-    final_records = []
+    final_records, demoted_records = [], []
     for r in base_records:
         if r.record_id in demoted_ids:
-            final_records.append(build_card_record(
+            demoted = build_card_record(
                 r.record_id, domain=r.domain, evidence_class=r.evidence_class,
-                allowed_uses={"context_only"}, allowed_consumers=r.allowed_consumers))
+                allowed_uses={"context_only"}, allowed_consumers=r.allowed_consumers)
+            final_records.append(demoted)
+            demoted_records.append(demoted)
         else:
             final_records.append(r)
     final_records.extend(attr_records)
+    # M1:最终注册表在工厂内构造并验证(重复身份在此拒,不留给下游)
+    final_registry = build_card_registry(cutoff_iso, final_records)
     bundle = AttributeBundle(
+        decision_id=str(decision_id), cutoff_iso=cutoff_iso,
+        source_registry_hash=source_registry.registry_hash,
         claim_ids=tuple(sorted(seen_claims)),
         row_hashes=tuple(sorted(r.row_hash for r in rows)),
-        record_ids=tuple(sorted(rec.record_id for rec in attr_records)),
-        demoted_base_ids=tuple(sorted(demoted_ids)))
-    return bundle, rows, final_records
+        child_record_hashes=tuple(sorted(rec.content_hash for rec in attr_records)),
+        demoted_record_hashes=tuple(sorted(rec.content_hash for rec in demoted_records)),
+        final_registry_hash=final_registry.registry_hash)
+    return bundle, rows, final_registry
+
+
+def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
+    """下游消费点强制:注册表必须恰一匹配束封的 final_registry_hash(M1:两个束/
+    改过的注册表无法都成为同一决策的权威)。"""
+    if not isinstance(bundle, AttributeBundle):
+        raise RegistryError("bundle 必须是密封 AttributeBundle")
+    if registry.registry_hash != bundle.final_registry_hash:
+        raise RegistryError(
+            f"注册表 {registry.registry_hash[:12]} 与束封最终注册表 "
+            f"{bundle.final_registry_hash[:12]} 不符——拒绝消费(M1)")
 
 
 # --------------------------------------------------- B1′ 存量 ID 语义分类

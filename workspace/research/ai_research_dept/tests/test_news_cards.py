@@ -10,9 +10,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from workspace.research.ai_research_dept.engine.news_cards import (  # noqa: E402
-    AttributeRow, RenderedCard, assess_flash, assign_evidence_class,
-    build_attribute_records, is_legacy_attention_id, render_attention_context_card,
-    render_news_flash_section,
+    AttributeRow, D7BaseFact, RenderedCard, _build_attribute_records, assess_flash,
+    assign_evidence_class, build_attribute_bundle, is_legacy_attention_id,
+    render_attention_context_card, render_news_flash_section, verify_bundle_registry,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (  # noqa: E402
     PayloadGateError, RegistryError, assert_factor_payload, authorize,
@@ -136,7 +136,7 @@ class TestEvidenceFence:
 
 class TestFlashSection:
     def test_factor_slice_only_positive_classes(self):
-        card, records = render_news_flash_section([
+        card, records, _ = render_news_flash_section([
             _assessed("中芯国际签订大额订单", status="官方证实"),
             _assessed("媒体报道产能爬坡", status="署名媒体", dt="2025-01-27 09:00:00"),
             _assessed("传闻公司将重组", status="传闻", rumor=True, dt="2025-01-27 08:00:00"),
@@ -150,7 +150,7 @@ class TestFlashSection:
         assert "NFR01" in card.restricted_text and "NFU01" in card.restricted_text
 
     def test_factor_slice_passes_gate_risk_slice_fails(self):
-        card, records = render_news_flash_section([
+        card, records, _ = render_news_flash_section([
             _assessed("签订订单", status="官方证实"),
             _assessed("传闻重组", status="传闻", rumor=True, dt="2025-01-27 08:00:00"),
         ], CUT)
@@ -166,7 +166,7 @@ class TestFlashSection:
 
     def test_no_aggregate_count_lines_in_factor_slice(self):
         # B1′: zero aggregate/count rows — no 全景/聚合/条 counting language
-        card, _ = render_news_flash_section(
+        card, _, _ = render_news_flash_section(
             [_assessed(f"事件{i}", importance=i % 5) for i in range(1, 6)], CUT)
         for banned in ("全景", "聚合", "另有"):
             assert banned not in card.factor_payload_text
@@ -175,7 +175,7 @@ class TestFlashSection:
         # same wording (same fact id) assessed twice -> ONE row
         a1 = _assessed("重复事实文", status="官方证实")
         a2 = _assessed("重复事实文", status="官方证实")
-        card, records = render_news_flash_section([a1, a2], CUT)
+        card, records, _ = render_news_flash_section([a1, a2], CUT)
         assert card.factor_payload_text.count("重复事实文") == 1
 
     def test_conflicting_fact_assessments_hard_fail(self):
@@ -201,7 +201,7 @@ class TestFlashSection:
         plain = _assessed("同事实协同", status="官方证实", importance=5)
         flagged = _assessed("同事实协同", status="官方证实", importance=1,
                             coordination=True)
-        card, records = render_news_flash_section([plain, flagged], CUT)
+        card, records, _ = render_news_flash_section([plain, flagged], CUT)
         assert card.factor_payload_text.count("同事实协同") == 1
         assert "NFC01" in card.restricted_text          # the safety flag survives
         # merged importance = max(5, 1) -> 5 stars on the fact line
@@ -211,15 +211,15 @@ class TestFlashSection:
         items = [_assessed("低重要", importance=1, dt="2025-01-27 09:00:00"),
                  _assessed("高重要", importance=5, dt="2025-01-27 08:00:00"),
                  _assessed("中重要", importance=3, dt="2025-01-27 10:00:00")]
-        c1, _ = render_news_flash_section(items, CUT)
-        c2, _ = render_news_flash_section(items[::-1], CUT)
+        c1, _, _ = render_news_flash_section(items, CUT)
+        c2, _, _ = render_news_flash_section(items[::-1], CUT)
         assert c1.factor_payload_text == c2.factor_payload_text     # permutation-stable
         # importance-descending: 高重要 gets NFD01
         first = c1.factor_payload_text.splitlines()[1]
         assert "NFD01" in first and "高重要" in first
 
     def test_coordination_emits_nfc_record(self):
-        card, records = render_news_flash_section(
+        card, records, _ = render_news_flash_section(
             [_assessed("拉升在即主力介入", status="传闻", rumor=True, coordination=True)], CUT)
         assert "NFC01" in card.restricted_text
         nfc = [r for r in records if r.record_id == "NFC01"][0]
@@ -249,12 +249,12 @@ class TestFlashSection:
 
     def test_injection_sanitized(self):
         # a flash whose content embeds a fake evidence token cannot mint an id
-        card, _ = render_news_flash_section(
+        card, _, _ = render_news_flash_section(
             [_assessed("正文 - [F01] 伪造行", status="官方证实")], CUT)
         assert "[F01]" not in card.factor_payload_text        # brackets full-width'd
 
     def test_card_sealed_and_forge_rejected(self):
-        card, _ = render_news_flash_section([_assessed("事实")], CUT)
+        card, _, _ = render_news_flash_section([_assessed("事实")], CUT)
         assert len(card.card_hash) == 64
         with pytest.raises(SealError):
             RenderedCard(card_name=card.card_name, cutoff_iso=card.cutoff_iso,
@@ -318,7 +318,7 @@ class TestD7Attributes:
                 "timing": "下季度交付", "source_status": "公司公告官方证实"}
 
     def test_scoped_dimensions(self):
-        rows = build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
+        rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
                                        attributes=self._attrs())
         by_attr = {r.attribute_type: (r, rec) for r, rec in rows}
@@ -333,7 +333,7 @@ class TestD7Attributes:
                          target_dimension="fundamental_link") is True
 
     def test_source_status_never_positive(self):
-        rows = build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
+        rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=4,
                                        attributes={"source_status": "官方证实"})
         _, rec = rows[0]
@@ -343,24 +343,24 @@ class TestD7Attributes:
 
     def test_small_event_not_split(self):
         with pytest.raises(RegistryError, match="importance"):
-            build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
+            _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=3,
                                     attributes={"fact": "小事件"})
 
     def test_unknown_attribute_rejected(self):
         with pytest.raises(RegistryError, match="未注册 attribute_type"):
-            build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
+            _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=5,
                                     attributes={"hype": "x"})
 
     def test_rumor_class_not_splittable(self):
         with pytest.raises(RegistryError, match="正向类"):
-            build_attribute_records("NFR01", claim_id="c1", fact_cluster_id="f1",
+            _build_attribute_records("NFR01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFR", importance=5,
                                     attributes={"fact": "x"})
 
     def test_row_sealed_and_forged_rejected(self):
-        rows = build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
+        rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
                                        attributes={"fact": "x"})
         row, _ = rows[0]
@@ -374,23 +374,26 @@ class TestD7Attributes:
 # --------------------------------------------------- D7 batch bundle (Major-4)
 
 class TestAttributeBundle:
-    def _base(self):
-        card, records = render_news_flash_section(
+    def _rendered(self):
+        # 重大订单甲 imp=5 (NFD01), 署名乙 imp=4 (NFI01), 小事件丙 imp=3 (NFD02)
+        return render_news_flash_section(
             [_assessed("重大订单甲", status="官方证实", importance=5),
-             _assessed("重大订单乙", status="官方证实", importance=4,
-                       dt="2025-01-27 09:00:00")], CUT)
-        return records
+             _assessed("媒体乙报道", status="署名媒体", importance=4,
+                       dt="2025-01-27 09:00:00"),
+             _assessed("小事件丙", status="官方证实", importance=3,
+                       dt="2025-01-27 08:00:00")], CUT)
 
-    def _split(self, base_id, claim="c1"):
-        return {"base_record_id": base_id, "claim_id": claim, "fact_cluster_id": "f1",
-                "evidence_class": "NFD", "importance": 5,
+    def _split(self, base_id):
+        # re-review#2 B1: a split carries ONLY the base reference + attributes
+        return {"base_record_id": base_id,
                 "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}}
 
     def test_base_demoted_attributes_positive(self):
-        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
-        base = self._base()
-        bundle, rows, final = build_attribute_bundle([self._split("NFD01")], base)
-        by_id = {r.record_id: r for r in final}
+        card, records, facts = self._rendered()
+        bundle, rows, final_reg = build_attribute_bundle(
+            [self._split("NFD01")], facts, records, card=card,
+            decision_id="d1", cutoff=CUT)
+        by_id = dict(final_reg.records)
         # the split event's broad base row can no longer score positively...
         assert authorize(by_id["NFD01"], use="factor_positive", consumer_seat="news",
                          target_dimension="event_materiality") is False
@@ -401,36 +404,102 @@ class TestAttributeBundle:
         # untouched sibling stays positive
         assert authorize(by_id["NFD02"], use="factor_positive", consumer_seat="news",
                          target_dimension="event_materiality") is True
-        # the final set builds a valid registry (no duplicate identities)
-        build_card_registry(CUT, final)
+        # downstream consumption point: registry must match the sealed bundle
+        verify_bundle_registry(bundle, final_reg)
 
-    def test_duplicate_claim_across_calls_rejected(self):
-        # re-review Major-4: (claim, attribute) exact-once is GLOBAL — the bundle
-        # is the single entry point, and a claim split twice (even via two bases)
-        # is refused
-        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
-        base = self._base()
+    def test_caller_supplied_class_or_importance_rejected(self):
+        # re-review#2 B1: the laundering probe — extra authority keys are refused
+        card, records, facts = self._rendered()
+        forged = {"base_record_id": "NFI01", "evidence_class": "NFD",
+                  "attributes": {"fact": "x"}}
+        with pytest.raises(RegistryError, match="只许"):
+            build_attribute_bundle([forged], facts, records, card=card,
+                                   decision_id="d1", cutoff=CUT)
+
+    def test_class_and_floor_derived_from_sealed_base(self):
+        # NFI01 splits as NFI (children ceiling 3, not 5); imp-3 NFD02 fails the floor
+        card, records, facts = self._rendered()
+        bundle, _, final_reg = build_attribute_bundle(
+            [self._split("NFI01")], facts, records, card=card,
+            decision_id="d1", cutoff=CUT)
+        child = dict(final_reg.records)["NFI01.fact"]
+        assert child.evidence_class == "NFI" and child.positive_ceiling == 3
+        with pytest.raises(RegistryError, match="importance"):
+            build_attribute_bundle([self._split("NFD02")], facts, records,
+                                   card=card, decision_id="d1", cutoff=CUT)
+
+    def test_self_minted_descriptor_rejected(self):
+        # a self-consistent D7BaseFact NOT minted by the renderer (importance
+        # upgraded to 5) fails the card-membership check
+        card, records, facts = self._rendered()
+        base = [r for r in records if r.record_id == "NFD02"][0]
+        forged = D7BaseFact(base_record_id="NFD02", base_content_hash=base.content_hash,
+                            claim_id="CLAIM:forged", fact_cluster_id="f",
+                            evidence_class="NFD", importance=5)
+        with pytest.raises(RegistryError, match="不在卡封基事实总体"):
+            build_attribute_bundle([self._split("NFD02")], [forged], records,
+                                   card=card, decision_id="d1", cutoff=CUT)
+
+    def test_duplicate_base_split_rejected(self):
+        card, records, facts = self._rendered()
         with pytest.raises(RegistryError, match="全局重复拆分"):
-            build_attribute_bundle([self._split("NFD01", claim="c1"),
-                                    self._split("NFD02", claim="c1")], base)
+            build_attribute_bundle([self._split("NFD01"), self._split("NFD01")],
+                                   facts, records, card=card,
+                                   decision_id="d1", cutoff=CUT)
 
     def test_unknown_base_rejected(self):
-        from workspace.research.ai_research_dept.engine.news_cards import build_attribute_bundle
-        with pytest.raises(RegistryError, match="不在快讯节记录集"):
-            build_attribute_bundle([self._split("NFD99")], self._base())
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="无密封 D7BaseFact"):
+            build_attribute_bundle([self._split("NFD99")], facts, records,
+                                   card=card, decision_id="d1", cutoff=CUT)
 
-    def test_bundle_sealed(self):
-        from workspace.research.ai_research_dept.engine.news_cards import (
-            AttributeBundle, build_attribute_bundle,
-        )
-        bundle, _, _ = build_attribute_bundle([self._split("NFD01")], self._base())
-        assert len(bundle.bundle_hash) == 64
-        from workspace.research.ai_research_dept.engine.news_seal import SealError as SE
-        with pytest.raises(SE):
-            AttributeBundle(claim_ids=("EVIL",), row_hashes=bundle.row_hashes,
-                            record_ids=bundle.record_ids,
-                            demoted_base_ids=bundle.demoted_base_ids,
-                            bundle_hash=bundle.bundle_hash)
+    def test_bundle_seal_binds_authorization(self):
+        # re-review#2 B1: bundles differing only in child content (class/attrs)
+        # must have different bundle hashes (child content_hash is sealed)
+        card, records, facts = self._rendered()
+        b1, _, _ = build_attribute_bundle([self._split("NFD01")], facts, records,
+                                          card=card, decision_id="d1", cutoff=CUT)
+        b2, _, _ = build_attribute_bundle([self._split("NFI01")], facts, records,
+                                          card=card, decision_id="d1", cutoff=CUT)
+        assert b1.bundle_hash != b2.bundle_hash
+        assert len(b1.bundle_hash) == 64 and b1.child_record_hashes
+
+    def test_forged_bundle_rejected(self):
+        from workspace.research.ai_research_dept.engine.news_cards import AttributeBundle
+        card, records, facts = self._rendered()
+        b, _, _ = build_attribute_bundle([self._split("NFD01")], facts, records,
+                                         card=card, decision_id="d1", cutoff=CUT)
+        with pytest.raises(SealError):
+            AttributeBundle(decision_id="EVIL", cutoff_iso=b.cutoff_iso,
+                            source_registry_hash=b.source_registry_hash,
+                            claim_ids=b.claim_ids, row_hashes=b.row_hashes,
+                            child_record_hashes=b.child_record_hashes,
+                            demoted_record_hashes=b.demoted_record_hashes,
+                            final_registry_hash=b.final_registry_hash,
+                            bundle_hash=b.bundle_hash)
+
+    def test_mismatched_registry_refused_downstream(self):
+        card, records, facts = self._rendered()
+        bundle, _, _ = build_attribute_bundle([self._split("NFD01")], facts, records,
+                                              card=card, decision_id="d1", cutoff=CUT)
+        other = build_card_registry(bundle.cutoff_iso, records)   # pre-split registry
+        with pytest.raises(RegistryError, match="不符"):
+            verify_bundle_registry(bundle, other)
+
+
+# --------------------------------------------------- renderer full revalidation (M3)
+
+class TestRendererRevalidation:
+    def test_post_assess_mutation_rejected(self):
+        # re-review#2 M3: mutating typing AFTER assess_flash must be refused at
+        # the renderer boundary (previously int("5")/5.0 coercions let it through)
+        for field_name, bad in (("event_type", "EVIL"), ("direction", "涨停"),
+                                ("importance", "5"), ("importance", 5.0),
+                                ("importance", True)):
+            a = _assessed("被篡改事实")
+            a["typing"][field_name] = bad
+            with pytest.raises(RegistryError):
+                render_news_flash_section([a], CUT)
 
 
 # --------------------------------------------------- macro precedence (Major-5)

@@ -116,13 +116,79 @@ M_LINE_TAXONOMY: dict[str, tuple[str, frozenset]] = {
 }
 _M_LINE_RESERVED_RE = re.compile(r"^M(0[1-9]|1[0-6])$")
 
+#: 记录 ID 语法 v1(re-review#2 M2:空/标点 ID 曾可铸)。大写字母开头 + 2-16 位
+#  大写字母数字,可选恰一注册 D7 属性后缀。
+RECORD_ID_GRAMMAR_VERSION = "rid_v1"
+_RECORD_ID_RE = re.compile(
+    r"^[A-Z][A-Z0-9]{1,15}(\.(fact|economic_linkage|timing|source_status))?$")
+
+#: 注册 domain enum(re-review#2 M2:domain 曾不受约束,M01 可挂 domain="news")
+DOMAINS = frozenset({"news", "macro", "attention", "coordination", "research"})
+
+#: kernel 级保留命名空间(re-review#2 M2:MP/MF 前缀曾可经通用 mint 铸成 news/NFD
+#  正向记录,绕开 taxonomy 工厂)。前缀命中 → 必须满足该命名空间的冻结元数据契约。
+_POLICY_NS_RE = re.compile(r"^MP\d{2,}$")
+_MF_NS_RE = re.compile(r"^MF[A-Z]?\d{2,}$")
+_MF_CLASSES = frozenset({"MFD", "MFI", "MFA", "MFR"})
+
 
 def _m_line_expected(record_id: str) -> tuple:
-    """保留 M-line ID 的规范元数据:(class, uses, consumers, dims)。"""
+    """保留 M-line ID 的规范元数据:(domain, class, uses, consumers, dims)。"""
     ec, dims = M_LINE_TAXONOMY[record_id]
     uses = frozenset({"factor_positive", "context_only"}) if dims \
         else frozenset({"context_only"})
-    return ec, uses, frozenset({"macro"}), dims
+    return "macro", ec, uses, frozenset({"macro"}), dims
+
+
+def _enforce_protected_namespaces(record_id: str, domain: str, evidence_class: str,
+                                  uses: frozenset, consumers: frozenset,
+                                  dims: frozenset) -> None:
+    """kernel 级命名空间锁(re-review#2 M2)。M01-M16 逐字(含 domain);MP* 只能是
+    原子政策行的精确元数据;MF* 只能是宏观快讯类(MFR 精确;MFD/MFI/MFA 只许
+    context_only-无维 或 正向-恰一宏观维)。"""
+    if _M_LINE_RESERVED_RE.match(record_id):
+        expected = _m_line_expected(record_id)
+        if (domain, evidence_class, uses, consumers, dims) != expected:
+            exp_d, exp_ec, exp_uses, exp_consumers, exp_dims = expected
+            raise RegistryError(
+                f"{record_id} 是冻结 M-line 保留 ID(§6b M1⁴)——元数据必须与权威表"
+                f"逐字一致(期望 domain={exp_d}, class={exp_ec}, uses={sorted(exp_uses)}, "
+                f"consumers={sorted(exp_consumers)}, dims={sorted(exp_dims)})")
+        return
+    if record_id.startswith("MP"):
+        if not _POLICY_NS_RE.match(record_id):
+            raise RegistryError(f"MP 前缀为原子政策行保留命名空间——{record_id!r} 不合"
+                                f"其语法 MP\\d{{2,}}")
+        expected = ("macro", "market_state_fact",
+                    frozenset({"factor_positive", "context_only"}),
+                    frozenset({"macro"}), frozenset({"policy_alignment"}))
+        if (domain, evidence_class, uses, consumers, dims) != expected:
+            raise RegistryError(
+                f"{record_id} 在 MP 保留命名空间——元数据必须是原子政策行契约"
+                f"(macro/market_state_fact/正向+context/macro 席/policy_alignment)")
+        return
+    if record_id.startswith("MF"):
+        if not _MF_NS_RE.match(record_id):
+            raise RegistryError(f"MF 前缀为宏观快讯保留命名空间——{record_id!r} 不合"
+                                f"其语法 MF[A-Z]?\\d{{2,}}")
+        if domain != "macro" or evidence_class not in _MF_CLASSES:
+            raise RegistryError(
+                f"{record_id} 在 MF 保留命名空间——须 domain=macro 且类 ∈ "
+                f"{sorted(_MF_CLASSES)}(得 domain={domain!r}, class={evidence_class!r})")
+        if evidence_class == "MFR":
+            expected = (frozenset({"penalty", "bear"}), frozenset({"macro", "bear"}),
+                        frozenset({"manipulation_risk"}))
+            if (uses, consumers, dims) != expected:
+                raise RegistryError(f"{record_id}(MFR)元数据须为 penalty+bear/"
+                                    f"macro+bear/manipulation_risk 精确契约")
+            return
+        ctx_only = (uses == frozenset({"context_only"}) and not dims)
+        positive = (uses == frozenset({"factor_positive", "context_only"})
+                    and len(dims) == 1 and dims <= MACRO_DIMENSIONS)
+        if consumers != frozenset({"macro"}) or not (ctx_only or positive):
+            raise RegistryError(
+                f"{record_id}(MF 正向类)须 consumers={{macro}} 且 context_only-无维 "
+                f"或 正向-恰一宏观维(得 uses={sorted(uses)}, dims={sorted(dims)})")
 
 
 # --------------------------------------------------- 逐卡注册记录(封印)
@@ -176,6 +242,13 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
     uses = frozenset(allowed_uses)
     consumers = frozenset(allowed_consumers)
     dims = frozenset(allowed_dimensions)
+    # re-review#2 M2:ID 语法 + domain enum 先于一切(空/标点/越界 ID 不可铸)
+    if not isinstance(record_id, str) or not _RECORD_ID_RE.match(record_id):
+        raise RegistryError(
+            f"record_id {record_id!r} 不合语法 {RECORD_ID_GRAMMAR_VERSION}"
+            f"(大写字母开头 2-16 位大写字母数字,可选恰一注册 D7 属性后缀)")
+    if domain not in DOMAINS:
+        raise RegistryError(f"未注册 domain {domain!r}(须 ∈ {sorted(DOMAINS)})")
     if evidence_class not in EVIDENCE_CLASSES:
         raise RegistryError(f"未知 evidence_class {evidence_class!r}(须 ∈ {sorted(EVIDENCE_CLASSES)})")
     bad_use = uses - USES
@@ -199,16 +272,10 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
                 f"factor_positive 记录须有非空 allowed_dimensions ⊆ 注册维;越界 {sorted(bad_dim)}")
         if not consumers:
             raise RegistryError("factor_positive 记录须有非空 allowed_consumers")
-    # re-review Major-3:M01-M16 是冻结保留 ID——任何 mint 必须与权威表逐字一致,
-    # 政策/MF/任意工厂借用保留 ID 铸出偏离元数据在此(工厂层)即拒。
-    if _M_LINE_RESERVED_RE.match(record_id):
-        exp_ec, exp_uses, exp_consumers, exp_dims = _m_line_expected(record_id)
-        if (evidence_class, uses, consumers, dims) != (exp_ec, exp_uses,
-                                                       exp_consumers, exp_dims):
-            raise RegistryError(
-                f"{record_id} 是冻结 M-line 保留 ID(§6b M1⁴)——元数据必须与权威表"
-                f"逐字一致(期望 class={exp_ec}, uses={sorted(exp_uses)}, "
-                f"consumers={sorted(exp_consumers)}, dims={sorted(exp_dims)})")
+    # re-review Major-3 + re-review#2 M2:保留命名空间锁(M01-M16 逐字含 domain;
+    # MP*/MF* 前缀 kernel 级保留,只许各自的冻结元数据契约)。
+    _enforce_protected_namespaces(record_id, domain, evidence_class,
+                                  uses, consumers, dims)
     payload = {"record_id": record_id, "domain": domain, "evidence_class": evidence_class,
                "allowed_uses": sorted(uses), "allowed_consumers": sorted(consumers),
                "allowed_dimensions": sorted(dims)}

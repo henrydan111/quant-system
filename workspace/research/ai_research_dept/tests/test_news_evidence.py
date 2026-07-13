@@ -91,7 +91,20 @@ class TestCardRecord:
 
     def test_unknown_evidence_class(self):
         with pytest.raises(RegistryError, match="未知 evidence_class"):
-            build_card_record("X", domain="news", evidence_class="HYPE",
+            build_card_record("XX01", domain="news", evidence_class="HYPE",
+                              allowed_uses={"context_only"}, allowed_consumers={"news"})
+
+    # re-review#2 M2: ID grammar + domain enum enforced at the kernel mint
+    @pytest.mark.parametrize("bad_id", ["", ".", "nfd01", "N", "NFD01.hype",
+                                        "NFD01.fact.fact", "A" * 20])
+    def test_id_grammar_rejected(self, bad_id):
+        with pytest.raises(RegistryError, match="不合语法"):
+            build_card_record(bad_id, domain="news", evidence_class="NFD",
+                              allowed_uses={"context_only"}, allowed_consumers={"news"})
+
+    def test_unregistered_domain_rejected(self):
+        with pytest.raises(RegistryError, match="domain"):
+            build_card_record("NFD01", domain="hype", evidence_class="NFD",
                               allowed_uses={"context_only"}, allowed_consumers={"news"})
 
     def test_forged_content_hash_rejected(self):
@@ -129,6 +142,37 @@ class TestReservedMLine:
 
     def test_canonical_mint_accepted(self):
         assert _macro("M01").record_id == "M01"        # 逐字规范 → 可铸
+
+    def test_m_line_domain_is_part_of_frozen_identity(self):
+        # re-review#2 M2: canonical M01 metadata but domain="news" must be refused
+        with pytest.raises(RegistryError, match="保留 ID"):
+            build_card_record("M01", domain="news", evidence_class="market_state_fact",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"risk_appetite_environment_fit"})
+
+    def test_mp_prefix_reserved_at_kernel(self):
+        # re-review#2 M2: a direct kernel mint of MP01 as a positive news/NFD
+        # record bypassed the taxonomy factory — now refused at the kernel
+        with pytest.raises(RegistryError, match="MP 保留命名空间"):
+            build_card_record("MP01", domain="news", evidence_class="NFD",
+                              allowed_uses={"factor_positive"},
+                              allowed_consumers={"news"},
+                              allowed_dimensions={"event_materiality"})
+
+    def test_mf_prefix_reserved_at_kernel(self):
+        with pytest.raises(RegistryError, match="MF 保留命名空间"):
+            build_card_record("MF01", domain="news", evidence_class="NFD",
+                              allowed_uses={"factor_positive"},
+                              allowed_consumers={"news"},
+                              allowed_dimensions={"event_materiality"})
+
+    def test_mfr_variant_reserved_at_kernel(self):
+        with pytest.raises(RegistryError, match="MF"):
+            build_card_record("MFR01", domain="news", evidence_class="NFR",
+                              allowed_uses={"penalty", "bear"},
+                              allowed_consumers={"news", "bear"},
+                              allowed_dimensions={"manipulation_risk"})
 
 
 class TestHierarchicalIdScan:
