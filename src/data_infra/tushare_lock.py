@@ -157,7 +157,14 @@ def spaced_call(fn, base_sleep: float, *args, rate_limit_backoff: float = 30.0, 
     next-allowed timestamp is an optimization; whenever it can't be read or written, the spacing is
     enforced in-band by sleeping WHILE HOLDING api_call_lock (which serializes callers), so the account
     rate limit can never silently drop to zero. base_sleep is FLOORED to MIN_BASE_SLEEP centrally —
-    callers cannot reduce the account-wide spacing below §6.1 (GPT recovery B3)."""
+    callers cannot reduce the account-wide spacing below §6.1 (GPT recovery B3). Non-finite input is
+    NOT mathematically floored by max() (max(nan, 1.5) is nan) — validate isfinite first (GPT minor)."""
+    try:
+        base_sleep = float(base_sleep)
+    except (TypeError, ValueError):
+        base_sleep = MIN_BASE_SLEEP
+    if not math.isfinite(base_sleep):
+        base_sleep = MIN_BASE_SLEEP  # nan/inf -> the floor (inf would hang the in-band fallback forever)
     base_sleep = max(base_sleep, MIN_BASE_SLEEP)
     with api_call_lock():
         nxt, ok = _read_next_allowed()
