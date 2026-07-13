@@ -29,28 +29,19 @@ from __future__ import annotations
 import re
 
 from workspace.research.ai_research_dept.engine.news_evidence import (
-    M_LINE_TAXONOMY, CardRecord, RegistryError, build_card_record,
+    M_LINE_TAXONOMY, MACRO_TYPE_DIMENSION, MF_DERIVATION_VERSION, CardRecord,
+    RegistryError, build_card_record,
 )
 
 __all__ = ["M_LINE_TAXONOMY", "MACRO_TYPE_DIMENSION", "MACRO_TYPE_DERIVATION_VERSION",
            "build_m_line_records", "build_mf_record", "build_policy_row_record"]
 
-#: MF macro_type → 恰一正向维(注册派生表 v1;优先级契约见模块 docstring)
-MACRO_TYPE_DIMENSION: dict[str, str] = {
-    "货币政策": "policy_alignment",
-    "财政政策": "policy_alignment",
-    "监管全局": "policy_alignment",
-    "地缘外围": "risk_appetite_environment_fit",     # 非冲击外围情绪;冲击→external_shock
-    "大盘资金面": "liquidity_flows_transmission",
-    "商品汇率": "risk_appetite_environment_fit",     # 常规波动;离散冲击→external_shock
-    "行业景气": "industry_concept_transmission",
-    "external_shock": "external_shock_transmission",  # 该维的唯一接地入口(M1⁴)
-}
-MACRO_TYPE_DERIVATION_VERSION = "mf_dim_v1"
+#: 兼容别名(表本体与派生版本在 kernel,re-review#3 B1:维只由密封 macro_type 派生)
+MACRO_TYPE_DERIVATION_VERSION = MF_DERIVATION_VERSION
 
-#: 命名空间(re-review Major-3):政策行/宏观快讯各自专属,绝不触碰保留 M01-M16
-_POLICY_ID_RE = re.compile(r"^MP\d{2,}$")
-_MF_ID_RE = re.compile(r"^MF[A-Z]?\d{2,}$")
+#: 命名空间(re-review Major-3;re-review#3 M2:fullmatch,尾随换行拒)
+_POLICY_ID_RE = re.compile(r"MP\d{2,}")
+_MF_ID_RE = re.compile(r"MF[A-Z]?\d{2,}")
 
 
 def build_m_line_records() -> list[CardRecord]:
@@ -62,25 +53,28 @@ def build_m_line_records() -> list[CardRecord]:
             out.append(build_card_record(rid, domain="macro", evidence_class=ec,
                                          allowed_uses={"factor_positive", "context_only"},
                                          allowed_consumers={"macro"},
-                                         allowed_dimensions=dims))
+                                         allowed_dimensions=dims,
+                                         record_schema_id="m_line_v1"))
         else:                                    # M16 聚合:永不正向
             out.append(build_card_record(rid, domain="macro", evidence_class=ec,
                                          allowed_uses={"context_only"},
-                                         allowed_consumers={"macro"}))
+                                         allowed_consumers={"macro"},
+                                         record_schema_id="m_line_v1"))
     return out
 
 
 def build_policy_row_record(record_id: str) -> CardRecord:
     """注册原子政策行(M1⁴:policy_alignment 的唯一 M 域接地来源——M16 聚合不作数)。
     命名空间 `MP\\d{2,}`;保留 M-line ID 拒(Major-3)。"""
-    if not _POLICY_ID_RE.match(record_id):
+    if not _POLICY_ID_RE.fullmatch(record_id):
         raise RegistryError(
             f"政策行 ID {record_id!r} 越界——须匹配 MP\\d{{2,}}(保留 M01-M16 不可借用)")
     return build_card_record(record_id, domain="macro",
                              evidence_class="market_state_fact",
                              allowed_uses={"factor_positive", "context_only"},
                              allowed_consumers={"macro"},
-                             allowed_dimensions={"policy_alignment"})
+                             allowed_dimensions={"policy_alignment"},
+                             record_schema_id="mp_v1")
 
 
 def build_mf_record(record_id: str, evidence_class: str, *,
@@ -89,21 +83,26 @@ def build_mf_record(record_id: str, evidence_class: str, *,
     - MFR:仅 penalty/bear,无正向维(M1⁴);
     - MFD/MFI/MFA + 注册 macro_type:正向,维 = 派生表的**恰一**维;
     - MFD/MFI/MFA + macro_type 缺失/未注册:context_only(M4:绝不落真维度)。"""
-    if not _MF_ID_RE.match(record_id):
+    if not _MF_ID_RE.fullmatch(record_id):
         raise RegistryError(
             f"MF 记录 ID {record_id!r} 越界——须匹配 MF[A-Z]?\\d{{2,}}(保留 M01-M16 不可借用)")
+    # re-review#3 B1:派生输入(macro_type + 派生版本)密封进记录——维只能派生
+    deriv = (("derivation_version", MF_DERIVATION_VERSION), ("macro_type", macro_type))
     if evidence_class == "MFR":
         return build_card_record(record_id, domain="macro", evidence_class="MFR",
                                  allowed_uses={"penalty", "bear"},
                                  allowed_consumers={"macro", "bear"},
-                                 allowed_dimensions={"manipulation_risk"})
+                                 allowed_dimensions={"manipulation_risk"},
+                                 record_schema_id="mf_v1", derivation=deriv)
     if evidence_class not in ("MFD", "MFI", "MFA"):
         raise RegistryError(f"MF 记录类须 ∈ {{MFD, MFI, MFA, MFR}}(得 {evidence_class!r})")
     dim = MACRO_TYPE_DIMENSION.get(macro_type) if macro_type is not None else None
     if dim is None:                               # 缺/未注册 macro_type → 不正向
         return build_card_record(record_id, domain="macro", evidence_class=evidence_class,
                                  allowed_uses={"context_only"},
-                                 allowed_consumers={"macro"})
+                                 allowed_consumers={"macro"},
+                                 record_schema_id="mf_v1", derivation=deriv)
     return build_card_record(record_id, domain="macro", evidence_class=evidence_class,
                              allowed_uses={"factor_positive", "context_only"},
-                             allowed_consumers={"macro"}, allowed_dimensions={dim})
+                             allowed_consumers={"macro"}, allowed_dimensions={dim},
+                             record_schema_id="mf_v1", derivation=deriv)

@@ -114,21 +114,51 @@ M_LINE_TAXONOMY: dict[str, tuple[str, frozenset]] = {
     "M15": ("market_breadth_state", frozenset({"risk_appetite_environment_fit"})),
     "M16": ("market_state_fact", frozenset()),   # 聚合:context_only 永不正向(M1⁴)
 }
-_M_LINE_RESERVED_RE = re.compile(r"^M(0[1-9]|1[0-6])$")
+_M_LINE_RESERVED_RE = re.compile(r"M(0[1-9]|1[0-6])")
 
-#: 记录 ID 语法 v1(re-review#2 M2:空/标点 ID 曾可铸)。大写字母开头 + 2-16 位
-#  大写字母数字,可选恰一注册 D7 属性后缀。
+#: 记录 ID 语法 v1(re-review#2 M2:空/标点 ID 曾可铸;re-review#3 M2:一律
+#  fullmatch——`$` + match 会放行尾随换行的"视觉重复身份")。大写字母开头 +
+#  2-16 位大写字母数字,可选恰一注册 D7 属性后缀。
 RECORD_ID_GRAMMAR_VERSION = "rid_v1"
 _RECORD_ID_RE = re.compile(
-    r"^[A-Z][A-Z0-9]{1,15}(\.(fact|economic_linkage|timing|source_status))?$")
+    r"[A-Z][A-Z0-9]{1,15}(\.(fact|economic_linkage|timing|source_status))?")
 
 #: 注册 domain enum(re-review#2 M2:domain 曾不受约束,M01 可挂 domain="news")
 DOMAINS = frozenset({"news", "macro", "attention", "coordination", "research"})
 
-#: kernel 级保留命名空间(re-review#2 M2:MP/MF 前缀曾可经通用 mint 铸成 news/NFD
-#  正向记录,绕开 taxonomy 工厂)。前缀命中 → 必须满足该命名空间的冻结元数据契约。
-_POLICY_NS_RE = re.compile(r"^MP\d{2,}$")
-_MF_NS_RE = re.compile(r"^MF[A-Z]?\d{2,}$")
+#: 注册记录 schema(re-review#3 B1:受保护 ID 必须经**类型化 schema 工厂**铸造并
+#  密封派生输入——"形状正确"的通用铸造不再能伪造计分权威)。
+RECORD_SCHEMAS = frozenset({"generic_v1", "m_line_v1", "mp_v1", "mf_v1", "d7_child_v1"})
+MF_DERIVATION_VERSION = "mf_dim_v1"
+
+#: MF macro_type → 恰一正向维(注册派生表 v1;re-review#3 B1:表移入 kernel,
+#  MF 记录的维**只能由密封的 macro_type 派生**,不可直接供给)。优先级契约见
+#  news_taxonomy 模块 docstring(与分型 prompt 配套)。
+MACRO_TYPE_DIMENSION: dict[str, str] = {
+    "货币政策": "policy_alignment",
+    "财政政策": "policy_alignment",
+    "监管全局": "policy_alignment",
+    "地缘外围": "risk_appetite_environment_fit",
+    "大盘资金面": "liquidity_flows_transmission",
+    "商品汇率": "risk_appetite_environment_fit",
+    "行业景气": "industry_concept_transmission",
+    "external_shock": "external_shock_transmission",
+}
+
+#: D7 属性 → 注册维(§6b M4′;re-review#3 B1:表移入 kernel,子行结构契约由
+#  kernel 强制——source_status 永不正向)
+ATTRIBUTE_DIMENSIONS = {
+    "fact": frozenset({"event_materiality"}),
+    "economic_linkage": frozenset({"fundamental_link"}),
+    "timing": frozenset({"catalyst_timing", "tradeability_at_horizon"}),
+    "source_status": frozenset({"confidence_cap"}),
+}
+_HEX64_RE = re.compile(r"[0-9a-f]{64}")
+
+#: kernel 级保留命名空间(re-review#2 M2 + re-review#3 B1:**整个 M 命名空间保留**,
+#  含 MS/M17+——未落类型化工厂的 M 域 ID 一律拒)。
+_POLICY_NS_RE = re.compile(r"MP\d{2,}")
+_MF_NS_RE = re.compile(r"MF[A-Z]?\d{2,}")
 _MF_CLASSES = frozenset({"MFD", "MFI", "MFA", "MFR"})
 
 
@@ -142,53 +172,109 @@ def _m_line_expected(record_id: str) -> tuple:
 
 def _enforce_protected_namespaces(record_id: str, domain: str, evidence_class: str,
                                   uses: frozenset, consumers: frozenset,
-                                  dims: frozenset) -> None:
-    """kernel 级命名空间锁(re-review#2 M2)。M01-M16 逐字(含 domain);MP* 只能是
-    原子政策行的精确元数据;MF* 只能是宏观快讯类(MFR 精确;MFD/MFI/MFA 只许
-    context_only-无维 或 正向-恰一宏观维)。"""
-    if _M_LINE_RESERVED_RE.match(record_id):
-        expected = _m_line_expected(record_id)
-        if (domain, evidence_class, uses, consumers, dims) != expected:
-            exp_d, exp_ec, exp_uses, exp_consumers, exp_dims = expected
-            raise RegistryError(
-                f"{record_id} 是冻结 M-line 保留 ID(§6b M1⁴)——元数据必须与权威表"
-                f"逐字一致(期望 domain={exp_d}, class={exp_ec}, uses={sorted(exp_uses)}, "
-                f"consumers={sorted(exp_consumers)}, dims={sorted(exp_dims)})")
-        return
-    if record_id.startswith("MP"):
-        if not _POLICY_NS_RE.match(record_id):
-            raise RegistryError(f"MP 前缀为原子政策行保留命名空间——{record_id!r} 不合"
-                                f"其语法 MP\\d{{2,}}")
-        expected = ("macro", "market_state_fact",
-                    frozenset({"factor_positive", "context_only"}),
-                    frozenset({"macro"}), frozenset({"policy_alignment"}))
-        if (domain, evidence_class, uses, consumers, dims) != expected:
-            raise RegistryError(
-                f"{record_id} 在 MP 保留命名空间——元数据必须是原子政策行契约"
-                f"(macro/market_state_fact/正向+context/macro 席/policy_alignment)")
-        return
-    if record_id.startswith("MF"):
-        if not _MF_NS_RE.match(record_id):
-            raise RegistryError(f"MF 前缀为宏观快讯保留命名空间——{record_id!r} 不合"
-                                f"其语法 MF[A-Z]?\\d{{2,}}")
-        if domain != "macro" or evidence_class not in _MF_CLASSES:
-            raise RegistryError(
-                f"{record_id} 在 MF 保留命名空间——须 domain=macro 且类 ∈ "
-                f"{sorted(_MF_CLASSES)}(得 domain={domain!r}, class={evidence_class!r})")
-        if evidence_class == "MFR":
-            expected = (frozenset({"penalty", "bear"}), frozenset({"macro", "bear"}),
-                        frozenset({"manipulation_risk"}))
-            if (uses, consumers, dims) != expected:
-                raise RegistryError(f"{record_id}(MFR)元数据须为 penalty+bear/"
-                                    f"macro+bear/manipulation_risk 精确契约")
+                                  dims: frozenset, schema_id: str,
+                                  derivation: tuple) -> None:
+    """kernel 级命名空间 + schema 派生锁(re-review#2 M2 + re-review#3 B1)。
+    受保护 ID 必须携带对应**类型化 schema** 且元数据与**密封派生输入**一致:
+    - M01-M16:schema=m_line_v1,元数据(含 domain)与权威表逐字一致;
+    - MP*:schema=mp_v1,原子政策行精确契约;
+    - MF*:schema=mf_v1,**维只由密封 macro_type 经 mf_dim_v1 派生**(直接供维=拒);
+    - **其余 M 开头 ID(含 MS/M17+)整体保留**:无类型化工厂 → 一律拒;
+    - `X.attr` D7 子行:schema=d7_child_v1,派生须绑 64-hex 父记录哈希 + 与后缀
+      一致的 attribute_type,维=该属性注册维,source_status 永不正向;
+    - schema 与命名空间**双向绑定**:非保护 ID 只许 generic_v1。"""
+    d = dict(derivation)
+    if record_id.startswith("M"):
+        if _M_LINE_RESERVED_RE.fullmatch(record_id):
+            if schema_id != "m_line_v1":
+                raise RegistryError(
+                    f"{record_id} 是冻结 M-line 保留 ID——须经类型化工厂"
+                    f"(record_schema_id=m_line_v1,得 {schema_id!r})")
+            expected = _m_line_expected(record_id)
+            if (domain, evidence_class, uses, consumers, dims) != expected:
+                exp_d, exp_ec, exp_uses, exp_consumers, exp_dims = expected
+                raise RegistryError(
+                    f"{record_id} 是冻结 M-line 保留 ID(§6b M1⁴)——元数据必须与权威表"
+                    f"逐字一致(期望 domain={exp_d}, class={exp_ec}, uses={sorted(exp_uses)}, "
+                    f"consumers={sorted(exp_consumers)}, dims={sorted(exp_dims)})")
             return
-        ctx_only = (uses == frozenset({"context_only"}) and not dims)
-        positive = (uses == frozenset({"factor_positive", "context_only"})
-                    and len(dims) == 1 and dims <= MACRO_DIMENSIONS)
-        if consumers != frozenset({"macro"}) or not (ctx_only or positive):
-            raise RegistryError(
-                f"{record_id}(MF 正向类)须 consumers={{macro}} 且 context_only-无维 "
-                f"或 正向-恰一宏观维(得 uses={sorted(uses)}, dims={sorted(dims)})")
+        if _POLICY_NS_RE.fullmatch(record_id):
+            if schema_id != "mp_v1":
+                raise RegistryError(f"{record_id} 在 MP 保留命名空间——须经类型化工厂"
+                                    f"(record_schema_id=mp_v1,得 {schema_id!r})")
+            expected = ("macro", "market_state_fact",
+                        frozenset({"factor_positive", "context_only"}),
+                        frozenset({"macro"}), frozenset({"policy_alignment"}))
+            if (domain, evidence_class, uses, consumers, dims) != expected:
+                raise RegistryError(
+                    f"{record_id} 在 MP 保留命名空间——元数据必须是原子政策行契约"
+                    f"(macro/market_state_fact/正向+context/macro 席/policy_alignment)")
+            return
+        if _MF_NS_RE.fullmatch(record_id):
+            if schema_id != "mf_v1":
+                raise RegistryError(f"{record_id} 在 MF 保留命名空间——须经类型化工厂"
+                                    f"(record_schema_id=mf_v1,得 {schema_id!r})")
+            if domain != "macro" or evidence_class not in _MF_CLASSES:
+                raise RegistryError(
+                    f"{record_id} 在 MF 保留命名空间——须 domain=macro 且类 ∈ "
+                    f"{sorted(_MF_CLASSES)}(得 domain={domain!r}, class={evidence_class!r})")
+            if d.get("derivation_version") != MF_DERIVATION_VERSION:
+                raise RegistryError(f"{record_id}(MF)派生须密封 derivation_version="
+                                    f"{MF_DERIVATION_VERSION}(re-review#3 B1)")
+            if evidence_class == "MFR":
+                expected = (frozenset({"penalty", "bear"}), frozenset({"macro", "bear"}),
+                            frozenset({"manipulation_risk"}))
+                if (uses, consumers, dims) != expected:
+                    raise RegistryError(f"{record_id}(MFR)元数据须为 penalty+bear/"
+                                        f"macro+bear/manipulation_risk 精确契约")
+                return
+            # re-review#3 B1:MF 正向维**只由密封 macro_type 派生**——绕过派生直铸
+            # external_shock_transmission(不带 macro_type=external_shock)在此拒
+            mt = d.get("macro_type")
+            derived = MACRO_TYPE_DIMENSION.get(mt) if mt is not None else None
+            if derived is None:
+                if uses != frozenset({"context_only"}) or dims:
+                    raise RegistryError(
+                        f"{record_id}(MF,macro_type={mt!r} 缺/未注册)只许 "
+                        f"context_only-无维(M4:绝不落真维度)")
+            else:
+                if (uses != frozenset({"factor_positive", "context_only"})
+                        or dims != frozenset({derived})):
+                    raise RegistryError(
+                        f"{record_id}(MF,macro_type={mt!r})维必须是派生维 "
+                        f"{{{derived}}}(得 {sorted(dims)})——维不可直接供给(B1)")
+            if consumers != frozenset({"macro"}):
+                raise RegistryError(f"{record_id}(MF)consumers 须 {{macro}}")
+            return
+        raise RegistryError(
+            f"{record_id!r}:**整个 M 命名空间保留**(M01-M16/MP*/MF* 之外——含 "
+            f"MS/M17+——尚无类型化工厂,一律拒;re-review#3 B1)")
+    if "." in record_id:
+        attr = record_id.split(".", 1)[1]
+        if schema_id != "d7_child_v1":
+            raise RegistryError(f"{record_id}(D7 子行后缀)须经类型化工厂"
+                                f"(record_schema_id=d7_child_v1,得 {schema_id!r})")
+        if evidence_class not in ("NFD", "NFI", "NFA"):
+            raise RegistryError(f"D7 子行 {record_id} 类须 ∈ {{NFD, NFI, NFA}}"
+                                f"(得 {evidence_class!r})")
+        if d.get("attribute_type") != attr:
+            raise RegistryError(f"D7 子行 {record_id} 派生 attribute_type "
+                                f"{d.get('attribute_type')!r} 与后缀 {attr!r} 不符")
+        ph = d.get("parent_content_hash")
+        if not (isinstance(ph, str) and _HEX64_RE.fullmatch(ph)):
+            raise RegistryError(f"D7 子行 {record_id} 派生须绑 64-hex 父记录哈希")
+        if dims != ATTRIBUTE_DIMENSIONS[attr]:
+            raise RegistryError(f"D7 子行 {record_id} 维须为属性注册维 "
+                                f"{sorted(ATTRIBUTE_DIMENSIONS[attr])}(得 {sorted(dims)})")
+        expected_uses = frozenset({"penalty", "bear"}) if attr == "source_status" \
+            else frozenset({"factor_positive", "context_only"})
+        if uses != expected_uses:
+            raise RegistryError(f"D7 子行 {record_id}({attr})uses 须 "
+                                f"{sorted(expected_uses)}(source_status 永不正向)")
+        return
+    if schema_id != "generic_v1":
+        raise RegistryError(f"{record_id!r} 非保护命名空间——只许 record_schema_id="
+                            f"generic_v1(得 {schema_id!r};schema 与命名空间双向绑定)")
 
 
 # --------------------------------------------------- 逐卡注册记录(封印)
@@ -203,18 +289,28 @@ class PayloadGateError(Exception):
 
 @dataclass(frozen=True)
 class CardRecord:
-    """一条**封印**逐卡元数据记录。只能经 build_card_record 构造;content_hash =
-    全 SHA-256 over 规范载荷;__post_init__ verify-not-trust(伪造直接构造被识破);
-    allowed_* 深只读。授权**只读元数据**,绝不看 record_id 前缀(M3″)。"""
+    """一条**封印**逐卡元数据记录。只能经 build_card_record / 类型化工厂构造;
+    content_hash = 全 SHA-256 over 规范载荷(**含 record_schema_id 与派生输入**,
+    re-review#3 B1);__post_init__ 先跑命名空间/schema 锁再 verify-not-trust——
+    直接 dataclass 构造同样过锁,"形状正确"的伪造无路可走。授权**只读元数据**,
+    绝不看 record_id 前缀(M3″)。"""
     record_id: str
-    domain: str                      # news | macro | attention | coordination | research
+    domain: str                      # ∈ DOMAINS
     evidence_class: str
     allowed_uses: frozenset
     allowed_consumers: frozenset
     allowed_dimensions: frozenset
+    record_schema_id: str = "generic_v1"
+    derivation: tuple = ()           # 密封派生输入(类型化 schema 的键值对)
     content_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#3 B1:锁在构造点(工厂与直接构造同一路径)
+        _enforce_protected_namespaces(
+            self.record_id, self.domain, self.evidence_class,
+            frozenset(self.allowed_uses), frozenset(self.allowed_consumers),
+            frozenset(self.allowed_dimensions), self.record_schema_id,
+            tuple(self.derivation))
         verify_sealed(self._payload(), self.content_hash, field_name="card record content_hash")
 
     def _payload(self) -> dict:
@@ -222,7 +318,9 @@ class CardRecord:
                 "evidence_class": self.evidence_class,
                 "allowed_uses": sorted(self.allowed_uses),
                 "allowed_consumers": sorted(self.allowed_consumers),
-                "allowed_dimensions": sorted(self.allowed_dimensions)}
+                "allowed_dimensions": sorted(self.allowed_dimensions),
+                "record_schema_id": self.record_schema_id,
+                "derivation": [list(kv) for kv in self.derivation]}
 
     @property
     def positive_ceiling(self) -> int:
@@ -231,7 +329,9 @@ class CardRecord:
 
 
 def build_card_record(record_id: str, *, domain: str, evidence_class: str,
-                      allowed_uses, allowed_consumers, allowed_dimensions=()) -> CardRecord:
+                      allowed_uses, allowed_consumers, allowed_dimensions=(),
+                      record_schema_id: str = "generic_v1",
+                      derivation: tuple = ()) -> CardRecord:
     """封印逐卡记录工厂。强制不变量(fail-closed):
     - evidence_class ∈ 注册 enum;allowed_uses ⊆ USES;allowed_consumers ⊆ CONSUMER_SEATS;
     - 每类用途约束(attention_only 只 context/bear、NFR/MFR/coordination 只 penalty/bear、
@@ -242,13 +342,17 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
     uses = frozenset(allowed_uses)
     consumers = frozenset(allowed_consumers)
     dims = frozenset(allowed_dimensions)
-    # re-review#2 M2:ID 语法 + domain enum 先于一切(空/标点/越界 ID 不可铸)
-    if not isinstance(record_id, str) or not _RECORD_ID_RE.match(record_id):
+    # re-review#2 M2 + re-review#3 M2:ID 语法 fullmatch(尾随换行/CR/NUL 拒)+
+    # domain/schema enum 先于一切
+    if not isinstance(record_id, str) or not _RECORD_ID_RE.fullmatch(record_id):
         raise RegistryError(
             f"record_id {record_id!r} 不合语法 {RECORD_ID_GRAMMAR_VERSION}"
             f"(大写字母开头 2-16 位大写字母数字,可选恰一注册 D7 属性后缀)")
     if domain not in DOMAINS:
         raise RegistryError(f"未注册 domain {domain!r}(须 ∈ {sorted(DOMAINS)})")
+    if record_schema_id not in RECORD_SCHEMAS:
+        raise RegistryError(f"未注册 record_schema_id {record_schema_id!r}"
+                            f"(须 ∈ {sorted(RECORD_SCHEMAS)})")
     if evidence_class not in EVIDENCE_CLASSES:
         raise RegistryError(f"未知 evidence_class {evidence_class!r}(须 ∈ {sorted(EVIDENCE_CLASSES)})")
     bad_use = uses - USES
@@ -272,17 +376,17 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
                 f"factor_positive 记录须有非空 allowed_dimensions ⊆ 注册维;越界 {sorted(bad_dim)}")
         if not consumers:
             raise RegistryError("factor_positive 记录须有非空 allowed_consumers")
-    # re-review Major-3 + re-review#2 M2:保留命名空间锁(M01-M16 逐字含 domain;
-    # MP*/MF* 前缀 kernel 级保留,只许各自的冻结元数据契约)。
-    _enforce_protected_namespaces(record_id, domain, evidence_class,
-                                  uses, consumers, dims)
+    # 命名空间/schema 锁在 CardRecord.__post_init__(直接构造同样过锁,re-review#3 B1)
+    derivation = tuple(tuple(kv) for kv in derivation)
     payload = {"record_id": record_id, "domain": domain, "evidence_class": evidence_class,
                "allowed_uses": sorted(uses), "allowed_consumers": sorted(consumers),
-               "allowed_dimensions": sorted(dims)}
+               "allowed_dimensions": sorted(dims), "record_schema_id": record_schema_id,
+               "derivation": [list(kv) for kv in derivation]}
     # frozensets are already immutable — no deep_ro needed for the leaf sets
     return CardRecord(record_id=record_id, domain=domain, evidence_class=evidence_class,
                       allowed_uses=uses, allowed_consumers=consumers,
-                      allowed_dimensions=dims, content_hash=seal_hash(payload))
+                      allowed_dimensions=dims, record_schema_id=record_schema_id,
+                      derivation=derivation, content_hash=seal_hash(payload))
 
 
 # --------------------------------------------------- 密封注册表(逐 cutoff)
@@ -309,18 +413,44 @@ class SealedCardRegistry:
 
 
 def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCardRegistry:
-    """封印注册表工厂。重复 record_id → 拒(身份必须唯一)。"""
+    """封印注册表工厂。重复 record_id → 拒(身份必须唯一)。
+    re-review#3 B1:逐记录重验受保护 schema 绑定(构造点已锁,此处显式重跑)+
+    **D7 子行注册表级校验**:父行必须同表存在、子行类与父行类逐字一致(kernel 结构
+    锁绑父哈希但解析不了父,类等式在此闭合——`NFI01.fact` 挂 NFD 类在此拒)。"""
     by_id: dict[str, CardRecord] = {}
     for r in records:
         if not isinstance(r, CardRecord):
             raise RegistryError("注册表只收封印 CardRecord")
         if r.record_id in by_id:
             raise RegistryError(f"重复 record_id {r.record_id!r}")
+        _enforce_protected_namespaces(
+            r.record_id, r.domain, r.evidence_class, frozenset(r.allowed_uses),
+            frozenset(r.allowed_consumers), frozenset(r.allowed_dimensions),
+            r.record_schema_id, tuple(r.derivation))
         by_id[r.record_id] = r
+    for rid, r in by_id.items():
+        if "." in rid:
+            parent = by_id.get(rid.split(".", 1)[0])
+            if parent is None:
+                raise RegistryError(f"D7 子行 {rid} 无父行在同一注册表——孤儿拒")
+            if r.evidence_class != parent.evidence_class:
+                raise RegistryError(
+                    f"D7 子行 {rid} 类 {r.evidence_class!r} ≠ 父行类 "
+                    f"{parent.evidence_class!r}——洗类拒(re-review#3 B1)")
     payload = {"cutoff": cutoff_iso,
                "record_hashes": sorted(r.content_hash for r in by_id.values())}
     return SealedCardRegistry(cutoff_iso=cutoff_iso, records=deep_ro(by_id),
                               registry_hash=seal_hash(payload))
+
+
+def require_sealed_registry(registry) -> SealedCardRegistry:
+    """消费边界强制(re-review#3 B2):只收真 SealedCardRegistry 并重验其封印——
+    duck-typed 冒牌对象(裸 .registry_hash 属性)在每个消费点拒,不再只在构造点。"""
+    if not isinstance(registry, SealedCardRegistry):
+        raise RegistryError("registry 必须是密封 SealedCardRegistry"
+                            f"(得 {type(registry).__name__};duck-typed 拒,B2)")
+    verify_sealed(registry._payload(), registry.registry_hash, field_name="registry_hash")
+    return registry
 
 
 # --------------------------------------------------- 三元授权 + 上限算术
@@ -347,6 +477,7 @@ def authorize(record: CardRecord, *, use: str, consumer_seat: str,
 
 def dimension_ceiling(cited_ids, registry: SealedCardRegistry, *,
                       consumer_seat: str, target_dimension: str) -> int:
+    registry = require_sealed_registry(registry)          # B2:消费边界重验
     """证据类上限算术(§0/M2 line 122):某维的上限 = 所引证据中,对 (seat, dimension)
     授权 factor_positive 的记录里**最强合格证据类的上限**;无合格证据 → 0(NO-SCORE)。
     传闻/协同/attention_only/未注册引用**不贡献**(它们授权不过 → 天然被排除)。"""
@@ -369,6 +500,7 @@ def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
     re-review Major-2:**最长优先 alternation 单趟扫描**——一个 token 恰解析为一条
     记录:`NFD01.economic_linkage`(D7 子行)不再同时命中父 `NFD01`(旧逐 ID 搜索里
     `.` 是词边界导致父子双解析);词边界仍防 `M1` 命中 `M16`、`NFD1` 命中 `NFD11`。"""
+    registry = require_sealed_registry(registry)          # B2:消费边界重验
     known = sorted(registry.records, key=len, reverse=True)   # 最长优先
     if not known:
         return set()
@@ -415,6 +547,7 @@ def build_factor_payload_ids(registry: SealedCardRegistry, *, consumer_seat: str
                              target_dimension: str) -> list:
     """构造-自-注册表方向(M1″):返回对 (seat, dimension) **授权 factor_positive** 的
     record_id 白名单(按 id 排序,确定性)——序列化器只放这些进正向 payload。"""
+    registry = require_sealed_registry(registry)          # B2:消费边界重验
     return sorted(rid for rid, rec in registry.records.items()
                   if authorize(rec, use="factor_positive", consumer_seat=consumer_seat,
                                target_dimension=target_dimension))

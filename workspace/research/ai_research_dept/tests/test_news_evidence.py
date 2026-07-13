@@ -43,11 +43,12 @@ def _coordination(rid="NFC01"):
 
 
 def _macro(rid="M01"):
-    # M01-M16 是冻结保留 ID(re-review Major-3)——mint 必须与权威表逐字一致
+    # M01-M16 是冻结保留 ID(re-review Major-3/#3 B1)——须经类型化 m_line_v1 且逐字一致
     return build_card_record(rid, domain="macro", evidence_class="market_state_fact",
                              allowed_uses={"factor_positive", "context_only"},
                              allowed_consumers={"macro"},
-                             allowed_dimensions={"risk_appetite_environment_fit"})
+                             allowed_dimensions={"risk_appetite_environment_fit"},
+                             record_schema_id="m_line_v1")
 
 
 # --------------------------------------------------- record invariants
@@ -94,9 +95,11 @@ class TestCardRecord:
             build_card_record("XX01", domain="news", evidence_class="HYPE",
                               allowed_uses={"context_only"}, allowed_consumers={"news"})
 
-    # re-review#2 M2: ID grammar + domain enum enforced at the kernel mint
+    # re-review#2 M2 + re-review#3 M2: ID grammar (fullmatch — trailing
+    # newline/CR/NUL are "visually duplicate identities") + domain enum
     @pytest.mark.parametrize("bad_id", ["", ".", "nfd01", "N", "NFD01.hype",
-                                        "NFD01.fact.fact", "A" * 20])
+                                        "NFD01.fact.fact", "A" * 20,
+                                        "NFD01\n", "MP01\n", "NFD01\r", "NFD01\x00"])
     def test_id_grammar_rejected(self, bad_id):
         with pytest.raises(RegistryError, match="不合语法"):
             build_card_record(bad_id, domain="news", evidence_class="NFD",
@@ -175,16 +178,24 @@ class TestReservedMLine:
                               allowed_dimensions={"manipulation_risk"})
 
 
+def _d7_child(parent, attr="economic_linkage", evidence_class=None):
+    from workspace.research.ai_research_dept.engine.news_evidence import ATTRIBUTE_DIMENSIONS
+    return build_card_record(
+        f"{parent.record_id}.{attr}", domain="news",
+        evidence_class=evidence_class or parent.evidence_class,
+        allowed_uses={"factor_positive", "context_only"}, allowed_consumers={"news"},
+        allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
+        record_schema_id="d7_child_v1",
+        derivation=(("parent_content_hash", parent.content_hash),
+                    ("attribute_type", attr)))
+
+
 class TestHierarchicalIdScan:
     # re-review Major-2: one token resolves to exactly ONE record (longest-first)
     def test_d7_child_does_not_double_resolve_parent(self):
         from workspace.research.ai_research_dept.engine.news_evidence import scan_payload_ids
         parent = _nfd("NFD01")
-        child = build_card_record("NFD01.economic_linkage", domain="news",
-                                  evidence_class="NFD",
-                                  allowed_uses={"factor_positive"},
-                                  allowed_consumers={"news"},
-                                  allowed_dimensions={"fundamental_link"})
+        child = _d7_child(parent)
         reg = build_card_registry(CUT, [parent, child])
         # the child token alone must resolve ONLY the child, never also the parent
         assert scan_payload_ids("引用 NFD01.economic_linkage 支撑", reg) \
@@ -194,6 +205,103 @@ class TestHierarchicalIdScan:
             == {"NFD01", "NFD01.economic_linkage"}
         # parent followed by a period (sentence end) is still the parent
         assert scan_payload_ids("see NFD01.", reg) == {"NFD01"}
+
+
+class TestTypedSchemaLocks:
+    # re-review#3 B1: "correctly shaped" generic mints of protected records refused
+    def test_mf_external_shock_needs_derived_macro_type(self):
+        # your probe: MF01/MFD minted directly into external_shock_transmission
+        # WITHOUT macro_type=external_shock — refused (dim must be DERIVED)
+        with pytest.raises(RegistryError, match="派生|mf_v1"):
+            build_card_record("MF01", domain="macro", evidence_class="MFD",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"external_shock_transmission"},
+                              record_schema_id="mf_v1",
+                              derivation=(("derivation_version", "mf_dim_v1"),
+                                          ("macro_type", "地缘外围")))
+
+    def test_mf_generic_schema_refused(self):
+        with pytest.raises(RegistryError, match="mf_v1"):
+            build_card_record("MF01", domain="macro", evidence_class="MFD",
+                              allowed_uses={"context_only"}, allowed_consumers={"macro"},
+                              record_schema_id="generic_v1")
+
+    def test_d7_child_generic_mint_refused(self):
+        # your probe: NFI01.fact minted with class NFD via the generic path
+        with pytest.raises(RegistryError, match="d7_child_v1"):
+            build_card_record("NFI01.fact", domain="news", evidence_class="NFD",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"news"},
+                              allowed_dimensions={"event_materiality"})
+
+    def test_d7_child_class_laundering_caught_at_registry(self):
+        # typed child claiming NFD alongside its NFI parent -> registry refuses
+        parent = _nfi("NFI01")
+        child = _d7_child(parent, attr="fact", evidence_class="NFD")
+        with pytest.raises(RegistryError, match="洗类"):
+            build_card_registry(CUT, [parent, child])
+
+    def test_d7_orphan_child_refused_at_registry(self):
+        parent = _nfd("NFD01")
+        child = _d7_child(parent, attr="fact")
+        with pytest.raises(RegistryError, match="孤儿"):
+            build_card_registry(CUT, [child])          # parent absent
+
+    @pytest.mark.parametrize("rid", ["M17", "MS01", "M01.fact", "MKT01"])
+    def test_complete_m_namespace_reserved(self, rid):
+        # your probe: M17 / future MS01 / M01.fact minted as positive news/NFD
+        with pytest.raises(RegistryError, match="保留"):
+            build_card_record(rid, domain="news", evidence_class="NFD",
+                              allowed_uses={"factor_positive"},
+                              allowed_consumers={"news"},
+                              allowed_dimensions={"event_materiality"})
+
+    def test_generic_schema_on_unprotected_only(self):
+        # schema<->namespace bidirectional: a typed schema on a plain id refused
+        with pytest.raises(RegistryError, match="generic_v1"):
+            build_card_record("NFD01", domain="news", evidence_class="NFD",
+                              allowed_uses={"context_only"}, allowed_consumers={"news"},
+                              record_schema_id="mf_v1")
+
+    def test_direct_dataclass_construction_also_locked(self):
+        # enforcement lives in __post_init__ — direct construction can't bypass
+        with pytest.raises(RegistryError, match="保留"):
+            CardRecord(record_id="M17", domain="news", evidence_class="NFD",
+                       allowed_uses=frozenset({"factor_positive"}),
+                       allowed_consumers=frozenset({"news"}),
+                       allowed_dimensions=frozenset({"event_materiality"}))
+
+
+class TestRequireSealedRegistry:
+    # re-review#3 B2: duck-typed registry lookalikes refused at EVERY consumer
+    def _fake(self):
+        real = build_card_registry(CUT, [_nfd("NFD01")])
+
+        class _Fake:
+            registry_hash = real.registry_hash
+            records = dict(real.records)
+        return _Fake()
+
+    def test_scan_refuses_fake(self):
+        from workspace.research.ai_research_dept.engine.news_evidence import scan_payload_ids
+        with pytest.raises(RegistryError, match="SealedCardRegistry"):
+            scan_payload_ids("NFD01", self._fake())
+
+    def test_assert_factor_payload_refuses_fake(self):
+        with pytest.raises(RegistryError, match="SealedCardRegistry"):
+            assert_factor_payload("NFD01", self._fake(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_build_factor_payload_ids_refuses_fake(self):
+        with pytest.raises(RegistryError, match="SealedCardRegistry"):
+            build_factor_payload_ids(self._fake(), consumer_seat="news",
+                                     target_dimension="event_materiality")
+
+    def test_dimension_ceiling_refuses_fake(self):
+        with pytest.raises(RegistryError, match="SealedCardRegistry"):
+            dimension_ceiling(["NFD01"], self._fake(), consumer_seat="news",
+                              target_dimension="event_materiality")
 
 
 # --------------------------------------------------- sealed registry
@@ -310,7 +418,8 @@ class TestFactorPayloadGate:
                                         build_card_record("M16", domain="macro",
                                                           evidence_class="market_state_fact",
                                                           allowed_uses={"context_only"},
-                                                          allowed_consumers={"macro"})])
+                                                          allowed_consumers={"macro"},
+                                                          record_schema_id="m_line_v1")])
         # a payload mentioning M16 (context_only) must flag M16, NOT falsely match M01
         with pytest.raises(PayloadGateError, match="M16"):
             assert_factor_payload({"macro_card": "环境 M16 综合"}, reg,

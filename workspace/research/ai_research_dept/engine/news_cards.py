@@ -35,7 +35,8 @@ import pandas as pd
 
 from workspace.research.ai_research_dept.engine.cards import sanitize_text
 from workspace.research.ai_research_dept.engine.news_evidence import (
-    RegistryError, assert_factor_payload, build_card_record, build_card_registry,
+    ATTRIBUTE_DIMENSIONS, RegistryError, assert_factor_payload, build_card_record,
+    build_card_registry, require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -387,14 +388,9 @@ def render_attention_context_card(flow: dict, cutoff, *,
 
 # --------------------------------------------------- D7 原子属性行(importance≥4)
 
-ATTRIBUTE_TYPES = ("fact", "economic_linkage", "timing", "source_status")
-#: 每属性只入其注册维(§6b M4′):source_status 永不正向 materiality
-ATTRIBUTE_DIMENSIONS = {
-    "fact": frozenset({"event_materiality"}),
-    "economic_linkage": frozenset({"fundamental_link"}),
-    "timing": frozenset({"catalyst_timing", "tradeability_at_horizon"}),
-    "source_status": frozenset({"confidence_cap"}),
-}
+#: 属性→注册维表本体在 kernel(re-review#3 B1:D7 子行结构契约由 kernel 强制);
+#  此处保留类型元组(§6b M4′:source_status 永不正向 materiality)
+ATTRIBUTE_TYPES = tuple(sorted(ATTRIBUTE_DIMENSIONS))
 MAX_ATTRIBUTE_ROWS = 4
 D7_IMPORTANCE_FLOOR = 4
 
@@ -425,16 +421,20 @@ class AttributeRow:
 
 def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_id: str,
                              evidence_class: str, importance: int,
-                             attributes: dict) -> list[tuple]:
+                             parent_content_hash: str, attributes: dict) -> list[tuple]:
     """(私有,re-review#2 M1:唯一入口是 build_attribute_bundle)把 importance≥4 的
     重大直接事件拆为原子属性行(D7)。返回 [(AttributeRow, CardRecord)];每行
-    record_id = `{base}.{attr}`,维收窄到该属性的注册维。强制:importance≥4 才拆;
-    ≤4 行;attribute_type 注册;source_status 行 uses={penalty, bear}
-    (**永不 factor_positive**,§6b M4′)。"""
+    record_id = `{base}.{attr}`,经 **d7_child_v1 类型化 schema** 铸造(re-review#3
+    B1:密封父记录哈希 + attribute_type 派生,通用铸造对带后缀 ID 一律拒),维收窄到
+    该属性的注册维。强制:importance≥4 才拆;非空且 ≤4 行(re-review#3 m1);
+    attribute_type 注册;source_status 行 uses={penalty, bear}(永不 factor_positive)。"""
     if importance < D7_IMPORTANCE_FLOOR:
         raise RegistryError(
             f"D7 拆行仅限 importance≥{D7_IMPORTANCE_FLOOR}(得 {importance})——"
             f"小事件保持单行")
+    if not attributes:
+        raise RegistryError("D7 拆分 attributes 不得为空(re-review#3 m1:空拆分会"
+                            "降级证据却不产任何子行)")
     if len(attributes) > MAX_ATTRIBUTE_ROWS:
         raise RegistryError(f"每事件属性行 ≤{MAX_ATTRIBUTE_ROWS}(得 {len(attributes)})")
     if evidence_class not in ("NFD", "NFI", "NFA"):
@@ -445,16 +445,19 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
         if attr not in ATTRIBUTE_TYPES:
             raise RegistryError(f"未注册 attribute_type {attr!r}(须 ∈ {ATTRIBUTE_TYPES})")
         rid = f"{base_record_id}.{attr}"
+        deriv = (("parent_content_hash", parent_content_hash), ("attribute_type", attr))
         if attr == "source_status":
             rec = build_card_record(rid, domain="news", evidence_class=evidence_class,
                                     allowed_uses={"penalty", "bear"},
                                     allowed_consumers={"news", "bear"},
-                                    allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr])
+                                    allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
+                                    record_schema_id="d7_child_v1", derivation=deriv)
         else:
             rec = build_card_record(rid, domain="news", evidence_class=evidence_class,
                                     allowed_uses={"factor_positive", "context_only"},
                                     allowed_consumers={"news"},
-                                    allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr])
+                                    allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
+                                    record_schema_id="d7_child_v1", derivation=deriv)
         row = AttributeRow(row_id=rid, claim_id=claim_id,
                            fact_cluster_id=fact_cluster_id, evidence_group_id=group,
                            attribute_type=attr, text=sanitize_text(text))
@@ -472,6 +475,8 @@ class AttributeBundle:
       (`verify_bundle_registry`),两个束/两次调用无法都成为同一决策的权威。"""
     decision_id: str
     cutoff_iso: str
+    source_card_hash: str            # re-review#3 M1:绑铸出卡的精确身份
+    base_fact_hashes: tuple          # re-review#3 M1:精确基事实总体(非成员子集)
     source_registry_hash: str
     claim_ids: tuple
     row_hashes: tuple
@@ -488,6 +493,8 @@ class AttributeBundle:
 
     def _payload(self) -> dict:
         return {"decision_id": self.decision_id, "cutoff": self.cutoff_iso,
+                "source_card_hash": self.source_card_hash,
+                "base_fact_hashes": list(self.base_fact_hashes),
                 "source_registry_hash": self.source_registry_hash,
                 "claim_ids": list(self.claim_ids), "row_hashes": list(self.row_hashes),
                 "child_record_hashes": list(self.child_record_hashes),
@@ -513,23 +520,26 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
       哈希——下游用 `verify_bundle_registry` 要求恰一匹配。
     返回 (bundle, rows, final_registry)。"""
     cutoff_iso = pd.Timestamp(cutoff).isoformat()
+    # re-review#3 M1:decision_id 严格非空字符串,绝不 str() 强转(1 与 "1" 不同一)
+    if not isinstance(decision_id, str) or not decision_id.strip():
+        raise RegistryError(f"decision_id 须非空 str(得 {decision_id!r},不强转)")
     if not isinstance(card, RenderedCard):
         raise RegistryError("card 必须是密封 RenderedCard(B1:束绑定其铸出卡)")
+    verify_sealed(card._payload(), card.card_hash, field_name="card_hash")
     if cutoff_iso != card.cutoff_iso:
         raise RegistryError(f"cutoff {cutoff_iso} 与卡 cutoff {card.cutoff_iso} 不符")
     if _records_hash(base_records) != card.records_hash:
         raise RegistryError("base_records 与卡封记录总体不符(B1:束只认卡的记录集)")
-    sealed_fact_hashes = set(card.base_fact_hashes)
+    # re-review#3 M1:基事实总体须与卡封**精确相等**(子集/超集皆拒,非成员检查)
+    supplied_hashes = sorted(bf.fact_hash for bf in base_facts
+                             if isinstance(bf, D7BaseFact))
+    if len(supplied_hashes) != len(base_facts) or \
+            supplied_hashes != sorted(card.base_fact_hashes):
+        raise RegistryError(
+            "base_facts 与卡封基事实总体不精确相等——子集/超集/自铸描述符拒"
+            f"(B1/M1:得 {len(base_facts)} 个 vs 卡封 {len(card.base_fact_hashes)} 个)")
     source_registry = build_card_registry(cutoff_iso, base_records)
-    facts_by_id: dict = {}
-    for bf in base_facts:
-        if not isinstance(bf, D7BaseFact):
-            raise RegistryError("base_facts 只收渲染器铸的密封 D7BaseFact(B1)")
-        if bf.fact_hash not in sealed_fact_hashes:
-            raise RegistryError(
-                f"D7BaseFact {bf.base_record_id}({bf.fact_hash[:12]})不在卡封基事实"
-                f"总体内——自铸描述符拒(B1:类/importance 权威只来自渲染器)")
-        facts_by_id[bf.base_record_id] = bf
+    facts_by_id = {bf.base_record_id: bf for bf in base_facts}
     recs_by_id = {r.record_id: r for r in base_records}
     seen_bases, seen_claims = set(), set()
     rows, attr_records, demoted_ids = [], [], []
@@ -560,10 +570,14 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
         if bf.claim_id in seen_claims:
             raise RegistryError(f"claim {bf.claim_id!r} 全局重复拆分(M1)")
         seen_claims.add(bf.claim_id)
+        # re-review#3 m1:降级 broad 基行的拆分必须含 fact 属性(证据不凭空消失)
+        if "fact" not in sp["attributes"]:
+            raise RegistryError(f"拆分 {bid} 缺 'fact' 属性——降级基行的拆分必须"
+                                f"保留事实行(re-review#3 m1)")
         pairs = _build_attribute_records(
             bid, claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
             evidence_class=bf.evidence_class, importance=bf.importance,
-            attributes=sp["attributes"])
+            parent_content_hash=base.content_hash, attributes=sp["attributes"])
         rows.extend(r for r, _ in pairs)
         attr_records.extend(rec for _, rec in pairs)
         demoted_ids.append(base.record_id)
@@ -582,7 +596,9 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
     # M1:最终注册表在工厂内构造并验证(重复身份在此拒,不留给下游)
     final_registry = build_card_registry(cutoff_iso, final_records)
     bundle = AttributeBundle(
-        decision_id=str(decision_id), cutoff_iso=cutoff_iso,
+        decision_id=decision_id, cutoff_iso=cutoff_iso,
+        source_card_hash=card.card_hash,
+        base_fact_hashes=tuple(sorted(card.base_fact_hashes)),
         source_registry_hash=source_registry.registry_hash,
         claim_ids=tuple(sorted(seen_claims)),
         row_hashes=tuple(sorted(r.row_hash for r in rows)),
@@ -593,10 +609,12 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
 
 
 def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
-    """下游消费点强制:注册表必须恰一匹配束封的 final_registry_hash(M1:两个束/
-    改过的注册表无法都成为同一决策的权威)。"""
+    """下游消费点强制:**真密封注册表**(re-review#3 B2:duck-typed 冒牌对象在此拒,
+    经 require_sealed_registry 重验封印)且必须恰一匹配束封的 final_registry_hash
+    (M1:两个束/改过的注册表无法都成为同一决策的权威)。"""
     if not isinstance(bundle, AttributeBundle):
         raise RegistryError("bundle 必须是密封 AttributeBundle")
+    registry = require_sealed_registry(registry)
     if registry.registry_hash != bundle.final_registry_hash:
         raise RegistryError(
             f"注册表 {registry.registry_hash[:12]} 与束封最终注册表 "
@@ -605,11 +623,12 @@ def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
 
 # --------------------------------------------------- B1′ 存量 ID 语义分类
 
-_LEGACY_ATTENTION_RE = re.compile(r"^(N00|NDA\d+|NIA\d+)$")
+_LEGACY_ATTENTION_RE = re.compile(r"(N00|NDA\d+|NIA\d+)")
 
 
 def is_legacy_attention_id(record_id: str) -> bool:
     """B1′:existing N00(全景计数)/NDA*(直接聚合)/NIA*(间接聚合)为语义
     attention_only——增量信息只是计数/广度/聚合。ND##/NI##(原子明细)/NX01
-    (缺席声明)不是。物理移出在席位接线块;本判定是其唯一语义依据。"""
-    return bool(_LEGACY_ATTENTION_RE.match(str(record_id)))
+    (缺席声明)不是。物理移出在席位接线块;本判定是其唯一语义依据。
+    re-review#3 M2:fullmatch(尾随换行不再算合法身份)。"""
+    return bool(_LEGACY_ATTENTION_RE.fullmatch(str(record_id)))

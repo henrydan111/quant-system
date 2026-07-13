@@ -320,7 +320,7 @@ class TestD7Attributes:
     def test_scoped_dimensions(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
-                                       attributes=self._attrs())
+                                       parent_content_hash="a" * 64, attributes=self._attrs())
         by_attr = {r.attribute_type: (r, rec) for r, rec in rows}
         _, fact_rec = by_attr["fact"]
         # fact row authorizes ONLY event_materiality
@@ -335,7 +335,7 @@ class TestD7Attributes:
     def test_source_status_never_positive(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=4,
-                                       attributes={"source_status": "官方证实"})
+                                       parent_content_hash="a" * 64, attributes={"source_status": "官方证实"})
         _, rec = rows[0]
         assert "factor_positive" not in rec.allowed_uses
         assert authorize(rec, use="penalty", consumer_seat="news",
@@ -345,24 +345,24 @@ class TestD7Attributes:
         with pytest.raises(RegistryError, match="importance"):
             _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=3,
-                                    attributes={"fact": "小事件"})
+                                    parent_content_hash="a" * 64, attributes={"fact": "小事件"})
 
     def test_unknown_attribute_rejected(self):
         with pytest.raises(RegistryError, match="未注册 attribute_type"):
             _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=5,
-                                    attributes={"hype": "x"})
+                                    parent_content_hash="a" * 64, attributes={"hype": "x"})
 
     def test_rumor_class_not_splittable(self):
         with pytest.raises(RegistryError, match="正向类"):
             _build_attribute_records("NFR01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFR", importance=5,
-                                    attributes={"fact": "x"})
+                                    parent_content_hash="a" * 64, attributes={"fact": "x"})
 
     def test_row_sealed_and_forged_rejected(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
-                                       attributes={"fact": "x"})
+                                       parent_content_hash="a" * 64, attributes={"fact": "x"})
         row, _ = rows[0]
         assert len(row.row_hash) == 64
         with pytest.raises(SealError):
@@ -430,15 +430,75 @@ class TestAttributeBundle:
 
     def test_self_minted_descriptor_rejected(self):
         # a self-consistent D7BaseFact NOT minted by the renderer (importance
-        # upgraded to 5) fails the card-membership check
+        # upgraded to 5), swapped into the population, fails the EXACT-population
+        # equality check (re-review#3 M1: not membership-only)
         card, records, facts = self._rendered()
         base = [r for r in records if r.record_id == "NFD02"][0]
         forged = D7BaseFact(base_record_id="NFD02", base_content_hash=base.content_hash,
                             claim_id="CLAIM:forged", fact_cluster_id="f",
                             evidence_class="NFD", importance=5)
-        with pytest.raises(RegistryError, match="不在卡封基事实总体"):
-            build_attribute_bundle([self._split("NFD02")], [forged], records,
+        swapped = [f for f in facts if f.base_record_id != "NFD02"] + [forged]
+        with pytest.raises(RegistryError, match="不精确相等"):
+            build_attribute_bundle([self._split("NFD02")], swapped, records,
                                    card=card, decision_id="d1", cutoff=CUT)
+
+    def test_subset_population_rejected(self):
+        # re-review#3 M1: exact population equality — a SUBSET of the card's base
+        # facts is refused even though every member is genuine
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="不精确相等"):
+            build_attribute_bundle([self._split("NFD01")], facts[:1], records,
+                                   card=card, decision_id="d1", cutoff=CUT)
+
+    def test_cross_card_binding_rejected(self):
+        # re-review#3 M1: a bundle can only bind ITS OWN card — records/facts from
+        # a different render (importance differs -> different card identity) refuse
+        card_a, records_a, facts_a = self._rendered()
+        card_b, records_b, facts_b = render_news_flash_section(
+            [_assessed("重大订单甲", status="官方证实", importance=4)], CUT)
+        with pytest.raises(RegistryError, match="不符|不精确相等"):
+            build_attribute_bundle([self._split("NFD01")], facts_b, records_b,
+                                   card=card_a, decision_id="d1", cutoff=CUT)
+        # and the two cards' bundle identities differ (source_card_hash sealed)
+        assert card_a.card_hash != card_b.card_hash
+
+    def test_decision_id_not_coerced(self):
+        # re-review#3 M1: decision_id=1 must be refused, not str()-coerced
+        card, records, facts = self._rendered()
+        for bad in (1, None, "", "  "):
+            with pytest.raises(RegistryError, match="decision_id"):
+                build_attribute_bundle([self._split("NFD01")], facts, records,
+                                       card=card, decision_id=bad, cutoff=CUT)
+
+    def test_empty_attributes_rejected(self):
+        # re-review#3 m1: an empty split must not demote evidence with no child
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="fact"):
+            build_attribute_bundle([{"base_record_id": "NFD01", "attributes": {}}],
+                                   facts, records, card=card,
+                                   decision_id="d1", cutoff=CUT)
+
+    def test_missing_fact_attribute_rejected(self):
+        # re-review#3 m1: demoting a broad base requires the fact attribute
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="fact"):
+            build_attribute_bundle(
+                [{"base_record_id": "NFD01", "attributes": {"timing": "下季度"}}],
+                facts, records, card=card, decision_id="d1", cutoff=CUT)
+
+    def test_duck_typed_registry_rejected(self):
+        # re-review#3 B2: an unsealed lookalike exposing .registry_hash is refused
+        card, records, facts = self._rendered()
+        bundle, _, final_reg = build_attribute_bundle(
+            [self._split("NFD01")], facts, records, card=card,
+            decision_id="d1", cutoff=CUT)
+        presplit = {r.record_id: r for r in records}       # pre-split positives!
+
+        class _Fake:
+            registry_hash = bundle.final_registry_hash
+            records = presplit
+        with pytest.raises(RegistryError, match="SealedCardRegistry"):
+            verify_bundle_registry(bundle, _Fake())
 
     def test_duplicate_base_split_rejected(self):
         card, records, facts = self._rendered()
@@ -471,6 +531,8 @@ class TestAttributeBundle:
                                          card=card, decision_id="d1", cutoff=CUT)
         with pytest.raises(SealError):
             AttributeBundle(decision_id="EVIL", cutoff_iso=b.cutoff_iso,
+                            source_card_hash=b.source_card_hash,
+                            base_fact_hashes=b.base_fact_hashes,
                             source_registry_hash=b.source_registry_hash,
                             claim_ids=b.claim_ids, row_hashes=b.row_hashes,
                             child_record_hashes=b.child_record_hashes,
