@@ -116,6 +116,7 @@ def run_sealed_oos(
     claim_seal: bool = True,
     ls_floor: float = DEFAULT_LS_SHARPE_FLOOR,
     fresh_window_override_id: str = "",
+    ledger_root: str | None = None,
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
     apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. ``sides``
@@ -154,6 +155,7 @@ def run_sealed_oos(
         design_hash=design_hash, hypothesis_id=hypothesis_id, horizon=horizon,
         n_quantiles=n_quantiles, claim_seal=claim_seal,
         fresh_window_override_id=str(fresh_window_override_id),
+        ledger_root=ledger_root,
     )
     per_factor = reproduction["independent_reproduction"]["per_factor"]
     verdict = evaluate_sealed_oos_bar(sides, per_factor, ls_floor=ls_floor)

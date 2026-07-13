@@ -546,17 +546,22 @@ class OosWindowLedgerStore(AppendOnlyStore):
         warn_threshold: int = 3,
         hard_threshold: int = 5,
         multiplicity_ack: bool = False,
-        override_authorization: Mapping[str, Any] | None = None,
+        override_store=None,
+        multiplicity_override_id: str = "",
     ) -> dict[str, Any]:
-        """PR3 REWORK (R1 Blocker 5) — the ATOMIC spend reservation: under ONE lock this
-        (1) recognizes an existing identical ``(window, book_seal_key)`` row as a RESUME
-        (returned with ``resumed=True``, never counted as a pending extra spend),
-        (2) counts distinct existing spend-unit keys, (3) enforces the virgin budget —
-        the warn band needs ``multiplicity_ack``; at/over the hard threshold only a
-        VALIDATED consumed a6 authorization (a store row, never a boolean) admits the
-        spend, (4) appends the spend-on-attempt row. The reservation happens BEFORE the
-        holdout claim, so a crash between the two leaves a recorded spend and an
-        unclaimed seal — the budget over-counts (conservative), never under-counts."""
+        """PR3 REWORK (R1 Blocker 5 + R2 Blocker 5/Major 2) — the ATOMIC spend
+        reservation: under ONE lock this (1) recognizes an existing ``(window,
+        book_seal_key)`` row with the IDENTICAL ``request_hash`` as a RESUME (returned
+        with ``resumed=True``; a blank/legacy or different recorded hash REFUSES —
+        strict equality, R2 M2), (2) counts distinct existing spend-unit keys,
+        (3) enforces the virgin budget — the warn band needs ``multiplicity_ack``; at/
+        over the hard threshold the authorization is RE-READ FROM the
+        ``OverrideAuthorizationStore`` (``override_store`` + ``multiplicity_override_id``
+        via :meth:`require_consumed`, request-bound) — a caller-shaped dict can never
+        satisfy it (R2 B5), (4) appends the spend-on-attempt row. The reservation
+        happens BEFORE the holdout claim, so a crash between the two leaves a recorded
+        spend and an unclaimed seal — the budget over-counts (conservative), never
+        under-counts."""
         if not str(book_seal_key).strip():
             raise ValueError("reserve_book_spend requires a non-empty book_seal_key")
         if not str(request_hash).strip():
@@ -572,31 +577,37 @@ class OosWindowLedgerStore(AppendOnlyStore):
             mine = sub[sub["book_seal_key"].astype("string") == str(book_seal_key)]
             if not mine.empty:
                 row = mine.iloc[-1].to_dict()
-                if str(row.get("request_hash") or "") not in ("", str(request_hash)):
+                # R2 Major 2: STRICT equality — a blank (legacy) recorded hash is
+                # quarantined, never a wildcard that resumes any request.
+                if str(row.get("request_hash") or "") != str(request_hash):
                     raise ValueError(
-                        f"reserve_book_spend: book_seal_key {book_seal_key} was reserved under a "
-                        f"DIFFERENT request_hash ({row.get('request_hash')!r}) — a changed request "
-                        "cannot resume a prior spend"
+                        f"reserve_book_spend: book_seal_key {book_seal_key} was reserved under "
+                        f"request_hash {row.get('request_hash')!r} — this call's "
+                        f"{request_hash!r} cannot resume it (a blank legacy row is quarantined; "
+                        "a changed request is a new spend attempt)"
                     )
                 row["resumed"] = True
                 return row
             if virgin:
                 n_would_be = len(existing_keys) + 1
                 if n_would_be > hard_threshold:
-                    auth = override_authorization or {}
-                    valid = (
-                        isinstance(auth, Mapping)
-                        and str(auth.get("action")) == "consumed"
-                        and str(auth.get("kind")) == "a6_multiplicity"
-                        and str(auth.get("oos_window_id")) == str(oos_window_id)
-                    )
-                    if not valid:
+                    # R2 B5: the authorization is verified FROM the store, in here —
+                    # never trusted from a caller-supplied mapping.
+                    if override_store is None or not str(multiplicity_override_id).strip():
                         raise ValueError(
                             f"virgin-window book budget HARD STOP (would be spend #{n_would_be} > "
-                            f"{hard_threshold}): requires a pre-recorded, consumed a6_multiplicity "
-                            "authorization bound to this window (OverrideAuthorizationStore) — a "
-                            "boolean flag is not an authorization"
+                            f"{hard_threshold}): requires a pre-recorded, CONSUMED a6_multiplicity "
+                            "authorization verified from the OverrideAuthorizationStore "
+                            "(override_store + multiplicity_override_id) — caller input is never "
+                            "an authorization"
                         )
+                    override_store.require_consumed(
+                        kind="a6_multiplicity",
+                        override_id=str(multiplicity_override_id),
+                        oos_window_id=str(oos_window_id),
+                        scope_key=str(book_seal_key),
+                        consumed_by_request_hash=str(request_hash),
+                    )
                 elif n_would_be > warn_threshold and not multiplicity_ack:
                     raise ValueError(
                         f"virgin-window book budget acknowledge band (would be spend #{n_would_be} > "
@@ -615,7 +626,65 @@ class OosWindowLedgerStore(AppendOnlyStore):
                     "book_plan_hash": str(book_plan_hash),
                     "structural_family": str(structural_family),
                     "request_hash": str(request_hash),
-                    "override_id": str((override_authorization or {}).get("override_id", "")),
+                    "override_id": str(multiplicity_override_id),
+                }
+            )
+            row["recorded_at"] = recorded_at
+            row["record_id"] = self._record_id(row, recorded_at)
+            frame = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
+            _store_atomic_write(frame, self.log_path)
+            row["resumed"] = False
+            return row
+
+    def reserve_a5_study_spend(
+        self,
+        *,
+        oos_window_id: str,
+        frozen_set_hash: str,
+        override_id: str,
+        request_hash: str = "",
+        factor_ids: Sequence[str] = (),
+        seal_mode: str = "live",
+    ) -> dict[str, Any]:
+        """PR3 REWORK (R2 Blocker 4) — the ATOMIC A5 study reservation, called by
+        ``reproduce_sealed_oos`` BEFORE its holdout claim so a direct import can never
+        consume an authorization + claim a virgin seal WITHOUT the spend entering the
+        A6 budget denominator. Idempotent on the A5 unit ``(window, frozen_set_hash)``
+        with strict request binding on resume (blank-tolerant only when both blank).
+        The per-study human gate is the consume-once A5 authorization itself; the
+        warn/hard budget bands for the factor-level path are enforced at the cmd_seal
+        layer (``virgin_window_multiplicity``), which reads this ledger."""
+        if not str(override_id).strip():
+            raise ValueError("reserve_a5_study_spend requires the consumed A5 override_id")
+        with file_lock(self.lock_path):
+            frame = self._load()
+            mask = (
+                (frame["oos_window_id"].astype("string") == str(oos_window_id))
+                & (frame["frozen_set_hash"].astype("string") == str(frozen_set_hash))
+                & (frame["spend_unit_type"].astype("string").fillna("") == "a5_signal_replication_study")
+            )
+            mine = frame[mask]
+            if not mine.empty:
+                row = mine.iloc[-1].to_dict()
+                if str(row.get("request_hash") or "") != str(request_hash or ""):
+                    raise ValueError(
+                        f"reserve_a5_study_spend: (window={oos_window_id}, frozen_set="
+                        f"{frozen_set_hash}) was reserved under request_hash "
+                        f"{row.get('request_hash')!r}, not {request_hash!r}"
+                    )
+                row["resumed"] = True
+                return row
+            recorded_at = _store_now()
+            row = {column: "" for column in self.COLUMNS}
+            row.update(
+                {
+                    "oos_window_id": str(oos_window_id),
+                    "frozen_set_hash": str(frozen_set_hash),
+                    "factor_ids": canonical_json(sorted(str(f) for f in factor_ids)),
+                    "seal_mode": normalize_enum(seal_mode),
+                    "spend_unit_type": "a5_signal_replication_study",
+                    "override_id": str(override_id),
+                    "request_hash": str(request_hash or ""),
                 }
             )
             row["recorded_at"] = recorded_at

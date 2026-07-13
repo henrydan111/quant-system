@@ -177,13 +177,12 @@ def evaluate_pre_declared_bar(
 def run_component_diagnostics_in_book_context(
     *,
     book_seal_key: str,
-    book_plan_hash: str,
-    frozen_set,
-    factor_exprs: Mapping[str, str],
+    request_hash: str,
+    artifact_store,
+    seal_store,
     oos_start: str,
     oos_end: str,
     qlib_dir: str,
-    seal_store,
     horizon: int = 20,
     n_quantiles: int = 10,
     component_weights: Mapping[str, float] | None = None,
@@ -193,31 +192,33 @@ def run_component_diagnostics_in_book_context(
     """A2(b)/N3 — per-component gross OOS diagnostics computed INSIDE the book's
     already-claimed seal. The ONLY sanctioned component-diagnostics path.
 
-    Refuses (fail-closed) unless: the ACTIVE ``ResearchAccessContext`` is a claimed OOS
-    context with ``effective_seal_key == book_seal_key`` covering ``[oos_start,
-    oos_end]``, AND (R1 B4 — an in-process context is constructible, so it is not
-    proof) a REAL holdout seal event for ``book_seal_key`` exists in the supplied
-    ``seal_store`` whose recorded ``run_dir`` matches the context's ``run_id``. NEVER
-    claims a seal, NEVER installs a (nested) context — the metric computation
-    (:func:`promotion_evidence._compute_oos_per_factor_metrics`, the screening's exact
-    path) runs under the caller's active context, so its ``qlib_windowed_features``
-    reads are validated against the book seal at the data layer.
+    R2 Blocker 3: the leg is bound to the CANONICAL CLAIM, not to caller arguments —
+    the component set (factors, sides, expressions) is loaded from the manifest SEALED
+    at claim time (``BookSealArtifactStore.load_component_manifest``); there is no
+    ``frozen_set``/``factor_exprs`` parameter to substitute foreign factors into a real
+    book's seal. Refuses (fail-closed) unless ALL of:
 
-    Completeness (R1 B4): every frozen-set member must yield a row with FINITE
-    ``oos_rank_icir`` + ``oos_ls_sharpe`` and ``n_components == len(frozen_set.selected)``
-    — an empty or NaN diagnostics result raises instead of reading as healthy. Emits NO
-    promotion evidence and mints NO status: rows carry
+    * the ACTIVE ``ResearchAccessContext`` is a claimed OOS context with
+      ``effective_seal_key == book_seal_key``, ``request_hash == request_hash``,
+      covering ``[oos_start, oos_end]``;
+    * the canonical claim exists for (key, request) and its ``run_dir`` / ``step_id`` /
+      provider / calendar / window ALL equal the context's;
+    * a REAL holdout seal event exists for the key whose ``event_id`` matches the
+      claim's, with the same ``request_hash`` / run / step.
+
+    NEVER claims a seal, NEVER installs a (nested) context. Completeness (R1 B4):
+    every manifest member must yield a FINITE-metric row with exact coverage. Emits NO
+    promotion evidence and mints NO status (rows carry
     ``run_type='book_component_diagnostic'``, ``spent_in_book_context=True``,
-    ``fresh_oos_eligible=False``, ``promotion_eligible=False`` (round-1 m3). The old
-    factor-level bar survives only as ``reference_pass`` — a diagnostic line, never a
-    gate."""
+    ``fresh_oos_eligible=False``, ``promotion_eligible=False``)."""
     import pandas as pd
 
     from src.research_orchestrator.research_access_context import get_research_access_context
 
     key = str(book_seal_key).strip()
-    if not key:
-        raise BookSealError("book_seal_key is required (blank keys are refused)")
+    req = str(request_hash).strip()
+    if not key or not req:
+        raise BookSealError("book_seal_key + request_hash are required (blank refused)")
     ctx = get_research_access_context()
     if ctx is None:
         raise BookSealError(
@@ -235,6 +236,11 @@ def run_component_diagnostics_in_book_context(
             f"active context seal_key {ctx.effective_seal_key!r} != book_seal_key {key!r} — "
             "the diagnostics leg may only run inside ITS OWN book's claimed seal."
         )
+    if str(getattr(ctx, "request_hash", "")) != req:
+        raise BookSealError(
+            f"active context request_hash {getattr(ctx, 'request_hash', '')!r} != {req!r} — "
+            "a context borrowed from a different evaluation cannot authorize diagnostics."
+        )
     if str(getattr(ctx, "stage", "")) != "oos_test":
         raise BookSealError(f"active context stage {ctx.stage!r} != 'oos_test'")
     if pd.Timestamp(ctx.allowed_start) > pd.Timestamp(oos_start) or pd.Timestamp(
@@ -244,27 +250,72 @@ def run_component_diagnostics_in_book_context(
             f"diagnostics window [{oos_start}, {oos_end}] is not covered by the active book "
             f"context window [{ctx.allowed_start}, {ctx.allowed_end}]"
         )
-    # R1 B4: the context flag alone is forgeable in-process — require the REAL claim event.
-    if seal_store is None:
-        raise BookSealError("component diagnostics require the holdout seal_store (fail-closed)")
+    # R2 B3: bind to the CANONICAL CLAIM — run/step/provider/calendar/window all matched.
+    if artifact_store is None or seal_store is None:
+        raise BookSealError(
+            "component diagnostics require the artifact_store + holdout seal_store (fail-closed)"
+        )
+    claim = artifact_store.current(key)
+    if claim is None or str(claim.get("request_hash")) != req:
+        raise BookSealError(
+            f"no canonical claim for book_seal_key {key!r} under request {req!r}"
+        )
+    ctx_run = str(Path(str(ctx.run_id)).resolve())
+    for field, ctx_value in (
+        ("run_dir", ctx_run),
+        ("step_id", str(ctx.step_id)),
+        ("provider_build_id", str(ctx.provider_build_id)),
+        ("calendar_policy_id", str(ctx.calendar_policy_id)),
+        ("oos_window_id", f"{oos_start}..{oos_end}"),
+    ):
+        recorded = str(claim.get(field, ""))
+        compare = str(Path(recorded).resolve()) if field == "run_dir" and recorded else recorded
+        if compare != ctx_value:
+            raise BookSealError(
+                f"canonical claim {field} {recorded!r} != active context/evaluation "
+                f"{ctx_value!r} — foreign-context reuse refused"
+            )
     events = seal_store.list_events(seal_key=key)
     if events.empty:
         raise BookSealError(
             f"no holdout seal event exists for book_seal_key {key!r} — a fabricated context "
             "without a real claim is not a sanctioned path"
         )
-    recorded_run = str(events.iloc[0].get("run_dir", ""))
-    if recorded_run != str(Path(str(ctx.run_id)).resolve()):
+    event = events.iloc[0].to_dict()
+    if str(event.get("event_id", "")) != str(claim.get("seal_event_id", "")):
         raise BookSealError(
-            f"the seal event for {key!r} was claimed by run_dir {recorded_run!r}, not the "
-            f"active context's run {ctx.run_id!r} — foreign-context reuse refused"
+            f"holdout seal event {event.get('event_id')!r} != the claim's recorded "
+            f"{claim.get('seal_event_id')!r}"
         )
+    for field, expect in (
+        ("request_hash", req),
+        ("run_dir", ctx_run),
+        ("step_id", str(ctx.step_id)),
+    ):
+        if str(event.get(field, "")) != expect:
+            raise BookSealError(
+                f"holdout seal event {field} {event.get(field)!r} != {expect!r} — "
+                "foreign-context reuse refused"
+            )
+
+    # the SEALED manifest is the only source of the observable component set (R2 B2/B3)
+    manifest = artifact_store.load_component_manifest(book_seal_key=key, request_hash=req)
+    components = manifest.get("components")
+    if not isinstance(components, Mapping) or not components:
+        raise BookSealError("sealed component manifest is empty/malformed")
+    sides = {str(fid): str(spec.get("side", "")) for fid, spec in components.items()}
+    bad_sides = {f: s for f, s in sides.items() if s not in ("long", "short")}
+    if bad_sides:
+        raise BookSealError(f"sealed manifest has non-held-side directions {bad_sides}")
+    factor_exprs = {str(fid): str(spec.get("expr", "")) for fid, spec in components.items()}
+    if any(not e.strip() for e in factor_exprs.values()):
+        raise BookSealError("sealed manifest has blank factor expressions")
+    book_plan_hash = str(claim.get("book_plan_hash", ""))
 
     if compute_metrics_fn is None:
         from src.research_orchestrator.promotion_evidence import _compute_oos_per_factor_metrics
         compute_metrics_fn = _compute_oos_per_factor_metrics
 
-    sides = sides_from_frozen_set(frozen_set)
     per_factor, max_label_realization = compute_metrics_fn(
         factor_exprs=dict(factor_exprs), oos_start=oos_start, oos_end=oos_end,
         qlib_dir=qlib_dir, horizon=horizon, n_quantiles=n_quantiles, trade_cal=trade_cal,
@@ -470,6 +521,43 @@ def run_book_sealed_evaluation(
             "provider_build_id and calendar_policy_id are required (the spend is "
             "generation-bound; blank ids would break crash-resume binding)"
         )
+    # R2 Blocker 2: the seal must bind the ACTUAL observed book — the frozen set must be
+    # the real typed object, must hash-match the plan, and the expressions must cover the
+    # selected members EXACTLY (no foreign factor can ride a book's seal, no member can
+    # be silently dropped). The canonical component manifest is sealed into the claim and
+    # is the diagnostics leg's only component source.
+    from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet
+
+    if not isinstance(frozen_set, FrozenSelectionSet):
+        raise BookSealError(
+            f"frozen_set must be a FrozenSelectionSet (got {type(frozen_set).__name__}) — "
+            "the seal binds the actual observed book, not a look-alike"
+        )
+    if str(frozen_set.frozen_set_hash) != str(plan.frozen_set_hash):
+        raise BookSealError(
+            f"plan.frozen_set_hash {plan.frozen_set_hash!r} != frozen_set.frozen_set_hash "
+            f"{frozen_set.frozen_set_hash!r} — the plan and the observed set must be the same book"
+        )
+    sides_check = sides_from_frozen_set(frozen_set)   # raises on non-held-side directions
+    selected_ids = set(sides_check)
+    if not selected_ids:
+        raise BookSealError("frozen_set has no selected members")
+    if set(map(str, factor_exprs)) != selected_ids:
+        raise BookSealError(
+            f"factor_exprs must cover the frozen set EXACTLY: exprs={sorted(map(str, factor_exprs))} "
+            f"vs selected={sorted(selected_ids)}"
+        )
+    component_manifest = {
+        "components": {
+            sf.factor_id: {
+                "version": int(sf.version),
+                "definition_hash": str(sf.definition_hash),
+                "side": str(sf.expected_direction),
+                "expr": str(factor_exprs[sf.factor_id]),
+            }
+            for sf in frozen_set.selected
+        }
+    }
 
     identity = BookSealIdentity.from_plan(
         plan,
@@ -542,11 +630,13 @@ def run_book_sealed_evaluation(
     # The a6 authorization is consumed ONLY on a fresh spend attempt — a resume's
     # reservation already exists (resumed=True short-circuits the budget check), and
     # re-consuming a single-use authorization would wrongly refuse the recovery.
-    override_auth = None
+    if override_store is None:
+        override_store = OverrideAuthorizationStore(seal_store_dir)
     if multiplicity_override_id and not resuming:
-        if override_store is None:
-            override_store = OverrideAuthorizationStore(seal_store_dir)
-        override_auth = override_store.consume_authorization(
+        # consume-once (fresh spends only — a resume's reservation already exists);
+        # the reservation below RE-READS the consumed record from the store
+        # (require_consumed, request-bound) — caller input is never the authorization.
+        override_store.consume_authorization(
             kind="a6_multiplicity", override_id=multiplicity_override_id,
             oos_window_id=oos_window_id, scope_key=book_seal_key,
             consumed_by_request_hash=request_hash,
@@ -557,7 +647,8 @@ def run_book_sealed_evaluation(
         request_hash=request_hash, structural_family=str(structural_family),
         factor_ids=sorted(str(k) for k in factor_exprs), seal_mode=mode,
         virgin=virgin, warn_threshold=VIRGIN_WARN, hard_threshold=VIRGIN_HARD,
-        multiplicity_ack=multiplicity_ack, override_authorization=override_auth,
+        multiplicity_ack=multiplicity_ack, override_store=override_store,
+        multiplicity_override_id=str(multiplicity_override_id),
     )
 
     if not resuming:
@@ -588,6 +679,8 @@ def run_book_sealed_evaluation(
             oos_window_id=oos_window_id, provider_build_id=str(provider_build_id),
             calendar_policy_id=str(calendar_policy_id),
             seal_event_id=str(seal_event.get("event_id", "")),
+            book_plan_hash=plan.plan_hash,
+            component_manifest=component_manifest,
         )
     else:
         # the claim already happened; recover the recorded event (same-run, request-bound)
@@ -599,8 +692,6 @@ def run_book_sealed_evaluation(
             provider_build_id=str(provider_build_id),
             calendar_policy_id=str(calendar_policy_id), request_hash=request_hash,
         )
-
-    import json as _json
 
     import pandas as pd
 
@@ -614,34 +705,32 @@ def run_book_sealed_evaluation(
         design_hash=plan.plan_hash,
         allowed_start=pd.Timestamp(oos_start), allowed_end=pd.Timestamp(oos_end),
         provider_build_id=str(provider_build_id), calendar_policy_id=str(calendar_policy_id),
-        holdout_seal_claimed=True, seal_key=book_seal_key,
+        holdout_seal_claimed=True, seal_key=book_seal_key, request_hash=request_hash,
     )
-    with research_access_context(book_ctx):
-        state = str(artifact_store.current(book_seal_key).get("state"))
-        if state == "claimed":
-            # first (and only) execution of the book backtest for this request
-            book_metrics = book_backtest_fn()
-            if not isinstance(book_metrics, Mapping) or not book_metrics:
-                raise BookSealError(
-                    f"book_backtest_fn must return a non-empty metrics mapping, got "
-                    f"{type(book_metrics)!r}"
-                )
-            verdict = evaluate_pre_declared_bar(book_metrics, plan.pre_declared_bar)
-            artifact_store.persist_verdict(
-                book_seal_key=book_seal_key, request_hash=request_hash,
-                verdict=verdict.to_dict(),
+
+    def _validated_verdict(book_metrics) -> dict[str, Any]:
+        if not isinstance(book_metrics, Mapping) or not book_metrics:
+            raise BookSealError(
+                f"book_backtest_fn must return a non-empty metrics mapping, got "
+                f"{type(book_metrics)!r}"
             )
-            verdict_dict = verdict.to_dict()
-        else:
-            # verdict already persisted — IMMUTABLE; never call book_backtest_fn again
-            verdict_dict = _json.loads(str(artifact_store.current(book_seal_key)["book_verdict_json"]))
+        return evaluate_pre_declared_bar(book_metrics, plan.pre_declared_bar).to_dict()
+
+    with research_access_context(book_ctx):
+        # R2 Blocker 1: read-state → evaluate → persist is ATOMIC under the store's
+        # per-key lock — a concurrent same-key resume serializes and receives the
+        # persisted verdict; the backtest can never execute twice for one request.
+        verdict_dict = artifact_store.run_or_load_verdict(
+            book_seal_key=book_seal_key, request_hash=request_hash,
+            evaluator=book_backtest_fn, make_verdict=_validated_verdict,
+        )
 
         try:
             diagnostics = run_component_diagnostics_in_book_context(
-                book_seal_key=book_seal_key, book_plan_hash=plan.plan_hash,
-                frozen_set=frozen_set, factor_exprs=factor_exprs,
+                book_seal_key=book_seal_key, request_hash=request_hash,
+                artifact_store=artifact_store, seal_store=seal_store,
                 oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
-                seal_store=seal_store, horizon=horizon, n_quantiles=n_quantiles,
+                horizon=horizon, n_quantiles=n_quantiles,
                 component_weights=component_weights,
                 compute_metrics_fn=compute_metrics_fn, trade_cal=trade_cal,
             )

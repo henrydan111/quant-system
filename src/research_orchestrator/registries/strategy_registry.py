@@ -31,6 +31,23 @@ BOOK_SEAL_IDENTITY_FIELDS = (
 # Mandatory finite metrics per component-diagnostic row (mirrors book_seal's contract).
 _MANDATORY_DIAG_METRICS = ("oos_rank_icir", "oos_ls_sharpe")
 
+# R2 Major 1 — the governed-runner registry: a LIVE artifact is promotable only when its
+# governed_execution attestation names a runner registered HERE. The set is EMPTY until
+# the governed S6 book runner PR lands (which registers its id + attestation contract),
+# so every live artifact — including one hand-seeded into the stores — FAILS CLOSED at
+# the promotion gate. Do not add entries outside that PR.
+REGISTERED_GOVERNED_RUNNERS: frozenset[str] = frozenset()
+_GOVERNED_ATTESTATION_FIELDS = (
+    "runner_id",
+    "runner_version",
+    "execution_profile_id",
+    "execution_profile_hash",
+    "allowed_for_formal",
+    "return_type",
+    "max_gross_exposure",
+    "result_hash",
+)
+
 
 def _refuse(object_id: str, reason: str) -> None:
     raise PromotionGateError(
@@ -44,6 +61,7 @@ def assert_book_seal_promotion_evidence(
     registry_store: "StrategyRegistryStore",
     artifact_store,
     seal_store,
+    diagnostic_store=None,
     version: int | None = None,
 ) -> dict[str, Any]:
     """v1.4 A8 (post-R1-REWORK Blocker 2) — the book-seal wiring of the strategy
@@ -196,6 +214,66 @@ def assert_book_seal_promotion_evidence(
     action = str((artifact.get("multiplicity") or {}).get("action", ""))
     if action == "refuse_without_override":
         _refuse(label, "the artifact's governing multiplicity report is refuse_without_override")
+
+    # R2 Major 3: the diagnostic rows must EXIST in the durable StrategyComponentDiagnosticStore
+    # — artifact-embedded rows alone (with dangling record ids) are not evidence.
+    if diagnostic_store is not None:
+        ids = diag.get("diagnostic_record_ids")
+        if not isinstance(ids, list) or not ids:
+            _refuse(label, "component_diagnostics.diagnostic_record_ids is empty — the durable "
+                           "diagnostic rows were never written")
+        store_rows = diagnostic_store.list_all()
+        by_id = {str(r["record_id"]): r for _, r in store_rows.iterrows()} if not store_rows.empty else {}
+        seen_components = set()
+        for rid in ids:
+            row = by_id.get(str(rid))
+            if row is None:
+                _refuse(label, f"diagnostic record id {rid!r} does not exist in the "
+                               f"StrategyComponentDiagnosticStore — dangling evidence reference")
+            if str(row["book_seal_key"]) != key:
+                _refuse(label, f"diagnostic record {rid!r} belongs to book_seal_key "
+                               f"{row['book_seal_key']!r}, not {key!r}")
+            if str(row["request_hash"]) != str(artifact.get("request_hash", "")):
+                _refuse(label, f"diagnostic record {rid!r} belongs to a different request")
+            seen_components.add(str(row["component_factor_id"]))
+        artifact_components = {str(e.get("component_factor_id")) for e in rows_list}
+        if seen_components != artifact_components:
+            _refuse(label, f"durable diagnostic components {sorted(seen_components)} != the "
+                           f"artifact's {sorted(artifact_components)}")
+
+    # R2 Major 1 (LAST check, after every binding): a live artifact must carry a
+    # governed_execution attestation from a REGISTERED governed runner. The registry is
+    # empty until the S6 runner PR — every live artifact fails closed here until then.
+    governed = artifact.get("governed_execution")
+    if not isinstance(governed, Mapping) or not governed:
+        _refuse(label, "artifact carries no governed_execution attestation — a live artifact "
+                       "must be produced by a REGISTERED governed runner (none exist yet: the "
+                       "S6 runner PR adds the first); live artifacts fail closed until then")
+    missing_att = [f for f in _GOVERNED_ATTESTATION_FIELDS if str(governed.get(f, "")).strip() == ""]
+    if missing_att:
+        _refuse(label, f"governed_execution attestation missing {missing_att}")
+    runner_id = str(governed.get("runner_id", ""))
+    if runner_id not in REGISTERED_GOVERNED_RUNNERS:
+        _refuse(label, f"governed_execution.runner_id {runner_id!r} is not a REGISTERED governed "
+                       f"runner (registered: {sorted(REGISTERED_GOVERNED_RUNNERS) or 'NONE — S6 pending'}) "
+                       f"— fail-closed")
+    if governed.get("allowed_for_formal") is not True:
+        _refuse(label, "governed_execution.allowed_for_formal must be literally True")
+    if str(governed.get("return_type")) != "total_return":
+        _refuse(label, f"governed_execution.return_type must be 'total_return' "
+                       f"(got {governed.get('return_type')!r})")
+    try:
+        gross_ok = float(governed.get("max_gross_exposure")) <= 1.0
+    except (TypeError, ValueError):
+        gross_ok = False
+    if not gross_ok:
+        _refuse(label, f"governed_execution.max_gross_exposure must be <= 1.0 "
+                       f"(got {governed.get('max_gross_exposure')!r})")
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
+
+    if str(governed.get("result_hash")) != _phash({str(k): v for k, v in metrics.items()}):
+        _refuse(label, "governed_execution.result_hash does not recompute from the persisted "
+                       "book metrics — the attestation is not bound to this result")
     return artifact
 
 
@@ -277,11 +355,21 @@ class StrategyRegistryStore(TypedRegistryStore):
                 )
 
                 artifact_store = BookSealArtifactStore(book_artifact_dir)
+            # R2 Major 3: the durable diagnostic rows live alongside the artifact store
+            # (the runner writes both under ledger_root) — verified, not optional.
+            from src.alpha_research.factor_eval_skill.book_seal_stores import (
+                StrategyComponentDiagnosticStore,
+            )
+
+            diagnostic_store = StrategyComponentDiagnosticStore(
+                book_artifact_dir if book_artifact_dir else artifact_store.root_dir
+            )
             assert_book_seal_promotion_evidence(
                 object_id=str(object_id),
                 registry_store=self,
                 artifact_store=artifact_store,
                 seal_store=seal_store,
+                diagnostic_store=diagnostic_store,
                 version=version,
             )
         return super().set_status(

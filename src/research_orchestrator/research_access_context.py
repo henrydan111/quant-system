@@ -112,6 +112,10 @@ class ResearchAccessContext:
     # as before. A FrozenSelectionSet-driven OOS run carries frozen_set_hash here so
     # the reported seal identity matches the seal_key the claim was made under.
     seal_key: str = ""
+    # PR3 R2 (Blocker 3): the ONE-evaluation request this context serves. A book's
+    # diagnostics leg verifies it against the canonical claim, so a context borrowed
+    # for a different evaluation of the same key cannot authorize reads. "" = legacy.
+    request_hash: str = ""
     allowed_fields: Optional[frozenset[str]] = None
 
     @property

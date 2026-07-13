@@ -70,6 +70,11 @@ class BookSealArtifactStore(AppendOnlyStore):
         "provider_build_id",
         "calendar_policy_id",
         "seal_event_id",
+        # R2 Blocker 2/3: the claim SEALS the actual observed book — plan hash + the
+        # canonical component manifest (selected factors + expressions). The diagnostics
+        # leg loads THIS manifest; caller-supplied component args are never trusted.
+        "book_plan_hash",
+        "component_manifest_json",
         "book_verdict_json",
         "book_verdict_hash",
         "artifact_json",
@@ -85,6 +90,74 @@ class BookSealArtifactStore(AppendOnlyStore):
         if frame.empty:
             return None
         return frame.iloc[-1].to_dict()
+
+    def _key_lock_path(self, book_seal_key: str):
+        return self.root_dir / f"{self.FILENAME}.key.{str(book_seal_key)[:40]}.lock"
+
+    def run_or_load_verdict(
+        self,
+        *,
+        book_seal_key: str,
+        request_hash: str,
+        evaluator,
+        make_verdict,
+    ) -> dict[str, Any]:
+        """R2 Blocker 1 — the ONE-execution guarantee under concurrency: the read-state →
+        evaluate → persist sequence runs under a PER-KEY file lock, so two same-key
+        resume processes serialize; the second reads ``verdict_persisted`` and RETURNS
+        the persisted verdict without ever calling the evaluator. The lock is per
+        ``book_seal_key`` (a long backtest never blocks other books; the short append
+        inside ``persist_verdict`` takes the store-wide lock nested within — consistent
+        ordering, no deadlock).
+
+        States: ``claimed`` → run ``evaluator()`` once, ``make_verdict(metrics)``,
+        persist, return; ``verdict_persisted`` / ``diagnostics_failed`` → return the
+        persisted verdict; ``complete`` / missing / request mismatch → refuse."""
+        with file_lock(self._key_lock_path(book_seal_key)):
+            cur = self.current(book_seal_key)
+            if cur is None:
+                raise BookSealStoreError(f"no open claim for book_seal_key {book_seal_key}")
+            if str(cur.get("request_hash")) != str(request_hash):
+                raise BookSealStoreError(
+                    f"request_hash mismatch for {book_seal_key}: {request_hash!r} vs the claim's "
+                    f"{cur.get('request_hash')!r}"
+                )
+            state = str(cur.get("state"))
+            if state == "complete":
+                raise BookSealStoreError(
+                    f"book_seal_key {book_seal_key} is COMPLETE — never re-evaluated"
+                )
+            if state in ("verdict_persisted", "diagnostics_failed"):
+                return json.loads(str(cur["book_verdict_json"]))
+            # state == "claimed": the ONE execution, inside the key lock — a concurrent
+            # same-key resume blocks here and then takes the persisted branch above.
+            metrics = evaluator()
+            verdict = make_verdict(metrics)
+            self.persist_verdict(
+                book_seal_key=book_seal_key, request_hash=request_hash, verdict=verdict
+            )
+            return dict(verdict)
+
+    def load_component_manifest(
+        self, *, book_seal_key: str, request_hash: str
+    ) -> dict[str, Any]:
+        """The SEALED component manifest recorded at claim time (R2 B2/B3) — the only
+        source of truth for which factors/expressions the book's diagnostics may
+        observe. Refuses when absent or when the request does not match."""
+        cur = self.current(book_seal_key)
+        if cur is None:
+            raise BookSealStoreError(f"no claim for book_seal_key {book_seal_key}")
+        if str(cur.get("request_hash")) != str(request_hash):
+            raise BookSealStoreError(
+                f"component manifest request_hash mismatch for {book_seal_key}"
+            )
+        raw = str(cur.get("component_manifest_json") or "")
+        if not raw.strip():
+            raise BookSealStoreError(
+                f"claim for {book_seal_key} carries no component manifest — pre-R2 claims "
+                "cannot run diagnostics; re-open under the current contract"
+            )
+        return json.loads(raw)
 
     def _append_locked_row(self, row: dict[str, Any]) -> dict[str, Any]:
         """Append one pre-validated row; caller MUST already hold ``self.lock_path``."""
@@ -109,6 +182,8 @@ class BookSealArtifactStore(AppendOnlyStore):
         provider_build_id: str,
         calendar_policy_id: str,
         seal_event_id: str,
+        book_plan_hash: str = "",
+        component_manifest: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not str(book_seal_key).strip() or not str(request_hash).strip():
             raise BookSealStoreError("open_claim requires non-blank book_seal_key + request_hash")
@@ -131,6 +206,10 @@ class BookSealArtifactStore(AppendOnlyStore):
                     "provider_build_id": str(provider_build_id),
                     "calendar_policy_id": str(calendar_policy_id),
                     "seal_event_id": str(seal_event_id),
+                    "book_plan_hash": str(book_plan_hash),
+                    "component_manifest_json": (
+                        canonical_json(dict(component_manifest)) if component_manifest else ""
+                    ),
                 }
             )
 
@@ -313,6 +392,52 @@ class OverrideAuthorizationStore(AppendOnlyStore):
             frame = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
             _atomic_write_dataframe(frame, self.log_path)
             return row
+
+    def require_consumed(
+        self,
+        *,
+        kind: str,
+        override_id: str,
+        oos_window_id: str,
+        scope_key: str,
+        consumed_by_request_hash: str = "",
+    ) -> dict[str, Any]:
+        """R2 Blocker 5 — the READ-side verifier: proves a CONSUMED authorization row
+        exists IN THE STORE matching kind + id + window + scope (+ the consuming
+        request when given). Used by the ledger's reservation so a caller-shaped dict
+        can never stand in for an authorization. Fail-closed on any mismatch."""
+        if kind not in OVERRIDE_KINDS:
+            raise BookSealStoreError(f"kind must be one of {OVERRIDE_KINDS}, got {kind!r}")
+        frame = self._load()
+        mine = frame[
+            (frame["kind"].astype("string") == kind)
+            & (frame["override_id"].astype("string") == str(override_id))
+            & (frame["action"].astype("string") == "consumed")
+        ]
+        if mine.empty:
+            raise BookSealStoreError(
+                f"no CONSUMED {kind} authorization {override_id!r} exists in the store — "
+                "caller input is never an authorization"
+            )
+        record = mine.iloc[-1].to_dict()
+        if str(record.get("oos_window_id")) != str(oos_window_id):
+            raise BookSealStoreError(
+                f"consumed authorization {override_id!r} is bound to window "
+                f"{record.get('oos_window_id')!r}, not {oos_window_id!r}"
+            )
+        if str(record.get("scope_key")) != str(scope_key):
+            raise BookSealStoreError(
+                f"consumed authorization {override_id!r} is bound to scope "
+                f"{record.get('scope_key')!r}, not {scope_key!r}"
+            )
+        if consumed_by_request_hash and str(
+            record.get("consumed_by_request_hash") or ""
+        ) != str(consumed_by_request_hash):
+            raise BookSealStoreError(
+                f"authorization {override_id!r} was consumed by request "
+                f"{record.get('consumed_by_request_hash')!r}, not {consumed_by_request_hash!r}"
+            )
+        return record
 
     def consume_authorization(
         self,

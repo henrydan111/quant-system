@@ -238,6 +238,7 @@ def reproduce_sealed_oos(
     seal_store=None,
     trade_cal=None,
     fresh_window_override_id: str = "",
+    ledger_root: str | Path | None = None,
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
@@ -329,6 +330,24 @@ def reproduce_sealed_oos(
                 override_id=str(fresh_window_override_id),
                 oos_window_id=f"{oos_start}..{oos_end}",
                 scope_key=str(seal_hash),
+            )
+            # R2 Blocker 4: the A5 spend enters the A6 budget denominator HERE — the
+            # lowest shared claim point — atomically BEFORE the claim, so a direct
+            # import can never consume an authorization + claim a virgin seal without
+            # the spend being ledgered. Fail-closed: no ledger_root, no virgin claim.
+            if not ledger_root:
+                raise PromotionEvidenceError(
+                    "a virgin-window A5 claim requires ledger_root (the A6 "
+                    "OosWindowLedgerStore root) so the spend is reserved BEFORE the "
+                    "claim — refusing an unledgered virgin observation"
+                )
+            from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
+
+            OosWindowLedgerStore(ledger_root).reserve_a5_study_spend(
+                oos_window_id=f"{oos_start}..{oos_end}",
+                frozen_set_hash=str(seal_hash),
+                override_id=str(fresh_window_override_id),
+                factor_ids=sorted(str(k) for k in factor_exprs),
             )
         if seal_store is None:
             from src.research_orchestrator.holdout_seal import HoldoutSealStore

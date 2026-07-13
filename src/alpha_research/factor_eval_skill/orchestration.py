@@ -471,7 +471,7 @@ def cmd_seal(
     qlib_dir: str = "", horizon: int = 20, n_quantiles: int = 10,
     metric: str = "rank_icir", neutralization: str = "none", rebalance: str = "20d",
     portfolio_side: str = "long_short", created_by: str = "factor-eval",
-    multiplicity_ack: bool = False, multiplicity_override: bool = False,
+    multiplicity_ack: bool = False, multiplicity_override_id: str = "",
     fresh_window_override_id: str = "",
 ) -> dict:
     # dryrun REMOVED (GPT re-review): it ran the real OOS reproduction under a run-local seal — an
@@ -534,7 +534,21 @@ def cmd_seal(
             "live seal requires a global holdout_seal_root (the cross-run single-shot store) — "
             "refusing a run-local live seal that would not enforce the OOS budget across runs"
         )
-    _enforce_multiplicity_action(report, ack=multiplicity_ack, override=multiplicity_override)  # (#7)
+    # R2 Blocker 5: the multiplicity override is a pre-recorded, consume-once a6
+    # AUTHORIZATION (OverrideAuthorizationStore at the global holdout root), never a
+    # boolean — an invented id refuses here, before any OOS access.
+    override_ok = False
+    if str(multiplicity_override_id).strip():
+        from src.alpha_research.factor_eval_skill.book_seal_stores import (
+            OverrideAuthorizationStore,
+        )
+
+        OverrideAuthorizationStore(str(ctx.holdout_seal_root)).consume_authorization(
+            kind="a6_multiplicity", override_id=str(multiplicity_override_id),
+            oos_window_id=oos_window_id, scope_key=fs.frozen_set_hash,
+        )
+        override_ok = True
+    _enforce_multiplicity_action(report, ack=multiplicity_ack, override=override_ok)  # (#7)
     # v1.4 A5 (PR3): a FRESH/virgin (post-2026-02-27) window through this FACTOR-LEVEL path is an
     # A5 signal-replication study — it requires a fresh_window_signal_replication_override_id
     # recorded BEFORE access, burns the window for overlapping downstream books, and is counted
@@ -550,34 +564,33 @@ def cmd_seal(
                 "through book_seal.run_book_sealed_evaluation"
             )
         virgin_report = virgin_window_multiplicity(
-            ledger, oos_window_id, override_recorded=multiplicity_override, pending_self=True
+            ledger, oos_window_id, override_recorded=override_ok, pending_self=True
         )
         if virgin_report.action == ACTION_REFUSE:
             raise FactorEvalError(
                 f"virgin-window budget HARD STOP (n_spent={virgin_report.n_spent}): a user-signed "
-                f"multiplicity override must be recorded BEFORE the spend (A6). {virgin_report.note}"
+                f"a6_multiplicity authorization must be recorded+consumed BEFORE the spend (A6). "
+                f"{virgin_report.note}"
             )
-        _enforce_multiplicity_action(virgin_report, ack=multiplicity_ack, override=multiplicity_override)
+        _enforce_multiplicity_action(virgin_report, ack=multiplicity_ack, override=override_ok)
     _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
     seal_root = str(ctx.holdout_seal_root)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
+    # R2 Blocker 4: the A5 virgin spend is RESERVED inside reproduce_sealed_oos (the lowest
+    # shared claim point) against THIS ledger, atomically before the claim — cmd_seal no
+    # longer carries the sole after-the-fact accounting for virgin windows.
     result = run_sealed_oos(
         frozen_set=fs, factor_exprs=exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
         seal_root=seal_root, run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
         fresh_window_override_id=fresh_window_override_id,
+        ledger_root=str(ctx.store_root),
     )
     verdict = result["verdict"]
-    # record the window-tag ledger AFTER the global claim succeeds, so a pre-claim failure does
-    # NOT overcount a failed attempt (GPT re-verify operational note). A virgin-window spend is
-    # recorded as an A5 STUDY row (override id bound, counts against the A6 budget).
-    if virgin:
-        ledger.record_study_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
-                                  override_id=str(fresh_window_override_id),
-                                  evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids,
-                                  seal_mode="live")
-    else:
+    # burned windows keep the legacy post-claim record (pre-claim failure never overcounts);
+    # virgin windows were already reserved pre-claim inside reproduce_sealed_oos.
+    if not virgin:
         ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
                             evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids,
                             seal_mode="live")

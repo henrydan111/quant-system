@@ -363,6 +363,8 @@ class TestPromotionGuardBindings:
             },
             seal_store=self._StubSealStoreBoom(),
             fresh_window_override_id=fresh_window_override_id,
+            # PR3 R2 B4: a virgin claim must reserve its A5 spend in the A6 ledger first
+            ledger_root="data/_r4_test_seal",
         )
 
     @staticmethod

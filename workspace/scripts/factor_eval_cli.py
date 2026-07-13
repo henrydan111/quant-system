@@ -94,7 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     sl.add_argument("--portfolio-side", default="long_short",
                     choices=["long_short", "long_only", "short_only", "market_neutral"])
     sl.add_argument("--multiplicity-ack", action="store_true", help="acknowledge the OOS-window multiplicity (warn band)")
-    sl.add_argument("--multiplicity-override", action="store_true", help="override the OOS-window multiplicity hard band")
+    sl.add_argument("--multiplicity-override-id", default="",
+                    help="a PRE-RECORDED consume-once a6_multiplicity authorization id (OverrideAuthorizationStore) — booleans cannot lift the hard band (PR3 R2 B5)")
+    sl.add_argument("--fresh-window-override-id", default="",
+                    help="a PRE-RECORDED consume-once a5_fresh_window authorization id, required for any live seal on a virgin (post-2026-02-27) window")
     return ap
 
 
@@ -127,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
             out = cmd_seal(ctx, mode=args.mode, oos_start=args.oos_start, oos_end=args.oos_end,
                            qlib_dir=args.qlib_dir, horizon=args.horizon, n_quantiles=args.n_quantiles,
                            portfolio_side=args.portfolio_side, multiplicity_ack=args.multiplicity_ack,
-                           multiplicity_override=args.multiplicity_override)
+                           multiplicity_override_id=args.multiplicity_override_id,
+                           fresh_window_override_id=args.fresh_window_override_id)
         else:  # pragma: no cover
             raise FactorEvalError(f"unknown command {args.cmd}")
         print(json.dumps(out, indent=2, default=str))
