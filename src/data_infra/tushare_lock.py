@@ -50,35 +50,27 @@ class LockIdentityError(RuntimeError):
     identity is unknowable the safe action is to not mutate the store at all)."""
 
 
-def _resolve_lock_root(source_root: Path) -> Path:
-    """Repo-scoped lock root for the ACCOUNT-level lock (api_call_lock + rate spacing):
-    the git COMMON dir's parent — identical for every worktree of a repo, equal to the
-    checkout root for a plain clone. Best-effort by design (the Tushare account is a
-    per-machine resource, not a per-store one); data-store-guarding locks use
-    :func:`_resolve_data_lock_dir` instead, which is FAIL-CLOSED."""
-    import logging
-    import subprocess
-    try:
-        # git emits UTF-8 bytes; text=True would decode with the locale codepage (cp936 on
-        # this host) and MANGLE non-ASCII path components (the real repo root contains
-        # Chinese characters) — decode explicitly.
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=str(source_root), stderr=subprocess.DEVNULL,
-        ).decode("utf-8").strip()
-        common = Path(out)
-        if not common.is_absolute():
-            common = (source_root / common).resolve()
-        return common.parent
-    except Exception:  # noqa: BLE001 — degraded per-checkout namespace, loudly
-        logging.getLogger(__name__).warning(
-            "git common-dir resolution failed under %s — the ACCOUNT lock namespace "
-            "degrades to this checkout only.", source_root,
-        )
-        return source_root
-
-
-_LOCK_DIR = _resolve_lock_root(_SOURCE_ROOT) / "logs" / "locks"
+def _resolve_account_lock_dir(source_root: Path) -> Path:
+    """Lock directory for the ACCOUNT-level lock (api_call_lock + rate-spacing state):
+    a stable PER-USER directory keyed by an irreversible fingerprint of the Tushare
+    token (GPT re-review #4 Major: repo/checkout-anchored namespaces let two independent
+    clones on one machine call the SAME account concurrently). Token resolution: the
+    TUSHARE_TOKEN env var, else the checkout's .env file; no token resolves to the
+    conservative shared 'no_token' namespace (all no-token processes serialize)."""
+    import hashlib
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        env_file = source_root / ".env"
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("TUSHARE_TOKEN=") and not line.startswith("#"):
+                    token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+        except OSError:
+            token = ""
+    fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16] if token else "no_token"
+    return Path.home() / ".quant_tushare_locks" / fingerprint
 
 
 def _resolve_data_lock_dir(source_root: Path) -> Path:
@@ -113,14 +105,19 @@ def _resolve_data_lock_dir(source_root: Path) -> Path:
         ) from exc
 
 
-def _lock_dir() -> Path:
-    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    return _LOCK_DIR
-
-
-# Resolved lazily from config.yaml storage.data_root (see _resolve_data_lock_dir). Tests
-# inject isolation by assigning this module attribute directly (a Path), never via env.
+# Resolved lazily (see the _resolve_* functions). Tests inject isolation by assigning
+# these module attributes directly (a Path), never via env.
+_ACCOUNT_LOCK_DIR = None
 _DATA_LOCK_DIR = None
+
+
+def _account_lock_dir() -> Path:
+    global _ACCOUNT_LOCK_DIR
+    if _ACCOUNT_LOCK_DIR is None:
+        _ACCOUNT_LOCK_DIR = _resolve_account_lock_dir(_SOURCE_ROOT)
+    d = Path(_ACCOUNT_LOCK_DIR)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _data_lock_dir() -> Path:
@@ -132,13 +129,44 @@ def _data_lock_dir() -> Path:
     return d
 
 
-def _filelock(name: str, timeout: float) -> FileLock:
-    return FileLock(str(_lock_dir() / name), timeout=timeout)
+def _resolve_provider_lock_path(source_root: Path, qlib_dir=None) -> Path:
+    """Lock FILE for the provider-publish lock, keyed by the CANONICAL LIVE PROVIDER
+    directory itself (GPT re-review #4 P0: config permits storage.qlib_data_dir to live
+    apart from storage.data_root — keying off the raw root gave two checkouts targeting
+    ONE provider two different locks). The lock file sits ADJACENT to the provider
+    (never inside it — the tree is what gets swapped), named after the provider dir.
+    ``qlib_dir`` overrides config resolution (the builder passes the exact tree it
+    swaps); an unresolvable identity raises :class:`LockIdentityError`."""
+    if qlib_dir is None:
+        try:
+            import yaml
+            with open(source_root / "config.yaml", "r", encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh) or {}
+            raw = ((cfg.get("storage") or {}).get("qlib_data_dir"))
+            if not raw or not str(raw).strip():
+                raise LockIdentityError(
+                    f"config.yaml under {source_root} declares no storage.qlib_data_dir — "
+                    "cannot derive the provider lock identity; refusing (fail closed)."
+                )
+            qlib_dir = Path(str(raw))
+            if not qlib_dir.is_absolute():
+                qlib_dir = source_root / qlib_dir
+        except LockIdentityError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LockIdentityError(
+                f"cannot resolve storage.qlib_data_dir from {source_root / 'config.yaml'}: "
+                f"{exc} — the provider lock refuses (fail closed)."
+            ) from exc
+    q = Path(qlib_dir).resolve()
+    lock_dir = q.parent / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f"provider_publish__{q.name}.lock"
 
 
 @contextmanager
 def api_call_lock(timeout: float = 1800.0):
-    with _filelock("tushare_api.lock", timeout):
+    with FileLock(str(_account_lock_dir() / "tushare_api.lock"), timeout=timeout):
         yield
 
 
@@ -156,18 +184,19 @@ def raw_maintenance_lock(timeout: float = 21600.0):  # 6h default — a monthly 
 
 
 @contextmanager
-def provider_publish_lock(timeout: float = 7200.0):
+def provider_publish_lock(timeout: float = 7200.0, qlib_dir=None):
     """Process-exclusive LIVE-provider publish/swap + manifest writes (Phase 5-B B3; GPT
-    re-review Blocker 7 made this a GLOBAL publish lock, not a driver-private one; re-review
-    #3 P0 anchored its identity to the SHARED DATA ROOT — ``<data_root>/.locks/`` — so two
-    independent clones configured onto one store share ONE lock; an unresolvable identity
-    raises :class:`LockIdentityError` and the publish REFUSES, never proceeds under a
-    private namespace).
+    re-review Blocker 7 made this a GLOBAL publish lock; re-review #4 P0 keyed its identity
+    to the CANONICAL LIVE PROVIDER DIRECTORY itself — the lock file sits adjacent to the
+    provider (``<qlib_parent>/.locks/provider_publish__<qlib_name>.lock``), so ANY checkout
+    targeting the same provider shares ONE lock even when their raw data roots differ; an
+    unresolvable identity raises :class:`LockIdentityError` and the publish REFUSES).
 
     Held at the COMMON CHOKEPOINTS — ``StagedQlibBackendBuilder.publish()`` and the
-    ``provider_build.json`` emitters in ``provider_manifest`` acquire it themselves — so ANY
-    sanctioned publisher/manifest writer excludes any other, whichever entrypoint invoked it.
-    The monthly transaction additionally holds it across its whole verify->swap->rebind scope.
+    ``provider_build.json`` emitters pass the exact ``qlib_dir`` they mutate — so ANY
+    sanctioned publisher/manifest writer excludes any other, whichever entrypoint invoked
+    it. The monthly transaction additionally holds it across its whole
+    verify->swap->rebind scope.
 
     REENTRANT within a process/thread: the underlying ``FileLock`` is a per-path SINGLETON
     (``is_singleton=True``; verified on filelock 3.25.2 — same instance, counted acquire), so
@@ -175,7 +204,8 @@ def provider_publish_lock(timeout: float = 7200.0):
     deadlocking, while a second process still blocks. LOCK ORDER: any holder that also needs
     ``raw_maintenance_lock`` acquires raw FIRST, then this; publish-lock-only holders (the
     builder/emitters) never take the raw lock afterwards — no reverse-order path exists."""
-    lock = FileLock(str(_data_lock_dir() / "provider_publish.lock"), is_singleton=True)
+    lock = FileLock(str(_resolve_provider_lock_path(_SOURCE_ROOT, qlib_dir=qlib_dir)),
+                    is_singleton=True)
     lock.acquire(timeout=timeout)
     try:
         yield
@@ -183,9 +213,10 @@ def provider_publish_lock(timeout: float = 7200.0):
         lock.release()
 
 
-# ── global cross-process rate spacing (a shared next-allowed timestamp, held under the API lock) ──
+# ── global cross-process rate spacing (a shared next-allowed timestamp, held under the API lock;
+# lives in the PER-ACCOUNT namespace so independent clones share one spacing state) ──
 def _next_allowed_path() -> Path:
-    return _lock_dir() / "tushare_next_allowed.txt"
+    return _account_lock_dir() / "tushare_next_allowed.txt"
 
 
 def _read_next_allowed() -> tuple[float | None, bool]:
@@ -211,7 +242,7 @@ def _set_next_allowed(delta: float) -> bool:
     persisted, so the caller enforces the spacing IN-BAND (sleep while holding the API lock) rather than
     silently dropping it (GPT minor 1)."""
     try:
-        d = _lock_dir()
+        d = _account_lock_dir()
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".next_allowed.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:

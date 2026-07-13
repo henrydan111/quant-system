@@ -97,7 +97,7 @@ def test_locked_pro_routes_calls_and_refuses_raw_escape(tmp_path, monkeypatch):
     import pytest
     from data_infra import tushare_lock
     from data_infra.fetchers import _LockedPro
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
+    monkeypatch.setattr(tushare_lock, "_ACCOUNT_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
 
     captured = []
 

@@ -4629,11 +4629,11 @@ class StagedQlibBackendBuilder:
         """
         # Phase 5-B B7: the GLOBAL provider-publish lock is acquired HERE, at the common
         # chokepoint, so every sanctioned publisher excludes every other regardless of
-        # entrypoint. Reentrant (per-path singleton FileLock — shared across the dual
-        # src./plain namespaces) — the monthly transaction already holding it nests
-        # without deadlock. Sibling-relative import resolves under either namespace root.
+        # entrypoint. Keyed by the EXACT provider dir this publish swaps (re-review #4
+        # P0). Reentrant (per-path singleton FileLock — shared across the dual src./plain
+        # namespaces) — the monthly transaction already holding it nests without deadlock.
         from .tushare_lock import provider_publish_lock
-        with provider_publish_lock():
+        with provider_publish_lock(qlib_dir=self.paths.qlib_dir):
             self._publish_locked(
                 calendar_policy_id=calendar_policy_id,
                 emit_manifest=emit_manifest,

@@ -443,7 +443,7 @@ def _write_manifest_locked(qlib_dir: Path, manifest: ProviderManifest) -> Path:
     from .tushare_lock import provider_publish_lock
 
     target = manifest_path_for(qlib_dir)
-    with provider_publish_lock():
+    with provider_publish_lock(qlib_dir=qlib_dir):
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
         with open(tmp, "w", encoding="utf-8") as handle:

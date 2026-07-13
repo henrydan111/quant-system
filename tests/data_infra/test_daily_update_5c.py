@@ -213,7 +213,7 @@ def test_spaced_call_fails_closed_when_state_unwritable(tmp_path, monkeypatch):
     # GPT minor 1: if the shared next-allowed timestamp can't be persisted, spacing must be enforced
     # IN-BAND (sleep under the API lock), never silently dropped to zero.
     import time as _time
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
+    monkeypatch.setattr(tushare_lock, "_ACCOUNT_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
     monkeypatch.setattr(tushare_lock, "_set_next_allowed", lambda delta: False)  # simulate unwritable
     t0 = _time.time()
     tushare_lock.spaced_call(lambda: "ok", 0.4)
@@ -224,7 +224,7 @@ def test_spaced_call_fails_closed_on_nan_state(tmp_path, monkeypatch):
     # GPT REWORK-5 minor 1: a state file containing `nan` parses via float() but makes delay>0 False and
     # fires immediately. isfinite-guard must force the conservative in-band sleep.
     import time as _time
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")
+    monkeypatch.setattr(tushare_lock, "_ACCOUNT_LOCK_DIR", tmp_path / "locks")
     (tmp_path / "locks").mkdir(parents=True)
     tushare_lock._next_allowed_path().write_text("nan")
     t0 = _time.time()

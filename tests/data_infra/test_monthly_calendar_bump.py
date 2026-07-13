@@ -550,8 +550,10 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     monkeypatch.setattr(mcb, "RAW_MANIFEST_PATH", out / "raw_input_manifest.json")
     monkeypatch.setattr(mcb, "PUBLISH_RECORD_PATH", out / "publish_record.json")
     monkeypatch.setattr(mcb, "TRANSACTION_JOURNAL_PATH", out / "publish_transaction_journal.json")
-    monkeypatch.setattr(mcb, "TRANSACTION_INTENT_PATH", out / "publish_intent.json")
     monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: qa_rc)
+    monkeypatch.setattr(mcb, "_live_paths",
+                        lambda: _types.SimpleNamespace(data_root=str(root / "data"),
+                                                       qlib_dir=str(root / "data" / "qlib_data")))
     import data_infra.tushare_lock as _tl
     monkeypatch.setattr(_tl, "_DATA_LOCK_DIR", root / "locks")
 
@@ -578,6 +580,11 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     (staged / "features" / "000001_sz").mkdir(parents=True)
     (staged / "features" / "000001_sz" / "close.day.bin").write_bytes(b"\x01\x02\x03\x04")
     (staged / "STAGED_MARKER.txt").write_text("child", encoding="utf-8")
+    # a payload file that shares the control-plane BASENAME (re-review #4 P0: the seal
+    # exemption must be by exact relpath, not name)
+    (staged / "metadata" / "audit_payload").mkdir(parents=True)
+    (staged / "metadata" / "audit_payload" / "publish_state.json").write_text(
+        '{"decoy": true}', encoding="utf-8")
     (data / "qlib_builds" / new_pb / "manifest.json").write_text("{}", encoding="utf-8")
 
     # the minted policy the report points at
@@ -611,7 +618,6 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     raw.write_bytes(b"CAL0")
     manifest = mcb._full_raw_manifest(data)
     (out / "raw_input_manifest.json").write_text(_json.dumps(manifest), encoding="utf-8")
-    (staged / "metadata").mkdir()
     (staged / "metadata" / "raw_input_manifest.json").write_text(
         _json.dumps(manifest), encoding="utf-8")
 
@@ -1150,7 +1156,7 @@ def test_publish_systemexit_right_after_swap_rolls_back_via_disk_truth(tmp_path,
     assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
     assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
     assert (env.staged / "STAGED_MARKER.txt").exists()
-    intent = _json.loads((env.out / "publish_intent.json").read_text(encoding="utf-8"))
+    intent = _json.loads(mcb._intent_path().read_text(encoding="utf-8"))
     assert intent["status"] == "aborted"
 
 
@@ -1192,11 +1198,157 @@ def test_ready_seal_blocks_later_writes(tmp_path, monkeypatch):
         (env.qlib / "features" / "000001_sz" / "close.day.bin").write_bytes(b"\x0c\x0c\x0c\x0c")
 
 
-def test_unresolved_intent_blocks_new_publish(tmp_path, monkeypatch):
+def test_unresolved_intent_blocks_new_publish_cross_checkout(tmp_path, monkeypatch):
+    # Re-review #4 P0: the intent journal lives in the STORE's transaction dir (adjacent
+    # to the provider), so a hard crash in ANY checkout blocks a publish from EVERY
+    # checkout sharing the store — never checkout-local workspace state.
     env = _publish_env(tmp_path, monkeypatch)
     mcb._write_intent({"transaction_id": "deadbeef", "status": "swapping"})
+    assert mcb._intent_path().is_relative_to(env.data), \
+        "the intent journal must live inside the shared store, not the checkout workspace"
     assert mcb.phase_publish(_PubArgs()) == 2
     _assert_untouched(env)
+
+
+# ── GPT re-review #3 probes (record forge / seal relpath / restore interrupt / locks) ─
+def test_finalize_refuses_forged_record(tmp_path, monkeypatch):
+    # P0 probe: after qa_failed, forge ONE approval to another build AND rewrite the
+    # per-transaction record's approvals_post_rebind_root to the new current root. The
+    # marker's pinned record digest breaks -> tamper-class refusal (suspect), never ready.
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6
+    forged = env.a2.read_text(encoding="utf-8").replace(env.new_pb, "forged_other_build")
+    env.a2.write_text(forged, encoding="utf-8")
+    marker = _json.loads((env.qlib / "metadata" / "publish_state.json").read_text(encoding="utf-8"))
+    record_file = env.data / "qlib_transactions" / f"publish_record_{marker['transaction_id']}.json"
+    record = _json.loads(record_file.read_text(encoding="utf-8"))
+    record["approvals_post_rebind_root"] = mcb._approvals_attestation()["root"]
+    record_file.write_text(_json.dumps(record, indent=1), encoding="utf-8")
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 5
+    assert _publish_state_of(env.qlib) == "suspect", "a forged record must quarantine, not certify"
+
+
+def test_finalize_refuses_binding_drift_even_with_consistent_forge(tmp_path, monkeypatch):
+    # P0 probe (deeper): the attacker ALSO re-pins the marker's record_sha256 so the
+    # digest check passes — the SEMANTIC binding evaluation still catches the approval
+    # bound to a foreign build. No root-equality shortcut can fake it.
+    import hashlib as _hl
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6
+    forged = env.a2.read_text(encoding="utf-8").replace(env.new_pb, "forged_other_build")
+    env.a2.write_text(forged, encoding="utf-8")
+    marker_path = env.qlib / "metadata" / "publish_state.json"
+    marker = _json.loads(marker_path.read_text(encoding="utf-8"))
+    record_file = env.data / "qlib_transactions" / f"publish_record_{marker['transaction_id']}.json"
+    record = _json.loads(record_file.read_text(encoding="utf-8"))
+    record["approvals_post_rebind_root"] = mcb._approvals_attestation()["root"]
+    record_bytes = _json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8")
+    record_file.write_bytes(record_bytes)
+    marker["record_sha256"] = _hl.sha256(record_bytes).hexdigest()
+    marker_path.write_text(_json.dumps(marker, indent=1), encoding="utf-8")
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 5
+    assert _publish_state_of(env.qlib) == "suspect"
+    steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
+    bad = [s for s in steps if s["status"] == "refused_suspect"]
+    assert bad and any("binding" in p for p in bad[0]["problems"])
+
+
+def test_seal_covers_nested_control_plane_basename_and_build_manifest(tmp_path, monkeypatch):
+    # P0 probe: a payload file NAMED publish_state.json in a nested dir was previously
+    # exempt (basename comparison) and writable after ready; the exemption is now the
+    # exact relpath. The external build manifest (part of the attestation) seals too.
+    env = _publish_env(tmp_path, monkeypatch)
+    assert mcb.phase_publish(_PubArgs()) == 0
+    decoy = env.qlib / "metadata" / "audit_payload" / "publish_state.json"
+    with pytest.raises(PermissionError):
+        decoy.write_text('{"tampered": true}', encoding="utf-8")
+    with pytest.raises(PermissionError):
+        (env.data / "qlib_builds" / env.new_pb / "manifest.json").write_text("{}", encoding="utf-8")
+    # the REAL control-plane marker stays writable
+    mcb._write_publish_state(env.qlib, "ready", env.new_pb)
+
+
+def test_restore_parent_interrupt_rolls_back_partial_rebind(tmp_path, monkeypatch):
+    # P0 probe: KeyboardInterrupt between the two REVERSE approval writes previously left
+    # a half-rebound child live and the built-in recovery refused. The restore domain is
+    # now BaseException-safe: partial reverse writes are undone (byte-verified) so
+    # --restore-parent can simply be re-run.
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6  # quarantined child live
+    a1_child, a2_child = env.a1.read_bytes(), env.a2.read_bytes()
+    real = mcb._atomic_write_bytes
+    seen: list[Path] = []
+
+    def interrupt_second_reverse(path, data):
+        p = Path(path)
+        if p.parent == env.root / "approvals" and p.suffix == ".yaml":
+            seen.append(p)
+            if len(seen) == 2:
+                raise KeyboardInterrupt("probe: Ctrl-C mid reverse rebind")
+        real(path, data)
+
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", interrupt_second_reverse)
+    with pytest.raises(KeyboardInterrupt):
+        mcb.phase_restore_parent(_PubArgs())
+    assert env.a1.read_bytes() == a1_child and env.a2.read_bytes() == a2_child, \
+        "partial reverse writes must be undone — approvals uniformly child-bound again"
+    assert (env.qlib / "STAGED_MARKER.txt").exists(), "child still live (restore aborted cleanly)"
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", real)
+    assert mcb.phase_restore_parent(_PubArgs()) == 0, "the restore must be re-runnable"
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+
+
+def test_publish_refuses_nonstandard_layout(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(mcb, "_live_paths",
+                        lambda: _types.SimpleNamespace(data_root=str(tmp_path / "elsewhere"),
+                                                       qlib_dir=str(env.qlib)))
+    assert mcb.phase_publish(_PubArgs()) == 2
+    assert (env.staged / "STAGED_MARKER.txt").exists()
+
+
+def test_provider_lock_keyed_by_qlib_dir_not_raw_root(tmp_path):
+    # Re-review #4 P0: two checkouts with DIFFERENT raw data_roots but ONE live provider
+    # must resolve the SAME provider-publish lock file.
+    import data_infra.tushare_lock as tl
+
+    shared_qlib = tmp_path / "store" / "qlib_data"
+    shared_qlib.mkdir(parents=True)
+    a, b = tmp_path / "cloneA", tmp_path / "cloneB"
+    for c, raw in ((a, "rawA"), (b, "rawB")):
+        c.mkdir()
+        (c / "config.yaml").write_text(
+            "storage:\n"
+            f"  data_root: {_json.dumps(str(tmp_path / raw))}\n"
+            f"  qlib_data_dir: {_json.dumps(str(shared_qlib))}\n", encoding="utf-8")
+    lock_a = tl._resolve_provider_lock_path(a)
+    lock_b = tl._resolve_provider_lock_path(b)
+    assert lock_a == lock_b == shared_qlib.parent.resolve() / ".locks" / "provider_publish__qlib_data.lock"
+    # explicit qlib_dir override (what the builder passes) resolves identically
+    assert tl._resolve_provider_lock_path(a, qlib_dir=shared_qlib) == lock_a
+    # unresolvable identity refuses
+    blank = tmp_path / "blank"
+    blank.mkdir()
+    (blank / "config.yaml").write_text("storage: {}\n", encoding="utf-8")
+    with pytest.raises(tl.LockIdentityError):
+        tl._resolve_provider_lock_path(blank)
+
+
+def test_account_lock_is_per_token_not_per_checkout(tmp_path, monkeypatch):
+    # Re-review #4 Major: the Tushare account lock namespace is a per-user directory keyed
+    # by the token fingerprint — identical for ANY checkout under the same token, distinct
+    # across tokens.
+    import data_infra.tushare_lock as tl
+
+    monkeypatch.setenv("TUSHARE_TOKEN", "tok_A_secret")
+    a = tl._resolve_account_lock_dir(tmp_path / "cloneA")
+    b = tl._resolve_account_lock_dir(tmp_path / "cloneB")
+    assert a == b and a.parent == Path.home() / ".quant_tushare_locks"
+    assert "tok_A_secret" not in str(a), "the token must appear only as an irreversible fingerprint"
+    monkeypatch.setenv("TUSHARE_TOKEN", "tok_B_other")
+    assert tl._resolve_account_lock_dir(tmp_path / "cloneA") != a
 
 
 def test_stale_qa_worker_cannot_overwrite_ready(tmp_path, monkeypatch):
@@ -1231,8 +1383,8 @@ def test_builder_publish_acquires_global_lock(tmp_path, monkeypatch):
     from contextlib import contextmanager
 
     @contextmanager
-    def recording(timeout: float = 7200.0):
-        entered.append(timeout)
+    def recording(timeout: float = 7200.0, qlib_dir=None):
+        entered.append(qlib_dir)  # publish() must key the lock by the EXACT provider dir
         yield
 
     monkeypatch.setattr(tl, "provider_publish_lock", recording)
@@ -1243,4 +1395,5 @@ def test_builder_publish_acquires_global_lock(tmp_path, monkeypatch):
     b = StagedQlibBackendBuilder(data_root=str(data), qlib_dir=str(data / "qlib_data"),
                                  build_id="lockprobe")
     b.publish(calendar_policy_id="frozen_20260701_thaw_step1", emit_manifest=False)
-    assert entered, "publish() must acquire the global provider-publish lock"
+    assert entered and Path(entered[0]).resolve() == (data / "qlib_data").resolve(), \
+        "publish() must acquire the provider-publish lock keyed by its own qlib_dir"
