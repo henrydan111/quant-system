@@ -67,6 +67,46 @@ def _valid_payload(**overrides) -> dict:
     return base
 
 
+class TestRawInputAttestationFields:
+    """Phase 5-B B3.2: raw_input_manifest_root + parent_provider_build_id are OPTIONAL
+    (pre-thaw manifests keep loading) but validated when present, and round-trip."""
+
+    def test_legacy_manifest_without_fields_loads_as_none(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path, _valid_payload())
+        manifest = load_provider_manifest(tmp_path)
+        assert manifest.raw_input_manifest_root is None
+        assert manifest.parent_provider_build_id is None
+        # and to_dict does NOT invent the keys (legacy round-trip stability)
+        d = manifest.to_dict()
+        assert "raw_input_manifest_root" not in d
+        assert "parent_provider_build_id" not in d
+
+    def test_attested_manifest_roundtrips(self, tmp_path: Path) -> None:
+        root = "ab" * 32
+        _write_manifest(tmp_path, _valid_payload(
+            raw_input_manifest_root=root, parent_provider_build_id="parent_build_1"))
+        manifest = load_provider_manifest(tmp_path)
+        assert manifest.raw_input_manifest_root == root
+        assert manifest.parent_provider_build_id == "parent_build_1"
+        d = manifest.to_dict()
+        assert d["raw_input_manifest_root"] == root
+        assert d["parent_provider_build_id"] == "parent_build_1"
+
+    def test_malformed_raw_root_fails_closed(self, tmp_path: Path) -> None:
+        # A present-but-garbage attestation is corruption, not legacy — must raise.
+        _write_manifest(tmp_path, _valid_payload(raw_input_manifest_root="not-a-hash"))
+        with pytest.raises(ProviderManifestError, match="raw_input_manifest_root"):
+            load_provider_manifest(tmp_path)
+        _write_manifest(tmp_path, _valid_payload(raw_input_manifest_root="AB" * 32))  # uppercase
+        with pytest.raises(ProviderManifestError, match="raw_input_manifest_root"):
+            load_provider_manifest(tmp_path)
+
+    def test_blank_parent_build_id_fails_closed(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path, _valid_payload(parent_provider_build_id="  "))
+        with pytest.raises(ProviderManifestError, match="parent_provider_build_id"):
+            load_provider_manifest(tmp_path)
+
+
 class TestProviderManifestLoadErrors:
     """Negative path: missing/malformed manifest must raise."""
 

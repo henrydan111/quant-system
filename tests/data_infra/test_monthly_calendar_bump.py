@@ -504,3 +504,262 @@ def test_full_raw_manifest_covers_readset_and_detects_mutation(tmp_path):
     assert m1["root"] != m2["root"], "a mutated income file MUST change the manifest root"
     bad, why = mcb._verify_raw_manifest(m1, data_root)
     assert not bad and "income" in why  # verify-before-publish catches the out-of-band mutation
+
+
+# ── Phase 5-B B3.3-5: the atomic publish transaction ─────────────────────────
+# phase_publish is now verify+swap+rebind+metadata in ONE lock scope. These tests drive
+# the REAL transaction end-to-end against a synthetic staged/live pair (real renames,
+# real manifest emission, real approval rewrites) — only the QA subprocess is stubbed.
+import json as _json  # noqa: E402
+import types as _types  # noqa: E402
+
+import yaml as _yamlmod  # noqa: E402
+
+
+class _PubArgs:
+    i_reviewed_the_dryrun = True
+
+
+def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
+    root = tmp_path
+    data = root / "data"
+    out = root / "out"
+    out.mkdir(parents=True)
+    (root / "policies").mkdir()
+    (root / "approvals").mkdir()
+    monkeypatch.setattr(mcb, "PROJECT_ROOT", root)
+    monkeypatch.setattr(mcb, "OUT_DIR", out)
+    monkeypatch.setattr(mcb, "POLICY_DIR", root / "policies")
+    monkeypatch.setattr(mcb, "APPROVALS_DIR", root / "approvals")
+    monkeypatch.setattr(mcb, "DRYRUN_REPORT_PATH", out / "monthly_bump_dryrun_report.json")
+    monkeypatch.setattr(mcb, "FRESH_AUDIT_PATH", out / "fresh_window_survivorship_audit.json")
+    monkeypatch.setattr(mcb, "RAW_MANIFEST_PATH", out / "raw_input_manifest.json")
+    monkeypatch.setattr(mcb, "PUBLISH_RECORD_PATH", out / "publish_record.json")
+    monkeypatch.setattr(mcb, "TRANSACTION_JOURNAL_PATH", out / "publish_transaction_journal.json")
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: qa_rc)
+
+    parent_pb, parent_cp = "parent_build_1", "frozen_20260701_thaw_step1"
+    new_pb, new_cp = "thaw_20990101_120000", "frozen_20990101_thaw_step2"
+
+    # live provider (the parent)
+    qlib = data / "qlib_data"
+    (qlib / "metadata").mkdir(parents=True)
+    (qlib / "calendars").mkdir()
+    (qlib / "calendars" / "day.txt").write_text("2008-01-02\n2026-07-01\n", encoding="utf-8")
+    (qlib / "LIVE_MARKER.txt").write_text("parent", encoding="utf-8")
+    (qlib / "metadata" / "provider_build.json").write_text(_json.dumps(
+        {"provider_build_id": parent_pb, "calendar_policy_id": parent_cp}), encoding="utf-8")
+
+    # staged provider (the child) at the canonical build path
+    staged = data / "qlib_builds" / new_pb / "provider"
+    (staged / "calendars").mkdir(parents=True)
+    (staged / "calendars" / "day.txt").write_text("2008-01-02\n2099-01-01\n", encoding="utf-8")
+    (staged / "instruments").mkdir()
+    (staged / "instruments" / "all_stocks.txt").write_text(
+        "000001_SZ\t2008-01-02\t2099-01-01\n", encoding="utf-8")
+    (staged / "features" / "000001_sz").mkdir(parents=True)
+    (staged / "STAGED_MARKER.txt").write_text("child", encoding="utf-8")
+    (data / "qlib_builds" / new_pb / "manifest.json").write_text("{}", encoding="utf-8")
+
+    # the minted policy the report points at
+    (root / "policies" / f"{new_cp}.yaml").write_text(_yamlmod.safe_dump({
+        "policy_id": new_cp, "policy_schema_version": 1,
+        "calendar_start_date": "2008-01-02", "calendar_end_date": "2099-01-01",
+        "data_end_date": "2099-01-01", "frozen": True, "reason": "test",
+        "established_at": "2099-01-01", "spent_oos_end": mcb.SPENT_OOS_END,
+        "fresh_holdout_start": mcb.FRESH_HOLDOUT_START,
+        "require_raw_input_attestation": True,
+        "allowed_modes": ["formal"], "default_formal_behavior": "require_explicit_policy",
+    }, sort_keys=False), encoding="utf-8")
+
+    # bound approvals in BOTH quoting styles + one exempt admin record
+    a1 = root / "approvals" / "a1.yaml"
+    a1.write_text(f'approval_id: a1\ndataset_id: d1\nto_status: approved\ndate: "2026-07-01"\n'
+                  f'provider_build_id: "{parent_pb}"\ncalendar_policy_id: {parent_cp}\n',
+                  encoding="utf-8")
+    a2 = root / "approvals" / "a2.yaml"
+    a2.write_text(f"approval_id: a2\ndataset_id: d2\nto_status: approved\ndate: '2026-07-01'\n"
+                  f"provider_build_id: {parent_pb}\ncalendar_policy_id: '{parent_cp}'\n",
+                  encoding="utf-8")
+    (root / "approvals" / "exempt.yaml").write_text(
+        "approval_id: x\nbinding_exempt: true\nbinding_exempt_reason: admin-only record\n",
+        encoding="utf-8")
+
+    # raw cut + full-readset manifest sidecar over it
+    raw = data / "reference" / "trade_cal.parquet"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"CAL0")
+    manifest = mcb._full_raw_manifest(data)
+    (out / "raw_input_manifest.json").write_text(_json.dumps(manifest), encoding="utf-8")
+
+    # audit artifacts + staged attestation, pinned into the dry-run report
+    fp = out / "frozen_prefix_audit.json"
+    fp.write_text(_json.dumps({"staged": str(staged), "ok": True}), encoding="utf-8")
+    fw = out / "fresh_window_survivorship_audit.json"
+    fw.write_text(_json.dumps({"ok": True, "violations": []}), encoding="utf-8")
+    att = mcb._staged_attestation(staged)
+    report = {
+        "target_end": "20990101", "new_policy_id": new_cp, "staged_build_id": new_pb,
+        "staged_provider_dir": str(staged), "parent_build_id": parent_pb,
+        "parent_policy_id": parent_cp, "raw_input_manifest_root": manifest["root"],
+        "frozen_prefix_audit_sha256": mcb._sha256_file(fp),
+        "fresh_window_audit_sha256": mcb._sha256_file(fw),
+        "staged_attestation_root": att["root"],
+    }
+    (out / "monthly_bump_dryrun_report.json").write_text(_json.dumps(report), encoding="utf-8")
+
+    def _builder(build_id: str):
+        from data_infra.pit_backend import StagedQlibBackendBuilder
+        return StagedQlibBackendBuilder(data_root=str(data), qlib_dir=str(qlib), build_id=build_id)
+
+    monkeypatch.setattr(mcb, "_make_publish_builder", _builder)
+    return _types.SimpleNamespace(
+        root=root, data=data, qlib=qlib, staged=staged, out=out, raw=raw,
+        parent_pb=parent_pb, parent_cp=parent_cp, new_pb=new_pb, new_cp=new_cp,
+        manifest=manifest, a1=a1, a2=a2,
+        a1_bytes=a1.read_bytes(), a2_bytes=a2.read_bytes())
+
+
+def _assert_untouched(env):
+    """The refusal contract: NOTHING durable mutated — parent still live, staged still
+    staged, approvals byte-identical."""
+    assert (env.qlib / "LIVE_MARKER.txt").exists(), "parent must still be live"
+    assert (env.staged / "STAGED_MARKER.txt").exists(), "staged tree must stay staged"
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert not (env.data / f"qlib_data.bak_{env.new_pb}").exists(), "no backup may appear"
+
+
+def test_publish_transaction_happy_path(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    assert mcb.phase_publish(_PubArgs()) == 0
+    # swap: child live, parent retained as .bak
+    assert (env.qlib / "STAGED_MARKER.txt").exists()
+    bak = env.data / f"qlib_data.bak_{env.new_pb}"
+    assert (bak / "LIVE_MARKER.txt").exists()
+    # metadata: the live manifest binds build -> policy -> raw cut -> parent
+    m = _json.loads((env.qlib / "metadata" / "provider_build.json").read_text(encoding="utf-8"))
+    assert m["provider_build_id"] == env.new_pb
+    assert m["calendar_policy_id"] == env.new_cp
+    assert m["raw_input_manifest_root"] == env.manifest["root"]
+    assert m["parent_provider_build_id"] == env.parent_pb
+    # rebind: both quoting styles preserved, values swapped; exempt untouched
+    t1 = env.a1.read_text(encoding="utf-8")
+    assert f'provider_build_id: "{env.new_pb}"' in t1 and f"calendar_policy_id: {env.new_cp}" in t1
+    t2 = env.a2.read_text(encoding="utf-8")
+    assert f"provider_build_id: {env.new_pb}" in t2 and f"calendar_policy_id: '{env.new_cp}'" in t2
+    from data_infra.approval_evidence import evaluate_approval_evidence_bindings
+    drifts = evaluate_approval_evidence_bindings(
+        approvals_dir=env.root / "approvals",
+        manifest_path=env.qlib / "metadata" / "provider_build.json")
+    assert drifts and not any(d.drift for d in drifts)
+    # records
+    assert (env.out / "publish_record.json").exists()
+    assert (env.out / "publish_transaction_journal.json").exists()
+    assert list((env.root / "approvals").glob(f"*_rebind_to_{env.new_pb}.md"))
+
+
+def test_publish_refuses_parent_drift(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    (env.qlib / "metadata" / "provider_build.json").write_text(_json.dumps(
+        {"provider_build_id": "someone_else", "calendar_policy_id": env.parent_cp}), encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    assert (env.qlib / "LIVE_MARKER.txt").exists() and (env.staged / "STAGED_MARKER.txt").exists()
+    assert env.a1.read_bytes() == env.a1_bytes
+
+
+def test_publish_refuses_raw_input_mutation(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    env.raw.write_bytes(b"CALX")  # same size, different content — content hash must catch it
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_audit_artifact_drift(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    fp = env.out / "frozen_prefix_audit.json"
+    fp.write_text(_json.dumps({"staged": str(env.staged), "ok": True, "edited": 1}), encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_staged_tree_drift(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    cal = env.staged / "calendars" / "day.txt"
+    cal.write_text(cal.read_text(encoding="utf-8") + "2099-01-02\n", encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_foreign_approval_binding(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+    env.a2.write_text("approval_id: a2\ndataset_id: d2\nto_status: approved\ndate: '2026-07-01'\n"
+                      "provider_build_id: other_build\ncalendar_policy_id: other_policy\n",
+                      encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    assert (env.qlib / "LIVE_MARKER.txt").exists() and (env.staged / "STAGED_MARKER.txt").exists()
+
+
+def test_publish_refuses_pre_phase5b_report(tmp_path, monkeypatch):
+    # A report produced by the pre-transaction driver (no attestation fields) must refuse
+    # — publish verifies exactly what execute attested, or nothing.
+    env = _publish_env(tmp_path, monkeypatch)
+    rep = _json.loads((env.out / "monthly_bump_dryrun_report.json").read_text(encoding="utf-8"))
+    del rep["staged_attestation_root"]
+    (env.out / "monthly_bump_dryrun_report.json").write_text(_json.dumps(rep), encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_rolls_back_on_postswap_failure(tmp_path, monkeypatch):
+    # A failure AFTER the swap (here: the rebind-record write) must restore the approval
+    # bytes AND roll the swap back — parent live again, staged tree back for a clean retry.
+    env = _publish_env(tmp_path, monkeypatch)
+
+    def _boom(**kwargs):
+        raise RuntimeError("record write failed")
+
+    monkeypatch.setattr(mcb, "_write_rebind_record", _boom)
+    assert mcb.phase_publish(_PubArgs()) == 4
+    assert (env.qlib / "LIVE_MARKER.txt").exists(), "parent live provider must be restored"
+    assert (env.staged / "STAGED_MARKER.txt").exists(), "staged tree must be back at provider_dir"
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert not (env.data / f"qlib_data.bak_{env.new_pb}").exists(), "rollback must consume the backup"
+    steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
+    assert any(s["step"] == "bind" and s["status"] == "failed_rolled_back" for s in steps)
+
+
+def test_publish_rolls_back_when_manifest_emission_fails(tmp_path, monkeypatch):
+    # The builder's emit path is deliberately non-raising; the transaction must catch the
+    # absent/short manifest via _verify_live_manifest and roll the whole swap back.
+    env = _publish_env(tmp_path, monkeypatch)
+    import data_infra.provider_manifest as pm
+
+    def _boom(**kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pm, "emit_manifest_at_publish", _boom)
+    assert mcb.phase_publish(_PubArgs()) == 4
+    assert (env.qlib / "LIVE_MARKER.txt").exists()
+    assert (env.staged / "STAGED_MARKER.txt").exists()
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert env.a1.read_bytes() == env.a1_bytes
+
+
+def test_publish_qa_failure_returns_6_and_keeps_provider(tmp_path, monkeypatch):
+    # QA runs OUTSIDE the transaction: a QA failure alarms (exit 6) but does not undo a
+    # consistent swap+rebind+metadata — the operator investigates with the .bak retained.
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6
+    assert (env.qlib / "STAGED_MARKER.txt").exists(), "the published provider stays live"
+    m = _json.loads((env.qlib / "metadata" / "provider_build.json").read_text(encoding="utf-8"))
+    assert m["provider_build_id"] == env.new_pb
+    assert f'provider_build_id: "{env.new_pb}"' in env.a1.read_text(encoding="utf-8")
+
+
+def test_generate_thaw_policy_requires_raw_attestation(tmp_path, monkeypatch):
+    # Every bump-minted policy makes the raw-input attestation load-bearing for formal runs.
+    monkeypatch.setattr(mcb, "POLICY_DIR", tmp_path)
+    _pid, path = mcb.generate_thaw_policy("20990131", "pb", write=True)
+    body = _yamlmod.safe_load(path.read_text(encoding="utf-8"))
+    assert body["require_raw_input_attestation"] is True
