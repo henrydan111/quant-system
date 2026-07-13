@@ -524,8 +524,48 @@ class StrategyComponentDiagnosticStore(AppendOnlyStore):
     KEY_FIELDS = ("book_seal_key", "request_hash", "component_factor_id")
 
     def append_rows(self, rows: list[Mapping[str, Any]]) -> list[str]:
-        ids: list[str] = []
-        for row in rows:
-            written = self.record(**{k: str(v) for k, v in row.items() if k in self.COLUMNS})
-            ids.append(str(written["record_id"]))
-        return ids
+        """R3 Minor 1 — BATCH-ATOMIC and IDEMPOTENT by the logical key
+        ``(book_seal_key, request_hash, component_factor_id)``: a resume after a crash
+        between the diagnostic append and the artifact completion re-uses the existing
+        record ids instead of duplicating rows; a row whose payload DIVERGES from the
+        recorded one refuses (same request must mean same diagnostics). One lock, one
+        atomic write for the whole batch."""
+        payload_fields = [c for c in self.COLUMNS if c not in ("record_id", "recorded_at")]
+        with file_lock(self.lock_path):
+            frame = self._load()
+            ids: list[str] = []
+            to_append: list[dict[str, Any]] = []
+            recorded_at = _now_str()
+            for raw in rows:
+                row = {k: str(v) for k, v in raw.items() if k in self.COLUMNS}
+                key3 = (
+                    str(row.get("book_seal_key", "")),
+                    str(row.get("request_hash", "")),
+                    str(row.get("component_factor_id", "")),
+                )
+                existing = frame[
+                    (frame["book_seal_key"].astype("string") == key3[0])
+                    & (frame["request_hash"].astype("string") == key3[1])
+                    & (frame["component_factor_id"].astype("string") == key3[2])
+                ]
+                if not existing.empty:
+                    prior = existing.iloc[-1].to_dict()
+                    for field in payload_fields:
+                        if str(prior.get(field, "")) != str(row.get(field, "")):
+                            raise BookSealStoreError(
+                                f"diagnostic row for {key3} already exists with a DIVERGENT "
+                                f"{field!r} ({prior.get(field)!r} vs {row.get(field)!r}) — the "
+                                "same request must produce the same diagnostics"
+                            )
+                    ids.append(str(prior["record_id"]))
+                    continue
+                full: dict[str, Any] = {column: "" for column in self.COLUMNS}
+                full.update(row)
+                full["recorded_at"] = recorded_at
+                full["record_id"] = self._record_id(full, recorded_at)
+                to_append.append(full)
+                ids.append(str(full["record_id"]))
+            if to_append:
+                frame = pd.concat([frame, pd.DataFrame(to_append)], ignore_index=True)
+                _atomic_write_dataframe(frame, self.log_path)
+            return ids

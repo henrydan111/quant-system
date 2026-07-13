@@ -589,13 +589,17 @@ class OosWindowLedgerStore(AppendOnlyStore):
                 row["resumed"] = True
                 return row
             if virgin:
+                # R3 Blocker 1: INCLUSIVE boundaries, matching virgin_window_multiplicity
+                # exactly — the 3rd spend (n>=warn) requires acknowledgement, the 5th
+                # spend (n>=hard) requires the consumed a6 authorization. `>` was an
+                # off-by-one that let the 5th spend through un-authorized.
                 n_would_be = len(existing_keys) + 1
-                if n_would_be > hard_threshold:
+                if n_would_be >= hard_threshold:
                     # R2 B5: the authorization is verified FROM the store, in here —
                     # never trusted from a caller-supplied mapping.
                     if override_store is None or not str(multiplicity_override_id).strip():
                         raise ValueError(
-                            f"virgin-window book budget HARD STOP (would be spend #{n_would_be} > "
+                            f"virgin-window book budget HARD STOP (would be spend #{n_would_be} >= "
                             f"{hard_threshold}): requires a pre-recorded, CONSUMED a6_multiplicity "
                             "authorization verified from the OverrideAuthorizationStore "
                             "(override_store + multiplicity_override_id) — caller input is never "
@@ -608,9 +612,9 @@ class OosWindowLedgerStore(AppendOnlyStore):
                         scope_key=str(book_seal_key),
                         consumed_by_request_hash=str(request_hash),
                     )
-                elif n_would_be > warn_threshold and not multiplicity_ack:
+                elif n_would_be >= warn_threshold and not multiplicity_ack:
                     raise ValueError(
-                        f"virgin-window book budget acknowledge band (would be spend #{n_would_be} > "
+                        f"virgin-window book budget acknowledge band (would be spend #{n_would_be} >= "
                         f"{warn_threshold}): pass multiplicity_ack=True after reviewer acknowledgement"
                     )
             recorded_at = _store_now()
@@ -642,20 +646,33 @@ class OosWindowLedgerStore(AppendOnlyStore):
         oos_window_id: str,
         frozen_set_hash: str,
         override_id: str,
-        request_hash: str = "",
+        request_hash: str,
         factor_ids: Sequence[str] = (),
         seal_mode: str = "live",
+        warn_threshold: int = 3,
+        hard_threshold: int = 5,
+        multiplicity_ack: bool = False,
+        override_store=None,
+        a6_multiplicity_override_id: str = "",
     ) -> dict[str, Any]:
-        """PR3 REWORK (R2 Blocker 4) — the ATOMIC A5 study reservation, called by
-        ``reproduce_sealed_oos`` BEFORE its holdout claim so a direct import can never
-        consume an authorization + claim a virgin seal WITHOUT the spend entering the
-        A6 budget denominator. Idempotent on the A5 unit ``(window, frozen_set_hash)``
-        with strict request binding on resume (blank-tolerant only when both blank).
-        The per-study human gate is the consume-once A5 authorization itself; the
-        warn/hard budget bands for the factor-level path are enforced at the cmd_seal
-        layer (``virgin_window_multiplicity``), which reads this ledger."""
+        """PR3 REWORK (R2 Blocker 4 + R3 Blocker 2/3) — the ATOMIC A5 study reservation,
+        called by ``reproduce_sealed_oos`` (against the CANONICAL ledger derived from the
+        global holdout root, never a caller-selected path) BEFORE its holdout claim.
+        Idempotent on the A5 unit ``(window, frozen_set_hash)`` with STRICT request
+        binding (``request_hash`` is mandatory non-blank; a changed recipe can never
+        resume a prior A5 spend). The A6 virgin budget is enforced IN HERE, under this
+        lock, with INCLUSIVE boundaries matching ``virgin_window_multiplicity``: the
+        3rd distinct spend-unit key requires ``multiplicity_ack``; the 5th requires a
+        pre-recorded CONSUMED ``a6_multiplicity`` authorization verified FROM the
+        ``override_store`` — an A5 authorization grants exceptional ACCESS, it never
+        replaces A6's multiplicity control (R3 Blocker 2)."""
         if not str(override_id).strip():
             raise ValueError("reserve_a5_study_spend requires the consumed A5 override_id")
+        if not str(request_hash).strip():
+            raise ValueError(
+                "reserve_a5_study_spend requires a non-blank request_hash (the A5 spend is "
+                "bound to ONE recipe — R3 Blocker 3)"
+            )
         with file_lock(self.lock_path):
             frame = self._load()
             mask = (
@@ -666,14 +683,43 @@ class OosWindowLedgerStore(AppendOnlyStore):
             mine = frame[mask]
             if not mine.empty:
                 row = mine.iloc[-1].to_dict()
-                if str(row.get("request_hash") or "") != str(request_hash or ""):
+                if str(row.get("request_hash") or "") != str(request_hash):
                     raise ValueError(
                         f"reserve_a5_study_spend: (window={oos_window_id}, frozen_set="
                         f"{frozen_set_hash}) was reserved under request_hash "
-                        f"{row.get('request_hash')!r}, not {request_hash!r}"
+                        f"{row.get('request_hash')!r}, not {request_hash!r} — a changed "
+                        "recipe cannot resume a prior A5 spend (blank legacy rows are "
+                        "quarantined)"
                     )
                 row["resumed"] = True
                 return row
+            # R3 Blocker 2: the A6 virgin budget applies to A5 spends too, atomically here.
+            window_mask = frame["oos_window_id"].astype("string") == str(oos_window_id)
+            sub = frame[window_mask]
+            keys = sub["book_seal_key"].astype("string").fillna("")
+            fallback = sub["frozen_set_hash"].astype("string").fillna("")
+            merged = keys.where(keys.str.len() > 0, fallback)
+            existing_keys = {k for k in merged.dropna().unique().tolist() if k}
+            n_would_be = len(existing_keys) + 1
+            if n_would_be >= hard_threshold:
+                if override_store is None or not str(a6_multiplicity_override_id).strip():
+                    raise ValueError(
+                        f"virgin-window A5 budget HARD STOP (would be spend #{n_would_be} >= "
+                        f"{hard_threshold}): requires a pre-recorded, CONSUMED a6_multiplicity "
+                        "authorization (override_store + a6_multiplicity_override_id) — the A5 "
+                        "access authorization does NOT replace A6's multiplicity control"
+                    )
+                override_store.require_consumed(
+                    kind="a6_multiplicity",
+                    override_id=str(a6_multiplicity_override_id),
+                    oos_window_id=str(oos_window_id),
+                    scope_key=str(frozen_set_hash),
+                )
+            elif n_would_be >= warn_threshold and not multiplicity_ack:
+                raise ValueError(
+                    f"virgin-window A5 budget acknowledge band (would be spend #{n_would_be} >= "
+                    f"{warn_threshold}): pass multiplicity_ack=True after reviewer acknowledgement"
+                )
             recorded_at = _store_now()
             row = {column: "" for column in self.COLUMNS}
             row.update(

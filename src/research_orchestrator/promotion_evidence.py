@@ -238,7 +238,8 @@ def reproduce_sealed_oos(
     seal_store=None,
     trade_cal=None,
     fresh_window_override_id: str = "",
-    ledger_root: str | Path | None = None,
+    multiplicity_ack: bool = False,
+    a6_multiplicity_override_id: str = "",
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
@@ -311,6 +312,26 @@ def reproduce_sealed_oos(
             )
 
     seal_hash = frozen_set.frozen_set_hash
+    # R3 Blocker 3: the ONE-recipe identity of this reproduction. Everything that
+    # determines what the sealed evaluation computes is hash material; the seal claim,
+    # the A5 reservation, the authorization consumption, and the access context are all
+    # bound to it — a changed recipe (different expressions/horizon/quantiles/window/
+    # provider generation) can never resume a prior spend.
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
+
+    a5_request_hash = _phash(
+        {
+            "kind": "a5_sealed_oos_reproduction",
+            "frozen_set_hash": str(seal_hash),
+            "factor_exprs": {str(k): str(v) for k, v in sorted(factor_exprs.items())},
+            "oos_window": f"{oos_start}..{oos_end}",
+            "provider_build_id": str(prov.get("provider_build_id", "")),
+            "calendar_policy_id": str(prov.get("calendar_policy_id", "")),
+            "horizon": int(horizon),
+            "n_quantiles": int(n_quantiles),
+            "hypothesis_id": str(hypothesis_id),
+        }
+    )
     if claim_seal:
         # v1.4 A5 (PR3 REWORK, R1 Blocker 3): this is the LOWEST shared claim point of the
         # factor-level (frozen-set-keyed) path — enforce the fresh-window authorization
@@ -325,29 +346,30 @@ def reproduce_sealed_oos(
                 OverrideAuthorizationStore,
             )
 
-            OverrideAuthorizationStore(seal_root).consume_authorization(
+            override_store = OverrideAuthorizationStore(seal_root)
+            override_store.consume_authorization(
                 kind="a5_fresh_window",
                 override_id=str(fresh_window_override_id),
                 oos_window_id=f"{oos_start}..{oos_end}",
                 scope_key=str(seal_hash),
+                consumed_by_request_hash=a5_request_hash,
             )
-            # R2 Blocker 4: the A5 spend enters the A6 budget denominator HERE — the
-            # lowest shared claim point — atomically BEFORE the claim, so a direct
-            # import can never consume an authorization + claim a virgin seal without
-            # the spend being ledgered. Fail-closed: no ledger_root, no virgin claim.
-            if not ledger_root:
-                raise PromotionEvidenceError(
-                    "a virgin-window A5 claim requires ledger_root (the A6 "
-                    "OosWindowLedgerStore root) so the spend is reserved BEFORE the "
-                    "claim — refusing an unledgered virgin observation"
-                )
+            # R2 Blocker 4 + R3 Blocker 2: the A5 spend enters the A6 budget denominator
+            # HERE, atomically BEFORE the claim, in the CANONICAL ledger DERIVED from the
+            # global holdout root (never a caller-selected path — a forked ledger would
+            # hide spends from the budget). The warn/hard bands are enforced INSIDE the
+            # reservation lock; an A5 access authorization never replaces A6's control.
             from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
 
-            OosWindowLedgerStore(ledger_root).reserve_a5_study_spend(
+            OosWindowLedgerStore(seal_root).reserve_a5_study_spend(
                 oos_window_id=f"{oos_start}..{oos_end}",
                 frozen_set_hash=str(seal_hash),
                 override_id=str(fresh_window_override_id),
+                request_hash=a5_request_hash,
                 factor_ids=sorted(str(k) for k in factor_exprs),
+                multiplicity_ack=multiplicity_ack,
+                override_store=override_store,
+                a6_multiplicity_override_id=str(a6_multiplicity_override_id),
             )
         if seal_store is None:
             from src.research_orchestrator.holdout_seal import HoldoutSealStore
@@ -356,9 +378,12 @@ def reproduce_sealed_oos(
             design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
             profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
             allow_same_run=allow_same_run, seal_key=seal_hash,
-            # R1 B3: the factor-level claim is provider-generation-bound too.
+            # R1 B3: the factor-level claim is provider-generation-bound too; R3 B3: and
+            # RECIPE-bound — an allow_same_run resume under a changed request refuses in
+            # the store (persisted request_hash equality).
             provider_build_id=str(prov.get("provider_build_id", "")),
             calendar_policy_id=str(prov.get("calendar_policy_id", "")),
+            request_hash=a5_request_hash,
         )
 
     import pandas as pd
@@ -380,6 +405,7 @@ def reproduce_sealed_oos(
         provider_build_id=prov.get("provider_build_id", ""),
         calendar_policy_id=prov.get("calendar_policy_id", ""),
         holdout_seal_claimed=bool(claim_seal), seal_key=seal_hash,
+        request_hash=a5_request_hash,
     )
     # Reproduce the screening's EXACT inputs AND metric path (extracted, v1.4 PR3:
     # _compute_oos_per_factor_metrics — the shared context-agnostic body). ls_sharpe is

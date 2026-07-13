@@ -329,7 +329,8 @@ class TestPromotionGuardBindings:
             raise RuntimeError("GUARD_PASSED_reached_seal_store")
 
     def _call(self, *, oos_end, calendar_end, seal_ctx=None, monkeypatch=None,
-              spent_boundary="2026-02-27", fresh_window_override_id=""):
+              spent_boundary="2026-02-27", fresh_window_override_id="",
+              frozen_set_hash="f" * 16):
         import src.research_orchestrator.promotion_evidence as pe
 
         if monkeypatch is not None:
@@ -345,7 +346,9 @@ class TestPromotionGuardBindings:
                 monkeypatch.setattr(pe, "PromotionEvidenceError", pe.PromotionEvidenceError)
 
         class _FS:
-            frozen_set_hash = "f" * 16
+            pass
+
+        _FS.frozen_set_hash = frozen_set_hash
 
         return pe.reproduce_sealed_oos(
             frozen_set=_FS(),
@@ -363,15 +366,14 @@ class TestPromotionGuardBindings:
             },
             seal_store=self._StubSealStoreBoom(),
             fresh_window_override_id=fresh_window_override_id,
-            # PR3 R2 B4: a virgin claim must reserve its A5 spend in the A6 ledger first
-            ledger_root="data/_r4_test_seal",
         )
 
     @staticmethod
-    def _a5_authorization(oos_end: str) -> str:
+    def _a5_authorization(oos_end: str, frozen_set_hash: str) -> str:
         """PR3 R1 B3: a virgin-window factor-level claim now needs a PRE-RECORDED
         consume-once A5 authorization — record a unique one per test run (ids are
-        single-use, so a fixed id would fail the second run)."""
+        single-use; the frozen-set hash is also per-run so the shared-dir canonical
+        ledger's request-bound idempotency never collides across runs)."""
         import uuid
 
         from src.alpha_research.factor_eval_skill.book_seal_stores import (
@@ -381,7 +383,7 @@ class TestPromotionGuardBindings:
         override_id = f"r4_test_{uuid.uuid4().hex[:12]}"
         OverrideAuthorizationStore("data/_r4_test_seal").record_authorization(
             kind="a5_fresh_window", override_id=override_id,
-            oos_window_id=f"2021-01-01..{oos_end}", scope_key="f" * 16,
+            oos_window_id=f"2021-01-01..{oos_end}", scope_key=frozen_set_hash,
             user_signoff="r4-test", reason="D3.5 sealed fresh-window guard test",
         )
         return override_id
@@ -410,10 +412,20 @@ class TestPromotionGuardBindings:
             "provider_build_id": "prov_X",
             "calendar_policy_id": THAW_POLICY,
         })()
+        import uuid
+        from pathlib import Path as _P
+
+        # the canonical A6 ledger at the shared test-scratch seal root accumulates one
+        # unique key per run — clean it so the budget bands measure THIS run only.
+        ledger_file = _P("data/_r4_test_seal/oos_window_ledger.parquet")
+        if ledger_file.exists():
+            ledger_file.unlink()
+        fsh = f"r4fs_{uuid.uuid4().hex[:12]}"
         with pytest.raises(RuntimeError, match="GUARD_PASSED"):
             self._call(oos_end="2026-05-29", calendar_end="2026-06-30",
                        seal_ctx=seal_ctx, monkeypatch=monkeypatch,
-                       fresh_window_override_id=self._a5_authorization("2026-05-29"))
+                       frozen_set_hash=fsh,
+                       fresh_window_override_id=self._a5_authorization("2026-05-29", fsh))
 
     def test_longer_calendar_with_mismatched_seal_provider_refused(self, monkeypatch):
         import src.research_orchestrator.promotion_evidence as pe

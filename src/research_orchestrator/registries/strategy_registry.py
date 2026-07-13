@@ -31,12 +31,17 @@ BOOK_SEAL_IDENTITY_FIELDS = (
 # Mandatory finite metrics per component-diagnostic row (mirrors book_seal's contract).
 _MANDATORY_DIAG_METRICS = ("oos_rank_icir", "oos_ls_sharpe")
 
-# R2 Major 1 — the governed-runner registry: a LIVE artifact is promotable only when its
-# governed_execution attestation names a runner registered HERE. The set is EMPTY until
-# the governed S6 book runner PR lands (which registers its id + attestation contract),
-# so every live artifact — including one hand-seeded into the stores — FAILS CLOSED at
-# the promotion gate. Do not add entries outside that PR.
-REGISTERED_GOVERNED_RUNNERS: frozenset[str] = frozenset()
+# R2 Major 1 + R3 Major 1 — the governed-runner VERIFIER registry: a LIVE artifact is
+# promotable only when its governed_execution attestation names a runner registered HERE,
+# and the registered value is a VERIFIER CALLABLE (called with the attestation + the
+# canonical artifact; it must raise PromotionGateError on any inconsistency) — never a
+# bare name string. The registry is EMPTY until the governed S6 book runner PR lands
+# (which registers its verifier), so every live artifact — including one hand-seeded
+# into the stores — FAILS CLOSED at the promotion gate. Independent of the verifier, the
+# gate itself resolves the attested execution profile against the REAL profile registry
+# (unknown id / not-allowed-for-formal / hash mismatch all refuse), so registering a
+# runner name can never skip profile verification. Do not add entries outside the S6 PR.
+REGISTERED_GOVERNED_RUNNER_VERIFIERS: dict[str, Any] = {}
 _GOVERNED_ATTESTATION_FIELDS = (
     "runner_id",
     "runner_version",
@@ -252,11 +257,6 @@ def assert_book_seal_promotion_evidence(
     missing_att = [f for f in _GOVERNED_ATTESTATION_FIELDS if str(governed.get(f, "")).strip() == ""]
     if missing_att:
         _refuse(label, f"governed_execution attestation missing {missing_att}")
-    runner_id = str(governed.get("runner_id", ""))
-    if runner_id not in REGISTERED_GOVERNED_RUNNERS:
-        _refuse(label, f"governed_execution.runner_id {runner_id!r} is not a REGISTERED governed "
-                       f"runner (registered: {sorted(REGISTERED_GOVERNED_RUNNERS) or 'NONE — S6 pending'}) "
-                       f"— fail-closed")
     if governed.get("allowed_for_formal") is not True:
         _refuse(label, "governed_execution.allowed_for_formal must be literally True")
     if str(governed.get("return_type")) != "total_return":
@@ -274,6 +274,29 @@ def assert_book_seal_promotion_evidence(
     if str(governed.get("result_hash")) != _phash({str(k): v for k, v in metrics.items()}):
         _refuse(label, "governed_execution.result_hash does not recompute from the persisted "
                        "book metrics — the attestation is not bound to this result")
+    # R3 Major 1: resolve the attested execution profile against the REAL registry —
+    # registering a runner name can never skip this. Unknown id / not formal / hash
+    # mismatch all refuse (the same triple the release gate enforces for artifacts).
+    from src.backtest_engine.execution_profiles import ExecutionProfileError, get_profile
+
+    try:
+        profile = get_profile(str(governed.get("execution_profile_id")))
+    except ExecutionProfileError as exc:
+        _refuse(label, f"governed_execution.execution_profile_id does not resolve: {exc}")
+    if not profile.allowed_for_formal:
+        _refuse(label, f"execution profile {profile.profile_id!r} is not allowed_for_formal")
+    if str(governed.get("execution_profile_hash")) != str(profile.profile_hash):
+        _refuse(label, f"governed_execution.execution_profile_hash "
+                       f"{governed.get('execution_profile_hash')!r} != the live registry's "
+                       f"{profile.profile_hash!r} for {profile.profile_id!r}")
+    runner_id = str(governed.get("runner_id", ""))
+    verifier = REGISTERED_GOVERNED_RUNNER_VERIFIERS.get(runner_id)
+    if verifier is None:
+        _refuse(label, f"governed_execution.runner_id {runner_id!r} has no REGISTERED governed-"
+                       f"runner VERIFIER (registered: "
+                       f"{sorted(REGISTERED_GOVERNED_RUNNER_VERIFIERS) or 'NONE — S6 pending'}) "
+                       f"— fail-closed")
+    verifier(governed=governed, artifact=artifact)
     return artifact
 
 

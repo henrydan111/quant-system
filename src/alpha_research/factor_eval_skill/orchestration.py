@@ -563,8 +563,12 @@ def cmd_seal(
                 "fresh_window_signal_replication_override_id (A5); book-level spends go "
                 "through book_seal.run_book_sealed_evaluation"
             )
+        # R3 Blocker 2: the virgin budget reads the CANONICAL ledger colocated with the
+        # global holdout store (where reproduce_sealed_oos reserves A5 spends) — the
+        # run-local store_root ledger stays for legacy burned-window accounting only.
+        canonical_ledger = OosWindowLedgerStore(str(ctx.holdout_seal_root))
         virgin_report = virgin_window_multiplicity(
-            ledger, oos_window_id, override_recorded=override_ok, pending_self=True
+            canonical_ledger, oos_window_id, override_recorded=override_ok, pending_self=True
         )
         if virgin_report.action == ACTION_REFUSE:
             raise FactorEvalError(
@@ -577,15 +581,17 @@ def cmd_seal(
     seal_root = str(ctx.holdout_seal_root)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
     exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
-    # R2 Blocker 4: the A5 virgin spend is RESERVED inside reproduce_sealed_oos (the lowest
-    # shared claim point) against THIS ledger, atomically before the claim — cmd_seal no
-    # longer carries the sole after-the-fact accounting for virgin windows.
+    # R2 Blocker 4 + R3 Blocker 2: the A5 virgin spend is RESERVED inside
+    # reproduce_sealed_oos (the lowest shared claim point) against the CANONICAL ledger
+    # derived from seal_root, atomically before the claim, with the A6 bands enforced
+    # inside the reservation — cmd_seal no longer selects the ledger path.
     result = run_sealed_oos(
         frozen_set=fs, factor_exprs=exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
         seal_root=seal_root, run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
         fresh_window_override_id=fresh_window_override_id,
-        ledger_root=str(ctx.store_root),
+        multiplicity_ack=multiplicity_ack,
+        a6_multiplicity_override_id=str(multiplicity_override_id),
     )
     verdict = result["verdict"]
     # burned windows keep the legacy post-claim record (pre-claim failure never overcounts);
@@ -599,7 +605,9 @@ def cmd_seal(
     # not replace it); the legacy system-level report is retained alongside for compatibility.
     legacy_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     if virgin:
-        final_report = virgin_window_multiplicity(ledger, oos_window_id, pending_self=False)
+        final_report = virgin_window_multiplicity(
+            OosWindowLedgerStore(str(ctx.holdout_seal_root)), oos_window_id, pending_self=False
+        )
     else:
         final_report = legacy_report
     return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(),

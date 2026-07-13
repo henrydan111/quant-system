@@ -480,12 +480,11 @@ class TestSpendReservationAndOverrides:
     def test_reserve_recognizes_resume_and_refuses_changed_request(self, tmp_path):
         ledger = OosWindowLedgerStore(tmp_path / "ledger")
         window = f"{VIRGIN[0]}..{VIRGIN[1]}"
-        for i in range(4):
-            ledger.record_book_spend(oos_window_id=window, book_seal_key=f"k{i}",
-                                     frozen_set_hash=f"f{i}")
+        ledger.record_book_spend(oos_window_id=window, book_seal_key="k0",
+                                 frozen_set_hash="f0")
         first = ledger.reserve_book_spend(oos_window_id=window, book_seal_key="mine",
                                           frozen_set_hash="f", book_plan_hash="p",
-                                          request_hash="req", virgin=True, multiplicity_ack=True)
+                                          request_hash="req", virgin=True)
         assert first["resumed"] is False
         again = ledger.reserve_book_spend(oos_window_id=window, book_seal_key="mine",
                                           frozen_set_hash="f", book_plan_hash="p",
@@ -495,6 +494,31 @@ class TestSpendReservationAndOverrides:
             ledger.reserve_book_spend(oos_window_id=window, book_seal_key="mine",
                                       frozen_set_hash="f", book_plan_hash="p",
                                       request_hash="req_changed", virgin=True)
+
+    def test_a6_boundaries_are_inclusive(self, tmp_path):
+        # THE R3 Blocker 1 probes: 2 existing -> the THIRD spend requires acknowledgement;
+        # 4 existing -> the FIFTH spend requires a consumed a6 authorization (not merely
+        # the sixth — `>` was an off-by-one that let the 5th through).
+        window = f"{VIRGIN[0]}..{VIRGIN[1]}"
+        ledger3 = OosWindowLedgerStore(tmp_path / "l3")
+        for i in range(2):
+            ledger3.record_book_spend(oos_window_id=window, book_seal_key=f"k{i}",
+                                      frozen_set_hash=f"f{i}")
+        with pytest.raises(ValueError, match="acknowledge band"):
+            ledger3.reserve_book_spend(oos_window_id=window, book_seal_key="third",
+                                       frozen_set_hash="f", book_plan_hash="p",
+                                       request_hash="r", virgin=True)
+        ledger3.reserve_book_spend(oos_window_id=window, book_seal_key="third",
+                                   frozen_set_hash="f", book_plan_hash="p",
+                                   request_hash="r", virgin=True, multiplicity_ack=True)
+        ledger5 = OosWindowLedgerStore(tmp_path / "l5")
+        for i in range(4):
+            ledger5.record_book_spend(oos_window_id=window, book_seal_key=f"k{i}",
+                                      frozen_set_hash=f"f{i}")
+        with pytest.raises(ValueError, match="HARD STOP"):
+            ledger5.reserve_book_spend(oos_window_id=window, book_seal_key="fifth",
+                                       frozen_set_hash="f", book_plan_hash="p",
+                                       request_hash="r", virgin=True, multiplicity_ack=True)
 
     def test_hard_threshold_verified_from_the_store_never_caller_input(self, tmp_path):
         # THE R2 B5 probe: no parameter accepts a caller-shaped dict any more; the id is
@@ -566,13 +590,10 @@ class TestA5FreshWindowEnforcement:
                            hypothesis_id="h", claim_seal=True)
 
     def test_reproduce_sealed_oos_virgin_authorizes_ledgers_then_claims(self, tmp_path):
-        # THE R2 B4 probe: the direct lowest-level call must (1) refuse invented ids,
-        # (2) refuse an unledgered claim (no ledger_root), (3) RESERVE the A5 spend in
-        # the A6 ledger BEFORE the claim.
-        from src.research_orchestrator.promotion_evidence import (
-            PromotionEvidenceError,
-            reproduce_sealed_oos,
-        )
+        # THE R2 B4 + R3 B2 probes: the direct lowest-level call must (1) refuse invented
+        # ids, (2) RESERVE the A5 spend in the CANONICAL ledger DERIVED from seal_root
+        # (there is no caller-selectable ledger path to fork), (3) only then claim.
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
 
         prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
         window_id = f"{VIRGIN[0]}..{VIRGIN[1]}"
@@ -580,37 +601,95 @@ class TestA5FreshWindowEnforcement:
             frozen_set=FS, factor_exprs=dict(EXPRS), oos_start=VIRGIN[0],
             oos_end=VIRGIN[1], qlib_dir="q", seal_root=str(tmp_path / "seals"),
             run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
-            ledger_root=str(tmp_path / "ledger"),
         )
+        import inspect
+
+        from src.research_orchestrator import promotion_evidence as pe
+
+        assert "ledger_root" not in inspect.signature(pe.reproduce_sealed_oos).parameters
         with pytest.raises(BookSealStoreError, match="never pre-recorded"):
             reproduce_sealed_oos(**common, fresh_window_override_id="invented")
+        assert HoldoutSealStore(tmp_path / "seals").list_events().empty
         OverrideAuthorizationStore(tmp_path / "seals").record_authorization(
             kind="a5_fresh_window", override_id="ov_real", oos_window_id=window_id,
             scope_key=FS.frozen_set_hash, user_signoff="user",
             reason="burns the window for overlapping books")
-        # no ledger_root -> refused BEFORE any claim (the unledgered-observation hole)
-        unledgered = {**common, "ledger_root": None}
-        with pytest.raises(PromotionEvidenceError, match="ledger_root"):
-            reproduce_sealed_oos(**unledgered, fresh_window_override_id="ov_real")
-        assert HoldoutSealStore(tmp_path / "seals").list_events().empty
-        # the consume-once ov_real is spent by the refused attempt? NO — consumption
-        # happens before the ledger check; record a fresh authorization for the real run.
-        OverrideAuthorizationStore(tmp_path / "seals").record_authorization(
-            kind="a5_fresh_window", override_id="ov_real2", oos_window_id=window_id,
-            scope_key=FS.frozen_set_hash, user_signoff="user", reason="burn stmt")
 
         def sentinel(**kw):
             raise RuntimeError("SENTINEL_COMPUTE_REACHED")
 
         with pytest.raises(RuntimeError, match="SENTINEL_COMPUTE_REACHED"):
-            reproduce_sealed_oos(**common, fresh_window_override_id="ov_real2",
+            reproduce_sealed_oos(**common, fresh_window_override_id="ov_real",
                                  compute_factors_fn=sentinel)
-        # the claim happened AND the spend is in the A6 ledger (spend-unit accounting)
+        # the claim happened AND the spend sits in the CANONICAL ledger at seal_root
         assert not HoldoutSealStore(tmp_path / "seals").list_events().empty
-        ledger = OosWindowLedgerStore(tmp_path / "ledger")
+        ledger = OosWindowLedgerStore(tmp_path / "seals")
         assert ledger.distinct_spend_keys(window_id) == [FS.frozen_set_hash]
         rows = ledger.list_all()
         assert set(rows["spend_unit_type"].dropna()) == {"a5_signal_replication_study"}
+        assert rows.iloc[-1]["request_hash"]          # recipe-bound (R3 B3)
+
+    def test_direct_a5_changed_recipe_cannot_reuse_the_spend(self, tmp_path):
+        # THE R3 B3 probe: after a first recipe reached computation, a resume with
+        # DIFFERENT expressions on the same frozen set / window / seal refuses at the
+        # request-bound A5 reservation — one seal, one recipe.
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+
+        prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
+        window_id = f"{VIRGIN[0]}..{VIRGIN[1]}"
+        store = OverrideAuthorizationStore(tmp_path / "seals")
+        for ov in ("ov_1", "ov_2", "ov_3"):
+            store.record_authorization(kind="a5_fresh_window", override_id=ov,
+                                       oos_window_id=window_id, scope_key=FS.frozen_set_hash,
+                                       user_signoff="user", reason="burn stmt")
+        common = dict(
+            frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+            seal_root=str(tmp_path / "seals"), run_dir=str(tmp_path / "run"),
+            design_hash="d", provider_provenance=prov, allow_same_run=True,
+        )
+
+        def sentinel(**kw):
+            raise RuntimeError("SENTINEL_COMPUTE_REACHED")
+
+        with pytest.raises(RuntimeError, match="SENTINEL_COMPUTE_REACHED"):
+            reproduce_sealed_oos(**common, factor_exprs=dict(EXPRS),
+                                 fresh_window_override_id="ov_1",
+                                 compute_factors_fn=sentinel)
+        # changed recipe (different expressions) -> the A5 reservation refuses BEFORE
+        # any claim/compute, even with allow_same_run=True
+        with pytest.raises(ValueError, match="cannot resume a prior A5 spend"):
+            reproduce_sealed_oos(**common,
+                                 factor_exprs={"fac_a": "$high", "fac_b": "$low"},
+                                 fresh_window_override_id="ov_2",
+                                 compute_factors_fn=sentinel)
+        # the IDENTICAL recipe resumes fine (idempotent reservation + same-run claim);
+        # ov_2 was consumed by the refused attempt (conservative waste) -> use ov_3.
+        with pytest.raises(RuntimeError, match="SENTINEL_COMPUTE_REACHED"):
+            reproduce_sealed_oos(**common, factor_exprs=dict(EXPRS),
+                                 fresh_window_override_id="ov_3",
+                                 compute_factors_fn=sentinel)
+
+    def test_direct_a5_hard_band_enforced_inside_reservation(self, tmp_path):
+        # THE R3 B2 probe: N individually-authorized A5 studies cannot exceed the A6
+        # hard band — the 5th distinct spend-unit key refuses inside the reservation.
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+
+        prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
+        window_id = f"{VIRGIN[0]}..{VIRGIN[1]}"
+        ledger = OosWindowLedgerStore(tmp_path / "seals")
+        for i in range(4):
+            ledger.record_book_spend(oos_window_id=window_id, book_seal_key=f"k{i}",
+                                     frozen_set_hash=f"f{i}")
+        OverrideAuthorizationStore(tmp_path / "seals").record_authorization(
+            kind="a5_fresh_window", override_id="ov5", oos_window_id=window_id,
+            scope_key=FS.frozen_set_hash, user_signoff="user", reason="burn stmt")
+        with pytest.raises(ValueError, match="A5 budget HARD STOP"):
+            reproduce_sealed_oos(
+                frozen_set=FS, factor_exprs=dict(EXPRS), oos_start=VIRGIN[0],
+                oos_end=VIRGIN[1], qlib_dir="q", seal_root=str(tmp_path / "seals"),
+                run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
+                fresh_window_override_id="ov5", multiplicity_ack=True)
+        assert HoldoutSealStore(tmp_path / "seals").list_events().empty
 
     def test_cmd_seal_live_virgin_requires_override_and_ledgers_via_reproduce(self, tmp_path):
         from src.alpha_research.factor_eval_skill.orchestration import (
@@ -648,18 +727,20 @@ class TestA5FreshWindowEnforcement:
             cmd_seal(ctx, mode="live", oos_start=VIRGIN[0], oos_end=VIRGIN[1])
         assert HoldoutSealStore(ctx.holdout_seal_root).list_events().empty
 
-        # the mock stands in for run_sealed_oos but performs the REAL A5 reservation with
-        # the ledger_root cmd_seal passes down — pinning the cmd_seal->reproduce wiring.
+        # the mock stands in for run_sealed_oos but performs the REAL A5 reservation into
+        # the CANONICAL ledger derived from the seal_root cmd_seal passes down (R3 B2 —
+        # there is no caller-selectable ledger path any more).
         import src.alpha_research.factor_eval_skill.sealed_oos as so
 
         class _V:
             n_pass, n_total, results = 1, 1, ({"factor": "tf", "pass": True},)
 
         def fake_run_sealed_oos(**kw):
-            OosWindowLedgerStore(kw["ledger_root"]).reserve_a5_study_spend(
+            OosWindowLedgerStore(kw["seal_root"]).reserve_a5_study_spend(
                 oos_window_id=f"{kw['oos_start']}..{kw['oos_end']}",
                 frozen_set_hash=kw["frozen_set"].frozen_set_hash,
-                override_id=kw["fresh_window_override_id"])
+                override_id=kw["fresh_window_override_id"],
+                request_hash="mock_request")
             return {"reproduction": {}, "verdict": _V()}
 
         orig = so.run_sealed_oos
@@ -670,8 +751,8 @@ class TestA5FreshWindowEnforcement:
         finally:
             so.run_sealed_oos = orig
         assert out["n_pass"] == 1
-        assert out["multiplicity"]["n_spent"] >= 1      # virgin GOVERNING report
-        ledger_rows = OosWindowLedgerStore(ctx.store_root).list_all()
+        assert out["multiplicity"]["n_spent"] >= 1      # virgin GOVERNING report (canonical)
+        ledger_rows = OosWindowLedgerStore(str(ctx.holdout_seal_root)).list_all()
         window_rows = ledger_rows[ledger_rows["oos_window_id"] == f"{VIRGIN[0]}..{VIRGIN[1]}"]
         assert set(window_rows["spend_unit_type"].dropna()) == {"a5_signal_replication_study"}
 
@@ -757,10 +838,17 @@ def _seed_live_artifact(tmp_path, *, metrics=None, claim_bar_passed=None, mode="
     else:
         ids = dstore.append_rows(rows)
     governed_section = None
-    if governed == "valid":
+    if governed in ("valid", "unknown_profile"):
+        if governed == "valid":
+            from src.backtest_engine.execution_profiles import get_profile
+
+            profile = get_profile("joinquant_daily_sim")
+            profile_id, profile_hash = profile.profile_id, profile.profile_hash
+        else:
+            profile_id, profile_hash = "exec_jq_daily", "eph"   # the R3 forged attestation
         governed_section = {
             "runner_id": "seeded_test_runner", "runner_version": "0",
-            "execution_profile_id": "exec_jq_daily", "execution_profile_hash": "eph",
+            "execution_profile_id": profile_id, "execution_profile_hash": profile_hash,
             "allowed_for_formal": True, "return_type": "total_return",
             "max_gross_exposure": 1.0,
             "result_hash": payload_hash({str(k): v for k, v in verdict["metrics"].items()}),
@@ -816,21 +904,46 @@ class TestStrategyPromotionWiring:
         return store.set_status(**args)
 
     def test_fully_consistent_live_artifact_fails_closed_at_governed_runner(self, tmp_path):
-        # THE R2 M1 pin: every binding passes, then the FINAL check refuses because no
-        # governed runner is registered — hand-seeded live artifacts cannot promote.
+        # THE R2 M1 + R3 M1 pins, layer by layer:
+        # (a) a FORGED attestation with an unknown profile id refuses at profile
+        #     resolution (registering a runner name can never skip this — the R3 probe);
+        # (b) a REAL profile + hash still refuses because no VERIFIER is registered;
+        # (c) no attestation at all refuses with the no-attestation message.
         from src.research_orchestrator.release_gate import PromotionGateError
+
+        forged = _seed_live_artifact(tmp_path, governed="unknown_profile")
+        store = self._publish(tmp_path, forged)
+        with pytest.raises(PromotionGateError, match="does not resolve"):
+            self._approve(tmp_path, store)
+        real = _seed_live_artifact(tmp_path / "b")
+        store_b = self._publish(tmp_path / "b", real)
+        with pytest.raises(PromotionGateError, match="no REGISTERED governed-runner VERIFIER"):
+            self._approve(tmp_path / "b", store_b,
+                          holdout_seal_dir=tmp_path / "b" / "seals",
+                          book_artifact_dir=tmp_path / "b" / "book_artifacts")
+        none = _seed_live_artifact(tmp_path / "c", governed=None)
+        store_c = self._publish(tmp_path / "c", none)
+        with pytest.raises(PromotionGateError, match="no governed_execution attestation"):
+            self._approve(tmp_path / "c", store_c,
+                          holdout_seal_dir=tmp_path / "c" / "seals",
+                          book_artifact_dir=tmp_path / "c" / "book_artifacts")
+
+    def test_registered_verifier_with_real_profile_completes_the_chain(self, tmp_path, monkeypatch):
+        # the S6 simulation: registering a VERIFIER (not a name) + a real profile + hash
+        # lets the full chain pass — this is exactly what the S6 runner PR will do.
+        from src.research_orchestrator.registries import strategy_registry as sr
 
         seeded = _seed_live_artifact(tmp_path)
         store = self._publish(tmp_path, seeded)
-        with pytest.raises(PromotionGateError, match="not a REGISTERED governed runner"):
-            self._approve(tmp_path, store)
-        # and one WITHOUT any attestation refuses with the no-attestation message
-        seeded2 = _seed_live_artifact(tmp_path / "b", governed=None)
-        store2 = self._publish(tmp_path / "b", seeded2)
-        with pytest.raises(PromotionGateError, match="no governed_execution attestation"):
-            self._approve(tmp_path / "b", store2,
-                          holdout_seal_dir=tmp_path / "b" / "seals",
-                          book_artifact_dir=tmp_path / "b" / "book_artifacts")
+        calls = {}
+
+        def verifier(*, governed, artifact):
+            calls["seen"] = (governed["runner_id"], artifact["book_seal_key"])
+
+        monkeypatch.setitem(sr.REGISTERED_GOVERNED_RUNNER_VERIFIERS, "seeded_test_runner", verifier)
+        result = self._approve(tmp_path, store)
+        assert result["new_status"] == "approved"
+        assert calls["seen"] == ("seeded_test_runner", seeded["key"])
 
     def test_gate_ignores_caller_supplied_book_seal_dict(self, tmp_path):
         from src.research_orchestrator.release_gate import PromotionGateError
@@ -937,6 +1050,22 @@ class TestBookSealArtifactStore:
         with pytest.raises(BookSealStoreError, match="illegal transition"):
             store.complete(**kw, artifact={"a": 2})
         assert store.current("k")["state"] == "complete"
+
+    def test_append_rows_batch_idempotent_and_divergence_refused(self, tmp_path):
+        # R3 Minor 1: a resume after a crash between append and complete re-uses ids
+        # instead of duplicating; a divergent payload for the same logical key refuses.
+        store = StrategyComponentDiagnosticStore(tmp_path / "d")
+        rows = [{"book_seal_key": "k", "request_hash": "r", "component_factor_id": "fac_a",
+                 "oos_rank_icir": "0.2", "run_type": "book_component_diagnostic"},
+                {"book_seal_key": "k", "request_hash": "r", "component_factor_id": "fac_b",
+                 "oos_rank_icir": "-0.1", "run_type": "book_component_diagnostic"}]
+        ids1 = store.append_rows(rows)
+        ids2 = store.append_rows(rows)              # crash-resume replay
+        assert ids1 == ids2
+        assert len(store.list_all()) == 2           # no duplicates
+        divergent = [dict(rows[0], oos_rank_icir="0.9")]
+        with pytest.raises(BookSealStoreError, match="DIVERGENT"):
+            store.append_rows(divergent)
 
     def test_load_artifact_content_addressed(self, tmp_path):
         store = BookSealArtifactStore(tmp_path / "a")
