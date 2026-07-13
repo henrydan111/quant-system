@@ -333,6 +333,14 @@ class TestTyping:
                          _mock([{"idx": 2}, {"idx": 5}]))
         assert [r["idx"] for r in out] == [5, 2]
 
+    def test_importance_coercion(self):
+        # §2 step 6 importance_0_5: literal int in [0,5] passes; bool/oob/str -> 2
+        outs = type_batch(
+            [{"idx": i, "content": "x"} for i in range(4)],
+            _mock([{"idx": 0, "importance": 5}, {"idx": 1, "importance": True},
+                   {"idx": 2, "importance": 9}, {"idx": 3, "importance": "5"}]))
+        assert [r["importance"] for r in outs] == [5, 2, 2, 2]
+
     def test_macro_missing_not_applicable(self):
         out = type_batch([{"idx": 0, "content": "x"}], _mock([
             {"idx": 0, "event_type": "政策转述"}]), macro=True)

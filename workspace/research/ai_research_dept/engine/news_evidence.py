@@ -39,9 +39,11 @@ CONSUMER_SEATS = frozenset({"news", "macro", "technical", "fund", "bear", "chief
 #: 消费用途(allowed_uses ⊆ 此;§6b B1 line 440 + research_summary 的 display_only)
 USES = frozenset({"context_only", "penalty", "bear", "factor_positive", "display_only"})
 
-#: news 席 20 分制正向维(M3‴ line 363)
+#: news 席 20 分制正向维(M3‴ line 363):c16_v1 用 catalyst_timing,
+#  c16_news_horizon_v1 只替换它为 tradeability_at_horizon(其余三维共用)
 NEWS_FACTOR_DIMENSIONS = frozenset({
-    "event_materiality", "fundamental_link", "novelty", "tradeability_at_horizon"})
+    "event_materiality", "fundamental_link", "novelty",
+    "catalyst_timing", "tradeability_at_horizon"})
 
 #: 宏观维(M1⁴ line 386 冻结唯一 enum)
 MACRO_DIMENSIONS = frozenset({
@@ -68,6 +70,7 @@ EVIDENCE_CEILING = {
     # 绝不正向
     "attention_only": 0,            # N00/NDA/NIA + news-flow 派生(line 347)
     "research_summary": 0,          # chief 综合(M2′ line 259)
+    "news_context": 0,              # 行情/评论/未证实/观点:信息性但不计分(fail-closed)
 }
 EVIDENCE_CLASSES = frozenset(EVIDENCE_CEILING)
 
@@ -78,6 +81,7 @@ _CLASS_USE_CONSTRAINT = {
     "research_summary": frozenset({"display_only"}),            # M2′ line 259
     "NFR": frozenset({"penalty", "bear"}),                      # 正向上限 0
     "MFR": frozenset({"penalty", "bear"}),                      # line 399
+    "news_context": frozenset({"context_only", "bear"}),        # 不计分上下文
 }
 
 
