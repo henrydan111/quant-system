@@ -62,3 +62,41 @@ def test_shared_hash_matches_fetcher(tmp_path):
                       store_dir=tmp_path, ingest_class="forward")
     fetch_hash = content_hash_for("news", rows.iloc[0], list(rows.columns))
     assert fetch_hash == out.iloc[0]["content_hash"]
+
+
+def test_news_flat_path_ingest_rejected(tmp_path):
+    # review B1: news without ingest_class MUST hard-fail (no flat-path bypass)
+    import pytest
+    from data_infra.text_store import TextStoreError
+    with pytest.raises(TextStoreError, match="ingest_class"):
+        ingest_rows("news", _news_rows(["x"]), published_col="datetime",
+                    retrieved_at=pd.Timestamp("2025-01-27 16:00:00"),
+                    store_dir=tmp_path)                # no ingest_class
+
+
+def test_news_flat_path_load_rejected(tmp_path):
+    import pytest
+    from data_infra.text_store import TextStoreError
+    with pytest.raises(TextStoreError, match="ingest_class"):
+        load_text("news", "2025-01-27 18:00:00", store_dir=tmp_path)
+
+
+def test_dedicated_forward_wrappers(tmp_path):
+    from data_infra.text_store import ingest_forward_news, load_forward_news
+    ingest_forward_news(_news_rows(["盘后"], dt="2025-01-27 16:00:00"),
+                        retrieved_at=pd.Timestamp("2025-01-27 16:05:00"),
+                        store_dir=tmp_path)
+    assert len(load_forward_news("2025-01-27 18:00:00", store_dir=tmp_path)) == 1
+
+
+def test_none_nan_missing_field_same_hash(tmp_path):
+    # review M5: a row with title=None and title=NaN (same missing field) must
+    # dedup to one (identical content_hash), not two
+    r1 = pd.DataFrame([{"src": "sina", "datetime": "2025-01-27 16:00:00",
+                        "content": "同正文", "title": None, "channels": ""}])
+    r2 = pd.DataFrame([{"src": "sina", "datetime": "2025-01-27 16:00:00",
+                        "content": "同正文", "title": float("nan"), "channels": ""}])
+    from data_infra.text_store import content_hash_for
+    h1 = content_hash_for("news", r1.iloc[0], list(r1.columns))
+    h2 = content_hash_for("news", r2.iloc[0], list(r2.columns))
+    assert h1 == h2                                   # None and NaN hash identically

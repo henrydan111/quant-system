@@ -99,8 +99,25 @@ class TextStoreError(Exception):
     """Fail-closed error for the PIT text store."""
 
 
+#: canonical missing sentinel (review M5): None / NaN / pd.NA / NaT hash identically
+NULL_SENTINEL = "\x00NULL\x00"
+
+
 def _norm_value(v) -> str:
-    """Whitespace-normalize a value for hashing (absorbs vendor format noise)."""
+    """Canonical value encoding for hashing (review M5): ALL missing forms
+    (None/NaN/pd.NA/NaT) collapse to ONE sentinel so the same missing vendor
+    field never hashes two ways; timestamps → CN-naive ISO; else
+    whitespace-normalized text. One encoder, shared by fetcher and store."""
+    try:
+        if v is None or bool(pd.isna(v)):
+            return NULL_SENTINEL
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, pd.Timestamp) or hasattr(v, "to_pydatetime"):
+        t = pd.Timestamp(v)
+        if t.tzinfo is not None:
+            t = t.tz_convert(CN_TZ).tz_localize(None)
+        return "T:" + t.isoformat()
     return " ".join(str(v).split())
 
 
@@ -142,6 +159,8 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
 #  decision_visible_at<=cutoff filter and pollute current flow). Sources not
 #  passing ingest_class use the flat legacy path (unchanged).
 INGEST_CLASSES = ("forward", "history_bulk")
+#: sources that MUST declare a physical ingest_class (review B1: no flat-path bypass)
+CLASS_REQUIRED_SOURCES = frozenset({"news"})
 
 
 def _store_path(source: str, store_dir: str | os.PathLike | None,
@@ -213,6 +232,12 @@ def ingest_rows(
         The stamped rows for THIS batch (both newly appended and pre-existing
         duplicates, with their authoritative stamps).
     """
+    # review B1: news MUST declare a physical ingest_class (before the empty
+    # return) so a flat-path bypass is impossible; pre-NF sources unchanged.
+    if source in CLASS_REQUIRED_SOURCES and ingest_class is None:
+        raise TextStoreError(
+            f"source {source!r} requires ingest_class ∈ {INGEST_CLASSES} "
+            f"(physical isolation, review B1) — flat-path ingest refused")
     if raw.empty:
         return raw.copy()
     retrieved_at = to_cn_naive(retrieved_at)
@@ -266,7 +291,8 @@ def ingest_rows(
             _atomic_write_parquet(combined, path)
         else:
             combined = existing
-        assert combined["content_hash"].is_unique, "store content_hash not unique"
+        if not combined["content_hash"].is_unique:      # permanent check (review M5)
+            raise TextStoreError(f"{path}: content_hash not unique after append")
         # return authoritative stamps for THIS batch's hashes (originals win)
         return combined[combined["content_hash"].isin(set(stamped["content_hash"]))].copy()
     _atomic_write_parquet(stamped, path)
@@ -293,6 +319,10 @@ def load_text(
     never reachable from a forward decision. Omitting it reads the flat legacy
     path (unchanged for pre-NF sources).
     """
+    if source in CLASS_REQUIRED_SOURCES and ingest_class is None:
+        raise TextStoreError(
+            f"source {source!r} requires ingest_class to load (review B1) — "
+            f"a flat-path read would bypass forward/history_bulk isolation")
     path = _store_path(source, store_dir, ingest_class)
     if not path.exists():
         if require_exists:
@@ -307,5 +337,35 @@ def load_text(
             f"{path} is missing PIT stamp columns {missing} — refusing to load "
             f"(rows must be written through ingest_rows)"
         )
+    # review B1: every loaded row's stamped ingest_class must match the requested
+    # partition (a row's provenance can't disagree with its physical location)
+    if ingest_class is not None and "ingest_class" in df.columns:
+        bad = df["ingest_class"] != ingest_class
+        if bad.any():
+            raise TextStoreError(
+                f"{path}: {int(bad.sum())} rows have ingest_class != {ingest_class!r} "
+                f"(partition/metadata mismatch)")
     t = to_cn_naive(decision_time)
     return df[df["decision_visible_at"] <= t].copy()
+
+
+# ---- dedicated news entry points (review B1: production decisions use forward) ----
+
+def ingest_forward_news(raw, *, retrieved_at, store_dir=None):
+    """Forward-panel news ingest — the ONLY path a live decision's raw text takes."""
+    return ingest_rows("news", raw, published_col="datetime",
+                       retrieved_at=retrieved_at, store_dir=store_dir,
+                       ingest_class="forward")
+
+
+def ingest_history_news(raw, *, retrieved_at, store_dir=None):
+    """History-bulk news ingest — physically separated; NON_EVIDENTIARY replay only."""
+    return ingest_rows("news", raw, published_col="datetime",
+                       retrieved_at=retrieved_at, store_dir=store_dir,
+                       ingest_class="history_bulk")
+
+
+def load_forward_news(decision_time, *, store_dir=None, require_exists=False):
+    """Forward-panel news load — a live decision can NEVER see bulk history."""
+    return load_text("news", decision_time, store_dir=store_dir,
+                     require_exists=require_exists, ingest_class="forward")

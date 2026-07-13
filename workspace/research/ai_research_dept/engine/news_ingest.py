@@ -11,10 +11,11 @@
   velocity = count_1d/(count_20d/20) 仅分母>0 否则 null(**绝不地板**);
 - 确定性预过滤 + 协同检测(B4/E6):长度域/黑嘴词表硬丢弃 + coordination_flag。
 
-⚠ 所有流/广度只从 cutoff 前可见成员算;history_bulk 成员(回填、无真时间戳)由
-`decision_visible_at` 语义自动排除——回填行 first_ingested_at 晚,cutoff 前不可见。
+⚠ 所有流/广度只从 cutoff 前可见成员算;**history_bulk 由 text_store 物理隔离**
+(review B1:独立 forward/ 与 history_bulk/ 目录,forward 加载器只读 forward/,回填历史
+对前向决策物理不可达)——不再依赖 decision_visible_at 语义"自动排除"。
 LLM 分型(event_type × verification_status × content_kind)+ 三路路由 + attention 卡
-渲染在 news_ingest_llm.py(下一块),消费本模块的确定性输出。
+渲染在下一块,消费本模块的确定性输出。
 """
 from __future__ import annotations
 
@@ -25,6 +26,8 @@ import unicodedata
 from dataclasses import dataclass, field
 
 import pandas as pd
+
+from workspace.research.ai_research_dept.engine.news_seal import SealError, seal_hash
 
 # ---- A-share trading sessions (Asia/Shanghai, calendar = truth) ----
 _AM_OPEN = pd.Timedelta("9:30:00")
@@ -82,23 +85,38 @@ class SessionInputError(Exception):
     """发布时刻晚于 cutoff(review M3:不得静默当作 no-session)。"""
 
 
+def _to_cn_naive(ts) -> pd.Timestamp:
+    """规范到 Asia/Shanghai naive(review M3:tz-aware 与 naive 混用不再 TypeError)。"""
+    t = pd.Timestamp(ts)
+    if t.tzinfo is not None:
+        t = t.tz_convert("Asia/Shanghai").tz_localize(None)
+    return t
+
+
 def no_exchange_session_since_publish(published_at, cutoff, open_days: set, *,
-                                      target_tradable_since=None) -> bool:
+                                      target_intervals=None) -> bool:
     """事实字段(M2‴ 替代 unpriced_since_close,review M3):自发布至 cutoff 之间是否
-    **没有该标的可被定价的交易所价格发现区间**。True = 市场自发布起对该标的一直无定价机会。
-    - 发布晚于 cutoff → SessionInputError(不静默当 no-session);
-    - `target_tradable_since`(可选):{开市日} 集合,标的当日**可交易**(未停牌/未一字锁)的
-      交易日;给定时,只有标的可交易的 session 才算"有定价机会"(停牌/一字期 → 仍视为未定价)。
-    时间戳均按 Asia/Shanghai naive(本项目 text_store 已规范化)。"""
-    t0, t1 = pd.Timestamp(published_at), pd.Timestamp(cutoff)
+    **没有该标的可被定价的交易所价格发现区间**。True = 无定价机会。
+    - 发布晚于 cutoff → SessionInputError(不静默当 no-session);全部时戳规范到 CN naive;
+    - `target_intervals`(可选,标的特定):[(start, end, state)] 列表,state ∈
+      {tradable, suspended, locked}——**可表达上午停牌/下午复牌/一字锁的盘中级状态**;
+      给定时,只有与 (published, cutoff] 相交且 state=='tradable' 的区间算"有定价机会"
+      (停牌/一字 → 仍视为未定价)。不给则回退到 open_days 的日历级 session。"""
+    t0 = _to_cn_naive(published_at)
+    t1 = _to_cn_naive(cutoff)
     if t1 < t0:
         raise SessionInputError(f"published_at {t0} > cutoff {t1}")
     if t1 == t0:
         return True
-    days = set(open_days)
-    if target_tradable_since is not None:
-        days = days & set(target_tradable_since)   # 只保留标的可交易的开市日
-    return not _sessions_in_window(days, t0, t1)
+    if target_intervals is not None:
+        for start, end, state in target_intervals:
+            if state != "tradable":
+                continue
+            s, e = _to_cn_naive(start), _to_cn_naive(end)
+            if s <= t1 and e > t0:              # 相交且可交易 → 有定价机会
+                return False
+        return True
+    return not _sessions_in_window(set(open_days), t0, t1)
 
 
 # --------------------------------------------------- 确定性预过滤 + 协同(B4/E6)
@@ -123,84 +141,119 @@ def deterministic_prefilter(content: str) -> tuple[bool, str]:
     return True, ""
 
 
-# --------------------------------------------------- 簇 + 源家族(M1″/B4,review B2/M2)
+# --------------------------------------------------- 簇 + 源家族(review B2/M2 全面密封)
 
 #: 确定性算法版本(进簇快照哈希与 C16b 指纹;改分桶/相似口径必 bump)
-CLUSTER_ALGO_VERSION = "clust_v2"
-FAMILY_ALGO_VERSION = "fam_v2"
+CLUSTER_ALGO_VERSION = "clust_v3"
+FAMILY_ALGO_VERSION = "fam_v3"
+#: 事实占位分桶粒度(review M2:同措辞在新窗口重现 = 新事实占位,不再被旧家族吞掉)
+FACT_BUCKET = "D"                                # 日历日
 
 
 def source_family_id(content: str) -> str:
-    """稳定版本化源家族 ID(review M2:**只看规范化措辞,不含分钟**)。同措辞 =
-    一个家族,无论发布时刻或来源——staggered 转载 10:00/10:01/10:02 归一,不再膨胀独立性。
-    (跨不同措辞、同一事实的佐证是 fact 级概念,需语义分组,v1 延后到 typing 后的
-    fact_cluster_id;raw 层的簇即源家族=一种措辞。)"""
+    """稳定版本化**源家族** ID(review M2:同措辞=一个家族,不含分钟)。"""
     return f"{FAMILY_ALGO_VERSION}:{_text_fingerprint(content)}"
+
+
+def fact_occurrence_id(content: str, effective_at) -> str:
+    """**事实占位** ID(review M2:源家族 × 时间桶)。同措辞在不同日重现 = 不同占位,
+    使数周后的重现被当前窗口正确计为一次新事实(修复 flow_count 归零 bug)。
+    与 source_family_id 显式区分:count 数唯一事实占位,breadth 数唯一源家族。"""
+    day = pd.Timestamp(effective_at).strftime("%Y%m%d")
+    return f"{source_family_id(content)}@{day}"
 
 
 @dataclass(frozen=True)
 class ClusterSnapshot:
-    """cutoff T 的**真不可变**簇快照(review B2)。frozen dataclass;成员为规范
-    不可变元组(非调用方持有的 DataFrame);snapshot_id = SHA-256 over 完整规范
-    载荷(算法版本/cutoff/成员内容哈希+effective_at 有序)。一个簇 = 一种措辞
-    (源家族)。"""
-    cluster_id: str                             # = source_family_id(措辞)
+    """cutoff T 的**不可伪造**簇快照(review B2 全面密封)。frozen + 成员为完整规范
+    provenance 元组;snapshot_id = **全 64 位 SHA-256** over 完整成员总体
+    (object_id_hash / 全长 content_hash / source_published_at / first_ingested_at /
+    decision_visible_at / ingest_class),按**完整成员元组**规范排序(等时不再受输入序
+    影响);自称 snapshot_id 由校验重算,不符硬失败。一个簇 = 一种措辞(源家族)。"""
+    cluster_id: str
     algo_version: str
     cutoff_iso: str
-    #: 成员规范元组:每条 (src, datetime, content_hash, effective_at_iso),按 effective 排序
+    #: 每成员完整 provenance dict(object_id_hash/content_hash/三时戳/ingest_class/src/datetime)
     members: tuple
+    fact_occurrence_id: str                     # 该簇的事实占位(family@day)
     cluster_first_visible_at_iso: str
-    n_outlets: int                              # 携带此措辞的不同 src 数(≥2=转载)
+    n_outlets: int
     snapshot_id: str = field(default="")
 
     def __post_init__(self):
+        payload = self._payload()
+        recomputed = seal_hash(payload)
+        if self.snapshot_id and self.snapshot_id != recomputed:
+            raise SealError(f"snapshot_id 伪造:自称 {self.snapshot_id[:12]} "
+                            f"重算 {recomputed[:12]}")
         if not self.snapshot_id:
-            payload = json.dumps({
-                "algo": self.algo_version, "cluster_id": self.cluster_id,
-                "cutoff": self.cutoff_iso, "members": list(self.members),
-            }, sort_keys=True, ensure_ascii=False)
-            object.__setattr__(self, "snapshot_id",
-                               hashlib.sha256(payload.encode()).hexdigest()[:24])
+            object.__setattr__(self, "snapshot_id", recomputed)
+
+    def _payload(self) -> dict:
+        return {"algo": self.algo_version, "cluster_id": self.cluster_id,
+                "cutoff": self.cutoff_iso, "fact": self.fact_occurrence_id,
+                "members": list(self.members)}
 
     @property
     def cluster_first_visible_at(self):
         return pd.Timestamp(self.cluster_first_visible_at_iso)
 
 
+_REQUIRED_MEMBER_COLS = ("src", "datetime", "content", "object_id_hash",
+                         "content_hash", "source_published_at",
+                         "first_ingested_at", "decision_visible_at", "ingest_class")
+
+
 def build_cluster_snapshots(visible: pd.DataFrame, cutoff) -> list[ClusterSnapshot]:
-    """从 cutoff 前可见成员构造不可变簇快照(M1″/review B2)。**验证不信任调用方**:
-    对每条成员重算 effective_at=max(source_published_at, first_ingested_at) 并**硬失败**
-    任何 > cutoff 的成员(不再默默保留未来成员)。聚簇键 = 源家族(措辞)。"""
+    """从 cutoff 前可见成员构造**不可伪造**簇快照(review B2)。要求完整 provenance 列
+    (含全长 content_hash / object_id_hash / 三时戳 / ingest_class,由 text_store 印戳)。
+    验证不信任:重算 effective_at=max(pub, ingest),**拒 NaT、拒 > cutoff**;成员按
+    完整元组规范排序(等时确定)。聚簇键 = 源家族(措辞)。"""
     cutoff = pd.Timestamp(cutoff)
     if visible.empty:
         return []
+    missing = [c for c in _REQUIRED_MEMBER_COLS if c not in visible.columns]
+    if missing:
+        raise ValueError(f"visible 缺完整 provenance 列 {missing} —— 拒绝构造"
+                         f"(必须经 text_store 印戳,review B2)")
     v = visible.copy()
-    # 验证不信任:重算 effective_at,fail-closed 拒未来成员(review B2/M3)
-    if {"source_published_at", "first_ingested_at"} <= set(v.columns):
-        eff = v[["source_published_at", "first_ingested_at"]].apply(
-            pd.to_datetime, errors="coerce").max(axis=1)
-    elif "decision_visible_at" in v.columns:
-        eff = pd.to_datetime(v["decision_visible_at"], errors="coerce")
-    else:
-        raise ValueError("visible 缺 effective_at 来源列(source_published_at/"
-                         "first_ingested_at 或 decision_visible_at)")
+    pub = pd.to_datetime(v["source_published_at"], errors="coerce")
+    ing = pd.to_datetime(v["first_ingested_at"], errors="coerce")
+    eff = pd.concat([pub, ing], axis=1).max(axis=1)   # 重算,不信 decision_visible_at
+    if eff.isna().any():
+        raise ValueError(f"{int(eff.isna().sum())} 个成员 effective_at 为 NaT —— 拒绝(review B2)")
     if (eff > cutoff).any():
         raise ValueError(f"{int((eff > cutoff).sum())} 个成员 effective_at > cutoff "
-                         f"{cutoff} —— 拒绝构造(未来成员泄漏,review B2)")
+                         f"{cutoff} —— 拒绝(未来成员泄漏)")
     v = v.assign(_eff=eff, _fam=v["content"].map(source_family_id))
     out = []
     for fam, grp in v.groupby("_fam", sort=True):
-        grp = grp.sort_values("_eff")
-        members = tuple(
-            (str(r["src"]), str(r["datetime"]), _text_fingerprint(str(r["content"])),
-             pd.Timestamp(r["_eff"]).isoformat())
-            for _, r in grp.iterrows())
+        members = tuple(sorted(
+            ({"src": str(r["src"]), "datetime": str(r["datetime"]),
+              "object_id_hash": str(r["object_id_hash"]),
+              "content_hash": str(r["content_hash"]),
+              "source_published_at": (None if _pd_na(r["source_published_at"])
+                                      else pd.Timestamp(r["source_published_at"]).isoformat()),
+              "first_ingested_at": pd.Timestamp(r["first_ingested_at"]).isoformat(),
+              "decision_visible_at": pd.Timestamp(r["_eff"]).isoformat(),
+              "ingest_class": str(r["ingest_class"])}
+             for _, r in grp.iterrows()),
+            key=lambda m: (m["content_hash"], m["src"], m["decision_visible_at"])))
+        first_eff = pd.Timestamp(grp["_eff"].min())
         out.append(ClusterSnapshot(
             cluster_id=fam, algo_version=CLUSTER_ALGO_VERSION,
             cutoff_iso=cutoff.isoformat(), members=members,
-            cluster_first_visible_at_iso=pd.Timestamp(grp["_eff"].min()).isoformat(),
+            fact_occurrence_id=f"{fam}@{first_eff.strftime('%Y%m%d')}",
+            cluster_first_visible_at_iso=first_eff.isoformat(),
             n_outlets=int(grp["src"].nunique())))
     return out
+
+
+def _pd_na(v) -> bool:
+    try:
+        return bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return v is None
 
 
 def coordination_flag(cluster: ClusterSnapshot, *, burst_seconds: int = 900,
@@ -208,7 +261,7 @@ def coordination_flag(cluster: ClusterSnapshot, *, burst_seconds: int = 900,
     """协同/pump 检测(E6 → NFC 负向证据类,review M2)。同一措辞被 ≥3 个不同 outlet
     突发转载 + **确认无结构化事件背书** = 协同拉抬。只在
     structured_backing_status=='confirmed_absent' 时发旗(覆盖不完整/present → not_applicable)。"""
-    times = pd.to_datetime([m[1] for m in cluster.members])
+    times = pd.to_datetime([m["datetime"] for m in cluster.members])
     burst = (len(cluster.members) >= 3
              and (times.max() - times.min()).total_seconds() <= burst_seconds)
     syndicated = cluster.n_outlets >= 3           # 同措辞跨≥3 outlet = 转载
@@ -220,6 +273,65 @@ def coordination_flag(cluster: ClusterSnapshot, *, burst_seconds: int = 900,
             "status": "ok" if eligible else "not_applicable_backing"}
 
 
+# --------------------------------------------------- 覆盖工件(M1,封印)
+
+@dataclass(frozen=True)
+class NewsCoverageArtifact:
+    """封印覆盖工件(review M1)。frozen;coverage_hash = 全 SHA-256 over 规范载荷
+    (src/window/complete/availability_state/windows/watermark 前后/population_hash)。
+    availability_state ∈ {confirmed_absent, coverage_incomplete, source_unavailable}。
+    下游必须消费本工件而非裸 bool;watermark 只在 complete 时推进。"""
+    src: str
+    start: str
+    end: str
+    complete: bool
+    availability_state: str
+    windows: tuple
+    watermark_before: str | None
+    watermark_after: str | None
+    population_hash: str
+    coverage_hash: str = field(default="")
+
+    def __post_init__(self):
+        payload = self._payload()
+        h = seal_hash(payload)
+        if self.coverage_hash and self.coverage_hash != h:
+            raise SealError(f"coverage_hash 伪造:{self.coverage_hash[:12]} ≠ {h[:12]}")
+        if not self.coverage_hash:
+            object.__setattr__(self, "coverage_hash", h)
+
+    def _payload(self) -> dict:
+        return {"src": self.src, "start": self.start, "end": self.end,
+                "complete": self.complete, "availability_state": self.availability_state,
+                "windows": list(self.windows), "watermark_before": self.watermark_before,
+                "watermark_after": self.watermark_after,
+                "population_hash": self.population_hash}
+
+
+def build_coverage_artifact(coverage: dict, *, watermark_before, watermark_after,
+                            population_hash: str,
+                            source_available: bool = True) -> NewsCoverageArtifact:
+    """从 fetcher 覆盖 dict 封印覆盖工件(review M1)。availability:源不可用 →
+    source_unavailable;有 cap_at_min_window → coverage_incomplete;否则 confirmed_absent。
+    watermark 只在 complete 时可推进(watermark_after 给定即断言 complete)。"""
+    complete = bool(coverage.get("complete")) and source_available
+    if not source_available:
+        state = "source_unavailable"
+    elif not complete:
+        state = "coverage_incomplete"
+    else:
+        state = "confirmed_absent"
+    if watermark_after is not None and not complete:
+        raise ValueError("watermark 不得在覆盖不完整时推进(review M1)")
+    return NewsCoverageArtifact(
+        src=coverage["src"], start=coverage["start"], end=coverage["end"],
+        complete=complete, availability_state=state,
+        windows=tuple(json.dumps(w, sort_keys=True) for w in coverage.get("windows", [])),
+        watermark_before=(None if watermark_before is None else str(watermark_before)),
+        watermark_after=(None if watermark_after is None else str(watermark_after)),
+        population_hash=population_hash)
+
+
 # --------------------------------------------------- 流特征(E1,as-of 固定窗)
 
 _FLOW_WINDOWS = {"1d": pd.Timedelta(hours=24), "5d": pd.Timedelta(hours=120),
@@ -227,30 +339,31 @@ _FLOW_WINDOWS = {"1d": pd.Timedelta(hours=24), "5d": pd.Timedelta(hours=120),
 
 
 def flow_features(entity_clusters: list[ClusterSnapshot], cutoff, *,
-                  coverage_complete: bool = True) -> dict:
-    """单实体流动态(E1,attention_only 域,review M2)。窗口止于 cutoff;
-    flow_count=唯一源家族(措辞)簇数;coverage_breadth=**唯一 outlet 的并集**
-    (非逐簇求和);velocity=count_1d/(count_20d/20) 仅分母>0 否则 None(**绝不地板**)。
-    必需源覆盖不完整(coverage_complete=False)→ 全部 not_applicable(不静默给数)。"""
-    if not coverage_complete:
+                  coverage: "NewsCoverageArtifact | None" = None) -> dict:
+    """单实体流动态(E1,attention_only 域,review M1/M2)。窗口止于 cutoff;
+    flow_count=唯一**事实占位**(family×day)数;coverage_breadth=唯一**源家族**(措辞)数;
+    velocity=count_1d/(count_20d/20) 仅分母>0 否则 None(**绝不地板**)。
+    **coverage 必须是封印 NewsCoverageArtifact 且 complete**(review M1:不完整/None →
+    全部 not_applicable,绝不在覆盖不完整时静默给数)。"""
+    if coverage is None or not isinstance(coverage, NewsCoverageArtifact) \
+            or not coverage.complete:
         return {"flow_count_1d": None, "flow_count_5d": None, "flow_count_20d": None,
                 "coverage_breadth_1d": None, "flow_velocity": None,
                 "flow_velocity_status": "not_applicable_incomplete_coverage"}
     cutoff = pd.Timestamp(cutoff)
-    counts, outlets_union = {}, {}
+    counts, family_union = {}, {}
     for name, span in _FLOW_WINDOWS.items():
         lo = cutoff - span
         in_win = [c for c in entity_clusters if lo < c.cluster_first_visible_at <= cutoff]
-        counts[name] = len(in_win)
-        # breadth = 窗口内所有簇成员 outlet(src)的**并集**大小(review M2)
-        srcs = set()
-        for c in in_win:
-            srcs.update(m[0] for m in c.members)
-        outlets_union[name] = len(srcs)
+        # review M2: count = 唯一**事实占位**(family×day);同措辞新日重现被计入
+        counts[name] = len({c.fact_occurrence_id for c in in_win})
+        # breadth = 唯一**源家族**(不同措辞)数
+        family_union[name] = len({c.cluster_id for c in in_win})
     c1, c20 = counts["1d"], counts["20d"]
     velocity = (c1 / (c20 / 20.0)) if c20 > 0 else None
     return {"flow_count_1d": c1, "flow_count_5d": counts["5d"],
-            "flow_count_20d": c20, "coverage_breadth_1d": outlets_union["1d"],
+            "flow_count_20d": c20,
+            "coverage_breadth_1d": family_union["1d"],   # 唯一源家族(措辞)数
             "flow_velocity": velocity,
             "flow_velocity_status": "ok" if c20 > 0 else "not_applicable_zero_baseline"}
 
@@ -300,16 +413,31 @@ def type_batch(items: list[dict], call_fn, *, macro: bool = False) -> list[dict]
     不再当 True 又不静默放行);macro 批必须请求且要求合法 `macro_type`(缺/非法 →
     not_applicable,绝不落到真维度);输出按输入序排。"""
     from ai_layer.ark_client import parse_json_reply
+    # review M4: validate REQUEST items before the model call — every item must be
+    # an object with a unique int idx of the exact type (bool excluded: True==1)
+    requested = []
+    for it in items:
+        if not isinstance(it, dict) or "idx" not in it:
+            raise TypingSchemaError(f"request item not an object with idx: {it!r}")
+        i = it["idx"]
+        if isinstance(i, bool) or not isinstance(i, int):
+            raise TypingSchemaError(f"request idx must be a non-bool int: {i!r}")
+        requested.append(i)
+    if len(set(requested)) != len(requested):
+        raise TypingSchemaError(f"duplicate requested idx: {requested}")
+    req_set = set(requested)
     prompt = _TYPING_PROMPT + (_MACRO_TYPE_APPENDIX if macro else "")
     msgs = [{"role": "system", "content": _TYPING_SYSTEM + prompt},
             {"role": "user", "content": json.dumps({"items": items}, ensure_ascii=False)}]
     rec = parse_json_reply(call_fn(msgs).text)
-    requested = [it["idx"] for it in items]
     by_idx: dict = {}
     for r in rec.get("results", []):
+        if not isinstance(r, dict):
+            continue
         i = r.get("idx")
-        if i not in set(requested):
-            continue                              # 未知 idx 丢弃
+        # exact-type match (a bool response idx must NOT match an int request)
+        if isinstance(i, bool) or not isinstance(i, int) or i not in req_set:
+            continue                              # 未知/错类型 idx 丢弃
         if i in by_idx:
             raise TypingSchemaError(f"duplicate result idx {i}")
         by_idx[i] = r
