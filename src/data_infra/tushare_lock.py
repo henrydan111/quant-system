@@ -18,11 +18,23 @@ ORPHAN child keeps running inside a no-op "lock" while a new sibling acquires th
 exclusivity acquires the REAL kernel lock. Callers that would otherwise nest (the monthly bump around
 its catch-up subprocesses) are restructured so the parent does NOT hold the lock across a child that
 re-acquires it (see scripts/monthly_calendar_bump.py).
+
+LOCK IDENTITIES (GPT REWORK-6 Blocker 1 — a checkout-relative dir split the namespace per clone/
+worktree while both talk to the SAME Tushare account / raw store):
+- API lock: MACHINE-GLOBAL, at a fixed well-known literal path independent of the checkout — every
+  clone/worktree on this machine serializes against the same single Tushare account (§6.1).
+- Raw-maintenance lock: COLOCATED with the canonical resolved data store (``<data_root>/.locks``,
+  data_root from the checkout's config.yaml) — every writer of the SAME store shares the lock; a
+  different store is a different (correctly independent) lock.
+Both paths are COMPUTED FRESH on every acquisition by module-level functions; there is no mutable
+module path variable as a sanctioned override. Tests isolate by monkeypatching the path FUNCTIONS
+(_api_lock_dir/_raw_lock_dir) — an explicit test seam, not a production knob.
 """
 from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -30,28 +42,47 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout  # noqa: F401 — Timeout re-exported for callers' soft-skip
 
-# ONE immutable lock identity for this workspace — a fixed absolute path under the project root, NOT
-# overridable by an ambient environment variable. A per-process `QUANT_LOCK_DIR` override previously
-# let a second process select a DIFFERENT namespace and acquire immediately while a real holder was
-# live (two raw writers / two parallel Tushare callers — GPT REWORK-5 Blocker 1). Tests INJECT
-# isolation by monkeypatching this module attribute in-process (or reassigning it inside a spawned
-# holder's own code), never via a production-readable env var. A shared-volume deploy that needs a
-# different directory must resolve it centrally (config), not from ambient per-process state.
-_LOCK_DIR = Path(__file__).resolve().parents[2] / "logs" / "locks"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _lock_dir() -> Path:
-    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    return _LOCK_DIR
+def _api_lock_dir() -> Path:
+    """Machine-global fixed literal location (NOT checkout-relative, NOT env-derived): the Tushare
+    account is machine-wide, so its serialization must be too. Single-account setup — if a second
+    account is ever added, key the lock file name by an account hash."""
+    if sys.platform == "win32":
+        d = Path("C:/ProgramData/quant_system_locks")
+    else:
+        d = Path("/var/tmp/quant_system_locks")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def _filelock(name: str, timeout: float) -> FileLock:
-    return FileLock(str(_lock_dir() / name), timeout=timeout)
+def _resolve_data_root() -> Path:
+    """The canonical raw data store this checkout operates on (config.yaml data.data_root, resolved
+    against the project root when relative). Falls back to <project_root>/data — same default the
+    pipeline uses — if config is unreadable."""
+    try:
+        import yaml
+        with open(_PROJECT_ROOT / "config.yaml", encoding="utf-8") as fh:
+            root = str(yaml.safe_load(fh)["data"]["data_root"])
+        p = Path(root)
+        return (p if p.is_absolute() else (_PROJECT_ROOT / p)).resolve()
+    except Exception:  # noqa: BLE001 — missing/odd config -> the pipeline default
+        return (_PROJECT_ROOT / "data").resolve()
+
+
+def _raw_lock_dir() -> Path:
+    """Colocated with the resolved data store so every writer of the SAME store — from any clone or
+    worktree — contends on the SAME lock (a checkout-relative logs/ dir gave each worktree its own
+    namespace over one shared store)."""
+    d = _resolve_data_root() / ".locks"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 @contextmanager
 def api_call_lock(timeout: float = 1800.0):
-    with _filelock("tushare_api.lock", timeout):
+    with FileLock(str(_api_lock_dir() / "tushare_api.lock"), timeout=timeout):
         yield
 
 
@@ -61,13 +92,14 @@ def raw_maintenance_lock(timeout: float = 21600.0):  # 6h default — a monthly 
     SHORT timeout in an unattended job (the daily raw job) so it fails fast + retries instead of
     blocking behind a multi-hour monthly build until its own task time-limit kills it (GPT m3); on
     timeout FileLock raises `Timeout` (re-exported above)."""
-    with _filelock("raw_maintenance.lock", timeout):
+    with FileLock(str(_raw_lock_dir() / "raw_maintenance.lock"), timeout=timeout):
         yield
 
 
 # ── global cross-process rate spacing (a shared next-allowed timestamp, held under the API lock) ──
 def _next_allowed_path() -> Path:
-    return _lock_dir() / "tushare_next_allowed.txt"
+    # lives with the API lock: the spacing is an ACCOUNT property, so it must be machine-global too.
+    return _api_lock_dir() / "tushare_next_allowed.txt"
 
 
 def _read_next_allowed() -> tuple[float | None, bool]:
@@ -93,7 +125,7 @@ def _set_next_allowed(delta: float) -> bool:
     persisted, so the caller enforces the spacing IN-BAND (sleep while holding the API lock) rather than
     silently dropping it (GPT minor 1)."""
     try:
-        d = _lock_dir()
+        d = _api_lock_dir()
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".next_allowed.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:
@@ -126,12 +158,17 @@ def spaced_call(fn, base_sleep: float, *args, rate_limit_backoff: float = 30.0, 
             delay = nxt - time.time()
             if delay > 0:
                 time.sleep(min(delay, 120.0))  # cap so a poisoned value can't hang forever
+        # cooldown is recorded after EVERY attempted call — success, rate-limit, AND any other
+        # exception (a timeout/parse error still consumed an account request; without this a failed
+        # call let the next process fire immediately — GPT REWORK-6 M6). Rate-limit gets the longer
+        # backoff; persist failure -> enforce IN-BAND by sleeping while still holding the API lock.
+        delta = max(0.0, base_sleep)
         try:
-            r = fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except Exception as exc:
-            if _is_rate_limit(exc) and not _set_next_allowed(rate_limit_backoff):
-                time.sleep(rate_limit_backoff)  # fail-closed cooldown when it can't be persisted
+            if _is_rate_limit(exc):
+                delta = max(delta, rate_limit_backoff)
             raise
-        if not _set_next_allowed(base_sleep):
-            time.sleep(max(0.0, base_sleep))  # can't persist -> hold the lock so the next caller waits
-        return r
+        finally:
+            if not _set_next_allowed(delta):
+                time.sleep(min(delta, 120.0))

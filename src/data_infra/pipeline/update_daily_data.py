@@ -720,6 +720,12 @@ def _validate_trade_cal(df, *, fresh: bool):
     out["cal_date"] = out["cal_date"].astype(str).str.replace("-", "", regex=False).str.strip()
     if not out["cal_date"].str.fullmatch(r"\d{8}").all():
         raise ValueError("trade_cal has non-8-digit cal_date values")
+    # REAL Gregorian dates, not just 8-digit shape — `20260230` passed the regex and then poisoned
+    # every downstream consumer incl. the attested provider floor (GPT REWORK-6 M2).
+    parsed = pd.to_datetime(out["cal_date"], format="%Y%m%d", errors="coerce")
+    if parsed.isna().any():
+        bad = out.loc[parsed.isna(), "cal_date"].head(3).tolist()
+        raise ValueError(f"trade_cal has impossible calendar dates {bad}")
     io = pd.to_numeric(out["is_open"], errors="coerce")
     if io.isna().any() or not io.isin([0, 1]).all():
         raise ValueError("trade_cal has is_open outside {0,1}")

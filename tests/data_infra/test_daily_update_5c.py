@@ -47,14 +47,22 @@ def test_update_for_date_beyond_coverage_is_error(tmp_path):
     assert res["is_trading_day"] is True and res["errors"]
 
 
+def _lockdir_patch(monkeypatch, lockdir):
+    # test seam (GPT R6 B1): inject the lock PATH FUNCTIONS — there is no mutable module path variable.
+    lockdir = Path(lockdir)
+    lockdir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(tushare_lock, "_raw_lock_dir", lambda: lockdir)
+    monkeypatch.setattr(tushare_lock, "_api_lock_dir", lambda: lockdir)
+
+
 def _holder_code(lockdir, marker):
-    # a spawned holder injects the lock dir via the MODULE ATTRIBUTE (not an env var — the env override
-    # is removed), acquires raw_maintenance_lock, and holds it while sleeping.
+    # a spawned holder injects the lock-path FUNCTION seam (no module path variable exists to assign),
+    # acquires raw_maintenance_lock, and holds it while sleeping.
     return (
         "import sys, time, pathlib\n"
         f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
         "import data_infra.tushare_lock as tl\n"
-        f"tl._LOCK_DIR = pathlib.Path(r'{lockdir}')\n"
+        f"tl._raw_lock_dir = lambda: pathlib.Path(r'{lockdir}')\n"
         "from data_infra.tushare_lock import raw_maintenance_lock\n"
         "with raw_maintenance_lock():\n"
         f"    open(r'{marker}', 'w').close()\n"
@@ -70,7 +78,7 @@ def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatc
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # inject via attr, not env
+    _lockdir_patch(monkeypatch, lockdir)
     holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq")])
     try:
         for _ in range(200):  # wait until the holder has acquired
@@ -88,15 +96,15 @@ def test_raw_maintenance_lock_kernel_held_and_auto_released(tmp_path, monkeypatc
         pass
 
 
-def test_raw_maintenance_lock_namespace_not_env_forgeable(tmp_path, monkeypatch):
-    # GPT REWORK-5 Blocker 1: the lock namespace must NOT be forgeable via an ambient env var. A live
-    # subprocess holds the lock; the parent — even with QUANT_LOCK_DIR pointed at a DIFFERENT directory
-    # (the old bypass) — must still contend on the SAME immutable lock and time out (the env is ignored).
+def test_raw_lock_namespace_not_ambient_forgeable(tmp_path, monkeypatch):
+    # GPT REWORK-5/6 Blocker 1: the lock namespace must not split via ambient state. A live subprocess
+    # holds the lock; the parent — with the RETIRED env var pointed elsewhere — must still contend on
+    # the SAME lock and time out (no env override exists; the path functions are the only seam).
     import subprocess as _sp
     import time as _time
     import filelock
     lockdir = tmp_path / "locks"
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", lockdir)  # the real (injected) identity
+    _lockdir_patch(monkeypatch, lockdir)
     holder = _sp.Popen([sys.executable, "-c", _holder_code(lockdir, tmp_path / "acq2")])
     try:
         for _ in range(200):
@@ -104,7 +112,7 @@ def test_raw_maintenance_lock_namespace_not_env_forgeable(tmp_path, monkeypatch)
                 break
             _time.sleep(0.05)
         assert (tmp_path / "acq2").exists(), "holder never acquired"
-        # FORGE a different namespace via the (now-ignored) env var — must NOT grant a second lock
+        # the retired env override must have NO effect — still the same contended lock
         monkeypatch.setenv("QUANT_LOCK_DIR", str(tmp_path / "ALT_namespace"))
         with pytest.raises(filelock.Timeout):
             with tushare_lock.raw_maintenance_lock(timeout=0.3):
@@ -114,6 +122,17 @@ def test_raw_maintenance_lock_namespace_not_env_forgeable(tmp_path, monkeypatch)
         holder.wait()
     with tushare_lock.raw_maintenance_lock(timeout=5):  # holder gone -> real lock free
         pass
+
+
+def test_lock_identities_machine_global_and_store_colocated(monkeypatch):
+    # GPT REWORK-6 Blocker 1: the API lock must NOT be checkout-relative (every clone/worktree shares
+    # one Tushare account) and the raw lock must be colocated with the resolved data store (every
+    # writer of the same store shares it). Assert the UNPATCHED identities.
+    api = tushare_lock._api_lock_dir()
+    assert str(tushare_lock._PROJECT_ROOT) not in str(api), "api lock must be machine-global, not checkout-relative"
+    raw = tushare_lock._raw_lock_dir()
+    assert raw == tushare_lock._resolve_data_root() / ".locks", "raw lock must be colocated with the data store"
+    assert tushare_lock._resolve_data_root().name == "data"  # config data_root=./data resolved
 
 
 def _load_script(name):
@@ -213,7 +232,7 @@ def test_spaced_call_fails_closed_when_state_unwritable(tmp_path, monkeypatch):
     # GPT minor 1: if the shared next-allowed timestamp can't be persisted, spacing must be enforced
     # IN-BAND (sleep under the API lock), never silently dropped to zero.
     import time as _time
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")  # inject via attr, not env
+    _lockdir_patch(monkeypatch, tmp_path / "locks")
     monkeypatch.setattr(tushare_lock, "_set_next_allowed", lambda delta: False)  # simulate unwritable
     t0 = _time.time()
     tushare_lock.spaced_call(lambda: "ok", 0.4)
@@ -224,8 +243,7 @@ def test_spaced_call_fails_closed_on_nan_state(tmp_path, monkeypatch):
     # GPT REWORK-5 minor 1: a state file containing `nan` parses via float() but makes delay>0 False and
     # fires immediately. isfinite-guard must force the conservative in-band sleep.
     import time as _time
-    monkeypatch.setattr(tushare_lock, "_LOCK_DIR", tmp_path / "locks")
-    (tmp_path / "locks").mkdir(parents=True)
+    _lockdir_patch(monkeypatch, tmp_path / "locks")
     tushare_lock._next_allowed_path().write_text("nan")
     t0 = _time.time()
     tushare_lock.spaced_call(lambda: "ok", 0.4)
