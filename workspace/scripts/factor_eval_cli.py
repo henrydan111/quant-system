@@ -44,8 +44,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--store-root", default=str(DEFAULT_STORE))
     ap.add_argument("--registry-root", default=str(DEFAULT_REGISTRY))
-    ap.add_argument("--holdout-seal-root", default=str(DEFAULT_HOLDOUT),
-                    help="global cross-run holdout-seal store (used by seal --mode live)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("register")
@@ -105,7 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ctx = FactorEvalContext.create(run_dir=args.run_dir, store_root=args.store_root,
                                    registry_root=args.registry_root,
-                                   holdout_seal_root=args.holdout_seal_root)
+                                   # R4 B1: no CLI override — live claims resolve the CONFIGURED root inside
+                                   # reproduce_sealed_oos; this fixed value only feeds the read-only
+                                   # multiplicity fold-in (_seal_store).
+                                   holdout_seal_root=str(DEFAULT_HOLDOUT))
     try:
         if args.cmd == "register":
             out = cmd_register(ctx, factor_id=args.factor_id, mode=args.mode, evidence_tier=args.evidence_tier,

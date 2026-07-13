@@ -522,39 +522,60 @@ def cmd_seal(
             "horizon": horizon, "selection_universe": sel.get("selection_universe", tud_a["target_universe_id"]),
             "held_sides": [{"factor_id": s.factor_id, "side": s.expected_direction} for s in selected]}
 
+    # R4 Blocker 1: the ONE configured global holdout root — never taken from the caller
+    # (late import = the single monkeypatch target for tests).
+    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
+
+    canonical_root = str(resolve_configured_global_holdout_root())
+    virgin = is_virgin_window(oos_end)
+
     # multiplicity computed with pending_self=True (this would-be spend counted) BEFORE OOS access (#8).
+    # R4 Minor 2: on a VIRGIN window the GOVERNING preview is the A6 virgin budget over the
+    # CANONICAL ledger — a show-mode preview reading only the run-local ledger under-reported
+    # the refusal state.
     report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=True)
+    if virgin:
+        report = virgin_window_multiplicity(
+            OosWindowLedgerStore(canonical_root), oos_window_id, pending_self=True
+        )
     if mode == "show":
         return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(),
                                    "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
 
     # ---- live: the ONLY OOS-access mode ----
-    if not ctx.holdout_seal_root:
-        raise FactorEvalError(
-            "live seal requires a global holdout_seal_root (the cross-run single-shot store) — "
-            "refusing a run-local live seal that would not enforce the OOS budget across runs"
-        )
-    # R2 Blocker 5: the multiplicity override is a pre-recorded, consume-once a6
-    # AUTHORIZATION (OverrideAuthorizationStore at the global holdout root), never a
-    # boolean — an invented id refuses here, before any OOS access.
+    # R2 Blocker 5 + R4 Major 1: the multiplicity override is a pre-recorded a6
+    # AUTHORIZATION. cmd_seal only CHECKS its availability (non-consuming) for the report
+    # enforcement; the request-bound CONSUMPTION happens at the enforcement point inside
+    # the atomic A5 reservation (reserve_a5_study_spend), where the request hash exists.
     override_ok = False
     if str(multiplicity_override_id).strip():
         from src.alpha_research.factor_eval_skill.book_seal_stores import (
             OverrideAuthorizationStore,
         )
 
-        OverrideAuthorizationStore(str(ctx.holdout_seal_root)).consume_authorization(
+        if not OverrideAuthorizationStore(canonical_root).has_authorization(
             kind="a6_multiplicity", override_id=str(multiplicity_override_id),
             oos_window_id=oos_window_id, scope_key=fs.frozen_set_hash,
-        )
+        ):
+            raise FactorEvalError(
+                f"a6_multiplicity authorization {multiplicity_override_id!r} is not "
+                "available (never recorded, scope/window mismatch, or already consumed)"
+            )
         override_ok = True
+    if virgin:
+        # recompute the governing report WITH the available-override flag so an
+        # authorized ≥hard spend downgrades REFUSE → REQUIRE (the consumption itself is
+        # request-bound inside the atomic reservation).
+        report = virgin_window_multiplicity(
+            OosWindowLedgerStore(canonical_root), oos_window_id,
+            override_recorded=override_ok, pending_self=True,
+        )
     _enforce_multiplicity_action(report, ack=multiplicity_ack, override=override_ok)  # (#7)
     # v1.4 A5 (PR3): a FRESH/virgin (post-2026-02-27) window through this FACTOR-LEVEL path is an
     # A5 signal-replication study — it requires a fresh_window_signal_replication_override_id
     # recorded BEFORE access, burns the window for overlapping downstream books, and is counted
     # under the STRICTER A6 virgin budget (warn 3 / hard 5 spend-unit keys). Book-level spends
     # use factor_eval_skill.book_seal (book_seal_key), never this door.
-    virgin = is_virgin_window(oos_end)
     if virgin:
         if not str(fresh_window_override_id).strip():
             raise FactorEvalError(
@@ -563,31 +584,22 @@ def cmd_seal(
                 "fresh_window_signal_replication_override_id (A5); book-level spends go "
                 "through book_seal.run_book_sealed_evaluation"
             )
-        # R3 Blocker 2: the virgin budget reads the CANONICAL ledger colocated with the
-        # global holdout store (where reproduce_sealed_oos reserves A5 spends) — the
-        # run-local store_root ledger stays for legacy burned-window accounting only.
-        canonical_ledger = OosWindowLedgerStore(str(ctx.holdout_seal_root))
-        virgin_report = virgin_window_multiplicity(
-            canonical_ledger, oos_window_id, override_recorded=override_ok, pending_self=True
-        )
-        if virgin_report.action == ACTION_REFUSE:
+        # the governing virgin report was already computed over the CANONICAL ledger above;
+        # ACTION_REFUSE hard-stops here (the reservation inside reproduce re-enforces it).
+        if report.action == ACTION_REFUSE:
             raise FactorEvalError(
-                f"virgin-window budget HARD STOP (n_spent={virgin_report.n_spent}): a user-signed "
-                f"a6_multiplicity authorization must be recorded+consumed BEFORE the spend (A6). "
-                f"{virgin_report.note}"
+                f"virgin-window budget HARD STOP (n_spent={report.n_spent}): a user-signed "
+                f"a6_multiplicity authorization must be recorded BEFORE the spend (A6). "
+                f"{report.note}"
             )
-        _enforce_multiplicity_action(virgin_report, ack=multiplicity_ack, override=override_ok)
     _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
-    seal_root = str(ctx.holdout_seal_root)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
-    exprs = {m["factor_id"]: ctx.resolve_factor(m["factor_id"]).expr for m in sel["members"]}
-    # R2 Blocker 4 + R3 Blocker 2: the A5 virgin spend is RESERVED inside
-    # reproduce_sealed_oos (the lowest shared claim point) against the CANONICAL ledger
-    # derived from seal_root, atomically before the claim, with the A6 bands enforced
-    # inside the reservation — cmd_seal no longer selects the ledger path.
+    # R4 Blockers 1+3: no seal_root and no factor_exprs are passed — the sealed stores
+    # derive from the configured global root and the expressions resolve from the current
+    # catalog (definition-hash-verified) INSIDE reproduce_sealed_oos.
     result = run_sealed_oos(
-        frozen_set=fs, factor_exprs=exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
-        seal_root=seal_root, run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,
+        frozen_set=fs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
+        run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
         fresh_window_override_id=fresh_window_override_id,
         multiplicity_ack=multiplicity_ack,
@@ -606,7 +618,7 @@ def cmd_seal(
     legacy_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     if virgin:
         final_report = virgin_window_multiplicity(
-            OosWindowLedgerStore(str(ctx.holdout_seal_root)), oos_window_id, pending_self=False
+            OosWindowLedgerStore(canonical_root), oos_window_id, pending_self=False
         )
     else:
         final_report = legacy_report

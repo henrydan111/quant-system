@@ -102,11 +102,9 @@ def evaluate_sealed_oos_bar(
 def run_sealed_oos(
     *,
     frozen_set,
-    factor_exprs: Mapping[str, str],
     oos_start: str,
     oos_end: str,
     qlib_dir: str,
-    seal_root: str,
     run_dir: str,
     design_hash: str,
     hypothesis_id: str,
@@ -121,8 +119,10 @@ def run_sealed_oos(
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
     apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. ``sides``
-    defaults to the held sides DERIVED from ``frozen_set`` (no divergence); the seal spend is
-    governed by ``claim_seal`` + ``seal_root`` (the caller decides dryrun vs live).
+    defaults to the held sides DERIVED from ``frozen_set`` (no divergence). R4 B1/B3:
+    there is no ``seal_root`` (the sealed stores derive from the CONFIGURED global
+    holdout root) and no ``factor_exprs`` (expressions resolve from the current catalog,
+    definition-hash-verified against the frozen set).
 
     v1.4 A5 (PR3): this is a FACTOR-LEVEL (frozen-set-keyed) path — on a FRESH/virgin
     (post-2026-02-27) window it is an A5 signal-replication study, which requires a
@@ -151,8 +151,8 @@ def run_sealed_oos(
     if sides is None:
         sides = sides_from_frozen_set(frozen_set)
     reproduction = pe.reproduce_sealed_oos(
-        frozen_set=frozen_set, factor_exprs=dict(factor_exprs), oos_start=oos_start,
-        oos_end=oos_end, qlib_dir=qlib_dir, seal_root=seal_root, run_dir=run_dir,
+        frozen_set=frozen_set, oos_start=oos_start,
+        oos_end=oos_end, qlib_dir=qlib_dir, run_dir=run_dir,
         design_hash=design_hash, hypothesis_id=hypothesis_id, horizon=horizon,
         n_quantiles=n_quantiles, claim_seal=claim_seal,
         fresh_window_override_id=str(fresh_window_override_id),

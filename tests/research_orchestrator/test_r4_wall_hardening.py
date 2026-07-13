@@ -335,9 +335,22 @@ class TestPromotionGuardBindings:
 
         if monkeypatch is not None:
             import src.data_infra.provider_context as ctx_mod
+            import src.research_orchestrator.holdout_seal as hs_mod
 
             monkeypatch.setattr(
                 ctx_mod, "live_spent_oos_end", lambda: pd.Timestamp(spent_boundary)
+            )
+            # PR3 R4 B1/B3: the sealed stores derive from the CONFIGURED root (patched to
+            # the test scratch dir) and expressions from the catalog resolver (patched —
+            # the fake test frozen set is not in the live catalog). There is no caller
+            # seal_root / factor_exprs any more.
+            monkeypatch.setattr(
+                hs_mod, "resolve_configured_global_holdout_root",
+                lambda: Path("data/_r4_test_seal"),
+            )
+            monkeypatch.setattr(
+                pe, "resolve_frozen_catalog_expressions",
+                lambda frozen_set, **kw: {"f1": "Ref($close,1)"},
             )
             if seal_ctx is not None:
                 from src.research_orchestrator import research_access_context as rac
@@ -352,11 +365,9 @@ class TestPromotionGuardBindings:
 
         return pe.reproduce_sealed_oos(
             frozen_set=_FS(),
-            factor_exprs={"f1": "Ref($close,1)"},
             oos_start="2021-01-01",
             oos_end=oos_end,
             qlib_dir="data/qlib_data",
-            seal_root="data/_r4_test_seal",
             run_dir="r4_run",
             design_hash="d" * 8,
             provider_provenance={

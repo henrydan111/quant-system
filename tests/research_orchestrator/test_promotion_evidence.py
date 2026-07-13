@@ -108,6 +108,23 @@ class GitStateTests(unittest.TestCase):
 
 
 class ReproduceSealedOosTests(unittest.TestCase):
+    def _patch_sealed_world(self, root):
+        """PR3 R4 B1/B3 test seam: the configured-root resolver -> the test scratch dir,
+        and the catalog-expression resolver -> the fake fixture factors (not in the live
+        catalog). There is no caller seal_root / factor_exprs any more."""
+        import contextlib
+        from pathlib import Path as _P
+        from unittest.mock import patch
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch(
+            "src.research_orchestrator.holdout_seal.resolve_configured_global_holdout_root",
+            lambda: _P(root)))
+        stack.enter_context(patch(
+            "src.research_orchestrator.promotion_evidence.resolve_frozen_catalog_expressions",
+            lambda frozen_set, **kw: {"f_pos": "x", "f_neg": "y"}))
+        return stack
+
     def _frozen_set(self):
         from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
         return FrozenSelectionSet(
@@ -140,11 +157,14 @@ class ReproduceSealedOosTests(unittest.TestCase):
         return cal, cf
 
     def test_calendar_mismatch_refused(self):
+        # PR3 R4 B1/B3: no seal_root / factor_exprs are passed any more — the calendar
+        # guard fires BEFORE the catalog/root resolution, so this still raises for the
+        # calendar reason.
         from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
         with self.assertRaises(PromotionEvidenceError):
             reproduce_sealed_oos(
-                frozen_set=self._frozen_set(), factor_exprs={"f_pos": "x"}, oos_start="2021-01-01",
-                qlib_dir=".", seal_root=".", run_dir=".", design_hash="d", claim_seal=False,
+                frozen_set=self._frozen_set(), oos_start="2021-01-01",
+                qlib_dir=".", run_dir=".", design_hash="d", claim_seal=False,
                 provider_provenance={"provider_build_id": "b", "calendar_policy_id": "c",
                                      "calendar_end": "2025-01-01"},  # != OOS_END 2026-02-27
             )
@@ -160,13 +180,14 @@ class ReproduceSealedOosTests(unittest.TestCase):
         _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
             store = HoldoutSealStore(d)
-            rep = reproduce_sealed_oos(
-                frozen_set=fs, factor_exprs={"f_pos": "x", "f_neg": "y"}, oos_start="2021-01-01",
-                qlib_dir=".", seal_root=d, run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
-                provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
-                                     "calendar_end": OOS_END},
-                compute_factors_fn=cf, seal_store=store, trade_cal=cal,
-            )
+            with self._patch_sealed_world(d):
+                rep = reproduce_sealed_oos(
+                    frozen_set=fs, oos_start="2021-01-01",
+                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
+                    provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
+                                         "calendar_end": OOS_END},
+                    compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+                )
             ir = rep["independent_reproduction"]
             self.assertEqual(ir["source"], "qlib_windowed_features")
             self.assertEqual(ir["provider_build_id"], "pb1")
@@ -200,13 +221,14 @@ class ReproduceSealedOosTests(unittest.TestCase):
         _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
             store = HoldoutSealStore(d)
-            reproduce_sealed_oos(
-                frozen_set=fs, factor_exprs={"f_pos": "x", "f_neg": "y"}, oos_start="2021-01-01",
-                qlib_dir=".", seal_root=d, run_dir=d, design_hash="dh", horizon=4,
-                provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
-                                     "calendar_end": OOS_END},
-                compute_factors_fn=cf, seal_store=store, trade_cal=cal,
-            )
+            with self._patch_sealed_world(d):
+                reproduce_sealed_oos(
+                    frozen_set=fs, oos_start="2021-01-01",
+                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=4,
+                    provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
+                                         "calendar_end": OOS_END},
+                    compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+                )
         ctx = seen.get("ctx")
         self.assertIsNotNone(ctx, "compute ran with NO ResearchAccessContext installed")
         self.assertEqual(ctx.stage, "oos_test")

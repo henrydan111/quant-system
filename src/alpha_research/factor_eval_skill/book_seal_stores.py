@@ -21,12 +21,27 @@ whole read-check-append under ``file_lock``).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Mapping
 
 import pandas as pd
 
 from src.alpha_research.factor_eval_skill._hashing import canonical_json, payload_hash
+
+
+def _nan_tolerant_canonical_json(payload: Any) -> str:
+    """Deterministic JSON for a DATA payload that may legitimately contain NaN (e.g. a
+    factor with insufficient OOS coverage). Unlike ``canonical_json`` (``allow_nan=False``,
+    used for IDENTITY hashing where NaN would be a bug), this preserves NaN as the ``NaN``
+    token — Python's ``json.loads`` round-trips it back to ``float('nan')``. Sorted keys +
+    compact separators keep it stable for content hashing."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=True,
+                      ensure_ascii=True)
+
+
+def _data_payload_hash(payload: Any) -> str:
+    return hashlib.sha256(_nan_tolerant_canonical_json(payload).encode("utf-8")).hexdigest()
 from src.alpha_research.factor_eval_skill._store import (
     AppendOnlyStore,
     _atomic_write_dataframe,
@@ -393,6 +408,31 @@ class OverrideAuthorizationStore(AppendOnlyStore):
             _atomic_write_dataframe(frame, self.log_path)
             return row
 
+    def has_authorization(
+        self, *, kind: str, override_id: str, oos_window_id: str, scope_key: str
+    ) -> bool:
+        """Non-consuming existence check (R4 Major 1): True iff an AUTHORIZED,
+        not-yet-consumed record matches kind + id + window + scope. Used by report
+        layers to reflect an available override WITHOUT spending it — consumption
+        happens request-bound at the enforcement point."""
+        if kind not in OVERRIDE_KINDS:
+            raise BookSealStoreError(f"kind must be one of {OVERRIDE_KINDS}, got {kind!r}")
+        frame = self._load()
+        mine = frame[
+            (frame["kind"].astype("string") == kind)
+            & (frame["override_id"].astype("string") == str(override_id))
+        ]
+        auth = mine[mine["action"].astype("string") == "authorized"]
+        if auth.empty:
+            return False
+        record = auth.iloc[-1].to_dict()
+        if str(record.get("oos_window_id")) != str(oos_window_id):
+            return False
+        if str(record.get("scope_key")) != str(scope_key):
+            return False
+        consumed = mine[mine["action"].astype("string") == "consumed"]
+        return consumed.empty
+
     def require_consumed(
         self,
         *,
@@ -493,6 +533,91 @@ class OverrideAuthorizationStore(AppendOnlyStore):
             return row
 
 
+class A5ReproductionStore(AppendOnlyStore):
+    """PR3 R4 Blocker 2 — the completion state machine for FACTOR-LEVEL (A5 /
+    frozen-set-keyed) sealed reproductions, mirroring the book path's
+    :class:`BookSealArtifactStore`: a COMPLETED reproduction is never recomputed
+    (``open_or_resume`` returns the persisted result); only an unfinished ``claimed``
+    state may resume, and only under the IDENTICAL ``request_hash``."""
+
+    FILENAME = "a5_reproductions.parquet"
+    COLUMNS = (
+        "record_id",
+        "recorded_at",
+        "seal_key",
+        "request_hash",
+        "state",              # claimed | complete
+        "result_json",
+        "result_hash",
+    )
+    SCHEMA = {column: "string" for column in COLUMNS}
+    KEY_FIELDS = ("seal_key", "state")
+
+    def current(self, seal_key: str) -> dict[str, Any] | None:
+        frame = self._load()
+        frame = frame[frame["seal_key"].astype("string") == str(seal_key)]
+        if frame.empty:
+            return None
+        return frame.iloc[-1].to_dict()
+
+    def open_or_resume(self, *, seal_key: str, request_hash: str) -> dict[str, Any]:
+        """Open a ``claimed`` record, or resume an existing one: a ``complete`` record
+        is returned as-is (the caller must return its persisted result, never
+        recompute); a ``claimed`` record resumes only under the identical request;
+        a different request refuses."""
+        if not str(seal_key).strip() or not str(request_hash).strip():
+            raise BookSealStoreError("open_or_resume requires non-blank seal_key + request_hash")
+        with file_lock(self.lock_path):
+            cur = self.current(seal_key)
+            if cur is not None:
+                if str(cur.get("request_hash")) != str(request_hash):
+                    raise BookSealStoreError(
+                        f"A5 reproduction for seal_key {seal_key} was opened under request "
+                        f"{cur.get('request_hash')!r}; a changed recipe ({request_hash!r}) can "
+                        "never resume it"
+                    )
+                return cur
+            recorded_at = _now_str()
+            row: dict[str, Any] = {column: "" for column in self.COLUMNS}
+            row.update({"seal_key": str(seal_key), "request_hash": str(request_hash),
+                        "state": "claimed"})
+            row["recorded_at"] = recorded_at
+            row["record_id"] = self._record_id(row, recorded_at)
+            frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
+            _atomic_write_dataframe(frame, self.log_path)
+            return row
+
+    def complete(self, *, seal_key: str, request_hash: str, result: Mapping[str, Any]) -> dict[str, Any]:
+        with file_lock(self.lock_path):
+            cur = self.current(seal_key)
+            if cur is None or str(cur.get("request_hash")) != str(request_hash):
+                raise BookSealStoreError(
+                    f"no matching claimed A5 reproduction for seal_key {seal_key}"
+                )
+            if str(cur.get("state")) == "complete":
+                raise BookSealStoreError(
+                    f"A5 reproduction for seal_key {seal_key} is already complete — the "
+                    "persisted result is immutable"
+                )
+            recorded_at = _now_str()
+            row = {column: cur.get(column, "") for column in self.COLUMNS
+                   if column not in ("record_id", "recorded_at")}
+            row.update({"state": "complete",
+                        "result_json": _nan_tolerant_canonical_json(dict(result)),
+                        "result_hash": _data_payload_hash(dict(result))})
+            row["recorded_at"] = recorded_at
+            row["record_id"] = self._record_id(row, recorded_at)
+            frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
+            _atomic_write_dataframe(frame, self.log_path)
+            return row
+
+    def load_result(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        result = json.loads(str(row["result_json"]))
+        if _data_payload_hash(result) != str(row.get("result_hash")):
+            raise BookSealStoreError("persisted A5 result does not re-hash — tamper/corruption")
+        return result
+
+
 class StrategyComponentDiagnosticStore(AppendOnlyStore):
     """Durable, append-only component-diagnostic rows (R1 Major 2). Keyed by
     ``book_seal_key + request_hash + component_factor_id``; the completed artifact stores
@@ -535,6 +660,7 @@ class StrategyComponentDiagnosticStore(AppendOnlyStore):
             frame = self._load()
             ids: list[str] = []
             to_append: list[dict[str, Any]] = []
+            batch_keys: set[tuple[str, str, str]] = set()
             recorded_at = _now_str()
             for raw in rows:
                 row = {k: str(v) for k, v in raw.items() if k in self.COLUMNS}
@@ -543,6 +669,12 @@ class StrategyComponentDiagnosticStore(AppendOnlyStore):
                     str(row.get("request_hash", "")),
                     str(row.get("component_factor_id", "")),
                 )
+                # R4 Minor 1: the dup check covers the CURRENT batch too, not just disk.
+                if key3 in batch_keys:
+                    raise BookSealStoreError(
+                        f"duplicate diagnostic logical key within one batch: {key3}"
+                    )
+                batch_keys.add(key3)
                 existing = frame[
                     (frame["book_seal_key"].astype("string") == key3[0])
                     & (frame["request_hash"].astype("string") == key3[1])

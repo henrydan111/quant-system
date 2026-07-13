@@ -181,19 +181,36 @@ def test_select_multi_factor_requires_corr(tmp_path):
                    caps={"x": 1, "y": 1}, floor=0.10, require_eligibility=False)
 
 
-def test_live_seal_requires_global_holdout_root(tmp_path):
+def test_live_seal_uses_configured_root_and_catalog_gate(tmp_path, monkeypatch):
+    # PR3 R4 B1/B3: a live seal derives EVERY sealed store from the CONFIGURED global
+    # holdout root (tests monkeypatch the resolver — there is no caller path to fork a
+    # sealed world), and expressions must resolve from the CURRENT catalog: the fake
+    # test factor "tf" is not in the catalog, so the live path refuses at the
+    # definition-binding gate BEFORE any claim — nothing lands in the configured root
+    # or the ledger.
+    import src.research_orchestrator.holdout_seal as hs_mod
+    import src.research_orchestrator.promotion_evidence as pe
+    from src.research_orchestrator.promotion_evidence import PromotionEvidenceError
+
+    monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                        lambda: tmp_path / "configured_holdout")
+    # provenance loads before the catalog gate; stub it (a bare cmd_seal has qlib_dir="")
+    # so the test reaches the definition-binding refusal it is asserting.
+    monkeypatch.setattr(pe, "_load_provider_provenance",
+                        lambda qdir: {"provider_build_id": "pb", "calendar_policy_id": "cp",
+                                      "calendar_end": "2026-02-27"})
     matrix = _matrix_file(tmp_path)
-    ctx = _ctx(tmp_path)  # no holdout_seal_root configured
+    ctx = _ctx(tmp_path)
     _register(ctx)
     cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l", asof_policy="pit_lag_1")
     cmd_characterize(ctx, matrix_path=matrix)
-    cmd_gate(ctx)  # select now requires a candidate-eligible gate decision
+    cmd_gate(ctx)
     cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
-    # a live seal without the global store is refused BEFORE any spend/backtest
-    with pytest.raises(FactorEvalError, match="holdout_seal_root"):
+    with pytest.raises(PromotionEvidenceError, match="not in the current catalog"):
         cmd_seal(ctx, mode="live", oos_start="2021-01-01", oos_end="2026-02-27")
-    # ... and no spend leaked into the ledger
+    from src.research_orchestrator.holdout_seal import HoldoutSealStore
     from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
+    assert HoldoutSealStore(tmp_path / "configured_holdout").list_events().empty
     assert OosWindowLedgerStore(ctx.store_root).distinct_frozen_sets("2021-01-01..2026-02-27") == []
 
 

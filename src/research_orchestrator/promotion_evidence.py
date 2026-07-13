@@ -215,14 +215,61 @@ def _compute_oos_per_factor_metrics(
     return per_factor, str(getattr(panel, "max_label_realization_date", ""))
 
 
+def resolve_frozen_catalog_expressions(
+    frozen_set,
+    *,
+    catalog: Mapping[str, str] | None = None,
+    definition_hashes: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """PR3 R4 Blocker 3 — the ONLY expression source for a sealed factor-level
+    reproduction: the CURRENT code catalog, definition-hash-verified against the frozen
+    set. A caller can never inject expressions (an unselected factor, a swapped
+    expression, or a drifted definition all refuse):
+
+    * every ``SelectedFactor`` must exist in the catalog;
+    * the current catalog ``definition_hash`` must EQUAL the frozen
+      ``SelectedFactor.definition_hash`` (the P1.3 definition-binding parity primitive);
+    * exactly the selected ids are returned — nothing more.
+
+    ``catalog`` / ``definition_hashes`` are injectable for tests; live defaults are
+    ``get_factor_catalog(include_new_data=True)`` and
+    ``FactorRegistryStore.current_catalog_definition_hashes()`` (recomputed from code,
+    read-only)."""
+    if catalog is None:
+        from src.alpha_research.factor_library.catalog import get_factor_catalog
+
+        catalog = get_factor_catalog(include_new_data=True)
+    if definition_hashes is None:
+        from src.alpha_research.factor_registry.store import FactorRegistryStore
+
+        registry_root = _PROJECT_ROOT / "data" / "factor_registry"
+        definition_hashes = FactorRegistryStore(registry_root).current_catalog_definition_hashes()
+    exprs: dict[str, str] = {}
+    for sf in frozen_set.selected:
+        fid = str(sf.factor_id)
+        if fid not in catalog:
+            raise PromotionEvidenceError(
+                f"frozen factor {fid!r} is not in the current catalog — cannot reproduce"
+            )
+        current_hash = str(definition_hashes.get(fid, ""))
+        if not current_hash or current_hash != str(sf.definition_hash):
+            raise PromotionEvidenceError(
+                f"definition drift for {fid!r}: frozen definition_hash "
+                f"{sf.definition_hash!r} != current catalog {current_hash!r} — the sealed "
+                "recipe is not reproducible against the live catalog (definition-binding gate)"
+            )
+        exprs[fid] = str(catalog[fid])
+    if not exprs:
+        raise PromotionEvidenceError("frozen_set has no selected members")
+    return exprs
+
+
 def reproduce_sealed_oos(
     *,
     frozen_set,
-    factor_exprs: Mapping[str, str],
     oos_start: str,
     oos_end: str | None = None,
     qlib_dir: str | Path,
-    seal_root: str | Path,
     run_dir: str,
     design_hash: str,
     hypothesis_id: str = "sealed_oos_winners",
@@ -312,11 +359,24 @@ def reproduce_sealed_oos(
             )
 
     seal_hash = frozen_set.frozen_set_hash
+    # R4 Blocker 1: every sealed store derives from the ONE CONFIGURED global holdout
+    # root — there is no caller-suppliable seal_root, so a caller cannot fork a parallel
+    # sealed world (seal events + authorizations + budget ledger + completion records
+    # all live together under the configured root). LATE import: the single monkeypatch
+    # target for tests is holdout_seal.resolve_configured_global_holdout_root.
+    from src.research_orchestrator.holdout_seal import (
+        resolve_configured_global_holdout_root,
+    )
+
+    root = resolve_configured_global_holdout_root()
+    # R4 Blocker 3: expressions are resolved from the CURRENT catalog, definition-hash-
+    # verified against the frozen set — never accepted from the caller.
+    factor_exprs = resolve_frozen_catalog_expressions(frozen_set)
     # R3 Blocker 3: the ONE-recipe identity of this reproduction. Everything that
     # determines what the sealed evaluation computes is hash material; the seal claim,
-    # the A5 reservation, the authorization consumption, and the access context are all
-    # bound to it — a changed recipe (different expressions/horizon/quantiles/window/
-    # provider generation) can never resume a prior spend.
+    # the A5 reservation, the authorization consumption, the completion record, and the
+    # access context are all bound to it — a changed recipe (different expressions/
+    # horizon/quantiles/window/provider generation) can never resume a prior spend.
     from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
 
     a5_request_hash = _phash(
@@ -333,20 +393,36 @@ def reproduce_sealed_oos(
         }
     )
     if claim_seal:
+        # R4 Blocker 2: the completion state machine is consulted FIRST — a COMPLETED
+        # reproduction returns its PERSISTED result and is NEVER recomputed (and never
+        # burns a fresh authorization / re-claims). Only a not-yet-existing key opens a
+        # fresh claim; a still-`claimed` (crash) state of the IDENTICAL request resumes
+        # WITHOUT re-consuming the authorization or re-reserving (both already happened
+        # on the first attempt). A changed recipe refuses inside open_or_resume.
+        from src.alpha_research.factor_eval_skill.book_seal_stores import A5ReproductionStore
+
+        a5_store = A5ReproductionStore(root)
+        prior = a5_store.current(str(seal_hash))
+        if prior is not None and str(prior.get("request_hash")) == a5_request_hash \
+                and str(prior.get("state")) == "complete":
+            return a5_store.load_result(prior)
+        is_fresh_open = prior is None
+
         # v1.4 A5 (PR3 REWORK, R1 Blocker 3): this is the LOWEST shared claim point of the
         # factor-level (frozen-set-keyed) path — enforce the fresh-window authorization
         # HERE, not only in the wrappers, so a direct import cannot bypass it. The
         # authorization must PRE-EXIST in the OverrideAuthorizationStore (recorded with an
         # explicit human sign-off + burn statement, window+scope bound) and is consumed
-        # exactly once; an invented non-empty string refuses.
+        # exactly once; an invented non-empty string refuses. Only a FRESH open runs the
+        # consume/reserve/claim — a crash-resume of the same request must not double-spend.
         from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
 
-        if is_virgin_window(str(oos_end)):
+        if is_fresh_open and is_virgin_window(str(oos_end)):
             from src.alpha_research.factor_eval_skill.book_seal_stores import (
                 OverrideAuthorizationStore,
             )
 
-            override_store = OverrideAuthorizationStore(seal_root)
+            override_store = OverrideAuthorizationStore(root)
             override_store.consume_authorization(
                 kind="a5_fresh_window",
                 override_id=str(fresh_window_override_id),
@@ -355,13 +431,13 @@ def reproduce_sealed_oos(
                 consumed_by_request_hash=a5_request_hash,
             )
             # R2 Blocker 4 + R3 Blocker 2: the A5 spend enters the A6 budget denominator
-            # HERE, atomically BEFORE the claim, in the CANONICAL ledger DERIVED from the
-            # global holdout root (never a caller-selected path — a forked ledger would
-            # hide spends from the budget). The warn/hard bands are enforced INSIDE the
-            # reservation lock; an A5 access authorization never replaces A6's control.
+            # HERE, atomically BEFORE the claim, in the CANONICAL ledger under the
+            # configured root. The warn/hard bands are enforced INSIDE the reservation
+            # lock (the a6 authorization is consumed there, request-bound — R4 Major 1);
+            # an A5 access authorization never replaces A6's control.
             from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
 
-            OosWindowLedgerStore(seal_root).reserve_a5_study_spend(
+            OosWindowLedgerStore(root).reserve_a5_study_spend(
                 oos_window_id=f"{oos_start}..{oos_end}",
                 frozen_set_hash=str(seal_hash),
                 override_id=str(fresh_window_override_id),
@@ -371,20 +447,24 @@ def reproduce_sealed_oos(
                 override_store=override_store,
                 a6_multiplicity_override_id=str(a6_multiplicity_override_id),
             )
-        if seal_store is None:
-            from src.research_orchestrator.holdout_seal import HoldoutSealStore
-            seal_store = HoldoutSealStore(seal_root)
-        seal_store.claim_holdout_access(
-            design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
-            profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
-            allow_same_run=allow_same_run, seal_key=seal_hash,
-            # R1 B3: the factor-level claim is provider-generation-bound too; R3 B3: and
-            # RECIPE-bound — an allow_same_run resume under a changed request refuses in
-            # the store (persisted request_hash equality).
-            provider_build_id=str(prov.get("provider_build_id", "")),
-            calendar_policy_id=str(prov.get("calendar_policy_id", "")),
-            request_hash=a5_request_hash,
-        )
+        if is_fresh_open:
+            if seal_store is None:
+                from src.research_orchestrator.holdout_seal import HoldoutSealStore
+                seal_store = HoldoutSealStore(root)
+            seal_store.claim_holdout_access(
+                design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
+                profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
+                allow_same_run=allow_same_run, seal_key=seal_hash,
+                # R1 B3: the factor-level claim is provider-generation-bound too; R3 B3: and
+                # RECIPE-bound — an allow_same_run resume under a changed request refuses in
+                # the store (persisted request_hash equality).
+                provider_build_id=str(prov.get("provider_build_id", "")),
+                calendar_policy_id=str(prov.get("calendar_policy_id", "")),
+                request_hash=a5_request_hash,
+            )
+        # open (fresh) or resume (crash) the reproduction record; a changed recipe on the
+        # same seal_key refuses HERE. A `complete` state was already returned above.
+        a5_store.open_or_resume(seal_key=str(seal_hash), request_hash=a5_request_hash)
 
     import pandas as pd
 
@@ -419,7 +499,7 @@ def reproduce_sealed_oos(
             horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
             trade_cal=trade_cal,
         )
-    return {
+    result_block = {
         "independent_reproduction": {
             "source": "qlib_windowed_features",
             "provider_build_id": prov.get("provider_build_id", ""),
@@ -440,6 +520,13 @@ def reproduce_sealed_oos(
             "per_factor": per_factor,
         }
     }
+    if claim_seal:
+        from src.alpha_research.factor_eval_skill.book_seal_stores import A5ReproductionStore
+
+        A5ReproductionStore(root).complete(
+            seal_key=str(seal_hash), request_hash=a5_request_hash, result=result_block
+        )
+    return result_block
 
 
 def build_promotion_evidence(

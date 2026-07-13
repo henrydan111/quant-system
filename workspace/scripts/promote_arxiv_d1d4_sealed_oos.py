@@ -1,3 +1,12 @@
+# ══════════════════════════════════════════════════════════════════════
+# HISTORICAL DRIVER (pre-PR3-R4) — DO NOT RE-RUN AS-IS.
+# This one-off targeted the PRE-R4 reproduce_sealed_oos signature (caller
+# `factor_exprs=` + `seal_root=`). PR3 R4 (2026-07-13) REMOVED both: expressions
+# now resolve from the current catalog (definition-hash-verified) and the sealed
+# stores derive from the ONE configured global holdout root. This spend is already
+# recorded (see the provenance JSON under workspace/research/); the record here is
+# preserved for audit, not for re-execution (a sealed OOS window is single-shot).
+# ══════════════════════════════════════════════════════════════════════
 # ──────────────────────────────────────────────────────────────────────
 # Sealed-OOS promotion driver for the arXiv D1-D4 idea-sourced candidates
 # (alpha_chip_cgo_smooth_20d, earn_sue_ni_mcap, earn_sue_ni_assets,

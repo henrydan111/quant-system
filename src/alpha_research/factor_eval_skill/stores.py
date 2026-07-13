@@ -705,15 +705,20 @@ class OosWindowLedgerStore(AppendOnlyStore):
                 if override_store is None or not str(a6_multiplicity_override_id).strip():
                     raise ValueError(
                         f"virgin-window A5 budget HARD STOP (would be spend #{n_would_be} >= "
-                        f"{hard_threshold}): requires a pre-recorded, CONSUMED a6_multiplicity "
+                        f"{hard_threshold}): requires a pre-recorded a6_multiplicity "
                         "authorization (override_store + a6_multiplicity_override_id) — the A5 "
                         "access authorization does NOT replace A6's multiplicity control"
                     )
-                override_store.require_consumed(
+                # R4 Major 1: the a6 authorization is CONSUMED here, bound to THIS A5
+                # request — an authorization consumed for some other recipe can never
+                # admit this spend, and consumption happens only when the hard band is
+                # actually hit (no waste below it).
+                override_store.consume_authorization(
                     kind="a6_multiplicity",
                     override_id=str(a6_multiplicity_override_id),
                     oos_window_id=str(oos_window_id),
                     scope_key=str(frozen_set_hash),
+                    consumed_by_request_hash=str(request_hash),
                 )
             elif n_would_be >= warn_threshold and not multiplicity_ack:
                 raise ValueError(

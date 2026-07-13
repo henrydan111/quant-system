@@ -1,107 +1,114 @@
-# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 4)
+# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 5)
 
-R1 REWORK (5B/3M/1m) → folded. R2 REWORK (5B/3M) → folded. R3 REWORK (3B/1M/1m — A6 off-by-one,
-A5 budget bypass + ledger forking, changed-recipe A5 resume, S6-registration forgeability, diagnostic
-duplication) → **all folded**. R3 confirmed 6/8 prior findings closed. This round asks you to verify
-the A5/A6 closure and re-probe. Branch: `calendar-unfreeze`.
+R1 REWORK (5B/3M/1m) → folded. R2 REWORK (5B/3M) → folded. R3 REWORK (3B/1M/1m) → folded.
+R4 REWORK (3B/1M/2m — caller-suppliable seal_root forks the sealed world; allow_same_run recomputes a
+completed OOS; low-level entry accepts arbitrary factor_exprs; a6-for-A5 not request-bound; in-batch
+diagnostic dup; show-mode virgin preview reads the wrong ledger) → **all folded**. R4 confirmed the R3
+six closed within one seal root. Branch: `calendar-unfreeze`.
 
 ---
 
 ```text
 ROLE
-You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-4 re-review of PR3: verify each R3 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp.
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-5 re-review of PR3: verify each R4 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. The single most important invariant: a caller must NOT be able to build a new "sealed world" (fork the seal store / budget ledger) and re-read the same OOS window.
 
 REPO (public) https://github.com/henrydan111/quant-system  (branch: calendar-unfreeze)
 Raw form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
 
 FETCH (authoritative):
-- src/alpha_research/factor_eval_skill/stores.py            (inclusive boundaries; A6 inside reserve_a5)
-- src/research_orchestrator/promotion_evidence.py           (canonical ledger; mandatory A5 request_hash)
-- src/alpha_research/factor_eval_skill/book_seal_stores.py  (idempotent batch append_rows)
-- src/research_orchestrator/registries/strategy_registry.py (profile resolution + verifier registry)
-- src/alpha_research/factor_eval_skill/orchestration.py     (canonical virgin ledger in cmd_seal)
-- src/alpha_research/factor_eval_skill/sealed_oos.py        (passthroughs; ledger_root REMOVED)
-- tests/alpha_research/test_pr3_book_seal.py                (your R1+R2+R3 probes pinned)
+- src/research_orchestrator/holdout_seal.py                 (resolve_configured_global_holdout_root — the ONE root)
+- src/research_orchestrator/promotion_evidence.py           (no seal_root/factor_exprs; completion machine; recipe hash)
+- src/alpha_research/factor_eval_skill/book_seal_stores.py  (A5ReproductionStore; has_authorization; batch-dup)
+- src/alpha_research/factor_eval_skill/stores.py            (reserve_a5_study_spend: request-bound a6 consume)
+- src/alpha_research/factor_eval_skill/sealed_oos.py        (no seal_root/factor_exprs passthrough)
+- src/alpha_research/factor_eval_skill/orchestration.py     (cmd_seal: configured root; show-mode virgin preview)
+- workspace/scripts/factor_eval_cli.py                      (--holdout-seal-root override removed)
+- config.yaml                                               (research_governance.holdout_seal_root)
+- tests/alpha_research/test_pr3_book_seal.py                (R1..R4 probes pinned)
+- tests/research_orchestrator/test_promotion_evidence.py    (resolver/catalog seams)
 - tests/research_orchestrator/test_r4_wall_hardening.py
 
-YOUR R3 FINDINGS — how each was closed (verify in code; probes pinned as named tests):
-B1 (A6 off-by-one) → BOTH comparisons are now INCLUSIVE (n_would_be >= hard / >= warn), matching
-   virgin_window_multiplicity exactly, in reserve_book_spend AND the new A5 budget. Your two boundary
-   probes are pinned: test_a6_boundaries_are_inclusive (2 existing -> 3rd needs ack; 4 existing -> 5th
-   needs a consumed a6 authorization).
-B2 (direct A5 bypasses budget + forks ledger) → the public ledger_root parameter is REMOVED from
-   reproduce_sealed_oos / run_sealed_oos / cmd_seal: the A5 reservation goes to the CANONICAL ledger
-   DERIVED from seal_root (OosWindowLedgerStore(seal_root) — colocated with the holdout store, so claims
-   and budget rows cannot be split), and the A6 warn/hard bands are enforced INSIDE
-   reserve_a5_study_spend under its lock (hard band requires a consumed a6_multiplicity authorization
-   verified from the OverrideAuthorizationStore via require_consumed — the A5 access authorization never
-   replaces A6's control). cmd_seal's virgin GOVERNING reports (pre-spend + final) now read the canonical
-   ledger at holdout_seal_root. Pinned: test_direct_a5_hard_band_enforced_inside_reservation (your probe:
-   4 prior spends + a valid A5 authorization -> the 5th direct claim refuses with no seal written) +
-   test_reproduce_sealed_oos_virgin_authorizes_ledgers_then_claims (asserts the spend lands in the
-   canonical ledger at seal_root; also pins that no ledger_root parameter exists).
-B3 (changed-recipe A5 resume) → reproduce_sealed_oos computes a MANDATORY a5_request_hash over
-   {frozen_set_hash, sorted factor_exprs, oos window, provider ids, horizon, n_quantiles, hypothesis_id}
-   and binds it to: the authorization consumption (consumed_by_request_hash), the A5 reservation
-   (request_hash now mandatory non-blank; blank legacy rows quarantined), the holdout claim
-   (request_hash column; allow_same_run resume verifies persisted equality — the persisted-state
-   machine you asked for), and the ResearchAccessContext. Your probe is pinned:
-   test_direct_a5_changed_recipe_cannot_reuse_the_spend ($close/$open then $high/$low on the same
-   seal -> the second recipe refuses at the reservation BEFORE any claim/compute; the identical recipe
-   resumes). allow_same_run is retained but is inert for changed recipes (the persisted request_hash
-   refuses); factor_exprs remain caller-supplied at this layer but are BOUND into the request hash —
-   the full sealed-catalog derivation is disclosed as residual (b).
-M1 (S6 registration forgeability) → the name-set is replaced by REGISTERED_GOVERNED_RUNNER_VERIFIERS
-   (id -> VERIFIER CALLABLE, still empty); and INDEPENDENT of the verifier, the gate now resolves the
-   attested profile against the REAL execution-profile registry: get_profile(execution_profile_id)
-   (unknown id refuses), allowed_for_formal must be True, execution_profile_hash must equal the live
-   profile_hash. Your probe (temporarily registering the runner name with profile 'exec_jq_daily'/hash
-   'eph') now refuses at profile resolution. Pinned:
-   test_fully_consistent_live_artifact_fails_closed_at_governed_runner (3 layers: forged profile ->
-   "does not resolve"; REAL profile+hash -> "no REGISTERED governed-runner VERIFIER"; no attestation ->
-   refused) + test_registered_verifier_with_real_profile_completes_the_chain (the S6 simulation:
-   registering a VERIFIER + a real profile passes the full chain — what the S6 PR will do).
-m1 (diagnostic duplication) → StrategyComponentDiagnosticStore.append_rows is BATCH-ATOMIC (one lock,
-   one write) and IDEMPOTENT by (book_seal_key, request_hash, component_factor_id): replay returns the
-   SAME ids with no duplicates; a divergent payload for the same key refuses. Pinned:
-   test_append_rows_batch_idempotent_and_divergence_refused.
+YOUR R4 FINDINGS — how each was closed (verify in code; probes pinned as named tests):
+B1 (caller-suppliable seal_root forks the sealed world) → the public seal_root parameter is REMOVED
+   from reproduce_sealed_oos AND run_sealed_oos; both derive EVERY sealed store (seal events, override
+   authorizations, the A5/A6 ledger, the A5 reproduction records) from resolve_configured_global_holdout_root()
+   (holdout_seal.py) — config.yaml research_governance.holdout_seal_root, else the canonical
+   data/holdout_seals. The CLI --holdout-seal-root override is removed. Tests monkeypatch the RESOLVER
+   (never pass a path). Pinned: test_reproduce_sealed_oos_virgin_authorizes_ledgers_then_claims asserts
+   `seal_root` is not a parameter and that the spend lands in the resolver-derived ledger;
+   test_live_seal_uses_configured_root_and_catalog_gate.
+B2 (allow_same_run recomputes a completed OOS) → the new A5ReproductionStore is a completion state
+   machine keyed by seal_key with request binding: reproduce_sealed_oos consults it FIRST — a `complete`
+   record returns its PERSISTED result and NEVER recomputes (and never re-claims / re-consumes); only a
+   not-yet-existing key opens a fresh claim; a still-`claimed` (crash) state of the IDENTICAL request
+   resumes WITHOUT re-consuming or re-reserving; a changed recipe refuses. Pinned:
+   test_completed_a5_reproduction_is_never_recomputed (metric_compute_calls stays 1 across two identical
+   calls) + test_direct_a5_changed_recipe_cannot_reuse_the_spend.
+B3 (low-level entry accepts arbitrary factor_exprs) → the public factor_exprs parameter is REMOVED;
+   resolve_frozen_catalog_expressions(frozen_set) resolves expressions from the CURRENT catalog and
+   REQUIRES (a) every SelectedFactor exists in the catalog and (b) the current catalog definition_hash
+   EQUALS the frozen SelectedFactor.definition_hash (the P1.3 definition-binding parity primitive) —
+   exactly the selected ids, nothing more. Pinned: TestCatalogExpressionResolution
+   (exact-ids / definition-drift-refused / missing-factor-refused) + the orchestration catalog-gate test.
+M1 (a6-for-A5 not request-bound) → reserve_a5_study_spend now CONSUMES the a6 authorization (not just
+   require_consumed) bound to consumed_by_request_hash = the A5 request, and ONLY when the hard band is
+   actually hit (no waste below it). An a6 consumed for another recipe can never admit this spend.
+   Pinned: test_direct_a5_hard_band_consumes_request_bound_a6.
+m1 (in-batch diagnostic dup) → append_rows tracks batch_keys and refuses a duplicate logical key WITHIN
+   one batch (not only vs disk). Pinned: test_append_rows_batch_idempotent_and_divergence_refused
+   (extended) / the batch-dup path.
+m2 (show-mode virgin preview reads the run-local ledger) → cmd_seal computes virgin = is_virgin_window
+   up front and, for a virgin window, the governing report (show AND live) is virgin_window_multiplicity
+   over the CANONICAL ledger at the configured root. Pinned: test_cmd_seal_show_previews_canonical_virgin_budget
+   (4 canonical spends + pending => n_spent=5, refuse_without_override).
 
-TEST STATE: 544 passed across the full affected suite (102 in the core trio + 442 across the wider set).
-Your R3 clean-checkout notes: the 5 R4 failures need data/qlib_data/metadata/provider_build.json and the
-1 factor-registry failure needs local screening metadata — both are LOCAL DATA prerequisites (gitignored
-data/ tree), present on the operator machine; they are not code regressions. Subsets that fit a 124s
-budget:
-  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_gate.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~35s)
-  pytest tests/alpha_research/test_factor_eval_skill_orchestration.py tests/alpha_research/test_v14_book_level_promotion.py -q   (~50s)
+Also folded from your R4 residual (a): a crash-resume of the identical recipe no longer burns a fresh
+A5 authorization (is_fresh_open gating on the reproduction record) — see the disclosed residual below
+for the one remaining narrow window.
 
-SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 4.
+NON-TEST CALLERS: the 5 one-off promotion drivers under workspace/scripts/ (promote_gp/eps/arxiv/winners,
+select_e_wave) targeted the PRE-R4 signature; they are HISTORICAL records of already-spent windows (the
+spend is in the provenance JSONs), NOT re-runnable, and now carry a "HISTORICAL DRIVER (pre-PR3-R4)"
+banner. They are intentionally not rewired.
+
+TEST STATE: 548 passed across the full affected suite (serial). Subsets fitting a 124s budget:
+  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_evidence.py -q   (~10s)
+  pytest tests/alpha_research/test_factor_eval_skill_orchestration.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~10s)
+As you noted at R3/R4: a clean checkout without the gitignored data/ tree (provider_build.json, screening
+metadata) fails a handful of data-dependent tests — environment, not code.
+
+SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 5.
 RESIDUAL CONCERNS (honest list):
-(a) Authorization consumption precedes the reservation/enforcement checks — a refused attempt (changed
-    recipe, budget band) WASTES the consumed authorization (conservative: re-record to retry). This also
-    means an identical-recipe crash-resume consumes a fresh A5 authorization (the reservation itself is
-    idempotent; only the consume-once record is spent). Acceptable, or should consumption move after the
-    reservation inside one compound operation?
-(b) factor_exprs at the reproduce layer are caller-supplied but recipe-bound (in the request hash and
-    therefore in the seal/reservation/authorization). Deriving them from a sealed catalog manifest
-    (definition-hash-verified) at THIS layer is not implemented — the catalog binding lives in the
-    formal resolver path (definition-binding gate) upstream; cmd_seal resolves exprs from the catalog.
-(c) The canonical A5/A6 ledger is colocated with the holdout seal root; a caller who forks seal_root
-    forks BOTH stores together (claims + budget stay consistent within the fork) — the global-root
-    configuration is the remaining trust anchor, same class as every store path in the repo.
-(d) The A5 hard band uses require_consumed WITHOUT request binding (the a6 authorization for an A5 study
-    is consumed by cmd_seal or manually before the reservation; binding it to the A5 request hash would
-    require the consumer to know the hash pre-run). Scope+window binding is enforced.
-(e) Book-runner diagnostics rows and A5 spends live in DIFFERENT ledgers when a dryrun book uses
-    run-local stores (by design — dryrun isolation); live books + A5 studies share the canonical root.
+(a-narrowed) The consume->reserve->claim->record->compute->complete sequence is fail-closed but not
+    fully atomic: the reserve is idempotent by request_hash and the seal claim is idempotent under
+    allow_same_run, so a crash never double-spends the ledger or double-claims the seal. The ONE
+    non-idempotent-on-resume step is the consume-once A5 authorization: a crash in the narrow window
+    AFTER consuming it but BEFORE the reproduction `claimed` record is written strands that
+    authorization (resume fails closed with "already consumed"), requiring one manual re-record of a
+    fresh A5 authorization (the ledger/seal then resume idempotently). Fail-closed (never a silent
+    double or unbudgeted spend). Should consume become idempotent-by-request (skip if already consumed
+    by THIS request_hash) to close even that window, or is the fail-closed manual-re-record acceptable
+    for the machinery layer?
+(b) resolve_frozen_catalog_expressions reads the live catalog + registry at call time; a definition
+    drift between seal time and reproduce time correctly refuses (the sealed recipe is no longer
+    reproducible) — this is intended, but means a legitimately-migrated factor needs a migration_record
+    path (not in PR3; the legacy revalidate path exists separately).
+(c) config.yaml research_governance.holdout_seal_root is a project-root-relative default; a deployment
+    that relocates data/ must set it. The resolver falls back to <project_root>/data/holdout_seals.
+(d) The completion state machine keys by seal_key (frozen_set_hash); two DIFFERENT recipes on the same
+    frozen set produce the same seal_key but different request_hash — the second refuses at open_or_resume
+    ("changed recipe can never resume"), which is correct (one frozen set = one sealed spend) but means
+    a genuine re-selection on the same frozen set is blocked at this layer by design.
 
 REVIEW QUESTIONS
-1. Re-run your R3 probes (5th-spend boundary / six-authorized-A5 sweep / forked ledger_root / changed-
-   recipe resume / registered-name-only promotion / crash-duplicated diagnostics). Any probe still lands?
-2. Is the canonical-ledger derivation (seal_root colocation) the right binding, or do you require a
-   config-resolved global root independent of the seal_root argument?
-3. Residuals (a)-(e): acceptable for the machinery layer, or does any block SHIP?
-4. Anything else blocking SHIP (the S6 governed runner + real-data burned-window pilot remain explicitly
-   future PRs; live promotion is unreachable until a verifier is registered).
+1. Re-run your R4 probes (new-root fork => canonical_events vs fork_events; allow_same_run double-compute;
+   arbitrary factor_exprs; a6-for-A5 cross-recipe; in-batch dup; show-mode virgin preview). Any land?
+2. Residual (a-narrowed): is the fail-closed manual-re-record acceptable, or must consume be
+   idempotent-by-request?
+3. Is resolve_configured_global_holdout_root the right seam (config key + canonical fallback + single
+   monkeypatch point), or do you require an explicit injected dependency instead of a module function?
+4. Anything else blocking SHIP for the machinery layer (the S6 governed runner + real-data burned-window
+   pilot remain future PRs; live promotion is unreachable until a verifier registers).
 
 OUTPUT FORMAT
 - Issues ranked Blocker / Major / Minor, each with the offending line quoted and an exact suggested

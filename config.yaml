@@ -34,3 +34,11 @@ risk:
   max_drawdown_limit: 0.15 # 组合最大回撤限制 15%
   max_leverage: 1.5        # 最大杠杆
   single_stock_max_weight: 0.05 # 单日单只个股最大权重 5%
+
+research_governance:
+  # PR3 R4 Blocker 1: the ONE configured global holdout-seal root. Every sealed-OOS
+  # claim path (seal events, override authorizations, the A5/A6 budget ledger, the A5
+  # reproduction completion records) derives its store from this single directory — a
+  # caller can NEVER supply a seal_root, so a parallel "sealed world" that re-reads the
+  # same OOS window is impossible. Resolved by holdout_seal.resolve_configured_global_holdout_root().
+  holdout_seal_root: "./data/holdout_seals"

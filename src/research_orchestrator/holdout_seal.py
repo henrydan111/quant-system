@@ -53,6 +53,30 @@ SEAL_SCHEMA = {
 }
 
 
+def resolve_configured_global_holdout_root() -> Path:
+    """PR3 R4 Blocker 1 — the ONE configured global holdout-seal root. OOS claim paths
+    must derive every sealed store (seal events, override authorizations, the canonical
+    A5/A6 ledger, the A5 reproduction records) from THIS resolver — never from a
+    caller-supplied path, which would let a caller fork a parallel sealed world and
+    re-read the same OOS window. Resolution: ``research_governance.holdout_seal_root``
+    in config.yaml when present, else the canonical ``<project_root>/data/holdout_seals``
+    (the factor-eval CLI's historical default). Tests monkeypatch THIS function; they
+    never pass a store path into a claim entry point."""
+    project_root = Path(__file__).resolve().parents[2]
+    config_path = project_root / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            configured = (cfg.get("research_governance") or {}).get("holdout_seal_root")
+            if configured:
+                return Path(str(configured)).resolve()
+        except Exception:  # noqa: BLE001 — unreadable config falls back to the canonical default
+            pass
+    return (project_root / "data" / "holdout_seals").resolve()
+
+
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
