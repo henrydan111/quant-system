@@ -239,6 +239,17 @@ def test_spaced_call_fails_closed_when_state_unwritable(tmp_path, monkeypatch):
     assert _time.time() - t0 >= 0.35  # it slept in-band rather than returning instantly
 
 
+def test_spaced_call_floors_base_sleep_centrally(tmp_path, monkeypatch):
+    # GPT recovery B3: the §6.1 floor is enforced at the CHOKEPOINT — a caller passing 0.1 cannot lower
+    # the account spacing; the recorded next-allowed cooldown must be >= MIN_BASE_SLEEP ahead.
+    import time as _time
+    _lockdir_patch(monkeypatch, tmp_path / "locks")
+    t0 = _time.time()
+    tushare_lock.spaced_call(lambda: "ok", 0.1)  # caller asks 0.1 -> floored to 1.5
+    nxt = float(tushare_lock._next_allowed_path().read_text())
+    assert nxt - t0 >= tushare_lock.MIN_BASE_SLEEP - 0.05, "cooldown must be floored to MIN_BASE_SLEEP"
+
+
 def test_spaced_call_fails_closed_on_nan_state(tmp_path, monkeypatch):
     # GPT REWORK-5 minor 1: a state file containing `nan` parses via float() but makes delay>0 False and
     # fires immediately. isfinite-guard must force the conservative in-band sleep.

@@ -88,7 +88,7 @@ class FundamentalsDataInitializer:
 
         # Initialize fetcher and storage
         if not self.dry_run:
-            self.fetcher = TushareFetcher(config_path=config_path, max_retries=5, base_sleep=1.0)
+            self.fetcher = TushareFetcher(config_path=config_path, max_retries=5, base_sleep=1.5)
             self.storage = StorageManager(data_root=data_root)
         else:
             self.fetcher = None

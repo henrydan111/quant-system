@@ -116,7 +116,7 @@ def main() -> None:
     parser.add_argument("--refresh", action="store_true", help="Re-fetch periods even if the parquet already exists")
     args = parser.parse_args()
 
-    fetcher = TushareFetcher(config_path=args.config_path, max_retries=5, base_sleep=1.0)
+    fetcher = TushareFetcher(config_path=args.config_path, max_retries=5, base_sleep=1.5)
     storage = StorageManager(data_root=args.data_root)
     periods = generate_periods(args.start_year, args.end_year)
     fields = args.fields.replace(" ", "") if args.fields else None

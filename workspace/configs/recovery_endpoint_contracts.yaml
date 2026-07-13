@@ -1,0 +1,48 @@
+# Recovery endpoint contracts (GPT recovery-review M3 — the §6.1 "read the interface doc BEFORE
+# fetching" gate, made fetch-blocking). One entry per Tushare endpoint the recovery touches.
+# A leg is BLOCKED until every one of its endpoints has ALL fields non-empty, with a HUMAN review
+# timestamp. doc_path points into the offline mirror (Tushare数据接口/content/); doc_sha256 pins the
+# reviewed doc version. NOTHING here is pre-filled as reviewed — every entry must be completed during
+# adapter construction, per endpoint, before wiring.
+#
+# Template (copy per endpoint):
+#   <endpoint>:
+#     doc_path: "Tushare数据接口/content/<doc_id>_<名称>.md"
+#     doc_sha256: ""            # sha256 of the doc file actually read
+#     fields_reviewed: ""       # field list + ★-flagged PIT date fields noted
+#     rate_limit: ""            # 积分/每分钟限次 from the doc
+#     cadence: ""               # update cadence from the doc
+#     pit_semantics: ""         # nominal-date vs visible-date anchoring notes
+#     reviewed_by: ""           # human identity
+#     reviewed_at: ""           # ISO timestamp
+#
+daily: {}
+daily_basic: {}
+adj_factor: {}
+index_daily: {}
+income_vip: {}
+balancesheet_vip: {}
+cashflow_vip: {}
+forecast_vip: {}
+fina_indicator_vip: {}
+moneyflow: {}
+stk_limit: {}
+margin_detail: {}
+hk_hold: {}
+dividend: {}
+stk_holdernumber: {}
+suspend_d: {}
+top_list: {}
+top_inst: {}
+block_trade: {}
+stk_holdertrade: {}
+cyq_perf: {}
+report_rc: {}
+express: {}
+disclosure_date: {}
+fina_mainbz: {}
+fina_audit: {}
+repurchase: {}
+pledge_stat: {}
+top10_floatholders: {}
+broker_recommend: {}

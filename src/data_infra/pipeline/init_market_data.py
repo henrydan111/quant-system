@@ -91,7 +91,7 @@ class MarketDataInitializer:
 
         # Initialize fetcher (skipped in dry-run mode)
         if not self.dry_run:
-            self.fetcher = TushareFetcher(config_path=config_path, max_retries=5, base_sleep=1.0)
+            self.fetcher = TushareFetcher(config_path=config_path, max_retries=5, base_sleep=1.5)
         else:
             self.fetcher = None
 

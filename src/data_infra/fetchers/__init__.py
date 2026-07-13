@@ -79,6 +79,12 @@ class TushareFetcher:
         # Resolve token: prefer env var, fall back to config value
         token = os.environ.get("TUSHARE_TOKEN") or self.config["data"]["tushare_token"]
         self.max_retries = max_retries
+        # §6.1 central floor (GPT recovery B3): a constructor cannot lower the account-wide spacing.
+        # spaced_call floors again at the chokepoint; this keeps self.base_sleep (retry backoff) honest too.
+        from data_infra.tushare_lock import MIN_BASE_SLEEP
+        if base_sleep < MIN_BASE_SLEEP:
+            logging.warning("base_sleep %.2f below the §6.1 floor — raised to %.2f", base_sleep, MIN_BASE_SLEEP)
+            base_sleep = MIN_BASE_SLEEP
         self.base_sleep = base_sleep
         try:
             ts.set_token(token)

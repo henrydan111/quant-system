@@ -144,12 +144,21 @@ def _is_rate_limit(exc: Exception) -> bool:
     return any(k in m for k in ("daily request", "frequent", "limit", "每分钟", "每天"))
 
 
+# §6.1 floor, enforced CENTRALLY at the account chokepoint (GPT recovery-review B3: a dataclass
+# metadata check protects nothing — four drivers constructed their own base_sleep=1.0 fetchers and the
+# lock serialized calls at the CALLER's delay). Every spaced_call floors its spacing here; a caller
+# cannot lower it. There is no env/test escape — tests pay the 1.5s where they exercise real spacing.
+MIN_BASE_SLEEP = 1.5
+
+
 def spaced_call(fn, base_sleep: float, *args, rate_limit_backoff: float = 30.0, **kwargs):
     """Call `fn` under the cross-process account lock, enforcing a GLOBAL minimum spacing between calls
     (and a longer cooldown after a rate-limit error). Spacing is FAIL-CLOSED (GPT minor 1): the shared
     next-allowed timestamp is an optimization; whenever it can't be read or written, the spacing is
     enforced in-band by sleeping WHILE HOLDING api_call_lock (which serializes callers), so the account
-    rate limit can never silently drop to zero."""
+    rate limit can never silently drop to zero. base_sleep is FLOORED to MIN_BASE_SLEEP centrally —
+    callers cannot reduce the account-wide spacing below §6.1 (GPT recovery B3)."""
+    base_sleep = max(base_sleep, MIN_BASE_SLEEP)
     with api_call_lock():
         nxt, ok = _read_next_allowed()
         if not ok:
