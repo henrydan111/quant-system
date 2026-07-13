@@ -40,8 +40,11 @@ from src.alpha_research.factor_eval_skill.identity import (
 from src.alpha_research.factor_eval_skill.marginal import select_marginal
 from src.alpha_research.factor_eval_skill.multiplicity import (
     ACTION_ACKNOWLEDGE,
+    ACTION_REFUSE,
     ACTION_REQUIRE,
+    is_virgin_window,
     oos_window_multiplicity,
+    virgin_window_multiplicity,
 )
 from src.alpha_research.factor_eval_skill.sealed_oos import DIR_MAP
 from src.alpha_research.factor_eval_skill.stage3_reader import (
@@ -469,6 +472,7 @@ def cmd_seal(
     metric: str = "rank_icir", neutralization: str = "none", rebalance: str = "20d",
     portfolio_side: str = "long_short", created_by: str = "factor-eval",
     multiplicity_ack: bool = False, multiplicity_override: bool = False,
+    fresh_window_override_id: str = "",
 ) -> dict:
     # dryrun REMOVED (GPT re-review): it ran the real OOS reproduction under a run-local seal — an
     # OOS-leak path. show = identity/multiplicity preview (no OOS); live = the ONLY OOS-access mode.
@@ -531,6 +535,29 @@ def cmd_seal(
             "refusing a run-local live seal that would not enforce the OOS budget across runs"
         )
     _enforce_multiplicity_action(report, ack=multiplicity_ack, override=multiplicity_override)  # (#7)
+    # v1.4 A5 (PR3): a FRESH/virgin (post-2026-02-27) window through this FACTOR-LEVEL path is an
+    # A5 signal-replication study — it requires a fresh_window_signal_replication_override_id
+    # recorded BEFORE access, burns the window for overlapping downstream books, and is counted
+    # under the STRICTER A6 virgin budget (warn 3 / hard 5 spend-unit keys). Book-level spends
+    # use factor_eval_skill.book_seal (book_seal_key), never this door.
+    virgin = is_virgin_window(oos_end)
+    if virgin:
+        if not str(fresh_window_override_id).strip():
+            raise FactorEvalError(
+                "v1.4_A5_fresh_window_override_required: a live factor-level seal on a virgin "
+                f"window (oos_end={oos_end}) needs a pre-recorded "
+                "fresh_window_signal_replication_override_id (A5); book-level spends go "
+                "through book_seal.run_book_sealed_evaluation"
+            )
+        virgin_report = virgin_window_multiplicity(
+            ledger, oos_window_id, override_recorded=multiplicity_override, pending_self=True
+        )
+        if virgin_report.action == ACTION_REFUSE:
+            raise FactorEvalError(
+                f"virgin-window budget HARD STOP (n_spent={virgin_report.n_spent}): a user-signed "
+                f"multiplicity override must be recorded BEFORE the spend (A6). {virgin_report.note}"
+            )
+        _enforce_multiplicity_action(virgin_report, ack=multiplicity_ack, override=multiplicity_override)
     _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
     seal_root = str(ctx.holdout_seal_root)
     from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
@@ -539,12 +566,21 @@ def cmd_seal(
         frozen_set=fs, factor_exprs=exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
         seal_root=seal_root, run_dir=str(ctx.run_dir), design_hash=fs.frozen_set_hash,
         hypothesis_id=reg["factor_id"], horizon=horizon, n_quantiles=n_quantiles, claim_seal=True,
+        fresh_window_override_id=fresh_window_override_id,
     )
     verdict = result["verdict"]
     # record the window-tag ledger AFTER the global claim succeeds, so a pre-claim failure does
-    # NOT overcount a failed attempt (GPT re-verify operational note).
-    ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
-                        evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids, seal_mode="live")
+    # NOT overcount a failed attempt (GPT re-verify operational note). A virgin-window spend is
+    # recorded as an A5 STUDY row (override id bound, counts against the A6 budget).
+    if virgin:
+        ledger.record_study_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
+                                  override_id=str(fresh_window_override_id),
+                                  evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids,
+                                  seal_mode="live")
+    else:
+        ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
+                            evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids,
+                            seal_mode="live")
     # final report AFTER the spend is recorded (pending_self=False)
     final_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(), "n_pass": verdict.n_pass,

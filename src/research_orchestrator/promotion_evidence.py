@@ -150,6 +150,71 @@ def _load_provider_provenance(qlib_dir: str | Path) -> dict:
     }
 
 
+def _compute_oos_per_factor_metrics(
+    *,
+    factor_exprs: Mapping[str, str],
+    oos_start: str,
+    oos_end: str,
+    qlib_dir: str | Path,
+    horizon: int,
+    n_quantiles: int,
+    compute_factors_fn=None,
+    trade_cal=None,
+) -> tuple[dict[str, dict], str]:
+    """The screening's EXACT per-factor OOS metric path (``compute_factors(stage="oos_test")`` →
+    the ``build_is_windowed_panel`` label-realization belt → ``run_batch_screening``), extracted
+    verbatim from :func:`reproduce_sealed_oos` (v1.4 PR3, amendment §2 A2(b)/N3).
+
+    CONTEXT-AGNOSTIC BY DESIGN: this function NEVER installs a ``ResearchAccessContext`` — it
+    runs under whatever context the CALLER has active. Exactly two sanctioned callers:
+
+    * :func:`reproduce_sealed_oos` — installs its own OOS context (claimed or not) and calls
+      this inside it (the legacy factor-level path, behavior unchanged);
+    * ``run_component_diagnostics_in_book_context`` (factor_eval_skill.book_seal) — REUSES the
+      book's already-claimed context (``holdout_seal_claimed=True, seal_key=book_seal_key``)
+      and must never nest a second context (round-2 N3).
+
+    Returns ``(per_factor, max_label_realization_date)`` where ``per_factor`` is
+    ``{factor_id: {"oos_rank_icir", "oos_ls_sharpe", "ls_sharpe_horizon"}}``."""
+    from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
+
+    if compute_factors_fn is None:
+        from src.alpha_research.factor_library import operators
+        compute_factors_fn = operators.compute_factors
+        adj_expr = getattr(operators, "ADJ_CLOSE", "$close * $adj_factor")
+    else:
+        adj_expr = "$close * $adj_factor"
+
+    import pandas as pd
+    from src.alpha_research.factor_eval.batch_screening import run_batch_screening
+
+    qdir = str(qlib_dir)
+    factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
+                                            horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1,
+                                            stage="oos_test")
+    factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
+    apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
+                                   horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
+    # The explicit label-realization leak-guard (raises IsEndLeakageError if the longest-horizon
+    # label would realize past oos_end); its panel is NOT the scoring metric.
+    panel = build_is_windowed_panel(factors_df, apanel["adj_close"], is_end=oos_end,
+                                    horizon=max(SCREENING_HORIZONS), trade_cal=trade_cal)
+    screen = run_batch_screening(factors_df, fwd_df, horizons=tuple(SCREENING_HORIZONS),
+                                 engine="batch", progress_every=0, n_quantiles=n_quantiles)
+    per_factor: dict[str, dict] = {}
+    for name in factor_exprs:
+        if name not in screen.index:
+            continue
+        row = screen.loc[name]
+        ricir, ls = row.get(f"rank_icir_{horizon}d"), row.get("ls_sharpe")
+        per_factor[str(name)] = {
+            "oos_rank_icir": float(ricir) if ricir is not None and not pd.isna(ricir) else float("nan"),
+            "oos_ls_sharpe": float(ls) if ls is not None and not pd.isna(ls) else float("nan"),
+            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
+        }
+    return per_factor, str(getattr(panel, "max_label_realization_date", ""))
+
+
 def reproduce_sealed_oos(
     *,
     frozen_set,
@@ -185,8 +250,6 @@ def reproduce_sealed_oos(
     ``independent_reproduction`` block with `source='qlib_windowed_features'`, provenance, and
     per-factor `oos_rank_icir` (read at `horizon`) + `oos_ls_sharpe` (primary horizon). The
     metrics GOVERN approval. Injectable deps for tests; live by default."""
-    from src.alpha_research.factor_lifecycle.walk_forward_validation import build_is_windowed_panel
-
     oos_end = oos_end or _default_oos_end()
     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
     calendar_end = str(prov.get("calendar_end"))
@@ -256,17 +319,8 @@ def reproduce_sealed_oos(
             allow_same_run=allow_same_run, seal_key=seal_hash,
         )
 
-    if compute_factors_fn is None:
-        from src.alpha_research.factor_library import operators
-        compute_factors_fn = operators.compute_factors
-        adj_expr = getattr(operators, "ADJ_CLOSE", "$close * $adj_factor")
-    else:
-        adj_expr = "$close * $adj_factor"
-
     import pandas as pd
-    from src.alpha_research.factor_eval.batch_screening import run_batch_screening
 
-    qdir = str(qlib_dir)
     # Guard #3 hardening (GPT post-impl review #3): install the OOS ResearchAccessContext so the
     # qlib_windowed_features reads INSIDE compute_factors are validated against [oos_start, oos_end]
     # + the claimed seal at the data layer (the formal chokepoint), instead of relying solely on
@@ -285,43 +339,18 @@ def reproduce_sealed_oos(
         calendar_policy_id=prov.get("calendar_policy_id", ""),
         holdout_seal_claimed=bool(claim_seal), seal_key=seal_hash,
     )
-    # Reproduce the screening's EXACT inputs AND metric path: compute the factors plus
-    # the multi-horizon forward returns over SCREENING_HORIZONS (the run_sealed_oos set),
-    # then score with the SAME engine="batch" path. ls_sharpe is run_batch_screening's
-    # primary-horizon (5d) long-short Sharpe — the metric the registration bar was
-    # defined against; rank_icir is read at `horizon` (20d). A hand-rolled metric on a
-    # different horizon (the pre-fix bug) does NOT reproduce the bar's scale.
+    # Reproduce the screening's EXACT inputs AND metric path (extracted, v1.4 PR3:
+    # _compute_oos_per_factor_metrics — the shared context-agnostic body). ls_sharpe is
+    # run_batch_screening's primary-horizon (5d) long-short Sharpe — the metric the
+    # registration bar was defined against; rank_icir is read at `horizon` (20d). The
+    # n_quantiles default is the 2026-06-11 decile standard; pass n_quantiles=5 to
+    # reproduce pre-unification evidence bit-for-bit.
     with research_access_context(oos_ctx):
-        factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
-                                                horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1, stage="oos_test")
-        factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
-        apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
-                                       horizons=None, qlib_dir=qdir, kernels=1, stage="oos_test")
-    # Guard #3 belt: the LONGEST-horizon label must realize on or before OOS_END
-    # (raises IsEndLeakageError otherwise). Redundant with the calendar_end == OOS_END
-    # assertion above (at the data boundary Ref(-h) is NaN past OOS_END for every
-    # horizon), but kept as the explicit leak-guard; its panel is NOT the scoring metric.
-    panel = build_is_windowed_panel(factors_df, apanel["adj_close"], is_end=oos_end,
-                                    horizon=max(SCREENING_HORIZONS), trade_cal=trade_cal)
-
-    # n_quantiles wired through (2026-06-11 10-group unification). REPRODUCTION NOTE:
-    # evidence registered before that date (Round-6 winners, GP, arXiv D1-D4,
-    # eps_diffusion) was produced with the then-hardcoded quintiles — pass
-    # n_quantiles=5 to reproduce those runs bit-for-bit; decile ls_sharpe is NOT
-    # comparable to the historical quintile bar.
-    screen = run_batch_screening(factors_df, fwd_df, horizons=tuple(SCREENING_HORIZONS),
-                                 engine="batch", progress_every=0, n_quantiles=n_quantiles)
-    per_factor: dict[str, dict] = {}
-    for name in factor_exprs:
-        if name not in screen.index:
-            continue
-        row = screen.loc[name]
-        ricir, ls = row.get(f"rank_icir_{horizon}d"), row.get("ls_sharpe")
-        per_factor[str(name)] = {
-            "oos_rank_icir": float(ricir) if ricir is not None and not pd.isna(ricir) else float("nan"),
-            "oos_ls_sharpe": float(ls) if ls is not None and not pd.isna(ls) else float("nan"),
-            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
-        }
+        per_factor, max_label_realization = _compute_oos_per_factor_metrics(
+            factor_exprs=factor_exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
+            horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
+            trade_cal=trade_cal,
+        )
     return {
         "independent_reproduction": {
             "source": "qlib_windowed_features",
@@ -339,7 +368,7 @@ def reproduce_sealed_oos(
                 f"long-short Sharpe). This is the registration metric, not a horizon-consistent "
                 f"tradability metric; strategy-level deployment validation is a separate gate."
             ),
-            "max_label_realization_date": str(getattr(panel, "max_label_realization_date", "")),
+            "max_label_realization_date": max_label_realization,
             "per_factor": per_factor,
         }
     }

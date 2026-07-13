@@ -288,7 +288,7 @@ class TestA8VirginWindowChokepoint:
 
         context = self._context(tmp_path, oos_end="2026-09-30")
         with patch("src.research_orchestrator.steps._assert_cicc_oos_quarantine"):
-            with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+            with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
                 _claim_holdout_access_if_needed(context)
 
     def test_burned_window_still_reaches_the_legacy_claim(self, tmp_path: Path):
@@ -331,7 +331,7 @@ class TestA8SealedBacktestRunner:
 
     def test_a8_sealed_backtest_runner_refuses_virgin_window_before_claim(self, tmp_path: Path):
         runner = self._runner(tmp_path)
-        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+        with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
             runner._claim_if_oos({"stage": "oos_test", "oos_start": "2026-03-01",
                                   "oos_end": "2026-09-30"})
         assert self._no_seal_written(tmp_path)
@@ -343,7 +343,7 @@ class TestA8SealedBacktestRunner:
 
         runner = self._runner(tmp_path)
         backtester = MagicMock()
-        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+        with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
             runner.run_event_driven(
                 time_split={"stage": "oos_test", "oos_end": "2026-06-30"},
                 backtester=backtester,
@@ -358,7 +358,7 @@ class TestA8SealedBacktestRunner:
 
         runner = self._runner(tmp_path)
         backtester = MagicMock()
-        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+        with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
             runner.run_vectorized(
                 time_split={"stage": "oos_test", "oos_end": "2026-06-30"},
                 backtester=backtester,
@@ -390,7 +390,7 @@ class TestA8SealedBacktestRunner:
         # ctx.stage == "oos_test" + a payload WITHOUT "stage": previously this skipped
         # claim AND guard entirely (the round-3 bypass). Now: virgin window -> A8 refusal…
         runner = self._runner(tmp_path)
-        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+        with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
             runner._claim_if_oos({"oos_start": "2026-03-01", "oos_end": "2026-09-30"})
         assert self._no_seal_written(tmp_path)
         # …and a burned window CLAIMS (the seal is spent, not silently skipped).
@@ -416,7 +416,7 @@ class TestA8SealedBacktestRunner:
         # ResearchAccessContext with holdout_seal_claimed=True can be installed.
         runner = self._runner(tmp_path)
         pipeline_fn = MagicMock(return_value="ok")
-        with pytest.raises(RuntimeError, match=r"v1\.4_A8_virgin_window_blocked_until_pr3"):
+        with pytest.raises(RuntimeError, match=r"v1.4_A8_virgin_window_legacy_path_blocked"):
             runner.run_workspace_pipeline(
                 pipeline_fn=pipeline_fn,
                 time_split={"oos_start": "2026-03-01", "oos_end": "2026-09-30"},

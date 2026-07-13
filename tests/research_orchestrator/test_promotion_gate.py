@@ -163,12 +163,22 @@ def test_strategy_set_status_approved_cannot_be_bypassed_via_evidence_status(tmp
                          promotion_evidence={"promotion_status": "draft"}, current_git_sha="abc123")
 
 
-def test_strategy_set_status_approved_passes_gate_with_matching_sha(tmp_path):
+def test_strategy_set_status_approved_p11_alone_refused_under_v14(tmp_path):
+    # v1.4 A8 (PR3): the P1.1 artifact gate is NECESSARY but no longer sufficient — a
+    # strategy approval must additionally be wired to the ONE book sealed-evaluation
+    # artifact. A P1.1-valid artifact with a matching SHA now refuses at the BOOK layer
+    # (proving it got PAST the P1.1 layer): first for the missing holdout store, then —
+    # with a store supplied — for the missing book_seal section. The full valid pass-path
+    # is pinned end-to-end in tests/alpha_research/test_pr3_book_seal.py
+    # (TestStrategyPromotionWiring::test_publish_and_full_valid_promotion).
     store = StrategyRegistryStore(tmp_path)
-    # full evidence + matching SHA -> gate passes -> KeyError for the absent object proves we got PAST it
-    with pytest.raises(KeyError):
+    with pytest.raises(PromotionGateError, match="holdout_seal_dir"):
         store.set_status(object_id="missing", status="approved", reason="promote",
                          promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123")
+    with pytest.raises(PromotionGateError, match="book_seal"):
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123",
+                         holdout_seal_dir=tmp_path / "seals")
 
 
 def test_strategy_set_status_approved_sha_mismatch_blocked(tmp_path):

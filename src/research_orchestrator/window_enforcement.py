@@ -104,9 +104,10 @@ def assert_v14_a8_no_legacy_virgin_oos_claim(
 
     if is_virgin_window(oos_end):
         raise RuntimeError(
-            "v1.4_A8_virgin_window_blocked_until_pr3: "
-            f"{caller} still uses the legacy design_hash/frozen_set OOS seal identity. "
-            "Post-2026-02-27 virgin OOS may be spent only by the PR3 "
-            "StrategyRegistryStore/book_seal_key path, or by a pre-authorized "
-            "A5 override study. Use already-burned windows for the required dry-run pilot."
+            "v1.4_A8_virgin_window_legacy_path_blocked: "
+            f"{caller} uses the legacy design_hash/frozen_set OOS seal identity, which is "
+            "PERMANENTLY refused on post-2026-02-27 virgin windows. Spend virgin OOS only "
+            "through the book path (factor_eval_skill.book_seal.run_book_sealed_evaluation, "
+            "seal_key=book_seal_key; PR3) or a pre-authorized A5 override study "
+            "(cmd_seal fresh_window_override_id). Already-burned windows still pass here."
         )

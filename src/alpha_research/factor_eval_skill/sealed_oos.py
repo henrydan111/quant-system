@@ -115,12 +115,31 @@ def run_sealed_oos(
     n_quantiles: int = DEFAULT_N_QUANTILES,
     claim_seal: bool = True,
     ls_floor: float = DEFAULT_LS_SHARPE_FLOOR,
+    fresh_window_override_id: str = "",
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
     apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. ``sides``
     defaults to the held sides DERIVED from ``frozen_set`` (no divergence); the seal spend is
-    governed by ``claim_seal`` + ``seal_root`` (the caller decides dryrun vs live)."""
+    governed by ``claim_seal`` + ``seal_root`` (the caller decides dryrun vs live).
+
+    v1.4 A5 (PR3): this is a FACTOR-LEVEL (frozen-set-keyed) path — on a FRESH/virgin
+    (post-2026-02-27) window it is an A5 signal-replication study, which requires a
+    ``fresh_window_override_id`` recorded BEFORE access (the pre-authorized exception;
+    the spend counts against the A6 book budget and burns the window for overlapping
+    downstream books). Enforced HERE (the shared wrapper) so a direct script call cannot
+    bypass the ``cmd_seal`` CLI enforcement. Book-level spends use
+    :mod:`.book_seal` (``book_seal_key``), never this path."""
     from src.research_orchestrator import promotion_evidence as pe
+
+    from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
+
+    if claim_seal and is_virgin_window(oos_end) and not str(fresh_window_override_id).strip():
+        raise ValueError(
+            "v1.4_A5_fresh_window_override_required: a factor-level sealed-OOS spend on a "
+            f"virgin (post-2026-02-27) window (oos_end={oos_end}) is an A5 signal-replication "
+            "study and requires a pre-recorded fresh_window_signal_replication_override_id. "
+            "Book-level spends go through factor_eval_skill.book_seal (book_seal_key)."
+        )
 
     if sides is None:
         sides = sides_from_frozen_set(frozen_set)
