@@ -66,3 +66,34 @@
 37 monthly 电池全绿（11 新事务测试含对抗性排序首位）；+4 provider_manifest 往返/fail-closed、+7 attestation gate/接线、+1 政策铸造旗标；组合四套件（data_infra+research_orchestrator+backtest_engine+architecture 单次 pytest）**1049 绿 + 16 skip**，39 败全数归类环境失败（worktree 无 gitignored 活体数据；每类以 FileNotFoundError 证据 + main-树全数据复跑绿证明；`test_pre_open_isolation` 2 例为 main 树同败的既有缺基准文件问题→task_741b05c9）。7 触及文件 py_compile 干净。**本会话零次触碰活体 provider/数据。**
 
 **结论：clean for GPT。** B3.2 + B3.3-5 全部落地且每条有测试；验证与交换在同一锁域不可分（GPT REWORK-5 的裁定语义）；5 项已知限制显式留审。
+
+---
+
+## REWORK round 2（GPT 首审 REWORK：7 Blocker + 3 Major，独立故障注入全数复现）— 2026-07-13
+
+GPT 审 `0525cc1`：**REWORK**。7 个探针全部是真缺陷——首版的"原子"只覆盖了 verify↔swap，没有覆盖 swap 之后的完整域，且多个 attestation 有 fail-open 洞。逐条闭合（每条带把 GPT 探针变成回归测试）：
+
+| # | GPT finding（探针复现） | 修复 | 探针测试 |
+|---|---|---|---|
+| **B1** swap 成功后首个 `j("swap","ok")` 在回滚 try 之前——journal 写盘失败=新树 live+approval 旧+裸抛不回滚 | `_write_journal` 改**非抛出**（内吞+log，面包屑非闸门）；且 swap 成功起 journal/manifest 校验/换绑/状态/记录**全部**进单一 `try` 保护域 | `test_publish_survives_journal_write_failure_after_swap`（journal 路径指向目录=永远写失败→事务照常完成 exit 0） |
+| **B2** exit-4 可为假：`_rebind_approval_files` 内部恢复失败时 originals 不外传（调用者拿空 dict 误判已恢复）；record 写序留假"成功换绑"md | 换绑拆为 **swap 前纯 planner**（`_plan_rebind` 零写入，originals 在任何写之前就在调用者手里）；恢复=`_restore_approval_files(written, originals)` **逐文件重读核验**并返回失败清单；回滚域删除本事务全部工件（publish_record、rebind md、新树 post-swap 文件）+回滚后 `live_provider_ids()==parent` 复核；**exit 4 仅当 problems 为空，否则 exit 5 + journal 点名**；提交型 md 改最后写 | `test_publish_rolls_back_when_rebind_write_fails_midway`（中途故障→字节全恢复+parent live）；`test_publish_reports_5_when_restore_also_fails`（a1 已换绑+恢复也失败→exit 5+journal 点名 a1.yaml）；`test_publish_rolls_back_when_record_write_fails`（record 故障→无假 md 残留） |
+| **B3** approvals CAS 对删除 fail-open（loader 空目录返 []→删光仍发布 rebound:0） | execute 钉 `_approvals_attestation`（排序 *.yaml 文件名+逐文件 sha256+bound 数）；publish 要求**完全相等且 bound≥1**（增/删/改任一 YAML 拒发） | `test_publish_refuses_deleted_approvals`（删一个/删光都拒）+`test_publish_refuses_added_approval` |
+| **B4（L1 被拒）** feature bin 字节变异仍原样发布 | `_staged_content_attestation`：staged 全树**每文件全内容 sha256**（线程池抗 open 延迟；按 features/<code> 分组 sidecar 定位漂移；execute 钉根→publish swap 前**全量重哈希**）。代价=每侧读全树一遍（月度可承受），sidecar 按 build-id 持久化 | `test_publish_refuses_feature_bin_mutation`（同尺寸字节变异→拒） |
+| **B5** 门只接 event-driven；正式 Qlib 读取门（`qlib_windowed_features`→`provider_context`）未覆盖 | 双门（attestation+publish-state）接线 **`provider_context._resolve`**——两个 sanctioned data door 的共同咽喉；状态文件 digest 并入轮换安全缓存键（`--finalize-qa` 翻转→缓存键变→重验，不吃陈旧判定） | `test_provider_context_enforces_attestation_and_state` + `_legacy_policy_still_resolves` |
+| **B6（L4 被拒）** QA 失败无机械隔离（正式 runtime 验证照过） | `publish_state.json` 标记：swap 域内写 `pending_qa`→QA 过绿翻 `ready`/失败 `qa_failed`+exit 6；`release_gate.assert_provider_publish_state` 双咽喉强制（**present 非 ready 连 legacy 政策也隔离**；required 时 absent 拒；foreign build 标记拒）；新增 **`--finalize-qa`** 恢复腿（崩溃后/QA 修复后续接，live build 必须==report staged build） | `test_publish_qa_failure_returns_6_and_quarantines`（qa_failed→门拒→finalize 翻 ready）+`test_publish_state_gate_quarantines_until_ready`+`test_formal_runtime_validation_refuses_quarantined_provider` |
+| **B7** publish 锁非全局（裸 `builder.publish()` 可在 parent CAS 后插入） | 锁下沉公共咽喉：`StagedQlibBackendBuilder.publish()`+`provider_manifest` 两个发射器**自持** `provider_publish_lock`；锁改 **per-path singleton FileLock**（filelock 3.25.2 `is_singleton=True` 实测：同实例+计数可重入）→事务嵌套不死锁、跨进程互斥；**相对导入**（`from .tushare_lock`）解决 src./plain 双命名空间——singleton 按锁文件路径注册，两命名空间共享同一实例 | `test_builder_publish_acquires_global_lock`（裸 publish 必取锁）+happy-path 实测嵌套可重入 |
+| **M1** "严格 bool"实为 fail-open（字符串 "true"→False，测试还钉死了该行为） | 非 bool 值**拒加载**（`CalendarPolicyError`）；铸造政策**整文件 sha256** 入 report，publish 重验 | `test_policy_flag_non_bool_fails_closed`（"true"/1/"yes" 全拒）+`test_publish_refuses_policy_file_drift` |
+| **M2** provenance 不绑真实构建（publish 时 rev-parse；固定名 sidecar 被覆盖） | execute 捕 `_git_state()`（HEAD+dirty digest）入 report；publish 要求相等（漂移=拒）；`publish(source_git_commit=...)` 贯通发射 **execute-time** commit 并回读核验；raw manifest 三份持久化（固定名+per-build+**staged metadata/ 随 provider 出版**，在 content attestation 之前写入故被证明覆盖） | `test_publish_refuses_git_state_drift`+happy-path 断言 manifest 带 execute-time sha |
+| **M3（L5 被拒）** UNFREEZE_PLAN 仍指手工流程 | Phase 3.4/4.1/5.2 已改（划线+«2026-07-13 Phase 5-B B3 取代»注记，指向新事务与 CLAUDE §3.4 不变量） | 文档 diff |
+
+### L1-L5 裁定内化
+L1 不接受→B4 全内容重哈希；L2 接受（保持可信操作员威胁模型）；L3 有条件接受→**修完后首个真实 241GB 运行仍需单独 §13 授权**（未变）；L4 原则接受但须机械隔离→B6；L5 不接受→已更新。
+
+### 本轮自查发现并已修
+- 我的双故障探针初版设计错误（fail a2 的写与恢复——但 a2 从未被写入无需恢复→verified exit 4 是**正确**行为）；改为"a1 已写+a1 恢复失败"才是真双故障。
+- `provider_manifest`/`pit_backend` 内取锁的导入必须**相对**（双命名空间下 `src.` 前缀在部分脚本上下文不可解析；singleton 按路径注册使两命名空间共享同一锁实例）。
+
+### 验证汇总（本轮）
+焦点电池 **156 绿**（monthly 53 + gate 22 + manifest/policy/pit_backend/approval_evidence）；四套件组合 **1064 绿+16 skip**，39 败=与首版完全相同的 8 个环境文件（缺活体数据；main 树+全数据复核仍绿；`test_pre_open_isolation` 2 例=既有 main 树失败→task_741b05c9 处理中）；provider_context/pr8 消费者隔离复跑 81 绿；8 文件 py_compile 干净。**本会话仍零次触碰活体 provider。**
+
+**结论：clean for GPT（re-review）。** 7 Blocker + 3 Major 全闭且每条有探针复刻测试；exit-4 现在是被证明的声明；attestation 覆盖全部发布字节与治理集合；隔离与锁均为机械強制。真实 staged tree 首跑（§13）与 GPT 复审仍是 final 前置。

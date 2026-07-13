@@ -134,17 +134,17 @@
    - **侧车成员矩阵（B2 核心新增）**：对 `all_stocks` / `st_stocks` / `csi300/500/1000` 及一切 universe/tradability 侧车——**侧车集合由 provider 树/manifest 枚举发现，不允许仅按硬编码清单**（Round-2 附加要求）——把区间表物化为旧日历上的**逐日成员矩阵**，断言 ≤2026-02-27 每一天与旧 live 完全相等。行级字节等值不要求（end date 延长属正常），但 **spent 窗口内成员漂移 = 发布阻断**（侧车由刷新后的 raw 再生——`pit_backend.py:3852-3872`——namechange/ST/权重的历史修正必须被显式发现并走批准流程，不允许静默漂移）；
    - **审计工件持久化**：`prefix_bin_hashes`、`calendar_append_proof`、`sidecar_membership_hashes`、新旧 `provider_build_id`/`calendar_policy_id`、`audit_script_hash`。
 3. **解冻 dry-run 报告（m4）**：发布前产出并人工过目——计划 target_end、新政策 id、staged build id、磁盘前后估计、将交换的文件、将保留的备份、前缀审计摘要、侧车成员审计摘要、待换绑 approval 清单。
-4. **安全发布**：复用 `_depth9_safe_publish.py` 三步原子交换（同卷 `st_dev` 闸内建），旧 live 保留为 `.bak`（受 D2 引用型保留规则管理）。
+4. **安全发布**：~~复用 `_depth9_safe_publish.py` 三步原子交换~~ **【2026-07-13 Phase 5-B B3 取代】发布 = `scripts/monthly_calendar_bump.py --publish-approved --i-reviewed-the-dryrun` 的原子事务**（同一把 raw+publish 锁域内：parent CAS + 全读集 raw manifest 重哈希 + 审计工件哈希 + staged **全内容**重证明 + approvals 集合钉 + git 绑定 → `StagedQlibBackendBuilder.publish` 三步交换【同卷 `st_dev` 闸内建，现自持全局 publish 锁】 → 活体 manifest 回读校验 → 换绑 → `pending_qa` 隔离标记）；旧 live 保留为 `.bak`（受 D2 引用型保留规则管理）。手工跑 `_depth9_safe_publish.py` 对月度 bump **已退役**（CLAUDE.md §3.4 硬不变量）。
 
 ### Phase 4 — 发布后换绑与验证（验证性质，不再含可执行常量清理；0.5 天）
-1. **Approvals 换绑**：约 25 个 YAML 同换 `provider_build_id` + `calendar_policy_id`（driver 照 `_rebind_approvals_depth9.py`），审计 md 的证据 = Phase 3.2 全套审计工件；`evaluate_approval_evidence_bindings()` → 0 drift。
+1. **Approvals 换绑**：~~driver 照 `_rebind_approvals_depth9.py`~~ **【2026-07-13 Phase 5-B B3 取代】换绑在发布事务 swap 后同一锁域内自动完成**（两阶段字节保持重写 + 逐文件 exact-token CAS + 0-drift 断言 + 提交型 rebind 记录 md；失败=恢复原字节并回滚交换）；`evaluate_approval_evidence_bindings()` → 0 drift 由事务内断言。
 2. **硬编码残留断言（M7 后 Phase 4 仅做验证）**：断言 legacy fixture / 显式旧-artifact 回放测试之外**无任何可执行的** `frozen_20260227_system_build` 残留（可执行清理已全部在 Phase 2 完成）；仅清理非执行文本（如 `event_driven/__init__.py:489` 报错文案）；对**老 artifact 政策**与**新 thaw_step1 政策**各跑一次正式验证 smoke。
 3. **测试全扫**：18 个测试文件 132 处钉死日期逐一核（fixture 自包含的预期不红）；`run_daily_qa` / `audit_qlib.py` / `qlib_smoke.py` / `test_pit_live_provider.py` + Phase 2 新增闸测试全绿。
 4. **文档同步（§11.2 同批）**：CLAUDE.md §3.4/§6.2a、AGENTS.md、`project_state.md`（含跨审 verdict 记录）、`data_tracker.md`/`data_dictionary.md`。
 
 ### Phase 5 — 稳态更新机制
 1. **每日**：计划任务收盘后跑 `update_daily_data.py --no-qlib`（原始层 + 日频集）；`run_daily_qa` 随后跑并失败告警（冻结期"故意不调度"注释同步移除）。
-2. **每月**：一键 driver（`scripts/monthly_calendar_bump.py`，`--dry-run` 必备）串起：磁盘检查 → 端点就绪检查定 target_end → 全量重建 → 前缀+侧车审计 → dry-run 报告 → 安全发布 → 换绑 → QA → 父 build 元数据 + 文档 stub。
+2. **每月**：一键 driver（`scripts/monthly_calendar_bump.py`）串起：磁盘检查 → 端点就绪检查定 target_end → 全量重建（staged）→ 前缀+侧车审计 + 全套事务证明（raw 全读集 manifest / staged 全内容 / approvals 集合 / git / 政策文件哈希）→ dry-run 报告（人工过目）→ **`--publish-approved` 原子事务**（验证↔交换↔换绑↔`pending_qa` 隔离标记不可分；swap 后任何失败经验证回滚）→ QA 过绿翻 `ready`（未 ready 的 provider 被 `release_gate.assert_provider_publish_state` 机械隔离；`--finalize-qa` 恢复腿）。**【2026-07-13 Phase 5-B B3 实施】**
 3. **保留策略（M3）**：只修剪**无引用** build；引用型 build 保留全树或回放核验包（见 D2）。**修剪前必须完成对全部引用存储（approvals / 五注册表 evidence / seal store / frozen selection / deployment-gate 记录——此列表是示例不是穷尽白名单，"全部引用存储"按字面执行，未来新增证据存储自动纳入）的完整扫描；扫描无法枚举任一引用源时，修剪 fail-closed**（Round-2 附加要求 + Round-3 实现注记）。
 4. **滚动政策守护规则（m1）**：在 `max_calendar_lag_days` 的运行时 + daily QA 强制检查落地并测试全绿之前，**任何 `frozen:false` 政策不得被 live provider / 正式验证 / daily QA / promotion / revalidation / 月度 driver 选用**；QA 增加检查：`active_policy.frozen == false` 时要求 lag 强制测试绿 + `live_calendar_end ≥ last_complete_trade_date − lag`。
 5. **后续演进（不在关键路径）**：滚动政策；真·追加式增量物化器（仅当月度全量重建时长不可接受时立项）。
