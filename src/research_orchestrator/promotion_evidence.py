@@ -237,6 +237,7 @@ def reproduce_sealed_oos(
     compute_factors_fn=None,
     seal_store=None,
     trade_cal=None,
+    fresh_window_override_id: str = "",
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
@@ -310,6 +311,25 @@ def reproduce_sealed_oos(
 
     seal_hash = frozen_set.frozen_set_hash
     if claim_seal:
+        # v1.4 A5 (PR3 REWORK, R1 Blocker 3): this is the LOWEST shared claim point of the
+        # factor-level (frozen-set-keyed) path — enforce the fresh-window authorization
+        # HERE, not only in the wrappers, so a direct import cannot bypass it. The
+        # authorization must PRE-EXIST in the OverrideAuthorizationStore (recorded with an
+        # explicit human sign-off + burn statement, window+scope bound) and is consumed
+        # exactly once; an invented non-empty string refuses.
+        from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
+
+        if is_virgin_window(str(oos_end)):
+            from src.alpha_research.factor_eval_skill.book_seal_stores import (
+                OverrideAuthorizationStore,
+            )
+
+            OverrideAuthorizationStore(seal_root).consume_authorization(
+                kind="a5_fresh_window",
+                override_id=str(fresh_window_override_id),
+                oos_window_id=f"{oos_start}..{oos_end}",
+                scope_key=str(seal_hash),
+            )
         if seal_store is None:
             from src.research_orchestrator.holdout_seal import HoldoutSealStore
             seal_store = HoldoutSealStore(seal_root)
@@ -317,6 +337,9 @@ def reproduce_sealed_oos(
             design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
             profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
             allow_same_run=allow_same_run, seal_key=seal_hash,
+            # R1 B3: the factor-level claim is provider-generation-bound too.
+            provider_build_id=str(prov.get("provider_build_id", "")),
+            calendar_policy_id=str(prov.get("calendar_policy_id", "")),
         )
 
     import pandas as pd

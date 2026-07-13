@@ -26,14 +26,21 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
+import pandas as pd
+
 from src.alpha_research.factor_eval_skill._hashing import (
     canonical_json,
     normalize_enum,
     normalize_mapping,
     payload_hash,
 )
-from src.alpha_research.factor_eval_skill._store import AppendOnlyStore
+from src.alpha_research.factor_eval_skill._store import (
+    AppendOnlyStore,
+    _atomic_write_dataframe as _store_atomic_write,
+    _now_str as _store_now,
+)
 from src.alpha_research.factor_eval_skill.identity import FrozenSelectionEnvelope
+from src.research_orchestrator.file_lock import file_lock
 
 # evidence_tier is a provenance/multiplicity field — NOT replication_tier_planned /
 # evidence_class / formal_evidence_eligible / cohort oos_eligibility (seam trap #1).
@@ -423,6 +430,11 @@ class OosWindowLedgerStore(AppendOnlyStore):
         "spend_unit_type",
         "book_seal_key",
         "override_id",
+        # PR3 REWORK (R1 Major 3): A6 disclosure fields — additive, back-filled blank on
+        # legacy rows by AppendOnlyStore._load.
+        "book_plan_hash",
+        "structural_family",
+        "request_hash",
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("oos_window_id", "frozen_set_hash")
@@ -518,6 +530,100 @@ class OosWindowLedgerStore(AppendOnlyStore):
             spend_unit_type="a5_signal_replication_study",
             override_id=str(override_id),
         )
+
+    def reserve_book_spend(
+        self,
+        *,
+        oos_window_id: str,
+        book_seal_key: str,
+        frozen_set_hash: str,
+        book_plan_hash: str,
+        request_hash: str,
+        structural_family: str = "",
+        factor_ids: Sequence[str] = (),
+        seal_mode: str = "live",
+        virgin: bool = False,
+        warn_threshold: int = 3,
+        hard_threshold: int = 5,
+        multiplicity_ack: bool = False,
+        override_authorization: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """PR3 REWORK (R1 Blocker 5) — the ATOMIC spend reservation: under ONE lock this
+        (1) recognizes an existing identical ``(window, book_seal_key)`` row as a RESUME
+        (returned with ``resumed=True``, never counted as a pending extra spend),
+        (2) counts distinct existing spend-unit keys, (3) enforces the virgin budget —
+        the warn band needs ``multiplicity_ack``; at/over the hard threshold only a
+        VALIDATED consumed a6 authorization (a store row, never a boolean) admits the
+        spend, (4) appends the spend-on-attempt row. The reservation happens BEFORE the
+        holdout claim, so a crash between the two leaves a recorded spend and an
+        unclaimed seal — the budget over-counts (conservative), never under-counts."""
+        if not str(book_seal_key).strip():
+            raise ValueError("reserve_book_spend requires a non-empty book_seal_key")
+        if not str(request_hash).strip():
+            raise ValueError("reserve_book_spend requires a non-empty request_hash")
+        with file_lock(self.lock_path):
+            frame = self._load()
+            window_mask = frame["oos_window_id"].astype("string") == str(oos_window_id)
+            sub = frame[window_mask]
+            keys = sub["book_seal_key"].astype("string").fillna("")
+            fallback = sub["frozen_set_hash"].astype("string").fillna("")
+            merged = keys.where(keys.str.len() > 0, fallback)
+            existing_keys = {k for k in merged.dropna().unique().tolist() if k}
+            mine = sub[sub["book_seal_key"].astype("string") == str(book_seal_key)]
+            if not mine.empty:
+                row = mine.iloc[-1].to_dict()
+                if str(row.get("request_hash") or "") not in ("", str(request_hash)):
+                    raise ValueError(
+                        f"reserve_book_spend: book_seal_key {book_seal_key} was reserved under a "
+                        f"DIFFERENT request_hash ({row.get('request_hash')!r}) — a changed request "
+                        "cannot resume a prior spend"
+                    )
+                row["resumed"] = True
+                return row
+            if virgin:
+                n_would_be = len(existing_keys) + 1
+                if n_would_be > hard_threshold:
+                    auth = override_authorization or {}
+                    valid = (
+                        isinstance(auth, Mapping)
+                        and str(auth.get("action")) == "consumed"
+                        and str(auth.get("kind")) == "a6_multiplicity"
+                        and str(auth.get("oos_window_id")) == str(oos_window_id)
+                    )
+                    if not valid:
+                        raise ValueError(
+                            f"virgin-window book budget HARD STOP (would be spend #{n_would_be} > "
+                            f"{hard_threshold}): requires a pre-recorded, consumed a6_multiplicity "
+                            "authorization bound to this window (OverrideAuthorizationStore) — a "
+                            "boolean flag is not an authorization"
+                        )
+                elif n_would_be > warn_threshold and not multiplicity_ack:
+                    raise ValueError(
+                        f"virgin-window book budget acknowledge band (would be spend #{n_would_be} > "
+                        f"{warn_threshold}): pass multiplicity_ack=True after reviewer acknowledgement"
+                    )
+            recorded_at = _store_now()
+            row = {column: "" for column in self.COLUMNS}
+            row.update(
+                {
+                    "oos_window_id": str(oos_window_id),
+                    "frozen_set_hash": str(frozen_set_hash),
+                    "factor_ids": canonical_json(sorted(str(f) for f in factor_ids)),
+                    "seal_mode": normalize_enum(seal_mode),
+                    "spend_unit_type": "book_seal",
+                    "book_seal_key": str(book_seal_key),
+                    "book_plan_hash": str(book_plan_hash),
+                    "structural_family": str(structural_family),
+                    "request_hash": str(request_hash),
+                    "override_id": str((override_authorization or {}).get("override_id", "")),
+                }
+            )
+            row["recorded_at"] = recorded_at
+            row["record_id"] = self._record_id(row, recorded_at)
+            frame = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
+            _store_atomic_write(frame, self.log_path)
+            row["resumed"] = False
+            return row
 
     def distinct_frozen_sets(self, oos_window_id: str) -> list[str]:
         frame = self._load()

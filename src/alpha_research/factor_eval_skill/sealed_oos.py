@@ -134,11 +134,16 @@ def run_sealed_oos(
     from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
 
     if claim_seal and is_virgin_window(oos_end) and not str(fresh_window_override_id).strip():
+        # fail-fast wrapper check; the AUTHORITATIVE enforcement (pre-recorded, consume-once,
+        # window+scope-bound authorization) lives at the lowest shared claim point inside
+        # reproduce_sealed_oos (R1 Blocker 3) — an invented id fails THERE even if a caller
+        # bypasses this wrapper.
         raise ValueError(
             "v1.4_A5_fresh_window_override_required: a factor-level sealed-OOS spend on a "
             f"virgin (post-2026-02-27) window (oos_end={oos_end}) is an A5 signal-replication "
-            "study and requires a pre-recorded fresh_window_signal_replication_override_id. "
-            "Book-level spends go through factor_eval_skill.book_seal (book_seal_key)."
+            "study and requires a PRE-RECORDED fresh_window_signal_replication_override_id "
+            "(OverrideAuthorizationStore, kind=a5_fresh_window). Book-level spends go through "
+            "factor_eval_skill.book_seal (book_seal_key)."
         )
 
     if sides is None:
@@ -148,6 +153,7 @@ def run_sealed_oos(
         oos_end=oos_end, qlib_dir=qlib_dir, seal_root=seal_root, run_dir=run_dir,
         design_hash=design_hash, hypothesis_id=hypothesis_id, horizon=horizon,
         n_quantiles=n_quantiles, claim_seal=claim_seal,
+        fresh_window_override_id=str(fresh_window_override_id),
     )
     per_factor = reproduction["independent_reproduction"]["per_factor"]
     verdict = evaluate_sealed_oos_bar(sides, per_factor, ls_floor=ls_floor)

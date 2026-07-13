@@ -175,10 +175,16 @@ def test_strategy_set_status_approved_p11_alone_refused_under_v14(tmp_path):
     with pytest.raises(PromotionGateError, match="holdout_seal_dir"):
         store.set_status(object_id="missing", status="approved", reason="promote",
                          promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123")
-    with pytest.raises(PromotionGateError, match="book_seal"):
+    with pytest.raises(PromotionGateError, match="book_artifact_dir"):
         store.set_status(object_id="missing", status="approved", reason="promote",
                          promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123",
                          holdout_seal_dir=tmp_path / "seals")
+    # and with BOTH stores supplied, an unpublished object still refuses at the row binding
+    with pytest.raises(PromotionGateError, match="no current strategy_candidate row"):
+        store.set_status(object_id="missing", status="approved", reason="promote",
+                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123",
+                         holdout_seal_dir=tmp_path / "seals",
+                         book_artifact_dir=tmp_path / "book_artifacts")
 
 
 def test_strategy_set_status_approved_sha_mismatch_blocked(tmp_path):

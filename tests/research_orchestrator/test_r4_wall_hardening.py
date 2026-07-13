@@ -329,7 +329,7 @@ class TestPromotionGuardBindings:
             raise RuntimeError("GUARD_PASSED_reached_seal_store")
 
     def _call(self, *, oos_end, calendar_end, seal_ctx=None, monkeypatch=None,
-              spent_boundary="2026-02-27"):
+              spent_boundary="2026-02-27", fresh_window_override_id=""):
         import src.research_orchestrator.promotion_evidence as pe
 
         if monkeypatch is not None:
@@ -362,7 +362,27 @@ class TestPromotionGuardBindings:
                 "calendar_end": calendar_end,
             },
             seal_store=self._StubSealStoreBoom(),
+            fresh_window_override_id=fresh_window_override_id,
         )
+
+    @staticmethod
+    def _a5_authorization(oos_end: str) -> str:
+        """PR3 R1 B3: a virgin-window factor-level claim now needs a PRE-RECORDED
+        consume-once A5 authorization — record a unique one per test run (ids are
+        single-use, so a fixed id would fail the second run)."""
+        import uuid
+
+        from src.alpha_research.factor_eval_skill.book_seal_stores import (
+            OverrideAuthorizationStore,
+        )
+
+        override_id = f"r4_test_{uuid.uuid4().hex[:12]}"
+        OverrideAuthorizationStore("data/_r4_test_seal").record_authorization(
+            kind="a5_fresh_window", override_id=override_id,
+            oos_window_id=f"2021-01-01..{oos_end}", scope_key="f" * 16,
+            user_signoff="r4-test", reason="D3.5 sealed fresh-window guard test",
+        )
+        return override_id
 
     def test_shorter_calendar_refused(self, monkeypatch):
         import src.research_orchestrator.promotion_evidence as pe
@@ -390,7 +410,8 @@ class TestPromotionGuardBindings:
         })()
         with pytest.raises(RuntimeError, match="GUARD_PASSED"):
             self._call(oos_end="2026-05-29", calendar_end="2026-06-30",
-                       seal_ctx=seal_ctx, monkeypatch=monkeypatch)
+                       seal_ctx=seal_ctx, monkeypatch=monkeypatch,
+                       fresh_window_override_id=self._a5_authorization("2026-05-29"))
 
     def test_longer_calendar_with_mismatched_seal_provider_refused(self, monkeypatch):
         import src.research_orchestrator.promotion_evidence as pe

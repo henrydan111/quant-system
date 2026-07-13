@@ -28,6 +28,9 @@ SEAL_COLUMNS = [
     # Legacy rows backfill "" via the _load column loop.
     "provider_build_id",
     "calendar_policy_id",
+    # PR3 REWORK (R1 Blocker 1/2): the claim is bound to ONE evaluation request; the
+    # promotion gate cross-checks artifact.request_hash == seal_event.request_hash.
+    "request_hash",
 ]
 
 SEAL_SCHEMA = {
@@ -46,6 +49,7 @@ SEAL_SCHEMA = {
     "stage": "string",
     "provider_build_id": "string",
     "calendar_policy_id": "string",
+    "request_hash": "string",
 }
 
 
@@ -124,6 +128,7 @@ class HoldoutSealStore:
         seal_key: str | None = None,
         provider_build_id: str = "",
         calendar_policy_id: str = "",
+        request_hash: str = "",
     ) -> dict[str, Any]:
         """Claim OOS access for a seal_key (defaults to design_hash); raise if sealed.
 
@@ -154,9 +159,16 @@ class HoldoutSealStore:
                     # the claim was spent against specific data. Enforced when
                     # the resuming caller supplies its ids; a legacy recorded
                     # "" mismatching a real id fails closed too.
-                    for column, current in (
-                        ("provider_build_id", provider_build_id),
-                        ("calendar_policy_id", calendar_policy_id),
+                    # PR3 REWORK (R1 Blocker 1): the same rule binds request_hash —
+                    # a resume under a CHANGED evaluation request is a new spend
+                    # attempt, never a recovery.
+                    for column, current, why in (
+                        ("provider_build_id", provider_build_id,
+                         "provider generation changed — UNFREEZE_PLAN.md D3.4"),
+                        ("calendar_policy_id", calendar_policy_id,
+                         "provider generation changed — UNFREEZE_PLAN.md D3.4"),
+                        ("request_hash", request_hash,
+                         "the evaluation request changed — PR3 R1 Blocker 1"),
                     ):
                         recorded = str(first_row.get(column, "") or "")
                         if current and recorded != str(current):
@@ -164,7 +176,7 @@ class HoldoutSealStore:
                                 f"Holdout seal recovery refused: claim for seal_key "
                                 f"{effective_seal_key} was spent under {column}="
                                 f"{recorded!r} but the resume runs under {current!r} "
-                                "(provider generation changed — UNFREEZE_PLAN.md D3.4)."
+                                f"({why})."
                             )
                     return first_row
                 raise ValueError(
@@ -190,6 +202,8 @@ class HoldoutSealStore:
                 # R4/D3.4 generation binding ("" = legacy caller, unset sentinel)
                 "provider_build_id": str(provider_build_id),
                 "calendar_policy_id": str(calendar_policy_id),
+                # PR3: the one-request binding ("" = legacy caller)
+                "request_hash": str(request_hash),
             }
             frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
             _atomic_write_dataframe(frame, self.log_path)

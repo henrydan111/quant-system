@@ -581,9 +581,16 @@ def cmd_seal(
         ledger.record_spend(oos_window_id=oos_window_id, frozen_set_hash=fs.frozen_set_hash,
                             evidence_tier=reg.get("evidence_tier", ""), factor_ids=factor_ids,
                             seal_mode="live")
-    # final report AFTER the spend is recorded (pending_self=False)
-    final_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
-    return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(), "n_pass": verdict.n_pass,
+    # final report AFTER the spend is recorded (pending_self=False). On a VIRGIN window the
+    # GOVERNING report is the stricter A6 virgin budget (R1 Major 3 — the legacy report must
+    # not replace it); the legacy system-level report is retained alongside for compatibility.
+    legacy_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
+    if virgin:
+        final_report = virgin_window_multiplicity(ledger, oos_window_id, pending_self=False)
+    else:
+        final_report = legacy_report
+    return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(),
+                               "legacy_multiplicity": legacy_report.to_dict(), "n_pass": verdict.n_pass,
                                "n_total": verdict.n_total, "results": list(verdict.results)})
 
 
