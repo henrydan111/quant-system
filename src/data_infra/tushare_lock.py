@@ -67,13 +67,26 @@ def raw_maintenance_lock(timeout: float = 21600.0):  # 6h default — a monthly 
 
 @contextmanager
 def provider_publish_lock(timeout: float = 7200.0):
-    """Process-exclusive LIVE-provider publish/swap (the monthly bump's atomic verify->swap->rebind
-    transaction, Phase 5-B B3). Serializes anything that replaces ``data/qlib_data`` or rewrites its
-    ``provider_build.json`` so two publishers can never interleave renames. LOCK ORDER: acquire
-    ``raw_maintenance_lock`` FIRST, then this — every holder follows that one order (the publish
-    transaction), so there is no reverse-order path and no lock-order deadlock."""
-    with _filelock("provider_publish.lock", timeout):
+    """Process-exclusive LIVE-provider publish/swap + manifest writes (Phase 5-B B3; GPT
+    re-review Blocker 7 made this a GLOBAL publish lock, not a driver-private one).
+
+    Held at the COMMON CHOKEPOINTS — ``StagedQlibBackendBuilder.publish()`` and the
+    ``provider_build.json`` emitters in ``provider_manifest`` acquire it themselves — so ANY
+    sanctioned publisher/manifest writer excludes any other, whichever entrypoint invoked it.
+    The monthly transaction additionally holds it across its whole verify->swap->rebind scope.
+
+    REENTRANT within a process/thread: the underlying ``FileLock`` is a per-path SINGLETON
+    (``is_singleton=True``; verified on filelock 3.25.2 — same instance, counted acquire), so
+    the transaction holding the lock can call ``publish()`` which re-acquires without
+    deadlocking, while a second process still blocks. LOCK ORDER: any holder that also needs
+    ``raw_maintenance_lock`` acquires raw FIRST, then this; publish-lock-only holders (the
+    builder/emitters) never take the raw lock afterwards — no reverse-order path exists."""
+    lock = FileLock(str(_lock_dir() / "provider_publish.lock"), is_singleton=True)
+    lock.acquire(timeout=timeout)
+    try:
         yield
+    finally:
+        lock.release()
 
 
 # ── global cross-process rate spacing (a shared next-allowed timestamp, held under the API lock) ──

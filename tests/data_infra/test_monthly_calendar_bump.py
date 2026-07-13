@@ -550,7 +550,8 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     (qlib / "metadata" / "provider_build.json").write_text(_json.dumps(
         {"provider_build_id": parent_pb, "calendar_policy_id": parent_cp}), encoding="utf-8")
 
-    # staged provider (the child) at the canonical build path
+    # staged provider (the child) at the canonical build path — incl. a feature BIN whose
+    # bytes the full-content attestation must protect (GPT re-review Blocker 4)
     staged = data / "qlib_builds" / new_pb / "provider"
     (staged / "calendars").mkdir(parents=True)
     (staged / "calendars" / "day.txt").write_text("2008-01-02\n2099-01-01\n", encoding="utf-8")
@@ -558,6 +559,7 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     (staged / "instruments" / "all_stocks.txt").write_text(
         "000001_SZ\t2008-01-02\t2099-01-01\n", encoding="utf-8")
     (staged / "features" / "000001_sz").mkdir(parents=True)
+    (staged / "features" / "000001_sz" / "close.day.bin").write_bytes(b"\x01\x02\x03\x04")
     (staged / "STAGED_MARKER.txt").write_text("child", encoding="utf-8")
     (data / "qlib_builds" / new_pb / "manifest.json").write_text("{}", encoding="utf-8")
 
@@ -592,19 +594,33 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     manifest = mcb._full_raw_manifest(data)
     (out / "raw_input_manifest.json").write_text(_json.dumps(manifest), encoding="utf-8")
 
-    # audit artifacts + staged attestation, pinned into the dry-run report
+    # audit artifacts + the full transaction attestation set, pinned into the dry-run report
     fp = out / "frozen_prefix_audit.json"
     fp.write_text(_json.dumps({"staged": str(staged), "ok": True}), encoding="utf-8")
     fw = out / "fresh_window_survivorship_audit.json"
     fw.write_text(_json.dumps({"ok": True, "violations": []}), encoding="utf-8")
-    att = mcb._staged_attestation(staged)
+    monkeypatch.setattr(mcb, "_git_state", lambda: ("testsha0123", "clean"))
+    att = mcb._staged_content_attestation(staged)
+    (out / f"staged_content_manifest_{new_pb}.json").write_text(
+        _json.dumps(att), encoding="utf-8")
+    appr_att = mcb._approvals_attestation()
+    policy_file = root / "policies" / f"{new_cp}.yaml"
     report = {
         "target_end": "20990101", "new_policy_id": new_cp, "staged_build_id": new_pb,
         "staged_provider_dir": str(staged), "parent_build_id": parent_pb,
         "parent_policy_id": parent_cp, "raw_input_manifest_root": manifest["root"],
         "frozen_prefix_audit_sha256": mcb._sha256_file(fp),
         "fresh_window_audit_sha256": mcb._sha256_file(fw),
-        "staged_attestation_root": att["root"],
+        "staged_content_root": att["root"],
+        "staged_content_file_count": att["file_count"],
+        "staged_content_total_bytes": att["total_bytes"],
+        "staged_content_manifest_artifact": f"staged_content_manifest_{new_pb}.json",
+        "approvals_attestation_root": appr_att["root"],
+        "approvals_file_count": appr_att["file_count"],
+        "approvals_bound_count": appr_att["bound_count"],
+        "new_policy_sha256": mcb._sha256_file(policy_file),
+        "source_git_commit": "testsha0123",
+        "git_dirty_digest": "clean",
     }
     (out / "monthly_bump_dryrun_report.json").write_text(_json.dumps(report), encoding="utf-8")
 
@@ -615,9 +631,16 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
     monkeypatch.setattr(mcb, "_make_publish_builder", _builder)
     return _types.SimpleNamespace(
         root=root, data=data, qlib=qlib, staged=staged, out=out, raw=raw,
+        staged_bin=staged / "features" / "000001_sz" / "close.day.bin",
+        policy_file=policy_file,
         parent_pb=parent_pb, parent_cp=parent_cp, new_pb=new_pb, new_cp=new_cp,
         manifest=manifest, a1=a1, a2=a2,
         a1_bytes=a1.read_bytes(), a2_bytes=a2.read_bytes())
+
+
+def _publish_state_of(qlib) -> str | None:
+    p = qlib / "metadata" / "publish_state.json"
+    return _json.loads(p.read_text(encoding="utf-8"))["state"] if p.exists() else None
 
 
 def _assert_untouched(env):
@@ -642,6 +665,8 @@ def test_publish_transaction_happy_path(tmp_path, monkeypatch):
     assert m["calendar_policy_id"] == env.new_cp
     assert m["raw_input_manifest_root"] == env.manifest["root"]
     assert m["parent_provider_build_id"] == env.parent_pb
+    assert m["source_git_commit"] == "testsha0123"  # the EXECUTE-time commit, not publish-time
+    assert _publish_state_of(env.qlib) == "ready"   # QA passed -> quarantine lifted
     # rebind: both quoting styles preserved, values swapped; exempt untouched
     t1 = env.a1.read_text(encoding="utf-8")
     assert f'provider_build_id: "{env.new_pb}"' in t1 and f"calendar_policy_id: {env.new_cp}" in t1
@@ -704,7 +729,7 @@ def test_publish_refuses_pre_phase5b_report(tmp_path, monkeypatch):
     # — publish verifies exactly what execute attested, or nothing.
     env = _publish_env(tmp_path, monkeypatch)
     rep = _json.loads((env.out / "monthly_bump_dryrun_report.json").read_text(encoding="utf-8"))
-    del rep["staged_attestation_root"]
+    del rep["staged_content_root"]
     (env.out / "monthly_bump_dryrun_report.json").write_text(_json.dumps(rep), encoding="utf-8")
     assert mcb.phase_publish(_PubArgs()) == 2
     _assert_untouched(env)
@@ -725,6 +750,15 @@ def test_publish_rolls_back_on_postswap_failure(tmp_path, monkeypatch):
     assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
     assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
     assert not (env.data / f"qlib_data.bak_{env.new_pb}").exists(), "rollback must consume the backup"
+    # this transaction's artifacts must not survive a rollback (GPT re-review Blocker 2b):
+    assert not (env.out / "publish_record.json").exists(), "publish record must be removed"
+    assert not list((env.root / "approvals").glob("*_rebind_to_*.md")), "no rebind md may remain"
+    # ... and the returned staged tree is stripped back to its ATTESTED content, so a
+    # clean retry passes the content re-attestation:
+    assert not (env.staged / "metadata" / "provider_build.json").exists()
+    assert not (env.staged / "metadata" / "publish_state.json").exists()
+    rep = _json.loads((env.out / "monthly_bump_dryrun_report.json").read_text(encoding="utf-8"))
+    assert mcb._staged_content_attestation(env.staged)["root"] == rep["staged_content_root"]
     steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
     assert any(s["step"] == "bind" and s["status"] == "failed_rolled_back" for s in steps)
 
@@ -746,15 +780,26 @@ def test_publish_rolls_back_when_manifest_emission_fails(tmp_path, monkeypatch):
     assert env.a1.read_bytes() == env.a1_bytes
 
 
-def test_publish_qa_failure_returns_6_and_keeps_provider(tmp_path, monkeypatch):
-    # QA runs OUTSIDE the transaction: a QA failure alarms (exit 6) but does not undo a
-    # consistent swap+rebind+metadata — the operator investigates with the .bak retained.
+def test_publish_qa_failure_returns_6_and_quarantines(tmp_path, monkeypatch):
+    # QA runs OUTSIDE the transaction: a QA failure alarms (exit 6) and does not undo a
+    # consistent swap+rebind+metadata — but the publish-state marker QUARANTINES gated
+    # reads mechanically (GPT re-review Blocker 6), and --finalize-qa lifts it on a pass.
     env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
     assert mcb.phase_publish(_PubArgs()) == 6
     assert (env.qlib / "STAGED_MARKER.txt").exists(), "the published provider stays live"
     m = _json.loads((env.qlib / "metadata" / "provider_build.json").read_text(encoding="utf-8"))
     assert m["provider_build_id"] == env.new_pb
     assert f'provider_build_id: "{env.new_pb}"' in env.a1.read_text(encoding="utf-8")
+    assert _publish_state_of(env.qlib) == "qa_failed", "quarantine marker must persist"
+    # the marker is load-bearing at the gate:
+    from src.research_orchestrator.release_gate import evaluate_provider_publish_state
+    gate = evaluate_provider_publish_state(qlib_dir=env.qlib, policy=object(), manifest=None)
+    assert not gate.eligible and any("qa_failed" in r for r in gate.reasons)
+    # QA resolved -> --finalize-qa flips to ready
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 0
+    assert _publish_state_of(env.qlib) == "ready"
+    assert evaluate_provider_publish_state(qlib_dir=env.qlib, policy=object(), manifest=None).eligible
 
 
 def test_generate_thaw_policy_requires_raw_attestation(tmp_path, monkeypatch):
@@ -763,3 +808,167 @@ def test_generate_thaw_policy_requires_raw_attestation(tmp_path, monkeypatch):
     _pid, path = mcb.generate_thaw_policy("20990131", "pb", write=True)
     body = _yamlmod.safe_load(path.read_text(encoding="utf-8"))
     assert body["require_raw_input_attestation"] is True
+
+
+# ── GPT re-review probes (Blockers 1-4, 7 + Majors) ──────────────────────────
+def test_publish_survives_journal_write_failure_after_swap(tmp_path, monkeypatch):
+    # GPT Blocker 1 probe: the first post-swap journal write previously sat OUTSIDE the
+    # rollback domain — a journal fault left the child live with stale approvals and no
+    # rollback. Now the journal is a non-raising breadcrumb: the transaction completes.
+    env = _publish_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(mcb, "TRANSACTION_JOURNAL_PATH", env.out)  # a DIRECTORY -> every write fails
+    assert mcb.phase_publish(_PubArgs()) == 0
+    assert (env.qlib / "STAGED_MARKER.txt").exists() and _publish_state_of(env.qlib) == "ready"
+    assert f'provider_build_id: "{env.new_pb}"' in env.a1.read_text(encoding="utf-8")
+
+
+def _selective_write_fault(monkeypatch, should_fail):
+    """Patch mcb._atomic_write_bytes with a predicate-driven fault injector; all other
+    writes pass through to the real implementation."""
+    real = mcb._atomic_write_bytes
+
+    def fake(path, data):
+        if should_fail(Path(path), data):
+            raise OSError("injected write fault")
+        real(path, data)
+
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", fake)
+
+
+def test_publish_rolls_back_when_rebind_write_fails_midway(tmp_path, monkeypatch):
+    # GPT Blocker 2 probe: fail the SECOND approval write mid-rebind. The caller holds
+    # every original (pure planner), restores + VERIFIES, rolls the swap back -> exit 4
+    # with byte-identical approvals and the parent live again.
+    env = _publish_env(tmp_path, monkeypatch)
+    seen: list[Path] = []
+
+    def fail_second_approval(path, _data):
+        if path.parent == env.root / "approvals" and path.suffix == ".yaml":
+            seen.append(path)
+            return len(seen) == 2
+        return False
+
+    _selective_write_fault(monkeypatch, fail_second_approval)
+    assert mcb.phase_publish(_PubArgs()) == 4
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert (env.qlib / "LIVE_MARKER.txt").exists()
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert not list((env.root / "approvals").glob("*_rebind_to_*.md"))
+
+
+def test_publish_reports_5_when_restore_also_fails(tmp_path, monkeypatch):
+    # GPT Blocker 2 probe (double fault): a1 is rebound, a2's write fails (triggering the
+    # rollback), and then RESTORING a1 also fails — the transaction must NOT claim a
+    # verified rollback (the old code returned exit 4 with a half-rebound approvals dir);
+    # exit 5 with the journal naming the inconsistent file.
+    env = _publish_env(tmp_path, monkeypatch)
+    a1_writes: dict[str, int] = {}
+
+    def fault(path, _data):
+        if path.name == "a2.yaml":
+            return True  # rebind write of a2 fails -> handler engages with written=[a1]
+        if path.name == "a1.yaml":
+            a1_writes["n"] = a1_writes.get("n", 0) + 1
+            return a1_writes["n"] == 2  # 1st = rebind OK, 2nd = the RESTORE fails
+        return False
+
+    _selective_write_fault(monkeypatch, fault)
+    assert mcb.phase_publish(_PubArgs()) == 5
+    steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
+    bad = [s for s in steps if s["status"] == "failed_rollback_incomplete"]
+    assert bad and any("a1.yaml" in p for p in bad[0]["problems"])
+
+
+def test_publish_rolls_back_when_record_write_fails(tmp_path, monkeypatch):
+    # GPT Blocker 2b probe: the publish-record write fails AFTER the rebind — everything
+    # (approvals, provider, state marker, record artifacts) must be restored; the
+    # governance rebind md is written LAST so no false 'completed rebind' record survives.
+    env = _publish_env(tmp_path, monkeypatch)
+    _selective_write_fault(monkeypatch, lambda p, _d: p.name == "publish_record.json")
+    assert mcb.phase_publish(_PubArgs()) == 4
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert (env.qlib / "LIVE_MARKER.txt").exists()
+    assert not list((env.root / "approvals").glob("*_rebind_to_*.md")), \
+        "a false 'successful rebind' governance record must not survive the rollback"
+    assert not (env.staged / "metadata" / "publish_state.json").exists()
+    assert not (env.out / "publish_record.json").exists()
+
+
+def test_publish_refuses_deleted_approvals(tmp_path, monkeypatch):
+    # GPT Blocker 3 probe: deleting bound approval YAMLs between execute and publish
+    # previously published with `approvals_rebound: 0`. The pinned governance-set
+    # attestation now refuses — including the delete-ALL case.
+    env = _publish_env(tmp_path, monkeypatch)
+    env.a2.unlink()
+    assert mcb.phase_publish(_PubArgs()) == 2
+    env.a1.unlink()
+    (env.root / "approvals" / "exempt.yaml").unlink()
+    assert mcb.phase_publish(_PubArgs()) == 2
+    assert (env.qlib / "LIVE_MARKER.txt").exists() and (env.staged / "STAGED_MARKER.txt").exists()
+
+
+def test_publish_refuses_added_approval(tmp_path, monkeypatch):
+    # The set pin is two-sided: an approval ADDED after the review also refuses (it would
+    # be silently rebound without ever having been part of the reviewed report).
+    env = _publish_env(tmp_path, monkeypatch)
+    (env.root / "approvals" / "a3_new.yaml").write_text(
+        f"approval_id: a3\ndataset_id: d3\nto_status: approved\ndate: '2026-07-10'\n"
+        f"provider_build_id: {env.parent_pb}\ncalendar_policy_id: {env.parent_cp}\n",
+        encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_feature_bin_mutation(tmp_path, monkeypatch):
+    # GPT Blocker 4 probe: mutate a feature BIN's bytes (same size) after the audited
+    # build — the FULL-CONTENT re-attestation must refuse to publish the changed bytes.
+    env = _publish_env(tmp_path, monkeypatch)
+    env.staged_bin.write_bytes(b"\x09\x09\x09\x09")  # same size, different content
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_git_state_drift(tmp_path, monkeypatch):
+    # GPT Major 2 probe: code moved between execute and publish — the manifest would
+    # misattribute the build; refuse.
+    env = _publish_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(mcb, "_git_state", lambda: ("othersha", "clean"))
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_publish_refuses_policy_file_drift(tmp_path, monkeypatch):
+    # GPT Major 1 probe: the minted policy FILE (not just a few fields) is pinned by
+    # hash — any edit refuses.
+    env = _publish_env(tmp_path, monkeypatch)
+    env.policy_file.write_text(
+        env.policy_file.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_builder_publish_acquires_global_lock(tmp_path, monkeypatch):
+    # GPT Blocker 7: the publish LOCK lives at the common chokepoint — a bare
+    # StagedQlibBackendBuilder.publish() (any entrypoint) acquires it, and the singleton
+    # FileLock makes the monthly transaction's nested acquisition reentrant (the happy-path
+    # test exercises the nesting for real).
+    import data_infra.tushare_lock as tl
+    from data_infra.pit_backend import StagedQlibBackendBuilder
+
+    entered = []
+    from contextlib import contextmanager
+
+    @contextmanager
+    def recording(timeout: float = 7200.0):
+        entered.append(timeout)
+        yield
+
+    monkeypatch.setattr(tl, "provider_publish_lock", recording)
+    data = tmp_path / "data"
+    staged = data / "qlib_builds" / "lockprobe" / "provider"
+    staged.mkdir(parents=True)
+    (staged / "x.txt").write_text("x", encoding="utf-8")
+    b = StagedQlibBackendBuilder(data_root=str(data), qlib_dir=str(data / "qlib_data"),
+                                 build_id="lockprobe")
+    b.publish(calendar_policy_id="frozen_20260701_thaw_step1", emit_manifest=False)
+    assert entered, "publish() must acquire the global provider-publish lock"

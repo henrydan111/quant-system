@@ -102,6 +102,19 @@ class CalendarPolicy:
                 "spent_oos_end / fresh_holdout_start — both or neither."
             )
 
+        # Phase 5-B B3.2 (GPT re-review Major 1): the attestation requirement must be a real
+        # bool or absent. A truthy-but-non-bool value (the YAML string "true", 1, ...) must
+        # REFUSE, not silently read as False — that would be a fail-open typo path on a
+        # load-bearing enforcement flag.
+        require_attestation = payload.get("require_raw_input_attestation", False)
+        if not isinstance(require_attestation, bool):
+            raise CalendarPolicyError(
+                f"Calendar policy {payload['policy_id']!r}: require_raw_input_attestation "
+                f"must be a YAML bool (true/false) or absent, got "
+                f"{require_attestation!r} ({type(require_attestation).__name__}). A quoted "
+                "'true' would silently disable a load-bearing enforcement flag — fail closed."
+            )
+
         return cls(
             policy_id=str(payload["policy_id"]),
             policy_schema_version=schema_version,
@@ -117,7 +130,7 @@ class CalendarPolicy:
             notes=tuple(str(n) for n in payload.get("notes", ())),
             spent_oos_end=str(spent) if spent is not None else None,
             fresh_holdout_start=str(fresh) if fresh is not None else None,
-            require_raw_input_attestation=payload.get("require_raw_input_attestation") is True,
+            require_raw_input_attestation=require_attestation,
         )
 
     def permits_calendar_mismatch(self, run_mode: str) -> bool:

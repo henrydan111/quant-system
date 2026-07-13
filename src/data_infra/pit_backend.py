@@ -4599,6 +4599,7 @@ class StagedQlibBackendBuilder:
         emit_manifest: bool = True,
         raw_input_manifest_root: str | None = None,
         parent_provider_build_id: str | None = None,
+        source_git_commit: str | None = None,
     ) -> None:
         """Atomically promote the staged provider into ``data/qlib_data``.
 
@@ -4626,6 +4627,30 @@ class StagedQlibBackendBuilder:
         record ``provider_build_id``. Disable with ``emit_manifest=False`` only
         for hot-restore drills where attestation is not desired.
         """
+        # Phase 5-B B7: the GLOBAL provider-publish lock is acquired HERE, at the common
+        # chokepoint, so every sanctioned publisher excludes every other regardless of
+        # entrypoint. Reentrant (per-path singleton FileLock — shared across the dual
+        # src./plain namespaces) — the monthly transaction already holding it nests
+        # without deadlock. Sibling-relative import resolves under either namespace root.
+        from .tushare_lock import provider_publish_lock
+        with provider_publish_lock():
+            self._publish_locked(
+                calendar_policy_id=calendar_policy_id,
+                emit_manifest=emit_manifest,
+                raw_input_manifest_root=raw_input_manifest_root,
+                parent_provider_build_id=parent_provider_build_id,
+                source_git_commit=source_git_commit,
+            )
+
+    def _publish_locked(
+        self,
+        *,
+        calendar_policy_id: str,
+        emit_manifest: bool,
+        raw_input_manifest_root: str | None,
+        parent_provider_build_id: str | None,
+        source_git_commit: str | None,
+    ) -> None:
         if not os.path.isdir(self.paths.provider_dir):
             raise BuildGateError("Cannot publish: staged provider directory is missing")
 
@@ -4705,6 +4730,7 @@ class StagedQlibBackendBuilder:
                 calendar_policy_id=calendar_policy_id,
                 raw_input_manifest_root=raw_input_manifest_root,
                 parent_provider_build_id=parent_provider_build_id,
+                source_git_commit=source_git_commit,
             )
 
     def _emit_provider_manifest_at_publish(
@@ -4713,6 +4739,7 @@ class StagedQlibBackendBuilder:
         calendar_policy_id: str,
         raw_input_manifest_root: str | None = None,
         parent_provider_build_id: str | None = None,
+        source_git_commit: str | None = None,
     ) -> None:
         """Emit data/qlib_data/metadata/provider_build.json after publish.
 
@@ -4734,14 +4761,18 @@ class StagedQlibBackendBuilder:
             logger.warning("Failed to read calendars/day.txt for manifest emission: %s", exc)
             return
 
-        source_commit: str | None = None
-        try:
-            import subprocess
-            source_commit = (
-                subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() or None
-            )
-        except (OSError, subprocess.CalledProcessError):
-            source_commit = None
+        # Phase 5-B (GPT re-review Major 2): when the caller binds the BUILD-time commit
+        # (the monthly transaction records it at execute), stamp THAT — publish-time
+        # `rev-parse HEAD` misattributes the build if code moved between build and publish.
+        source_commit: str | None = source_git_commit
+        if source_commit is None:
+            try:
+                import subprocess
+                source_commit = (
+                    subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() or None
+                )
+            except (OSError, subprocess.CalledProcessError):
+                source_commit = None
 
         from data_infra.provider_manifest import emit_manifest_at_publish
         try:

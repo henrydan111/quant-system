@@ -519,15 +519,122 @@ def assert_provider_raw_attestation(
 ) -> ProviderAttestationGateResult:
     """Strict variant of :func:`evaluate_provider_raw_attestation` for formal paths.
 
-    Wired at the formal-run provider-validation chokepoint
-    (``backtest_engine.event_driven._validate_provider_at_runtime``), where both the
-    loaded manifest and the calendar policy are in hand.
+    Wired at BOTH read chokepoints: the formal-run provider validation
+    (``backtest_engine.event_driven._validate_provider_at_runtime``) and the shared
+    live-provider resolution every sanctioned data door goes through
+    (``data_infra.provider_context._resolve``).
     """
     result = evaluate_provider_raw_attestation(manifest=manifest, policy=policy)
     if not result.eligible:
         raise ProviderAttestationError(
             f"Provider raw-input attestation gate blocked {artifact_label}: "
             f"{list(result.reasons)}"
+        )
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Provider publish-state (QA quarantine) gate — Phase 5-B B3, GPT re-review Blocker 6
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The monthly atomic publish writes <qlib_dir>/metadata/publish_state.json with
+# state="pending_qa" the moment the swap+rebind are durable, flips it to "ready" only
+# after run_daily_qa PASSES, and to "qa_failed" on a QA failure. This gate makes that
+# quarantine MECHANICAL: while the marker is not "ready", every gated read path refuses —
+# a provider that published but failed (or has not yet run) QA cannot serve research.
+# Roll-forward scoping mirrors the raw attestation: a policy with
+# require_raw_input_attestation=True REQUIRES the marker to exist; legacy policies allow
+# an absent marker (pre-5B providers never had one) but STILL honor a present non-ready
+# marker (a written quarantine is always load-bearing).
+
+PUBLISH_STATE_FILENAME = "publish_state.json"
+PUBLISH_STATE_READY = "ready"
+PUBLISH_STATE_PENDING_QA = "pending_qa"
+PUBLISH_STATE_QA_FAILED = "qa_failed"
+
+
+def read_provider_publish_state(qlib_dir: Any) -> dict[str, Any] | None:
+    """The parsed publish-state marker for ``qlib_dir``, or ``None`` when absent.
+    Malformed content returns ``{"state": "<malformed>"}`` so gated readers fail closed
+    instead of treating corruption as legacy-absent."""
+    path = Path(qlib_dir) / "metadata" / PUBLISH_STATE_FILENAME
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {"state": "<malformed>"}
+        return payload
+    except (OSError, json.JSONDecodeError):
+        return {"state": "<malformed>"}
+
+
+def evaluate_provider_publish_state(
+    *,
+    qlib_dir: Any,
+    policy: Any,
+    manifest: Any = None,
+) -> ProviderAttestationGateResult:
+    """Decide whether the live provider's publish-state marker admits gated reads.
+
+    When ``manifest`` is supplied, a present marker must also name the SAME
+    ``provider_build_id`` — a marker left behind by a different build is corruption,
+    not clearance."""
+    def _get(obj: Any, key: str) -> Any:
+        if isinstance(obj, Mapping):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    policy_id = _get(policy, "policy_id")
+    required = _get(policy, "require_raw_input_attestation") is True
+    build_id = _get(manifest, "provider_build_id") if manifest is not None else None
+    state_payload = read_provider_publish_state(qlib_dir)
+
+    reasons: list[str] = []
+    if state_payload is None:
+        if required:
+            reasons.append(
+                f"calendar policy {policy_id!r} requires the publish-state marker "
+                f"(metadata/{PUBLISH_STATE_FILENAME}) but the live provider carries none — "
+                "the build did not complete the attested publish transaction."
+            )
+    else:
+        state = state_payload.get("state")
+        if state != PUBLISH_STATE_READY:
+            reasons.append(
+                f"live provider publish-state is {state!r} (not '{PUBLISH_STATE_READY}') — "
+                "post-publish QA has not passed; the provider is quarantined for gated "
+                "reads. Run scripts/monthly_calendar_bump.py --finalize-qa after resolving."
+            )
+        marker_build = state_payload.get("provider_build_id")
+        if build_id is not None and marker_build is not None and str(marker_build) != str(build_id):
+            reasons.append(
+                f"publish-state marker names build {marker_build!r} but the live manifest is "
+                f"{build_id!r} — stale/foreign marker; refusing."
+            )
+
+    return ProviderAttestationGateResult(
+        eligible=len(reasons) == 0,
+        required=required,
+        policy_id=str(policy_id) if policy_id is not None else None,
+        provider_build_id=str(build_id) if build_id is not None else None,
+        raw_input_manifest_root=None,
+        reasons=tuple(reasons),
+    )
+
+
+def assert_provider_publish_state(
+    *,
+    qlib_dir: Any,
+    policy: Any,
+    manifest: Any = None,
+    artifact_label: str = "gated read",
+) -> ProviderAttestationGateResult:
+    """Strict variant of :func:`evaluate_provider_publish_state` for gated paths."""
+    result = evaluate_provider_publish_state(qlib_dir=qlib_dir, policy=policy, manifest=manifest)
+    if not result.eligible:
+        raise ProviderAttestationError(
+            f"Provider publish-state gate blocked {artifact_label}: {list(result.reasons)}"
         )
     return result
 

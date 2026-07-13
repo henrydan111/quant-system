@@ -238,12 +238,21 @@ def _validate_provider_at_runtime(
             manifest, live_calendar_end, allow_calendar_mismatch=False,
         )
 
-    # Phase 5-B (B3.2): policies minted by the monthly bump require the live manifest
-    # to carry raw_input_manifest_root (the attested raw-input cut of the publish).
-    # Legacy policies leave the flag unset and skip cleanly inside the gate.
-    from src.research_orchestrator.release_gate import assert_provider_raw_attestation
+    # Phase 5-B (B3.2 + B6): policies minted by the monthly bump require the live manifest
+    # to carry raw_input_manifest_root (the attested raw-input cut of the publish) AND the
+    # publish-state marker to read "ready" (QA quarantine — a provider that swapped but has
+    # not passed post-publish QA must not serve a formal run). Legacy policies skip the
+    # attestation/marker-presence requirements but still honor a present non-ready marker.
+    from src.research_orchestrator.release_gate import (
+        assert_provider_publish_state,
+        assert_provider_raw_attestation,
+    )
     assert_provider_raw_attestation(
         manifest=manifest, policy=policy,
+        artifact_label=f"run_mode={run_mode!r} under policy {calendar_policy_id!r}",
+    )
+    assert_provider_publish_state(
+        qlib_dir=qlib_dir, policy=policy, manifest=manifest,
         artifact_label=f"run_mode={run_mode!r} under policy {calendar_policy_id!r}",
     )
 

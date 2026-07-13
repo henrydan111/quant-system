@@ -428,14 +428,28 @@ def emit_retroactive_manifest(
         retroactive_manifest_evidence=tuple(evidence_list),
     )
 
-    target = manifest_path_for(qlib_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(manifest.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(tmp, target)
+    target = _write_manifest_locked(qlib_dir, manifest)
     logger.info("Wrote retroactive provider manifest to %s", target)
+    return target
+
+
+def _write_manifest_locked(qlib_dir: Path, manifest: ProviderManifest) -> Path:
+    """Atomic manifest write under the GLOBAL provider-publish lock (Phase 5-B B7): every
+    sanctioned ``provider_build.json`` writer serializes against the swap transaction and
+    against each other. Reentrant for callers already holding the lock (the FileLock is a
+    per-PATH library-level singleton, so the dual src./plain module namespaces share one
+    lock instance). Relative import: this module is legitimately imported under BOTH
+    namespace roots, and a sibling-relative import resolves under either."""
+    from .tushare_lock import provider_publish_lock
+
+    target = manifest_path_for(qlib_dir)
+    with provider_publish_lock():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(manifest.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp, target)
     return target
 
 
@@ -502,12 +516,6 @@ def emit_manifest_at_publish(
         parent_provider_build_id=parent_provider_build_id,
     )
 
-    target = manifest_path_for(qlib_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(manifest.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(tmp, target)
+    target = _write_manifest_locked(qlib_dir, manifest)
     logger.info("Wrote provider manifest to %s", target)
     return target

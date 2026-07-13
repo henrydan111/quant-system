@@ -80,7 +80,19 @@ def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
             f"live provider manifest under {qlib_dir} changed during read — "
             "fail closed (mid-publish; retry)."
         )
-    key = (str(manifest_file), stat.st_mtime_ns, stat.st_size, digest)
+    # Phase 5-B B6: the publish-state marker is part of the provider's IDENTITY for gated
+    # reads — fold its content digest into the cache key so a --finalize-qa flip (which
+    # does not touch the manifest) re-runs the gates instead of serving a cached verdict.
+    state_file = qlib_dir / "metadata" / "publish_state.json"
+    try:
+        state_digest = (
+            hashlib.sha256(state_file.read_bytes()).hexdigest() if state_file.exists() else "absent"
+        )
+    except Exception as exc:
+        raise ProviderContextError(
+            f"cannot read the live provider publish-state marker under {qlib_dir}: {exc} — fail closed."
+        ) from exc
+    key = (str(manifest_file), stat.st_mtime_ns, stat.st_size, digest + ":" + state_digest)
 
     cached = _CACHE.get(key)
     if cached is not None:
@@ -102,6 +114,29 @@ def _resolve() -> tuple[str, str, pd.Timestamp, Optional[str]]:
         raise ProviderContextError(
             f"cannot resolve live provider identity/boundary (manifest/policy/calendar): "
             f"{exc} — fail closed."
+        ) from exc
+
+    # Phase 5-B (GPT re-review Blockers 5 + 6): BOTH sanctioned data doors — the sandbox
+    # pit_research_loader and the formal qlib_windowed_features — resolve through here, so
+    # this is where the raw-input attestation and the QA-quarantine publish-state become
+    # load-bearing for every gated read (the event-driven runtime validator re-checks them
+    # independently for formal backtests). Gate errors surface verbatim, wrapped as the
+    # fail-closed context error callers already handle.
+    try:
+        from src.research_orchestrator.release_gate import (
+            assert_provider_publish_state,
+            assert_provider_raw_attestation,
+        )
+        assert_provider_raw_attestation(
+            manifest=manifest, policy=policy, artifact_label="live-provider resolution")
+        assert_provider_publish_state(
+            qlib_dir=qlib_dir, policy=policy, manifest=manifest,
+            artifact_label="live-provider resolution")
+    except ProviderContextError:
+        raise
+    except Exception as exc:
+        raise ProviderContextError(
+            f"live provider refused by the publish gates: {exc} — fail closed."
         ) from exc
 
     # R6-m5: the miss path re-reads the manifest inside load_provider_manifest;
