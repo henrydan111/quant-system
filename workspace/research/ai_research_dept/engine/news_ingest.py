@@ -81,8 +81,12 @@ def _sessions_in_window(open_days: set, t0: pd.Timestamp, t1: pd.Timestamp) -> b
     return False
 
 
+#: 标的盘中状态枚举(review M3:target_intervals 的合法 state,fail-closed)
+_INTERVAL_STATES = frozenset({"tradable", "suspended", "locked"})
+
+
 class SessionInputError(Exception):
-    """发布时刻晚于 cutoff(review M3:不得静默当作 no-session)。"""
+    """发布时刻晚于 cutoff 或 interval 非法(review M3:不得静默当作 no-session)。"""
 
 
 def _to_cn_naive(ts) -> pd.Timestamp:
@@ -109,6 +113,15 @@ def no_exchange_session_since_publish(published_at, cutoff, open_days: set, *,
     if t1 == t0:
         return True
     if target_intervals is not None:
+        # review M3: validate structure — a zero-length/reversed interval or an
+        # unregistered state must NOT silently count as price discovery.
+        for start, end, state in target_intervals:
+            if state not in _INTERVAL_STATES:
+                raise SessionInputError(
+                    f"未知 interval state {state!r}(须 ∈ {sorted(_INTERVAL_STATES)})")
+            s, e = _to_cn_naive(start), _to_cn_naive(end)
+            if e <= s:
+                raise SessionInputError(f"非法 interval [{s}, {e}]:end 须严格 > start")
         for start, end, state in target_intervals:
             if state != "tradable":
                 continue
@@ -226,8 +239,18 @@ def build_cluster_snapshots(visible: pd.DataFrame, cutoff) -> list[ClusterSnapsh
         raise ValueError(f"{int((eff > cutoff).sum())} 个成员 effective_at > cutoff "
                          f"{cutoff} —— 拒绝(未来成员泄漏)")
     v = v.assign(_eff=eff, _fam=v["content"].map(source_family_id))
+    v = v.assign(_day=v["_eff"].dt.strftime("%Y%m%d"))
     out = []
-    for fam, grp in v.groupby("_fam", sort=True):
+    # review M2: group by (source family, effective calendar DAY), not family
+    # alone. A wording that reappears on a LATER day is a NEW fact occurrence
+    # (family@day) with its own visibility date, so it is counted in the current
+    # window instead of being swallowed by the first-ever occurrence's date
+    # (the flow_count=0-on-a-new-day bug). Same-family snapshots share cluster_id
+    # (breadth still counts the wording once) but carry distinct
+    # fact_occurrence_id (count sees each day). Cross-midnight syndication of ONE
+    # burst splits into two occurrences — a conservative over-count, not a silent
+    # zero; true fact-clustering is a pre-forward hardening item.
+    for (fam, day), grp in v.groupby(["_fam", "_day"], sort=True):
         members = tuple(sorted(
             ({"src": str(r["src"]), "datetime": str(r["datetime"]),
               "object_id_hash": str(r["object_id_hash"]),
@@ -243,7 +266,7 @@ def build_cluster_snapshots(visible: pd.DataFrame, cutoff) -> list[ClusterSnapsh
         out.append(ClusterSnapshot(
             cluster_id=fam, algo_version=CLUSTER_ALGO_VERSION,
             cutoff_iso=cutoff.isoformat(), members=members,
-            fact_occurrence_id=f"{fam}@{first_eff.strftime('%Y%m%d')}",
+            fact_occurrence_id=f"{fam}@{day}",
             cluster_first_visible_at_iso=first_eff.isoformat(),
             n_outlets=int(grp["src"].nunique())))
     return out
@@ -279,7 +302,9 @@ def coordination_flag(cluster: ClusterSnapshot, *, burst_seconds: int = 900,
 class NewsCoverageArtifact:
     """封印覆盖工件(review M1)。frozen;coverage_hash = 全 SHA-256 over 规范载荷
     (src/window/complete/availability_state/windows/watermark 前后/population_hash)。
-    availability_state ∈ {confirmed_absent, coverage_incomplete, source_unavailable}。
+    availability_state ∈ {complete_present, confirmed_absent, coverage_incomplete,
+    source_unavailable}——**complete_present**(完整拉取且有行)与 **confirmed_absent**
+    (完整拉取且零行)显式区分,一个有 99 行的完整拉取绝不再标成"确认无新闻"。
     下游必须消费本工件而非裸 bool;watermark 只在 complete 时推进。"""
     src: str
     start: str
@@ -313,13 +338,19 @@ def build_coverage_artifact(coverage: dict, *, watermark_before, watermark_after
                             source_available: bool = True) -> NewsCoverageArtifact:
     """从 fetcher 覆盖 dict 封印覆盖工件(review M1)。availability:源不可用 →
     source_unavailable;有 cap_at_min_window → coverage_incomplete;否则 confirmed_absent。
-    watermark 只在 complete 时可推进(watermark_after 给定即断言 complete)。"""
+    watermark 只在 complete 时可推进(watermark_after 给定即断言 complete)。
+    review M1:`source_available` 若在 coverage dict 内(fetcher 已判定 API 失败)则以
+    dict 为准 AND 入参——任一为假即源不可用,一个 None 响应绝不封成 confirmed_absent。"""
+    source_available = bool(source_available) and bool(coverage.get("source_available", True))
     complete = bool(coverage.get("complete")) and source_available
+    rows = int(coverage.get("rows", 0) or 0)
     if not source_available:
         state = "source_unavailable"
     elif not complete:
         state = "coverage_incomplete"
-    else:
+    elif rows > 0:
+        state = "complete_present"           # review M1: a complete pull WITH news
+    else:                                     # is NOT absence — only zero rows is
         state = "confirmed_absent"
     if watermark_after is not None and not complete:
         raise ValueError("watermark 不得在覆盖不完整时推进(review M1)")

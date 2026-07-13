@@ -40,9 +40,12 @@ tests/pit/test_text_backfill_rejection.py · tests/pit/test_text_revision_hash_f
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pandas as pd
@@ -202,9 +205,55 @@ def _resolve_bases(source: str, raw_columns: list[str]) -> tuple[list[str], list
     return obj, content
 
 
+#: sources whose row hash uses the injection-proof STRUCTURED encoding (review B1).
+#  The legacy flat ``key=value|...`` join is ambiguous: a free-text field
+#  containing ``|`` or ``=`` can forge the next field's boundary, so two DISTINCT
+#  rows (e.g. title="x|content=y",content="z" vs title="x",content="y|content=z")
+#  hash identically and silently dedup to one → data loss. ``news`` (free-text,
+#  vendor titles/bodies) uses a JSON list-of-pairs where field boundaries can't
+#  be forged. The 4 populated legacy stores (anns_d/irm_qa_*/research_report)
+#  keep the flat form so their EXISTING content_hash is byte-stable — migrating
+#  them to the structured form is a deliberate store re-hash, tracked as a
+#  pre-forward item in NF_SEAL_HARDENING.md, NOT a silent mid-stream change.
+_STRUCTURED_HASH_SOURCES = frozenset({"news"})
+
+
 def _hash_row(source: str, row: pd.Series, basis: list[str]) -> str:
-    payload = source + "|" + "|".join(f"{k}={_norm_value(row[k])}" for k in basis)
+    if source in _STRUCTURED_HASH_SOURCES:
+        # JSON list-of-pairs: a value containing '|' or '=' can no longer forge a
+        # field boundary; the [key, value] structure delimits fields unambiguously.
+        payload = json.dumps({"c": source, "f": [[k, _norm_value(row[k])] for k in basis]},
+                             ensure_ascii=False, sort_keys=False)
+    else:
+        payload = source + "|" + "|".join(f"{k}={_norm_value(row[k])}" for k in basis)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _store_lock(path: Path, *, timeout: float = 30.0):
+    """Advisory cross-process lock (atomic ``mkdir`` spin) around the store's
+    whole read/check/append/write transaction (review B3). ``os.replace`` makes
+    each WRITE atomic, but a read-modify-write race between two ingesters can
+    still drop rows (both read the old file, each appends its own, the second
+    replace clobbers the first). The lock serializes the transaction. Portable
+    (mkdir is atomic on Windows + POSIX), self-cleaning, no external dependency."""
+    lock_dir = path.parent / (path.name + ".lock")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            lock_dir.mkdir(parents=False, exist_ok=False)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TextStoreError(f"timeout ({timeout}s) acquiring store lock {lock_dir}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            lock_dir.rmdir()
+        except OSError:
+            pass
 
 
 def ingest_rows(
@@ -282,20 +331,23 @@ def ingest_rows(
 
     path = _store_path(source, store_dir, ingest_class)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        existing = pd.read_parquet(path)
-        known = set(existing["content_hash"])
-        new_rows = stamped[~stamped["content_hash"].isin(known)]
-        if not new_rows.empty:
-            combined = pd.concat([existing, new_rows], ignore_index=True)
-            _atomic_write_parquet(combined, path)
-        else:
-            combined = existing
-        if not combined["content_hash"].is_unique:      # permanent check (review M5)
-            raise TextStoreError(f"{path}: content_hash not unique after append")
-        # return authoritative stamps for THIS batch's hashes (originals win)
-        return combined[combined["content_hash"].isin(set(stamped["content_hash"]))].copy()
-    _atomic_write_parquet(stamped, path)
+    # review B3: serialize the ENTIRE read/check/append/write so two concurrent
+    # ingesters can't both read the old file and lose one's rows on replace.
+    with _store_lock(path):
+        if path.exists():
+            existing = pd.read_parquet(path)
+            known = set(existing["content_hash"])
+            new_rows = stamped[~stamped["content_hash"].isin(known)]
+            if not new_rows.empty:
+                combined = pd.concat([existing, new_rows], ignore_index=True)
+                _atomic_write_parquet(combined, path)
+            else:
+                combined = existing
+            if not combined["content_hash"].is_unique:      # permanent check (review M5)
+                raise TextStoreError(f"{path}: content_hash not unique after append")
+            # return authoritative stamps for THIS batch's hashes (originals win)
+            return combined[combined["content_hash"].isin(set(stamped["content_hash"]))].copy()
+        _atomic_write_parquet(stamped, path)
     return stamped
 
 
@@ -337,14 +389,24 @@ def load_text(
             f"{path} is missing PIT stamp columns {missing} — refusing to load "
             f"(rows must be written through ingest_rows)"
         )
-    # review B1: every loaded row's stamped ingest_class must match the requested
-    # partition (a row's provenance can't disagree with its physical location)
-    if ingest_class is not None and "ingest_class" in df.columns:
-        bad = df["ingest_class"] != ingest_class
-        if bad.any():
-            raise TextStoreError(
-                f"{path}: {int(bad.sum())} rows have ingest_class != {ingest_class!r} "
-                f"(partition/metadata mismatch)")
+    # review B1/B3: every loaded row's stamped ingest_class must match the
+    # requested partition (provenance can't disagree with physical location).
+    # For class-required sources the column MUST be present — a news parquet
+    # lacking it (older writer, hand edit) would otherwise load as forward and
+    # leak history_bulk into a decision, so its ABSENCE is fail-closed too.
+    if ingest_class is not None:
+        if "ingest_class" not in df.columns:
+            if source in CLASS_REQUIRED_SOURCES:
+                raise TextStoreError(
+                    f"{path}: {source!r} store missing 'ingest_class' column — refusing "
+                    f"to load (an unstamped partition could leak history into a forward "
+                    f"decision, review B3)")
+        else:
+            bad = df["ingest_class"] != ingest_class
+            if bad.any():
+                raise TextStoreError(
+                    f"{path}: {int(bad.sum())} rows have ingest_class != {ingest_class!r} "
+                    f"(partition/metadata mismatch)")
     t = to_cn_naive(decision_time)
     return df[df["decision_visible_at"] <= t].copy()
 

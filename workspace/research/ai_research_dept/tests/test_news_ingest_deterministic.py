@@ -82,6 +82,19 @@ class TestNoSession:
             pd.Timestamp("2025-01-27 16:00:00+08:00"), "2025-01-27 18:00:00",
             self._opens()), bool)
 
+    def test_reversed_interval_raises(self):
+        # review M3: a zero-length/reversed interval must not silently count
+        with pytest.raises(SessionInputError, match="end 须严格"):
+            no_exchange_session_since_publish(
+                "2025-01-27 10:00:00", "2025-01-27 14:00:00", self._opens(),
+                target_intervals=[("2025-01-27 15:00:00", "2025-01-27 13:00:00", "tradable")])
+
+    def test_unknown_interval_state_raises(self):
+        with pytest.raises(SessionInputError, match="未知 interval state"):
+            no_exchange_session_since_publish(
+                "2025-01-27 10:00:00", "2025-01-27 14:00:00", self._opens(),
+                target_intervals=[("2025-01-27 13:00:00", "2025-01-27 15:00:00", "halted")])
+
     def test_intraday_intervals_suspension(self):
         # review M3: morning-suspended, afternoon-tradable -> a session existed only
         # in the afternoon; a flash at 10:00 (during suspension) with cutoff 12:00
@@ -197,12 +210,18 @@ class TestFlow:
         assert f["flow_velocity_status"] == "not_applicable_zero_baseline"
 
     def test_reappearance_new_day_counts(self):
-        # review M2: same wording weeks apart -> distinct fact occurrences (family x day)
-        old = _cluster_at("2025-01-06 10:00:00", "重复公告文")   # ~21 days before
-        new = _cluster_at("2025-01-27 10:00:00", "重复公告文")   # today
-        f = flow_features([old, new], "2025-01-27 18:00:00", coverage=_cov())
+        # review M2: build from the COMBINED visible population (the case the old
+        # test hid by building separately). Same wording on two days inside the
+        # 20d window -> TWO fact occurrences (count), ONE source family (breadth).
+        combined = _stamp([
+            {"src": "sina", "datetime": "2025-01-15 10:00:00", "content": "重复公告文"},
+            {"src": "sina", "datetime": "2025-01-27 10:00:00", "content": "重复公告文"}])
+        snaps = build_cluster_snapshots(combined, "2025-01-27 18:00:00")
+        assert len(snaps) == 2                    # split by day, not merged to one
+        f = flow_features(snaps, "2025-01-27 18:00:00", coverage=_cov())
         assert f["flow_count_1d"] == 1            # today's occurrence counted (was 0)
-        assert f["flow_count_20d"] >= 1
+        assert f["flow_count_20d"] == 2           # both days counted as occurrences
+        assert f["coverage_breadth_1d"] == 1      # one wording (family) today
 
     def test_breadth_is_unique_source_families(self):
         # two distinct wordings today -> breadth 2 (unique families)
@@ -215,9 +234,17 @@ class TestFlow:
 # --------------------------------------------------- coverage artifact (M1)
 
 class TestCoverageArtifact:
-    def test_complete_is_confirmed_absent(self):
-        a = _cov(complete=True)
+    def test_complete_zero_rows_is_confirmed_absent(self):
+        a = _cov(complete=True)                    # _cov has no rows -> 0
         assert a.availability_state == "confirmed_absent" and len(a.coverage_hash) == 64
+
+    def test_complete_with_rows_is_present_not_absent(self):
+        # review M1: a complete pull WITH news is complete_present, never absent
+        a = build_coverage_artifact(
+            {"src": "sina", "start": "s", "end": "e", "complete": True, "rows": 99,
+             "windows": []}, watermark_before=None, watermark_after=None,
+            population_hash="p")
+        assert a.availability_state == "complete_present"
 
     def test_incomplete_state(self):
         assert _cov(complete=False).availability_state == "coverage_incomplete"
@@ -227,6 +254,15 @@ class TestCoverageArtifact:
             {"src": "cls", "start": "s", "end": "e", "complete": True, "windows": []},
             watermark_before=None, watermark_after=None, population_hash="p",
             source_available=False)
+        assert a.availability_state == "source_unavailable" and a.complete is False
+
+    def test_dict_source_unavailable_from_none_response(self):
+        # review M1: a None API response sets source_available=False in the coverage
+        # dict -> sealed as source_unavailable even though the param defaults True
+        a = build_coverage_artifact(
+            {"src": "sina", "start": "s", "end": "e", "complete": True, "rows": 0,
+             "source_available": False, "windows": []},
+            watermark_before=None, watermark_after=None, population_hash="p")
         assert a.availability_state == "source_unavailable" and a.complete is False
 
     def test_watermark_cannot_advance_when_incomplete(self):

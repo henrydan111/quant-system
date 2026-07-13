@@ -1008,14 +1008,17 @@ class TushareFetcher:
         """
         if src not in self.NEWS_SOURCES:
             raise ValueError(f"news source {src!r} not in whitelist {self.NEWS_SOURCES}")
-        df = self._safe_api_call(
+        raw = self._safe_api_call(
             self.pro.news, src=src, start_date=start, end_date=end,
             fields="datetime,content,title,channels")
-        if df is None:
-            df = pd.DataFrame(columns=["datetime", "content", "title", "channels"])
-        df = df.copy()
+        # review M1: a None/failed response is NOT "zero news" — record response_ok
+        # so the coverage layer seals it as source_unavailable, never confirmed_absent.
+        response_ok = raw is not None
+        df = (raw.copy() if response_ok
+              else pd.DataFrame(columns=["datetime", "content", "title", "channels"]))
         df["src"] = src
-        df.attrs["cap_hit"] = len(df) >= self._NEWS_CAP
+        df.attrs["cap_hit"] = response_ok and len(df) >= self._NEWS_CAP
+        df.attrs["response_ok"] = response_ok
         return df
 
     def _news_content_hashes(self, df: pd.DataFrame):
@@ -1041,16 +1044,26 @@ class TushareFetcher:
         t0, t1 = pd.Timestamp(start), pd.Timestamp(end)
         df = self.fetch_news(src, start, end)
         cap_hit = bool(df.attrs.get("cap_hit"))
+        # review M1: a failed API response propagates as source_available=False so
+        # the sealed coverage artifact is source_unavailable, not confirmed_absent.
+        response_ok = bool(df.attrs.get("response_ok", True))
         span = (t1 - t0).total_seconds()
-        if not cap_hit or span <= min_window_seconds:
-            status = "ok" if not cap_hit else "cap_at_min_window"
-            if status == "cap_at_min_window":
+        if not response_ok or not cap_hit or span <= min_window_seconds:
+            if not response_ok:
+                status = "source_unavailable"
+                logging.warning("news %s [%s,%s] API returned no response — coverage "
+                                "SOURCE_UNAVAILABLE (not confirmed-absent)", src, start, end)
+            elif cap_hit:
+                status = "cap_at_min_window"
                 logging.warning("news %s [%s,%s] capped at min window (%d rows) "
                                 "— coverage INCOMPLETE", src, start, end, len(df))
+            else:
+                status = "ok"
             windows = [{"start": start, "end": end, "rows": len(df),
                         "cap_hit": cap_hit, "status": status, "depth": _depth}]
             return df, {"src": src, "start": start, "end": end, "rows": len(df),
-                        "complete": (status == "ok"), "windows": windows}
+                        "complete": (status == "ok"), "source_available": response_ok,
+                        "windows": windows}
         # bisect into two GENUINELY-OVERLAPPING halves that share the boundary
         # second (right starts at mid, not mid+1s); the shared-hash dedup below
         # absorbs the overlap so an API that is inclusive on both ends can't lose
@@ -1069,6 +1082,8 @@ class TushareFetcher:
         windows = [split_entry] + left_c["windows"] + right_c["windows"]
         return both, {"src": src, "start": start, "end": end, "rows": len(both),
                       "complete": left_c["complete"] and right_c["complete"],
+                      "source_available": (left_c.get("source_available", True)
+                                           and right_c.get("source_available", True)),
                       "windows": windows}
 
     def fetch_anns_d_paged(self, ann_date: str, *, page_size: int = 2000,

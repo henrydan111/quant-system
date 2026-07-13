@@ -100,3 +100,49 @@ def test_none_nan_missing_field_same_hash(tmp_path):
     h1 = content_hash_for("news", r1.iloc[0], list(r1.columns))
     h2 = content_hash_for("news", r2.iloc[0], list(r2.columns))
     assert h1 == h2                                   # None and NaN hash identically
+
+
+def test_delimiter_injection_distinct_hash(tmp_path):
+    # review B1: two DISTINCT news rows that collided under the flat key=value|
+    # join (title="x|content=y",content="z" vs title="x",content="y|content=z")
+    # must now hash DIFFERENTLY (structured JSON encoding, injection-proof) — else
+    # they silently dedup to one row (data loss).
+    from data_infra.text_store import content_hash_for
+    cols = ["src", "datetime", "title", "content", "channels"]
+    a = pd.Series({"src": "sina", "datetime": "2025-01-27 16:00:00",
+                   "title": "x|content=y", "content": "z", "channels": ""})
+    b = pd.Series({"src": "sina", "datetime": "2025-01-27 16:00:00",
+                   "title": "x", "content": "y|content=z", "channels": ""})
+    assert content_hash_for("news", a, cols) != content_hash_for("news", b, cols)
+
+
+def test_news_missing_ingest_class_column_load_rejected(tmp_path):
+    # review B3: a news partition that has lost its ingest_class column must fail
+    # closed (an unstamped partition could leak history into a forward decision)
+    import pytest
+    from data_infra.text_store import TextStoreError, _store_path
+    ingest_rows("news", _news_rows(["盘后"], dt="2025-01-27 16:00:00"),
+                published_col="datetime",
+                retrieved_at=pd.Timestamp("2025-01-27 16:05:00"),
+                store_dir=tmp_path, ingest_class="forward")
+    p = _store_path("news", tmp_path, "forward")
+    pd.read_parquet(p).drop(columns=["ingest_class"]).to_parquet(p, index=False)
+    with pytest.raises(TextStoreError, match="ingest_class"):
+        load_text("news", "2025-01-27 18:00:00", store_dir=tmp_path,
+                  ingest_class="forward")
+
+
+def test_store_lock_released_and_serial_appends(tmp_path):
+    # review B3: the transaction lock is cleaned up and a second ingest still
+    # appends (lock re-acquired), never blocks
+    from data_infra.text_store import _store_path
+    ingest_rows("news", _news_rows(["一"], dt="2025-01-27 16:00:00"),
+                published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 16:05:00"),
+                store_dir=tmp_path, ingest_class="forward")
+    p = _store_path("news", tmp_path, "forward")
+    assert not (p.parent / (p.name + ".lock")).exists()   # lock dir cleaned up
+    ingest_rows("news", _news_rows(["二"], dt="2025-01-27 16:01:00"),
+                published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 16:06:00"),
+                store_dir=tmp_path, ingest_class="forward")
+    assert len(load_text("news", "2025-01-27 18:00:00", store_dir=tmp_path,
+                         ingest_class="forward")) == 2

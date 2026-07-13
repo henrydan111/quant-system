@@ -90,8 +90,13 @@ class AliasRegistry:
             if tc:
                 codes.append(tc)
                 mentions.append({"mentioned": tok, "mapped": tc, "alias_type": "hk_code"})
+        # review B4: iterate the alias map in a CANONICAL (sorted) order so two
+        # registries with the same sealed hash (built from row-permuted inputs)
+        # resolve mentions in an identical order — the sealed identity must fully
+        # determine the output, not the dict's insertion order.
+        exact_sorted = sorted(self.exact.items())
         # 3) ADR/ASCII 别名(种子内显式的)
-        for tok, tc in self.exact.items():
+        for tok, tc in exact_sorted:
             if not (isinstance(tok, str) and tok.isascii() and not tok[0].isdigit()):
                 continue
             if tok in self.ambiguous:
@@ -100,7 +105,7 @@ class AliasRegistry:
                 codes.append(tc)
                 mentions.append({"mentioned": tok, "mapped": tc, "alias_type": "adr"})
         # 4) ≥4 字唯一中文名
-        for name, tc in self.exact.items():
+        for name, tc in exact_sorted:
             if not isinstance(name, str) or name.isascii() or len(name) < _MIN_NAME_LINK_LEN:
                 continue
             if name in self.ambiguous:

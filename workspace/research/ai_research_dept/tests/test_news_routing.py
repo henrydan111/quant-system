@@ -75,6 +75,16 @@ class TestAliasRegistrySealed:
                                  version="v", valid_from="2025-01-01")
         assert a.content_hash == b.content_hash
 
+    def test_resolution_order_independent(self):
+        # review B4: same sealed hash must yield the same OUTPUT order too — not
+        # just the same hash. Two multi-name mentions resolve identically
+        # regardless of the stock_basic row order (canonical iteration).
+        text = "贵州茅台与中芯国际同日大涨"
+        a = build_alias_registry(_basic(), version="v", valid_from="2025-01-01")
+        b = build_alias_registry(_basic().iloc[::-1].reset_index(drop=True),
+                                 version="v", valid_from="2025-01-01")
+        assert a.resolve_codes(text, CUTOFF)[0] == b.resolve_codes(text, CUTOFF)[0]
+
     def test_explicit_suffix_honored(self):
         # review B3: 000001.SH must NOT resolve as 000001.SZ
         basic = pd.DataFrame([{"name": "X", "ts_code": "000001.SH"},
