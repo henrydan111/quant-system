@@ -587,12 +587,16 @@ def _publish_env(tmp_path, monkeypatch, *, qa_rc: int = 0):
         "approval_id: x\nbinding_exempt: true\nbinding_exempt_reason: admin-only record\n",
         encoding="utf-8")
 
-    # raw cut + full-readset manifest sidecar over it
+    # raw cut + full-readset manifest sidecar over it + the ATTESTED staged copy (the
+    # publish-time source of truth for raw provenance, re-review P0)
     raw = data / "reference" / "trade_cal.parquet"
     raw.parent.mkdir(parents=True)
     raw.write_bytes(b"CAL0")
     manifest = mcb._full_raw_manifest(data)
     (out / "raw_input_manifest.json").write_text(_json.dumps(manifest), encoding="utf-8")
+    (staged / "metadata").mkdir()
+    (staged / "metadata" / "raw_input_manifest.json").write_text(
+        _json.dumps(manifest), encoding="utf-8")
 
     # audit artifacts + the full transaction attestation set, pinned into the dry-run report
     fp = out / "frozen_prefix_audit.json"
@@ -945,6 +949,134 @@ def test_publish_refuses_policy_file_drift(tmp_path, monkeypatch):
         env.policy_file.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
     assert mcb.phase_publish(_PubArgs()) == 2
     _assert_untouched(env)
+
+
+# ── GPT re-review #2 probes (interrupt / TOCTOU / provenance / lock identity) ─
+def test_publish_interrupt_mid_rebind_rolls_back_then_reraises(tmp_path, monkeypatch):
+    # P0 probe: a KeyboardInterrupt between two approval writes previously bypassed the
+    # `except Exception` rollback — half-rebound approvals + child live + no marker. The
+    # protected domain now catches BaseException, performs the VERIFIED rollback, and
+    # re-raises the interrupt afterwards.
+    env = _publish_env(tmp_path, monkeypatch)
+    seen: list[Path] = []
+
+    def interrupt_on_second_approval(path, _data):
+        if path.parent == env.root / "approvals" and path.suffix == ".yaml":
+            seen.append(path)
+            if len(seen) == 2:
+                raise KeyboardInterrupt("probe: Ctrl-C between approval writes")
+        return False
+
+    real = mcb._atomic_write_bytes
+
+    def fake(path, data):
+        interrupt_on_second_approval(Path(path), data)
+        real(path, data)
+
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", fake)
+    with pytest.raises(KeyboardInterrupt):
+        mcb.phase_publish(_PubArgs())
+    assert (env.qlib / "LIVE_MARKER.txt").exists(), "parent must be restored before re-raising"
+    assert mcb.live_provider_ids() == (env.parent_pb, env.parent_cp)
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+    assert (env.staged / "STAGED_MARKER.txt").exists()
+    assert not list((env.root / "approvals").glob("*_rebind_to_*.md"))
+    steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
+    assert any(s["status"] == "interrupted_rolled_back" for s in steps)
+
+
+def test_publish_systemexit_mid_rebind_rolls_back(tmp_path, monkeypatch):
+    env = _publish_env(tmp_path, monkeypatch)
+
+    def fault(path, _data):
+        if path.name == "a2.yaml":
+            raise SystemExit(3)
+        return False
+
+    real = mcb._atomic_write_bytes
+
+    def fake(path, data):
+        fault(Path(path), data)
+        real(path, data)
+
+    monkeypatch.setattr(mcb, "_atomic_write_bytes", fake)
+    with pytest.raises(SystemExit):
+        mcb.phase_publish(_PubArgs())
+    assert (env.qlib / "LIVE_MARKER.txt").exists()
+    assert env.a1.read_bytes() == env.a1_bytes and env.a2.read_bytes() == env.a2_bytes
+
+
+def test_ready_gate_refuses_bytes_changed_after_swap(tmp_path, monkeypatch):
+    # P0 probe (hash->swap TOCTOU): bytes changed AFTER the pre-swap attestation — here
+    # while QA runs — must NOT reach 'ready'. The READY gate re-hashes the FULL live tree
+    # and refuses; the provider stays quarantined.
+    env = _publish_env(tmp_path, monkeypatch)
+
+    def tampering_qa():
+        (env.qlib / "features" / "000001_sz" / "close.day.bin").write_bytes(b"\x0a\x0a\x0a\x0a")
+        return 0  # QA "passes" — sampling checks cannot see the tamper
+
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", tampering_qa)
+    assert mcb.phase_publish(_PubArgs()) == 5
+    assert _publish_state_of(env.qlib) == "pending_qa", "quarantine must persist"
+    steps = _json.loads((env.out / "publish_transaction_journal.json").read_text(encoding="utf-8"))["steps"]
+    ready = [s for s in steps if s["step"] == "ready" and s["status"] == "refused"]
+    assert ready and any("content root" in p for p in ready[0]["problems"])
+
+
+def test_finalize_qa_cannot_green_changed_bytes(tmp_path, monkeypatch):
+    # P0 probe: QA fails first (qa_failed), the live bin is then rewritten, QA is made to
+    # pass — finalize must still REFUSE ready (full pin re-verification), and succeed only
+    # once the original bytes are restored.
+    env = _publish_env(tmp_path, monkeypatch, qa_rc=1)
+    assert mcb.phase_publish(_PubArgs()) == 6
+    live_bin = env.qlib / "features" / "000001_sz" / "close.day.bin"
+    original = live_bin.read_bytes()
+    live_bin.write_bytes(b"\x0b\x0b\x0b\x0b")
+    monkeypatch.setattr(mcb, "_run_post_publish_qa", lambda: 0)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 5
+    assert _publish_state_of(env.qlib) == "qa_failed", "tampered bytes must stay quarantined"
+    live_bin.write_bytes(original)
+    assert mcb.phase_finalize_qa(_PubArgs()) == 0
+    assert _publish_state_of(env.qlib) == "ready"
+
+
+def test_publish_refuses_raw_provenance_mismatch(tmp_path, monkeypatch):
+    # P0 probe: report + OUT_DIR sidecar rewritten to claim raw cut R2 while the staged
+    # provider's ATTESTED in-tree copy says R1 — publish derives provenance from the
+    # staged copy and refuses the mismatch.
+    env = _publish_env(tmp_path, monkeypatch)
+    fake_root = "ab" * 32
+    rep = _json.loads((env.out / "monthly_bump_dryrun_report.json").read_text(encoding="utf-8"))
+    rep["raw_input_manifest_root"] = fake_root
+    (env.out / "monthly_bump_dryrun_report.json").write_text(_json.dumps(rep), encoding="utf-8")
+    sidecar = _json.loads((env.out / "raw_input_manifest.json").read_text(encoding="utf-8"))
+    sidecar["root"] = fake_root
+    (env.out / "raw_input_manifest.json").write_text(_json.dumps(sidecar), encoding="utf-8")
+    assert mcb.phase_publish(_PubArgs()) == 2
+    _assert_untouched(env)
+
+
+def test_lock_root_is_shared_across_worktrees(tmp_path):
+    # P0 probe: two worktrees of the same repo previously resolved DIFFERENT lock dirs and
+    # could publish concurrently. The lock root is anchored to the git COMMON dir's parent
+    # — identical from the main checkout and from any linked worktree.
+    import subprocess
+
+    import data_infra.tushare_lock as tl
+
+    main = tmp_path / "mainrepo"
+    main.mkdir()
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    (main / "x.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(main), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(main), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], check=True)
+    wt = tmp_path / "wt1"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], check=True)
+    root_main = tl._resolve_lock_root(main)
+    root_wt = tl._resolve_lock_root(wt)
+    assert root_main.resolve() == root_wt.resolve() == main.resolve()
 
 
 def test_builder_publish_acquires_global_lock(tmp_path, monkeypatch):

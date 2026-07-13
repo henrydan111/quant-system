@@ -606,8 +606,18 @@ def evaluate_provider_publish_state(
                 "post-publish QA has not passed; the provider is quarantined for gated "
                 "reads. Run scripts/monthly_calendar_bump.py --finalize-qa after resolving."
             )
+        # Phase 5-B re-review P0: a marker MUST name the build it certifies — a bare
+        # {"state": "ready"} previously passed because the comparison was conditional on
+        # the field being present, severing the "this QA verdict belongs to THIS build"
+        # binding. Blank/missing marker build id fails closed; when the caller supplies
+        # the manifest, exact equality is mandatory.
         marker_build = state_payload.get("provider_build_id")
-        if build_id is not None and marker_build is not None and str(marker_build) != str(build_id):
+        if not isinstance(marker_build, str) or not marker_build.strip():
+            reasons.append(
+                f"publish-state marker carries no provider_build_id ({marker_build!r}) — an "
+                "unbound certification cannot clear any build; refusing."
+            )
+        elif build_id is not None and str(marker_build) != str(build_id):
             reasons.append(
                 f"publish-state marker names build {marker_build!r} but the live manifest is "
                 f"{build_id!r} — stale/foreign marker; refusing."

@@ -180,6 +180,13 @@ def test_publish_state_gate_quarantines_until_ready(tmp_path):
     # a marker naming a DIFFERENT build is stale/foreign -> refuse
     _write_state(tmp_path, "ready", build_id="someone_else")
     assert not evaluate_provider_publish_state(qlib_dir=tmp_path, policy=flagged, manifest=m).eligible
+    # GPT re-review #2 P0: a bare {"state": "ready"} with NO provider_build_id must refuse
+    # — an unbound certification cannot clear any build (even with no manifest supplied).
+    import json as _j
+    (tmp_path / "metadata" / "publish_state.json").write_text(
+        _j.dumps({"state": "ready"}), encoding="utf-8")
+    unbound = evaluate_provider_publish_state(qlib_dir=tmp_path, policy=legacy, manifest=None)
+    assert not unbound.eligible and any("provider_build_id" in r for r in unbound.reasons)
 
 
 def test_formal_runtime_validation_refuses_quarantined_provider(tmp_path, monkeypatch):

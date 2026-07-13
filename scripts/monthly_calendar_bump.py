@@ -412,6 +412,38 @@ class PublishTransactionError(RuntimeError):
     unless the message says otherwise)."""
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _defer_sigint(span: str):
+    """Defer Ctrl-C across the CRITICAL transaction span (re-review P0: an interrupt
+    landing between two approval writes previously bypassed the `except Exception`
+    rollback and left a half-rebound live provider). SIGINT received inside the span is
+    recorded and re-raised as KeyboardInterrupt at span exit — after the swap+bind (or
+    their verified rollback) completed. No-op outside the main thread (signal handlers
+    are main-thread-only; the BaseException handler remains the belt there)."""
+    import signal
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    received: list = []
+
+    def _handler(signum, frame):  # noqa: ARG001
+        received.append(signum)
+        logger.warning("SIGINT received during the %s span — DEFERRED until the "
+                       "transaction reaches a consistent state.", span)
+
+    previous = signal.signal(signal.SIGINT, _handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        if received:
+            raise KeyboardInterrupt(f"deferred SIGINT after the {span} span")
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     import tempfile
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
@@ -424,60 +456,84 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             os.remove(tmp)
 
 
-def _staged_content_attestation(staged_provider, *, workers: int = 8) -> dict:
-    """FULL-CONTENT attestation over the ENTIRE staged provider tree (GPT re-review
-    Blocker 4: the published feature bytes themselves must be proven, not just identity
-    files — a build-id path is a naming convention, not an immutability control).
+def _staged_content_attestation(tree, *, workers: int = 8, exclude: tuple[str, ...] = (),
+                                build_manifest_path=None) -> dict:
+    """FULL-CONTENT attestation over an ENTIRE provider tree (GPT re-review Blocker 4: the
+    published feature bytes themselves must be proven, not just identity files).
 
-    Every file under the staged provider (features/*.bin included) AND the build
-    manifest.json at <build_root>/manifest.json is content-hashed (sha256, thread-pooled —
-    23M small files are open-latency-bound, not bandwidth-bound). Files are grouped by
-    top-level entry (each features/<code>/ dir collapses to one group digest over its
-    sorted "relpath:size:sha256" lines) so a publish-time mismatch localizes without a
-    multi-GB sidecar; the root is the sha256 over the sorted group map. Recomputed at
-    publish IMMEDIATELY before the swap and compared to the execute-time root — any byte
-    that changed since the audited build refuses the publish. Cost: one full read of the
-    staged tree per side (disclosed; a monthly operation after a multi-hour build)."""
+    Every file under the tree (features/*.bin included) AND the build manifest.json is
+    content-hashed (sha256; a shared thread pool — 23M small files are open-latency-bound).
+    STREAMING BY GROUP (re-review P1: materializing 23M paths+digests+lines at once would
+    exhaust memory): each top-level entry / features/<code> dir is walked, hashed, reduced
+    to ONE group digest over its sorted "relpath:size:sha256" lines, and released before
+    the next group; only the ~5.8k group digests are retained. The root is the sha256 over
+    the sorted group map.
+
+    ``exclude`` (tree-relative forward-slash paths) lets the READY-gate re-verification
+    skip exactly the files the publish itself adds to the live tree
+    (metadata/provider_build.json, metadata/publish_state.json). ``build_manifest_path``
+    defaults to <tree_parent>/manifest.json (the staged layout); the live-tree ready check
+    passes the retained build root's manifest explicitly."""
     import hashlib
     from concurrent.futures import ThreadPoolExecutor
 
-    prov = Path(staged_provider)
+    prov = Path(tree)
     if not prov.is_dir():
         return {"algo": "sha256_grouped_full_content", "root": "MISSING_STAGED_DIR",
                 "file_count": 0, "total_bytes": 0, "groups": {}}
-
-    def _group_of(rel: str) -> str:
-        parts = rel.split("/")
-        if len(parts) >= 3 and parts[0] == "features":
-            return f"features/{parts[1]}"
-        return parts[0] if len(parts) > 1 else f"<top>/{parts[0]}"
-
-    files = sorted(
-        (str(p.relative_to(prov)).replace("\\", "/"), p)
-        for p in prov.rglob("*") if p.is_file()
-    )
-    build_manifest = prov.parent / "manifest.json"
-    if build_manifest.is_file():
-        files.append(("<build_root>/manifest.json", build_manifest))
-
+    excluded = set(exclude)
+    groups: dict[str, str] = {}
+    file_count = 0
     total_bytes = 0
-    lines_by_group: dict[str, list[str]] = {}
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        digests = list(pool.map(lambda item: _sha256_file(item[1]), files))
-    for (rel, p), digest in zip(files, digests):
-        size = p.stat().st_size
-        total_bytes += size
-        lines_by_group.setdefault(_group_of(rel), []).append(f"{rel}:{size}:{digest}")
 
-    groups = {
-        g: hashlib.sha256("\n".join(sorted(lines)).encode("utf-8")).hexdigest()
-        for g, lines in lines_by_group.items()
-    }
+    def _rel(p: Path) -> str:
+        return str(p.relative_to(prov)).replace("\\", "/")
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        def hash_group(name: str, paths: list) -> None:
+            nonlocal file_count, total_bytes
+            rels = [_rel(p) if not isinstance(p, tuple) else p[0] for p in paths]
+            fps = [p if not isinstance(p, tuple) else p[1] for p in paths]
+            digests = list(pool.map(_sha256_file, fps))
+            lines = []
+            for rel, fp, dg in zip(rels, fps, digests):
+                size = fp.stat().st_size
+                total_bytes += size
+                lines.append(f"{rel}:{size}:{dg}")
+            file_count += len(lines)
+            groups[name] = hashlib.sha256("\n".join(sorted(lines)).encode("utf-8")).hexdigest()
+
+        def files_under(d: Path) -> list:
+            return [p for p in sorted(d.rglob("*")) if p.is_file() and _rel(p) not in excluded]
+
+        for entry in sorted(prov.iterdir(), key=lambda p: p.name):
+            if entry.is_file():
+                if _rel(entry) not in excluded:
+                    hash_group(f"<top>/{entry.name}", [entry])
+            elif entry.name == "features":
+                direct = [p for p in sorted(entry.iterdir())
+                          if p.is_file() and _rel(p) not in excluded]
+                if direct:
+                    hash_group("features", direct)
+                for code_dir in sorted(p for p in entry.iterdir() if p.is_dir()):
+                    fs = files_under(code_dir)
+                    if fs:
+                        hash_group(f"features/{code_dir.name}", fs)
+            else:
+                fs = files_under(entry)
+                if fs:
+                    hash_group(entry.name, fs)
+
+        build_manifest = (Path(build_manifest_path) if build_manifest_path is not None
+                          else prov.parent / "manifest.json")
+        if build_manifest.is_file():
+            hash_group("<build_root>", [("<build_root>/manifest.json", build_manifest)])
+
     root = hashlib.sha256(
         "\n".join(f"{g}:{h}" for g, h in sorted(groups.items())).encode("utf-8")
     ).hexdigest()
     return {"algo": "sha256_grouped_full_content", "root": root,
-            "file_count": len(files), "total_bytes": total_bytes, "groups": groups}
+            "file_count": file_count, "total_bytes": total_bytes, "groups": groups}
 
 
 def _approvals_attestation() -> dict:
@@ -1423,7 +1479,29 @@ def phase_publish(args) -> int:
             logger.error("rebind planning refused: %s", exc)
             j("verify", "refused", reason=f"rebind_plan:{exc}")
             return 2
-        ok, why = _verify_raw_manifest(manifest)
+        # Raw provenance from the ATTESTED staged copy (re-review P0: the fixed-name OUT_DIR
+        # sidecar is mutable and outside any attestation — a regenerated sidecar could make
+        # the published manifest claim raw cut R2 while the staged tree was built from R1).
+        # The copy inside <staged>/metadata/ is covered by the staged content attestation;
+        # it is the source of truth for BOTH the re-verification file list and the root
+        # emitted into provider_build.json. Report + sidecar must agree with it exactly.
+        staged_raw_copy = staged_dir / "metadata" / "raw_input_manifest.json"
+        try:
+            staged_raw = json.loads(staged_raw_copy.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.error("staged raw-input manifest copy missing/unreadable at %s (%s) — the "
+                         "staged build predates the attested-transaction contract; re-run "
+                         "--execute. Refusing.", staged_raw_copy, exc)
+            j("verify", "refused", reason="staged_raw_copy_missing")
+            return 2
+        if (staged_raw.get("root") != rep["raw_input_manifest_root"]
+                or _manifest_root(staged_raw.get("files", [])) != staged_raw.get("root")):
+            logger.error("RAW PROVENANCE MISMATCH — staged copy root %s (self-check %s) != "
+                         "report root %s. Refusing.", staged_raw.get("root"),
+                         _manifest_root(staged_raw.get("files", [])), rep["raw_input_manifest_root"])
+            j("verify", "refused", reason="staged_raw_copy_mismatch")
+            return 2
+        ok, why = _verify_raw_manifest(staged_raw)
         if not ok:
             logger.error("RAW-INPUT MANIFEST MISMATCH (%s) — the raw cut the staged build consumed "
                          "changed since the build. Re-run --execute. Refusing (fail closed).", why)
@@ -1464,196 +1542,298 @@ def phase_publish(args) -> int:
                     live_build, live_policy, manifest["root"], manifest["file_count"],
                     att["root"], att["file_count"], git_head[:12])
 
-        # ── SWAP: the proven primitive; single-rename failures self-roll-back inside it,
-        # leaving the pre-publish state — so a bounded retry vs transient Windows handle
-        # locks (indexer/Defender; the depth9 publish hit exactly this, WinError 5) is
-        # safe. A double failure (live missing) is NEVER retried.
+        # ── SWAP + BIND under DEFERRED SIGINT (re-review P0: a Ctrl-C between two approval
+        # writes previously bypassed the `except Exception` rollback). The swap primitive
+        # self-rolls-back single-rename failures, so a bounded retry vs transient Windows
+        # handle locks is safe; a double failure (live missing) is NEVER retried. From
+        # swap-success onward EVERY operation runs inside ONE protected domain whose
+        # handler catches BaseException — interrupts included — restores the approval
+        # bytes, deletes this transaction's artifacts, strips the post-swap files from the
+        # new tree, rolls the swap back, and VERIFIES every restoration before claiming
+        # exit 4; interrupts re-raise AFTER the verified rollback.
         from data_infra.pit_backend import BuildGateError
         import time as _time
-        swap_exc: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                builder.publish(calendar_policy_id=rep["new_policy_id"],
-                                raw_input_manifest_root=manifest["root"],
-                                parent_provider_build_id=live_build,
-                                source_git_commit=rep["source_git_commit"])
-                swap_exc = None
-                break
-            except BuildGateError as exc:
-                swap_exc = exc
-                break  # deterministic refusal (cross-volume / missing staged / double failure)
-            except OSError as exc:
-                swap_exc = exc
-                if not os.path.isdir(builder.paths.qlib_dir):
-                    break  # double failure — do NOT retry over a missing live provider
-                logger.warning("swap attempt %d failed (%s) — pre-publish state restored by the "
-                               "primitive; retrying in 5s", attempt, exc)
-                _time.sleep(5)
-        if swap_exc is not None:
-            live_intact = os.path.isdir(builder.paths.qlib_dir)
-            j("swap", "failed", error=str(swap_exc), live_provider_intact=live_intact)
-            if live_intact:
-                logger.error("swap failed after retries and the primitive rolled back — live "
-                             "provider intact: %s", swap_exc)
-                return 2
-            logger.critical("swap DOUBLE failure — live provider MISSING; follow the recovery move "
-                            "in the error: %s", swap_exc)
-            return 5
-
-        # ── BIND: from the successful swap onward, EVERY operation — journal, manifest
-        # verification, rebind writes, state marker, records — runs inside ONE protected
-        # domain (GPT re-review Blocker 1: the first post-swap journal write previously sat
-        # outside it, so a journal failure aborted with the child live + approvals stale).
-        # Any failure restores the approval bytes, deletes this transaction's artifacts,
-        # strips the post-swap files from the new tree, rolls the swap back, and VERIFIES
-        # every restoration before claiming exit 4 (Blocker 2).
+        swap_completed = False
         written: list[Path] = []
         record_md: Path | None = None
         record_written = False
-        state_written = False
-        try:
-            j("swap", "ok", backup=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
-            okm, why_m = _verify_live_manifest(
-                builder.paths.qlib_dir, build_id=rep["staged_build_id"],
-                policy_id=rep["new_policy_id"], raw_root=manifest["root"], parent_pb=live_build,
-                source_git_commit=rep["source_git_commit"])
-            if not okm:
-                raise PublishTransactionError(f"post-swap live manifest verification failed: {why_m}")
-            for p, nd in rebind_plan:
-                _atomic_write_bytes(p, nd)
-                written.append(p)
-            from data_infra.approval_evidence import evaluate_approval_evidence_bindings
-            drifts = evaluate_approval_evidence_bindings(
-                approvals_dir=APPROVALS_DIR,
-                manifest_path=Path(builder.paths.qlib_dir) / "metadata" / "provider_build.json")
-            still = [d for d in drifts if d.drift]
-            if still:
-                raise PublishTransactionError(
-                    f"{len(still)} approval(s) still drift after the rebind: {still[0].reasons()}")
-            # B6 QA quarantine: the provider is durable but NOT ready — gated reads refuse
-            # until run_daily_qa passes and flips this marker to 'ready'.
-            _write_publish_state(builder.paths.qlib_dir, "pending_qa", rep["staged_build_id"],
-                                 parent_build_id=live_build)
-            state_written = True
-            record = {
-                "published_build_id": rep["staged_build_id"],
-                "calendar_policy_id": rep["new_policy_id"],
-                "parent_build_id": live_build, "parent_policy_id": live_policy,
-                "raw_input_manifest_root": manifest["root"],
-                "raw_input_manifest_file_count": manifest["file_count"],
-                "staged_content_root": att["root"],
-                "staged_content_file_count": att["file_count"],
-                "source_git_commit": rep["source_git_commit"],
-                "approvals_rebound": len(written),
-                "backup_dir": f"{builder.paths.qlib_dir}.bak_{builder.build_id}",
-                "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
-                "published_cst": now_cst().isoformat(timespec="seconds"),
-            }
-            _atomic_write_bytes(PUBLISH_RECORD_PATH,
-                                json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8"))
-            record_written = True
-            # the committed governance record is written LAST — nothing may claim a
-            # completed rebind before every durable step above proved out (Blocker 2b).
-            record_md = _write_rebind_record(
-                new_pb=rep["staged_build_id"], new_cp=rep["new_policy_id"], old_pb=live_build,
-                old_cp=live_policy, n_files=len(written), raw_root=manifest["root"],
-                raw_files=manifest["file_count"],
-                backup_dir=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
-            j("bind", "ok", approvals_rebound=len(written))
-        except Exception as exc:  # noqa: BLE001 — every post-swap failure must roll back
-            logger.error("post-swap step failed (%s) — restoring approvals + artifacts + rolling "
-                         "the swap back.", exc)
-            problems: list[str] = []
-            problems += _restore_approval_files(written, originals)
-            for artifact, present in ((record_md, record_md is not None),
-                                      (PUBLISH_RECORD_PATH, record_written)):
-                if present:
+        with _defer_sigint("swap+bind"):
+            try:
+                swap_exc: Exception | None = None
+                for attempt in range(1, 4):
                     try:
-                        Path(artifact).unlink(missing_ok=True)
+                        builder.publish(calendar_policy_id=rep["new_policy_id"],
+                                        raw_input_manifest_root=staged_raw["root"],
+                                        parent_provider_build_id=live_build,
+                                        source_git_commit=rep["source_git_commit"])
+                        swap_exc = None
+                        break
+                    except BuildGateError as exc:
+                        swap_exc = exc
+                        break  # deterministic refusal (cross-volume / missing staged / double failure)
+                    except OSError as exc:
+                        swap_exc = exc
+                        if not os.path.isdir(builder.paths.qlib_dir):
+                            break  # double failure — do NOT retry over a missing live provider
+                        logger.warning("swap attempt %d failed (%s) — pre-publish state restored "
+                                       "by the primitive; retrying in 5s", attempt, exc)
+                        _time.sleep(5)
+                if swap_exc is not None:
+                    live_intact = os.path.isdir(builder.paths.qlib_dir)
+                    j("swap", "failed", error=str(swap_exc), live_provider_intact=live_intact)
+                    if live_intact:
+                        logger.error("swap failed after retries and the primitive rolled back — "
+                                     "live provider intact: %s", swap_exc)
+                        return 2
+                    logger.critical("swap DOUBLE failure — live provider MISSING; follow the "
+                                    "recovery move in the error: %s", swap_exc)
+                    return 5
+                swap_completed = True
+                j("swap", "ok", backup=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+                okm, why_m = _verify_live_manifest(
+                    builder.paths.qlib_dir, build_id=rep["staged_build_id"],
+                    policy_id=rep["new_policy_id"], raw_root=staged_raw["root"],
+                    parent_pb=live_build, source_git_commit=rep["source_git_commit"])
+                if not okm:
+                    raise PublishTransactionError(
+                        f"post-swap live manifest verification failed: {why_m}")
+                for p, nd in rebind_plan:
+                    _atomic_write_bytes(p, nd)
+                    written.append(p)
+                from data_infra.approval_evidence import evaluate_approval_evidence_bindings
+                drifts = evaluate_approval_evidence_bindings(
+                    approvals_dir=APPROVALS_DIR,
+                    manifest_path=Path(builder.paths.qlib_dir) / "metadata" / "provider_build.json")
+                still = [d for d in drifts if d.drift]
+                if still:
+                    raise PublishTransactionError(
+                        f"{len(still)} approval(s) still drift after the rebind: {still[0].reasons()}")
+                # B6 QA quarantine: the provider is durable but NOT ready — gated reads
+                # refuse until the READY gate (QA pass + full pin re-verification) flips it.
+                _write_publish_state(builder.paths.qlib_dir, "pending_qa", rep["staged_build_id"],
+                                     parent_build_id=live_build)
+                appr_post = _approvals_attestation()  # post-rebind pin the READY gate re-checks
+                record = {
+                    "published_build_id": rep["staged_build_id"],
+                    "calendar_policy_id": rep["new_policy_id"],
+                    "parent_build_id": live_build, "parent_policy_id": live_policy,
+                    "raw_input_manifest_root": staged_raw["root"],
+                    "raw_input_manifest_file_count": staged_raw.get("file_count"),
+                    "staged_content_root": att["root"],
+                    "staged_content_file_count": att["file_count"],
+                    "approvals_post_rebind_root": appr_post["root"],
+                    "source_git_commit": rep["source_git_commit"],
+                    "approvals_rebound": len(written),
+                    "backup_dir": f"{builder.paths.qlib_dir}.bak_{builder.build_id}",
+                    "reviewed_dryrun_report": str(DRYRUN_REPORT_PATH),
+                    "published_cst": now_cst().isoformat(timespec="seconds"),
+                }
+                _atomic_write_bytes(PUBLISH_RECORD_PATH,
+                                    json.dumps(record, ensure_ascii=False, indent=1).encode("utf-8"))
+                record_written = True
+                # the committed governance record is written LAST — nothing may claim a
+                # completed rebind before every durable step above proved out (Blocker 2b).
+                record_md = _write_rebind_record(
+                    new_pb=rep["staged_build_id"], new_cp=rep["new_policy_id"], old_pb=live_build,
+                    old_cp=live_policy, n_files=len(written), raw_root=staged_raw["root"],
+                    raw_files=staged_raw.get("file_count") or 0,
+                    backup_dir=f"{builder.paths.qlib_dir}.bak_{builder.build_id}")
+                j("bind", "ok", approvals_rebound=len(written))
+            except BaseException as exc:  # noqa: BLE001 — interrupts included (re-review P0)
+                if not swap_completed:
+                    # the primitive self-rolled-back (or the failure landed before any
+                    # rename) — nothing durable mutated by THIS transaction.
+                    j("swap", "aborted_pre_completion", error=repr(exc))
+                    logger.critical("aborted before the swap completed (%r) — the primitive's "
+                                    "self-rollback applies; data/qlib_data is the parent.", exc)
+                    raise
+                logger.error("post-swap step failed (%r) — restoring approvals + artifacts + "
+                             "rolling the swap back.", exc)
+                problems: list[str] = []
+                problems += _restore_approval_files(written, originals)
+                for artifact, present in ((record_md, record_md is not None),
+                                          (PUBLISH_RECORD_PATH, record_written)):
+                    if present:
+                        try:
+                            Path(artifact).unlink(missing_ok=True)
+                        except OSError as uexc:
+                            problems.append(f"could not remove {artifact}: {uexc}")
+                # strip THIS transaction's post-swap files from the new tree so the returned
+                # staged tree matches its content attestation again for a clean retry
+                for name in ("provider_build.json", "publish_state.json"):
+                    fpath = Path(builder.paths.qlib_dir) / "metadata" / name
+                    try:
+                        fpath.unlink(missing_ok=True)
                     except OSError as uexc:
-                        problems.append(f"could not remove {artifact}: {uexc}")
-            # strip THIS transaction's post-swap files from the new tree so the returned
-            # staged tree matches its content attestation again for a clean retry
-            for name in ("provider_build.json", "publish_state.json"):
-                fpath = Path(builder.paths.qlib_dir) / "metadata" / name
-                try:
-                    fpath.unlink(missing_ok=True)
-                except OSError as uexc:
-                    problems.append(f"could not remove new-tree {name}: {uexc}")
-            ok_rb, rb_msg = _rollback_swap(builder)
-            if ok_rb:
-                try:
-                    rb_build, rb_policy = live_provider_ids()
-                    if (rb_build, rb_policy) != (live_build, live_policy):
-                        problems.append(f"post-rollback live ids ({rb_build}/{rb_policy}) != "
-                                        f"parent ({live_build}/{live_policy})")
-                except Exception as vexc:  # noqa: BLE001
-                    problems.append(f"post-rollback live manifest unreadable: {vexc}")
-            else:
-                problems.append(f"swap rollback failed: {rb_msg}")
-            if not problems:
-                j("bind", "failed_rolled_back", error=str(exc), rollback=rb_msg)
-                logger.error("ROLLED BACK to the parent live provider — VERIFIED (approval bytes "
-                             "re-read identical, parent ids live, artifacts removed): %s. Fix the "
-                             "cause and re-run --publish-approved. Cause: %s", rb_msg, exc)
-                return 4
-            j("bind", "failed_rollback_incomplete", error=str(exc), rollback=rb_msg,
-              problems=problems)
-            logger.critical("ROLLBACK INCOMPLETE — resolve manually per the journal (%s). "
-                            "Problems: %s. Cause: %s", TRANSACTION_JOURNAL_PATH, problems, exc)
-            return 5
+                        problems.append(f"could not remove new-tree {name}: {uexc}")
+                ok_rb, rb_msg = _rollback_swap(builder)
+                if ok_rb:
+                    try:
+                        rb_build, rb_policy = live_provider_ids()
+                        if (rb_build, rb_policy) != (live_build, live_policy):
+                            problems.append(f"post-rollback live ids ({rb_build}/{rb_policy}) != "
+                                            f"parent ({live_build}/{live_policy})")
+                    except Exception as vexc:  # noqa: BLE001
+                        problems.append(f"post-rollback live manifest unreadable: {vexc}")
+                else:
+                    problems.append(f"swap rollback failed: {rb_msg}")
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    j("bind", "interrupted_rolled_back" if not problems
+                      else "interrupted_rollback_incomplete", error=repr(exc),
+                      rollback=rb_msg, problems=problems)
+                    logger.critical("INTERRUPTED mid-transaction — rollback %s. Problems: %s",
+                                    "VERIFIED complete" if not problems else "INCOMPLETE",
+                                    problems or "none")
+                    raise
+                if not problems:
+                    j("bind", "failed_rolled_back", error=str(exc), rollback=rb_msg)
+                    logger.error("ROLLED BACK to the parent live provider — VERIFIED (approval "
+                                 "bytes re-read identical, parent ids live, artifacts removed): "
+                                 "%s. Fix the cause and re-run --publish-approved. Cause: %s",
+                                 rb_msg, exc)
+                    return 4
+                j("bind", "failed_rollback_incomplete", error=str(exc), rollback=rb_msg,
+                  problems=problems)
+                logger.critical("ROLLBACK INCOMPLETE — resolve manually per the journal (%s). "
+                                "Problems: %s. Cause: %s", TRANSACTION_JOURNAL_PATH, problems, exc)
+                return 5
     # ── locks released: swap + rebind + metadata are consistent and durable (state=pending_qa).
 
     logger.info("ATOMIC PUBLISH COMPLETE: %s live under %s (parent %s retained as .bak; publish-state "
                 "pending_qa quarantines gated reads). Running post-publish QA ...",
                 rep["staged_build_id"], rep["new_policy_id"], live_build)
-    return _run_and_record_qa(builder.paths.qlib_dir, rep["staged_build_id"], j)
+    return _run_and_record_qa(builder, rep, j)
 
 
-def _run_and_record_qa(qlib_dir, build_id: str, j) -> int:
-    """Run run_daily_qa and flip the publish-state marker accordingly (B6): PASS -> 'ready'
-    (gated reads open), FAIL -> 'qa_failed' (quarantine persists; exit 6). The flip is a
-    manifest-adjacent metadata write — taken under the global publish lock."""
+# files the publish itself adds to the live tree AFTER the content attestation — the
+# READY-gate re-verification excludes exactly these (and nothing else).
+_LIVE_PUBLISH_FILES = ("metadata/provider_build.json", "metadata/publish_state.json")
+
+
+def _run_and_record_qa(builder, rep: dict, j) -> int:
+    """Run run_daily_qa, then hand the READY decision to :func:`_finalize_ready` (PASS) or
+    persist the quarantine (FAIL -> 'qa_failed', exit 6)."""
     from data_infra.tushare_lock import provider_publish_lock
     qa_rc = _run_post_publish_qa()
     if qa_rc != 0:
         with provider_publish_lock():
-            _write_publish_state(qlib_dir, "qa_failed", build_id, qa_returncode=qa_rc)
+            _write_publish_state(builder.paths.qlib_dir, "qa_failed", rep["staged_build_id"],
+                                 qa_returncode=qa_rc)
         j("qa", "failed", returncode=qa_rc)
         logger.critical("PUBLISHED but post-publish QA FAILED (exit %d) — the provider stays live "
                         "but publish-state 'qa_failed' QUARANTINES gated reads until "
                         "--finalize-qa passes. Parent retained as .bak.", qa_rc)
         return 6
-    with provider_publish_lock():
-        _write_publish_state(qlib_dir, "ready", build_id, qa_returncode=0)
-    j("qa", "ok")
-    logger.info("post-publish QA PASS — publish-state 'ready'. Publish record: %s", PUBLISH_RECORD_PATH)
+    j("qa", "passed", returncode=0)
+    return _finalize_ready(builder, rep, j)
+
+
+def _finalize_ready(builder, rep: dict, j) -> int:
+    """The ONLY transition to publish-state 'ready' (re-review P0-3 + P0-4). Under the
+    transaction locks, EVERY pin is re-verified against the LIVE tree: the manifest CAS
+    (build/policy/raw-root/parent/execute-commit), the minted-policy file hash, the
+    post-rebind approvals set (vs the publish record), the in-tree raw manifest
+    self-consistency, and the FULL live content root vs the reviewed staged root
+    (excluding exactly the two files the publish itself adds). QA is a sampling check —
+    THIS is the proof; it closes the hash->swap TOCTOU window: a byte changed at ANY point
+    between the pre-swap attestation and this gate refuses 'ready' (quarantine persists,
+    exit 5)."""
+    from data_infra.tushare_lock import provider_publish_lock, raw_maintenance_lock
+    qlib_dir = Path(builder.paths.qlib_dir)
+    with raw_maintenance_lock(), provider_publish_lock():
+        problems: list[str] = []
+        okm, why_m = _verify_live_manifest(
+            qlib_dir, build_id=rep["staged_build_id"], policy_id=rep["new_policy_id"],
+            raw_root=rep["raw_input_manifest_root"], parent_pb=rep["parent_build_id"],
+            source_git_commit=rep["source_git_commit"])
+        if not okm:
+            problems.append(f"live manifest CAS failed: {why_m}")
+        policy_file = POLICY_DIR / f"{rep['new_policy_id']}.yaml"
+        if not policy_file.is_file() or _sha256_file(policy_file) != rep["new_policy_sha256"]:
+            problems.append("minted policy file hash drifted since the reviewed report")
+        try:
+            record = json.loads(PUBLISH_RECORD_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            record = {}
+            problems.append(f"publish record unreadable: {exc}")
+        if record.get("published_build_id") != rep["staged_build_id"]:
+            problems.append("publish record does not describe this build")
+        appr = _approvals_attestation()
+        if appr["bound_count"] < 1 or appr["root"] != record.get("approvals_post_rebind_root"):
+            problems.append("approvals governance set drifted since the rebind")
+        try:
+            live_raw = json.loads((qlib_dir / "metadata" / "raw_input_manifest.json")
+                                  .read_text(encoding="utf-8"))
+            if live_raw.get("root") != rep["raw_input_manifest_root"]:
+                problems.append("in-tree raw manifest root != the reviewed raw root")
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(f"in-tree raw manifest unreadable: {exc}")
+        if not problems:
+            logger.info("READY gate: FULL live-content re-verification (%s files) ...",
+                        rep.get("staged_content_file_count"))
+            att = _staged_content_attestation(
+                qlib_dir, exclude=_LIVE_PUBLISH_FILES,
+                build_manifest_path=Path(builder.paths.build_root) / "manifest.json")
+            if att["root"] != rep["staged_content_root"]:
+                problems.append(
+                    f"LIVE content root {att['root']} != reviewed {rep['staged_content_root']} — "
+                    "the published bytes changed since the audited build")
+        if problems:
+            j("ready", "refused", problems=problems)
+            logger.critical("READY REFUSED — the provider STAYS QUARANTINED. Problems: %s. "
+                            "Investigate; if the published bytes are compromised, restore the "
+                            "parent from the .bak per the journal (%s).",
+                            problems, TRANSACTION_JOURNAL_PATH)
+            return 5
+        _write_publish_state(qlib_dir, "ready", rep["staged_build_id"], qa_returncode=0)
+    j("ready", "ok")
+    logger.info("publish-state 'ready' — QA passed AND every pin re-verified against the live "
+                "tree. Publish record: %s", PUBLISH_RECORD_PATH)
     return 0
 
 
 def phase_finalize_qa(args) -> int:
-    """Re-run the post-publish QA leg for a provider stuck in 'pending_qa'/'qa_failed'
-    (crash between swap and QA, or a QA failure now resolved). Refuses when the live build
-    is not the reviewed report's staged build (the quarantine belongs to THIS publish)."""
+    """Re-run the QA + READY-gate leg for a provider stuck in 'pending_qa'/'qa_failed'
+    (crash between swap and QA, or a QA failure now resolved). CAS-verifies the live
+    manifest against the reviewed report BEFORE running QA, and the full READY gate
+    (:func:`_finalize_ready` — content root included) decides afterwards; a provider whose
+    bytes changed since the review can NEVER be marked ready by this path."""
     if not DRYRUN_REPORT_PATH.exists():
         logger.error("no dry-run report at %s — nothing to finalize.", DRYRUN_REPORT_PATH)
         return 2
     rep = json.loads(DRYRUN_REPORT_PATH.read_text(encoding="utf-8"))
-    live_build, _ = live_provider_ids()
-    if live_build != rep.get("staged_build_id"):
-        logger.error("live build %s is not the report's staged build %s — --finalize-qa only "
-                     "finishes the publish this report describes. Refusing.",
-                     live_build, rep.get("staged_build_id"))
+    required = ("staged_build_id", "new_policy_id", "raw_input_manifest_root",
+                "parent_build_id", "source_git_commit", "new_policy_sha256",
+                "staged_content_root")
+    missing = [k for k in required if not rep.get(k)]
+    if missing:
+        logger.error("dry-run report lacks %s — cannot finalize. Refusing.", missing)
         return 2
     builder = _make_publish_builder(rep["staged_build_id"])
-    state_file = Path(builder.paths.qlib_dir) / "metadata" / "publish_state.json"
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8")).get("state")
-    except (OSError, json.JSONDecodeError):
-        state = None
-    if state not in ("pending_qa", "qa_failed"):
-        logger.error("publish-state is %r — --finalize-qa only applies to pending_qa/qa_failed.", state)
-        return 2
+    from data_infra.tushare_lock import provider_publish_lock, raw_maintenance_lock
+    with raw_maintenance_lock(), provider_publish_lock():
+        live_build, _ = live_provider_ids()
+        if live_build != rep["staged_build_id"]:
+            logger.error("live build %s is not the report's staged build %s — --finalize-qa only "
+                         "finishes the publish this report describes. Refusing.",
+                         live_build, rep["staged_build_id"])
+            return 2
+        state_file = Path(builder.paths.qlib_dir) / "metadata" / "publish_state.json"
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8")).get("state")
+        except (OSError, json.JSONDecodeError):
+            state = None
+        if state not in ("pending_qa", "qa_failed"):
+            logger.error("publish-state is %r — --finalize-qa only applies to pending_qa/qa_failed.",
+                         state)
+            return 2
+        okm, why_m = _verify_live_manifest(
+            builder.paths.qlib_dir, build_id=rep["staged_build_id"],
+            policy_id=rep["new_policy_id"], raw_root=rep["raw_input_manifest_root"],
+            parent_pb=rep["parent_build_id"], source_git_commit=rep["source_git_commit"])
+        if not okm:
+            logger.error("live manifest CAS failed before QA (%s) — refusing to finalize.", why_m)
+            return 2
 
     journal: dict = {"transaction": "finalize_qa", "staged_build_id": rep["staged_build_id"],
                      "steps": []}
@@ -1663,7 +1843,7 @@ def phase_finalize_qa(args) -> int:
                                  "ts_cst": now_cst().isoformat(timespec="seconds"), **info})
         _write_journal(journal)
 
-    return _run_and_record_qa(builder.paths.qlib_dir, rep["staged_build_id"], j)
+    return _run_and_record_qa(builder, rep, j)
 
 
 def main() -> int:

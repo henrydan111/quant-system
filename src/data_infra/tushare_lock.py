@@ -30,14 +30,44 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout  # noqa: F401 — Timeout re-exported for callers' soft-skip
 
-# ONE immutable lock identity for this workspace — a fixed absolute path under the project root, NOT
-# overridable by an ambient environment variable. A per-process `QUANT_LOCK_DIR` override previously
-# let a second process select a DIFFERENT namespace and acquire immediately while a real holder was
-# live (two raw writers / two parallel Tushare callers — GPT REWORK-5 Blocker 1). Tests INJECT
-# isolation by monkeypatching this module attribute in-process (or reassigning it inside a spawned
-# holder's own code), never via a production-readable env var. A shared-volume deploy that needs a
-# different directory must resolve it centrally (config), not from ambient per-process state.
-_LOCK_DIR = Path(__file__).resolve().parents[2] / "logs" / "locks"
+# ONE immutable lock identity for this REPOSITORY (all worktrees), NOT overridable by an ambient
+# environment variable. A per-process `QUANT_LOCK_DIR` override previously let a second process
+# select a DIFFERENT namespace and acquire immediately while a real holder was live (GPT REWORK-5
+# Blocker 1). Phase 5-B re-review P0: deriving the path from THIS source file's checkout is ALSO a
+# forgeable-by-accident namespace — two git WORKTREES of the same repo resolved different lock dirs
+# and could publish/fetch concurrently against the same shared store. The identity is therefore
+# anchored to the GIT COMMON DIRECTORY's parent (identical for every worktree of a repo; equal to
+# the checkout root for a plain clone, so the production daily job's lock path is unchanged).
+# Degraded fallback (git unavailable): the source checkout root, with a loud warning — never env.
+# Tests INJECT isolation by monkeypatching the module attribute in-process, never via env.
+_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_lock_root(source_root: Path) -> Path:
+    import logging
+    import subprocess
+    try:
+        # git emits UTF-8 bytes; text=True would decode with the locale codepage (cp936 on
+        # this host) and MANGLE non-ASCII path components (the real repo root contains
+        # Chinese characters) — decode explicitly.
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(source_root), stderr=subprocess.DEVNULL,
+        ).decode("utf-8").strip()
+        common = Path(out)
+        if not common.is_absolute():
+            common = (source_root / common).resolve()
+        return common.parent
+    except Exception:  # noqa: BLE001 — degraded per-checkout namespace, loudly
+        logging.getLogger(__name__).warning(
+            "git common-dir resolution failed under %s — lock namespace degrades to this "
+            "checkout only (cross-worktree publishers would NOT exclude each other).",
+            source_root,
+        )
+        return source_root
+
+
+_LOCK_DIR = _resolve_lock_root(_SOURCE_ROOT) / "logs" / "locks"
 
 
 def _lock_dir() -> Path:
