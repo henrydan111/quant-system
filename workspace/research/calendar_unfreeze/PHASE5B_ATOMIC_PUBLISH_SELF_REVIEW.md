@@ -122,3 +122,31 @@ GPT 对 `e4ceeea` 再判 REWORK。全部有效——上一轮的"原子"只对 E
 焦点电池 **189 绿**（+7 新探针）；四套件组合 **1070 绿+16 skip**（环境失败集与基线逐文件一致）；worktree 下 `_LOCK_DIR == E:\量化系统\logs\locks` 精确等值实测。**本会话仍零次触碰活体 provider。**
 
 **结论：clean for GPT（re-review #3）。** 6 P0+1 P1 全闭且每条有探针复刻测试；ready 是被完整重验过的声明；锁、回滚、隔离对中断与跨 worktree 均机械成立。真实 241GB 首跑（§13）与 GPT 复审 #3 仍是 final 前置。
+
+---
+
+## REWORK round 4（GPT 复审 #3 再 REWORK：3 P0 + 3 Major，布尔 vs 磁盘事实 / 哈希→ready 窗口 / 数据根锁）— 2026-07-13
+
+GPT 确认前七探针全过，但新探针再破三处。逐条：
+
+| # | GPT finding（探针复现） | 修复 | 探针测试 |
+|---|---|---|---|
+| **P0-A** publish() 返回→`swap_completed=True` 之间的异常把 child 留 live 且被误判 pre-swap（真 publish 后立刻 SystemExit：child live、审批旧、无 marker、不回滚）| 处理器改**磁盘事实分类** `_disk_swap_state`（live manifest build + backup 目录；child_live→完整 verified 撤销；parent_live→原语已自回滚；unknown→exit 5 留 journal）；**持久 intent journal**（`publish_intent.json`，首次 rename 前必须写成功；swapping→committed_core/aborted/rollback_incomplete；未决 intent 阻断任何新 publish）| `test_publish_systemexit_right_after_swap_rolls_back_via_disk_truth`（真 publish 完成后 SystemExit→磁盘分类→全恢复→intent aborted→重抛）+ `test_unresolved_intent_blocks_new_publish` |
+| **P0-B** 最后一次哈希→写 ready 之间仍可改写（锁只约束守锁者；"再加一次哈希"关不掉）| READY 门顺序改为：lease CAS → cheap pins → **封存 generation 只读**（`_seal_tree_readonly`，除控制面 marker 外每文件 +R）→ 对**已封存**内容全量哈希 → 写 ready。认证后的字节对任何守属性写者不可写。tamper 类失败 → **`suspect`**（publish+finalize 全阻断），恢复唯一路径=显式验证型 **`--restore-parent`**（反向换绑→.bak parent 换回→parent ids+0 drift 证明；绝不静默自动恢复——按 GPT 处置意见）| `test_ready_seal_blocks_later_writes`（ready 后写 bin=PermissionError）+ `test_ready_gate_refuses_bytes_changed_after_swap`（→suspect+finalize 阻断）+ `test_finalize_qa_cannot_green_changed_bytes_then_restore_parent`（suspect→restore-parent 全演练：parent 回 live、审批回绑、0 drift、child 归位）|
+| **P0-C** 锁仍非共享数据根全局（两个独立 clone 同数据根≠同锁；git 失败退化每检出一把）| 存储锁（raw+publish）身份=**规范化 `storage.data_root`**→`<data_root>/.locks/`（任何检出同店同锁）；身份不可解析→**`LockIdentityError` 拒绝**（绝不警告后继续）；账号级 api_call_lock 保留 repo 锚（账号是机器资源非店资源）| `test_data_lock_identity_shared_across_checkouts`（两独立 clone 绝对同店→同锁；相对 ./data→各自店各自锁=正确语义）+ `test_data_lock_identity_unresolvable_refuses` |
+| **Major-D** 真实 SIGINT 语义与文档/测试不符（defer=core 提交后才抛）| 按 GPT 选项 1：**诚实文档化**——真信号=一致 core 提交+`pending_qa` 隔离，`--finalize-qa` 续接（\_defer_sigint/CLAUDE §3.4 措辞重写）；in-flow 抛出的异常（SystemExit/注入 KeyboardInterrupt=崩溃类）仍走 verified 回滚后重抛；**真信号测试**用 `signal.raise_signal(SIGINT)` 钉死两种语义的分界 | `test_real_sigint_defers_commits_core_then_finalize` |
+| **Major-E** 并发 QA 把已 ready 的同代覆盖回 qa_failed | **QA attempt lease**：`_begin_qa_attempt`（同锁内 last-starter-wins 写 active_qa_attempt）；fail/ready 写前同锁 CAS（lease+build+state）；过期 worker 记 `superseded`（exit 7）什么都不改 | `test_stale_qa_worker_cannot_overwrite_ready` |
+| **Major-F** 回滚可遗留假 publish_record（原子写成功→布尔置位前中断）| **每事务记录** `publish_record_<txid>.json`（canonical；固定名仅便览副本）；marker 携带 `transaction_id` 供 finalize 定位；回滚清理**按 txid 磁盘驱动**（per-tx 记录+md 按既定路径 unlink；固定名副本读出 transaction_id 匹配才删）——不再依赖任何进程内布尔 | 既有 record-fault/中断探针在新机制下全绿（清理断言不变）|
+| 文档偏差 | READY 门 raw manifest 只比 root 不算 files 自洽根 | 补 `_manifest_root(files)==root` 重算；表述改为 root+file-list 自洽 | ready 门电池 |
+
+### GPT 首跑前置清单（照单全收，进 runbook）
+1. ✔ 本轮 P0 修复+回归（post-swap SystemExit / ready 前篡改（封存化解）/ 独立 clone 共享数据根）。
+2. ☐ 操作员在**同卷一次性数据副本**上完整演练：publish→rollback→qa_failed→finalize→并发 QA lease→suspect→restore-parent（驱动即本 driver，路径由副本 config 决定）。
+3. ☐ 实测三次全树哈希耗时/峰值内存/可用磁盘并留档（`--execute` 与 READY 门各自打印 file_count/bytes；操作员记录墙钟）。
+4. ✔ 正式读取门三态拒绝（pending_qa/qa_failed/suspect）已由 gate 电池覆盖。
+5. ☐ 以上全过后另行 §13 申请 live 首跑。
+
+### 验证汇总（本轮）
+焦点电池 **200 绿**（monthly 62 + gate 25 + daily-5c/fetchers 锁迁移 + 其余）；四套件 **1076 绿+16 skip**（环境失败集逐文件同基线）。封存产生的只读残留由测试级 autouse unseal 清理。**本会话仍零次触碰活体 provider。**
+
+**结论：clean for GPT（re-review #4）。** 3 P0+3 Major 全闭且每条探针复刻；"已发布字节可在认证后被改写"这一最重残余风险由**封存只读 generation** 机械关闭；suspect/restore-parent 给出了被验证的恢复路径。真实 241GB 首跑（§13+前置清单 2/3/5）与 GPT 复审 #4 仍是 final 前置。
