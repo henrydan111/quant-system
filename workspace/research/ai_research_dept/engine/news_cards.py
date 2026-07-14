@@ -421,12 +421,14 @@ class AttributeRow:
 
 def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_id: str,
                              evidence_class: str, importance: int,
-                             parent_content_hash: str, attributes: dict) -> list[tuple]:
+                             source_parent_content_hash: str,
+                             registry_parent_content_hash: str,
+                             attributes: dict) -> list[tuple]:
     """(私有,re-review#2 M1:唯一入口是 build_attribute_bundle)把 importance≥4 的
     重大直接事件拆为原子属性行(D7)。返回 [(AttributeRow, CardRecord)];每行
-    record_id = `{base}.{attr}`,经 **d7_child_v1 类型化 schema** 铸造(re-review#3
-    B1:密封父记录哈希 + attribute_type 派生,通用铸造对带后缀 ID 一律拒),维收窄到
-    该属性的注册维。强制:importance≥4 才拆;非空且 ≤4 行(re-review#3 m1);
+    record_id = `{base}.{attr}`,经 **d7_child_v2 类型化 schema** 铸造(re-review#4
+    B1:密封 source+registry 双父哈希 + attribute_type,domain=news、consumers 精确集
+    由 kernel 强制),维收窄到该属性的注册维。强制:importance≥4 才拆;非空且 ≤4 行;
     attribute_type 注册;source_status 行 uses={penalty, bear}(永不 factor_positive)。"""
     if importance < D7_IMPORTANCE_FLOOR:
         raise RegistryError(
@@ -445,19 +447,22 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
         if attr not in ATTRIBUTE_TYPES:
             raise RegistryError(f"未注册 attribute_type {attr!r}(须 ∈ {ATTRIBUTE_TYPES})")
         rid = f"{base_record_id}.{attr}"
-        deriv = (("parent_content_hash", parent_content_hash), ("attribute_type", attr))
+        # 规范键序(_SCHEMA_DERIVATION_KEYS['d7_child_v2']):source, registry, attribute_type
+        deriv = (("source_parent_content_hash", source_parent_content_hash),
+                 ("registry_parent_content_hash", registry_parent_content_hash),
+                 ("attribute_type", attr))
         if attr == "source_status":
             rec = build_card_record(rid, domain="news", evidence_class=evidence_class,
                                     allowed_uses={"penalty", "bear"},
                                     allowed_consumers={"news", "bear"},
                                     allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
-                                    record_schema_id="d7_child_v1", derivation=deriv)
+                                    record_schema_id="d7_child_v2", derivation=deriv)
         else:
             rec = build_card_record(rid, domain="news", evidence_class=evidence_class,
                                     allowed_uses={"factor_positive", "context_only"},
                                     allowed_consumers={"news"},
                                     allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
-                                    record_schema_id="d7_child_v1", derivation=deriv)
+                                    record_schema_id="d7_child_v2", derivation=deriv)
         row = AttributeRow(row_id=rid, claim_id=claim_id,
                            fact_cluster_id=fact_cluster_id, evidence_group_id=group,
                            attribute_type=attr, text=sanitize_text(text))
@@ -542,7 +547,7 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
     facts_by_id = {bf.base_record_id: bf for bf in base_facts}
     recs_by_id = {r.record_id: r for r in base_records}
     seen_bases, seen_claims = set(), set()
-    rows, attr_records, demoted_ids = [], [], []
+    rows, attr_records, demoted_by_id = [], [], {}
     for sp in splits:
         extra = set(sp) - {"base_record_id", "attributes"}
         if extra:
@@ -574,20 +579,26 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
         if "fact" not in sp["attributes"]:
             raise RegistryError(f"拆分 {bid} 缺 'fact' 属性——降级基行的拆分必须"
                                 f"保留事实行(re-review#3 m1)")
+        # re-review#4 B1:**先**构造降级(registry)父行,取其最终 content_hash,子行
+        # 同时密封 source(卡内原始)与 registry(降级后)双父哈希——子行绑的父就是
+        # 最终注册表里 ID-前缀那个父,错父/跨类/跨席无路可走
+        demoted = build_card_record(
+            base.record_id, domain=base.domain, evidence_class=base.evidence_class,
+            allowed_uses={"context_only"}, allowed_consumers=base.allowed_consumers)
         pairs = _build_attribute_records(
             bid, claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
             evidence_class=bf.evidence_class, importance=bf.importance,
-            parent_content_hash=base.content_hash, attributes=sp["attributes"])
+            source_parent_content_hash=bf.base_content_hash,
+            registry_parent_content_hash=demoted.content_hash,
+            attributes=sp["attributes"])
         rows.extend(r for r, _ in pairs)
         attr_records.extend(rec for _, rec in pairs)
-        demoted_ids.append(base.record_id)
+        demoted_by_id[base.record_id] = demoted
     # 被拆事件的基行降级 context_only(broad 行与属性行绝不同时正向)
     final_records, demoted_records = [], []
     for r in base_records:
-        if r.record_id in demoted_ids:
-            demoted = build_card_record(
-                r.record_id, domain=r.domain, evidence_class=r.evidence_class,
-                allowed_uses={"context_only"}, allowed_consumers=r.allowed_consumers)
+        if r.record_id in demoted_by_id:
+            demoted = demoted_by_id[r.record_id]
             final_records.append(demoted)
             demoted_records.append(demoted)
         else:

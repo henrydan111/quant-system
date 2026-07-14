@@ -284,7 +284,7 @@ class TestAttentionCard:
         card, records = render_attention_context_card(self._flow(), CUT)
         reg = build_card_registry(card.cutoff_iso, records)
         with pytest.raises(PayloadGateError, match="NFV01"):
-            assert_factor_payload({"news_card": "热度 NFV01 参考"}, reg,
+            assert_factor_payload({"news_card": "热度 [NFV01] 参考"}, reg,
                                   consumer_seat="news",
                                   target_dimension="event_materiality")
 
@@ -320,7 +320,8 @@ class TestD7Attributes:
     def test_scoped_dimensions(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
-                                       parent_content_hash="a" * 64, attributes=self._attrs())
+                                       source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes=self._attrs())
         by_attr = {r.attribute_type: (r, rec) for r, rec in rows}
         _, fact_rec = by_attr["fact"]
         # fact row authorizes ONLY event_materiality
@@ -335,7 +336,8 @@ class TestD7Attributes:
     def test_source_status_never_positive(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=4,
-                                       parent_content_hash="a" * 64, attributes={"source_status": "官方证实"})
+                                       source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes={"source_status": "官方证实"})
         _, rec = rows[0]
         assert "factor_positive" not in rec.allowed_uses
         assert authorize(rec, use="penalty", consumer_seat="news",
@@ -345,24 +347,28 @@ class TestD7Attributes:
         with pytest.raises(RegistryError, match="importance"):
             _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=3,
-                                    parent_content_hash="a" * 64, attributes={"fact": "小事件"})
+                                    source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes={"fact": "小事件"})
 
     def test_unknown_attribute_rejected(self):
         with pytest.raises(RegistryError, match="未注册 attribute_type"):
             _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFD", importance=5,
-                                    parent_content_hash="a" * 64, attributes={"hype": "x"})
+                                    source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes={"hype": "x"})
 
     def test_rumor_class_not_splittable(self):
         with pytest.raises(RegistryError, match="正向类"):
             _build_attribute_records("NFR01", claim_id="c1", fact_cluster_id="f1",
                                     evidence_class="NFR", importance=5,
-                                    parent_content_hash="a" * 64, attributes={"fact": "x"})
+                                    source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes={"fact": "x"})
 
     def test_row_sealed_and_forged_rejected(self):
         rows = _build_attribute_records("NFD01", claim_id="c1", fact_cluster_id="f1",
                                        evidence_class="NFD", importance=5,
-                                       parent_content_hash="a" * 64, attributes={"fact": "x"})
+                                       source_parent_content_hash="a" * 64,
+                                       registry_parent_content_hash="b" * 64, attributes={"fact": "x"})
         row, _ = rows[0]
         assert len(row.row_hash) == 64
         with pytest.raises(SealError):
@@ -485,6 +491,25 @@ class TestAttributeBundle:
             build_attribute_bundle(
                 [{"base_record_id": "NFD01", "attributes": {"timing": "下季度"}}],
                 facts, records, card=card, decision_id="d1", cutoff=CUT)
+
+    def test_final_registry_reverifies_d7_parent_binding(self):
+        # re-review#4 B1: the bundle's final registry passes require_sealed_registry
+        # (D7 children bind the DEMOTED parent, whose hash the child sealed)
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            require_sealed_registry,
+        )
+        card, records, facts = self._rendered()
+        bundle, _, final_reg = build_attribute_bundle(
+            [self._split("NFD01")], facts, records, card=card,
+            decision_id="d1", cutoff=CUT)
+        require_sealed_registry(final_reg)                 # D7 relationships hold
+        # the demoted parent and its children coexist; parent is context_only
+        by_id = dict(final_reg.records)
+        assert authorize(by_id["NFD01"], use="factor_positive", consumer_seat="news",
+                         target_dimension="event_materiality") is False
+        assert authorize(by_id["NFD01.fact"], use="factor_positive",
+                         consumer_seat="news",
+                         target_dimension="event_materiality") is True
 
     def test_duck_typed_registry_rejected(self):
         # re-review#3 B2: an unsealed lookalike exposing .registry_hash is refused

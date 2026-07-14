@@ -128,8 +128,35 @@ DOMAINS = frozenset({"news", "macro", "attention", "coordination", "research"})
 
 #: 注册记录 schema(re-review#3 B1:受保护 ID 必须经**类型化 schema 工厂**铸造并
 #  密封派生输入——"形状正确"的通用铸造不再能伪造计分权威)。
-RECORD_SCHEMAS = frozenset({"generic_v1", "m_line_v1", "mp_v1", "mf_v1", "d7_child_v1"})
+RECORD_SCHEMAS = frozenset({"generic_v1", "m_line_v1", "mp_v1", "mf_v1", "d7_child_v2"})
 MF_DERIVATION_VERSION = "mf_dim_v1"
+
+#: 每 schema 的**精确规范 derivation 键序列**(re-review#4 Major:dict(derivation)
+#  会静默取重复键最后一值 + 留冗余键。此表锁死每 schema 的键集、顺序、唯一性——
+#  冲突重复键 / 冗余 provenance="FORGED" / M-line 挂任意 derivation 一律拒)。
+_SCHEMA_DERIVATION_KEYS: dict[str, tuple] = {
+    "generic_v1": (),
+    "m_line_v1": (),
+    "mp_v1": (),
+    "mf_v1": ("derivation_version", "macro_type"),
+    "d7_child_v2": ("source_parent_content_hash", "registry_parent_content_hash",
+                    "attribute_type"),
+}
+
+
+def _validated_derivation(schema_id: str, derivation: tuple) -> dict:
+    """re-review#4 Major:derivation 必须是该 schema 的**恰好**规范键序列(键集+顺序+
+    唯一,零冗余)。返回 dict(此后 dict() 安全,无重复键)。"""
+    pairs = tuple(tuple(kv) for kv in derivation)
+    keys = [kv[0] for kv in pairs]
+    expected = _SCHEMA_DERIVATION_KEYS.get(schema_id, ())
+    if len(keys) != len(set(keys)):
+        raise RegistryError(f"derivation 键重复 {keys}(re-review#4 Major:不得歧义)")
+    if tuple(keys) != expected:
+        raise RegistryError(
+            f"{schema_id} derivation 键必须恰为 {expected}(得 {tuple(keys)};"
+            f"冗余/缺失/乱序/冲突键一律拒,re-review#4 Major)")
+    return dict(pairs)
 
 #: MF macro_type → 恰一正向维(注册派生表 v1;re-review#3 B1:表移入 kernel,
 #  MF 记录的维**只能由密封的 macro_type 派生**,不可直接供给)。优先级契约见
@@ -180,10 +207,12 @@ def _enforce_protected_namespaces(record_id: str, domain: str, evidence_class: s
     - MP*:schema=mp_v1,原子政策行精确契约;
     - MF*:schema=mf_v1,**维只由密封 macro_type 经 mf_dim_v1 派生**(直接供维=拒);
     - **其余 M 开头 ID(含 MS/M17+)整体保留**:无类型化工厂 → 一律拒;
-    - `X.attr` D7 子行:schema=d7_child_v1,派生须绑 64-hex 父记录哈希 + 与后缀
-      一致的 attribute_type,维=该属性注册维,source_status 永不正向;
-    - schema 与命名空间**双向绑定**:非保护 ID 只许 generic_v1。"""
-    d = dict(derivation)
+    - `X.attr` D7 子行:schema=d7_child_v2,派生绑 source+registry 双父哈希 + 与后缀
+      一致的 attribute_type,domain 恰为 news,consumers 恰 {news}(source_status
+      {news,bear}),维=该属性注册维,source_status 永不正向;
+    - schema 与命名空间**双向绑定**:非保护 ID 只许 generic_v1。
+    re-review#4 Major:derivation 先经 `_validated_derivation`(键集/顺序/唯一/零冗余)。"""
+    d = _validated_derivation(schema_id, derivation)
     if record_id.startswith("M"):
         if _M_LINE_RESERVED_RE.fullmatch(record_id):
             if schema_id != "m_line_v1":
@@ -251,26 +280,38 @@ def _enforce_protected_namespaces(record_id: str, domain: str, evidence_class: s
             f"MS/M17+——尚无类型化工厂,一律拒;re-review#3 B1)")
     if "." in record_id:
         attr = record_id.split(".", 1)[1]
-        if schema_id != "d7_child_v1":
+        # re-review#4 B1:d7_child_v2 —— domain 恰 news + consumers 精确集(防跨席扩张)
+        if schema_id != "d7_child_v2":
             raise RegistryError(f"{record_id}(D7 子行后缀)须经类型化工厂"
-                                f"(record_schema_id=d7_child_v1,得 {schema_id!r})")
+                                f"(record_schema_id=d7_child_v2,得 {schema_id!r})")
+        if domain != "news":
+            raise RegistryError(f"D7 子行 {record_id} domain 须恰为 news"
+                                f"(得 {domain!r};re-review#4 B1 防跨席扩张)")
         if evidence_class not in ("NFD", "NFI", "NFA"):
             raise RegistryError(f"D7 子行 {record_id} 类须 ∈ {{NFD, NFI, NFA}}"
                                 f"(得 {evidence_class!r})")
         if d.get("attribute_type") != attr:
             raise RegistryError(f"D7 子行 {record_id} 派生 attribute_type "
                                 f"{d.get('attribute_type')!r} 与后缀 {attr!r} 不符")
-        ph = d.get("parent_content_hash")
-        if not (isinstance(ph, str) and _HEX64_RE.fullmatch(ph)):
-            raise RegistryError(f"D7 子行 {record_id} 派生须绑 64-hex 父记录哈希")
+        for key in ("source_parent_content_hash", "registry_parent_content_hash"):
+            h = d.get(key)
+            if not (isinstance(h, str) and _HEX64_RE.fullmatch(h)):
+                raise RegistryError(f"D7 子行 {record_id} 派生须绑 64-hex {key}(B1 双父哈希)")
         if dims != ATTRIBUTE_DIMENSIONS[attr]:
             raise RegistryError(f"D7 子行 {record_id} 维须为属性注册维 "
                                 f"{sorted(ATTRIBUTE_DIMENSIONS[attr])}(得 {sorted(dims)})")
-        expected_uses = frozenset({"penalty", "bear"}) if attr == "source_status" \
-            else frozenset({"factor_positive", "context_only"})
+        if attr == "source_status":
+            expected_uses = frozenset({"penalty", "bear"})
+            expected_consumers = frozenset({"news", "bear"})
+        else:
+            expected_uses = frozenset({"factor_positive", "context_only"})
+            expected_consumers = frozenset({"news"})
         if uses != expected_uses:
-            raise RegistryError(f"D7 子行 {record_id}({attr})uses 须 "
+            raise RegistryError(f"D7 子行 {record_id}({attr})uses 须恰 "
                                 f"{sorted(expected_uses)}(source_status 永不正向)")
+        if consumers != expected_consumers:
+            raise RegistryError(f"D7 子行 {record_id}({attr})consumers 须恰 "
+                                f"{sorted(expected_consumers)}(re-review#4 B1 防跨席)")
         return
     if schema_id != "generic_v1":
         raise RegistryError(f"{record_id!r} 非保护命名空间——只许 record_schema_id="
@@ -428,28 +469,47 @@ def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCar
             frozenset(r.allowed_consumers), frozenset(r.allowed_dimensions),
             r.record_schema_id, tuple(r.derivation))
         by_id[r.record_id] = r
-    for rid, r in by_id.items():
-        if "." in rid:
-            parent = by_id.get(rid.split(".", 1)[0])
-            if parent is None:
-                raise RegistryError(f"D7 子行 {rid} 无父行在同一注册表——孤儿拒")
-            if r.evidence_class != parent.evidence_class:
-                raise RegistryError(
-                    f"D7 子行 {rid} 类 {r.evidence_class!r} ≠ 父行类 "
-                    f"{parent.evidence_class!r}——洗类拒(re-review#3 B1)")
+    _verify_d7_relationships(by_id)                    # re-review#4 B1
     payload = {"cutoff": cutoff_iso,
                "record_hashes": sorted(r.content_hash for r in by_id.values())}
     return SealedCardRegistry(cutoff_iso=cutoff_iso, records=deep_ro(by_id),
                               registry_hash=seal_hash(payload))
 
 
+def _verify_d7_relationships(records) -> None:
+    """D7 子行的**关系级**语义校验(re-review#4 B1):子行必须绑**同一注册表内、ID 前缀
+    指向的**那个父行——class、domain、以及密封的 registry_parent_content_hash 都必须与
+    该父行一致。**从 build_card_registry 与 require_sealed_registry 双调用**(每次消费
+    都重验),使 `NFD01.fact` 封 `NFD02` 的哈希、或子行错父/跨类无路可走。"""
+    for rid, r in records.items():
+        if "." not in rid:
+            continue
+        parent = records.get(rid.split(".", 1)[0])
+        if parent is None:
+            raise RegistryError(f"D7 子行 {rid} 无父行在同一注册表——孤儿拒(B1)")
+        d = dict(tuple(kv) for kv in r.derivation)
+        if d.get("registry_parent_content_hash") != parent.content_hash:
+            raise RegistryError(
+                f"D7 子行 {rid} 绑的 registry 父哈希 "
+                f"{str(d.get('registry_parent_content_hash'))[:12]} ≠ 同表 ID-前缀父行 "
+                f"{parent.record_id} 实际哈希 {parent.content_hash[:12]}——错父拒(B1)")
+        if r.evidence_class != parent.evidence_class:
+            raise RegistryError(
+                f"D7 子行 {rid} 类 {r.evidence_class!r} ≠ 父行类 "
+                f"{parent.evidence_class!r}——洗类拒(B1)")
+        if r.domain != parent.domain:
+            raise RegistryError(
+                f"D7 子行 {rid} domain {r.domain!r} ≠ 父行 domain {parent.domain!r}(B1)")
+
+
 def require_sealed_registry(registry) -> SealedCardRegistry:
-    """消费边界强制(re-review#3 B2):只收真 SealedCardRegistry 并重验其封印——
-    duck-typed 冒牌对象(裸 .registry_hash 属性)在每个消费点拒,不再只在构造点。"""
+    """消费边界强制(re-review#3 B2 + re-review#4 B1):只收真 SealedCardRegistry、重验
+    其封印、**并重跑 D7 关系语义校验**——duck-typed 冒牌对象与错父 D7 子行在每个消费点拒。"""
     if not isinstance(registry, SealedCardRegistry):
         raise RegistryError("registry 必须是密封 SealedCardRegistry"
                             f"(得 {type(registry).__name__};duck-typed 拒,B2)")
     verify_sealed(registry._payload(), registry.registry_hash, field_name="registry_hash")
+    _verify_d7_relationships(registry.records)         # re-review#4 B1:每次消费重验
     return registry
 
 
@@ -477,10 +537,10 @@ def authorize(record: CardRecord, *, use: str, consumer_seat: str,
 
 def dimension_ceiling(cited_ids, registry: SealedCardRegistry, *,
                       consumer_seat: str, target_dimension: str) -> int:
-    registry = require_sealed_registry(registry)          # B2:消费边界重验
     """证据类上限算术(§0/M2 line 122):某维的上限 = 所引证据中,对 (seat, dimension)
     授权 factor_positive 的记录里**最强合格证据类的上限**;无合格证据 → 0(NO-SCORE)。
     传闻/协同/attention_only/未注册引用**不贡献**(它们授权不过 → 天然被排除)。"""
+    registry = require_sealed_registry(registry)          # B2:消费边界重验
     ceils = []
     for rid in cited_ids:
         rec = registry.get(rid)
@@ -494,24 +554,28 @@ def dimension_ceiling(cited_ids, registry: SealedCardRegistry, *,
 
 # --------------------------------------------------- 正向 payload 门(承重硬失败)
 
-def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
-    """递归扫描完整序列化 payload(dict/list/tuple/str 任意嵌套),返回其中出现的**任何
-    已注册 record_id 集合**——覆盖每卡/键/嵌套/别名/散文内联(M1″ line 286)。
-    re-review Major-2:**最长优先 alternation 单趟扫描**——一个 token 恰解析为一条
-    记录:`NFD01.economic_linkage`(D7 子行)不再同时命中父 `NFD01`(旧逐 ID 搜索里
-    `.` 是词边界导致父子双解析);词边界仍防 `M1` 命中 `M16`、`NFD1` 命中 `NFD11`。"""
-    registry = require_sealed_registry(registry)          # B2:消费边界重验
-    known = sorted(registry.records, key=len, reverse=True)   # 最长优先
-    if not known:
-        return set()
-    pat = re.compile(r"(?<![A-Za-z0-9_])(?:"
-                     + "|".join(re.escape(k) for k in known)
-                     + r")(?![A-Za-z0-9_])")
+#: 证据引用的**规范语法**:ASCII `[ID]` 方括号组,内文恰为 record-id 语法(D7 后缀
+#  原子)。外部正文的 ASCII 方括号已被 sanitize_text 全角化(〔〕),故正文物理无法
+#  伪造一个 `[ID]` 引用;渲染器的元数据括号 `[龄|星|类]` 含 `|`,内文不 fullmatch
+#  语法故不被当引用(re-review#4 B2:引用有语法,不再逐"已注册 ID"子串搜索)。
+_BRACKET_REF_RE = re.compile(r"\[([^\[\]]*)\]")
+_ID_REF_GRAMMAR = re.compile(
+    r"[A-Z][A-Z0-9]{1,15}(?:\.(?:fact|economic_linkage|timing|source_status))?")
+
+
+def extract_candidate_ids(payload) -> set:
+    """从完整序列化 payload 抽取**每一个候选 record 引用**,**与注册表成员无关**
+    (re-review#4 B2:伪造/未知 ID 必须可见,不能因"不在已注册集"而静默缺席)。
+    引用 = ASCII `[ID]` 组且内文 fullmatch record-id 语法(D7 后缀作为一个原子——
+    `[NFD01.fact]` 抽出 `NFD01.fact` 整体,绝不退化成父 `NFD01`)。递归遍历
+    dict/list/tuple/str;dict 键与值都扫。"""
     found: set = set()
 
     def walk(o):
         if isinstance(o, str):
-            found.update(pat.findall(o))
+            for inner in _BRACKET_REF_RE.findall(o):
+                if _ID_REF_GRAMMAR.fullmatch(inner):
+                    found.add(inner)
         elif isinstance(o, dict):
             for k, v in o.items():
                 walk(k)
@@ -523,15 +587,31 @@ def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
     return found
 
 
+def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
+    """抽取 payload 内**全部候选 record 引用**(re-review#4 B2:注册表无关,含未注册)。
+    保留 registry 参数并重验(消费边界)以维持调用契约;真正的成员判定交给
+    assert_factor_payload(未知 ID 硬失败)。"""
+    require_sealed_registry(registry)                     # B2:消费边界重验
+    return extract_candidate_ids(payload)
+
+
 def assert_factor_payload(payload, registry: SealedCardRegistry, *,
                           consumer_seat: str, target_dimension: str) -> set:
-    """**承重门**(§6b B1 line 440 / M1″):正向 factor payload 内出现的**每一个**已注册
-    record_id 都必须对 (seat, dimension) 授权 factor_positive;任何 attention_only /
-    coordination_risk / 传闻(NFR/MFR) / 未授权 / 域外记录出现 → PayloadGateError(物理
-    排除,非仅挡 evidence_spans)。返回通过的已授权 ID 集(便于调用侧对账)。"""
-    present = scan_payload_ids(payload, registry)
+    """**承重门**(§6b B1 line 440 / M1″ / re-review#4 B2):正向 factor payload 内出现的
+    **每一个**候选 record 引用都必须 (a) 已注册——`candidate_ids − registry_ids` 非空即
+    硬失败(伪造 `[NFD99]`、未注册 D7 子行 `[NFD01.fact]` 不再被误当父 ID 放行);
+    (b) 对 (seat, dimension) 授权 factor_positive——任何 attention_only / coordination_risk
+    / 传闻(NFR/MFR) / 未授权 / 域外记录出现 → PayloadGateError。返回通过的已授权 ID 集。"""
+    registry = require_sealed_registry(registry)
+    candidates = extract_candidate_ids(payload)
+    known = set(registry.records)
+    unknown = candidates - known
+    if unknown:
+        raise PayloadGateError(
+            f"正向 payload(seat={consumer_seat}, dim={target_dimension})含**未注册** "
+            f"record 引用 {sorted(unknown)}——伪造/未知 ID 硬失败(re-review#4 B2)")
     offenders = []
-    for rid in sorted(present):
+    for rid in sorted(candidates):
         rec = registry.get(rid)
         if not authorize(rec, use="factor_positive", consumer_seat=consumer_seat,
                          target_dimension=target_dimension):
@@ -540,7 +620,7 @@ def assert_factor_payload(payload, registry: SealedCardRegistry, *,
         raise PayloadGateError(
             f"正向 payload(seat={consumer_seat}, dim={target_dimension})含未授权注册 ID:"
             + "; ".join(f"{rid}[{ec},uses={u}]" for rid, ec, u in offenders))
-    return present
+    return candidates
 
 
 def build_factor_payload_ids(registry: SealedCardRegistry, *, consumer_seat: str,

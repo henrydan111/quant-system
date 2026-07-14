@@ -178,33 +178,39 @@ class TestReservedMLine:
                               allowed_dimensions={"manipulation_risk"})
 
 
-def _d7_child(parent, attr="economic_linkage", evidence_class=None):
+def _d7_child(parent, attr="economic_linkage", evidence_class=None,
+              registry_parent_content_hash=None):
+    # re-review#4 B1: d7_child_v2 seals BOTH source and registry parent hashes
     from workspace.research.ai_research_dept.engine.news_evidence import ATTRIBUTE_DIMENSIONS
+    rph = registry_parent_content_hash or parent.content_hash
     return build_card_record(
         f"{parent.record_id}.{attr}", domain="news",
         evidence_class=evidence_class or parent.evidence_class,
         allowed_uses={"factor_positive", "context_only"}, allowed_consumers={"news"},
         allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
-        record_schema_id="d7_child_v1",
-        derivation=(("parent_content_hash", parent.content_hash),
+        record_schema_id="d7_child_v2",
+        derivation=(("source_parent_content_hash", parent.content_hash),
+                    ("registry_parent_content_hash", rph),
                     ("attribute_type", attr)))
 
 
 class TestHierarchicalIdScan:
-    # re-review Major-2: one token resolves to exactly ONE record (longest-first)
+    # re-review#4 B2: references have a SYNTAX ([ID]); a token resolves atomically
     def test_d7_child_does_not_double_resolve_parent(self):
         from workspace.research.ai_research_dept.engine.news_evidence import scan_payload_ids
         parent = _nfd("NFD01")
         child = _d7_child(parent)
         reg = build_card_registry(CUT, [parent, child])
-        # the child token alone must resolve ONLY the child, never also the parent
-        assert scan_payload_ids("引用 NFD01.economic_linkage 支撑", reg) \
+        # the child bracket alone resolves ONLY the child, never also the parent
+        assert scan_payload_ids("引用 [NFD01.economic_linkage] 支撑", reg) \
             == {"NFD01.economic_linkage"}
-        # both tokens present -> both found
-        assert scan_payload_ids("NFD01 与 NFD01.economic_linkage", reg) \
+        # both bracketed tokens present -> both found
+        assert scan_payload_ids("[NFD01] 与 [NFD01.economic_linkage]", reg) \
             == {"NFD01", "NFD01.economic_linkage"}
-        # parent followed by a period (sentence end) is still the parent
-        assert scan_payload_ids("see NFD01.", reg) == {"NFD01"}
+        # a bracketed parent is the parent
+        assert scan_payload_ids("see [NFD01].", reg) == {"NFD01"}
+        # BARE (unbracketed) ids are NOT references — content can't forge one
+        assert scan_payload_ids("产能 H1 2025 展望", reg) == set()
 
 
 class TestTypedSchemaLocks:
@@ -229,7 +235,7 @@ class TestTypedSchemaLocks:
 
     def test_d7_child_generic_mint_refused(self):
         # your probe: NFI01.fact minted with class NFD via the generic path
-        with pytest.raises(RegistryError, match="d7_child_v1"):
+        with pytest.raises(RegistryError, match="d7_child_v2"):
             build_card_record("NFI01.fact", domain="news", evidence_class="NFD",
                               allowed_uses={"factor_positive", "context_only"},
                               allowed_consumers={"news"},
@@ -241,6 +247,70 @@ class TestTypedSchemaLocks:
         child = _d7_child(parent, attr="fact", evidence_class="NFD")
         with pytest.raises(RegistryError, match="洗类"):
             build_card_registry(CUT, [parent, child])
+
+    # re-review#4 B1: D7 child cannot bind the wrong parent or widen the seat
+    def test_d7_child_wrong_parent_hash_refused(self):
+        # NFD01.fact sealing NFD02's hash -> registry refuses (registry_parent
+        # hash != the ID-prefix parent's actual hash)
+        p1, p2 = _nfd("NFD01"), _nfd("NFD02")
+        child = _d7_child(p1, attr="fact", registry_parent_content_hash=p2.content_hash)
+        with pytest.raises(RegistryError, match="错父"):
+            build_card_registry(CUT, [p1, p2, child])
+
+    def test_d7_child_cross_seat_widening_refused(self):
+        # domain=macro / consumer=macro child -> kernel refuses at construction
+        from workspace.research.ai_research_dept.engine.news_evidence import ATTRIBUTE_DIMENSIONS
+        with pytest.raises(RegistryError, match="domain 须恰为 news"):
+            build_card_record("NFD01.fact", domain="macro", evidence_class="NFD",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions=ATTRIBUTE_DIMENSIONS["fact"],
+                              record_schema_id="d7_child_v2",
+                              derivation=(("source_parent_content_hash", "a" * 64),
+                                          ("registry_parent_content_hash", "b" * 64),
+                                          ("attribute_type", "fact")))
+
+    def test_d7_child_wrong_consumer_refused(self):
+        from workspace.research.ai_research_dept.engine.news_evidence import ATTRIBUTE_DIMENSIONS
+        with pytest.raises(RegistryError, match="consumers 须恰"):
+            build_card_record("NFD01.fact", domain="news", evidence_class="NFD",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"news", "bear"},   # fact must be {news}
+                              allowed_dimensions=ATTRIBUTE_DIMENSIONS["fact"],
+                              record_schema_id="d7_child_v2",
+                              derivation=(("source_parent_content_hash", "a" * 64),
+                                          ("registry_parent_content_hash", "b" * 64),
+                                          ("attribute_type", "fact")))
+
+    # re-review#4 Major: derivation tuples are mechanically singular
+    def test_duplicate_derivation_key_refused(self):
+        with pytest.raises(RegistryError, match="重复"):
+            build_card_record("MF01", domain="macro", evidence_class="MFD",
+                              allowed_uses={"context_only"}, allowed_consumers={"macro"},
+                              record_schema_id="mf_v1",
+                              derivation=(("derivation_version", "mf_dim_v1"),
+                                          ("macro_type", "货币政策"),
+                                          ("macro_type", "地缘外围")))
+
+    def test_surplus_derivation_key_refused(self):
+        with pytest.raises(RegistryError, match="恰为"):
+            build_card_record("MF01", domain="macro", evidence_class="MFD",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"policy_alignment"},
+                              record_schema_id="mf_v1",
+                              derivation=(("derivation_version", "mf_dim_v1"),
+                                          ("macro_type", "货币政策"),
+                                          ("provenance", "FORGED")))
+
+    def test_m_line_nonempty_derivation_refused(self):
+        with pytest.raises(RegistryError, match="恰为"):
+            build_card_record("M01", domain="macro", evidence_class="market_state_fact",
+                              allowed_uses={"factor_positive", "context_only"},
+                              allowed_consumers={"macro"},
+                              allowed_dimensions={"risk_appetite_environment_fit"},
+                              record_schema_id="m_line_v1",
+                              derivation=(("provenance", "x"),))
 
     def test_d7_orphan_child_refused_at_registry(self):
         parent = _nfd("NFD01")
@@ -259,10 +329,12 @@ class TestTypedSchemaLocks:
 
     def test_generic_schema_on_unprotected_only(self):
         # schema<->namespace bidirectional: a typed schema on a plain id refused
+        # (m_line_v1 has empty derivation so it passes the derivation check and
+        # reaches the namespace<->schema binding)
         with pytest.raises(RegistryError, match="generic_v1"):
             build_card_record("NFD01", domain="news", evidence_class="NFD",
                               allowed_uses={"context_only"}, allowed_consumers={"news"},
-                              record_schema_id="mf_v1")
+                              record_schema_id="m_line_v1")
 
     def test_direct_dataclass_construction_also_locked(self):
         # enforcement lives in __post_init__ — direct construction can't bypass
@@ -388,29 +460,44 @@ class TestFactorPayloadGate:
                                          _coordination("NFC01")])
 
     def test_clean_factor_payload_passes(self):
-        payload = {"news_card": {"facts": [{"id": "NFD01", "text": "签订大额订单"}]}}
+        payload = {"news_card": {"facts": [{"id": "[NFD01]", "text": "签订大额订单"}]}}
         got = assert_factor_payload(payload, self._reg(), consumer_seat="news",
                                     target_dimension="event_materiality")
         assert got == {"NFD01"}
 
     def test_attention_id_in_factor_payload_hard_fails(self):
         # N00 (attention_only) smuggled into a nested/aliased factor field -> HARD FAIL
-        payload = {"news_card": {"context_note": "参见 N00 热度"}}
+        payload = {"news_card": {"context_note": "参见 [N00] 热度"}}
         with pytest.raises(PayloadGateError, match="N00"):
             assert_factor_payload(payload, self._reg(), consumer_seat="news",
                                   target_dimension="event_materiality")
 
     def test_coordination_id_in_factor_payload_hard_fails(self):
-        payload = {"facts": ["NFC01 协同转载"]}
+        payload = {"facts": ["[NFC01] 协同转载"]}
         with pytest.raises(PayloadGateError, match="NFC01"):
             assert_factor_payload(payload, self._reg(), consumer_seat="news",
                                   target_dimension="event_materiality")
 
     def test_wrong_seat_for_registered_id_hard_fails(self):
         # NFD01 is authorized for news, not fund -> a fund factor payload citing it fails
-        payload = {"fund_card": {"note": "NFD01"}}
+        payload = {"fund_card": {"note": "[NFD01]"}}
         with pytest.raises(PayloadGateError, match="NFD01"):
             assert_factor_payload(payload, self._reg(), consumer_seat="fund",
+                                  target_dimension="event_materiality")
+
+    def test_unregistered_id_hard_fails(self):
+        # re-review#4 B2: a FABRICATED [NFD99] must hard-fail, not return empty
+        with pytest.raises(PayloadGateError, match="未注册"):
+            assert_factor_payload({"news_card": "[NFD99] 伪造事实"}, self._reg(),
+                                  consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_unregistered_d7_child_not_read_as_parent(self):
+        # re-review#4 B2: [NFD01.fact] with only NFD01 registered must NOT be
+        # misread as the authorized parent — it is an unknown id -> hard fail
+        with pytest.raises(PayloadGateError, match="未注册"):
+            assert_factor_payload({"news_card": {"note": "[NFD01.fact]"}}, self._reg(),
+                                  consumer_seat="news",
                                   target_dimension="event_materiality")
 
     def test_word_boundary_no_false_prefix_match(self):
@@ -420,15 +507,24 @@ class TestFactorPayloadGate:
                                                           allowed_uses={"context_only"},
                                                           allowed_consumers={"macro"},
                                                           record_schema_id="m_line_v1")])
-        # a payload mentioning M16 (context_only) must flag M16, NOT falsely match M01
+        # a payload mentioning [M16] (context_only) must flag M16, NOT falsely match M01
         with pytest.raises(PayloadGateError, match="M16"):
-            assert_factor_payload({"macro_card": "环境 M16 综合"}, reg,
+            assert_factor_payload({"macro_card": "环境 [M16] 综合"}, reg,
                                   consumer_seat="macro",
                                   target_dimension="risk_appetite_environment_fit")
-        # and a clean M01 payload passes without M16 false-positive
-        assert assert_factor_payload({"macro_card": "M01 风险偏好"}, reg,
+        # and a clean [M01] payload passes without M16 false-positive
+        assert assert_factor_payload({"macro_card": "[M01] 风险偏好"}, reg,
                                      consumer_seat="macro",
                                      target_dimension="risk_appetite_environment_fit") == {"M01"}
+
+    def test_metadata_bracket_not_a_reference(self):
+        # the render metadata bracket [age|stars|NFD] contains pipes -> not a
+        # reference; its bare class label NFD is never extracted (no false unknown)
+        reg = self._reg()
+        got = assert_factor_payload("- [NFD01][2.0h|★★★|NFD]订单|正文", reg,
+                                    consumer_seat="news",
+                                    target_dimension="event_materiality")
+        assert got == {"NFD01"}
 
     def test_build_from_registry_allowlist(self):
         reg = self._reg()
