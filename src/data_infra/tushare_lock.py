@@ -166,6 +166,15 @@ def spaced_call(fn, base_sleep: float, *args, rate_limit_backoff: float = 30.0, 
     if not math.isfinite(base_sleep):
         base_sleep = MIN_BASE_SLEEP  # nan/inf -> the floor (inf would hang the in-band fallback forever)
     base_sleep = max(base_sleep, MIN_BASE_SLEEP)
+    # the rate-limit cooldown must ALSO be finite (an inf backoff persisted inf as next-allowed — GPT
+    # re-review #3 minor); normalize to finite and at least base_sleep.
+    try:
+        rate_limit_backoff = float(rate_limit_backoff)
+    except (TypeError, ValueError):
+        rate_limit_backoff = 30.0
+    if not math.isfinite(rate_limit_backoff):
+        rate_limit_backoff = 30.0
+    rate_limit_backoff = max(rate_limit_backoff, base_sleep)
     with api_call_lock():
         nxt, ok = _read_next_allowed()
         if not ok:

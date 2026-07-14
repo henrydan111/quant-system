@@ -65,117 +65,104 @@ IRRECOVERABLE = [
                              "(natural key + content hash + timestamp) is admissible; else recovery-time floor/quarantine"),
 ]
 
-# ── B2: machine-readable endpoint matrix (one row per endpoint/output family; UNIQUE owner) ─────────
-# callable = the code the adapter wraps (bound to the exact method at adapter build, AFTER the
-# endpoint's contract is reviewed — GPT M3). empty: dense_refuse = an empty response can never be
-# accepted; sparse_canary = confirmed_empty needs contract permission + a same-session nonempty canary.
-def _row(owner, endpoint, callable_ref, outputs, partitioner, pagination, natural_key, empty,
-         consolidation, tail_rule, sidecars=()):
-    return {"owner": owner, "endpoint": endpoint, "callable": callable_ref, "outputs": outputs,
-            "partitioner": partitioner, "pagination": pagination, "natural_key": natural_key,
-            "empty": empty, "consolidation": consolidation, "tail_rule": tail_rule,
+# ── B2/M1: typed endpoint matrix — ONE row per (endpoint, query_mode, output_family) ───────────────
+# Every `callable` is UNBOUND (GPT re-review #3 M1): exact method binding follows contract review, and
+# adapter construction stays BLOCKED until it is pinned. `row_identity_key` = the true per-row unique
+# key; `agg_key` = the coarser profiling key; `baseline_dups` = duplicate rows the manifest legitimately
+# holds under agg_key (a per-agg-key count check, NOT uniqueness, for multi-row event datasets). empty:
+# dense_refuse (an empty response can NEVER be accepted) | sparse_canary (needs a verified nonempty
+# same-endpoint canary + >=2 stored empty receipts).
+def _row(owner, endpoint, query_mode, outputs, row_identity_key, agg_key, empty, tail_rule,
+         *, baseline_dups=False, callable_="UNBOUND (bind post-contract)", note="", sidecars=()):
+    return {"owner": owner, "endpoint": endpoint, "query_mode": query_mode, "callable": callable_,
+            "outputs": outputs, "row_identity_key": row_identity_key, "agg_key": agg_key,
+            "empty": empty, "tail_rule": tail_rule, "baseline_dups": baseline_dups, "note": note,
             "sidecars": list(sidecars)}
 
 
 ENDPOINT_MATRIX = [
-    _row("A01", "daily", "MarketDataInitializer.download_daily_data (bypass main(): it always refetches reference)",
-         ["market/daily/<yr>/daily_<date>.parquet"], "per open trade_date (survivor trade_cal)",
-         "single page per date (verify vs contract)", ["ts_code", "trade_date"], "dense_refuse",
-         "per-date file complete when daily+daily_basic+adj_factor merged (100% adj rule)",
-         "sessions 20260702..last-complete"),
-    _row("A01", "daily_basic", "same fetch as A01 daily merge leg", ["merged into daily_<date>.parquet"],
-         "per open trade_date", "single page per date", ["ts_code", "trade_date"], "dense_refuse",
-         "merged column set present (payload coverage rule)", "with A01"),
-    _row("A01", "adj_factor", "same fetch as A01 daily merge leg", ["merged into daily_<date>.parquet"],
-         "per open trade_date", "single page per date", ["ts_code", "trade_date"], "dense_refuse",
-         "100% positive coverage of priced codes", "with A01"),
-    _row("A02", "index_daily", "MarketDataInitializer index leg — per-index RANGE fetch (not per date)",
-         ["market/index/index_<code>.parquet"], "per index code × full range", "range paging per contract",
-         ["ts_code", "trade_date"], "dense_refuse", "per-index file spans manifest range 20080102..",
-         "range end extends to last-complete"),
-    _row("A03", "income_vip+balancesheet_vip+dividend", "FundamentalsInitializer.download_fundamentals — "
-         "per STOCK, fetches income+balancesheet+DIVIDENDS together (no separate statement methods); "
-         "adapter must SKIP industry/index_weights (survivors)",
-         ["fundamentals/income/*.parquet", "fundamentals/balancesheet/*.parquet", "corporate/dividends/*.parquet"],
-         "per ts_code over survivor stock_basic (incl. delisted)", "per-stock full history, no offset",
-         ["ts_code", "end_date", "(dividends: ts_code, end_date, div_proc)"], "sparse_canary",
-         "periodic files only after ALL stocks terminal-valid (per-stock failures currently swallowed — ledger gates)",
-         "ann_date-window sweep for the tail (calendar-day, not session)"),
-    _row("A04", "income_vip(q)+cashflow_vip(q)", "scripts/fetch_quarterly_statements.py (direct-quarter "
-         "report_type combine)", ["fundamentals/income_quarterly/*.parquet", "fundamentals/cashflow_quarterly/*.parquet"],
-         "per period × report_type", "VIP 10k page fallback offset", ["ts_code", "end_date", "report_type"],
-         "dense_refuse (past periods)", "per-period complete only after both report_types verified",
-         "current period via ann_date window"),
-    _row("A05", "cashflow_vip", "FactorDataInitializer cashflow leg (CLAUDE §6.2: cashflow is Phase-3/"
-         "init_factor scope; bind exact method at adapter build)", ["fundamentals/cashflow/*.parquet"],
-         "per period (cumulative)", "VIP page fallback", ["ts_code", "end_date"], "dense_refuse (past periods)",
-         "per-period", "ann_date window"),
-    _row("A06", "forecast_vip", "FactorDataInitializer forecast leg", ["fundamentals/forecast/*.parquet"],
-         "per ann_date window", "VIP page fallback", ["ts_code", "end_date", "ann_date"], "sparse_canary",
-         "per-window", "ann_date calendar-day window"),
-    _row("A07", "fina_indicator_vip", "refresh_indicator_history (SOLE indicator owner — update_flag "
-         "revision capture; historical archives = irrecoverable evidence)", ["fundamentals/indicators/*.parquet"],
-         "per period", "VIP 10k limit + offset fallback", ["ts_code", "end_date", "update_flag"], "dense_refuse",
-         "per-period after profiler parity", "current period refresh"),
-    _row("A08", "moneyflow", "FactorDataInitializer moneyflow leg", ["market/moneyflow/<yr>/moneyflow_<date>.parquet"],
-         "per open trade_date", "single page per date", ["ts_code", "trade_date"], "sparse_canary",
-         "per-date; known-empty dates live in the sidecar", "sessions tail",
-         sidecars=["reference/moneyflow_known_empty_dates.txt (FIRST-CLASS output: updates are recovery artifacts)"]),
-    _row("A08", "stk_limit", "FactorDataInitializer stk_limit leg", ["market/stk_limit/<yr>/stk_limit_<date>.parquet"],
-         "per open trade_date", "single page per date", ["ts_code", "trade_date"], "dense_refuse",
-         "per-date", "sessions tail"),
-    _row("A08", "margin_detail", "FactorDataInitializer margin leg (lands in market/margin/ = manifest "
-         "dataset 'margin' — NOT a separate store)", ["market/margin/<yr>/margin_<date>.parquet"],
-         "per open trade_date (2010+)", "single page per date", ["ts_code", "trade_date"], "dense_refuse (2010+)",
-         "per-date", "sessions tail"),
-    _row("A08", "hk_hold", "FactorDataInitializer northbound leg", ["market/northbound/<yr>/..."],
-         "per open trade_date (2017+; nonconnect days sidecar)", "single page per date", ["ts_code", "trade_date"],
-         "sparse_canary", "per-date", "sessions tail",
-         sidecars=["reference/northbound_nonconnect_days.txt (FIRST-CLASS output)"]),
-    _row("A09", "stk_holdernumber", "FactorDataInitializer holder leg", ["corporate/holder_number/*.parquet"],
-         "per ann_date window / per stock (bind at build)", "page fallback", ["ts_code", "ann_date", "end_date"],
-         "sparse_canary", "periodic consolidation after all constituents verified", "ann_date window"),
-    _row("A10", "suspend_d", "fetch_suspend_d_historical (yearly market/suspension/suspension_<yr>.parquet) "
-         "+ per-date write_suspend_d store + --ranges-only DERIVED rebuild LAST",
-         ["market/suspension/suspension_<yr>.parquet", "market/suspend_d/<yr>/suspend_d_<date>.parquet",
-          "market/suspension/suspension_ranges.parquet (derived)"],
-         "per year, then per open trade_date", "single page", ["ts_code", "trade_date", "suspend_type"],
-         "sparse_canary", "ranges derived only after yearly+per-date verified", "per-date tail"),
-    _row("A11", "top_list", "fetch_new_alpha_endpoints top_list leg", ["market/top_list/<yr>/..."],
-         "per open trade_date", "single page", ["ts_code", "trade_date"], "sparse_canary", "per-date",
-         "sessions tail"),
-    _row("A11", "top_inst", "fetch_new_alpha_endpoints top_inst leg", ["market/top_inst/<yr>/..."],
-         "per open trade_date (2012+)", "single page", ["ts_code", "trade_date"], "sparse_canary", "per-date",
-         "sessions tail"),
-    _row("A11", "block_trade", "fetch_new_alpha_endpoints block_trade leg", ["market/block_trade/<yr>/..."],
-         "per open trade_date", "single page", ["ts_code", "trade_date"], "sparse_canary", "per-date",
-         "sessions tail"),
-    _row("A12", "stk_holdertrade", "fetch_new_alpha_endpoints — PER STOCK then yearly consolidation "
-         "(current code swallows per-stock failures at line 143 — the ledger gate makes that impossible)",
-         ["corporate/stk_holdertrade/stk_holdertrade_<yr>.parquet"], "per ts_code (full history)",
-         "per-stock, no offset", ["ts_code", "ann_date", "holder_name"], "sparse_canary",
-         "yearly files only after ALL stocks terminal-valid", "ann_date window"),
-    _row("A13", "cyq_perf", "fetch_new_alpha_endpoints — PER STOCK, repartitioned to per-date",
-         ["market/cyq_perf/<yr>/cyq_perf_<date>.parquet"], "per ts_code (2018+), repartition per-date",
-         "per-stock range paging", ["ts_code", "trade_date"], "dense_refuse (2018+)",
-         "per-date files only after all stocks verified + repartition row-conserving", "per-stock range tail"),
-    _row("A14", "report_rc", "scripts/fetch_bucket_a.py report_rc leg (month-chunked, cap 5000/page)",
-         ["analyst/report_rc/report_rc_<yr>.parquet"], "per report_date month", "offset pages to cap; "
-         "page-count + termination reason ledgered", ["ts_code", "report_date", "org_name", "quarter"],
-         "dense_refuse (2010+)", "yearly consolidation after all months verified; raw_fetch_ts stamped per row",
-         "TTL halo replay per Phase 5-A availability contract"),
+    _row("A01", "daily", "per_open_trade_date", ["market/daily/<yr>/daily_<date>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions 20260702..last-complete",
+         note="bypass init_market_data.main() (always refetches reference); merges daily_basic+adj_factor"),
+    _row("A02", "index_daily", "per_index_range", ["market/index/index_<code>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "range end -> last-complete",
+         note="per-index RANGE fetch, NOT per trade_date"),
+    _row("A03", "income", "per_stock", ["fundamentals/income/*.parquet"], ["ts_code", "end_date", "report_type"],
+         ["ts_code", "end_date"], "sparse_canary", "ann_date calendar-day window",
+         note="download_fundamentals uses pro.income (STANDARD, not income_vip); income+balancesheet+dividend "
+              "fetched together per stock — split into 3 rows"),
+    _row("A03", "balancesheet", "per_stock", ["fundamentals/balancesheet/*.parquet"],
+         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date"], "sparse_canary",
+         "ann_date window", note="pro.balancesheet (STANDARD, not VIP)"),
+    _row("A03", "dividend", "per_stock", ["corporate/dividends/*.parquet"], ["ts_code", "end_date", "div_proc"],
+         ["ts_code", "end_date"], "sparse_canary", "ann_date window", baseline_dups=True,
+         note="multiple dividend records per (ts_code,end_date)"),
+    _row("A04", "income_vip", "per_period_report_type", ["fundamentals/income_quarterly/*.parquet"],
+         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date", "report_type"], "dense_refuse",
+         "current period via ann_date window", note="fetch_quarterly_statements direct-quarter combine"),
+    _row("A04", "cashflow_vip", "per_period_report_type", ["fundamentals/cashflow_quarterly/*.parquet"],
+         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date", "report_type"], "dense_refuse",
+         "ann_date window", note="direct-quarter"),
+    _row("A05", "cashflow", "per_stock", ["fundamentals/cashflow/*.parquet"], ["ts_code", "end_date", "report_type"],
+         ["ts_code", "end_date"], "dense_refuse", "ann_date window",
+         note="init_factor scope (CLAUDE §6.2); driver iterates PER STOCK (not per period)"),
+    _row("A06", "forecast", "per_stock", ["fundamentals/forecast/*.parquet"], ["ts_code", "end_date", "ann_date", "type"],
+         ["ts_code", "end_date"], "sparse_canary", "ann_date window", baseline_dups=True,
+         note="init_factor; PER STOCK iteration; multiple forecast rows per (ts_code,end_date)"),
+    _row("A07", "fina_indicator_vip", "per_period", ["fundamentals/indicators/*.parquet"],
+         ["ts_code", "end_date", "update_flag"], ["ts_code", "end_date"], "dense_refuse", "current period refresh",
+         baseline_dups=True, note="SOLE indicator owner (refresh_indicator_history); update_flag revisions => "
+         "multiple rows per (ts_code,end_date); historical staged archives = IRRECOVERABLE evidence"),
+    _row("A08", "moneyflow", "per_open_trade_date", ["market/moneyflow/<yr>/moneyflow_<date>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "sparse_canary", "sessions tail",
+         sidecars=["reference/moneyflow_known_empty_dates.txt (FIRST-CLASS recovery output)"]),
+    _row("A08", "stk_limit", "per_open_trade_date", ["market/stk_limit/<yr>/stk_limit_<date>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions tail"),
+    _row("A08", "margin_detail", "per_open_trade_date", ["market/margin/<yr>/margin_<date>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions tail",
+         note="lands in market/margin/ = manifest dataset 'margin' (NOT a separate store); 2010+"),
+    _row("A08", "hk_hold", "per_open_trade_date", ["market/northbound/<yr>/..."], ["ts_code", "trade_date"],
+         ["ts_code", "trade_date"], "sparse_canary", "sessions tail",
+         sidecars=["reference/northbound_nonconnect_days.txt (FIRST-CLASS recovery output)"]),
+    _row("A09", "stk_holdernumber", "per_stock", ["corporate/holder_number/*.parquet"],
+         ["ts_code", "ann_date", "end_date"], ["ts_code", "end_date"], "sparse_canary", "ann_date window",
+         note="init_factor; PER STOCK iteration"),
+    _row("A10", "suspend_d", "per_year_then_per_date",
+         ["market/suspension/suspension_<yr>.parquet", "market/suspend_d/<yr>/suspend_d_<date>.parquet"],
+         ["ts_code", "trade_date", "suspend_type"], ["ts_code", "trade_date"], "sparse_canary", "per-date tail",
+         note="suspension_ranges.parquet is DERIVED via --ranges-only AFTER yearly+per-date verified"),
+    _row("A11", "top_list", "per_open_trade_date", ["market/top_list/<yr>/..."], ["ts_code", "trade_date", "reason"],
+         ["ts_code", "trade_date"], "sparse_canary", "sessions tail", baseline_dups=True,
+         note="multi-row event: multiple list reasons per (ts_code,trade_date)"),
+    _row("A11", "top_inst", "per_open_trade_date", ["market/top_inst/<yr>/..."], ["ts_code", "trade_date", "exalter"],
+         ["ts_code", "trade_date"], "sparse_canary", "sessions tail", baseline_dups=True,
+         note="MULTI-ROW event: baseline has 2,636,668 rows dup under (ts_code,trade_date) — per-seat rows; "
+              "row_identity_key adds exalter"),
+    _row("A11", "block_trade", "per_open_trade_date", ["market/block_trade/<yr>/..."],
+         ["ts_code", "trade_date", "buyer", "seller", "price"], ["ts_code", "trade_date"], "sparse_canary",
+         "sessions tail", baseline_dups=True, note="MULTI-ROW event: baseline 180,262 dup rows under 2-col key"),
+    _row("A12", "stk_holdertrade", "per_stock", ["corporate/stk_holdertrade/stk_holdertrade_<yr>.parquet"],
+         ["ts_code", "ann_date", "holder_name", "in_de"], ["ts_code", "ann_date"], "sparse_canary", "ann_date window",
+         baseline_dups=True, note="PER STOCK; current fetch_new_alpha_endpoints swallows per-stock failures "
+         "(line 143) — the ledger gate makes a silent partial impossible"),
+    _row("A13", "cyq_perf", "per_stock_repartition_per_date", ["market/cyq_perf/<yr>/cyq_perf_<date>.parquet"],
+         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "per-stock range tail",
+         note="PER STOCK (2018+), repartitioned to per-date; repartition must be row-conserving"),
+    _row("A14", "report_rc", "per_report_date_month", ["analyst/report_rc/report_rc_<yr>.parquet"],
+         ["ts_code", "report_date", "org_name", "author_name", "quarter"], ["ts_code", "report_date"],
+         "dense_refuse", "TTL halo replay per Phase 5-A", baseline_dups=True,
+         note="doc cap = 3000/page (NOT 5000); natural_key INCLUDES author_name (pit_backend canonical); "
+              "raw_fetch_ts stamped per row; NEW raw generation — provider bins PRESERVED as legacy (§5)"),
 ] + [
-    _row("A15", ep, f"scripts/fetch_bucket_a.py {ep} leg", [f"(per bucket-A layout for {ep})"],
-         "per period / window (bind at build)", "offset pages", ["ts_code", "(per contract)"],
-         "sparse_canary", "per-partition", "ann_date/period window — NEW raw generation identity")
+    _row("A15", ep, "UNBOUND", ["UNBOUND"], ["UNBOUND"], ["UNBOUND"], "sparse_canary", "UNBOUND",
+         note="query_mode/keys/outputs UNRESOLVED until the contract is signed (was a placeholder row)")
     for ep in ("express", "disclosure_date", "fina_mainbz", "fina_audit", "repurchase", "pledge_stat",
                "top10_floatholders")
 ] + [
-    _row("A16", "broker_recommend", "scripts/fetch_broker_recommend_historical.py (EXISTS; E: paths → inject)",
-         ["analyst/broker_recommend/broker_recommend_<YYYYMM>.parquet"], "per month", "single page per month",
-         ["month", "broker", "ts_code"], "sparse_canary", "per-month", "monthly tail"),
+    _row("A16", "broker_recommend", "per_month", ["analyst/broker_recommend/broker_recommend_<YYYYMM>.parquet"],
+         ["month", "broker", "ts_code"], ["month", "broker"], "sparse_canary", "monthly tail",
+         note="fetch_broker_recommend_historical EXISTS; inject E: paths"),
 ]
-# generated provenance manifests are first-class recovery outputs on EVERY row:
 GLOBAL_SIDECARS = ["raw_cache/manifests/* (ingest provenance manifests regenerated during recovery are "
                    "recovery outputs — ledgered + hashed like data files)"]
 
@@ -191,20 +178,34 @@ def _lex_components(p: Path):
     return q, comps
 
 
+import stat as _stat
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _reparse_state(anc: Path):
+    """True=reparse point, False=plain existing, None=truly absent — via os.lstat (NEVER follows the
+    target; Path.exists() follows a junction and returns False for a BROKEN one, skipping it — GPT
+    re-review #3 B3). Only FileNotFoundError means absent; any other OSError => caller fails closed."""
+    try:
+        st = os.lstat(anc)
+    except FileNotFoundError:
+        return None
+    if (getattr(st, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT) or _stat.S_ISLNK(st.st_mode):
+        return True
+    return False
+
+
 def _reject_reparse_lexical(p: Path) -> None:
-    """Inspect every EXISTING component with lstat semantics — a junction/symlink anywhere refuses.
-    Inspection failure on an existing component also refuses (fail closed)."""
+    """Reject a reparse point at ANY component (incl. a BROKEN junction) — os.lstat, no follow. An
+    lstat error other than FileNotFoundError refuses (fail closed)."""
     _, comps = _lex_components(p)
     for anc in comps:
         try:
-            if not anc.exists():
-                continue  # not-yet-created components are fine — they'll be created by the authority
-            if anc.is_symlink() or (hasattr(anc, "is_junction") and anc.is_junction()):
-                raise RuntimeError(f"REFUSED: reparse point in ancestry: {anc}")
-        except RuntimeError:
-            raise
+            r = _reparse_state(anc)
         except OSError as exc:
-            raise RuntimeError(f"REFUSED: cannot inspect {anc}: {exc}")
+            raise RuntimeError(f"REFUSED: cannot lstat {anc}: {exc}")
+        if r is True:
+            raise RuntimeError(f"REFUSED: reparse point in ancestry: {anc}")
 
 
 def validate_run_id(run_id: str) -> str:
@@ -245,11 +246,15 @@ class RecoveryPaths:
             raise RuntimeError(f"REFUSED: write target {norm} outside run root {self.root}")
         if str(norm).upper().startswith("E:") or str(norm).upper().startswith("\\\\"):
             raise RuntimeError(f"REFUSED: {norm} on E:/UNC")
-        _reject_reparse_lexical(norm.parent if not norm.exists() else norm)
-        # belt: realpath must ALSO land inside realpath(root) (catches a reparse racing past the scan)
+        _reject_reparse_lexical(norm)  # inspect the leaf too (lstat, no follow)
+        # belt: realpath must ALSO land inside realpath(root), COMPONENT-AWARE (not str startswith,
+        # which a sibling-prefix dir like <root>_evil defeats — GPT re-review #3 B3).
         rr = Path(os.path.realpath(str(norm)))
-        if not str(rr).startswith(os.path.realpath(str(self.root))):
-            raise RuntimeError(f"REFUSED: realpath {rr} escaped run root")
+        root_real = Path(os.path.realpath(str(self.root)))
+        try:
+            rr.relative_to(root_real)
+        except ValueError:
+            raise RuntimeError(f"REFUSED: realpath {rr} escaped run root {root_real}")
         return norm
 
     def write_json(self, path: Path, obj) -> None:
@@ -326,15 +331,27 @@ class RecoveryLedger:
             self._append({"kind": "lifecycle", "event": name, **kw})
 
     def freeze_plan(self, plan_rows: list) -> str:
-        """plan_rows: [{request_id, endpoint, dataset, params, partition, empty_policy}]. Hash-frozen
-        BEFORE the first API call; requests outside the plan are refused forever after."""
+        """plan_rows: each REQUIRES request_id, endpoint, dataset, params, partition, empty_policy,
+        expected_output (staging-relative path this request must write), natural_key (from the signed
+        contract). Frozen ONCE; the request_id must equal request_id(endpoint,params,partition) — a
+        mislabelled row refuses; duplicate ids refuse (GPT re-review #3 B2). Endpoint/params/output are
+        thereafter derived from HERE, never from the caller."""
         with self.rp._lock():
             if self.rp.plan_path.exists():
                 raise RuntimeError("REFUSED: request plan already frozen for this run")
+            seen = set()
             for r in plan_rows:
-                need = {"request_id", "endpoint", "dataset", "params", "partition", "empty_policy"}
+                need = {"request_id", "endpoint", "dataset", "params", "partition", "empty_policy",
+                        "expected_output", "natural_key"}
                 if not need <= set(r):
                     raise RuntimeError(f"REFUSED: plan row missing {need - set(r)}")
+                if r["request_id"] != request_id(r["endpoint"], r["params"], r["partition"]):
+                    raise RuntimeError(f"REFUSED: request_id does not match endpoint+params+partition ({r['request_id']})")
+                if r["request_id"] in seen:
+                    raise RuntimeError(f"REFUSED: duplicate request_id {r['request_id']}")
+                if r["empty_policy"] not in ("dense_refuse", "sparse_canary"):
+                    raise RuntimeError(f"REFUSED: bad empty_policy {r['empty_policy']}")
+                seen.add(r["request_id"])
             blob = json.dumps(plan_rows, sort_keys=True, ensure_ascii=False)
             sha = hashlib.sha256(blob.encode()).hexdigest()
             self.rp.write_json(self.rp.plan_path, {"sha256": sha, "rows": plan_rows})
@@ -357,13 +374,16 @@ class RecoveryLedger:
             if r.get("request_id") != rid:
                 continue
             if r["kind"] == "attempt":
-                st = "fetched" if r.get("termination") == "success" else "failed"
+                st = "failed" if r.get("exception") else "fetched"  # termination is the PAGE reason, not the state
             elif r["kind"] == "verdict":
                 st = r["state"]
         return st
 
-    def record_attempt(self, rid: str, endpoint: str, params: dict, page: int, termination: str,
-                       response_ts: str, raw_page_sha256: str = "", exception: str = "") -> None:
+    def record_attempt(self, rid: str, *, page: int, row_count: int, termination: str,
+                       response_ts: str, raw_page_sha256: str, exception: str = "") -> None:
+        """An attempt receipt. endpoint/params are DERIVED from the frozen plan (not accepted from the
+        caller — GPT re-review #3 B2). row_count + raw_page_sha256 are the page receipt used later to
+        prove contiguous coverage / a real empty."""
         with self.rp._lock():
             rows = self._load()
             plan = self._plan()
@@ -372,41 +392,68 @@ class RecoveryLedger:
             cur = self._state_of(rows, rid)
             if cur in _TERMINAL:
                 raise RuntimeError(f"REFUSED: request {rid} already terminal ({cur})")
-            self._append({"kind": "attempt", "request_id": rid, "endpoint": endpoint, "params": params,
-                          "page": page, "termination": termination, "response_ts": response_ts,
+            row = plan[rid]
+            self._append({"kind": "attempt", "request_id": rid, "endpoint": row["endpoint"],
+                          "params": row["params"], "page": int(page), "row_count": int(row_count),
+                          "termination": termination, "response_ts": response_ts,
                           "raw_page_sha256": raw_page_sha256, "exception": exception})
 
-    def record_verdict(self, rid: str, state: str, *, output_path: str = "", output_sha256: str = "",
-                       schema_fingerprint: str = "", key_stats: dict | None = None,
-                       canary_request_id: str = "", repeat_confirmed: bool = False) -> None:
+    def _attempts(self, rows, rid):
+        return [r for r in rows if r.get("kind") == "attempt" and r.get("request_id") == rid]
+
+    def _profile_output(self, out: Path, natural_key: list) -> dict:
+        """Independently open the output and compute schema + key stats — never trust caller strings."""
+        import pandas as pd
+        df = pd.read_parquet(out)  # raises if not a real parquet (kills the b"DATA" probe)
+        schema = ";".join(f"{c}:{df[c].dtype}" for c in sorted(map(str, df.columns)))
+        fp = hashlib.sha256(schema.encode()).hexdigest()[:16]
+        miss = [k for k in natural_key if k not in df.columns]
+        if miss:
+            raise RuntimeError(f"output missing natural-key columns {miss}")
+        null_keys = int(df[natural_key].isna().any(axis=1).sum())
+        dup_groups = int(df.duplicated(subset=natural_key).sum())
+        return {"rows": int(len(df)), "schema_fingerprint": fp, "null_keys": null_keys,
+                "dup_groups": dup_groups, "sha256": sha256_file(out)}
+
+    def record_verdict(self, rid: str, state: str, *, output_path: str = "", canary_request_id: str = "") -> None:
         with self.rp._lock():
             rows = self._load()
             plan = self._plan()
             if rid not in plan:
                 raise RuntimeError(f"REFUSED: request {rid} not in the frozen plan")
+            row = plan[rid]
             cur = self._state_of(rows, rid)
             if state not in _TRANSITIONS.get(cur, set()):
                 raise RuntimeError(f"REFUSED: invalid transition {cur} -> {state} for {rid}")
+            evidence = {}
             if state == "verified":
-                out = Path(output_path)
-                ok = output_path and out.is_file()
-                if ok:
-                    self.rp.assert_write(out)  # containment
-                    ok = sha256_file(out) == output_sha256 and bool(schema_fingerprint) and key_stats is not None
-                if not ok:
-                    raise RuntimeError(f"REFUSED: 'verified' without a contained, hash-matching output "
-                                       f"+ schema fingerprint + key stats ({rid})")
+                exp = self.rp.assert_write(self.rp.staging_data / row["expected_output"])
+                if Path(os.path.normpath(output_path)) != exp:
+                    raise RuntimeError(f"REFUSED: output_path != the plan-bound expected_output ({rid})")
+                if not exp.is_file():
+                    raise RuntimeError(f"REFUSED: 'verified' but the bound output is missing ({rid})")
+                atts = self._attempts(rows, rid)
+                if not any(a.get("termination") in ("single_page", "last_page", "complete") for a in atts):
+                    raise RuntimeError(f"REFUSED: 'verified' without a proven termination attempt ({rid})")
+                prof = self._profile_output(exp, list(row["natural_key"]))  # INDEPENDENT computation
+                if prof["rows"] == 0 and row["empty_policy"] == "dense_refuse":
+                    raise RuntimeError(f"REFUSED: dense dataset verified with 0 rows ({rid})")
+                evidence = prof
             if state == "confirmed_empty":
-                pol = plan[rid].get("empty_policy")
-                if pol != "sparse_canary":
-                    raise RuntimeError(f"REFUSED: dataset is {pol} — an empty result can NEVER be accepted ({rid})")
-                if not canary_request_id or not repeat_confirmed:
-                    raise RuntimeError(f"REFUSED: confirmed_empty needs a same-session nonempty canary "
-                                       f"request id AND a repeated identical empty query ({rid})")
+                if row["empty_policy"] != "sparse_canary":
+                    raise RuntimeError(f"REFUSED: dense dataset — an empty result can NEVER be accepted ({rid})")
+                empties = [a for a in self._attempts(rows, rid) if int(a.get("row_count", -1)) == 0]
+                if len(empties) < 2:
+                    raise RuntimeError(f"REFUSED: confirmed_empty needs >=2 stored empty response receipts ({rid})")
+                can = plan.get(canary_request_id)
+                if not can or can["endpoint"] != row["endpoint"]:
+                    raise RuntimeError(f"REFUSED: canary must be a planned SAME-endpoint request ({rid})")
+                cstate = self._state_of(rows, canary_request_id)
+                cnonempty = any(int(a.get("row_count", 0)) > 0 for a in self._attempts(rows, canary_request_id))
+                if cstate != "verified" or not cnonempty:
+                    raise RuntimeError(f"REFUSED: canary {canary_request_id} must be verified AND nonempty ({rid})")
             self._append({"kind": "verdict", "request_id": rid, "state": state, "output_path": output_path,
-                          "output_sha256": output_sha256, "schema_fingerprint": schema_fingerprint,
-                          "key_stats": key_stats or {}, "canary_request_id": canary_request_id,
-                          "repeat_confirmed": repeat_confirmed})
+                          "canary_request_id": canary_request_id, "evidence": evidence})
 
     def consolidation_allowed(self, dataset: str):
         rows = self._load()
@@ -448,8 +495,14 @@ def contract_errors(endpoint: str, c: dict) -> list:
         errs.append(f"{endpoint}: doc_sha256 mismatch (doc changed since review)")
     if not isinstance(c["required_fields"], list) or len(c["required_fields"]) < 2:
         errs.append(f"{endpoint}: required_fields must be a real field list")
+    elif any(str(x).strip().lower() in _PLACEHOLDERS for x in c["required_fields"]):
+        errs.append(f"{endpoint}: required_fields contains placeholder elements (['x',...])")
     if not isinstance(c["natural_key"], list) or not c["natural_key"]:
         errs.append(f"{endpoint}: natural_key must be a non-empty list")
+    elif any(str(x).strip().lower() in _PLACEHOLDERS for x in c["natural_key"]):
+        errs.append(f"{endpoint}: natural_key contains placeholder elements")
+    # NOTE: required_fields ⊆ the pinned doc's field list + typed pagination/limit parsing are the
+    # adapter-phase deepening (they need the doc parsed); this structural gate blocks placeholders.
     if c["empty_policy"] not in ("dense_refuse", "sparse_canary"):
         errs.append(f"{endpoint}: empty_policy must be dense_refuse|sparse_canary")
     if len(str(c["reviewed_by"]).strip()) < 3:
@@ -579,15 +632,16 @@ def cmd_plan(rp: RecoveryPaths, led: RecoveryLedger) -> int:
         print(f"MATRIX ERROR: multiple owners: {dup}")
         problems += 1
     for row in ENDPOINT_MATRIX:
-        for ep in row["endpoint"].replace("(q)", "").split("+"):
-            errs = contract_errors(ep.strip(), contracts.get(ep.strip(), {}))
-            state = "BLOCKED" if errs else "contract-OK"
-            if errs:
-                problems += 1
-            print(f"  {row['owner']:<5} {ep.strip():<22} {state}")
+        ep = row["endpoint"]
+        unbound = row["callable"].startswith("UNBOUND")
+        errs = contract_errors(ep, contracts.get(ep, {}))
+        state = "BLOCKED(contract)" if errs else ("BLOCKED(UNBOUND callable)" if unbound else "ready")
+        if errs or unbound:
+            problems += 1
+        print(f"  {row['owner']:<5} {ep:<22} {state}")
     print(f"\n{problems} blocked/problem rows; fetch remains REFUSED (adapters unbuilt; contracts unreviewed; "
           f"§13 pending). Contract review MUST precede that endpoint's adapter logic (GPT M3).")
-    return 0
+    return 1 if problems else 0  # nonzero while any row is blocked (GPT re-review #3 M2)
 
 
 def cmd_fetch(_rp, _led) -> int:

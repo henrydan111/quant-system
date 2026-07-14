@@ -1,35 +1,41 @@
-# Recovery endpoint contracts (GPT recovery-review M3 — the §6.1 "read the interface doc BEFORE
-# fetching" gate, made fetch-blocking). One entry per Tushare endpoint the recovery touches.
-# A leg is BLOCKED until every one of its endpoints has ALL fields non-empty, with a HUMAN review
-# timestamp. doc_path points into the offline mirror (Tushare数据接口/content/); doc_sha256 pins the
-# reviewed doc version. NOTHING here is pre-filled as reviewed — every entry must be completed during
-# adapter construction, per endpoint, before wiring.
+# Recovery endpoint contracts (GPT recovery-review M3 + re-review #3 M2 — the §6.1 "read the interface
+# doc BEFORE fetching" gate, made fetch-blocking). SCHEMA MATCHES the validator's CONTRACT_REQUIRED
+# exactly (coordinator `contract_errors`) — one source of truth, no scaffold/validator drift. A leg is
+# BLOCKED until every one of its endpoints has ALL keys non-placeholder with a HUMAN review timestamp.
+# `doc_path` resolves under Tushare数据接口/content/ (traversal/reparse-rejected); `doc_sha256` pins the
+# reviewed doc bytes. NOTHING here is pre-signed — placeholder values (incl. list elements like
+# ["x","x"]) are rejected. Contracts are signed BEFORE that endpoint's adapter/partition logic (§8).
 #
-# Template (copy per endpoint):
-#   <endpoint>:
-#     doc_path: "Tushare数据接口/content/<doc_id>_<名称>.md"
-#     doc_sha256: ""            # sha256 of the doc file actually read
-#     fields_reviewed: ""       # field list + ★-flagged PIT date fields noted
-#     rate_limit: ""            # 积分/每分钟限次 from the doc
-#     cadence: ""               # update cadence from the doc
-#     pit_semantics: ""         # nominal-date vs visible-date anchoring notes
-#     reviewed_by: ""           # human identity
-#     reviewed_at: ""           # ISO timestamp
+# Required keys per endpoint (validator schema):
+#   doc_path        : "Tushare数据接口/content/<doc_id>_<名称>.md"
+#   doc_sha256      : sha256 of the doc file actually read
+#   required_fields : [real column names; >=2; no placeholders] — must be a subset of the doc's field list
+#   natural_key     : [row-identity columns; no placeholders]
+#   pagination      : typed rule (e.g. "single page per trade_date" | "offset to cap=3000")
+#   rate_limit      : from the doc (积分/每分钟限次)
+#   cadence         : from the doc
+#   pit_anchors     : nominal-vs-visible date anchoring (★ create_time/ann_date/f_ann_date/report_date)
+#   empty_policy    : dense_refuse | sparse_canary
+#   reviewed_by     : human identity (non-placeholder)
+#   reviewed_at     : ISO-8601, timezone-aware, not in the future
 #
+# (Every endpoint below is UNSIGNED — an empty mapping. `--plan` exits nonzero while any remain.)
 daily: {}
 daily_basic: {}
 adj_factor: {}
 index_daily: {}
-income_vip: {}
-balancesheet_vip: {}
+income: {}            # NOTE: FundamentalsInitializer.download_fundamentals uses pro.income (NOT income_vip)
+balancesheet: {}      # NOTE: uses pro.balancesheet (NOT balancesheet_vip)
+income_vip: {}        # direct-quarter path (fetch_quarterly_statements)
 cashflow_vip: {}
 forecast_vip: {}
 fina_indicator_vip: {}
+cashflow: {}
+dividend: {}
 moneyflow: {}
 stk_limit: {}
 margin_detail: {}
 hk_hold: {}
-dividend: {}
 stk_holdernumber: {}
 suspend_d: {}
 top_list: {}
@@ -37,7 +43,7 @@ top_inst: {}
 block_trade: {}
 stk_holdertrade: {}
 cyq_perf: {}
-report_rc: {}
+report_rc: {}         # NOTE: doc cap = 3000/page; natural_key includes author_name (pit_backend canonical)
 express: {}
 disclosure_date: {}
 fina_mainbz: {}
