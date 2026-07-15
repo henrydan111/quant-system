@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 _spec = importlib.util.spec_from_file_location("rrc", ROOT / "scripts" / "raw_recovery_coordinator.py")
 rrc = importlib.util.module_from_spec(_spec)
+sys.modules["rrc"] = rrc  # dataclass annotation resolution needs the module in sys.modules pre-exec
 _spec.loader.exec_module(rrc)
 
 
@@ -144,13 +145,52 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
 
 
 def test_endpoint_matrix_unique_owner_per_output():
-    seen = {}
-    for row in rrc.ENDPOINT_MATRIX:
-        key = (row["endpoint"], tuple(row["outputs"]))
-        assert seen.setdefault(key, row["owner"]) == row["owner"], f"duplicate owner for {key}"
-    # indicators has exactly ONE owner (GPT B2)
-    ind = [r for r in rrc.ENDPOINT_MATRIX if "fina_indicator" in r["endpoint"]]
-    assert len(ind) == 1 and ind[0]["owner"] == "A07"
+    # M1: every physical output_family is owned by exactly ONE row (no two requests claim one path).
+    rrc.assert_unique_output_owner()
+    fams = [r.output_family for r in rrc.ENDPOINT_MATRIX]
+    assert len(fams) == len(set(fams)), "duplicate output_family"
+    # indicators has exactly ONE owner (GPT B2) and it OWNS fundamentals/indicators
+    ind = [r for r in rrc.ENDPOINT_MATRIX if r.source_endpoints == ("fina_indicator_vip",)]
+    assert len(ind) == 1 and ind[0].owner == "A07" and ind[0].output_family == "fundamentals/indicators"
+    # suspend_d feeds TWO DISTINCT output families (yearly suspension + per-date store) — GPT M1 split
+    susp = sorted(r.output_family for r in rrc.ENDPOINT_MATRIX if r.source_endpoints == ("suspend_d",))
+    assert susp == ["market/suspend_d", "market/suspension"]
+    # A01 market/daily draws THREE source endpoints
+    a01 = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A01"][0]
+    assert a01.source_endpoints == ("daily", "daily_basic", "adj_factor")
+    # event families carry allowed_baseline_dups; dense per-date families do not
+    ti = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A11b"][0]
+    assert ti.allowed_baseline_dups and "exalter" in ti.vendor_record_key
+    a01d = a01
+    assert not a01d.allowed_baseline_dups
+    # statements carry a PIT version key (a restatement is a NEW row, not a dup)
+    inc = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A03a"][0]
+    assert inc.pit_version_key == ("ann_date", "f_ann_date", "update_flag")
+    # stk_holdertrade's key INCLUDES change_vol (canonical PIT key) — GPT M1
+    hld = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A12"][0]
+    assert "change_vol" in hld.vendor_record_key
+    # report_rc identity uses the payload digest, NEVER author_name alone
+    rc = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A14"][0]
+    assert "report_rc_payload_digest" in rc.content_dedup_key
+
+
+def test_matrix_source_endpoints_equal_contract_yaml():
+    # M2 reconciliation: the matrix's source-endpoint union MUST equal the contract-YAML key set.
+    import yaml
+    contracts = yaml.safe_load(rrc.CONTRACTS_YAML.read_text(encoding="utf-8")) or {}
+    assert rrc.matrix_source_endpoints() == set(contracts.keys()), (
+        "matrix<->contract endpoint drift: "
+        f"gap={sorted(rrc.matrix_source_endpoints() - set(contracts))} "
+        f"orphan={sorted(set(contracts) - rrc.matrix_source_endpoints())}")
+
+
+def test_a15_rows_are_wholly_unbound():
+    # A15 bucket-A siblings hard-block: UNBOUND callable + UNBOUND query_mode + UNBOUND keys.
+    a15 = [r for r in rrc.ENDPOINT_MATRIX if r.owner.startswith("A15_")]
+    assert len(a15) == 7
+    for r in a15:
+        assert r.callable.startswith("UNBOUND") and r.query_mode == "UNBOUND"
+        assert r.vendor_record_key == ("UNBOUND",) and r.output_family.startswith("UNBOUND/")
 
 
 # ── minor: non-finite throttle input ─────────────────────────────────────────────────────────────

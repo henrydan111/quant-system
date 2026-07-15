@@ -20,15 +20,20 @@
 #   reviewed_at     : ISO-8601, timezone-aware, not in the future
 #
 # (Every endpoint below is UNSIGNED — an empty mapping. `--plan` exits nonzero while any remain.)
+# The key set here MUST equal the matrix's source-endpoint union (assert via `--plan`:
+# matrix_source_endpoints() == yaml keys; a GAP or ORPHAN blocks). Reconciled endpoints (GPT M2):
+#   daily_basic + adj_factor : SEPARATE source endpoints merged into the A01 market/daily output
+#   forecast (NOT forecast_vip): the live path is pro.forecast per-stock (fetchers.__init__ fetch_forecast)
+#   income/balancesheet/cashflow : pro.* STANDARD; income_vip/cashflow_vip = the direct-quarter path only
 daily: {}
-daily_basic: {}
-adj_factor: {}
+daily_basic: {}      # A01 source endpoint (valuation join into market/daily), distinct from daily
+adj_factor: {}       # A01 source endpoint (adj factors join into market/daily), distinct from daily
 index_daily: {}
 income: {}            # NOTE: FundamentalsInitializer.download_fundamentals uses pro.income (NOT income_vip)
 balancesheet: {}      # NOTE: uses pro.balancesheet (NOT balancesheet_vip)
 income_vip: {}        # direct-quarter path (fetch_quarterly_statements)
 cashflow_vip: {}
-forecast_vip: {}
+forecast: {}          # RECONCILED: live path is pro.forecast per-stock (was mislabelled forecast_vip)
 fina_indicator_vip: {}
 cashflow: {}
 dividend: {}
@@ -43,7 +48,8 @@ top_inst: {}
 block_trade: {}
 stk_holdertrade: {}
 cyq_perf: {}
-report_rc: {}         # NOTE: doc cap = 3000/page; natural_key includes author_name (pit_backend canonical)
+report_rc: {}         # NOTE: doc cap = 3000/page; natural_key = normalized analyst (org+author) +
+                      # report_rc_payload_digest (current PIT identity), NOT author_name alone
 express: {}
 disclosure_date: {}
 fina_mainbz: {}

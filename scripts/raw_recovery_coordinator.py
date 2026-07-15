@@ -15,13 +15,19 @@ v3 closes the re-review's Blockers:
 - B4: the endpoint doc gate validates STRUCTURE: doc_path resolved under the offline mirror with
   traversal/reparse rejection, doc_sha256 recomputed, structured fields, ISO reviewed_at (not future),
   non-placeholder reviewer.
-- B2: ADAPTER_SPECS is replaced by ENDPOINT_MATRIX — one machine-readable row per endpoint/output
-  family (endpoint, callable, outputs, partitioner, pagination, natural key, empty policy,
-  consolidation, tail rule, UNIQUE owner, generated sidecars). Corrections: dividends are fetched
-  INSIDE FundamentalsInitializer.download_fundamentals (per stock, together with income+balancesheet);
-  cashflow/forecast/holder_number belong to init_factor_data (CLAUDE §6.2); index_daily is per-index
-  RANGE; stk_holdertrade/cyq_perf are per-stock (cyq repartitioned per-date); indicators have ONE owner
-  (A07, refresh_indicator_history); generic L9 is GONE — every row carries its own tail_rule.
+- M1: ENDPOINT_MATRIX is a TYPED `EndpointRow` table — one row per physical `output_family`, owned by
+  EXACTLY ONE row (assert_unique_output_owner). Each row declares `source_endpoints` (the API calls the
+  output requires — A01 market/daily draws daily+daily_basic+adj_factor), `vendor_record_key` (true
+  per-row identity), `pit_version_key` (ann_date/f_ann_date/update_flag — a restatement is a NEW row, not
+  a dup), `content_dedup_key`, `profile_key`, `allowed_baseline_dups`, `consolidation_group`, and an
+  UNBOUND `callable` (bound only post-contract). `matrix_source_endpoints()` MUST equal the contract-YAML
+  key set (cmd_plan reconciles — the forecast/forecast_vip drift is caught here). Corrections: dividends
+  fetched INSIDE FundamentalsInitializer.download_fundamentals (per stock); cashflow/forecast/
+  holder_number belong to init_factor_data (CLAUDE §6.2); index_daily is per-index RANGE; suspend_d feeds
+  TWO distinct output families (yearly suspension + per-date store); stk_holdertrade key INCLUDES
+  change_vol; report_rc identity = normalized analyst + report_rc_payload_digest (NOT author_name alone);
+  indicators have ONE owner (A07); event datasets (top_inst/block_trade/top_list) carry
+  allowed_baseline_dups; A15 bucket-A siblings are wholly UNBOUND placeholders that hard-block.
 
 Fetch remains REFUSED. Sequencing (GPT M3): contracts are reviewed+signed BEFORE that endpoint's
 adapter/partition logic is written; only generic containment/ledger infrastructure (this file) may
@@ -69,106 +75,220 @@ IRRECOVERABLE = [
                              "(natural key + content hash + timestamp) is admissible; else recovery-time floor/quarantine"),
 ]
 
-# ── B2/M1: typed endpoint matrix — ONE row per (endpoint, query_mode, output_family) ───────────────
-# Every `callable` is UNBOUND (GPT re-review #3 M1): exact method binding follows contract review, and
-# adapter construction stays BLOCKED until it is pinned. `row_identity_key` = the true per-row unique
-# key; `agg_key` = the coarser profiling key; `baseline_dups` = duplicate rows the manifest legitimately
-# holds under agg_key (a per-agg-key count check, NOT uniqueness, for multi-row event datasets). empty:
-# dense_refuse (an empty response can NEVER be accepted) | sparse_canary (needs a verified nonempty
-# same-endpoint canary + >=2 stored empty receipts).
-def _row(owner, endpoint, query_mode, outputs, row_identity_key, agg_key, empty, tail_rule,
-         *, baseline_dups=False, callable_="UNBOUND (bind post-contract)", note="", sidecars=()):
-    return {"owner": owner, "endpoint": endpoint, "query_mode": query_mode, "callable": callable_,
-            "outputs": outputs, "row_identity_key": row_identity_key, "agg_key": agg_key,
-            "empty": empty, "tail_rule": tail_rule, "baseline_dups": baseline_dups, "note": note,
-            "sidecars": list(sidecars)}
+# ── M1: TYPED endpoint matrix — one row per (output_family), GPT re-review #4 M1 ───────────────
+# A row models ONE physical output family and is OWNED uniquely by it (assert_unique_output_owner).
+# `source_endpoints` = the API endpoint(s) whose fetch this output requires (A01 needs three); every
+# source endpoint must have a signed contract before its adapter is built. `vendor_record_key` = the
+# vendor's true per-row identity; `pit_version_key` = version/PIT columns (ann_date/f_ann_date/
+# update_flag) whose changes are NEW rows not dups; `content_dedup_key` = the identity used to dedup a
+# consolidated file; `profile_key` = the coarse key the manifest profiler aggregates on;
+# `allowed_baseline_dups` = manifest rows that legitimately repeat under profile_key (a per-key COUNT
+# check, not uniqueness). `callable` stays UNBOUND until the endpoint's contract is signed (a BLOCKING
+# state, never an adapter input). A15 rows are wholly UNBOUND placeholders that hard-block.
+from dataclasses import dataclass, field as _dcfield
+
+
+@dataclass(frozen=True)
+class EndpointRow:
+    owner: str
+    output_family: str
+    source_endpoints: tuple
+    query_mode: str          # per_open_trade_date|per_index_range|per_stock|per_period_report_type|per_month|UNBOUND
+    vendor_record_key: tuple
+    pit_version_key: tuple
+    content_dedup_key: tuple
+    profile_key: tuple
+    empty_policy: str        # dense_refuse | sparse_canary
+    allowed_baseline_dups: bool
+    consolidation_group: str
+    tail_rule: str
+    callable: str = "UNBOUND (bind post-contract)"
+    note: str = ""
+    sidecars: tuple = ()
+
+
+def _r(**kw):
+    return EndpointRow(**kw)
 
 
 ENDPOINT_MATRIX = [
-    _row("A01", "daily", "per_open_trade_date", ["market/daily/<yr>/daily_<date>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions 20260702..last-complete",
-         note="bypass init_market_data.main() (always refetches reference); merges daily_basic+adj_factor"),
-    _row("A02", "index_daily", "per_index_range", ["market/index/index_<code>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "range end -> last-complete",
-         note="per-index RANGE fetch, NOT per trade_date"),
-    _row("A03", "income", "per_stock", ["fundamentals/income/*.parquet"], ["ts_code", "end_date", "report_type"],
-         ["ts_code", "end_date"], "sparse_canary", "ann_date calendar-day window",
-         note="download_fundamentals uses pro.income (STANDARD, not income_vip); income+balancesheet+dividend "
-              "fetched together per stock — split into 3 rows"),
-    _row("A03", "balancesheet", "per_stock", ["fundamentals/balancesheet/*.parquet"],
-         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date"], "sparse_canary",
-         "ann_date window", note="pro.balancesheet (STANDARD, not VIP)"),
-    _row("A03", "dividend", "per_stock", ["corporate/dividends/*.parquet"], ["ts_code", "end_date", "div_proc"],
-         ["ts_code", "end_date"], "sparse_canary", "ann_date window", baseline_dups=True,
-         note="multiple dividend records per (ts_code,end_date)"),
-    _row("A04", "income_vip", "per_period_report_type", ["fundamentals/income_quarterly/*.parquet"],
-         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date", "report_type"], "dense_refuse",
-         "current period via ann_date window", note="fetch_quarterly_statements direct-quarter combine"),
-    _row("A04", "cashflow_vip", "per_period_report_type", ["fundamentals/cashflow_quarterly/*.parquet"],
-         ["ts_code", "end_date", "report_type"], ["ts_code", "end_date", "report_type"], "dense_refuse",
-         "ann_date window", note="direct-quarter"),
-    _row("A05", "cashflow", "per_stock", ["fundamentals/cashflow/*.parquet"], ["ts_code", "end_date", "report_type"],
-         ["ts_code", "end_date"], "dense_refuse", "ann_date window",
-         note="init_factor scope (CLAUDE §6.2); driver iterates PER STOCK (not per period)"),
-    _row("A06", "forecast", "per_stock", ["fundamentals/forecast/*.parquet"], ["ts_code", "end_date", "ann_date", "type"],
-         ["ts_code", "end_date"], "sparse_canary", "ann_date window", baseline_dups=True,
-         note="init_factor; PER STOCK iteration; multiple forecast rows per (ts_code,end_date)"),
-    _row("A07", "fina_indicator_vip", "per_period", ["fundamentals/indicators/*.parquet"],
-         ["ts_code", "end_date", "update_flag"], ["ts_code", "end_date"], "dense_refuse", "current period refresh",
-         baseline_dups=True, note="SOLE indicator owner (refresh_indicator_history); update_flag revisions => "
-         "multiple rows per (ts_code,end_date); historical staged archives = IRRECOVERABLE evidence"),
-    _row("A08", "moneyflow", "per_open_trade_date", ["market/moneyflow/<yr>/moneyflow_<date>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "sparse_canary", "sessions tail",
-         sidecars=["reference/moneyflow_known_empty_dates.txt (FIRST-CLASS recovery output)"]),
-    _row("A08", "stk_limit", "per_open_trade_date", ["market/stk_limit/<yr>/stk_limit_<date>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions tail"),
-    _row("A08", "margin_detail", "per_open_trade_date", ["market/margin/<yr>/margin_<date>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "sessions tail",
-         note="lands in market/margin/ = manifest dataset 'margin' (NOT a separate store); 2010+"),
-    _row("A08", "hk_hold", "per_open_trade_date", ["market/northbound/<yr>/..."], ["ts_code", "trade_date"],
-         ["ts_code", "trade_date"], "sparse_canary", "sessions tail",
-         sidecars=["reference/northbound_nonconnect_days.txt (FIRST-CLASS recovery output)"]),
-    _row("A09", "stk_holdernumber", "per_stock", ["corporate/holder_number/*.parquet"],
-         ["ts_code", "ann_date", "end_date"], ["ts_code", "end_date"], "sparse_canary", "ann_date window",
-         note="init_factor; PER STOCK iteration"),
-    _row("A10", "suspend_d", "per_year_then_per_date",
-         ["market/suspension/suspension_<yr>.parquet", "market/suspend_d/<yr>/suspend_d_<date>.parquet"],
-         ["ts_code", "trade_date", "suspend_type"], ["ts_code", "trade_date"], "sparse_canary", "per-date tail",
-         note="suspension_ranges.parquet is DERIVED via --ranges-only AFTER yearly+per-date verified"),
-    _row("A11", "top_list", "per_open_trade_date", ["market/top_list/<yr>/..."], ["ts_code", "trade_date", "reason"],
-         ["ts_code", "trade_date"], "sparse_canary", "sessions tail", baseline_dups=True,
-         note="multi-row event: multiple list reasons per (ts_code,trade_date)"),
-    _row("A11", "top_inst", "per_open_trade_date", ["market/top_inst/<yr>/..."], ["ts_code", "trade_date", "exalter"],
-         ["ts_code", "trade_date"], "sparse_canary", "sessions tail", baseline_dups=True,
-         note="MULTI-ROW event: baseline has 2,636,668 rows dup under (ts_code,trade_date) — per-seat rows; "
-              "row_identity_key adds exalter"),
-    _row("A11", "block_trade", "per_open_trade_date", ["market/block_trade/<yr>/..."],
-         ["ts_code", "trade_date", "buyer", "seller", "price"], ["ts_code", "trade_date"], "sparse_canary",
-         "sessions tail", baseline_dups=True, note="MULTI-ROW event: baseline 180,262 dup rows under 2-col key"),
-    _row("A12", "stk_holdertrade", "per_stock", ["corporate/stk_holdertrade/stk_holdertrade_<yr>.parquet"],
-         ["ts_code", "ann_date", "holder_name", "in_de"], ["ts_code", "ann_date"], "sparse_canary", "ann_date window",
-         baseline_dups=True, note="PER STOCK; current fetch_new_alpha_endpoints swallows per-stock failures "
-         "(line 143) — the ledger gate makes a silent partial impossible"),
-    _row("A13", "cyq_perf", "per_stock_repartition_per_date", ["market/cyq_perf/<yr>/cyq_perf_<date>.parquet"],
-         ["ts_code", "trade_date"], ["ts_code", "trade_date"], "dense_refuse", "per-stock range tail",
-         note="PER STOCK (2018+), repartitioned to per-date; repartition must be row-conserving"),
-    _row("A14", "report_rc", "per_report_date_month", ["analyst/report_rc/report_rc_<yr>.parquet"],
-         ["ts_code", "report_date", "org_name", "author_name", "quarter"], ["ts_code", "report_date"],
-         "dense_refuse", "TTL halo replay per Phase 5-A", baseline_dups=True,
-         note="doc cap = 3000/page (NOT 5000); natural_key INCLUDES author_name (pit_backend canonical); "
-              "raw_fetch_ts stamped per row; NEW raw generation — provider bins PRESERVED as legacy (§5)"),
+    # market
+    _r(owner="A01", output_family="market/daily", source_endpoints=("daily", "daily_basic", "adj_factor"),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date"),
+       pit_version_key=(), content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="dense_refuse", allowed_baseline_dups=False, consolidation_group="daily_per_date",
+       tail_rule="sessions 20260702..last-complete",
+       note="THREE source endpoints merged into one per-date file; bypass init_market_data.main()"),
+    _r(owner="A02", output_family="market/index", source_endpoints=("index_daily",), query_mode="per_index_range",
+       vendor_record_key=("ts_code", "trade_date"), pit_version_key=(), content_dedup_key=("ts_code", "trade_date"),
+       profile_key=("ts_code", "trade_date"), empty_policy="dense_refuse", allowed_baseline_dups=False,
+       consolidation_group="index_per_code", tail_rule="range end -> last-complete",
+       note="per-index RANGE fetch, not per trade_date"),
+    _r(owner="A08a", output_family="market/moneyflow", source_endpoints=("moneyflow",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=False, consolidation_group="moneyflow_per_date",
+       tail_rule="sessions tail", sidecars=("reference/moneyflow_known_empty_dates.txt",)),
+    _r(owner="A08b", output_family="market/stk_limit", source_endpoints=("stk_limit",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="dense_refuse", allowed_baseline_dups=False, consolidation_group="stk_limit_per_date",
+       tail_rule="sessions tail"),
+    _r(owner="A08c", output_family="market/margin", source_endpoints=("margin_detail",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="dense_refuse", allowed_baseline_dups=False, consolidation_group="margin_per_date",
+       tail_rule="sessions tail", note="lands in market/margin = manifest dataset 'margin'; 2010+"),
+    _r(owner="A08d", output_family="market/northbound", source_endpoints=("hk_hold",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=False, consolidation_group="northbound_per_date",
+       tail_rule="sessions tail", sidecars=("reference/northbound_nonconnect_days.txt",)),
+    _r(owner="A10a", output_family="market/suspension", source_endpoints=("suspend_d",),
+       query_mode="per_year", vendor_record_key=("ts_code", "trade_date", "suspend_type"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date", "suspend_type"), profile_key=("ts_code", "trade_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=False, consolidation_group="suspension_yearly",
+       tail_rule="per-year", note="yearly suspension_<yr> files; DISTINCT output family from the per-date store"),
+    _r(owner="A10b", output_family="market/suspend_d", source_endpoints=("suspend_d",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date", "suspend_type"),
+       pit_version_key=(), content_dedup_key=("ts_code", "trade_date", "suspend_type"),
+       profile_key=("ts_code", "trade_date"), empty_policy="sparse_canary", allowed_baseline_dups=False,
+       consolidation_group="suspend_d_per_date", tail_rule="per-date tail",
+       note="per-date store (timing-preserving write_suspend_d); suspension_ranges is DERIVED afterward"),
+    _r(owner="A11a", output_family="market/top_list", source_endpoints=("top_list",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date", "reason"),
+       pit_version_key=(), content_dedup_key=("ts_code", "trade_date", "reason"),
+       profile_key=("ts_code", "trade_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="top_list_per_date", tail_rule="sessions tail",
+       note="multi-row event: multiple reasons per (ts_code,trade_date)"),
+    _r(owner="A11b", output_family="market/top_inst", source_endpoints=("top_inst",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date", "exalter", "side", "reason"),
+       pit_version_key=(), content_dedup_key=("ts_code", "trade_date", "exalter", "side", "reason"),
+       profile_key=("ts_code", "trade_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="top_inst_per_date", tail_rule="sessions tail",
+       note="MULTI-ROW event: baseline 2,636,668 dup rows under (ts_code,trade_date); key adds exalter+side+reason"),
+    _r(owner="A11c", output_family="market/block_trade", source_endpoints=("block_trade",),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date", "buyer", "seller", "price"),
+       pit_version_key=(), content_dedup_key=("ts_code", "trade_date", "buyer", "seller", "price"),
+       profile_key=("ts_code", "trade_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="block_trade_per_date", tail_rule="sessions tail",
+       note="MULTI-ROW event: baseline 180,262 dup rows under the 2-col key"),
+    _r(owner="A13", output_family="market/cyq_perf", source_endpoints=("cyq_perf",),
+       query_mode="per_stock_repartition", vendor_record_key=("ts_code", "trade_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
+       empty_policy="dense_refuse", allowed_baseline_dups=False, consolidation_group="cyq_per_date",
+       tail_rule="per-stock range tail", note="per-stock (2018+) repartitioned per-date, row-conserving"),
+    # fundamentals (statements: pit_version_key = ann_date/f_ann_date/update_flag)
+    _r(owner="A03a", output_family="fundamentals/income", source_endpoints=("income",), query_mode="per_stock",
+       vendor_record_key=("ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "update_flag"),
+       pit_version_key=("ann_date", "f_ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="income_period", tail_rule="ann_date window",
+       note="pro.income STANDARD (not VIP); a restatement is a NEW row (version key), not a dup"),
+    _r(owner="A03b", output_family="fundamentals/balancesheet", source_endpoints=("balancesheet",),
+       query_mode="per_stock",
+       vendor_record_key=("ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "update_flag"),
+       pit_version_key=("ann_date", "f_ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="balancesheet_period", tail_rule="ann_date window", note="pro.balancesheet STANDARD"),
+    _r(owner="A05", output_family="fundamentals/cashflow", source_endpoints=("cashflow",), query_mode="per_stock",
+       vendor_record_key=("ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "update_flag"),
+       pit_version_key=("ann_date", "f_ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="cashflow_period", tail_rule="ann_date window", note="init_factor scope, per stock"),
+    _r(owner="A04a", output_family="fundamentals/income_quarterly", source_endpoints=("income_vip",),
+       query_mode="per_period_report_type",
+       vendor_record_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       pit_version_key=("f_ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       profile_key=("ts_code", "end_date", "report_type"), empty_policy="dense_refuse", allowed_baseline_dups=True,
+       consolidation_group="income_q_period", tail_rule="ann_date window", note="fetch_quarterly_statements"),
+    _r(owner="A04b", output_family="fundamentals/cashflow_quarterly", source_endpoints=("cashflow_vip",),
+       query_mode="per_period_report_type",
+       vendor_record_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       pit_version_key=("f_ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+       profile_key=("ts_code", "end_date", "report_type"), empty_policy="dense_refuse", allowed_baseline_dups=True,
+       consolidation_group="cashflow_q_period", tail_rule="ann_date window"),
+    _r(owner="A06", output_family="fundamentals/forecast", source_endpoints=("forecast",), query_mode="per_stock",
+       vendor_record_key=("ts_code", "ann_date", "end_date", "type"), pit_version_key=("ann_date",),
+       content_dedup_key=("ts_code", "ann_date", "end_date", "type"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=True, consolidation_group="forecast_period",
+       tail_rule="ann_date window", note="init_factor per stock; multiple forecasts per (ts_code,end_date)"),
+    _r(owner="A07", output_family="fundamentals/indicators", source_endpoints=("fina_indicator_vip",),
+       query_mode="per_period", vendor_record_key=("ts_code", "end_date", "ann_date", "update_flag"),
+       pit_version_key=("ann_date", "update_flag"),
+       content_dedup_key=("ts_code", "end_date", "ann_date", "update_flag"), profile_key=("ts_code", "end_date"),
+       empty_policy="dense_refuse", allowed_baseline_dups=True, consolidation_group="indicators_period",
+       tail_rule="current period refresh", note="SOLE indicator owner; update_flag revisions => NEW rows; "
+       "historical staged archives IRRECOVERABLE"),
+    # corporate
+    _r(owner="A03c", output_family="corporate/dividends", source_endpoints=("dividend",), query_mode="per_stock",
+       vendor_record_key=("ts_code", "end_date", "ann_date", "div_proc"), pit_version_key=("ann_date", "div_proc"),
+       content_dedup_key=("ts_code", "end_date", "ann_date", "div_proc"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=True, consolidation_group="dividends_period",
+       tail_rule="ann_date window", note="multiple div records per (ts_code,end_date) across proc stages"),
+    _r(owner="A09", output_family="corporate/holder_number", source_endpoints=("stk_holdernumber",),
+       query_mode="per_stock", vendor_record_key=("ts_code", "ann_date", "end_date"), pit_version_key=("ann_date",),
+       content_dedup_key=("ts_code", "ann_date", "end_date"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", allowed_baseline_dups=False, consolidation_group="holder_number_period",
+       tail_rule="ann_date window", note="init_factor per stock"),
+    _r(owner="A12", output_family="corporate/stk_holdertrade", source_endpoints=("stk_holdertrade",),
+       query_mode="per_stock",
+       vendor_record_key=("ts_code", "ann_date", "holder_name", "in_de", "change_vol", "begin_date"),
+       pit_version_key=("ann_date",),
+       content_dedup_key=("ts_code", "ann_date", "holder_name", "in_de", "change_vol", "begin_date"),
+       profile_key=("ts_code", "ann_date"), empty_policy="sparse_canary", allowed_baseline_dups=True,
+       consolidation_group="stk_holdertrade_yearly", tail_rule="ann_date window",
+       note="per stock; key INCLUDES change_vol (canonical PIT key); current fetch swallows per-stock failures"),
+    # analyst
+    _r(owner="A14", output_family="analyst/report_rc", source_endpoints=("report_rc",),
+       query_mode="per_report_date_month",
+       vendor_record_key=("ts_code", "report_date", "org_name", "author_name", "quarter", "report_rc_payload_digest"),
+       pit_version_key=("create_time", "raw_fetch_ts"),
+       content_dedup_key=("ts_code", "report_date", "org_name", "author_name", "report_rc_payload_digest"),
+       profile_key=("ts_code", "report_date"), empty_policy="dense_refuse", allowed_baseline_dups=True,
+       consolidation_group="report_rc_yearly", tail_rule="TTL halo replay per Phase 5-A",
+       note="doc cap 3000/page; identity = normalized analyst (org+author) + report_rc_payload_digest "
+       "(current PIT logic), NOT author_name alone; NEW raw generation, provider bins PRESERVED as legacy"),
+    _r(owner="A16", output_family="analyst/broker_recommend", source_endpoints=("broker_recommend",),
+       query_mode="per_month", vendor_record_key=("month", "broker", "ts_code"), pit_version_key=(),
+       content_dedup_key=("month", "broker", "ts_code"), profile_key=("month", "broker"),
+       empty_policy="sparse_canary", allowed_baseline_dups=False, consolidation_group="broker_recommend_monthly",
+       tail_rule="monthly tail", note="fetch_broker_recommend_historical EXISTS; inject E: paths"),
 ] + [
-    _row("A15", ep, "UNBOUND", ["UNBOUND"], ["UNBOUND"], ["UNBOUND"], "sparse_canary", "UNBOUND",
-         note="query_mode/keys/outputs UNRESOLVED until the contract is signed (was a placeholder row)")
+    # A15: bucket-A siblings — WHOLLY UNBOUND placeholders that HARD-BLOCK until their contract is signed
+    _r(owner=f"A15_{ep}", output_family=f"UNBOUND/{ep}", source_endpoints=(ep,), query_mode="UNBOUND",
+       vendor_record_key=("UNBOUND",), pit_version_key=(), content_dedup_key=("UNBOUND",),
+       profile_key=("UNBOUND",), empty_policy="sparse_canary", allowed_baseline_dups=False,
+       consolidation_group=f"UNBOUND_{ep}", tail_rule="UNBOUND", callable="UNBOUND (contract unsigned)",
+       note="output family / keys UNRESOLVED until the signed contract defines them")
     for ep in ("express", "disclosure_date", "fina_mainbz", "fina_audit", "repurchase", "pledge_stat",
                "top10_floatholders")
-] + [
-    _row("A16", "broker_recommend", "per_month", ["analyst/broker_recommend/broker_recommend_<YYYYMM>.parquet"],
-         ["month", "broker", "ts_code"], ["month", "broker"], "sparse_canary", "monthly tail",
-         note="fetch_broker_recommend_historical EXISTS; inject E: paths"),
 ]
-GLOBAL_SIDECARS = ["raw_cache/manifests/* (ingest provenance manifests regenerated during recovery are "
-                   "recovery outputs — ledgered + hashed like data files)"]
+
+GLOBAL_SIDECARS = ("raw_cache/manifests/* (ingest provenance manifests regenerated during recovery are "
+                   "recovery outputs — ledgered + hashed like data files)",)
+
+
+def matrix_source_endpoints() -> set:
+    """Every API endpoint that needs a signed contract (union over source_endpoints)."""
+    return {e for row in ENDPOINT_MATRIX for e in row.source_endpoints}
+
+
+def assert_unique_output_owner():
+    """Each physical output_family is owned by exactly ONE row (GPT M1) — never let two requests/rows
+    lay claim to one output path."""
+    seen = {}
+    for row in ENDPOINT_MATRIX:
+        if row.output_family in seen:
+            raise RuntimeError(f"output_family {row.output_family} owned by both {seen[row.output_family]} "
+                               f"and {row.owner}")
+        seen[row.output_family] = row.owner
+
 
 
 # ── B1: path authority ───────────────────────────────────────────────────────────────────────────
@@ -463,23 +583,39 @@ def cmd_preflight(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
 def cmd_plan(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
     import yaml
     contracts = yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {} if CONTRACTS_YAML.exists() else {}
-    owners: dict = {}
     problems = 0
-    for row in ENDPOINT_MATRIX:
-        key = (row["endpoint"], tuple(row["outputs"]))
-        owners.setdefault(key, []).append(row["owner"])
-    dup = {k: v for k, v in owners.items() if len(set(v)) > 1}
-    if dup:
-        print(f"MATRIX ERROR: multiple owners: {dup}")
+    # M1: every physical output_family is owned by exactly ONE row (no two requests claim one path).
+    try:
+        assert_unique_output_owner()
+    except RuntimeError as e:
+        print(f"MATRIX ERROR: {e}")
         problems += 1
+    # M2 (endpoint-set reconciliation): the matrix's source-endpoint set MUST equal the contract-YAML
+    # key set — a source endpoint with no contract stanza, or an orphan stanza, is a blocking mismatch.
+    matrix_eps = matrix_source_endpoints()
+    yaml_eps = set(contracts.keys())
+    if matrix_eps - yaml_eps:
+        print(f"CONTRACT GAP: {len(matrix_eps - yaml_eps)} source endpoints have no contract stanza: "
+              f"{sorted(matrix_eps - yaml_eps)}")
+        problems += 1
+    if yaml_eps - matrix_eps:
+        print(f"CONTRACT ORPHAN: {len(yaml_eps - matrix_eps)} contract stanzas match no matrix endpoint: "
+              f"{sorted(yaml_eps - matrix_eps)}")
+        problems += 1
+    # per-row readiness: a row is 'ready' only when EVERY source endpoint is contract-clean AND its
+    # callable is bound (post-contract). An UNBOUND callable or any unsigned source endpoint BLOCKS.
     for row in ENDPOINT_MATRIX:
-        ep = row["endpoint"]
-        unbound = row["callable"].startswith("UNBOUND")
-        errs = contract_errors(ep, contracts.get(ep, {}))
-        state = "BLOCKED(contract)" if errs else ("BLOCKED(UNBOUND callable)" if unbound else "ready")
-        if errs or unbound:
+        unbound = row.callable.startswith("UNBOUND")
+        blocked_eps = [ep for ep in row.source_endpoints if contract_errors(ep, contracts.get(ep, {}))]
+        if blocked_eps:
+            state = f"BLOCKED(contract:{','.join(blocked_eps)})"
+        elif unbound:
+            state = "BLOCKED(UNBOUND callable)"
+        else:
+            state = "ready"
+        if blocked_eps or unbound:
             problems += 1
-        print(f"  {row['owner']:<5} {ep:<22} {state}")
+        print(f"  {row.owner:<7} {row.output_family:<28} {state}")
     print(f"\n{problems} blocked/problem rows; fetch remains REFUSED (adapters unbuilt; contracts unreviewed; "
           f"§13 pending). Contract review MUST precede that endpoint's adapter logic (GPT M3).")
     return 1 if problems else 0  # nonzero while any row is blocked (GPT re-review #3 M2)
