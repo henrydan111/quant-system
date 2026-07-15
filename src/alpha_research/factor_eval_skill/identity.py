@@ -241,6 +241,10 @@ class EvalProtocolSpec:
     neutralization: str = "none"
     rebalance: str = "20d"
     cost_slippage_for_registration: str = "gross"
+    # R6 Blocker 3: the registration bar (judgment semantics) is part of the protocol
+    # identity — a changed bar is a DIFFERENT protocol, never a reinterpretation of an
+    # already-observed OOS. cmd_seal passes sealed_oos.registration_bar_hash().
+    registration_bar_hash: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def _payload(self) -> dict[str, Any]:
@@ -260,6 +264,7 @@ class EvalProtocolSpec:
             "neutralization": normalize_enum(self.neutralization),
             "rebalance": normalize_enum(self.rebalance),
             "cost_slippage_for_registration": normalize_enum(self.cost_slippage_for_registration),
+            "registration_bar_hash": str(self.registration_bar_hash),
         }
 
     @property

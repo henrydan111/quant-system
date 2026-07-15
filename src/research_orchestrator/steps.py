@@ -486,7 +486,7 @@ def _holdout_context_for_step(context: StepExecutionContext) -> HoldoutContext |
         step_id=context.step.step_id,
         stage=_gate_stage(context),
         allow_same_run=context.resumed,
-        seal_store_dir=str(context.registry_dirs["holdout_seal_dir"]),
+        # R6 B1: no seal_store_dir — the runner + backstops resolve the canonical root.
     )
 
 

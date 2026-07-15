@@ -468,20 +468,40 @@ def _enforce_multiplicity_action(report, *, ack: bool, override: bool) -> None:
         )
 
 
-def _assert_not_already_spent(ctx: FactorEvalContext, frozen_set_hash: str) -> None:
+def _assert_not_already_spent(
+    ctx: FactorEvalContext, frozen_set_hash: str, *,
+    resume_same_run: bool = False, run_dir: str = "", step_id: str = "",
+) -> None:
     """Live preflight: refuse if this canonical hash OR any registered legacy alias is already a spent
-    seal_key (GPT re-review: the holdout store self-checks only the exact key)."""
+    seal_key (GPT re-review: the holdout store self-checks only the exact key).
+
+    R6 Major — same-run crash recovery: with an EXPLICIT ``resume_same_run``, the refusal
+    is exempted ONLY when every spent event for this key is the EXACT canonical key (an
+    alias hit still refuses) AND belongs to the identical ``run_dir + step_id`` — the
+    downstream state machine (seal-store request equality + the A5 completion record)
+    then decides whether the resume loads a persisted result or continues an unfinished
+    claim. A foreign run's event always refuses."""
     seal_store = _seal_store(ctx)
     events = seal_store.list_events()
     spent = set(events["seal_key"].dropna().astype("string")) if not events.empty else set()
     # R5 Blocker 1: the alias store is governance — read it from the canonical root.
     candidates = {frozen_set_hash} | set(FrozenSealAliasStore(_canonical_root()).aliases_for(frozen_set_hash))
     hit = candidates & spent
-    if hit:
-        raise FactorEvalError(
-            f"OOS already spent for frozen_set_hash {frozen_set_hash} (matched {sorted(hit)}) — "
-            "single-shot; refusing a re-spend of the same economic test"
-        )
+    if not hit:
+        return
+    if resume_same_run and hit == {str(frozen_set_hash)} and not events.empty:
+        exact = events[events["seal_key"].astype("string") == str(frozen_set_hash)]
+        same = exact[(exact["run_dir"].astype(str) == str(run_dir))
+                     & (exact["step_id"].astype(str) == str(step_id))]
+        if not exact.empty and len(same) == len(exact):
+            return
+    raise FactorEvalError(
+        f"OOS already spent for frozen_set_hash {frozen_set_hash} (matched {sorted(hit)}) — "
+        "single-shot; refusing a re-spend of the same economic test"
+        + ("" if not resume_same_run else
+           " (resume_same_run applies only when EVERY spent event is the exact key from "
+           "the identical run_dir/step_id)")
+    )
 
 
 def cmd_seal(
@@ -490,7 +510,7 @@ def cmd_seal(
     metric: str = "rank_icir", neutralization: str = "none", rebalance: str = "20d",
     portfolio_side: str = "long_short", created_by: str = "factor-eval",
     multiplicity_ack: bool = False, multiplicity_override_id: str = "",
-    fresh_window_override_id: str = "",
+    fresh_window_override_id: str = "", resume_same_run: bool = False,
 ) -> dict:
     # dryrun REMOVED (GPT re-review): it ran the real OOS reproduction under a run-local seal — an
     # OOS-leak path. show = identity/multiplicity preview (no OOS); live = the ONLY OOS-access mode.
@@ -512,10 +532,14 @@ def cmd_seal(
         for m in sel["members"]
     )
     # CANONICAL eval-protocol identity (GPT re-review #3.1): the full protocol, not a thin dict.
+    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+
     spec = EvalProtocolSpec(
         horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}", metric=metric,
         universe_filter_policy=sel.get("selection_universe", tud_a["target_universe_id"]),
         portfolio_construction=f"decile_{portfolio_side}", neutralization=neutralization, rebalance=rebalance,
+        # R6 Blocker 3: the judgment bar is protocol identity — a changed bar is a new protocol.
+        registration_bar_hash=registration_bar_hash(),
     )
     fs = FrozenSelectionSet(
         selected=selected, candidate_pool_hash=sel["pool_hash"],
@@ -606,8 +630,15 @@ def cmd_seal(
                 f"a6_multiplicity authorization must be recorded BEFORE the spend (A6). "
                 f"{report.note}"
             )
-    _assert_not_already_spent(ctx, fs.frozen_set_hash)                                            # (#1 preflight)
-    from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
+    from src.alpha_research.factor_eval_skill.sealed_oos import (
+        A5_REPRODUCTION_STEP_ID,
+        run_sealed_oos,
+    )
+    # R6 Major: an explicit --resume-same-run exempts the preflight ONLY for the exact
+    # canonical key from the identical run_dir/step_id (crash recovery); the downstream
+    # request-bound state machine then loads the persisted result or resumes the claim.
+    _assert_not_already_spent(ctx, fs.frozen_set_hash, resume_same_run=resume_same_run,
+                              run_dir=str(ctx.run_dir), step_id=A5_REPRODUCTION_STEP_ID)  # (#1 preflight)
     # R4 Blockers 1+3: no seal_root and no factor_exprs are passed — the sealed stores
     # derive from the configured global root and the expressions resolve from the current
     # catalog (definition-hash-verified) INSIDE reproduce_sealed_oos.
@@ -618,6 +649,7 @@ def cmd_seal(
         fresh_window_override_id=fresh_window_override_id,
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(multiplicity_override_id),
+        allow_same_run=resume_same_run,
     )
     verdict = result["verdict"]
     # burned windows keep the legacy post-claim record (pre-claim failure never overcounts);

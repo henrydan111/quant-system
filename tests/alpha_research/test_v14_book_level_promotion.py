@@ -310,6 +310,16 @@ class TestA8SealedBacktestRunner:
     back to design_hash) — the shared A8 guard must refuse virgin windows THERE too,
     before any seal row is written, on every public runner entry."""
 
+    @pytest.fixture(autouse=True)
+    def _canonical_at_tmp(self, tmp_path, monkeypatch):
+        # PR3 R6 Blocker 1: HoldoutContext has NO seal_store_dir — the runner claims
+        # against the configured canonical root. Pin it to THIS class's expected dir
+        # (applied after the global conftest quarantine fixture, so this wins).
+        import src.research_orchestrator.holdout_seal as hs_mod
+
+        monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                            lambda: tmp_path / "seals")
+
     def _runner(self, tmp_path: Path):
         from src.research_orchestrator.sealed_backtest_runner import (
             HoldoutContext,
@@ -320,7 +330,6 @@ class TestA8SealedBacktestRunner:
             design_hash="dh_a8_runner", hypothesis_id="hyp_a8_runner",
             structural_family="fam_a8", run_dir=str(tmp_path / "run"),
             step_id="oos_step", stage="oos_test", allow_same_run=False,
-            seal_store_dir=str(tmp_path / "seals"),
         )
         return SealedBacktestRunner(ctx)
 

@@ -15,6 +15,10 @@ from src.research_orchestrator.research_access_context import (
 
 @dataclass(frozen=True)
 class HoldoutContext:
+    # PR3 R6 Blocker 1: there is NO seal_store_dir field — the seal store is ALWAYS
+    # HoldoutSealStore(resolve_configured_global_holdout_root()); a per-context dir let
+    # two runs claim the same seal_key in two caller-chosen "worlds" and pass both
+    # engine backstops.
     design_hash: str
     hypothesis_id: str
     structural_family: str
@@ -22,7 +26,6 @@ class HoldoutContext:
     step_id: str
     stage: str
     allow_same_run: bool
-    seal_store_dir: str
     # PR P1.4: the OOS holdout budget is keyed by seal_key; empty falls back to
     # design_hash (existing behavior). A FrozenSelectionSet-driven run sets
     # frozen_set_hash here so the seal is spent per frozen selection set.
@@ -79,7 +82,11 @@ class SealedBacktestRunner:
                 f"(seal_key={self._ctx.effective_seal_key[:12]}…)"
             ),
         )
-        store = HoldoutSealStore(self._ctx.seal_store_dir)
+        from src.research_orchestrator.holdout_seal import (
+            resolve_configured_global_holdout_root,
+        )
+
+        store = HoldoutSealStore(resolve_configured_global_holdout_root())
         store.claim_holdout_access(
             design_hash=self._ctx.design_hash,
             hypothesis_id=self._ctx.hypothesis_id,

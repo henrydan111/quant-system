@@ -14,7 +14,11 @@ class LockTimeoutError(TimeoutError):
 
 
 @contextmanager
-def file_lock(lock_path: Path, timeout_seconds: float = 30.0) -> Iterator[None]:
+def file_lock(lock_path: Path, timeout_seconds: float | None = 30.0) -> Iterator[None]:
+    """Exclusive cross-process lock. ``timeout_seconds=None`` waits indefinitely —
+    used by locks that must span a long computation (e.g. the A5 execution lock),
+    where a second contender should WAIT for completion and then load the persisted
+    result rather than time out (PR3 R6 Minor)."""
     lock_path = Path(lock_path).resolve()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+b")
@@ -28,7 +32,7 @@ def file_lock(lock_path: Path, timeout_seconds: float = 30.0) -> Iterator[None]:
                     portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
                     break
                 except portalocker.exceptions.LockException as exc:  # type: ignore[attr-defined]
-                    if time.time() - start >= timeout_seconds:
+                    if timeout_seconds is not None and time.time() - start >= timeout_seconds:
                         raise LockTimeoutError(f"Timed out waiting for lock: {lock_path}") from exc
                     time.sleep(0.05)
             yield
@@ -45,7 +49,7 @@ def file_lock(lock_path: Path, timeout_seconds: float = 30.0) -> Iterator[None]:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     break
                 except OSError as exc:
-                    if time.time() - start >= timeout_seconds:
+                    if timeout_seconds is not None and time.time() - start >= timeout_seconds:
                         raise LockTimeoutError(f"Timed out waiting for lock: {lock_path}") from exc
                     time.sleep(0.05)
             try:
@@ -63,7 +67,7 @@ def file_lock(lock_path: Path, timeout_seconds: float = 30.0) -> Iterator[None]:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError as exc:
-                    if time.time() - start >= timeout_seconds:
+                    if timeout_seconds is not None and time.time() - start >= timeout_seconds:
                         raise LockTimeoutError(f"Timed out waiting for lock: {lock_path}") from exc
                     time.sleep(0.05)
             try:

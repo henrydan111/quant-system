@@ -573,8 +573,11 @@ class A5ReproductionStore(AppendOnlyStore):
     def execution_lock(self, seal_key: str):
         """A per-seal-key file mutex the caller holds across the WHOLE
         read-state→compute→complete span (R5 Blocker 3), so two concurrent runs cannot
-        both reach the OOS computation for one seal. Cross-process (OS file lock)."""
-        return file_lock(self._key_lock_path(seal_key))
+        both reach the OOS computation for one seal. Cross-process (OS file lock).
+        R6 Minor: INFINITE wait — the OOS compute is minutes-long, and a second
+        contender must WAIT for completion and then load the persisted result, not
+        time out after the default 30s."""
+        return file_lock(self._key_lock_path(seal_key), timeout_seconds=None)
 
     def current(self, seal_key: str) -> dict[str, Any] | None:
         frame = self._load()

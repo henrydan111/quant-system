@@ -180,11 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
             "are resolvable either way (the store backfills seal_key=design_hash)."
         ),
     )
-    verify_parser.add_argument(
-        "--seal-dir",
-        default=str(PROJECT_ROOT / "data" / "holdout_seals"),
-        help="Holdout seal directory",
-    )
+    # PR3 R6 Blocker 1: --seal-dir REMOVED — verify-seal always reads the ONE configured
+    # canonical holdout root (config.yaml research_governance.holdout_seal_root).
     verify_parser.add_argument(
         "--expect-claims",
         type=int,
@@ -383,7 +380,9 @@ def _verify_seal(args: argparse.Namespace) -> int:
             return 2
         query = {"design_hash": design_hash}
         label = f"design_hash={design_hash}"
-    store = HoldoutSealStore(Path(args.seal_dir).resolve())
+    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
+
+    store = HoldoutSealStore(resolve_configured_global_holdout_root())
     events = store.list_events(**query)
     oos_events = events[events["stage"].astype(str) == "oos_test"].copy() if not events.empty else events
     print(oos_events.to_string(index=False) if not oos_events.empty else "No OOS access recorded.")

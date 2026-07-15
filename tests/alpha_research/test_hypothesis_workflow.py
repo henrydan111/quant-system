@@ -1057,36 +1057,42 @@ class HypothesisWorkflowTests(unittest.TestCase):
             self.assertEqual(context.state.get("publish_status_override"), "under_review")
 
     def test_verify_seal_exit_codes(self):
+        # PR3 R6 Blocker 1: --seal-dir is REMOVED — verify-seal always reads the ONE
+        # configured canonical holdout root; tests monkeypatch the resolver.
+        import src.research_orchestrator.holdout_seal as hs_mod
+
         with self.make_temp_dir("verify_seal") as temp_dir:
             seal_dir = Path(temp_dir) / "seal"
             registry_dir = Path(temp_dir) / "registry"
-            self.assertEqual(
-                hypothesis_cli.main(
-                    ["--registry-dir", str(registry_dir), "verify-seal", "not-a-hash", "--seal-dir", str(seal_dir)]
-                ),
-                2,
-            )
-            self.assertEqual(
-                hypothesis_cli.main(
-                    ["--registry-dir", str(registry_dir), "verify-seal", "a" * 64, "--seal-dir", str(seal_dir)]
-                ),
-                0,
-            )
-            HoldoutSealStore(seal_dir).claim_holdout_access(
-                design_hash="a" * 64,
-                hypothesis_id="hyp_test_001",
-                structural_family="family_a",
-                profile_id="event_driven_signal_research",
-                run_dir=str(Path(temp_dir) / "run"),
-                step_id="oos_backtest",
-                stage="oos_test",
-            )
-            self.assertEqual(
-                hypothesis_cli.main(
-                    ["--registry-dir", str(registry_dir), "verify-seal", "a" * 64, "--seal-dir", str(seal_dir)]
-                ),
-                1,
-            )
+            with patch.object(hs_mod, "resolve_configured_global_holdout_root",
+                              lambda: seal_dir):
+                self.assertEqual(
+                    hypothesis_cli.main(
+                        ["--registry-dir", str(registry_dir), "verify-seal", "not-a-hash"]
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    hypothesis_cli.main(
+                        ["--registry-dir", str(registry_dir), "verify-seal", "a" * 64]
+                    ),
+                    0,
+                )
+                HoldoutSealStore(seal_dir).claim_holdout_access(
+                    design_hash="a" * 64,
+                    hypothesis_id="hyp_test_001",
+                    structural_family="family_a",
+                    profile_id="event_driven_signal_research",
+                    run_dir=str(Path(temp_dir) / "run"),
+                    step_id="oos_backtest",
+                    stage="oos_test",
+                )
+                self.assertEqual(
+                    hypothesis_cli.main(
+                        ["--registry-dir", str(registry_dir), "verify-seal", "a" * 64]
+                    ),
+                    1,
+                )
 
     def test_pause_for_input_payload_round_trip(self):
         payload = PauseForInputPayload(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import time
@@ -58,26 +59,12 @@ class HoldoutRootResolutionError(RuntimeError):
     rather than silently switch to a blank/wrong sealed world."""
 
 
-def resolve_configured_global_holdout_root() -> Path:
-    """PR3 R4/R5 Blocker 1+2 — the ONE configured global holdout-seal root, resolved with
-    a STABLE identity across processes, start directories, and failure states. OOS claim
-    paths derive every sealed store (seal events, override authorizations, the canonical
-    A5/A6 ledger, the A5 reproduction records) from THIS resolver — never from a
-    caller-supplied path, which would let a caller fork a parallel sealed world and
-    re-read the same OOS window.
-
-    Resolution (all relative paths anchor on the PROJECT ROOT, never the CWD):
-      * ``research_governance.holdout_seal_root`` in config.yaml → that path
-        (``~`` expanded; if relative, joined to the project root);
-      * key absent → the canonical ``<project_root>/data/holdout_seals``;
-      * config.yaml unreadable / not a mapping / the value present-but-blank/non-string
-        → raise ``HoldoutRootResolutionError`` (fail closed — a misconfigured governance
-        root must NOT silently fall back and wipe the historical OOS view).
-
-    Tests monkeypatch THIS function; they never pass a store path into a claim entry point."""
+def _resolve_configured_global_holdout_root_uncached(config_path: Path | None = None) -> Path:
+    """The uncached resolution body (unit-testable with an injected ``config_path``).
+    See :func:`resolve_configured_global_holdout_root` for the contract."""
     project_root = Path(__file__).resolve().parents[2]
     default_root = (project_root / "data" / "holdout_seals").resolve()
-    config_path = project_root / "config.yaml"
+    config_path = Path(config_path) if config_path is not None else project_root / "config.yaml"
     if not config_path.exists():
         return default_root
     import yaml
@@ -88,19 +75,56 @@ def resolve_configured_global_holdout_root() -> Path:
         raise HoldoutRootResolutionError(
             f"cannot resolve the canonical holdout root: config.yaml unreadable ({exc})"
         ) from exc
-    if cfg is None:
-        return default_root
+    # R6 Blocker 2: an EXISTING config that parses to a non-mapping (empty file, scalar,
+    # list) is a broken governance-config state — fail closed, never silently default.
     if not isinstance(cfg, dict):
-        raise HoldoutRootResolutionError("config.yaml must contain a mapping at the top level")
-    raw = (cfg.get("research_governance") or {}).get("holdout_seal_root")
-    if raw is None:
+        raise HoldoutRootResolutionError(
+            "config.yaml exists but does not contain a mapping at the top level — refusing "
+            "to silently fall back to the default holdout root"
+        )
+    if "research_governance" not in cfg:
         return default_root
+    governance = cfg["research_governance"]
+    if not isinstance(governance, dict):
+        raise HoldoutRootResolutionError(
+            "research_governance must be a mapping when present (got "
+            f"{type(governance).__name__}) — an explicitly-null/blank governance section "
+            "fails closed"
+        )
+    if "holdout_seal_root" not in governance:
+        return default_root
+    raw = governance["holdout_seal_root"]
     if not isinstance(raw, str) or not raw.strip():
         raise HoldoutRootResolutionError(
             "research_governance.holdout_seal_root must be a non-blank string path"
         )
     path = Path(raw.strip()).expanduser()
     return (path if path.is_absolute() else project_root / path).resolve()
+
+
+@functools.lru_cache(maxsize=1)
+def resolve_configured_global_holdout_root() -> Path:
+    """PR3 R4/R5/R6 Blockers — the ONE configured global holdout-seal root, resolved with
+    a STABLE identity across processes, start directories, and failure states, and PINNED
+    for the process lifetime (``lru_cache``): a mid-run config edit can never split one
+    command across two sealed worlds (R6 B2 — the ledger and the seal events must always
+    come from the SAME root). Changing the canonical root requires an explicit migration
+    AND a process restart. OOS claim paths derive every sealed store (seal events,
+    override authorizations, the canonical A5/A6 ledger, the A5 reproduction records)
+    from THIS resolver — never from a caller-supplied path.
+
+    Resolution (all relative paths anchor on the PROJECT ROOT, never the CWD):
+      * ``research_governance.holdout_seal_root`` in config.yaml → that path
+        (``~`` expanded; if relative, joined to the project root);
+      * config.yaml missing, or the governance section / key ABSENT → the canonical
+        ``<project_root>/data/holdout_seals``;
+      * config unreadable / non-mapping top level / non-mapping governance section /
+        present-but-blank-or-non-string value → ``HoldoutRootResolutionError``
+        (fail closed — a misconfigured governance root must NOT silently switch to a
+        blank sealed world and wipe the historical OOS view).
+
+    Tests monkeypatch THIS function; they never pass a store path into a claim entry point."""
+    return _resolve_configured_global_holdout_root_uncached()
 
 
 def _now_str() -> str:

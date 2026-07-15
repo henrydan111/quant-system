@@ -95,6 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
     sl.add_argument("--multiplicity-ack", action="store_true", help="acknowledge the OOS-window multiplicity (warn band)")
     sl.add_argument("--multiplicity-override-id", default="",
                     help="a PRE-RECORDED consume-once a6_multiplicity authorization id (OverrideAuthorizationStore) — booleans cannot lift the hard band (PR3 R2 B5)")
+    sl.add_argument("--resume-same-run", action="store_true",
+                    help="explicit crash recovery: resume THIS run's own unfinished/completed seal "
+                         "(exact key + identical run_dir/step_id only; foreign runs still refuse)")
     sl.add_argument("--fresh-window-override-id", default="",
                     help="a PRE-RECORDED consume-once a5_fresh_window authorization id, required for any live seal on a virgin (post-2026-02-27) window")
     return ap
@@ -129,7 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                            qlib_dir=args.qlib_dir, horizon=args.horizon, n_quantiles=args.n_quantiles,
                            portfolio_side=args.portfolio_side, multiplicity_ack=args.multiplicity_ack,
                            multiplicity_override_id=args.multiplicity_override_id,
-                           fresh_window_override_id=args.fresh_window_override_id)
+                           fresh_window_override_id=args.fresh_window_override_id,
+                           resume_same_run=args.resume_same_run)
         else:  # pragma: no cover
             raise FactorEvalError(f"unknown command {args.cmd}")
         print(json.dumps(out, indent=2, default=str))

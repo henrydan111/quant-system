@@ -445,9 +445,14 @@ class EventDrivenBacktester:
                         "Engine backstop: time_split.stage='oos_test' requires a holdout_context. "
                         "Sandbox mode cannot touch the holdout window."
                     )
-                from src.research_orchestrator.holdout_seal import HoldoutSealStore
+                from src.research_orchestrator.holdout_seal import (
+                    HoldoutSealStore,
+                    resolve_configured_global_holdout_root,
+                )
 
-                store = HoldoutSealStore(holdout_context.seal_store_dir)
+                # PR3 R6 Blocker 1: the backstop verifies the claim against the ONE
+                # canonical sealed world — never a caller-chosen store.
+                store = HoldoutSealStore(resolve_configured_global_holdout_root())
                 # PR P1.4: check by the seal_key the claim was made under
                 # (effective_seal_key falls back to design_hash for back-compat).
                 events = store.list_events(seal_key=holdout_context.effective_seal_key)

@@ -377,7 +377,12 @@ def reproduce_sealed_oos(
     # access context are all bound to it — a changed recipe (different expressions/
     # horizon/quantiles/window/provider generation) can never resume a prior spend.
     from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
+    from src.alpha_research.factor_eval_skill.sealed_oos import (
+        REGISTRATION_BAR,
+        registration_bar_hash,
+    )
 
+    _bar_hash = registration_bar_hash()
     a5_request_hash = _phash(
         {
             "kind": "a5_sealed_oos_reproduction",
@@ -389,6 +394,9 @@ def reproduce_sealed_oos(
             "horizon": int(horizon),
             "n_quantiles": int(n_quantiles),
             "hypothesis_id": str(hypothesis_id),
+            # R6 Blocker 3: the registration bar is part of the sealed recipe identity —
+            # a changed bar is a DIFFERENT request, never a reinterpretation.
+            "registration_bar_hash": _bar_hash,
         }
     )
     import pandas as pd
@@ -419,7 +427,32 @@ def reproduce_sealed_oos(
                 horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
                 trade_cal=trade_cal,
             )
+        # R6 Blocker 3: the registration-bar VERDICT is computed HERE — inside the same
+        # locked span that persists the completion record — against the CANONICAL bar
+        # whose full semantics travel with the record (bar_json + bar_hash + verdict).
+        # Reading a `complete` record later returns THIS verdict; no future code version
+        # ever re-judges observed OOS data. A frozen set that cannot yield held sides
+        # (legacy stub) records bar_verdict=None — quarantined by the bar consumers.
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            evaluate_sealed_oos_bar,
+            sides_from_frozen_set,
+        )
+
+        try:
+            sides = sides_from_frozen_set(frozen_set)
+        except (AttributeError, ValueError):
+            sides = None   # legacy stub without held sides — verdict quarantined on read
+        bar_verdict = None
+        if sides is not None:
+            _v = evaluate_sealed_oos_bar(
+                sides, per_factor, ls_floor=float(REGISTRATION_BAR["ls_sharpe_floor"])
+            )
+            bar_verdict = {"results": list(_v.results), "n_pass": int(_v.n_pass),
+                           "n_total": int(_v.n_total)}
         return {
+            "registration_bar": dict(REGISTRATION_BAR),
+            "registration_bar_hash": _bar_hash,
+            "bar_verdict": bar_verdict,
             "independent_reproduction": {
                 "source": "qlib_windowed_features",
                 "provider_build_id": prov.get("provider_build_id", ""),

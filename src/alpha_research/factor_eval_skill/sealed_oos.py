@@ -28,6 +28,32 @@ DEFAULT_HORIZON = 20
 DIR_MAP = {"inverse": "short", "positive": "long"}
 VALID_SIDES = frozenset({"long", "short"})
 
+# R6 Blocker 3 — the CANONICAL registration bar: the FULL judgment semantics as data, so
+# the bar an OOS observation was judged against is (a) hash material in the eval-protocol
+# identity and the A5 request hash, and (b) PERSISTED with the verdict inside the A5
+# completion record. A later code deploy (a changed constant, a new bar function) can
+# never re-judge already-observed OOS data — the persisted verdict is the verdict.
+# Changing the bar = a NEW bar_id/hash = a DIFFERENT sealed recipe, never a reinterpretation.
+REGISTRATION_BAR: dict[str, Any] = {
+    "bar_id": "registration_bar_v1",
+    "direction_alignment": "held_side_sign_alignment",  # s=+1 long / -1 short on both metrics
+    "rank_icir_rule": "aligned_rank_icir > 0",
+    "ls_sharpe_rule": "aligned_ls_sharpe > ls_sharpe_floor",
+    "ls_sharpe_floor": DEFAULT_LS_SHARPE_FLOOR,
+    "nan_rule": "nan_fails",
+    "sides_source": "frozen_set.selected.expected_direction",
+}
+
+# The A5/factor-level reproduction step id — one constant shared by the claim, the
+# reproduction record, and the cmd_seal same-run resume exemption (R6 Major).
+A5_REPRODUCTION_STEP_ID = "reproduce_sealed_oos"
+
+
+def registration_bar_hash() -> str:
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash
+
+    return payload_hash(REGISTRATION_BAR)
+
 
 def direction_aligned_pass(
     side: str, rank_icir: float | None, ls_sharpe: float | None, *, ls_floor: float = DEFAULT_LS_SHARPE_FLOOR
@@ -114,6 +140,7 @@ def run_sealed_oos(
     fresh_window_override_id: str = "",
     multiplicity_ack: bool = False,
     a6_multiplicity_override_id: str = "",
+    allow_same_run: bool = False,
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
     apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``.
@@ -151,8 +178,6 @@ def run_sealed_oos(
             "factor_eval_skill.book_seal (book_seal_key)."
         )
 
-    # R5 Blocker 4: sides + floor are recipe-fixed, never caller-supplied.
-    sides = sides_from_frozen_set(frozen_set)
     reproduction = pe.reproduce_sealed_oos(
         frozen_set=frozen_set, oos_start=oos_start,
         oos_end=oos_end, qlib_dir=qlib_dir, run_dir=run_dir,
@@ -161,7 +186,22 @@ def run_sealed_oos(
         fresh_window_override_id=str(fresh_window_override_id),
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(a6_multiplicity_override_id),
+        allow_same_run=allow_same_run, step_id=A5_REPRODUCTION_STEP_ID,
     )
-    per_factor = reproduction["independent_reproduction"]["per_factor"]
-    verdict = evaluate_sealed_oos_bar(sides, per_factor, ls_floor=DEFAULT_LS_SHARPE_FLOOR)
+    # R5 B4 + R6 B3: the verdict is judged against the CANONICAL registration bar INSIDE
+    # reproduce_sealed_oos's locked span and PERSISTED with the completion record — this
+    # wrapper only reads it back. Re-running with changed code (a new constant, a new bar
+    # function) returns the SAME persisted verdict; a record without one (pre-R6) is
+    # quarantined, never silently re-judged by current code.
+    bar_verdict = reproduction.get("bar_verdict")
+    if not isinstance(bar_verdict, Mapping) or not bar_verdict.get("results"):
+        raise ValueError(
+            "sealed reproduction carries no persisted bar_verdict — a pre-R6 completion "
+            "record must be explicitly migrated (with its original bar semantics), not "
+            "re-judged by the current code"
+        )
+    verdict = SealedOosVerdict(
+        results=tuple(dict(r) for r in bar_verdict["results"]),
+        n_pass=int(bar_verdict["n_pass"]),
+    )
     return {"reproduction": reproduction, "verdict": verdict}

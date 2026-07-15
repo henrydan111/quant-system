@@ -161,7 +161,15 @@ class TestSealKeyMigration:
 
 
 class TestVerifySealCLI:
-    def test_verify_seal_resolves_by_design_hash_and_by_seal_key(self, tmp_path: Path) -> None:
+    def test_verify_seal_resolves_by_design_hash_and_by_seal_key(self, tmp_path: Path, monkeypatch) -> None:
+        # PR3 R6 Blocker 1: --seal-dir is REMOVED — verify-seal reads the ONE configured
+        # canonical root; the test runs main() in-process with the resolver monkeypatched
+        # (the seal world is never caller-selectable, not even for a read tool).
+        import src.research_orchestrator.holdout_seal as hs_mod
+        from workspace.scripts import hypothesis_cli
+
+        monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                            lambda: tmp_path)
         store = HoldoutSealStore(tmp_path)
         design_hash, seal_key = "b" * 64, "a" * 64
         store.claim_holdout_access(
@@ -169,16 +177,12 @@ class TestVerifySealCLI:
             profile_id="p", run_dir=str(tmp_path / "r"), step_id="s",
             stage="oos_test", seal_key=seal_key,
         )
-        cli = PROJECT_ROOT / "workspace" / "scripts" / "hypothesis_cli.py"
-        by_key = subprocess.run(
-            [sys.executable, str(cli), "verify-seal", "--seal-dir", str(tmp_path),
-             "--seal-key", seal_key, "--expect-claims", "1"],
-            capture_output=True, text=True,
-        )
-        assert by_key.returncode == 0, by_key.stderr
-        by_dh = subprocess.run(
-            [sys.executable, str(cli), "verify-seal", "--seal-dir", str(tmp_path),
-             design_hash, "--expect-claims", "1"],
-            capture_output=True, text=True,
-        )
-        assert by_dh.returncode == 0, by_dh.stderr
+        assert hypothesis_cli.main(
+            ["verify-seal", "--seal-key", seal_key, "--expect-claims", "1"]
+        ) == 0
+        assert hypothesis_cli.main(
+            ["verify-seal", design_hash, "--expect-claims", "1"]
+        ) == 0
+        # exit 1 = the OOS window was already touched (one claim exists, expecting none
+        # would be a mismatch is covered elsewhere; here assert the malformed-hash path)
+        assert hypothesis_cli.main(["verify-seal", "not-a-hash"]) == 2

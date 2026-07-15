@@ -671,10 +671,28 @@ class TestA5FreshWindowEnforcement:
         first = reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
         assert calls["n"] == 1
         assert "fac_a" in first["independent_reproduction"]["per_factor"]
+        # R6 B3: the registration-bar VERDICT is judged inside the locked span and
+        # PERSISTED with the completion record (fac_a held long, ls 1.2 > 1.0 -> pass;
+        # fac_b held short, aligned -1.3 -> fail => n_pass = 1)
+        assert first["registration_bar_hash"]
+        assert first["registration_bar"]["bar_id"] == "registration_bar_v1"
+        assert first["bar_verdict"]["n_pass"] == 1 and first["bar_verdict"]["n_total"] == 2
         # identical request again: persisted result returned, NEVER recomputed
         second = reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
         assert calls["n"] == 1
         assert second == first
+        # THE R6 B3 probe: change the bar constants ("deploy new code") — the changed
+        # bar changes the recipe identity, so the call REFUSES outright (it cannot even
+        # resume the completed record, let alone re-judge it); the persisted verdict
+        # remains the only verdict for this seal. Stronger than returning the old one.
+        import src.alpha_research.factor_eval_skill.sealed_oos as so
+
+        monkeypatch.setattr(so, "DEFAULT_LS_SHARPE_FLOOR", 5.0)
+        monkeypatch.setitem(so.REGISTRATION_BAR, "ls_sharpe_floor", 5.0)
+        with pytest.raises(BookSealStoreError, match="changed recipe.*can never resume"):
+            reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
+        assert calls["n"] == 1                           # never recomputed
+        assert second["bar_verdict"]["n_pass"] == 1      # the persisted verdict stands
 
     def test_direct_a5_changed_recipe_cannot_reuse_the_spend(self, tmp_path, monkeypatch):
         # THE R3 B3 probe under R4 plumbing: the recipe now changes via the CATALOG
@@ -897,6 +915,227 @@ class TestCatalogExpressionResolution:
         with pytest.raises(PromotionEvidenceError, match="not in the current catalog"):
             self._resolve(catalog={"fac_a": "$close"},
                           definition_hashes={"fac_a": "def_a"})
+
+
+class TestRunSealedOosPersistedVerdict:
+    def test_missing_persisted_verdict_is_quarantined(self, monkeypatch):
+        # R6 B3 point 5: a completion record WITHOUT a persisted bar_verdict (pre-R6)
+        # must be quarantined — never silently re-judged by current code.
+        import src.research_orchestrator.promotion_evidence as pe
+        from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
+
+        monkeypatch.setattr(pe, "reproduce_sealed_oos",
+                            lambda **kw: {"independent_reproduction": {"per_factor": {}}})
+        with pytest.raises(ValueError, match="persisted bar_verdict"):
+            run_sealed_oos(frozen_set=FS, oos_start=BURNED[0], oos_end=BURNED[1],
+                           qlib_dir="q", run_dir="r", design_hash="d", hypothesis_id="h",
+                           claim_seal=True)
+
+    def test_sides_and_floor_are_not_parameters(self):
+        import inspect
+
+        from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
+
+        sig = inspect.signature(run_sealed_oos)
+        assert "sides" not in sig.parameters and "ls_floor" not in sig.parameters
+
+    def test_registration_bar_hash_in_protocol_identity(self):
+        # R6 B3: a changed bar is a DIFFERENT protocol hash (identity, not payload).
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+
+        base = dict(horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
+                    universe_filter_policy="u", portfolio_construction="decile_long_short")
+        a = EvalProtocolSpec(**base, registration_bar_hash="bar_A")
+        b = EvalProtocolSpec(**base, registration_bar_hash="bar_B")
+        assert a.protocol_hash != b.protocol_hash
+
+
+class TestCanonicalRootResolver:
+    """R6 B2 — the resolver is strict fail-closed, project-root-relative, and pinned."""
+
+    def _resolve(self, tmp_path, text=None):
+        from src.research_orchestrator.holdout_seal import (
+            _resolve_configured_global_holdout_root_uncached,
+        )
+
+        cfg = tmp_path / "config.yaml"
+        if text is not None:
+            cfg.write_text(text, encoding="utf-8")
+        return _resolve_configured_global_holdout_root_uncached(config_path=cfg)
+
+    def test_missing_config_or_keys_default(self, tmp_path):
+        from pathlib import Path as _P
+
+        default = self._resolve(tmp_path)                       # no config file
+        assert str(default).endswith("holdout_seals")
+        assert self._resolve(tmp_path, "storage: {}\n") == default          # no section
+        assert self._resolve(tmp_path, "research_governance: {}\n") == default  # no key
+
+    def test_empty_or_non_mapping_config_fails_closed(self, tmp_path):
+        from src.research_orchestrator.holdout_seal import HoldoutRootResolutionError
+
+        with pytest.raises(HoldoutRootResolutionError, match="does not contain a mapping"):
+            self._resolve(tmp_path, "")                          # EMPTY yaml -> refuse
+        with pytest.raises(HoldoutRootResolutionError, match="does not contain a mapping"):
+            self._resolve(tmp_path, "- just\n- a list\n")
+
+    def test_non_mapping_or_blank_governance_fails_closed(self, tmp_path):
+        from src.research_orchestrator.holdout_seal import HoldoutRootResolutionError
+
+        for bad in ("research_governance: null\n", "research_governance: []\n",
+                    "research_governance: ''\n", "research_governance: scalar\n"):
+            with pytest.raises(HoldoutRootResolutionError, match="must be a mapping"):
+                self._resolve(tmp_path, bad)
+        with pytest.raises(HoldoutRootResolutionError, match="non-blank string"):
+            self._resolve(tmp_path, "research_governance:\n  holdout_seal_root: ''\n")
+        with pytest.raises(HoldoutRootResolutionError, match="non-blank string"):
+            self._resolve(tmp_path, "research_governance:\n  holdout_seal_root: null\n")
+
+    def test_relative_path_anchors_on_project_root_not_cwd(self, tmp_path, monkeypatch):
+        import src.research_orchestrator.holdout_seal as hs_mod
+        from pathlib import Path as _P
+
+        project_root = _P(hs_mod.__file__).resolve().parents[2]
+        monkeypatch.chdir(tmp_path)                              # a FOREIGN cwd
+        resolved = self._resolve(tmp_path,
+                                 "research_governance:\n  holdout_seal_root: './rel/seals'\n")
+        assert resolved == (project_root / "rel" / "seals").resolve()
+
+    def test_public_resolver_is_process_pinned(self):
+        # lru_cache pin: one process = one sealed world (a mid-run config edit can
+        # never split a command across two roots). The conftest quarantine fixture
+        # masks the module attr with a lambda, so pin the decorator STRUCTURALLY.
+        import inspect
+
+        import src.research_orchestrator.holdout_seal as hs_mod
+
+        src = inspect.getsource(hs_mod)
+        decorated = "@functools.lru_cache(maxsize=1)\ndef resolve_configured_global_holdout_root"
+        assert decorated in src
+
+
+class TestSystemWideCanonicalWorld:
+    """R6 B1 — no orchestration entry lets a caller choose the sealed world."""
+
+    def test_holdout_context_has_no_seal_store_dir(self):
+        import dataclasses
+
+        from src.research_orchestrator.sealed_backtest_runner import HoldoutContext
+
+        assert "seal_store_dir" not in {f.name for f in dataclasses.fields(HoldoutContext)}
+
+    def test_engine_registry_dirs_holdout_is_canonical_and_conflict_refused(
+        self, tmp_path, monkeypatch
+    ):
+        import src.research_orchestrator.holdout_seal as hs_mod
+        from src.research_orchestrator.engine import _resolve_registry_dirs
+
+        canonical = tmp_path / "canonical_holdout"
+        monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                            lambda: canonical)
+        dirs = _resolve_registry_dirs({"registry_root": str(tmp_path / "reg")})
+        assert dirs["holdout_seal_dir"] == canonical.resolve()
+        # an equal explicit value passes; a DIFFERENT one is an error, never adopted
+        dirs2 = _resolve_registry_dirs({"holdout_seal_dir": str(canonical)})
+        assert dirs2["holdout_seal_dir"] == canonical.resolve()
+        with pytest.raises(ValueError, match="not caller-selectable"):
+            _resolve_registry_dirs({"holdout_seal_dir": str(tmp_path / "world_B")})
+
+    def test_file_lock_supports_infinite_wait(self, tmp_path):
+        from src.research_orchestrator.file_lock import file_lock
+
+        with file_lock(tmp_path / "x.lock", timeout_seconds=None):
+            pass                                                  # acquires + releases
+
+
+class TestSameRunResumePath:
+    """R6 Major — explicit --resume-same-run reaches the state machine through cmd_seal."""
+
+    def _pipeline(self, tmp_path, monkeypatch):
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalContext,
+            FactorIdentity,
+            cmd_characterize,
+            cmd_declare_target,
+            cmd_gate,
+            cmd_register,
+            cmd_select,
+        )
+        from src.alpha_research.factor_eval_skill.stage3_reader import ALL_UNIVERSES
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        rows = [{"factor": "tf", "universe_id": u, "heldout_rank_icir": 0.45,
+                 "mean_rank_ic": 0.045, "sign_consistency": 1.0, "coverage_tier": "broad",
+                 "effective_ic_days": 2600, "field_eligible": True,
+                 "layer1_methodology_hash": "l1hash"} for u in ALL_UNIVERSES]
+        matrix = tmp_path / "m.jsonl"
+        matrix.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        ctx = FactorEvalContext.create(
+            run_dir=tmp_path / "run", store_root=tmp_path / "store",
+            registry_root=tmp_path / "reg",
+            resolve_factor=lambda fid: FactorIdentity(fid, f"def_{fid}", 2, "", "$close"),
+        )
+        cmd_register(ctx, factor_id="tf", mode="deployment_bound",
+                     evidence_tier="theory_a_priori", direction_source="theory",
+                     role="ranking", role_direction="long")
+        cmd_declare_target(ctx, target_universe_id="univ_liquid_top300",
+                           eligibility_policy="l", asof_policy="pit_lag_1")
+        cmd_characterize(ctx, matrix_path=matrix)
+        cmd_gate(ctx)
+        cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+        return ctx, root
+
+    def test_preflight_exempts_only_exact_key_same_run(self, tmp_path, monkeypatch):
+        import src.alpha_research.factor_eval_skill.sealed_oos as so
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalError,
+            cmd_seal,
+        )
+        from src.alpha_research.factor_eval_skill.sealed_oos import A5_REPRODUCTION_STEP_ID
+
+        ctx, root = self._pipeline(tmp_path, monkeypatch)
+
+        class _V:
+            n_pass, n_total, results = 1, 1, ({"factor": "tf", "pass": True},)
+
+        seen = {}
+
+        def fake_run_sealed_oos(**kw):
+            seen["allow_same_run"] = kw.get("allow_same_run")
+            return {"reproduction": {}, "verdict": _V()}
+
+        monkeypatch.setattr(so, "run_sealed_oos", fake_run_sealed_oos)
+        # seed a spent seal event: exact key, THIS run's run_dir + the A5 step id
+        show = cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1])
+        key = show["frozen_set_hash"]
+        HoldoutSealStore(root).claim_holdout_access(
+            design_hash=key, hypothesis_id="h", structural_family="", profile_id="p",
+            run_dir=str(ctx.run_dir), step_id=A5_REPRODUCTION_STEP_ID, seal_key=key)
+        # without the flag: the preflight refuses (single-shot)
+        with pytest.raises(FactorEvalError, match="already spent"):
+            cmd_seal(ctx, mode="live", oos_start=BURNED[0], oos_end=BURNED[1])
+        # with the flag + identical run_dir/step_id: proceeds into the state machine
+        out = cmd_seal(ctx, mode="live", oos_start=BURNED[0], oos_end=BURNED[1],
+                       resume_same_run=True)
+        assert out["n_pass"] == 1 and seen["allow_same_run"] is True
+
+    def test_foreign_run_never_exempted(self, tmp_path, monkeypatch):
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalError,
+            cmd_seal,
+        )
+        from src.alpha_research.factor_eval_skill.sealed_oos import A5_REPRODUCTION_STEP_ID
+
+        ctx, root = self._pipeline(tmp_path, monkeypatch)
+        show = cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1])
+        key = show["frozen_set_hash"]
+        HoldoutSealStore(root).claim_holdout_access(
+            design_hash=key, hypothesis_id="h", structural_family="", profile_id="p",
+            run_dir=str(tmp_path / "FOREIGN_run"), step_id=A5_REPRODUCTION_STEP_ID,
+            seal_key=key)
+        with pytest.raises(FactorEvalError, match="already spent"):
+            cmd_seal(ctx, mode="live", oos_start=BURNED[0], oos_end=BURNED[1],
+                     resume_same_run=True)
 
 
 # ───────────────────────────────────── A8 strategy-promotion wiring ──

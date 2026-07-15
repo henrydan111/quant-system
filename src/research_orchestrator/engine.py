@@ -158,13 +158,30 @@ def _resolve_registry_dirs(run_context: dict[str, Any]) -> dict[str, Path]:
         "testing_ledger_dir": Path(
             str(run_context.get("testing_ledger_dir", registry_root / "testing_ledger"))
         ).resolve(),
-        "holdout_seal_dir": Path(
-            str(run_context.get("holdout_seal_dir", registry_root / "holdout_seals"))
-        ).resolve(),
+        "holdout_seal_dir": _canonical_holdout_seal_dir(run_context),
         "hypothesis_factor_dir": Path(
             str(run_context.get("hypothesis_factor_dir", registry_root / "hypothesis_factors"))
         ).resolve(),
     }
+
+
+def _canonical_holdout_seal_dir(run_context: dict[str, Any]) -> Path:
+    """PR3 R6 Blocker 1: the holdout-seal dir is GOVERNANCE — it comes UNCONDITIONALLY
+    from the configured canonical resolver, never from run_context (a run-context value
+    let a caller run the same seal_key in two "worlds" and pass both local backstops).
+    A run_context that explicitly supplies a DIFFERENT dir is an error, not adopted."""
+    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
+
+    canonical = Path(resolve_configured_global_holdout_root()).resolve()
+    supplied = run_context.get("holdout_seal_dir")
+    if supplied is not None and Path(str(supplied)).resolve() != canonical:
+        raise ValueError(
+            f"run_context.holdout_seal_dir={str(supplied)!r} differs from the configured "
+            f"canonical holdout root {str(canonical)!r} — the seal world is not "
+            "caller-selectable; remove the run_context override (change the root only via "
+            "config.yaml research_governance.holdout_seal_root + explicit migration)"
+        )
+    return canonical
 
 
 def _canonical_request_payload(request: ResearchRequest) -> dict[str, Any]:

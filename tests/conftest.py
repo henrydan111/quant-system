@@ -66,3 +66,23 @@ def pytest_configure(config):  # noqa: ARG001
 
     pytest_pathlib.cleanup_dead_symlinks = _safe_cleanup_dead_symlinks
     pytest_tmpdir.cleanup_dead_symlinks = _safe_cleanup_dead_symlinks
+
+
+@pytest.fixture(autouse=True)
+def _quarantine_canonical_holdout_root(request, monkeypatch):
+    """PR3 R6 (test-pollution guard): the LIVE canonical holdout root (the real
+    data/holdout_seals governance store) must be UNREACHABLE from tests. Every sealed
+    store now derives from resolve_configured_global_holdout_root(); patch it to a
+    per-test scratch dir by default so a test that reaches a claim can never write into
+    the real sealed world (this happened once on 2026-07-15 — the polluting row was
+    surgically removed with a backup). A test that needs a SPECIFIC root re-patches the
+    resolver in its own body (that wins over this default)."""
+    try:
+        import src.research_orchestrator.holdout_seal as hs_mod
+    except Exception:
+        yield
+        return
+    scratch = Path(_repo_mkdtemp(prefix="canonical_holdout_")) / "holdout_seals"
+    monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                        lambda: scratch)
+    yield
