@@ -40,6 +40,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from recovery_write_broker import (NoFollowWriteBroker, WriteBrokerError,  # noqa: E402
+                                   assert_no_reparse_source, walk_no_follow)
+
 E_ROOT = Path(r"E:\量化系统")
 E_DATA = E_ROOT / "data"
 DOC_MIRROR = E_ROOT / "Tushare数据接口" / "content"
@@ -238,6 +242,16 @@ class RecoveryPaths:
         _reject_reparse_lexical(self.root.parent)
         self.root.mkdir(parents=True, exist_ok=False)
 
+    def broker(self) -> NoFollowWriteBroker:
+        """The handle-based no-follow write broker (GPT B3) — the ONLY sanctioned write surface. Every
+        write-capable mode requires it; if it can't be constructed (non-Windows / missing API) the write
+        FAILS CLOSED. Constructed lazily (the run root must exist first)."""
+        b = getattr(self, "_broker", None)
+        if b is None:
+            b = NoFollowWriteBroker(self.root)  # raises WriteBrokerError -> fail closed
+            self._broker = b
+        return b
+
     def assert_write(self, p: Path) -> Path:
         norm, _ = _lex_components(Path(p) if Path(p).is_absolute() else self.root / p)
         try:
@@ -246,22 +260,17 @@ class RecoveryPaths:
             raise RuntimeError(f"REFUSED: write target {norm} outside run root {self.root}")
         if str(norm).upper().startswith("E:") or str(norm).upper().startswith("\\\\"):
             raise RuntimeError(f"REFUSED: {norm} on E:/UNC")
-        _reject_reparse_lexical(norm)  # inspect the leaf too (lstat, no follow)
-        # belt: realpath must ALSO land inside realpath(root), COMPONENT-AWARE (not str startswith,
-        # which a sibling-prefix dir like <root>_evil defeats — GPT re-review #3 B3).
-        rr = Path(os.path.realpath(str(norm)))
-        root_real = Path(os.path.realpath(str(self.root)))
-        try:
-            rr.relative_to(root_real)
-        except ValueError:
-            raise RuntimeError(f"REFUSED: realpath {rr} escaped run root {root_real}")
+        _reject_reparse_lexical(norm)  # cheap lexical pre-check (lstat, no follow)
+        # AUTHORITATIVE check: handle-based no-follow ancestry validation (closes the scan->write TOCTOU
+        # + broken-junction realpath escape). Fails closed if the broker is unavailable (GPT #4 B3).
+        self.broker().validate_ancestry(norm)
         return norm
 
     def write_json(self, path: Path, obj) -> None:
         path = self.assert_write(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        b = self.broker()
         tmp = self.assert_write(path.with_suffix(path.suffix + f".{os.getpid()}.tmp"))
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with b.open_for_write(tmp, "w") as fh:  # broker validates + creates parents no-follow
             json.dump(obj, fh, ensure_ascii=False, indent=1)
             fh.flush()
             os.fsync(fh.fileno())
@@ -269,7 +278,9 @@ class RecoveryPaths:
 
     def _lock(self):
         from filelock import FileLock
-        return FileLock(str(self.assert_write(Path(str(self.ledger_path) + ".lock"))))
+        lock_path = self.assert_write(Path(str(self.ledger_path) + ".lock"))
+        self.broker().mkdirs(lock_path.parent)
+        return FileLock(str(lock_path))
 
 
 # ── B3: typed, transition-enforced ledger ─────────────────────────────────────────────────────────
@@ -318,8 +329,7 @@ class RecoveryLedger:
 
     def _append(self, row: dict) -> None:
         p = self.rp.assert_write(self.rp.ledger_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a", encoding="utf-8") as fh:
+        with self.rp.broker().open_for_write(p, "a") as fh:  # no-follow validated append
             fh.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **row},
                                 ensure_ascii=False) + "\n")
             fh.flush()
@@ -586,15 +596,13 @@ def cmd_preflight(rp: RecoveryPaths, led: RecoveryLedger) -> int:
     if free_gb < MIN_STAGING_FREE_GB:
         print(f"FAIL: C: free {free_gb}GB < {MIN_STAGING_FREE_GB}GB")
         return 2
+    b = rp.broker()  # fail closed here if the no-follow broker is unavailable (before any write)
     manifest_rows, ev_rows = [], []
     for tree in SURVIVOR_TREES:
-        for src in sorted((E_DATA / tree).rglob("*")):
-            if not src.is_file():
-                continue
+        for src in sorted(walk_no_follow(E_DATA / tree)):  # refuses a reparse point in the SOURCE tree
             rel = src.relative_to(E_DATA)
             dst = rp.assert_write(rp.staging_data / rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            b.copy_into(src, dst)  # no-follow source + broker-validated dest
             manifest_rows.append({"path": str(rel).replace("\\", "/"), "sha256": sha256_file(dst),
                                   "size": dst.stat().st_size})
     import glob as _g
@@ -602,10 +610,10 @@ def cmd_preflight(rp: RecoveryPaths, led: RecoveryLedger) -> int:
         for f in _g.glob(str(E_ROOT / pat), recursive=True):
             fp = Path(f)
             if fp.is_file():
+                assert_no_reparse_source(fp)
                 rel = fp.relative_to(E_ROOT)
                 dst = rp.assert_write(rp.evidence / rel)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(fp, dst)
+                b.copy_into(fp, dst)
                 ev_rows.append({"path": str(rel).replace("\\", "/"), "sha256": sha256_file(dst)})
     import pandas as pd
     base = load_baseline()
