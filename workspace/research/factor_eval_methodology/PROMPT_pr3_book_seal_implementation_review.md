@@ -1,113 +1,102 @@
-# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 5)
+# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 6)
 
-R1 REWORK (5B/3M/1m) → folded. R2 REWORK (5B/3M) → folded. R3 REWORK (3B/1M/1m) → folded.
-R4 REWORK (3B/1M/2m — caller-suppliable seal_root forks the sealed world; allow_same_run recomputes a
-completed OOS; low-level entry accepts arbitrary factor_exprs; a6-for-A5 not request-bound; in-batch
-diagnostic dup; show-mode virgin preview reads the wrong ledger) → **all folded**. R4 confirmed the R3
-six closed within one seal root. Branch: `calendar-unfreeze`.
+R1..R4 REWORK → all folded. R5 REWORK (4B/1M/1m — public entry can still override the seal store +
+budget ledger [B1 incomplete]; "project-root relative" root resolves by CWD + silent fallback on config
+error; `claimed` state has no exclusive lock over the compute + no same-run binding [concurrent double
+read]; completed OOS re-judged with a new floor/direction; new-frozen-set stage swallows registry↔catalog
+drift; A5 consume same-request retry stranded) → **all folded**. Branch: `calendar-unfreeze`.
 
 ---
 
 ```text
 ROLE
-You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-5 re-review of PR3: verify each R4 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. The single most important invariant: a caller must NOT be able to build a new "sealed world" (fork the seal store / budget ledger) and re-read the same OOS window.
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-6 re-review of PR3: verify each R5 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. Top invariants: (1) EVERY live seal event / budget ledger row / authorization / completion record / alias belongs to ONE canonical sealed world the caller cannot choose; (2) one seal/request executes the OOS at most once, concurrently-safe.
 
 REPO (public) https://github.com/henrydan111/quant-system  (branch: calendar-unfreeze)
 Raw form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
 
 FETCH (authoritative):
-- src/research_orchestrator/holdout_seal.py                 (resolve_configured_global_holdout_root — the ONE root)
-- src/research_orchestrator/promotion_evidence.py           (no seal_root/factor_exprs; completion machine; recipe hash)
-- src/alpha_research/factor_eval_skill/book_seal_stores.py  (A5ReproductionStore; has_authorization; batch-dup)
-- src/alpha_research/factor_eval_skill/stores.py            (reserve_a5_study_spend: request-bound a6 consume)
-- src/alpha_research/factor_eval_skill/sealed_oos.py        (no seal_root/factor_exprs passthrough)
-- src/alpha_research/factor_eval_skill/orchestration.py     (cmd_seal: configured root; show-mode virgin preview)
-- workspace/scripts/factor_eval_cli.py                      (--holdout-seal-root override removed)
+- src/research_orchestrator/holdout_seal.py                 (resolve_configured_global_holdout_root — fail-closed, project-root-relative)
+- src/research_orchestrator/promotion_evidence.py           (no seal_store param; execution_lock over claim→compute→complete)
+- src/alpha_research/factor_eval_skill/book_seal_stores.py  (A5ReproductionStore: run_dir/step_id + execution_lock; idempotent consume)
+- src/alpha_research/factor_eval_skill/sealed_oos.py        (no sides/ls_floor)
+- src/alpha_research/factor_eval_skill/orchestration.py     (FactorEvalContext: no holdout_seal_root; ALL governance stores canonical; resolve_factor drift)
+- workspace/scripts/factor_eval_cli.py                      (no DEFAULT_HOLDOUT / holdout_seal_root)
 - config.yaml                                               (research_governance.holdout_seal_root)
-- tests/alpha_research/test_pr3_book_seal.py                (R1..R4 probes pinned)
-- tests/research_orchestrator/test_promotion_evidence.py    (resolver/catalog seams)
-- tests/research_orchestrator/test_r4_wall_hardening.py
+- tests/alpha_research/test_pr3_book_seal.py
+- tests/alpha_research/test_factor_eval_skill_orchestration.py  (autouse canonical-root isolation)
+- tests/research_orchestrator/test_promotion_evidence.py, test_r4_wall_hardening.py
 
-YOUR R4 FINDINGS — how each was closed (verify in code; probes pinned as named tests):
-B1 (caller-suppliable seal_root forks the sealed world) → the public seal_root parameter is REMOVED
-   from reproduce_sealed_oos AND run_sealed_oos; both derive EVERY sealed store (seal events, override
-   authorizations, the A5/A6 ledger, the A5 reproduction records) from resolve_configured_global_holdout_root()
-   (holdout_seal.py) — config.yaml research_governance.holdout_seal_root, else the canonical
-   data/holdout_seals. The CLI --holdout-seal-root override is removed. Tests monkeypatch the RESOLVER
-   (never pass a path). Pinned: test_reproduce_sealed_oos_virgin_authorizes_ledgers_then_claims asserts
-   `seal_root` is not a parameter and that the spend lands in the resolver-derived ledger;
-   test_live_seal_uses_configured_root_and_catalog_gate.
-B2 (allow_same_run recomputes a completed OOS) → the new A5ReproductionStore is a completion state
-   machine keyed by seal_key with request binding: reproduce_sealed_oos consults it FIRST — a `complete`
-   record returns its PERSISTED result and NEVER recomputes (and never re-claims / re-consumes); only a
-   not-yet-existing key opens a fresh claim; a still-`claimed` (crash) state of the IDENTICAL request
-   resumes WITHOUT re-consuming or re-reserving; a changed recipe refuses. Pinned:
-   test_completed_a5_reproduction_is_never_recomputed (metric_compute_calls stays 1 across two identical
-   calls) + test_direct_a5_changed_recipe_cannot_reuse_the_spend.
-B3 (low-level entry accepts arbitrary factor_exprs) → the public factor_exprs parameter is REMOVED;
-   resolve_frozen_catalog_expressions(frozen_set) resolves expressions from the CURRENT catalog and
-   REQUIRES (a) every SelectedFactor exists in the catalog and (b) the current catalog definition_hash
-   EQUALS the frozen SelectedFactor.definition_hash (the P1.3 definition-binding parity primitive) —
-   exactly the selected ids, nothing more. Pinned: TestCatalogExpressionResolution
-   (exact-ids / definition-drift-refused / missing-factor-refused) + the orchestration catalog-gate test.
-M1 (a6-for-A5 not request-bound) → reserve_a5_study_spend now CONSUMES the a6 authorization (not just
-   require_consumed) bound to consumed_by_request_hash = the A5 request, and ONLY when the hard band is
-   actually hit (no waste below it). An a6 consumed for another recipe can never admit this spend.
-   Pinned: test_direct_a5_hard_band_consumes_request_bound_a6.
-m1 (in-batch diagnostic dup) → append_rows tracks batch_keys and refuses a duplicate logical key WITHIN
-   one batch (not only vs disk). Pinned: test_append_rows_batch_idempotent_and_divergence_refused
-   (extended) / the batch-dup path.
-m2 (show-mode virgin preview reads the run-local ledger) → cmd_seal computes virgin = is_virgin_window
-   up front and, for a virgin window, the governing report (show AND live) is virgin_window_multiplicity
-   over the CANONICAL ledger at the configured root. Pinned: test_cmd_seal_show_previews_canonical_virgin_budget
-   (4 canonical spends + pending => n_spent=5, refuse_without_override).
-
-Also folded from your R4 residual (a): a crash-resume of the identical recipe no longer burns a fresh
-A5 authorization (is_fresh_open gating on the reproduction record) — see the disclosed residual below
-for the one remaining narrow window.
-
-NON-TEST CALLERS: the 5 one-off promotion drivers under workspace/scripts/ (promote_gp/eps/arxiv/winners,
-select_e_wave) targeted the PRE-R4 signature; they are HISTORICAL records of already-spent windows (the
-spend is in the provenance JSONs), NOT re-runnable, and now carry a "HISTORICAL DRIVER (pre-PR3-R4)"
-banner. They are intentionally not rewired.
+YOUR R5 FINDINGS — how each was closed (verify in code):
+B1 (public entry still forks the seal store + budget ledger) → the `seal_store` parameter is REMOVED
+   from reproduce_sealed_oos; the seal store is UNCONDITIONALLY HoldoutSealStore(resolve_configured_
+   global_holdout_root()). FactorEvalContext.holdout_seal_root is REMOVED (create() ignores it); the
+   orchestration helper `_canonical_root()` resolves the configured root and cmd_seal uses it for the
+   HoldoutSealStore (_seal_store), the OosWindowLedgerStore (both show and live, burned AND virgin — the
+   burned-window denominator no longer reads ctx.store_root), the OverrideAuthorizationStore, and the
+   FrozenSealAliasStore (_assert_not_already_spent). ctx.store_root now holds ONLY non-governance run
+   artifacts (provenance/roles/stage-3 quality/the per-run envelope). The CLI --holdout-seal-root and
+   DEFAULT_HOLDOUT are gone. Tests monkeypatch the RESOLVER (an autouse fixture isolates it per
+   orchestration test; the r4 boom is injected by monkeypatching HoldoutSealStore, not a param).
+B2 (CWD-relative + silent fallback) → resolve_configured_global_holdout_root now: anchors every relative
+   config path on the PROJECT ROOT (not CWD); returns the canonical default only when the key is ABSENT
+   or config.yaml is missing; and RAISES HoldoutRootResolutionError on unreadable/malformed config, a
+   non-mapping top level, or a present-but-blank/non-string value — a misconfigured governance root fails
+   closed instead of silently switching to a blank sealed world.
+B3 (claimed state: no exclusive lock, no same-run binding) → A5ReproductionStore gains run_dir + step_id
+   columns and an execution_lock(seal_key) (per-seal-key OS file mutex, same mechanism as the accepted
+   BookSealArtifactStore.run_or_load_verdict). reproduce_sealed_oos holds it across read-state →
+   consume/reserve/claim → compute → complete, so two runs can NEVER both enter the OOS computation: a
+   concurrent run blocks, then sees the `complete` record and returns the persisted result. A still-
+   `claimed` record resumes ONLY under the identical request AND allow_same_run=True AND the exact
+   run_dir/step_id — a foreign run refuses (fail closed).
+B4 (completed OOS re-judged with new floor/direction) → run_sealed_oos's `sides` and `ls_floor` public
+   parameters are REMOVED; sides derive from the frozen set and the floor is the fixed module constant
+   DEFAULT_LS_SHARPE_FLOOR. A caller who has seen the OOS metrics cannot re-judge a completed
+   reproduction with a laxer floor or a flipped direction.
+Major (new-frozen-set stage swallows drift) → the default resolver's resolve() now compares the REGISTRY
+   row's stored definition_hash against the catalog hash; a drift or a blank stored hash raises
+   FactorEvalError "definition drift ... record an explicit migration before creating a new frozen set",
+   so a stale registry row can no longer be silently re-stamped with the live catalog hash to trivially
+   satisfy the later reproduction definition-binding gate.
+Minor (A5 consume same-request retry stranded) → consume_authorization is now idempotent-by-request: a
+   retry of the SAME request that already consumed the authorization returns the prior record instead of
+   raising; a DIFFERENT request is still refused. This closes the R4 residual-(a) crash window.
 
 TEST STATE: 548 passed across the full affected suite (serial). Subsets fitting a 124s budget:
-  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_evidence.py -q   (~10s)
-  pytest tests/alpha_research/test_factor_eval_skill_orchestration.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~10s)
-As you noted at R3/R4: a clean checkout without the gitignored data/ tree (provider_build.json, screening
-metadata) fails a handful of data-dependent tests — environment, not code.
+  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_evidence.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~10s)
+  pytest tests/alpha_research/test_factor_eval_skill_orchestration.py -q   (~3s)
+A clean checkout without the gitignored data/ tree still fails a handful of data-dependent tests
+(provider_build.json, screening metadata) — environment, not code.
 
-SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 5.
+SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 6.
 RESIDUAL CONCERNS (honest list):
-(a-narrowed) The consume->reserve->claim->record->compute->complete sequence is fail-closed but not
-    fully atomic: the reserve is idempotent by request_hash and the seal claim is idempotent under
-    allow_same_run, so a crash never double-spends the ledger or double-claims the seal. The ONE
-    non-idempotent-on-resume step is the consume-once A5 authorization: a crash in the narrow window
-    AFTER consuming it but BEFORE the reproduction `claimed` record is written strands that
-    authorization (resume fails closed with "already consumed"), requiring one manual re-record of a
-    fresh A5 authorization (the ledger/seal then resume idempotently). Fail-closed (never a silent
-    double or unbudgeted spend). Should consume become idempotent-by-request (skip if already consumed
-    by THIS request_hash) to close even that window, or is the fail-closed manual-re-record acceptable
-    for the machinery layer?
-(b) resolve_frozen_catalog_expressions reads the live catalog + registry at call time; a definition
-    drift between seal time and reproduce time correctly refuses (the sealed recipe is no longer
-    reproducible) — this is intended, but means a legitimately-migrated factor needs a migration_record
-    path (not in PR3; the legacy revalidate path exists separately).
-(c) config.yaml research_governance.holdout_seal_root is a project-root-relative default; a deployment
-    that relocates data/ must set it. The resolver falls back to <project_root>/data/holdout_seals.
-(d) The completion state machine keys by seal_key (frozen_set_hash); two DIFFERENT recipes on the same
-    frozen set produce the same seal_key but different request_hash — the second refuses at open_or_resume
-    ("changed recipe can never resume"), which is correct (one frozen set = one sealed spend) but means
-    a genuine re-selection on the same frozen set is blocked at this layer by design.
+(a) The execution_lock is held across the (minutes-long) OOS compute — intentional (one seal = one
+    recipe = one computation), so a same-seal_key concurrent run blocks for the whole compute rather
+    than racing. Different seal_keys never contend (per-key lock).
+(b) A run that crashes while holding a `claimed` (not-complete) A5 record strands THAT seal_key until the
+    SAME run_dir/step_id resumes with allow_same_run=True (crash recovery), or a human clears the record.
+    Fail-closed (a foreign run can never re-execute) — the correct governance posture, at the cost of a
+    manual step if the original run is truly dead.
+(c) ctx.store_root still holds the per-run FrozenSelectionEnvelope (the sealed-selection identity record)
+    and the provenance/role/stage-3 artifacts. The envelope is a run artifact retrieved for THIS run's
+    output; it is NOT read by any budget / already-spent / multiplicity decision (those use the canonical
+    seal store + alias store), so it is not a fork vector — but flagging the classification for your call.
+(d) resolve_configured_global_holdout_root reads config.yaml on every call (no cache) — cheap, and keeps
+    a monkeypatch seam simple; a process that rewrites config mid-run would see the new root on the next
+    claim (not expected in practice).
 
 REVIEW QUESTIONS
-1. Re-run your R4 probes (new-root fork => canonical_events vs fork_events; allow_same_run double-compute;
-   arbitrary factor_exprs; a6-for-A5 cross-recipe; in-batch dup; show-mode virgin preview). Any land?
-2. Residual (a-narrowed): is the fail-closed manual-re-record acceptable, or must consume be
-   idempotent-by-request?
-3. Is resolve_configured_global_holdout_root the right seam (config key + canonical fallback + single
-   monkeypatch point), or do you require an explicit injected dependency instead of a module function?
-4. Anything else blocking SHIP for the machinery layer (the S6 governed runner + real-data burned-window
+1. Re-run your R5 probes (new-root fork → canonical vs fork events; CWD-relative root; two concurrent
+   resumers double-compute; completed-OOS re-judge with a new floor/direction; registry↔catalog drift at
+   new-frozen-set creation; same-request consume retry). Any still land?
+2. Is holding the execution_lock across the compute acceptable, or do you want the lock only around the
+   state transitions with a separate "in-progress" guard for the compute?
+3. Residual (b): is fail-closed manual recovery of a crash-orphaned claimed record acceptable, or must
+   there be an automatic lease/timeout?
+4. Residual (c): should the FrozenSelectionEnvelope also move to the canonical root, or is per-run
+   storage correct since no governance decision reads it?
+5. Anything else blocking SHIP for the machinery layer (the S6 governed runner + real-data burned-window
    pilot remain future PRs; live promotion is unreachable until a verifier registers).
 
 OUTPUT FORMAT

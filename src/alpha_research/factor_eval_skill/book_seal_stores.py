@@ -518,9 +518,17 @@ class OverrideAuthorizationStore(AppendOnlyStore):
                 )
             consumed = mine[mine["action"].astype("string") == "consumed"]
             if not consumed.empty:
+                prior = consumed.iloc[-1].to_dict()
+                # R5 Minor: idempotent-by-request — a retry of the SAME request that
+                # already consumed this authorization returns the prior record instead
+                # of stranding it (closes the R4 residual-(a) crash window). A DIFFERENT
+                # request is still refused (single-use across recipes).
+                if (str(consumed_by_request_hash).strip()
+                        and str(prior.get("consumed_by_request_hash")) == str(consumed_by_request_hash)):
+                    return prior
                 raise BookSealStoreError(
                     f"override {override_id!r} was already consumed at "
-                    f"{consumed.iloc[-1]['recorded_at']} — authorizations are single-use"
+                    f"{prior['recorded_at']} — authorizations are single-use"
                 )
             recorded_at = _now_str()
             row = {column: record.get(column, "") for column in self.COLUMNS}
@@ -534,11 +542,15 @@ class OverrideAuthorizationStore(AppendOnlyStore):
 
 
 class A5ReproductionStore(AppendOnlyStore):
-    """PR3 R4 Blocker 2 — the completion state machine for FACTOR-LEVEL (A5 /
+    """PR3 R4/R5 Blocker 2+3 — the completion state machine for FACTOR-LEVEL (A5 /
     frozen-set-keyed) sealed reproductions, mirroring the book path's
     :class:`BookSealArtifactStore`: a COMPLETED reproduction is never recomputed
     (``open_or_resume`` returns the persisted result); only an unfinished ``claimed``
-    state may resume, and only under the IDENTICAL ``request_hash``."""
+    state may resume, and only under the IDENTICAL ``request_hash`` AND the same
+    ``run_dir + step_id`` with ``allow_same_run=True`` (crash recovery, never a foreign
+    concurrent run). :meth:`execution_lock` gives the CALLER a per-seal-key mutex that
+    must be held across ``read-state → compute → complete`` so two runs cannot both
+    enter the OOS computation."""
 
     FILENAME = "a5_reproductions.parquet"
     COLUMNS = (
@@ -546,12 +558,23 @@ class A5ReproductionStore(AppendOnlyStore):
         "recorded_at",
         "seal_key",
         "request_hash",
+        "run_dir",
+        "step_id",
         "state",              # claimed | complete
         "result_json",
         "result_hash",
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("seal_key", "state")
+
+    def _key_lock_path(self, seal_key: str):
+        return self.root_dir / f"{self.FILENAME}.exec.{str(seal_key)[:40]}.lock"
+
+    def execution_lock(self, seal_key: str):
+        """A per-seal-key file mutex the caller holds across the WHOLE
+        read-state→compute→complete span (R5 Blocker 3), so two concurrent runs cannot
+        both reach the OOS computation for one seal. Cross-process (OS file lock)."""
+        return file_lock(self._key_lock_path(seal_key))
 
     def current(self, seal_key: str) -> dict[str, Any] | None:
         frame = self._load()
@@ -560,11 +583,16 @@ class A5ReproductionStore(AppendOnlyStore):
             return None
         return frame.iloc[-1].to_dict()
 
-    def open_or_resume(self, *, seal_key: str, request_hash: str) -> dict[str, Any]:
-        """Open a ``claimed`` record, or resume an existing one: a ``complete`` record
-        is returned as-is (the caller must return its persisted result, never
-        recompute); a ``claimed`` record resumes only under the identical request;
-        a different request refuses."""
+    def open_or_resume(
+        self, *, seal_key: str, request_hash: str, run_dir: str = "", step_id: str = "",
+        allow_same_run: bool = False,
+    ) -> dict[str, Any]:
+        """Open a ``claimed`` record, or resume an existing one. A ``complete`` record is
+        returned as-is (the caller must return its persisted result, never recompute); a
+        ``claimed`` record resumes ONLY under the identical request AND (``allow_same_run``
+        + exact ``run_dir``/``step_id``) — a foreign run, or the same run without the
+        explicit crash-recovery flag, refuses; a changed request refuses. The caller
+        should already hold :meth:`execution_lock` for the seal_key."""
         if not str(seal_key).strip() or not str(request_hash).strip():
             raise BookSealStoreError("open_or_resume requires non-blank seal_key + request_hash")
         with file_lock(self.lock_path):
@@ -576,11 +604,24 @@ class A5ReproductionStore(AppendOnlyStore):
                         f"{cur.get('request_hash')!r}; a changed recipe ({request_hash!r}) can "
                         "never resume it"
                     )
+                if str(cur.get("state")) == "complete":
+                    return cur
+                # a still-`claimed` record: only the SAME run may recover it, explicitly.
+                same_run = (str(cur.get("run_dir")) == str(run_dir)
+                            and str(cur.get("step_id")) == str(step_id))
+                if not (allow_same_run and same_run):
+                    raise BookSealStoreError(
+                        f"A5 reproduction for seal_key {seal_key} is CLAIMED by "
+                        f"run_dir={cur.get('run_dir')!r}/step_id={cur.get('step_id')!r}; a "
+                        f"resume requires allow_same_run=True AND the identical run_dir/step_id "
+                        f"(got {run_dir!r}/{step_id!r}) — a foreign concurrent run cannot "
+                        "re-execute a claimed OOS"
+                    )
                 return cur
             recorded_at = _now_str()
             row: dict[str, Any] = {column: "" for column in self.COLUMNS}
             row.update({"seal_key": str(seal_key), "request_hash": str(request_hash),
-                        "state": "claimed"})
+                        "run_dir": str(run_dir), "step_id": str(step_id), "state": "claimed"})
             row["recorded_at"] = recorded_at
             row["record_id"] = self._record_id(row, recorded_at)
             frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)

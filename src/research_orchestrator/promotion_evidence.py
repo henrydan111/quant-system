@@ -282,7 +282,6 @@ def reproduce_sealed_oos(
     allow_same_run: bool = False,
     provider_provenance: Mapping | None = None,
     compute_factors_fn=None,
-    seal_store=None,
     trade_cal=None,
     fresh_window_override_id: str = "",
     multiplicity_ack: bool = False,
@@ -392,31 +391,84 @@ def reproduce_sealed_oos(
             "hypothesis_id": str(hypothesis_id),
         }
     )
-    if claim_seal:
-        # R4 Blocker 2: the completion state machine is consulted FIRST — a COMPLETED
-        # reproduction returns its PERSISTED result and is NEVER recomputed (and never
-        # burns a fresh authorization / re-claims). Only a not-yet-existing key opens a
-        # fresh claim; a still-`claimed` (crash) state of the IDENTICAL request resumes
-        # WITHOUT re-consuming the authorization or re-reserving (both already happened
-        # on the first attempt). A changed recipe refuses inside open_or_resume.
-        from src.alpha_research.factor_eval_skill.book_seal_stores import A5ReproductionStore
+    import pandas as pd
 
-        a5_store = A5ReproductionStore(root)
+    from src.research_orchestrator.research_access_context import (
+        ResearchAccessContext,
+        research_access_context,
+    )
+
+    def _compute_result_block() -> dict:
+        # Guard #3 hardening: install the OOS ResearchAccessContext so the
+        # qlib_windowed_features reads INSIDE compute_factors are validated against
+        # [oos_start, oos_end] + the claimed seal at the data layer (the formal
+        # chokepoint). compute_factors requests exactly [oos_start, oos_end] (lookback is
+        # internal to the Qlib expr engine -> NaN warmup, no sub-oos_start read), so the
+        # read sits within the window. holdout_seal_claimed mirrors claim_seal.
+        oos_ctx = ResearchAccessContext(
+            run_id=str(run_dir), step_id=step_id, stage="oos_test", design_hash=design_hash,
+            allowed_start=pd.Timestamp(oos_start), allowed_end=pd.Timestamp(oos_end),
+            provider_build_id=prov.get("provider_build_id", ""),
+            calendar_policy_id=prov.get("calendar_policy_id", ""),
+            holdout_seal_claimed=bool(claim_seal), seal_key=seal_hash,
+            request_hash=a5_request_hash,
+        )
+        with research_access_context(oos_ctx):
+            per_factor, max_label_realization = _compute_oos_per_factor_metrics(
+                factor_exprs=factor_exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
+                horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
+                trade_cal=trade_cal,
+            )
+        return {
+            "independent_reproduction": {
+                "source": "qlib_windowed_features",
+                "provider_build_id": prov.get("provider_build_id", ""),
+                "calendar_policy_id": prov.get("calendar_policy_id", ""),
+                "frozen_set_hash": seal_hash,
+                "oos_window": f"{oos_start}..{oos_end}",
+                "horizon": horizon,
+                "rank_icir_horizon": horizon,
+                "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
+                "metric_note": (
+                    f"Approval bar reproduced exactly as the Round-6 screening defined it: "
+                    f"rank_icir at {horizon}d + run_batch_screening's primary-horizon ls_sharpe "
+                    f"from horizons={tuple(SCREENING_HORIZONS)} (i.e. {SCREENING_HORIZONS[0]}d "
+                    f"long-short Sharpe). This is the registration metric, not a horizon-consistent "
+                    f"tradability metric; strategy-level deployment validation is a separate gate."
+                ),
+                "max_label_realization_date": max_label_realization,
+                "per_factor": per_factor,
+            }
+        }
+
+    # claim_seal=False (dryrun/no-seal) touches no governance state — compute directly.
+    if not claim_seal:
+        return _compute_result_block()
+
+    from src.alpha_research.factor_eval_skill.book_seal_stores import A5ReproductionStore
+    from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
+    from src.research_orchestrator.holdout_seal import HoldoutSealStore
+
+    a5_store = A5ReproductionStore(root)
+    # R5 Blocker 3: hold a per-seal-key mutex across read-state -> consume/reserve/claim
+    # -> compute -> complete, so two runs can NEVER both enter the OOS computation for one
+    # seal. A concurrent run blocks here, then (when it acquires) sees the `complete`
+    # record and returns the persisted result — never a second observation.
+    with a5_store.execution_lock(str(seal_hash)):
+        # R4 Blocker 2: the completion state machine is consulted FIRST — a COMPLETED
+        # reproduction returns its PERSISTED result and is NEVER recomputed. A still-
+        # `claimed` state resumes only for the SAME run (crash recovery); a foreign run or
+        # a changed recipe refuses inside open_or_resume.
         prior = a5_store.current(str(seal_hash))
         if prior is not None and str(prior.get("request_hash")) == a5_request_hash \
                 and str(prior.get("state")) == "complete":
             return a5_store.load_result(prior)
         is_fresh_open = prior is None
 
-        # v1.4 A5 (PR3 REWORK, R1 Blocker 3): this is the LOWEST shared claim point of the
-        # factor-level (frozen-set-keyed) path — enforce the fresh-window authorization
-        # HERE, not only in the wrappers, so a direct import cannot bypass it. The
-        # authorization must PRE-EXIST in the OverrideAuthorizationStore (recorded with an
-        # explicit human sign-off + burn statement, window+scope bound) and is consumed
-        # exactly once; an invented non-empty string refuses. Only a FRESH open runs the
-        # consume/reserve/claim — a crash-resume of the same request must not double-spend.
-        from src.alpha_research.factor_eval_skill.multiplicity import is_virgin_window
-
+        # v1.4 A5 (PR3 REWORK, R1 Blocker 3): the fresh-window authorization is enforced
+        # HERE (the LOWEST shared claim point). It must PRE-EXIST in the
+        # OverrideAuthorizationStore (window+scope bound) and is consumed once (idempotent
+        # by request on a same-request retry). Only a FRESH open runs consume/reserve/claim.
         if is_fresh_open and is_virgin_window(str(oos_end)):
             from src.alpha_research.factor_eval_skill.book_seal_stores import (
                 OverrideAuthorizationStore,
@@ -430,11 +482,9 @@ def reproduce_sealed_oos(
                 scope_key=str(seal_hash),
                 consumed_by_request_hash=a5_request_hash,
             )
-            # R2 Blocker 4 + R3 Blocker 2: the A5 spend enters the A6 budget denominator
-            # HERE, atomically BEFORE the claim, in the CANONICAL ledger under the
-            # configured root. The warn/hard bands are enforced INSIDE the reservation
-            # lock (the a6 authorization is consumed there, request-bound — R4 Major 1);
-            # an A5 access authorization never replaces A6's control.
+            # R2 B4 + R3 B2: the A5 spend enters the A6 budget denominator HERE, in the
+            # CANONICAL ledger under the configured root; the warn/hard bands are enforced
+            # INSIDE the reservation (the a6 authorization is consumed there, request-bound).
             from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
 
             OosWindowLedgerStore(root).reserve_a5_study_spend(
@@ -448,85 +498,28 @@ def reproduce_sealed_oos(
                 a6_multiplicity_override_id=str(a6_multiplicity_override_id),
             )
         if is_fresh_open:
-            if seal_store is None:
-                from src.research_orchestrator.holdout_seal import HoldoutSealStore
-                seal_store = HoldoutSealStore(root)
+            # R5 Blocker 1: the seal store is NOT caller-injectable — it derives from the
+            # ONE configured global root, same as every other sealed store here.
+            seal_store = HoldoutSealStore(root)
             seal_store.claim_holdout_access(
                 design_hash=design_hash, hypothesis_id=hypothesis_id, structural_family=structural_family,
                 profile_id=profile_id, run_dir=str(run_dir), step_id=step_id, stage="oos_test",
                 allow_same_run=allow_same_run, seal_key=seal_hash,
-                # R1 B3: the factor-level claim is provider-generation-bound too; R3 B3: and
-                # RECIPE-bound — an allow_same_run resume under a changed request refuses in
-                # the store (persisted request_hash equality).
                 provider_build_id=str(prov.get("provider_build_id", "")),
                 calendar_policy_id=str(prov.get("calendar_policy_id", "")),
                 request_hash=a5_request_hash,
             )
-        # open (fresh) or resume (crash) the reproduction record; a changed recipe on the
-        # same seal_key refuses HERE. A `complete` state was already returned above.
-        a5_store.open_or_resume(seal_key=str(seal_hash), request_hash=a5_request_hash)
-
-    import pandas as pd
-
-    # Guard #3 hardening (GPT post-impl review #3): install the OOS ResearchAccessContext so the
-    # qlib_windowed_features reads INSIDE compute_factors are validated against [oos_start, oos_end]
-    # + the claimed seal at the data layer (the formal chokepoint), instead of relying solely on
-    # the calendar_end == OOS_END boundary above. compute_factors requests exactly [oos_start,
-    # oos_end] (lookback is internal to the Qlib expr engine -> NaN warmup, no sub-oos_start read),
-    # so the read sits within the window. holdout_seal_claimed mirrors claim_seal: a real OOS read
-    # without a seal claim is correctly refused (HoldoutSealViolation) rather than silently allowed.
-    from src.research_orchestrator.research_access_context import (
-        ResearchAccessContext,
-        research_access_context,
-    )
-    oos_ctx = ResearchAccessContext(
-        run_id=str(run_dir), step_id=step_id, stage="oos_test", design_hash=design_hash,
-        allowed_start=pd.Timestamp(oos_start), allowed_end=pd.Timestamp(oos_end),
-        provider_build_id=prov.get("provider_build_id", ""),
-        calendar_policy_id=prov.get("calendar_policy_id", ""),
-        holdout_seal_claimed=bool(claim_seal), seal_key=seal_hash,
-        request_hash=a5_request_hash,
-    )
-    # Reproduce the screening's EXACT inputs AND metric path (extracted, v1.4 PR3:
-    # _compute_oos_per_factor_metrics — the shared context-agnostic body). ls_sharpe is
-    # run_batch_screening's primary-horizon (5d) long-short Sharpe — the metric the
-    # registration bar was defined against; rank_icir is read at `horizon` (20d). The
-    # n_quantiles default is the 2026-06-11 decile standard; pass n_quantiles=5 to
-    # reproduce pre-unification evidence bit-for-bit.
-    with research_access_context(oos_ctx):
-        per_factor, max_label_realization = _compute_oos_per_factor_metrics(
-            factor_exprs=factor_exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
-            horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
-            trade_cal=trade_cal,
+        # open (fresh) or same-run resume (crash) the reproduction record — bound to
+        # run_dir/step_id; a foreign concurrent run or a changed recipe refuses HERE.
+        a5_store.open_or_resume(
+            seal_key=str(seal_hash), request_hash=a5_request_hash,
+            run_dir=str(run_dir), step_id=step_id, allow_same_run=allow_same_run,
         )
-    result_block = {
-        "independent_reproduction": {
-            "source": "qlib_windowed_features",
-            "provider_build_id": prov.get("provider_build_id", ""),
-            "calendar_policy_id": prov.get("calendar_policy_id", ""),
-            "frozen_set_hash": seal_hash,
-            "oos_window": f"{oos_start}..{oos_end}",
-            "horizon": horizon,
-            "rank_icir_horizon": horizon,
-            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
-            "metric_note": (
-                f"Approval bar reproduced exactly as the Round-6 screening defined it: "
-                f"rank_icir at {horizon}d + run_batch_screening's primary-horizon ls_sharpe "
-                f"from horizons={tuple(SCREENING_HORIZONS)} (i.e. {SCREENING_HORIZONS[0]}d "
-                f"long-short Sharpe). This is the registration metric, not a horizon-consistent "
-                f"tradability metric; strategy-level deployment validation is a separate gate."
-            ),
-            "max_label_realization_date": max_label_realization,
-            "per_factor": per_factor,
-        }
-    }
-    if claim_seal:
-        from src.alpha_research.factor_eval_skill.book_seal_stores import A5ReproductionStore
-
-        A5ReproductionStore(root).complete(
+        result_block = _compute_result_block()
+        a5_store.complete(
             seal_key=str(seal_hash), request_hash=a5_request_hash, result=result_block
         )
-    return result_block
+        return result_block
 
 
 def build_promotion_evidence(

@@ -805,6 +805,8 @@ class TestA5FreshWindowEnforcement:
             n_pass, n_total, results = 1, 1, ({"factor": "tf", "pass": True},)
 
         def fake_run_sealed_oos(**kw):
+            # R5: run_sealed_oos no longer takes seal_root — the ledger is the CANONICAL
+            # (resolver-derived) root, which the test patched to `root`.
             OosWindowLedgerStore(root).reserve_a5_study_spend(
                 oos_window_id=f"{kw['oos_start']}..{kw['oos_end']}",
                 frozen_set_hash=kw["frozen_set"].frozen_set_hash,

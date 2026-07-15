@@ -53,28 +53,54 @@ SEAL_SCHEMA = {
 }
 
 
+class HoldoutRootResolutionError(RuntimeError):
+    """The canonical global holdout root cannot be resolved with certainty — fail closed
+    rather than silently switch to a blank/wrong sealed world."""
+
+
 def resolve_configured_global_holdout_root() -> Path:
-    """PR3 R4 Blocker 1 — the ONE configured global holdout-seal root. OOS claim paths
-    must derive every sealed store (seal events, override authorizations, the canonical
+    """PR3 R4/R5 Blocker 1+2 — the ONE configured global holdout-seal root, resolved with
+    a STABLE identity across processes, start directories, and failure states. OOS claim
+    paths derive every sealed store (seal events, override authorizations, the canonical
     A5/A6 ledger, the A5 reproduction records) from THIS resolver — never from a
     caller-supplied path, which would let a caller fork a parallel sealed world and
-    re-read the same OOS window. Resolution: ``research_governance.holdout_seal_root``
-    in config.yaml when present, else the canonical ``<project_root>/data/holdout_seals``
-    (the factor-eval CLI's historical default). Tests monkeypatch THIS function; they
-    never pass a store path into a claim entry point."""
-    project_root = Path(__file__).resolve().parents[2]
-    config_path = project_root / "config.yaml"
-    if config_path.exists():
-        try:
-            import yaml
+    re-read the same OOS window.
 
-            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            configured = (cfg.get("research_governance") or {}).get("holdout_seal_root")
-            if configured:
-                return Path(str(configured)).resolve()
-        except Exception:  # noqa: BLE001 — unreadable config falls back to the canonical default
-            pass
-    return (project_root / "data" / "holdout_seals").resolve()
+    Resolution (all relative paths anchor on the PROJECT ROOT, never the CWD):
+      * ``research_governance.holdout_seal_root`` in config.yaml → that path
+        (``~`` expanded; if relative, joined to the project root);
+      * key absent → the canonical ``<project_root>/data/holdout_seals``;
+      * config.yaml unreadable / not a mapping / the value present-but-blank/non-string
+        → raise ``HoldoutRootResolutionError`` (fail closed — a misconfigured governance
+        root must NOT silently fall back and wipe the historical OOS view).
+
+    Tests monkeypatch THIS function; they never pass a store path into a claim entry point."""
+    project_root = Path(__file__).resolve().parents[2]
+    default_root = (project_root / "data" / "holdout_seals").resolve()
+    config_path = project_root / "config.yaml"
+    if not config_path.exists():
+        return default_root
+    import yaml
+
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:  # unreadable/malformed → fail closed
+        raise HoldoutRootResolutionError(
+            f"cannot resolve the canonical holdout root: config.yaml unreadable ({exc})"
+        ) from exc
+    if cfg is None:
+        return default_root
+    if not isinstance(cfg, dict):
+        raise HoldoutRootResolutionError("config.yaml must contain a mapping at the top level")
+    raw = (cfg.get("research_governance") or {}).get("holdout_seal_root")
+    if raw is None:
+        return default_root
+    if not isinstance(raw, str) or not raw.strip():
+        raise HoldoutRootResolutionError(
+            "research_governance.holdout_seal_root must be a non-blank string path"
+        )
+    path = Path(raw.strip()).expanduser()
+    return (path if path.is_absolute() else project_root / path).resolve()
 
 
 def _now_str() -> str:

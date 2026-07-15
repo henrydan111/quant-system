@@ -32,7 +32,8 @@ from src.alpha_research.factor_eval_skill.orchestration import (  # noqa: E402
 
 DEFAULT_STORE = ROOT / "data" / "factor_eval_skill"
 DEFAULT_REGISTRY = ROOT / "data" / "factor_registry"
-DEFAULT_HOLDOUT = ROOT / "data" / "holdout_seals"
+# R5 Blocker 1: there is NO CLI holdout-root — every governance store resolves the ONE
+# configured canonical root (config.yaml research_governance.holdout_seal_root) internally.
 
 
 def _json(text: str) -> dict:
@@ -102,11 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ctx = FactorEvalContext.create(run_dir=args.run_dir, store_root=args.store_root,
-                                   registry_root=args.registry_root,
-                                   # R4 B1: no CLI override — live claims resolve the CONFIGURED root inside
-                                   # reproduce_sealed_oos; this fixed value only feeds the read-only
-                                   # multiplicity fold-in (_seal_store).
-                                   holdout_seal_root=str(DEFAULT_HOLDOUT))
+                                   registry_root=args.registry_root)
     try:
         if args.cmd == "register":
             out = cmd_register(ctx, factor_id=args.factor_id, mode=args.mode, evidence_tier=args.evidence_tier,

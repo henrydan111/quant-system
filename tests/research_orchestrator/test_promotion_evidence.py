@@ -186,7 +186,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
                     qlib_dir=".", run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},
-                    compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+                    compute_factors_fn=cf, trade_cal=cal,
                 )
             ir = rep["independent_reproduction"]
             self.assertEqual(ir["source"], "qlib_windowed_features")
@@ -227,7 +227,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
                     qlib_dir=".", run_dir=d, design_hash="dh", horizon=4,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},
-                    compute_factors_fn=cf, seal_store=store, trade_cal=cal,
+                    compute_factors_fn=cf, trade_cal=cal,
                 )
         ctx = seen.get("ctx")
         self.assertIsNotNone(ctx, "compute ran with NO ResearchAccessContext installed")

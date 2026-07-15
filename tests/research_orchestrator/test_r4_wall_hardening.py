@@ -340,14 +340,18 @@ class TestPromotionGuardBindings:
             monkeypatch.setattr(
                 ctx_mod, "live_spent_oos_end", lambda: pd.Timestamp(spent_boundary)
             )
-            # PR3 R4 B1/B3: the sealed stores derive from the CONFIGURED root (patched to
+            # PR3 R4/R5 B1: the sealed stores derive from the CONFIGURED root (patched to
             # the test scratch dir) and expressions from the catalog resolver (patched —
             # the fake test frozen set is not in the live catalog). There is no caller
-            # seal_root / factor_exprs any more.
+            # seal_root / factor_exprs / seal_store any more. R5: the seal store is no
+            # longer a parameter, so the "guard reached the seal claim" sentinel is
+            # injected by monkeypatching HoldoutSealStore itself to the boom stub.
             monkeypatch.setattr(
                 hs_mod, "resolve_configured_global_holdout_root",
                 lambda: Path("data/_r4_test_seal"),
             )
+            monkeypatch.setattr(hs_mod, "HoldoutSealStore",
+                                lambda *a, **k: self._StubSealStoreBoom())
             monkeypatch.setattr(
                 pe, "resolve_frozen_catalog_expressions",
                 lambda frozen_set, **kw: {"f1": "Ref($close,1)"},
@@ -375,7 +379,6 @@ class TestPromotionGuardBindings:
                 "calendar_policy_id": THAW_POLICY,
                 "calendar_end": calendar_end,
             },
-            seal_store=self._StubSealStoreBoom(),
             fresh_window_override_id=fresh_window_override_id,
         )
 

@@ -110,9 +110,22 @@ def _default_resolver(registry_root: str | Path) -> Callable[[str], FactorIdenti
         if rows.empty:
             raise FactorEvalError(f"{factor_id} not in factor registry")
         row = rows.iloc[0]
+        # R5 Major: the CURRENT frozen-set construction entry must NOT silently stamp the
+        # live catalog hash onto a stale registry row. Compare the REGISTRY's stored
+        # definition_hash against the catalog hash; a drift (or a blank stored hash) means
+        # the registry evidence belongs to a different definition — refuse until an
+        # explicit migration is recorded, so the later reproduction definition-binding
+        # gate cannot be trivially satisfied.
+        stored = row.get("definition_hash")
+        stored_hash = "" if stored is None or pd.isna(stored) else str(stored)
+        if not stored_hash or stored_hash != defh:
+            raise FactorEvalError(
+                f"{factor_id} definition drift: registry={stored_hash!r}, catalog={defh!r}; "
+                "record an explicit migration before creating a new frozen set"
+            )
         cohort_raw = row.get("replication_cohort_id")
         cohort = "" if cohort_raw is None or pd.isna(cohort_raw) else str(cohort_raw)
-        return FactorIdentity(factor_id, defh, int(row["version"]), cohort, str(catalog[factor_id]))
+        return FactorIdentity(factor_id, stored_hash, int(row["version"]), cohort, str(catalog[factor_id]))
 
     return resolve
 
@@ -122,19 +135,20 @@ class FactorEvalContext:
     run_dir: Path
     store_root: Path
     resolve_factor: Callable[[str], FactorIdentity]
-    # the GLOBAL cross-run holdout-seal store (data/holdout_seals). REQUIRED for a live seal —
-    # a run-local seal would not enforce the single-shot OOS budget across runs.
-    holdout_seal_root: Path | None = None
+    # R5 Blocker 1: the holdout-seal root is NO LONGER a context field. Every governance
+    # store (seal events, budget ledger, aliases, authorizations, completion records)
+    # derives from resolve_configured_global_holdout_root() — the caller cannot choose the
+    # governance storage location. `store_root` holds only NON-governance run artifacts
+    # (provenance, roles, stage-3 quality records, the per-run envelope).
 
     @classmethod
     def create(cls, *, run_dir: str | Path, store_root: str | Path, registry_root: str | Path,
                resolve_factor: Callable[[str], FactorIdentity] | None = None,
-               holdout_seal_root: str | Path | None = None) -> "FactorEvalContext":
+               **_ignored) -> "FactorEvalContext":
         run_dir = Path(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         return cls(run_dir=run_dir, store_root=Path(store_root),
-                   resolve_factor=resolve_factor or _default_resolver(registry_root),
-                   holdout_seal_root=Path(holdout_seal_root) if holdout_seal_root else None)
+                   resolve_factor=resolve_factor or _default_resolver(registry_root))
 
     def _write(self, name: str, payload: Mapping[str, Any]) -> dict:
         (self.run_dir / name).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
@@ -155,14 +169,19 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _canonical_root() -> str:
+    """R5 Blocker 1: the ONE configured global holdout root — the sole home of every
+    governance store. Never taken from a context or caller argument."""
+    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
+    return str(resolve_configured_global_holdout_root())
+
+
 def _seal_store(ctx: "FactorEvalContext"):
-    """The global HoldoutSealStore (authoritative cross-tool spend record) if configured, else
-    None. Folded into the OOS-window multiplicity denominator so the FDR count includes the
-    historical seals (E-wave / GP / arXiv / eps_diffusion), not just skill-driven spends."""
-    if not ctx.holdout_seal_root:
-        return None
+    """The global HoldoutSealStore (authoritative cross-tool spend record), ALWAYS at the
+    configured canonical root. Folded into the OOS-window multiplicity denominator so the
+    FDR count includes the historical seals (E-wave / GP / arXiv / eps_diffusion)."""
     from src.research_orchestrator.holdout_seal import HoldoutSealStore
-    return HoldoutSealStore(ctx.holdout_seal_root)
+    return HoldoutSealStore(_canonical_root())
 
 
 def _tud_from_args(args: Mapping[str, Any]) -> TargetUniverseDeclaration:
@@ -453,11 +472,10 @@ def _assert_not_already_spent(ctx: FactorEvalContext, frozen_set_hash: str) -> N
     """Live preflight: refuse if this canonical hash OR any registered legacy alias is already a spent
     seal_key (GPT re-review: the holdout store self-checks only the exact key)."""
     seal_store = _seal_store(ctx)
-    if seal_store is None:
-        return
     events = seal_store.list_events()
     spent = set(events["seal_key"].dropna().astype("string")) if not events.empty else set()
-    candidates = {frozen_set_hash} | set(FrozenSealAliasStore(ctx.store_root).aliases_for(frozen_set_hash))
+    # R5 Blocker 1: the alias store is governance — read it from the canonical root.
+    candidates = {frozen_set_hash} | set(FrozenSealAliasStore(_canonical_root()).aliases_for(frozen_set_hash))
     hit = candidates & spent
     if hit:
         raise FactorEvalError(
@@ -514,7 +532,11 @@ def cmd_seal(
     FrozenSelectionEnvelopeStore(ctx.store_root).record_envelope(envelope)
 
     oos_window_id = f"{oos_start}..{oos_end}"
-    ledger = OosWindowLedgerStore(ctx.store_root)
+    # R5 Blocker 1: the OOS-window budget ledger is GOVERNANCE — it lives at the ONE
+    # configured canonical root, NOT ctx.store_root (a run-local ledger would let a caller
+    # fork the budget denominator even for burned windows).
+    canonical_root = _canonical_root()
+    ledger = OosWindowLedgerStore(canonical_root)
     factor_ids = [m["factor_id"] for m in sel["members"]]
     base = {"mode": mode, "frozen_set_hash": fs.frozen_set_hash, "envelope_hash": envelope.envelope_hash,
             "tud_hash": tud_a["tud_hash"], "eval_protocol_hash": spec.protocol_hash,
@@ -522,11 +544,6 @@ def cmd_seal(
             "horizon": horizon, "selection_universe": sel.get("selection_universe", tud_a["target_universe_id"]),
             "held_sides": [{"factor_id": s.factor_id, "side": s.expected_direction} for s in selected]}
 
-    # R4 Blocker 1: the ONE configured global holdout root — never taken from the caller
-    # (late import = the single monkeypatch target for tests).
-    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
-
-    canonical_root = str(resolve_configured_global_holdout_root())
     virgin = is_virgin_window(oos_end)
 
     # multiplicity computed with pending_self=True (this would-be spend counted) BEFORE OOS access (#8).
@@ -535,9 +552,7 @@ def cmd_seal(
     # the refusal state.
     report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=True)
     if virgin:
-        report = virgin_window_multiplicity(
-            OosWindowLedgerStore(canonical_root), oos_window_id, pending_self=True
-        )
+        report = virgin_window_multiplicity(ledger, oos_window_id, pending_self=True)
     if mode == "show":
         return ctx._write(A_SEAL, {**base, "multiplicity": report.to_dict(),
                                    "note": "recipe + identity chain verified; NO OOS touched, NO seal"})
@@ -567,8 +582,7 @@ def cmd_seal(
         # authorized ≥hard spend downgrades REFUSE → REQUIRE (the consumption itself is
         # request-bound inside the atomic reservation).
         report = virgin_window_multiplicity(
-            OosWindowLedgerStore(canonical_root), oos_window_id,
-            override_recorded=override_ok, pending_self=True,
+            ledger, oos_window_id, override_recorded=override_ok, pending_self=True,
         )
     _enforce_multiplicity_action(report, ack=multiplicity_ack, override=override_ok)  # (#7)
     # v1.4 A5 (PR3): a FRESH/virgin (post-2026-02-27) window through this FACTOR-LEVEL path is an
@@ -617,9 +631,7 @@ def cmd_seal(
     # not replace it); the legacy system-level report is retained alongside for compatibility.
     legacy_report = oos_window_multiplicity(ledger, oos_window_id, seal_store=_seal_store(ctx), pending_self=False)
     if virgin:
-        final_report = virgin_window_multiplicity(
-            OosWindowLedgerStore(canonical_root), oos_window_id, pending_self=False
-        )
+        final_report = virgin_window_multiplicity(ledger, oos_window_id, pending_self=False)
     else:
         final_report = legacy_report
     return ctx._write(A_SEAL, {**base, "multiplicity": final_report.to_dict(),

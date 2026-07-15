@@ -108,21 +108,24 @@ def run_sealed_oos(
     run_dir: str,
     design_hash: str,
     hypothesis_id: str,
-    sides: Mapping[str, str] | None = None,
     horizon: int = DEFAULT_HORIZON,
     n_quantiles: int = DEFAULT_N_QUANTILES,
     claim_seal: bool = True,
-    ls_floor: float = DEFAULT_LS_SHARPE_FLOOR,
     fresh_window_override_id: str = "",
     multiplicity_ack: bool = False,
     a6_multiplicity_override_id: str = "",
 ) -> dict[str, Any]:
     """SLOW orchestration: reproduce the sealed OOS (reused ``reproduce_sealed_oos``) then
-    apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``. ``sides``
-    defaults to the held sides DERIVED from ``frozen_set`` (no divergence). R4 B1/B3:
-    there is no ``seal_root`` (the sealed stores derive from the CONFIGURED global
-    holdout root) and no ``factor_exprs`` (expressions resolve from the current catalog,
-    definition-hash-verified against the frozen set).
+    apply the bar. Returns ``{"reproduction": …, "verdict": SealedOosVerdict}``.
+
+    R5 Blocker 4: the held SIDES and the pass FLOOR are NOT caller parameters — they are
+    part of the sealed evaluation recipe. Sides derive from ``frozen_set`` (each
+    ``SelectedFactor.expected_direction``) and the floor is the fixed module constant
+    ``DEFAULT_LS_SHARPE_FLOOR``. Seeing the OOS metrics can never let a caller re-judge a
+    completed reproduction with a laxer floor or a flipped direction.
+    R4 B1/B3: there is no ``seal_root`` (the sealed stores derive from the CONFIGURED
+    global holdout root) and no ``factor_exprs`` (expressions resolve from the current
+    catalog, definition-hash-verified against the frozen set).
 
     v1.4 A5 (PR3): this is a FACTOR-LEVEL (frozen-set-keyed) path — on a FRESH/virgin
     (post-2026-02-27) window it is an A5 signal-replication study, which requires a
@@ -148,8 +151,8 @@ def run_sealed_oos(
             "factor_eval_skill.book_seal (book_seal_key)."
         )
 
-    if sides is None:
-        sides = sides_from_frozen_set(frozen_set)
+    # R5 Blocker 4: sides + floor are recipe-fixed, never caller-supplied.
+    sides = sides_from_frozen_set(frozen_set)
     reproduction = pe.reproduce_sealed_oos(
         frozen_set=frozen_set, oos_start=oos_start,
         oos_end=oos_end, qlib_dir=qlib_dir, run_dir=run_dir,
@@ -160,5 +163,5 @@ def run_sealed_oos(
         a6_multiplicity_override_id=str(a6_multiplicity_override_id),
     )
     per_factor = reproduction["independent_reproduction"]["per_factor"]
-    verdict = evaluate_sealed_oos_bar(sides, per_factor, ls_floor=ls_floor)
+    verdict = evaluate_sealed_oos_bar(sides, per_factor, ls_floor=DEFAULT_LS_SHARPE_FLOOR)
     return {"reproduction": reproduction, "verdict": verdict}

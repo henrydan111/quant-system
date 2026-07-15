@@ -29,6 +29,17 @@ from src.alpha_research.factor_eval_skill.stage3_reader import ALL_UNIVERSES
 from src.alpha_research.factor_eval_skill.stores import FrozenSelectionEnvelopeStore
 
 
+@pytest.fixture(autouse=True)
+def _isolate_canonical_holdout_root(tmp_path, monkeypatch):
+    """PR3 R5 B1: cmd_seal's seal store + budget ledger now derive from the ONE configured
+    canonical root — NOT a ctx field. Isolate it per test so the multiplicity denominator
+    doesn't read the real data/holdout_seals (the historical E-wave/GP/arXiv seals). A test
+    that needs a specific root re-patches the resolver in its own body (that wins)."""
+    import src.research_orchestrator.holdout_seal as hs_mod
+    monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root",
+                        lambda: tmp_path / "_canonical_holdout")
+
+
 def _row(factor, universe, icir, *, cov="broad"):
     return {
         "factor": factor, "universe_id": universe, "heldout_rank_icir": icir,
@@ -333,11 +344,15 @@ def test_pool_eligibility_requires_ranking_role_and_matching_methodology(tmp_pat
     assert set(m["factor_id"] for m in sel["members"]) <= {"A", "B"}
 
 
-def test_seal_live_enforces_multiplicity_acknowledge(tmp_path):
+def test_seal_live_enforces_multiplicity_acknowledge(tmp_path, monkeypatch):
+    # PR3 R5 B1: the seal store + budget ledger derive from the CONFIGURED canonical root
+    # (monkeypatched here) — not a ctx field. The 5 historical seals must live there.
+    import src.research_orchestrator.holdout_seal as hs_mod
     from src.research_orchestrator.holdout_seal import HoldoutSealStore
+    canonical = tmp_path / "holdout"
+    monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root", lambda: canonical)
     ctx = _ctx(tmp_path)
-    ctx.holdout_seal_root = tmp_path / "holdout"   # configure the global seal store
-    hs = HoldoutSealStore(ctx.holdout_seal_root)
+    hs = HoldoutSealStore(canonical)
     for i in range(5):  # 5 historical seals + this pending = 6 -> warn band (warn=5)
         hs.claim_holdout_access(design_hash="d", seal_key=f"h{i}", hypothesis_id="x",
                                 structural_family="f", profile_id="p", run_dir=str(tmp_path / f"r{i}"), step_id="s")
