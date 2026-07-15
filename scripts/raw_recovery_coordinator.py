@@ -1,5 +1,5 @@
-# SCRIPT_STATUS: ACTIVE — 2026-07-13 junction-deletion incident: C:-staged raw-store recovery coordinator (v3)
-"""Recovery coordinator v3 (post GPT recovery re-review #2 REWORK — RAW_STORE_RECOVERY_PLAN.md v4).
+# SCRIPT_STATUS: ACTIVE — 2026-07-13 junction-deletion incident: C:-staged raw-store recovery coordinator (v3.1)
+"""Recovery coordinator v3.1 (post GPT recovery re-review #3 REWORK — RAW_STORE_RECOVERY_PLAN.md v4).
 
 v3 closes the re-review's Blockers:
 - B1: run_id is a validated single component; containment is LEXICAL-FIRST (validate under RECOVERY_ROOT

@@ -1,8 +1,8 @@
 # RAW STORE RECOVERY PLAN v5 — 2026-07-13 junction-deletion incident
 
-**Status: design under GPT §10 review (re-review #2 verdict = REWORK, all findings folded → coordinator v3 + this v4). NO fetch executed; fetch stays refused until (a) endpoint contracts are human-reviewed FIRST, (b) adapters built from the unique-owner matrix + the pre-fetch test matrix passes, (c) GPT re-review passes, (d) the user's explicit §13 go-ahead.**
+**Status: design under GPT §10 review (re-review #4 verdict = REWORK; B2/B3/M1/M2/M3 remaining blockers are now BUILD tasks GPT endorses starting, + a live-governance decision on legacy report_rc — see §9). coordinator v3.1 + this v5. NO fetch executed; fetch stays refused until (a) endpoint contracts are human-reviewed FIRST, (b) adapters built from the unique-owner matrix + the pre-fetch test matrix passes, (c) GPT re-review passes, (d) the user's explicit §13 go-ahead.**
 
-v1/v2 SUPERSEDED. v2's REWORK found: containment not end-to-end (drivers write E: logs/state; guard string-prefix-bypassable), a factually wrong leg matrix, a metadata-only throttle floor, a non-operational ledger, an oracle policy that could bless the very drift it must catch, and a physically impossible "atomic cross-volume promotion". Each is corrected below; the coordinator v2 (`scripts/raw_recovery_coordinator.py`) implements the run/ledger/doc-gate machinery.
+v1/v2 SUPERSEDED. v2's REWORK found: containment not end-to-end (drivers write E: logs/state; guard string-prefix-bypassable), a factually wrong leg matrix, a metadata-only throttle floor, a non-operational ledger, an oracle policy that could bless the very drift it must catch, and a physically impossible "atomic cross-volume promotion". Each is corrected below; the coordinator v3.1 (`scripts/raw_recovery_coordinator.py`) implements the run/ledger/doc-gate machinery. **Design has CONVERGED (GPT re-review #4): the remaining blockers are executable-build tasks, not prose.**
 
 ## 0. Incident + evidence (user-confirmed; unchanged from v2)
 

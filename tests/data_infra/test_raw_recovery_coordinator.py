@@ -303,3 +303,23 @@ def test_spaced_call_rejects_non_finite_base_sleep(tmp_path, monkeypatch):
         nxt = float(tushare_lock._next_allowed_path().read_text())
         assert nxt - t0 >= tushare_lock.MIN_BASE_SLEEP - 0.05, f"cooldown not floored for {bad!r}"
         tushare_lock._next_allowed_path().unlink()  # isolate iterations (no cross-wait)
+
+
+def test_spaced_call_rate_limit_backoff_finite(tmp_path, monkeypatch):
+    # GPT re-review #3 minor: an inf rate_limit_backoff must NOT persist inf as next-allowed. Drive a
+    # rate-limit exception with a non-finite backoff and assert a FINITE cooldown lands.
+    from data_infra import tushare_lock
+    lockdir = tmp_path / "locks"
+    lockdir.mkdir()
+    monkeypatch.setattr(tushare_lock, "_api_lock_dir", lambda: lockdir)
+
+    def _boom():
+        raise RuntimeError("每分钟最多访问该接口 limit reached")  # matches _is_rate_limit
+
+    for bad in (float("inf"), float("nan"), None):
+        with pytest.raises(RuntimeError):
+            tushare_lock.spaced_call(_boom, 1.5, rate_limit_backoff=bad)
+        import math
+        v = float(tushare_lock._next_allowed_path().read_text())
+        assert math.isfinite(v), f"rate-limit backoff {bad!r} persisted non-finite next-allowed"
+        tushare_lock._next_allowed_path().unlink()
