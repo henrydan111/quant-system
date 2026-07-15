@@ -695,19 +695,26 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
         if not isinstance(bf, D7BaseFact):
             raise RegistryError("base_facts 只收密封 D7BaseFact")
         facts_by_id[bf.base_record_id] = bf
+    if len(facts_by_id) != len(artifact.base_facts):
+        raise RegistryError("base_facts 含重复 base_record_id(re-review#6 B1)")
     if sorted(bf.fact_hash for bf in artifact.base_facts) \
             != sorted(card.base_fact_hashes):
         raise RegistryError("工件基事实总体与卡封不精确相等(B1)")
     if _records_hash(list(src.records.values())) != card.records_hash:
         raise RegistryError("源注册表记录总体与卡封不符(B1)")
-    # 束五向绑定
+    if not isinstance(bundle.decision_id, str) or not bundle.decision_id.strip():
+        raise RegistryError("束 decision_id 须非空 str(手搭工件重验,B1)")
+    # 束绑定 + 四向 cutoff 相等(re-review#6 Major-1:两注册表的 cutoff 一并锁)
+    if not (card.cutoff_iso == bundle.cutoff_iso == src.cutoff_iso == fin.cutoff_iso):
+        raise RegistryError(
+            f"cutoff 四向不等:卡 {card.cutoff_iso} / 束 {bundle.cutoff_iso} / 源注册表 "
+            f"{src.cutoff_iso} / 终注册表 {fin.cutoff_iso}(re-review#6 Major-1)")
     if bundle.source_card_hash != card.card_hash \
             or list(bundle.base_fact_hashes) != sorted(card.base_fact_hashes) \
             or bundle.source_registry_hash != src.registry_hash \
-            or bundle.final_registry_hash != fin.registry_hash \
-            or bundle.cutoff_iso != card.cutoff_iso:
+            or bundle.final_registry_hash != fin.registry_hash:
         raise RegistryError("束与卡/源注册表/最终注册表绑定不符——自封假血缘拒(B1)")
-    # 逐子行 source+registry 双父再推导
+    # 逐子行 source+registry 双父再推导(精确诊断;重建是最终权威)
     child_ids = {rid for rid in fin.records if "." in rid}
     prefixes = {rid.split(".", 1)[0] for rid in child_ids}
     for rid in sorted(child_ids):
@@ -725,33 +732,92 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
                 f"{str(d.get('source_parent_content_hash'))[:12]} vs 源注册表 "
                 f"{src_parent.content_hash[:12]} vs 基事实 "
                 f"{bf.base_content_hash[:12]}——错 source 血缘拒(re-review#5 B1)")
-        if d.get("registry_parent_content_hash") != fin.records[prefix].content_hash:
-            raise RegistryError(f"D7 子行 {rid} 的 registry 父血缘不符(B1)")
-    # 总体精确相等(子行/降级行/属性行/claim)
-    if sorted(fin.records[rid].content_hash for rid in child_ids) \
-            != list(bundle.child_record_hashes):
-        raise RegistryError("子行总体与束封不精确相等(B1)")
-    if sorted(fin.records[p].content_hash for p in prefixes) \
-            != list(bundle.demoted_record_hashes):
-        raise RegistryError("降级行总体与束封不精确相等(B1)")
+    # ---- re-review#6 B1:**全量确定性重建**——行/降级父/子行/终注册表/束全部从
+    # 卡绑基事实重新推导,束/终注册表**自报的总体绝非权威**。 ----
     rows = artifact.rows
-    if any(not isinstance(r, AttributeRow) for r in rows):
-        raise RegistryError("rows 只收密封 AttributeRow")
-    if sorted(r.row_hash for r in rows) != list(bundle.row_hashes):
-        raise RegistryError("属性行总体与束封不精确相等(B1)")
-    if {r.claim_id for r in rows} != set(bundle.claim_ids):
-        raise RegistryError("claim 总体与束封不精确相等(B1)")
-    # 被拆父:源正向 → 终 context_only;未拆记录逐字节不变;终 = 源 ∪ 子行
+    for r in rows:
+        if not isinstance(r, AttributeRow):
+            raise RegistryError("rows 只收密封 AttributeRow")
+    row_ids = [r.row_id for r in rows]
+    if len(set(row_ids)) != len(rows) \
+            or len({r.row_hash for r in rows}) != len(rows):
+        raise RegistryError("属性行 row_id/row_hash 重复(re-review#6 B1)")
+    if set(row_ids) != child_ids:
+        raise RegistryError(
+            f"属性行集合 ≠ 终注册表子行集合(每子行恰一行;行 {sorted(set(row_ids))} vs "
+            f"子行 {sorted(child_ids)}——零行子行/幽灵行拒,re-review#6 B1)")
+    # 每行语义绑定到卡封基事实(claim/事实/组血缘不许跨决策,re-review#6 B1)
+    grouped: dict[str, dict] = {}
+    for r in rows:
+        prefix, attr = r.row_id.split(".", 1)
+        bf = facts_by_id.get(prefix)
+        if bf is None:
+            raise RegistryError(f"属性行 {r.row_id} 无对应卡封基事实(B1)")
+        if r.attribute_type != attr:
+            raise RegistryError(f"属性行 {r.row_id} attribute_type 与后缀不符(B1)")
+        if r.claim_id != bf.claim_id or r.fact_cluster_id != bf.fact_cluster_id \
+                or r.evidence_group_id != f"{bf.claim_id}:attrs":
+            raise RegistryError(
+                f"属性行 {r.row_id} 的 claim/事实/组血缘与卡封基事实不符——跨决策行拒"
+                f"(re-review#6 B1:行 claim={r.claim_id!r} vs 基事实 {bf.claim_id!r})")
+        grouped.setdefault(prefix, {})[r.attribute_type] = r.text
+    # re-review#6 B2:重大事件 D7 拆分**强制全覆盖**(设计 §6c D7 合同)——
+    # importance≥4 的正向基事实必须逐一被拆;零拆/漏拆/多拆一律拒
+    required = {bf.base_record_id for bf in artifact.base_facts
+                if bf.importance >= D7_IMPORTANCE_FLOOR}
+    if prefixes != required:
+        raise RegistryError(
+            f"D7 拆分覆盖不符:importance≥{D7_IMPORTANCE_FLOOR} 的基事实必须逐一被拆"
+            f"(要求 {sorted(required)},实际 {sorted(prefixes)}——零拆/漏拆/多拆拒,"
+            f"re-review#6 B2)")
+    # 重建:重铸降级父(源父的确定性变换)+ 重跑 _build_attribute_records
+    rebuilt_rows, rebuilt_children, demoted_by_id = [], [], {}
     for p in sorted(prefixes):
-        if "factor_positive" not in src.records[p].allowed_uses:
+        src_parent = src.records[p]
+        bf = facts_by_id[p]
+        if "factor_positive" not in src_parent.allowed_uses:
             raise RegistryError(f"被拆父 {p} 在源注册表非正向——血缘不成立(B1)")
-        if fin.records[p].allowed_uses != frozenset({"context_only"}):
-            raise RegistryError(f"被拆父 {p} 在最终注册表未降级 context_only(B1)")
-    if set(fin.records) != set(src.records) | child_ids:
-        raise RegistryError("最终注册表 ID 集 ≠ 源 ID 集 ∪ 子行——总体被增删(B1)")
-    for rid in set(src.records) - prefixes:
-        if fin.records[rid].content_hash != src.records[rid].content_hash:
-            raise RegistryError(f"未拆记录 {rid} 在源↔终注册表间被改动(B1)")
+        if "fact" not in grouped[p]:
+            raise RegistryError(f"拆分 {p} 缺 'fact' 属性行(m1:降级不许无事实行)")
+        demoted_by_id[p] = build_card_record(
+            p, domain=src_parent.domain, evidence_class=src_parent.evidence_class,
+            allowed_uses={"context_only"}, allowed_consumers=src_parent.allowed_consumers)
+        pairs = _build_attribute_records(
+            p, claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
+            evidence_class=bf.evidence_class, importance=bf.importance,
+            source_parent_content_hash=bf.base_content_hash,
+            registry_parent_content_hash=demoted_by_id[p].content_hash,
+            attributes=grouped[p])
+        rebuilt_rows.extend(rr for rr, _ in pairs)
+        rebuilt_children.extend(rec for _, rec in pairs)
+    if sorted(rr.row_hash for rr in rebuilt_rows) != sorted(r.row_hash for r in rows):
+        raise RegistryError("重建属性行哈希 ≠ 工件行哈希——行不是基事实的确定性推导(B1)")
+    # 重建终注册表(未拆记录原样 + 降级父 + 重建子行)并要求哈希逐字相等——
+    # 该单一等式收编:子行/降级行总体、未拆不变、ID 集、NFI→NFD 升级、错维错席
+    rebuilt_final = [demoted_by_id.get(rid, rec) for rid, rec in src.records.items()]
+    rebuilt_final.extend(rebuilt_children)
+    rebuilt_fin = build_card_registry(card.cutoff_iso, rebuilt_final)
+    if rebuilt_fin.registry_hash != fin.registry_hash:
+        raise RegistryError(
+            f"重建终注册表 {rebuilt_fin.registry_hash[:12]} ≠ 工件终注册表 "
+            f"{fin.registry_hash[:12]}——终注册表不是卡绑基事实的确定性推导"
+            f"(re-review#6 B1:自报总体绝非权威)")
+    # 重建束并要求哈希逐字相等(束自报的 claim/行/子行/降级总体一并被收编)
+    rebuilt_bundle = AttributeBundle(
+        decision_id=bundle.decision_id, cutoff_iso=card.cutoff_iso,
+        source_card_hash=card.card_hash,
+        base_fact_hashes=tuple(sorted(card.base_fact_hashes)),
+        source_registry_hash=src.registry_hash,
+        claim_ids=tuple(sorted(facts_by_id[p].claim_id for p in prefixes)),
+        row_hashes=tuple(sorted(rr.row_hash for rr in rebuilt_rows)),
+        child_record_hashes=tuple(sorted(rec.content_hash for rec in rebuilt_children)),
+        demoted_record_hashes=tuple(sorted(d.content_hash
+                                           for d in demoted_by_id.values())),
+        final_registry_hash=rebuilt_fin.registry_hash)
+    if rebuilt_bundle.bundle_hash != bundle.bundle_hash:
+        raise RegistryError(
+            f"重建束 {rebuilt_bundle.bundle_hash[:12]} ≠ 工件束 "
+            f"{bundle.bundle_hash[:12]}——束不是卡绑基事实的确定性推导(re-review#6 B1)")
     return artifact
 
 

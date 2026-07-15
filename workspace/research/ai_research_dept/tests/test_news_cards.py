@@ -394,10 +394,14 @@ class TestAttributeBundle:
         return {"base_record_id": base_id,
                 "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}}
 
+    def _full_splits(self):
+        # re-review#6 B2: every importance>=4 base fact MUST be split (D7 合同)
+        return [self._split("NFD01"), self._split("NFI01")]
+
     def test_base_demoted_attributes_positive(self):
         card, records, facts = self._rendered()
         art = build_attribute_bundle(
-            [self._split("NFD01")], facts, records, card=card,
+            self._full_splits(), facts, records, card=card,
             decision_id="d1", cutoff=CUT)
         bundle, rows, final_reg = art.bundle, art.rows, art.final_registry
         by_id = dict(final_reg.records)
@@ -427,7 +431,7 @@ class TestAttributeBundle:
         # NFI01 splits as NFI (children ceiling 3, not 5); imp-3 NFD02 fails the floor
         card, records, facts = self._rendered()
         art = build_attribute_bundle(
-            [self._split("NFI01")], facts, records, card=card,
+            self._full_splits(), facts, records, card=card,
             decision_id="d1", cutoff=CUT)
         bundle, final_reg = art.bundle, art.final_registry
         child = dict(final_reg.records)["NFI01.fact"]
@@ -475,7 +479,7 @@ class TestAttributeBundle:
         card, records, facts = self._rendered()
         for bad in (1, None, "", "  "):
             with pytest.raises(RegistryError, match="decision_id"):
-                build_attribute_bundle([self._split("NFD01")], facts, records,
+                build_attribute_bundle(self._full_splits(), facts, records,
                                        card=card, decision_id=bad, cutoff=CUT)
 
     def test_empty_attributes_rejected(self):
@@ -502,7 +506,7 @@ class TestAttributeBundle:
         )
         card, records, facts = self._rendered()
         art = build_attribute_bundle(
-            [self._split("NFD01")], facts, records, card=card,
+            self._full_splits(), facts, records, card=card,
             decision_id="d1", cutoff=CUT)
         final_reg = art.final_registry
         require_sealed_registry(final_reg)                 # D7 relationships hold
@@ -518,7 +522,7 @@ class TestAttributeBundle:
         # re-review#3 B2: an unsealed lookalike exposing .registry_hash is refused
         card, records, facts = self._rendered()
         bundle = build_attribute_bundle(
-            [self._split("NFD01")], facts, records, card=card,
+            self._full_splits(), facts, records, card=card,
             decision_id="d1", cutoff=CUT).bundle
         presplit = {r.record_id: r for r in records}       # pre-split positives!
 
@@ -542,12 +546,14 @@ class TestAttributeBundle:
                                    card=card, decision_id="d1", cutoff=CUT)
 
     def test_bundle_seal_binds_authorization(self):
-        # re-review#2 B1: bundles differing only in child content (class/attrs)
+        # re-review#2 B1: bundles differing only in child content (attr rows)
         # must have different bundle hashes (child content_hash is sealed)
         card, records, facts = self._rendered()
-        b1 = build_attribute_bundle([self._split("NFD01")], facts, records,
+        b1 = build_attribute_bundle(self._full_splits(), facts, records,
                                     card=card, decision_id="d1", cutoff=CUT).bundle
-        b2 = build_attribute_bundle([self._split("NFI01")], facts, records,
+        alt = [dict(self._split("NFD01"), attributes={"fact": "另一措辞的事实行"}),
+               self._split("NFI01")]
+        b2 = build_attribute_bundle(alt, facts, records,
                                     card=card, decision_id="d1", cutoff=CUT).bundle
         assert b1.bundle_hash != b2.bundle_hash
         assert len(b1.bundle_hash) == 64 and b1.child_record_hashes
@@ -555,7 +561,7 @@ class TestAttributeBundle:
     def test_forged_bundle_rejected(self):
         from workspace.research.ai_research_dept.engine.news_cards import AttributeBundle
         card, records, facts = self._rendered()
-        b = build_attribute_bundle([self._split("NFD01")], facts, records,
+        b = build_attribute_bundle(self._full_splits(), facts, records,
                                    card=card, decision_id="d1", cutoff=CUT).bundle
         with pytest.raises(SealError):
             AttributeBundle(decision_id="EVIL", cutoff_iso=b.cutoff_iso,
@@ -570,7 +576,7 @@ class TestAttributeBundle:
 
     def test_mismatched_registry_refused_downstream(self):
         card, records, facts = self._rendered()
-        bundle = build_attribute_bundle([self._split("NFD01")], facts, records,
+        bundle = build_attribute_bundle(self._full_splits(), facts, records,
                                         card=card, decision_id="d1", cutoff=CUT).bundle
         other = build_card_registry(bundle.cutoff_iso, records)   # pre-split registry
         with pytest.raises(RegistryError, match="不符"):
@@ -590,9 +596,13 @@ class TestD7Artifact:
         return {"base_record_id": base_id,
                 "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}}
 
+    def _full_splits(self):
+        # re-review#6 B2: NFD01 (imp5) and NFI01 (imp4) are BOTH mandatory splits
+        return [self._split("NFD01"), self._split("NFI01")]
+
     def _artifact(self):
         card, records, facts = self._rendered()
-        art = build_attribute_bundle([self._split("NFD01")], facts, records,
+        art = build_attribute_bundle(self._full_splits(), facts, records,
                                      card=card, decision_id="d1", cutoff=CUT)
         return card, records, facts, art
 
@@ -677,6 +687,146 @@ class TestD7Artifact:
                                source_registry=art.source_registry, rows=(),
                                bundle=art.bundle, final_registry=art.final_registry,
                                artifact_hash=art.artifact_hash)   # rows dropped, old hash
+
+    # ---- re-review#6 B2: mandatory major-event split coverage ----
+
+    def test_zero_split_with_major_events_rejected(self):
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="覆盖"):
+            build_attribute_bundle([], facts, records, card=card,
+                                   decision_id="d1", cutoff=CUT)
+
+    def test_partial_split_rejected(self):
+        # one-of-two coverage: NFI01 (imp4) left broadly positive -> refused
+        card, records, facts = self._rendered()
+        with pytest.raises(RegistryError, match="覆盖"):
+            build_attribute_bundle([self._split("NFD01")], facts, records,
+                                   card=card, decision_id="d1", cutoff=CUT)
+
+    def test_zero_split_valid_when_no_major_events(self):
+        card, records, facts = render_news_flash_section(
+            [_assessed("小事甲", importance=3),
+             _assessed("小事乙", importance=2, dt="2025-01-27 09:00:00")], CUT)
+        art = build_attribute_bundle([], facts, records, card=card,
+                                     decision_id="d1", cutoff=CUT)
+        # nothing split -> final registry is byte-identical to the source registry
+        assert art.bundle.final_registry_hash == art.bundle.source_registry_hash
+
+    # ---- re-review#6 B1: reconstruction closes cross-wiring/upgrade/row forgery ----
+
+    def test_cross_decision_rows_rejected(self):
+        # same authorization topology, different content: card A + rows B, with a
+        # self-sealed hybrid bundle declaring B's rows/claims — the round-6 probe
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            AttributeBundle, D7DecisionArtifact, verify_d7_artifact,
+        )
+        card_a, rec_a, facts_a, art_a = self._artifact()
+        card_b, rec_b, facts_b = render_news_flash_section(
+            [_assessed("另一决策重大丙", status="官方证实", importance=5),
+             _assessed("另一媒体丁报道", status="署名媒体", importance=4,
+                       dt="2025-01-27 09:00:00")], CUT)
+        art_b = build_attribute_bundle(self._full_splits(), facts_b, rec_b,
+                                       card=card_b, decision_id="d2", cutoff=CUT)
+        hybrid_bundle = AttributeBundle(
+            decision_id="d1", cutoff_iso=art_a.bundle.cutoff_iso,
+            source_card_hash=card_a.card_hash,
+            base_fact_hashes=art_a.bundle.base_fact_hashes,
+            source_registry_hash=art_a.bundle.source_registry_hash,
+            claim_ids=art_b.bundle.claim_ids,           # B's claims
+            row_hashes=art_b.bundle.row_hashes,         # B's rows
+            child_record_hashes=art_a.bundle.child_record_hashes,
+            demoted_record_hashes=art_a.bundle.demoted_record_hashes,
+            final_registry_hash=art_a.bundle.final_registry_hash)
+        hybrid = D7DecisionArtifact(
+            card=card_a, base_facts=art_a.base_facts,
+            source_registry=art_a.source_registry, rows=art_b.rows,
+            bundle=hybrid_bundle, final_registry=art_a.final_registry)
+        with pytest.raises(RegistryError, match="跨决策|claim|血缘"):
+            verify_d7_artifact(hybrid)
+
+    def test_nfi_to_nfd_upgrade_rejected(self):
+        # forge the final registry so the NFI01 demoted parent + children carry
+        # class NFD (ceiling 3 -> 5): registry-internal checks pass (child class ==
+        # parent class), the reconstruction refuses (demoted parent must be the
+        # deterministic transformation of the NFI source parent)
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            AttributeBundle, D7DecisionArtifact, verify_d7_artifact,
+        )
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            ATTRIBUTE_DIMENSIONS, build_card_record, build_card_registry as bcr,
+        )
+        card, records, facts, art = self._artifact()
+        fin = art.final_registry
+        bf_nfi = [bf for bf in art.base_facts if bf.base_record_id == "NFI01"][0]
+        demoted_nfd = build_card_record(
+            "NFI01", domain="news", evidence_class="NFD",         # upgraded!
+            allowed_uses={"context_only"}, allowed_consumers={"news"})
+        forged_children = [build_card_record(
+            f"NFI01.{attr}", domain="news", evidence_class="NFD",  # upgraded!
+            allowed_uses={"factor_positive", "context_only"},
+            allowed_consumers={"news"},
+            allowed_dimensions=ATTRIBUTE_DIMENSIONS[attr],
+            record_schema_id="d7_child_v2",
+            derivation=(("source_parent_content_hash", bf_nfi.base_content_hash),
+                        ("registry_parent_content_hash", demoted_nfd.content_hash),
+                        ("attribute_type", attr)))
+            for attr in ("fact", "economic_linkage")]
+        keep = [r for rid, r in fin.records.items() if not rid.startswith("NFI01")]
+        forged_fin = bcr(art.bundle.cutoff_iso, keep + [demoted_nfd] + forged_children)
+        forged_bundle = AttributeBundle(
+            decision_id="d1", cutoff_iso=art.bundle.cutoff_iso,
+            source_card_hash=card.card_hash,
+            base_fact_hashes=art.bundle.base_fact_hashes,
+            source_registry_hash=art.bundle.source_registry_hash,
+            claim_ids=art.bundle.claim_ids, row_hashes=art.bundle.row_hashes,
+            child_record_hashes=tuple(sorted(
+                r.content_hash for r in keep + forged_children if "." in r.record_id)),
+            demoted_record_hashes=art.bundle.demoted_record_hashes,
+            final_registry_hash=forged_fin.registry_hash)
+        forged_art = D7DecisionArtifact(
+            card=card, base_facts=art.base_facts, source_registry=art.source_registry,
+            rows=art.rows, bundle=forged_bundle, final_registry=forged_fin)
+        with pytest.raises(RegistryError, match="推导"):
+            verify_d7_artifact(forged_art)
+
+    def test_duplicate_row_rejected(self):
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            D7DecisionArtifact, verify_d7_artifact,
+        )
+        card, records, facts, art = self._artifact()
+        dup = D7DecisionArtifact(card=card, base_facts=art.base_facts,
+                                 source_registry=art.source_registry,
+                                 rows=art.rows + (art.rows[0],),
+                                 bundle=art.bundle, final_registry=art.final_registry)
+        with pytest.raises(RegistryError, match="重复"):
+            verify_d7_artifact(dup)
+
+    def test_children_with_zero_rows_rejected(self):
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            D7DecisionArtifact, verify_d7_artifact,
+        )
+        card, records, facts, art = self._artifact()
+        empty = D7DecisionArtifact(card=card, base_facts=art.base_facts,
+                                   source_registry=art.source_registry, rows=(),
+                                   bundle=art.bundle, final_registry=art.final_registry)
+        with pytest.raises(RegistryError, match="子行集合"):
+            verify_d7_artifact(empty)
+
+    def test_shifted_registry_cutoff_rejected(self):
+        # re-review#6 Major-1: registries dated differently from card/bundle refuse
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            D7DecisionArtifact, verify_d7_artifact,
+        )
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            build_card_registry as bcr,
+        )
+        card, records, facts, art = self._artifact()
+        shifted_src = bcr("2025-02-01T18:00:00", list(art.source_registry.records.values()))
+        shifted = D7DecisionArtifact(card=card, base_facts=art.base_facts,
+                                     source_registry=shifted_src, rows=art.rows,
+                                     bundle=art.bundle, final_registry=art.final_registry)
+        with pytest.raises(RegistryError, match="cutoff 四向"):
+            verify_d7_artifact(shifted)
 
 
 # --------------------------------------------------- renderer full revalidation (M3)
