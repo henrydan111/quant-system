@@ -12,9 +12,11 @@ v3 closes the re-review's Blockers:
   verified|confirmed_empty transitions under the file lock, verification that checks the actual output
   (existence, containment, sha256) before accepting `verified`, dense-empty refusal, torn-tail
   fail-closed, and a consolidation gate requiring every planned constituent terminal-valid.
-- B4: the endpoint doc gate validates STRUCTURE: doc_path resolved under the offline mirror with
-  traversal/reparse rejection, doc_sha256 recomputed, structured fields, ISO reviewed_at (not future),
-  non-placeholder reviewer.
+- B4/M2: the endpoint doc gate validates STRUCTURE **and doc-field MEMBERSHIP**: doc_path resolved
+  under the offline mirror with traversal/reparse rejection, doc_sha256 recomputed, ISO reviewed_at
+  (not future), non-placeholder reviewer, AND every required_fields/natural_key column parsed as a real
+  field of the pinned doc (parse_doc_field_vocabulary over the 名称 markdown tables) — a fabricated
+  field list or a doc with no field table refuses; natural_key may name coordinator-DERIVED columns.
 - M1: ENDPOINT_MATRIX is a TYPED `EndpointRow` table — one row per physical `output_family`, owned by
   EXACTLY ONE row (assert_unique_output_owner). Each row declares `source_endpoints` (the API calls the
   output requires — A01 market/daily draws daily+daily_basic+adj_factor), `vendor_record_key` (true
@@ -426,6 +428,38 @@ def _coordinator_commit() -> str:
 CONTRACT_REQUIRED = ("doc_path", "doc_sha256", "required_fields", "natural_key", "pagination",
                      "rate_limit", "cadence", "pit_anchors", "empty_policy", "reviewed_by", "reviewed_at")
 
+# Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
+# (they are computed during ingest). report_rc_payload_digest is the PIT identity digest; raw_fetch_ts is
+# the first-seen stamp; _src_file/_src_ordinal are the deterministic tie-break columns (§6.3 P0-4).
+_DERIVED_KEY_ALLOWLIST = frozenset({"report_rc_payload_digest", "raw_fetch_ts", "_src_file", "_src_ordinal"})
+_FIELD_HEADERS = frozenset({"名称", "name", "参数名", "字段", "字段名"})  # markdown field-table header first cell
+_DOC_IDENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def parse_doc_field_vocabulary(doc: Path) -> set:
+    """Parse the DECLARED field vocabulary from a Tushare interface doc (M2). Every markdown table
+    whose header first cell is a field-name header (名称/字段/name) contributes its first-column
+    identifiers — the union across the input AND output tables is the doc's declared field set. Returns
+    an empty set if no field table is present (a wrong/output-less doc → the membership check refuses)."""
+    vocab, armed = set(), False
+    for line in doc.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            armed = False  # any non-table line ends the current table
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        first = cells[0] if cells else ""
+        if first in _FIELD_HEADERS:
+            armed = True  # header row of a field table — arm collection
+            continue
+        if first and set(first) <= {"-", ":"}:
+            continue  # separator row (| --- |) — stay armed
+        if armed:
+            m = _DOC_IDENT.match(first)
+            if m:
+                vocab.add(m.group(1))
+    return vocab
+
 
 def contract_errors(endpoint: str, c: dict) -> list:
     errs = []
@@ -448,20 +482,41 @@ def contract_errors(endpoint: str, c: dict) -> list:
         _reject_reparse_lexical(doc)
     except RuntimeError as e:
         return [f"{endpoint}: {e}"]
+    doc_ok = False
     if not doc.is_file():
         errs.append(f"{endpoint}: doc file missing: {doc}")
     elif sha256_file(doc) != str(c["doc_sha256"]).lower():
         errs.append(f"{endpoint}: doc_sha256 mismatch (doc changed since review)")
-    if not isinstance(c["required_fields"], list) or len(c["required_fields"]) < 2:
+    else:
+        doc_ok = True
+    rf_ok = isinstance(c["required_fields"], list) and len(c["required_fields"]) >= 2
+    if not rf_ok:
         errs.append(f"{endpoint}: required_fields must be a real field list")
     elif any(str(x).strip().lower() in _PLACEHOLDERS for x in c["required_fields"]):
         errs.append(f"{endpoint}: required_fields contains placeholder elements (['x',...])")
-    if not isinstance(c["natural_key"], list) or not c["natural_key"]:
+        rf_ok = False
+    nk_ok = isinstance(c["natural_key"], list) and bool(c["natural_key"])
+    if not nk_ok:
         errs.append(f"{endpoint}: natural_key must be a non-empty list")
     elif any(str(x).strip().lower() in _PLACEHOLDERS for x in c["natural_key"]):
         errs.append(f"{endpoint}: natural_key contains placeholder elements")
-    # NOTE: required_fields ⊆ the pinned doc's field list + typed pagination/limit parsing are the
-    # adapter-phase deepening (they need the doc parsed); this structural gate blocks placeholders.
+        nk_ok = False
+    # M2: field membership — required_fields/natural_key must be REAL columns of the pinned doc (a
+    # fabricated field list no longer passes). natural_key may also name a coordinator-DERIVED column.
+    if doc_ok and (rf_ok or nk_ok):
+        vocab = parse_doc_field_vocabulary(doc)
+        if not vocab:
+            errs.append(f"{endpoint}: no field table parsed from doc (wrong doc cited? cite the output-fields doc)")
+        else:
+            if rf_ok:
+                missing = [f for f in c["required_fields"] if str(f) not in vocab]
+                if missing:
+                    errs.append(f"{endpoint}: required_fields not in doc field list: {missing}")
+            if nk_ok:
+                allowed = vocab | _DERIVED_KEY_ALLOWLIST | (set(map(str, c["required_fields"])) if rf_ok else set())
+                bad = [f for f in c["natural_key"] if str(f) not in allowed]
+                if bad:
+                    errs.append(f"{endpoint}: natural_key columns not in doc field list nor derived-allowlist: {bad}")
     if c["empty_policy"] not in ("dense_refuse", "sparse_canary"):
         errs.append(f"{endpoint}: empty_policy must be dense_refuse|sparse_canary")
     if len(str(c["reviewed_by"]).strip()) < 3:

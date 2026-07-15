@@ -127,21 +127,49 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
                 "empty_policy": "dense_refuse", "reviewed_by": "henry",
                 "reviewed_at": datetime.now(timezone.utc).isoformat()}
 
+    # a doc WITH a real Tushare-style field table (输出参数 | 名称 | ...) — ts_code/trade_date/close declared
+    _FIELD_DOC = ("# daily interface doc\n输出参数\n| 名称 | 类型 | 默认显示 | 描述 |\n| --- | --- | --- | --- |\n"
+                  "| ts_code | str | Y | code |\n| trade_date | str | Y | date |\n| close | float | Y | close |\n")
+
     # (a) "x"-stuffed contract (GPT's exact probe) — scalar AND list-element placeholders — refuses
     xstuffed = {k: "x" for k in rrc.CONTRACT_REQUIRED}
     xstuffed["required_fields"] = ["x", "x"]
     xstuffed["natural_key"] = ["x"]
     errs = rrc.contract_errors("daily", xstuffed)
     assert errs and any("placeholder" in e for e in errs)
-    # (b) a real doc under the mirror passes
+    # (b) a real doc under the mirror whose declared fields cover required_fields/natural_key passes
     doc = fake_mirror / "292_report_rc.md"
-    doc.write_text("# daily interface doc", encoding="utf-8")
+    doc.write_text(_FIELD_DOC, encoding="utf-8")
     assert rrc.contract_errors("daily", _good(doc)) == []
     # (c) wrong hash / path-escape / future timestamp all refuse
     assert any("mismatch" in e for e in rrc.contract_errors("daily", dict(_good(doc), doc_sha256="0" * 64)))
     assert any("escapes" in e for e in rrc.contract_errors("daily", dict(_good(doc), doc_path="CLAUDE.md")))
     fut = dict(_good(doc), reviewed_at=(datetime.now(timezone.utc) + timedelta(days=2)).isoformat())
     assert any("future" in e for e in rrc.contract_errors("daily", fut))
+    # (d) M2: a FABRICATED required field (not in the doc) refuses — closes GPT re-review #4 M2
+    fab = dict(_good(doc), required_fields=["ts_code", "trade_date", "not_a_real_field"])
+    assert any("not in doc field list" in e and "not_a_real_field" in e for e in rrc.contract_errors("daily", fab))
+    # (e) M2: a natural_key column that is neither a doc field nor derived refuses
+    badnk = dict(_good(doc), natural_key=["ts_code", "invented_key"])
+    assert any("not in doc field list nor derived" in e for e in rrc.contract_errors("daily", badnk))
+    # (f) M2: a coordinator-DERIVED key column (report_rc_payload_digest) IS allowed in natural_key
+    okderived = dict(_good(doc), natural_key=["ts_code", "trade_date", "report_rc_payload_digest"])
+    assert rrc.contract_errors("daily", okderived) == []
+    # (g) M2: a doc with NO field table (wrong doc cited) refuses
+    emptydoc = fake_mirror / "999_no_table.md"
+    emptydoc.write_text("# just prose, no field table\n", encoding="utf-8")
+    assert any("no field table parsed" in e for e in rrc.contract_errors("daily", _good(emptydoc)))
+
+
+def test_parse_doc_field_vocabulary_on_real_docs():
+    # M2: the parser extracts real vendor fields from the pinned mirror docs (network-free).
+    rc = rrc.parse_doc_field_vocabulary(rrc.DOC_MIRROR / "292_券商盈利预测数据.md")
+    assert {"ts_code", "report_date", "org_name", "author_name", "quarter"} <= rc
+    assert "report_rc_payload_digest" not in rc  # a DERIVED key is never a doc field
+    ti = rrc.parse_doc_field_vocabulary(rrc.DOC_MIRROR / "107_龙虎榜机构交易单.md")
+    assert {"exalter", "side", "reason", "buy", "sell"} <= ti  # top_inst vendor_record_key columns
+    susp = rrc.parse_doc_field_vocabulary(rrc.DOC_MIRROR / "214_每日停复牌信息.md")
+    assert {"ts_code", "trade_date", "suspend_type"} <= susp
 
 
 def test_endpoint_matrix_unique_owner_per_output():
