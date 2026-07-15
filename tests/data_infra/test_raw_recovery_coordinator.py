@@ -86,158 +86,21 @@ def test_broken_junction_refused(crun):
         rp.assert_write(junc / "escaped.txt")
 
 
-def test_resume_requires_valid_run_created_record(crun):
+def test_resume_clean_ok_and_tamper_refused(crun):
     rp, led = rrc.open_run("resumerun", new=True)
-    # tamper: rewrite run_created with a wrong baseline hash
+    # a clean resume re-opens the same run
+    rp2, led2 = rrc.open_run("resumerun", new=False)
+    assert rp2.run_id == "resumerun"
+    # tampering ANY committed row now breaks the hash chain -> resume refuses (stronger than the old
+    # run_created-field check; the chain head is anchored outside the jsonl)
     lines = rp.ledger_path.read_text(encoding="utf-8").splitlines()
-    row = json.loads(lines[0])
-    row["baseline_manifest_sha256"] = "0" * 64
-    rp.ledger_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    with pytest.raises(SystemExit, match="run_created"):
+    row = json.loads(lines[0]); row["baseline_manifest_sha256"] = "0" * 64
+    lines[0] = json.dumps(row)
+    rp.ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="integrity failed|run_created"):
         rrc.open_run("resumerun", new=False)
 
 
-# ── B2/B3: ledger derives from the plan + independently verifies the output ──────────────────────
-def _write_parquet(path: Path, rows: int = 2):
-    import pandas as pd
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"ts_code": [f"{i:06d}.SZ" for i in range(rows)], "trade_date": ["20260702"] * rows,
-                  "close": [1.0] * rows}).to_parquet(path)
-
-
-def _fresh(crun, name="ledrun"):
-    rp, led = rrc.open_run(name, new=True)
-    rid = rrc.request_id("daily", {"trade_date": "20260702"}, "20260702")
-    rid2 = rrc.request_id("moneyflow", {"trade_date": "20260702"}, "20260702")
-    cid = rrc.request_id("moneyflow", {"trade_date": "20260703"}, "20260703")  # canary (same endpoint)
-    led.freeze_plan([
-        {"request_id": rid, "endpoint": "daily", "dataset": "daily", "params": {"trade_date": "20260702"},
-         "partition": "20260702", "empty_policy": "dense_refuse",
-         "expected_output": "market/daily/2026/daily_20260702.parquet", "natural_key": ["ts_code", "trade_date"]},
-        {"request_id": rid2, "endpoint": "moneyflow", "dataset": "moneyflow",
-         "params": {"trade_date": "20260702"}, "partition": "20260702", "empty_policy": "sparse_canary",
-         "expected_output": "market/moneyflow/2026/moneyflow_20260702.parquet", "natural_key": ["ts_code", "trade_date"]},
-        {"request_id": cid, "endpoint": "moneyflow", "dataset": "moneyflow",
-         "params": {"trade_date": "20260703"}, "partition": "20260703", "empty_policy": "sparse_canary",
-         "expected_output": "market/moneyflow/2026/moneyflow_20260703.parquet", "natural_key": ["ts_code", "trade_date"]},
-    ])
-    return rp, led, rid, rid2, cid
-
-
-def _verify(led, rp, rid, out_rel, rows=2):
-    out = rp.staging_data / out_rel
-    _write_parquet(out, rows)
-    led.record_attempt(rid, page=1, row_count=rows, termination="single_page", response_ts="t", raw_page_sha256="h")
-    led.record_verdict(rid, "verified", output_path=str(out))
-
-
-def test_plan_freeze_rejects_mislabelled_and_duplicate_ids(crun):
-    rp, led = rrc.open_run("freezerun", new=True)
-    good = rrc.request_id("daily", {"trade_date": "20260702"}, "20260702")
-    base = {"endpoint": "daily", "dataset": "daily", "params": {"trade_date": "20260702"},
-            "partition": "20260702", "empty_policy": "dense_refuse",
-            "expected_output": "market/daily/2026/daily_20260702.parquet", "natural_key": ["ts_code", "trade_date"]}
-    with pytest.raises(RuntimeError, match="does not match"):
-        led.freeze_plan([{**base, "request_id": "deadbeef"}])
-    with pytest.raises(RuntimeError, match="duplicate"):
-        led.freeze_plan([{**base, "request_id": good}, {**base, "request_id": good}])
-
-
-def test_plan_hash_tamper_refuses(crun):
-    rp, led, rid, *_ = _fresh(crun, "tam")
-    plan = json.loads(rp.plan_path.read_text(encoding="utf-8"))
-    plan["rows"][0]["params"] = {"trade_date": "20990101"}
-    rp.plan_path.write_text(json.dumps(plan), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="hash mismatch"):
-        led.record_attempt(rid, page=1, row_count=2, termination="single_page", response_ts="t", raw_page_sha256="h")
-
-
-def test_unplanned_request_refused(crun):
-    _, led, *_ = _fresh(crun, "ledrun2")
-    with pytest.raises(RuntimeError, match="not in the frozen plan"):
-        led.record_attempt("deadbeef" * 3, page=1, row_count=1, termination="single_page", response_ts="t", raw_page_sha256="h")
-
-
-def test_verified_needs_bound_path_real_parquet_and_termination(crun):
-    rp, led, rid, *_ = _fresh(crun, "ledrun3")
-    # (a) output at a path OTHER than the plan-bound expected_output -> refuse
-    other = rp.staging_data / "market" / "daily" / "2026" / "wrong.parquet"
-    _write_parquet(other)
-    led.record_attempt(rid, page=1, row_count=2, termination="single_page", response_ts="t", raw_page_sha256="h")
-    with pytest.raises(RuntimeError, match="expected_output"):
-        led.record_verdict(rid, "verified", output_path=str(other))
-    # (b) non-parquet bytes at the bound path -> pandas read raises (kills the b"DATA" probe)
-    bound = rp.staging_data / "market" / "daily" / "2026" / "daily_20260702.parquet"
-    bound.parent.mkdir(parents=True, exist_ok=True)
-    bound.write_bytes(b"DATA")
-    with pytest.raises(Exception):
-        led.record_verdict(rid, "verified", output_path=str(bound))
-    # (c) real parquet at the bound path with a proven termination -> verified
-    _write_parquet(bound)
-    led.record_verdict(rid, "verified", output_path=str(bound))
-    with pytest.raises(RuntimeError, match="terminal|invalid transition"):
-        led.record_attempt(rid, page=2, row_count=1, termination="single_page", response_ts="t", raw_page_sha256="h")
-
-
-def test_verified_without_termination_attempt_refused(crun):
-    rp, led, rid, *_ = _fresh(crun, "ledrun3b")
-    bound = rp.staging_data / "market" / "daily" / "2026" / "daily_20260702.parquet"
-    _write_parquet(bound)
-    led.record_attempt(rid, page=1, row_count=2, termination="mid_page", response_ts="t", raw_page_sha256="h")
-    with pytest.raises(RuntimeError, match="termination"):
-        led.record_verdict(rid, "verified", output_path=str(bound))
-
-
-def test_dense_empty_never_accepted(crun):
-    rp, led, rid, *_ = _fresh(crun, "ledrun4")
-    led.record_attempt(rid, page=1, row_count=0, termination="single_page", response_ts="t", raw_page_sha256="h")
-    with pytest.raises(RuntimeError, match="NEVER"):
-        led.record_verdict(rid, "confirmed_empty")
-
-
-def test_confirmed_empty_needs_two_receipts_and_verified_same_endpoint_canary(crun):
-    rp, led, rid, rid2, cid = _fresh(crun, "ledrun5")
-    # one empty receipt + no canary -> refuse
-    led.record_attempt(rid2, page=1, row_count=0, termination="single_page", response_ts="t", raw_page_sha256="h")
-    with pytest.raises(RuntimeError, match=">=2 stored empty"):
-        led.record_verdict(rid2, "confirmed_empty", canary_request_id=cid)
-    # second empty receipt, but canary not yet verified -> refuse
-    led.record_attempt(rid2, page=1, row_count=0, termination="single_page", response_ts="t2", raw_page_sha256="h2")
-    with pytest.raises(RuntimeError, match="canary .* verified"):
-        led.record_verdict(rid2, "confirmed_empty", canary_request_id=cid)
-    # verify the same-endpoint nonempty canary -> now confirmed_empty is admissible
-    _verify(led, rp, cid, "market/moneyflow/2026/moneyflow_20260703.parquet", rows=3)
-    led.record_verdict(rid2, "confirmed_empty", canary_request_id=cid)
-
-
-def test_cross_endpoint_canary_refused(crun):
-    rp, led, rid, rid2, cid = _fresh(crun, "ledrun5b")
-    _verify(led, rp, rid, "market/daily/2026/daily_20260702.parquet")  # a DAILY verified request
-    led.record_attempt(rid2, page=1, row_count=0, termination="single_page", response_ts="t", raw_page_sha256="h")
-    led.record_attempt(rid2, page=1, row_count=0, termination="single_page", response_ts="t2", raw_page_sha256="h2")
-    with pytest.raises(RuntimeError, match="SAME-endpoint"):
-        led.record_verdict(rid2, "confirmed_empty", canary_request_id=rid)  # daily canary for a moneyflow empty
-
-
-def test_torn_ledger_tail_fails_closed(crun):
-    rp, led, rid, *_ = _fresh(crun, "ledrun6")
-    with open(rp.ledger_path, "a", encoding="utf-8") as fh:
-        fh.write('{"kind": "attempt", "request_id": "x", TRUNCAT')
-    with pytest.raises(RuntimeError, match="torn|malformed"):
-        led.record_attempt(rid, page=1, row_count=1, termination="single_page", response_ts="t", raw_page_sha256="h")
-
-
-def test_consolidation_gate_requires_all_terminal(crun):
-    rp, led, rid, rid2, cid = _fresh(crun, "ledrun7")
-    ok, pending = led.consolidation_allowed("moneyflow")
-    assert ok is False and rid2 in pending
-    _verify(led, rp, rid2, "market/moneyflow/2026/moneyflow_20260702.parquet")
-    _verify(led, rp, cid, "market/moneyflow/2026/moneyflow_20260703.parquet")
-    ok, pending = led.consolidation_allowed("moneyflow")
-    assert ok is True and not pending
-
-
-# ── B4: contract gate negatives ──────────────────────────────────────────────────────────────────
 def _good_contract(tmp_doc: Path) -> dict:
     return {"doc_path": str(tmp_doc.relative_to(rrc.E_ROOT)), "doc_sha256": rrc.sha256_file(tmp_doc),
             "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],

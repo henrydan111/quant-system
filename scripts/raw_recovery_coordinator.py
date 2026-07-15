@@ -283,194 +283,23 @@ class RecoveryPaths:
         return FileLock(str(lock_path))
 
 
-# ── B3: typed, transition-enforced ledger ─────────────────────────────────────────────────────────
-LEDGER_KINDS = {
-    "lifecycle": {"event"},                                     # run_created / plan_frozen / preflight_ok...
-    "attempt": {"request_id", "endpoint", "params", "page", "termination", "response_ts"},
-    "verdict": {"request_id", "state"},                         # + per-state evidence below
-}
-_TERMINAL = {"verified", "confirmed_empty"}
-_TRANSITIONS = {None: {"planned"}, "planned": {"fetched", "failed"},
-                "fetched": {"verified", "confirmed_empty", "failed"},
-                "failed": {"fetched"},  # retry re-fetches; failed is never terminal-valid
-                "verified": set(), "confirmed_empty": set()}
+# ── B2/B3 ledger: the page-receipt ledger (coordinator-owned receipts + external hash chain) lives in
+# scripts/recovery_ledger.py (GPT re-review #4 B2). request_id/LedgerError are re-exported for callers.
+from recovery_ledger import PageReceiptLedger, LedgerError, request_id  # noqa: E402,F401
 
 
-def request_id(endpoint: str, params: dict, partition: str) -> str:
-    canon = json.dumps({"e": endpoint, "p": params, "part": partition}, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(canon.encode()).hexdigest()[:24]
-
-
-class RecoveryLedger:
-    """Read-check-append under the run file lock. Torn/malformed tail = fail closed. Verdicts are
-    validated against the FROZEN request plan + the actual output on disk."""
-
-    def __init__(self, rp: RecoveryPaths):
-        self.rp = rp
-
-    def _load(self) -> list:
-        p = self.rp.ledger_path
-        if not p.exists():
-            return []
-        rows = []
-        raw = p.read_text(encoding="utf-8")
-        for i, line in enumerate(raw.splitlines()):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                raise RuntimeError(f"REFUSED: ledger torn/malformed at line {i + 1} — manual inspection required")
-            kind = row.get("kind")
-            if kind not in LEDGER_KINDS or not LEDGER_KINDS[kind] <= set(row):
-                raise RuntimeError(f"REFUSED: ledger row {i + 1} malformed for kind={kind!r}")
-            rows.append(row)
-        return rows
-
-    def _append(self, row: dict) -> None:
-        p = self.rp.assert_write(self.rp.ledger_path)
-        with self.rp.broker().open_for_write(p, "a") as fh:  # no-follow validated append
-            fh.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **row},
-                                ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-
-    def event(self, name: str, **kw) -> None:
-        with self.rp._lock():
-            self._load()
-            self._append({"kind": "lifecycle", "event": name, **kw})
-
-    def freeze_plan(self, plan_rows: list) -> str:
-        """plan_rows: each REQUIRES request_id, endpoint, dataset, params, partition, empty_policy,
-        expected_output (staging-relative path this request must write), natural_key (from the signed
-        contract). Frozen ONCE; the request_id must equal request_id(endpoint,params,partition) — a
-        mislabelled row refuses; duplicate ids refuse (GPT re-review #3 B2). Endpoint/params/output are
-        thereafter derived from HERE, never from the caller."""
-        with self.rp._lock():
-            if self.rp.plan_path.exists():
-                raise RuntimeError("REFUSED: request plan already frozen for this run")
-            seen = set()
-            for r in plan_rows:
-                need = {"request_id", "endpoint", "dataset", "params", "partition", "empty_policy",
-                        "expected_output", "natural_key"}
-                if not need <= set(r):
-                    raise RuntimeError(f"REFUSED: plan row missing {need - set(r)}")
-                if r["request_id"] != request_id(r["endpoint"], r["params"], r["partition"]):
-                    raise RuntimeError(f"REFUSED: request_id does not match endpoint+params+partition ({r['request_id']})")
-                if r["request_id"] in seen:
-                    raise RuntimeError(f"REFUSED: duplicate request_id {r['request_id']}")
-                if r["empty_policy"] not in ("dense_refuse", "sparse_canary"):
-                    raise RuntimeError(f"REFUSED: bad empty_policy {r['empty_policy']}")
-                seen.add(r["request_id"])
-            blob = json.dumps(plan_rows, sort_keys=True, ensure_ascii=False)
-            sha = hashlib.sha256(blob.encode()).hexdigest()
-            self.rp.write_json(self.rp.plan_path, {"sha256": sha, "rows": plan_rows})
-            self._append({"kind": "lifecycle", "event": "plan_frozen", "plan_sha256": sha,
-                          "request_count": len(plan_rows)})
-            return sha
-
-    def _plan(self) -> dict:
-        if not self.rp.plan_path.exists():
-            raise RuntimeError("REFUSED: no frozen request plan")
-        plan = json.loads(self.rp.plan_path.read_text(encoding="utf-8"))
-        blob = json.dumps(plan["rows"], sort_keys=True, ensure_ascii=False)
-        if hashlib.sha256(blob.encode()).hexdigest() != plan["sha256"]:
-            raise RuntimeError("REFUSED: request plan hash mismatch (tampered)")
-        return {r["request_id"]: r for r in plan["rows"]}
-
-    def _state_of(self, rows: list, rid: str):
-        st = "planned" if rid in self._plan() else None
-        for r in rows:
-            if r.get("request_id") != rid:
-                continue
-            if r["kind"] == "attempt":
-                st = "failed" if r.get("exception") else "fetched"  # termination is the PAGE reason, not the state
-            elif r["kind"] == "verdict":
-                st = r["state"]
-        return st
-
-    def record_attempt(self, rid: str, *, page: int, row_count: int, termination: str,
-                       response_ts: str, raw_page_sha256: str, exception: str = "") -> None:
-        """An attempt receipt. endpoint/params are DERIVED from the frozen plan (not accepted from the
-        caller — GPT re-review #3 B2). row_count + raw_page_sha256 are the page receipt used later to
-        prove contiguous coverage / a real empty."""
-        with self.rp._lock():
-            rows = self._load()
-            plan = self._plan()
-            if rid not in plan:
-                raise RuntimeError(f"REFUSED: request {rid} not in the frozen plan")
-            cur = self._state_of(rows, rid)
-            if cur in _TERMINAL:
-                raise RuntimeError(f"REFUSED: request {rid} already terminal ({cur})")
-            row = plan[rid]
-            self._append({"kind": "attempt", "request_id": rid, "endpoint": row["endpoint"],
-                          "params": row["params"], "page": int(page), "row_count": int(row_count),
-                          "termination": termination, "response_ts": response_ts,
-                          "raw_page_sha256": raw_page_sha256, "exception": exception})
-
-    def _attempts(self, rows, rid):
-        return [r for r in rows if r.get("kind") == "attempt" and r.get("request_id") == rid]
-
-    def _profile_output(self, out: Path, natural_key: list) -> dict:
-        """Independently open the output and compute schema + key stats — never trust caller strings."""
-        import pandas as pd
-        df = pd.read_parquet(out)  # raises if not a real parquet (kills the b"DATA" probe)
-        schema = ";".join(f"{c}:{df[c].dtype}" for c in sorted(map(str, df.columns)))
-        fp = hashlib.sha256(schema.encode()).hexdigest()[:16]
-        miss = [k for k in natural_key if k not in df.columns]
-        if miss:
-            raise RuntimeError(f"output missing natural-key columns {miss}")
-        null_keys = int(df[natural_key].isna().any(axis=1).sum())
-        dup_groups = int(df.duplicated(subset=natural_key).sum())
-        return {"rows": int(len(df)), "schema_fingerprint": fp, "null_keys": null_keys,
-                "dup_groups": dup_groups, "sha256": sha256_file(out)}
-
-    def record_verdict(self, rid: str, state: str, *, output_path: str = "", canary_request_id: str = "") -> None:
-        with self.rp._lock():
-            rows = self._load()
-            plan = self._plan()
-            if rid not in plan:
-                raise RuntimeError(f"REFUSED: request {rid} not in the frozen plan")
-            row = plan[rid]
-            cur = self._state_of(rows, rid)
-            if state not in _TRANSITIONS.get(cur, set()):
-                raise RuntimeError(f"REFUSED: invalid transition {cur} -> {state} for {rid}")
-            evidence = {}
-            if state == "verified":
-                exp = self.rp.assert_write(self.rp.staging_data / row["expected_output"])
-                if Path(os.path.normpath(output_path)) != exp:
-                    raise RuntimeError(f"REFUSED: output_path != the plan-bound expected_output ({rid})")
-                if not exp.is_file():
-                    raise RuntimeError(f"REFUSED: 'verified' but the bound output is missing ({rid})")
-                atts = self._attempts(rows, rid)
-                if not any(a.get("termination") in ("single_page", "last_page", "complete") for a in atts):
-                    raise RuntimeError(f"REFUSED: 'verified' without a proven termination attempt ({rid})")
-                prof = self._profile_output(exp, list(row["natural_key"]))  # INDEPENDENT computation
-                if prof["rows"] == 0 and row["empty_policy"] == "dense_refuse":
-                    raise RuntimeError(f"REFUSED: dense dataset verified with 0 rows ({rid})")
-                evidence = prof
-            if state == "confirmed_empty":
-                if row["empty_policy"] != "sparse_canary":
-                    raise RuntimeError(f"REFUSED: dense dataset — an empty result can NEVER be accepted ({rid})")
-                empties = [a for a in self._attempts(rows, rid) if int(a.get("row_count", -1)) == 0]
-                if len(empties) < 2:
-                    raise RuntimeError(f"REFUSED: confirmed_empty needs >=2 stored empty response receipts ({rid})")
-                can = plan.get(canary_request_id)
-                if not can or can["endpoint"] != row["endpoint"]:
-                    raise RuntimeError(f"REFUSED: canary must be a planned SAME-endpoint request ({rid})")
-                cstate = self._state_of(rows, canary_request_id)
-                cnonempty = any(int(a.get("row_count", 0)) > 0 for a in self._attempts(rows, canary_request_id))
-                if cstate != "verified" or not cnonempty:
-                    raise RuntimeError(f"REFUSED: canary {canary_request_id} must be verified AND nonempty ({rid})")
-            self._append({"kind": "verdict", "request_id": rid, "state": state, "output_path": output_path,
-                          "canary_request_id": canary_request_id, "evidence": evidence})
-
-    def consolidation_allowed(self, dataset: str):
-        rows = self._load()
-        plan = self._plan()
-        pend = [rid for rid, r in plan.items() if r["dataset"] == dataset
-                and self._state_of(rows, rid) not in _TERMINAL]
-        return (len(pend) == 0, pend)
+def _coordinator_commit() -> str:
+    """The coordinator source identity bound into every ledger chain (falls back to the file hash if
+    git is unavailable)."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(E_ROOT), capture_output=True,
+                             text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return sha256_file(Path(__file__)) + ':' + sha256_file(E_ROOT / 'scripts' / 'recovery_ledger.py')
 
 
 # ── B4: structural doc-contract gate ─────────────────────────────────────────────────────────────
@@ -543,7 +372,8 @@ def load_baseline() -> dict:
 
 def open_run(run_id: str, *, new: bool) -> tuple:
     rp = RecoveryPaths(run_id)
-    led = RecoveryLedger(rp)
+    led = PageReceiptLedger(rp, coordinator_commit=_coordinator_commit(),
+                            adapter_bundle_hash="adapters_unbuilt")  # bound once adapters exist
     if new:
         if rp.root.exists():
             raise SystemExit(f"REFUSED: run {run_id} already exists — immutable runs")
@@ -553,7 +383,10 @@ def open_run(run_id: str, *, new: bool) -> tuple:
     else:
         if not rp.root.exists():
             raise SystemExit(f"REFUSED: run {run_id} does not exist")
-        rows = led._load()
+        try:
+            rows = led._load()  # verifies the hash chain vs the external head (tamper -> LedgerError)
+        except LedgerError as exc:
+            raise SystemExit(f"REFUSED: resume — ledger integrity failed ({exc})")
         created = next((r for r in rows if r.get("event") == "run_created"), None)
         if not created or created.get("run_id") != run_id \
                 or created.get("baseline_manifest_sha256") != MANIFEST_SHA256:
@@ -563,7 +396,7 @@ def open_run(run_id: str, *, new: bool) -> tuple:
 
 
 # ── modes (network-free) ─────────────────────────────────────────────────────────────────────────
-def cmd_inventory(rp: RecoveryPaths, led: RecoveryLedger) -> int:
+def cmd_inventory(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
     base = load_baseline()
     sys.path.insert(0, str(E_ROOT / "src"))
     from data_infra.pit_backend import DATASET_SPECS
@@ -591,7 +424,7 @@ def cmd_inventory(rp: RecoveryPaths, led: RecoveryLedger) -> int:
     return 0
 
 
-def cmd_preflight(rp: RecoveryPaths, led: RecoveryLedger) -> int:
+def cmd_preflight(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
     free_gb = shutil.disk_usage(str(RECOVERY_ROOT.drive + "\\"))[2] // 2**30
     if free_gb < MIN_STAGING_FREE_GB:
         print(f"FAIL: C: free {free_gb}GB < {MIN_STAGING_FREE_GB}GB")
@@ -627,7 +460,7 @@ def cmd_preflight(rp: RecoveryPaths, led: RecoveryLedger) -> int:
     return 0
 
 
-def cmd_plan(rp: RecoveryPaths, led: RecoveryLedger) -> int:
+def cmd_plan(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
     import yaml
     contracts = yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {} if CONTRACTS_YAML.exists() else {}
     owners: dict = {}
