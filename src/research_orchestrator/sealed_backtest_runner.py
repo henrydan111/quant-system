@@ -83,10 +83,12 @@ class SealedBacktestRunner:
             ),
         )
         from src.research_orchestrator.holdout_seal import (
+            OosExecutionGuardStore,
             resolve_configured_global_holdout_root,
         )
 
-        store = HoldoutSealStore(resolve_configured_global_holdout_root())
+        root = resolve_configured_global_holdout_root()
+        store = HoldoutSealStore(root)
         store.claim_holdout_access(
             design_hash=self._ctx.design_hash,
             hypothesis_id=self._ctx.hypothesis_id,
@@ -97,6 +99,15 @@ class SealedBacktestRunner:
             stage=self._ctx.stage,
             allow_same_run=self._ctx.allow_same_run,
             seal_key=self._ctx.effective_seal_key,
+        )
+        # R7 Blocker 1: this runner has NO result store — mark execution_started after
+        # the claim and BEFORE the backtest, so a crashed run cannot be silently
+        # re-executed via allow_same_run resume (there is nothing persisted to reload;
+        # the holdout may already have been observed). Quarantine, never re-run.
+        OosExecutionGuardStore(root).assert_and_mark_execution(
+            seal_key=self._ctx.effective_seal_key,
+            run_dir=self._ctx.run_dir,
+            step_id=self._ctx.step_id,
         )
 
     def run_vectorized(self, *, time_split: dict | None = None, **kwargs: Any) -> Any:

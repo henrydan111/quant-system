@@ -377,12 +377,13 @@ def reproduce_sealed_oos(
     # access context are all bound to it — a changed recipe (different expressions/
     # horizon/quantiles/window/provider generation) can never resume a prior spend.
     from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
-    from src.alpha_research.factor_eval_skill.sealed_oos import (
-        REGISTRATION_BAR,
-        registration_bar_hash,
-    )
+    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
-    _bar_hash = registration_bar_hash()
+    # R7 Major 1: ONE plain-dict snapshot of the bar for this whole run — the hash, the
+    # persisted payload, and the evaluation floor all come from THIS snapshot; the module
+    # global is read exactly once (a mid-run mutation cannot desynchronize them).
+    _bar = registration_bar_snapshot()
+    _bar_hash = _phash(_bar)
     a5_request_hash = _phash(
         {
             "kind": "a5_sealed_oos_reproduction",
@@ -445,12 +446,12 @@ def reproduce_sealed_oos(
         bar_verdict = None
         if sides is not None:
             _v = evaluate_sealed_oos_bar(
-                sides, per_factor, ls_floor=float(REGISTRATION_BAR["ls_sharpe_floor"])
+                sides, per_factor, ls_floor=float(_bar["ls_sharpe_floor"])
             )
             bar_verdict = {"results": list(_v.results), "n_pass": int(_v.n_pass),
                            "n_total": int(_v.n_total)}
         return {
-            "registration_bar": dict(REGISTRATION_BAR),
+            "registration_bar": dict(_bar),
             "registration_bar_hash": _bar_hash,
             "bar_verdict": bar_verdict,
             "independent_reproduction": {
@@ -542,11 +543,18 @@ def reproduce_sealed_oos(
                 calendar_policy_id=str(prov.get("calendar_policy_id", "")),
                 request_hash=a5_request_hash,
             )
-        # open (fresh) or same-run resume (crash) the reproduction record — bound to
-        # run_dir/step_id; a foreign concurrent run or a changed recipe refuses HERE.
+        # open (fresh) or same-run resume (crash-while-claimed) the reproduction record —
+        # bound to run_dir/step_id; a foreign concurrent run, a changed recipe, or a
+        # QUARANTINED execution_started state refuses HERE.
         a5_store.open_or_resume(
             seal_key=str(seal_hash), request_hash=a5_request_hash,
             run_dir=str(run_dir), step_id=step_id, allow_same_run=allow_same_run,
+        )
+        # R7 Blocker 1: mark execution_started BEFORE any OOS read — a crash between the
+        # computation and the persisted result leaves a PERMANENTLY QUARANTINED record
+        # (resume refuses); only a crash while still `claimed` (no OOS touched) resumes.
+        a5_store.mark_execution_started(
+            seal_key=str(seal_hash), request_hash=a5_request_hash
         )
         result_block = _compute_result_block()
         a5_store.complete(

@@ -127,6 +127,58 @@ def resolve_configured_global_holdout_root() -> Path:
     return _resolve_configured_global_holdout_root_uncached()
 
 
+class OosExecutionGuardStore:
+    """PR3 R7 Blocker 1 (generic-runner leg) — a persisted ``execution_started`` marker
+    for legacy/orchestrator OOS backtests that have NO result store of their own
+    (:class:`SealedBacktestRunner`): the marker is written AFTER the seal claim and
+    BEFORE the backtest runs. A resume (``allow_same_run=context.resumed``) that finds
+    a marker for its seal_key REFUSES — the OOS data may already have been observed and
+    there is no persisted result to load, so recovery is an explicit human migration,
+    never an automatic re-run. Lives at the canonical holdout root, append-only."""
+
+    FILENAME = "oos_execution_guard.parquet"
+
+    def __init__(self, root_dir: str | Path) -> None:
+        self.root_dir = Path(root_dir).resolve()
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.root_dir / self.FILENAME
+        self.lock_path = self.root_dir / f"{self.FILENAME}.lock"
+
+    def _load(self) -> pd.DataFrame:
+        if not self.log_path.exists():
+            return pd.DataFrame(columns=["recorded_at", "seal_key", "run_dir", "step_id"])
+        return pd.read_parquet(self.log_path)
+
+    def assert_and_mark_execution(self, *, seal_key: str, run_dir: str, step_id: str) -> None:
+        """Refuse if ANY execution marker exists for this seal_key (the prior backtest
+        may have observed OOS data — its result was never persisted anywhere the runner
+        can reload); otherwise write the marker atomically."""
+        from src.research_orchestrator.file_lock import file_lock
+
+        with file_lock(self.lock_path):
+            frame = self._load()
+            prior = frame[frame["seal_key"].astype("string") == str(seal_key)]
+            if not prior.empty:
+                row = prior.iloc[-1]
+                raise ValueError(
+                    f"OOS execution for seal_key {seal_key} already STARTED at "
+                    f"{row['recorded_at']} (run_dir={row['run_dir']!r}) and this runner "
+                    "persists no reloadable result — a resume must not re-run the "
+                    "backtest (the holdout may already have been observed); explicit "
+                    "human migration required (R7 B1)"
+                )
+            new_row = pd.DataFrame([{
+                "recorded_at": _now_str(),
+                "seal_key": str(seal_key),
+                "run_dir": str(run_dir),
+                "step_id": str(step_id),
+            }])
+            frame = pd.concat([frame, new_row], ignore_index=True)
+            tmp = self.log_path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
+            frame.to_parquet(tmp, index=False)
+            os.replace(tmp, self.log_path)
+
+
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

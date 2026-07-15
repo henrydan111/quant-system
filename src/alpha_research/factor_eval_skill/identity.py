@@ -241,13 +241,27 @@ class EvalProtocolSpec:
     neutralization: str = "none"
     rebalance: str = "20d"
     cost_slippage_for_registration: str = "gross"
-    # R6 Blocker 3: the registration bar (judgment semantics) is part of the protocol
-    # identity — a changed bar is a DIFFERENT protocol, never a reinterpretation of an
-    # already-observed OOS. cmd_seal passes sealed_oos.registration_bar_hash().
+    # R6 Blocker 3 + R7 Minor: the registration bar (judgment semantics) is part of the
+    # FULL protocol identity — a changed bar is a DIFFERENT protocol, never a
+    # reinterpretation of an already-observed OOS. REQUIRED non-blank (a protocol
+    # without a bar binding is not a valid sealed protocol); cmd_seal passes
+    # sealed_oos.registration_bar_hash().
     registration_bar_hash: str = ""
     schema_version: int = SCHEMA_VERSION
 
-    def _payload(self) -> dict[str, Any]:
+    def __post_init__(self) -> None:
+        if not str(self.registration_bar_hash).strip():
+            raise ValueError(
+                "EvalProtocolSpec requires a non-blank registration_bar_hash — a sealed "
+                "protocol must bind the judgment bar (R7 Minor, fail-closed)"
+            )
+
+    def _observation_payload(self) -> dict[str, Any]:
+        """R7 Blocker 2 — the OBSERVATION identity: everything that determines WHAT the
+        OOS test measures, EXCLUDING the judgment bar. The seal key (via
+        ``FrozenSelectionSet.eval_protocol_hash``) uses THIS hash, so changing the bar
+        after an observation hits the SAME seal key (and then refuses on the request
+        hash / spent preflight) instead of silently minting a fresh seal."""
         return {
             "schema_version": int(self.schema_version),
             "horizon": int(self.horizon),
@@ -264,11 +278,21 @@ class EvalProtocolSpec:
             "neutralization": normalize_enum(self.neutralization),
             "rebalance": normalize_enum(self.rebalance),
             "cost_slippage_for_registration": normalize_enum(self.cost_slippage_for_registration),
-            "registration_bar_hash": str(self.registration_bar_hash),
         }
+
+    def _payload(self) -> dict[str, Any]:
+        payload = self._observation_payload()
+        payload["registration_bar_hash"] = str(self.registration_bar_hash)
+        return payload
+
+    @property
+    def observation_protocol_hash(self) -> str:
+        """The bar-EXCLUDING identity — use for seal keys (R7 B2)."""
+        return payload_hash(self._observation_payload())
 
     @property
     def protocol_hash(self) -> str:
+        """The FULL identity (bar included) — use for request hashes + persisted records."""
         return payload_hash(self._payload())
 
 

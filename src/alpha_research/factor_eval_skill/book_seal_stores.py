@@ -64,9 +64,17 @@ class BookSealArtifactStore(AppendOnlyStore):
 
     Invariants (enforced fail-closed):
     - one ``claimed`` open per ``book_seal_key`` (a second ``open_claim`` refuses);
-    - ``persist_verdict`` only from ``claimed``, and only ONCE — the verdict is
-      immutable thereafter (every later row carries it verbatim);
-    - ``complete`` only from ``verdict_persisted`` / ``diagnostics_failed``, only once;
+    - R7 B1: states run ``claimed → execution_started → verdict_persisted →
+      complete | diagnostics_failed``. ``execution_started`` is written BEFORE the
+      backtest touches OOS data; a crash after it leaves a PERMANENTLY QUARANTINED
+      record (resume refuses — the OOS may already have been observed; only an
+      explicit human migration can release it). A crash while still ``claimed``
+      (before any OOS read) may resume.
+    - ``persist_verdict`` only from ``execution_started``, and only ONCE — the verdict
+      is immutable thereafter (every later row carries it verbatim);
+    - ``complete`` only from ``verdict_persisted`` / ``diagnostics_failed``, only once,
+      and ONLY when the artifact's embedded verdict re-hashes to the execution-time
+      ``book_verdict_hash`` (R7 B3 — the persisted verdict is the FINAL arbiter);
     - every transition must match the opening ``request_hash`` (a changed request can
       never continue a prior spend).
     """
@@ -125,9 +133,12 @@ class BookSealArtifactStore(AppendOnlyStore):
         inside ``persist_verdict`` takes the store-wide lock nested within — consistent
         ordering, no deadlock).
 
-        States: ``claimed`` → run ``evaluator()`` once, ``make_verdict(metrics)``,
-        persist, return; ``verdict_persisted`` / ``diagnostics_failed`` → return the
-        persisted verdict; ``complete`` / missing / request mismatch → refuse."""
+        States: ``claimed`` → mark ``execution_started``, run ``evaluator()`` once,
+        ``make_verdict(metrics)``, persist, return; ``verdict_persisted`` /
+        ``diagnostics_failed`` → return the persisted verdict; ``execution_started``
+        (a crash AFTER the OOS read began but before the verdict landed) → PERMANENT
+        QUARANTINE — refuse, never auto re-run (R7 B1); ``complete`` / missing /
+        request mismatch → refuse."""
         with file_lock(self._key_lock_path(book_seal_key)):
             cur = self.current(book_seal_key)
             if cur is None:
@@ -144,8 +155,19 @@ class BookSealArtifactStore(AppendOnlyStore):
                 )
             if state in ("verdict_persisted", "diagnostics_failed"):
                 return json.loads(str(cur["book_verdict_json"]))
-            # state == "claimed": the ONE execution, inside the key lock — a concurrent
-            # same-key resume blocks here and then takes the persisted branch above.
+            if state == "execution_started":
+                raise BookSealStoreError(
+                    f"book_seal_key {book_seal_key} is QUARANTINED: a prior run crashed "
+                    "AFTER the OOS execution started (the data may have been observed) — "
+                    "resume never re-runs the backtest; an explicit human migration is "
+                    "required to release this seal"
+                )
+            # state == "claimed": mark execution_started BEFORE any OOS read, so a crash
+            # from here on quarantines instead of silently allowing a second execution.
+            self._transition(
+                book_seal_key=book_seal_key, request_hash=request_hash,
+                allowed_from=("claimed",), new_state="execution_started", extra={},
+            )
             metrics = evaluator()
             verdict = make_verdict(metrics)
             self.persist_verdict(
@@ -264,12 +286,13 @@ class BookSealArtifactStore(AppendOnlyStore):
     def persist_verdict(
         self, *, book_seal_key: str, request_hash: str, verdict: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Persist the IMMUTABLE book verdict, exactly once, from ``claimed``."""
+        """Persist the IMMUTABLE book verdict, exactly once, from ``execution_started``
+        (R7 B1 — the verdict can only land from the run that marked the execution)."""
         verdict_json = canonical_json(dict(verdict))
         return self._transition(
             book_seal_key=book_seal_key,
             request_hash=request_hash,
-            allowed_from=("claimed",),
+            allowed_from=("execution_started",),
             new_state="verdict_persisted",
             extra={
                 "book_verdict_json": verdict_json,
@@ -291,6 +314,21 @@ class BookSealArtifactStore(AppendOnlyStore):
     def complete(
         self, *, book_seal_key: str, request_hash: str, artifact: Mapping[str, Any]
     ) -> dict[str, Any]:
+        # R7 B3: the artifact's embedded verdict must BE the execution-time persisted
+        # verdict — a completing artifact carrying any other verdict refuses. The
+        # persisted verdict is the FINAL arbiter; no later code re-judges it.
+        with file_lock(self.lock_path):
+            cur = self.current(book_seal_key)
+            if cur is not None and str(cur.get("book_verdict_hash") or "").strip():
+                embedded = artifact.get("book_verdict") if isinstance(artifact, Mapping) else None
+                if not isinstance(embedded, Mapping) or (
+                    payload_hash(dict(embedded)) != str(cur["book_verdict_hash"])
+                ):
+                    raise BookSealStoreError(
+                        f"complete refused for {book_seal_key}: the artifact's embedded "
+                        "book_verdict does not re-hash to the execution-time persisted "
+                        "verdict — the persisted verdict is immutable and final"
+                    )
         artifact_json = canonical_json(dict(artifact))
         return self._transition(
             book_seal_key=book_seal_key,
@@ -560,12 +598,38 @@ class A5ReproductionStore(AppendOnlyStore):
         "request_hash",
         "run_dir",
         "step_id",
-        "state",              # claimed | complete
+        "state",              # claimed | execution_started | complete
         "result_json",
         "result_hash",
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("seal_key", "state")
+
+    def mark_execution_started(self, *, seal_key: str, request_hash: str) -> dict[str, Any]:
+        """R7 B1: written BEFORE the OOS computation begins. Any crash after this row
+        leaves the seal PERMANENTLY QUARANTINED (``open_or_resume`` refuses) — the OOS
+        data may already have been observed, so recovery is an explicit human migration,
+        never an automatic re-run. Only ``claimed`` may transition here."""
+        with file_lock(self.lock_path):
+            cur = self.current(seal_key)
+            if cur is None or str(cur.get("request_hash")) != str(request_hash):
+                raise BookSealStoreError(
+                    f"no matching claimed A5 reproduction for seal_key {seal_key}"
+                )
+            if str(cur.get("state")) != "claimed":
+                raise BookSealStoreError(
+                    f"mark_execution_started refused from state {cur.get('state')!r} "
+                    f"for seal_key {seal_key}"
+                )
+            recorded_at = _now_str()
+            row = {column: cur.get(column, "") for column in self.COLUMNS
+                   if column not in ("record_id", "recorded_at")}
+            row["state"] = "execution_started"
+            row["recorded_at"] = recorded_at
+            row["record_id"] = self._record_id(row, recorded_at)
+            frame = pd.concat([self._load(), pd.DataFrame([row])], ignore_index=True)
+            _atomic_write_dataframe(frame, self.log_path)
+            return row
 
     def _key_lock_path(self, seal_key: str):
         return self.root_dir / f"{self.FILENAME}.exec.{str(seal_key)[:40]}.lock"
@@ -609,7 +673,17 @@ class A5ReproductionStore(AppendOnlyStore):
                     )
                 if str(cur.get("state")) == "complete":
                     return cur
-                # a still-`claimed` record: only the SAME run may recover it, explicitly.
+                if str(cur.get("state")) == "execution_started":
+                    # R7 B1: the OOS computation had STARTED when the prior run died —
+                    # the data may have been observed; recovery must never re-run.
+                    raise BookSealStoreError(
+                        f"A5 reproduction for seal_key {seal_key} is QUARANTINED: a prior "
+                        "run crashed after execution_started (result never persisted) — "
+                        "resume never recomputes an OOS whose execution began; explicit "
+                        "human migration required"
+                    )
+                # a still-`claimed` record (crash BEFORE any OOS read): only the SAME run
+                # may recover it, explicitly.
                 same_run = (str(cur.get("run_dir")) == str(run_dir)
                             and str(cur.get("step_id")) == str(step_id))
                 if not (allow_same_run and same_run):
@@ -642,6 +716,12 @@ class A5ReproductionStore(AppendOnlyStore):
                 raise BookSealStoreError(
                     f"A5 reproduction for seal_key {seal_key} is already complete — the "
                     "persisted result is immutable"
+                )
+            if str(cur.get("state")) != "execution_started":
+                # R7 B1: a result may only land from the run that MARKED the execution.
+                raise BookSealStoreError(
+                    f"complete refused from state {cur.get('state')!r} for seal_key "
+                    f"{seal_key} — mark_execution_started must precede the computation"
                 )
             recorded_at = _now_str()
             row = {column: cur.get(column, "") for column in self.COLUMNS

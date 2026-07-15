@@ -145,9 +145,12 @@ class FactorEvalContext:
     def create(cls, *, run_dir: str | Path, store_root: str | Path, registry_root: str | Path,
                resolve_factor: Callable[[str], FactorIdentity] | None = None,
                **_ignored) -> "FactorEvalContext":
-        run_dir = Path(run_dir)
+        # R7 Major 2: RESOLVE paths at creation — the seal store records absolute
+        # run_dirs, so a relative --run-dir would otherwise never string-match its own
+        # recorded events and make --resume-same-run unreachable.
+        run_dir = Path(run_dir).resolve()
         run_dir.mkdir(parents=True, exist_ok=True)
-        return cls(run_dir=run_dir, store_root=Path(store_root),
+        return cls(run_dir=run_dir, store_root=Path(store_root).resolve(),
                    resolve_factor=resolve_factor or _default_resolver(registry_root))
 
     def _write(self, name: str, payload: Mapping[str, Any]) -> dict:
@@ -491,7 +494,10 @@ def _assert_not_already_spent(
         return
     if resume_same_run and hit == {str(frozen_set_hash)} and not events.empty:
         exact = events[events["seal_key"].astype("string") == str(frozen_set_hash)]
-        same = exact[(exact["run_dir"].astype(str) == str(run_dir))
+        # R7 Major 2: compare RESOLVED paths — the recorded run_dir is absolute while a
+        # CLI --run-dir may be relative; a raw string comparison broke legitimate resume.
+        ours = str(Path(str(run_dir)).resolve())
+        same = exact[(exact["run_dir"].astype(str).map(lambda p: str(Path(p).resolve())) == ours)
                      & (exact["step_id"].astype(str) == str(step_id))]
         if not exact.empty and len(same) == len(exact):
             return
@@ -541,9 +547,15 @@ def cmd_seal(
         # R6 Blocker 3: the judgment bar is protocol identity — a changed bar is a new protocol.
         registration_bar_hash=registration_bar_hash(),
     )
+    # R7 Blocker 2: the SEAL KEY is derived from the OBSERVATION protocol (bar EXCLUDED)
+    # — changing the judgment bar after an observation hits the SAME seal key and
+    # refuses at the spent-preflight / request-hash layer, instead of silently minting
+    # a fresh seal and re-executing the OOS. The FULL protocol hash (bar included)
+    # remains in the A5 request hash and the persisted completion record.
     fs = FrozenSelectionSet(
         selected=selected, candidate_pool_hash=sel["pool_hash"],
-        selection_rule_hash=sel["selection_code_hash"], eval_protocol_hash=spec.protocol_hash,
+        selection_rule_hash=sel["selection_code_hash"],
+        eval_protocol_hash=spec.observation_protocol_hash,
         metric=metric, portfolio_side=portfolio_side, universe=tud_a["target_universe_id"],
         time_split_window=f"{oos_start}..{oos_end}", rebalance=rebalance, neutralization=neutralization,
     )

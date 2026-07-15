@@ -383,6 +383,27 @@ class TestA8SealedBacktestRunner:
                               "oos_end": "2026-02-27"})  # must NOT raise
         assert not HoldoutSealStore(tmp_path / "seals").list_events().empty
 
+    def test_runner_resume_never_reexecutes_started_oos(self, tmp_path: Path):
+        # THE R7 B1 generic-runner probe: this runner persists NO reloadable result, so
+        # once execution started (marker written after the claim), even a same-run
+        # allow_same_run resume must REFUSE — never re-run the backtester over the
+        # holdout. Recovery is an explicit human migration.
+        from src.research_orchestrator.sealed_backtest_runner import (
+            HoldoutContext,
+            SealedBacktestRunner,
+        )
+
+        runner = self._runner(tmp_path)
+        split = {"stage": "oos_test", "oos_start": "2021-01-01", "oos_end": "2026-02-27"}
+        runner._claim_if_oos(split)                       # first execution: claim + marker
+        resumed_ctx = HoldoutContext(
+            design_hash="dh_a8_runner", hypothesis_id="hyp_a8_runner",
+            structural_family="fam_a8", run_dir=str(tmp_path / "run"),
+            step_id="oos_step", stage="oos_test", allow_same_run=True,
+        )
+        with pytest.raises(ValueError, match="already STARTED"):
+            SealedBacktestRunner(resumed_ctx)._claim_if_oos(split)
+
     def test_runner_missing_oos_end_fails_closed(self, tmp_path: Path):
         runner = self._runner(tmp_path)
         with pytest.raises(RuntimeError, match=r"unable_to_determine_oos_end"):

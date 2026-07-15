@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 # The single OOS registration bar (sign-aligned rank_icir>0 AND aligned ls_sharpe>floor).
@@ -28,31 +29,9 @@ DEFAULT_HORIZON = 20
 DIR_MAP = {"inverse": "short", "positive": "long"}
 VALID_SIDES = frozenset({"long", "short"})
 
-# R6 Blocker 3 — the CANONICAL registration bar: the FULL judgment semantics as data, so
-# the bar an OOS observation was judged against is (a) hash material in the eval-protocol
-# identity and the A5 request hash, and (b) PERSISTED with the verdict inside the A5
-# completion record. A later code deploy (a changed constant, a new bar function) can
-# never re-judge already-observed OOS data — the persisted verdict is the verdict.
-# Changing the bar = a NEW bar_id/hash = a DIFFERENT sealed recipe, never a reinterpretation.
-REGISTRATION_BAR: dict[str, Any] = {
-    "bar_id": "registration_bar_v1",
-    "direction_alignment": "held_side_sign_alignment",  # s=+1 long / -1 short on both metrics
-    "rank_icir_rule": "aligned_rank_icir > 0",
-    "ls_sharpe_rule": "aligned_ls_sharpe > ls_sharpe_floor",
-    "ls_sharpe_floor": DEFAULT_LS_SHARPE_FLOOR,
-    "nan_rule": "nan_fails",
-    "sides_source": "frozen_set.selected.expected_direction",
-}
-
 # The A5/factor-level reproduction step id — one constant shared by the claim, the
 # reproduction record, and the cmd_seal same-run resume exemption (R6 Major).
 A5_REPRODUCTION_STEP_ID = "reproduce_sealed_oos"
-
-
-def registration_bar_hash() -> str:
-    from src.alpha_research.factor_eval_skill._hashing import payload_hash
-
-    return payload_hash(REGISTRATION_BAR)
 
 
 def direction_aligned_pass(
@@ -123,6 +102,52 @@ def evaluate_sealed_oos_bar(
         })
         n_pass += int(ok)
     return SealedOosVerdict(results=tuple(results), n_pass=n_pass)
+
+
+# R6 Blocker 3 + R7 Major 1 — the CANONICAL registration bar: the FULL judgment
+# semantics as data, so the bar an OOS observation was judged against is (a) hash
+# material in the eval-protocol identity and the A5 request hash, and (b) PERSISTED
+# with the verdict inside the A5 completion record. A later code deploy can never
+# re-judge already-observed OOS data — the persisted verdict is the verdict.
+#
+# R7 hardening: the mapping is IMMUTABLE (MappingProxyType — a runtime mutation raises),
+# and ``evaluator_hash`` binds the ACTUAL comparison semantics: it hashes the SOURCE of
+# the evaluator functions, so silently editing e.g. ``>`` to ``>=`` changes the bar hash
+# automatically (the descriptive rule strings alone could drift from the code).
+# Changing the bar = a NEW bar hash = a DIFFERENT sealed recipe, never a reinterpretation.
+def _evaluator_source_hash() -> str:
+    import inspect
+
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash
+
+    return payload_hash({
+        "direction_aligned_pass": inspect.getsource(direction_aligned_pass),
+        "evaluate_sealed_oos_bar": inspect.getsource(evaluate_sealed_oos_bar),
+    })
+
+
+REGISTRATION_BAR: Mapping[str, Any] = MappingProxyType({
+    "bar_id": "registration_bar_v1",
+    "direction_alignment": "held_side_sign_alignment",  # s=+1 long / -1 short on both metrics
+    "rank_icir_rule": "aligned_rank_icir > 0",
+    "ls_sharpe_rule": "aligned_ls_sharpe > ls_sharpe_floor",
+    "ls_sharpe_floor": DEFAULT_LS_SHARPE_FLOOR,
+    "nan_rule": "nan_fails",
+    "sides_source": "frozen_set.selected.expected_direction",
+    "evaluator_hash": _evaluator_source_hash(),
+})
+
+
+def registration_bar_snapshot() -> dict[str, Any]:
+    """One PLAIN-DICT snapshot of the bar for a single run: hash it, persist it, and
+    evaluate from IT — never re-read the module global mid-run (R7 Major 1)."""
+    return dict(REGISTRATION_BAR)
+
+
+def registration_bar_hash() -> str:
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash
+
+    return payload_hash(registration_bar_snapshot())
 
 
 def run_sealed_oos(
@@ -199,6 +224,17 @@ def run_sealed_oos(
             "sealed reproduction carries no persisted bar_verdict — a pre-R6 completion "
             "record must be explicitly migrated (with its original bar semantics), not "
             "re-judged by the current code"
+        )
+    # R7 Major 1: the persisted bar must re-hash to its recorded hash — a record whose
+    # bar payload was altered after judgment (or judged against a mutated global) refuses.
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
+
+    if _phash(dict(reproduction.get("registration_bar") or {})) != str(
+        reproduction.get("registration_bar_hash")
+    ):
+        raise ValueError(
+            "persisted registration_bar does not re-hash to its recorded "
+            "registration_bar_hash — tamper/mutation; the record is quarantined"
         )
     verdict = SealedOosVerdict(
         results=tuple(dict(r) for r in bar_verdict["results"]),

@@ -164,27 +164,21 @@ def test_strategy_set_status_approved_cannot_be_bypassed_via_evidence_status(tmp
 
 
 def test_strategy_set_status_approved_p11_alone_refused_under_v14(tmp_path):
-    # v1.4 A8 (PR3): the P1.1 artifact gate is NECESSARY but no longer sufficient — a
-    # strategy approval must additionally be wired to the ONE book sealed-evaluation
-    # artifact. A P1.1-valid artifact with a matching SHA now refuses at the BOOK layer
-    # (proving it got PAST the P1.1 layer): first for the missing holdout store, then —
-    # with a store supplied — for the missing book_seal section. The full valid pass-path
-    # is pinned end-to-end in tests/alpha_research/test_pr3_book_seal.py
-    # (TestStrategyPromotionWiring::test_publish_and_full_valid_promotion).
+    # v1.4 A8 (PR3, R7 B4): the P1.1 artifact gate is NECESSARY but no longer
+    # sufficient — a strategy approval must additionally be wired to the ONE book
+    # sealed-evaluation artifact in the CANONICAL sealed world (the stores are no
+    # longer caller parameters; they derive from the configured global holdout root).
+    # A P1.1-valid artifact with a matching SHA refuses at the BOOK layer (proving it
+    # got PAST the P1.1 layer): an unpublished object refuses at the row binding.
+    import inspect
+
+    sig = inspect.signature(StrategyRegistryStore.set_status)
+    for removed in ("holdout_seal_dir", "book_artifact_dir", "seal_store", "artifact_store"):
+        assert removed not in sig.parameters, f"{removed} must not be caller-suppliable (R7 B4)"
     store = StrategyRegistryStore(tmp_path)
-    with pytest.raises(PromotionGateError, match="holdout_seal_dir"):
-        store.set_status(object_id="missing", status="approved", reason="promote",
-                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123")
-    with pytest.raises(PromotionGateError, match="book_artifact_dir"):
-        store.set_status(object_id="missing", status="approved", reason="promote",
-                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123",
-                         holdout_seal_dir=tmp_path / "seals")
-    # and with BOTH stores supplied, an unpublished object still refuses at the row binding
     with pytest.raises(PromotionGateError, match="no current strategy_candidate row"):
         store.set_status(object_id="missing", status="approved", reason="promote",
-                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123",
-                         holdout_seal_dir=tmp_path / "seals",
-                         book_artifact_dir=tmp_path / "book_artifacts")
+                         promotion_evidence=_FULL_OK_SHA, current_git_sha="abc123")
 
 
 def test_strategy_set_status_approved_sha_mismatch_blocked(tmp_path):

@@ -24,7 +24,8 @@ from src.alpha_research.factor_eval_skill.identity import (
 
 def _spec(**over):
     base = dict(horizon=20, n_quantiles=10, oos_window="2021..2026", metric="rank_icir",
-                universe_filter_policy="univ_liquid_top300", portfolio_construction="decile_long_short")
+                universe_filter_policy="univ_liquid_top300", portfolio_construction="decile_long_short",
+                registration_bar_hash="test_bar_hash")  # required non-blank (R7 Minor)
     base.update(over)
     return EvalProtocolSpec(**base)
 

@@ -83,8 +83,10 @@ def assert_book_seal_promotion_evidence(
       ``HoldoutSealStore`` event exists with ``seal_key == book_seal_key`` whose
       ``event_id`` and ``request_hash`` match the artifact's, and whose
       run/step/provider/calendar/stage bindings match;
-    * the bar verdict is RECOMPUTED from the persisted metrics against the plan's
-      pre-declared bar (an edited ``bar_passed`` boolean is worthless) and passes;
+    * the artifact's verdict re-hashes to the EXECUTION-TIME ``book_verdict_hash`` the
+      state machine persisted when the OOS ran, and that persisted verdict passed —
+      the gate never re-judges with the current evaluator (R7 B3: the persisted
+      verdict is final; evaluator drift = quarantine/migrate, never silent re-judgment);
     * the component diagnostics are complete: rows present, every row carrying finite
       mandatory metrics, count consistent — recomputed, not trusted from a boolean;
     * the artifact's multiplicity decision did not require a refused override.
@@ -171,27 +173,36 @@ def assert_book_seal_promotion_evidence(
     if str(identity_payload.get("oos_window_id")) != str(artifact.get("oos_window_id")):
         _refuse(label, "artifact oos_window_id does not match its identity payload")
 
-    # recompute the bar from the persisted metrics — never trust a stored boolean (R1 B2)
+    # R7 Blocker 3: the EXECUTION-TIME persisted verdict is the FINAL arbiter — the gate
+    # verifies the artifact's embedded verdict IS the verdict the state machine persisted
+    # when the OOS ran (book_verdict_hash recorded at persist_verdict time), then requires
+    # bar_passed. It NEVER re-judges with the current evaluator: a later code version
+    # (changed thresholds, changed conventions) must not be able to flip an already-
+    # observed verdict in either direction; evaluator drift is a quarantine/migrate
+    # decision, not a silent re-judgment. (The plan's pre_declared_bar and the evaluator
+    # semantics were sealed into the identity/verdict at execution time.)
     verdict = artifact.get("book_verdict") if isinstance(artifact.get("book_verdict"), Mapping) else {}
     plan_payload = artifact.get("plan") if isinstance(artifact.get("plan"), Mapping) else {}
-    bar = plan_payload.get("pre_declared_bar")
+    if not isinstance(plan_payload.get("pre_declared_bar"), Mapping) or not isinstance(
+        verdict.get("metrics"), Mapping
+    ):
+        _refuse(label, "artifact lacks plan.pre_declared_bar / book_verdict.metrics")
     metrics = verdict.get("metrics")
-    if not isinstance(bar, Mapping) or not isinstance(metrics, Mapping):
-        _refuse(label, "artifact lacks plan.pre_declared_bar / book_verdict.metrics to recompute the bar")
-    from src.alpha_research.factor_eval_skill.book_seal import (
-        BookSealError,
-        evaluate_pre_declared_bar,
-    )
+    state_row = artifact_store.current(key)
+    persisted_hash = str((state_row or {}).get("book_verdict_hash") or "").strip()
+    if not persisted_hash:
+        _refuse(label, "the artifact store carries no execution-time book_verdict_hash for "
+                       "this key — a pre-R7 record must be explicitly migrated, never "
+                       "re-judged by current code")
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash as _vphash
 
-    try:
-        recomputed_verdict = evaluate_pre_declared_bar(metrics, bar)
-    except BookSealError as exc:
-        _refuse(label, f"bar recomputation failed: {exc}")
-    if not recomputed_verdict.bar_passed:
-        _refuse(label, "the RECOMPUTED pre-declared bar does not pass — a book that failed its "
-                       "own bar cannot be promoted")
+    if _vphash(dict(verdict)) != persisted_hash:
+        _refuse(label, "artifact book_verdict differs from the execution-time persisted "
+                       "verdict (book_verdict_hash mismatch) — the persisted verdict is "
+                       "immutable and final")
     if verdict.get("bar_passed") is not True:
-        _refuse(label, "persisted bar_passed is not literally True (inconsistent artifact)")
+        _refuse(label, "the execution-time persisted verdict did not pass the pre-declared "
+                       "bar — a book that failed its own bar cannot be promoted")
 
     # diagnostics completeness — recomputed from the rows, never a trusted boolean (R1 B4)
     diag = artifact.get("component_diagnostics")
@@ -319,10 +330,6 @@ class StrategyRegistryStore(TypedRegistryStore):
         source_run_id: str | None = None,
         promotion_evidence: Mapping[str, Any] | None = None,
         current_git_sha: str | None = None,
-        holdout_seal_dir: str | Path | None = None,
-        book_artifact_dir: str | Path | None = None,
-        seal_store=None,
-        artifact_store=None,
     ) -> dict[str, Any]:
         """Gate privileged promotions (PIT-prevention step 11 + v1.4 A8 book-seal wiring).
 
@@ -330,12 +337,13 @@ class StrategyRegistryStore(TypedRegistryStore):
         unless (P1.1) ``promotion_evidence`` proves an INDEPENDENT PIT-correct
         reconstruction and passes the lint/canary/clean-tree checks
         (:func:`src.research_orchestrator.release_gate.evaluate_promotion_artifact`)
-        with a matching committed ``current_git_sha``, AND (v1.4 A8, post-R1-REWORK)
-        the approval is bound to the CANONICAL book sealed-evaluation artifact loaded
-        from the ``BookSealArtifactStore`` (``book_artifact_dir`` / ``artifact_store``)
-        and cross-checked against the holdout store (``holdout_seal_dir`` /
-        ``seal_store``) — see :func:`assert_book_seal_promotion_evidence`. Both stores
-        are REQUIRED for a privileged transition (fail-closed).
+        with a matching committed ``current_git_sha``, AND (v1.4 A8) the approval is
+        bound to the CANONICAL book sealed-evaluation artifact — R7 Blocker 4: the
+        seal store, artifact store, and diagnostic store all derive from the ONE
+        configured global holdout root (:func:`resolve_configured_global_holdout_root`);
+        there are NO caller store/dir parameters, so a fully-consistent sealed world
+        fabricated in a caller-chosen directory can never be promoted. S6 must write
+        its live artifacts into the same canonical root.
 
         Non-privileged transitions (candidate / under_review / rejected / archived)
         are unchanged. Raises :class:`PromotionGateError` when the gate fails.
@@ -358,41 +366,24 @@ class StrategyRegistryStore(TypedRegistryStore):
                 current_git_sha=current_git_sha,
                 artifact_label=f"strategy_candidate:{object_id}",
             )
-            if seal_store is None:
-                if not holdout_seal_dir:
-                    _refuse(str(object_id),
-                            "holdout_seal_dir (or seal_store) is required for a privileged "
-                            "strategy transition — the book seal spend must be verified "
-                            "against the holdout store (v1.4 A8)")
-                from src.research_orchestrator.holdout_seal import HoldoutSealStore
-
-                seal_store = HoldoutSealStore(holdout_seal_dir)
-            if artifact_store is None:
-                if not book_artifact_dir:
-                    _refuse(str(object_id),
-                            "book_artifact_dir (or artifact_store) is required for a privileged "
-                            "strategy transition — the gate loads the CANONICAL artifact, never "
-                            "a caller-supplied dictionary (v1.4 A8 / R1 Blocker 2)")
-                from src.alpha_research.factor_eval_skill.book_seal_stores import (
-                    BookSealArtifactStore,
-                )
-
-                artifact_store = BookSealArtifactStore(book_artifact_dir)
-            # R2 Major 3: the durable diagnostic rows live alongside the artifact store
-            # (the runner writes both under ledger_root) — verified, not optional.
+            # R7 Blocker 4: every governance store at the CANONICAL root — never a
+            # caller-supplied path or store object.
             from src.alpha_research.factor_eval_skill.book_seal_stores import (
+                BookSealArtifactStore,
                 StrategyComponentDiagnosticStore,
             )
-
-            diagnostic_store = StrategyComponentDiagnosticStore(
-                book_artifact_dir if book_artifact_dir else artifact_store.root_dir
+            from src.research_orchestrator.holdout_seal import (
+                HoldoutSealStore,
+                resolve_configured_global_holdout_root,
             )
+
+            root = resolve_configured_global_holdout_root()
             assert_book_seal_promotion_evidence(
                 object_id=str(object_id),
                 registry_store=self,
-                artifact_store=artifact_store,
-                seal_store=seal_store,
-                diagnostic_store=diagnostic_store,
+                artifact_store=BookSealArtifactStore(root),
+                seal_store=HoldoutSealStore(root),
+                diagnostic_store=StrategyComponentDiagnosticStore(root),
                 version=version,
             )
         return super().set_status(
@@ -409,7 +400,6 @@ def publish_strategy_candidate(
     *,
     object_name: str,
     artifact_hash: str,
-    artifact_store,
     research_profile: str = "book_sealed_evaluation",
     run_dir: str | Path | None = None,
     display_name_zh: str = "",
@@ -432,6 +422,11 @@ def publish_strategy_candidate(
     key_hash = str(artifact_hash).strip()
     if not key_hash:
         raise ValueError("publish_strategy_candidate: artifact_hash is required")
+    # R7 Blocker 4: the artifact loads from the CANONICAL store — no caller store param.
+    from src.alpha_research.factor_eval_skill.book_seal_stores import BookSealArtifactStore
+    from src.research_orchestrator.holdout_seal import resolve_configured_global_holdout_root
+
+    artifact_store = BookSealArtifactStore(resolve_configured_global_holdout_root())
     artifact = artifact_store.load_artifact(key_hash)   # canonical; raises if absent/tampered
     if artifact.get("artifact_type") != "book_sealed_evaluation":
         raise ValueError(

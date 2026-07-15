@@ -418,7 +418,10 @@ class TestRunBookSealedEvaluation:
         assert calls["n"] == 1                              # backtest NEVER re-ran
         assert art["book_verdict"]["bar_passed"] is True
 
-    def test_crash_before_verdict_resume_completes_once(self, tmp_path):
+    def test_crash_during_execution_quarantines_permanently(self, tmp_path):
+        # R7 B1: a crash AFTER execution_started (mid-backtest) leaves a PERMANENTLY
+        # QUARANTINED record — a resume never re-runs the backtest (the OOS may have
+        # been observed); recovery is an explicit human migration.
         calls = {"n": 0}
 
         def crash_once():
@@ -430,8 +433,11 @@ class TestRunBookSealedEvaluation:
         with pytest.raises(RuntimeError, match="engine crashed"):
             _run(tmp_path, backtest=crash_once)
         assert len(_seals(tmp_path).list_events()) == 1     # spend-on-attempt
-        art = _run(tmp_path, backtest=crash_once)           # no verdict existed -> first completion
-        assert calls["n"] == 2 and art["book_verdict"]["bar_passed"] is True
+        astore = BookSealArtifactStore(tmp_path / "run" / "ledger")
+        assert astore.current(_expected_key())["state"] == "execution_started"
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
+            _run(tmp_path, backtest=crash_once)
+        assert calls["n"] == 1                              # the backtest NEVER re-ran
 
     def test_blank_provider_ids_refused_before_claim(self, tmp_path):
         with pytest.raises(BookSealError, match="provider_build_id"):
@@ -687,8 +693,12 @@ class TestA5FreshWindowEnforcement:
         # remains the only verdict for this seal. Stronger than returning the old one.
         import src.alpha_research.factor_eval_skill.sealed_oos as so
 
+        from types import MappingProxyType
+
+        mutated = dict(so.REGISTRATION_BAR)
+        mutated["ls_sharpe_floor"] = 5.0
         monkeypatch.setattr(so, "DEFAULT_LS_SHARPE_FLOOR", 5.0)
-        monkeypatch.setitem(so.REGISTRATION_BAR, "ls_sharpe_floor", 5.0)
+        monkeypatch.setattr(so, "REGISTRATION_BAR", MappingProxyType(mutated))
         with pytest.raises(BookSealStoreError, match="changed recipe.*can never resume"):
             reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
         assert calls["n"] == 1                           # never recomputed
@@ -727,8 +737,10 @@ class TestA5FreshWindowEnforcement:
         with pytest.raises(BookSealStoreError, match="changed recipe.*can never resume"):
             reproduce_sealed_oos(**common, fresh_window_override_id="ov_2",
                                  compute_factors_fn=sentinel)
-        holder["exprs"] = dict(EXPRS)                            # identical recipe resumes
-        with pytest.raises(RuntimeError, match="SENTINEL_COMPUTE_REACHED"):
+        # R7 B1: the ov_1 sentinel crashed AFTER execution_started — even the
+        # IDENTICAL recipe may not resume: the OOS may already have been observed.
+        holder["exprs"] = dict(EXPRS)
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
             reproduce_sealed_oos(**common, fresh_window_override_id="ov_3",
                                  compute_factors_fn=sentinel)
 
@@ -885,6 +897,106 @@ class TestA5FreshWindowEnforcement:
         out = cmd_seal(ctx, mode="show", oos_start=VIRGIN[0], oos_end=VIRGIN[1])
         assert out["multiplicity"]["n_spent"] == 5
         assert out["multiplicity"]["action"] == "refuse_without_override"
+
+
+class TestRegistrationBarIdentity:
+    """R7 B2 + Major 1 — the bar is immutable data bound to the evaluator source, and
+    the SEAL KEY excludes it (observation identity) while the request hash includes it."""
+
+    def test_registration_bar_is_immutable_and_evaluator_bound(self):
+        import src.alpha_research.factor_eval_skill.sealed_oos as so
+
+        with pytest.raises(TypeError):
+            so.REGISTRATION_BAR["ls_sharpe_floor"] = 0.0        # MappingProxyType
+        assert str(so.REGISTRATION_BAR.get("evaluator_hash", "")).strip()
+        # the evaluator hash derives from the FUNCTIONS' SOURCE — editing `>` to `>=`
+        # in the evaluator changes the bar hash automatically.
+        assert so._evaluator_source_hash() == so.REGISTRATION_BAR["evaluator_hash"]
+
+    def test_observation_hash_excludes_bar_full_hash_includes_it(self):
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+
+        base = dict(horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
+                    universe_filter_policy="u", portfolio_construction="decile_long_short")
+        a = EvalProtocolSpec(**base, registration_bar_hash="bar_A")
+        b = EvalProtocolSpec(**base, registration_bar_hash="bar_B")
+        assert a.observation_protocol_hash == b.observation_protocol_hash   # seal-key stable
+        assert a.protocol_hash != b.protocol_hash                           # request distinct
+
+    def test_blank_bar_hash_fails_closed(self):
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+
+        with pytest.raises(ValueError, match="registration_bar_hash"):
+            EvalProtocolSpec(horizon=20, n_quantiles=10, oos_window="w", metric="m",
+                             universe_filter_policy="u", portfolio_construction="c")
+
+    def test_cmd_seal_bar_flip_hits_same_seal_key_and_refuses(self, tmp_path, monkeypatch):
+        # THE R7 B2 END-TO-END probe: complete a live seal through the REAL cmd_seal ->
+        # run_sealed_oos -> reproduce chain (compute leaf + provenance mocked), then
+        # "deploy a new bar" and call again — the second call must hit the SAME seal key
+        # and refuse at the spent-preflight WITHOUT entering run_sealed_oos.
+        from types import MappingProxyType
+
+        import src.alpha_research.factor_eval_skill.sealed_oos as so
+        import src.research_orchestrator.promotion_evidence as pe
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalContext,
+            FactorEvalError,
+            FactorIdentity,
+            cmd_characterize,
+            cmd_declare_target,
+            cmd_gate,
+            cmd_register,
+            cmd_seal,
+            cmd_select,
+        )
+        from src.alpha_research.factor_eval_skill.stage3_reader import ALL_UNIVERSES
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path, exprs={"tf": "$close"})
+        monkeypatch.setattr(pe, "_load_provider_provenance",
+                            lambda qdir: {"provider_build_id": "pb", "calendar_policy_id": "cp",
+                                          "calendar_end": BURNED[1]})
+        calls = {"n": 0}
+
+        def fake_metrics(**kw):
+            calls["n"] += 1
+            return ({"tf": {"oos_rank_icir": 0.2, "oos_ls_sharpe": 1.4,
+                            "ls_sharpe_horizon": 5}}, BURNED[1])
+
+        monkeypatch.setattr(pe, "_compute_oos_per_factor_metrics", fake_metrics)
+        rows = [{"factor": "tf", "universe_id": u, "heldout_rank_icir": 0.45,
+                 "mean_rank_ic": 0.045, "sign_consistency": 1.0, "coverage_tier": "broad",
+                 "effective_ic_days": 2600, "field_eligible": True,
+                 "layer1_methodology_hash": "l1hash"} for u in ALL_UNIVERSES]
+        matrix = tmp_path / "m.jsonl"
+        matrix.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        ctx = FactorEvalContext.create(
+            run_dir=tmp_path / "run", store_root=tmp_path / "store", registry_root=tmp_path / "reg",
+            resolve_factor=lambda fid: FactorIdentity(fid, f"def_{fid}", 2, "", "$close"),
+        )
+        cmd_register(ctx, factor_id="tf", mode="deployment_bound", evidence_tier="theory_a_priori",
+                     direction_source="theory", role="ranking", role_direction="long")
+        cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l",
+                           asof_policy="pit_lag_1")
+        cmd_characterize(ctx, matrix_path=matrix)
+        cmd_gate(ctx)
+        cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+        first = cmd_seal(ctx, mode="live", oos_start=BURNED[0], oos_end=BURNED[1],
+                         qlib_dir="q")
+        assert calls["n"] == 1 and first["n_pass"] == 1
+        key_before = first["frozen_set_hash"]
+        # "deploy new code": a laxer bar
+        mutated = dict(so.REGISTRATION_BAR)
+        mutated["ls_sharpe_floor"] = 0.0
+        monkeypatch.setattr(so, "REGISTRATION_BAR", MappingProxyType(mutated))
+        with pytest.raises(FactorEvalError, match="already spent"):
+            cmd_seal(ctx, mode="live", oos_start=BURNED[0], oos_end=BURNED[1], qlib_dir="q")
+        assert calls["n"] == 1                                   # OOS ran exactly ONCE
+        # the changed bar hit the SAME seal key (observation identity is bar-free)
+        show = cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1])
+        assert show["frozen_set_hash"] == key_before
+        events = HoldoutSealStore(root).list_events()
+        assert len(events) == 1                                  # ONE seal event, ever
 
 
 class TestCatalogExpressionResolution:
@@ -1171,39 +1283,46 @@ def _diag_rows(key, plan_hash, req):
     ]
 
 
-def _seed_live_artifact(tmp_path, *, metrics=None, claim_bar_passed=None, mode="live",
+def _seed_live_artifact(root, *, metrics=None, mode="live",
                         null_metric=False, drop_durable_rows=False, governed="valid"):
-    """Simulate a would-be governed runner's output: real seal claim + canonical complete
-    artifact + durable diagnostic rows. NOTE (R2 M1): even a fully-consistent seeded LIVE
-    artifact now FAILS CLOSED at the governed-runner check (the registry is empty until
-    the S6 PR) — the gate tests pin exactly that."""
+    """Simulate a would-be governed runner's output IN THE CANONICAL ROOT (R7 B4: the
+    gate derives every store from the configured resolver — tests monkeypatch it to
+    `root` and seed everything there). The verdict flows through the REAL R7 state
+    machine (claimed → execution_started → verdict_persisted → complete with the
+    embedded-verdict binding), so the gate's persisted-verdict-final check exercises
+    the true path. NOTE (R2 M1): even a fully-consistent seeded LIVE artifact fails
+    closed at the governed-runner check until S6 registers a verifier."""
+    from src.alpha_research.factor_eval_skill.book_seal import evaluate_pre_declared_bar
+
+    root = Path(root)
     plan = _plan()
     identity = BookSealIdentity.from_plan(
         plan, selected_set_hash="ssh_pr3", execution_envelope_hash="exec_jq_daily",
         eval_protocol_hash="proto_pr3", oos_window_id=BURNED_ID)
     key = identity.book_seal_key
     request_hash = f"req_{key[:16]}"
-    run_dir = str((tmp_path / "run").resolve())
-    seal_store = HoldoutSealStore(tmp_path / "seals")
+    run_dir = str((root / "run").resolve())
+    seal_store = HoldoutSealStore(root)
     event = seal_store.claim_holdout_access(
         design_hash=plan.plan_hash, hypothesis_id="h", structural_family="",
         profile_id="p", run_dir=run_dir, step_id="s6", seal_key=key,
         provider_build_id="pb_test", calendar_policy_id="cp_test", request_hash=request_hash)
-    astore = BookSealArtifactStore(tmp_path / "book_artifacts")
+    astore = BookSealArtifactStore(root)
     astore.open_claim(book_seal_key=key, request_hash=request_hash, run_dir=run_dir,
                       step_id="s6", mode=mode, oos_window_id=BURNED_ID,
                       provider_build_id="pb_test", calendar_policy_id="cp_test",
                       seal_event_id=str(event["event_id"]), book_plan_hash=plan.plan_hash,
                       component_manifest=_manifest())
     metrics = metrics or {"net_sharpe": 0.95, "mdd": -0.28}
-    verdict = evaluate_pre_declared_bar(metrics, plan.pre_declared_bar).to_dict()
-    if claim_bar_passed is not None:
-        verdict["bar_passed"] = claim_bar_passed
-    astore.persist_verdict(book_seal_key=key, request_hash=request_hash, verdict=verdict)
+    # the R7 execution path: claimed -> execution_started -> verdict_persisted
+    verdict = astore.run_or_load_verdict(
+        book_seal_key=key, request_hash=request_hash,
+        evaluator=lambda: dict(metrics),
+        make_verdict=lambda m: evaluate_pre_declared_bar(m, plan.pre_declared_bar).to_dict())
     rows = _diag_rows(key, plan.plan_hash, request_hash)
     if null_metric:
         rows[1]["oos_rank_icir"] = None
-    dstore = StrategyComponentDiagnosticStore(tmp_path / "book_artifacts")
+    dstore = StrategyComponentDiagnosticStore(root)
     if drop_durable_rows:
         ids = ["dangling_1", "dangling_2"]
     else:
@@ -1232,7 +1351,7 @@ def _seed_live_artifact(tmp_path, *, metrics=None, claim_bar_passed=None, mode="
         "provider_build_id": "pb_test", "calendar_policy_id": "cp_test",
         "run_dir": run_dir, "step_id": "s6",
         "seal_event": {k: str(v) for k, v in dict(event).items()},
-        "book_verdict": verdict,
+        "book_verdict": verdict,          # the EXACT persisted verdict (complete verifies)
         "component_diagnostics": {"rows": rows, "n_components": len(rows),
                                   "n_reference_pass": 1,
                                   "max_label_realization_date": "2026-02-27",
@@ -1245,10 +1364,20 @@ def _seed_live_artifact(tmp_path, *, metrics=None, claim_bar_passed=None, mode="
         artifact["governed_execution"] = governed_section
     completed = astore.complete(book_seal_key=key, request_hash=request_hash, artifact=artifact)
     return {"artifact_hash": str(completed["artifact_hash"]), "artifact_store": astore,
-            "seal_store": seal_store, "key": key, "plan": plan}
+            "seal_store": seal_store, "key": key, "plan": plan, "root": root}
 
 
 class TestStrategyPromotionWiring:
+    """R7 B4: set_status/publish take NO store parameters — every governance store
+    derives from the canonical resolver, monkeypatched here to one tmp root."""
+
+    def _canonical(self, tmp_path, monkeypatch, name="canonical"):
+        import src.research_orchestrator.holdout_seal as hs_mod
+
+        root = tmp_path / name
+        monkeypatch.setattr(hs_mod, "resolve_configured_global_holdout_root", lambda: root)
+        return root
+
     def _store(self, tmp_path):
         from src.research_orchestrator.registries.strategy_registry import StrategyRegistryStore
 
@@ -1262,49 +1391,58 @@ class TestStrategyPromotionWiring:
         store = self._store(tmp_path)
         publish_strategy_candidate(store, object_name=name,
                                    artifact_hash=seeded["artifact_hash"],
-                                   artifact_store=seeded["artifact_store"],
                                    run_dir=tmp_path / "run")
         return store
 
-    def _approve(self, tmp_path, store, **kw):
+    def _approve(self, store, **kw):
         args = dict(object_id="strategy_candidate::book_pr3", status="approved", reason="t",
-                    promotion_evidence=_p11_fields(), current_git_sha="sha_pr3",
-                    holdout_seal_dir=tmp_path / "seals",
-                    book_artifact_dir=tmp_path / "book_artifacts")
+                    promotion_evidence=_p11_fields(), current_git_sha="sha_pr3")
         args.update(kw)
         return store.set_status(**args)
 
-    def test_fully_consistent_live_artifact_fails_closed_at_governed_runner(self, tmp_path):
-        # THE R2 M1 + R3 M1 pins, layer by layer:
-        # (a) a FORGED attestation with an unknown profile id refuses at profile
-        #     resolution (registering a runner name can never skip this — the R3 probe);
-        # (b) a REAL profile + hash still refuses because no VERIFIER is registered;
-        # (c) no attestation at all refuses with the no-attestation message.
+    def test_privileged_stores_are_not_caller_parameters(self):
+        # THE R7 B4 pin: the caller-suppliable store/dir parameters are GONE.
+        import inspect
+
+        from src.research_orchestrator.registries.strategy_registry import (
+            StrategyRegistryStore,
+            publish_strategy_candidate,
+        )
+
+        sig = inspect.signature(StrategyRegistryStore.set_status)
+        for removed in ("holdout_seal_dir", "book_artifact_dir", "seal_store", "artifact_store"):
+            assert removed not in sig.parameters
+        assert "artifact_store" not in inspect.signature(publish_strategy_candidate).parameters
+
+    def test_fully_consistent_live_artifact_fails_closed_at_governed_runner(
+        self, tmp_path, monkeypatch
+    ):
+        # R2 M1 + R3 M1 pins, layer by layer (all stores at the canonical root):
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        forged = _seed_live_artifact(tmp_path, governed="unknown_profile")
+        root = self._canonical(tmp_path, monkeypatch)
+        forged = _seed_live_artifact(root, governed="unknown_profile")
         store = self._publish(tmp_path, forged)
         with pytest.raises(PromotionGateError, match="does not resolve"):
-            self._approve(tmp_path, store)
-        real = _seed_live_artifact(tmp_path / "b")
+            self._approve(store)
+        root_b = self._canonical(tmp_path, monkeypatch, "canonical_b")
+        real = _seed_live_artifact(root_b)
         store_b = self._publish(tmp_path / "b", real)
         with pytest.raises(PromotionGateError, match="no REGISTERED governed-runner VERIFIER"):
-            self._approve(tmp_path / "b", store_b,
-                          holdout_seal_dir=tmp_path / "b" / "seals",
-                          book_artifact_dir=tmp_path / "b" / "book_artifacts")
-        none = _seed_live_artifact(tmp_path / "c", governed=None)
+            self._approve(store_b)
+        root_c = self._canonical(tmp_path, monkeypatch, "canonical_c")
+        none = _seed_live_artifact(root_c, governed=None)
         store_c = self._publish(tmp_path / "c", none)
         with pytest.raises(PromotionGateError, match="no governed_execution attestation"):
-            self._approve(tmp_path / "c", store_c,
-                          holdout_seal_dir=tmp_path / "c" / "seals",
-                          book_artifact_dir=tmp_path / "c" / "book_artifacts")
+            self._approve(store_c)
 
     def test_registered_verifier_with_real_profile_completes_the_chain(self, tmp_path, monkeypatch):
-        # the S6 simulation: registering a VERIFIER (not a name) + a real profile + hash
-        # lets the full chain pass — this is exactly what the S6 runner PR will do.
+        # the S6 simulation: registering a VERIFIER + a real profile + the canonical
+        # sealed world lets the full chain pass — what the S6 runner PR will do.
         from src.research_orchestrator.registries import strategy_registry as sr
 
-        seeded = _seed_live_artifact(tmp_path)
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root)
         store = self._publish(tmp_path, seeded)
         calls = {}
 
@@ -1312,91 +1450,79 @@ class TestStrategyPromotionWiring:
             calls["seen"] = (governed["runner_id"], artifact["book_seal_key"])
 
         monkeypatch.setitem(sr.REGISTERED_GOVERNED_RUNNER_VERIFIERS, "seeded_test_runner", verifier)
-        result = self._approve(tmp_path, store)
+        result = self._approve(store)
         assert result["new_status"] == "approved"
         assert calls["seen"] == ("seeded_test_runner", seeded["key"])
 
-    def test_gate_ignores_caller_supplied_book_seal_dict(self, tmp_path):
+    def test_persisted_fail_verdict_refused_never_rejudged(self, tmp_path, monkeypatch):
+        # R7 B3: an honestly-persisted FAILING verdict refuses at the gate with the
+        # execution-time verdict — the gate never re-judges with the current evaluator
+        # (a forged promotion_evidence dict cannot override the canonical artifact).
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        seeded = _seed_live_artifact(tmp_path, metrics={"net_sharpe": 0.5, "mdd": -0.40})
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root, metrics={"net_sharpe": 0.5, "mdd": -0.40})
         store = self._publish(tmp_path, seeded)
         forged = {"book_seal": {"book_verdict": {"bar_passed": True}}}
-        with pytest.raises(PromotionGateError, match="RECOMPUTED pre-declared bar"):
-            self._approve(tmp_path, store, promotion_evidence={**_p11_fields(), **forged})
+        with pytest.raises(PromotionGateError, match="did not pass"):
+            self._approve(store, promotion_evidence={**_p11_fields(), **forged})
 
-    def test_tampered_persisted_bar_boolean_refused_by_recompute(self, tmp_path):
+    def test_foreign_artifact_binding_refused(self, tmp_path, monkeypatch):
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        seeded = _seed_live_artifact(tmp_path, metrics={"net_sharpe": 0.5, "mdd": -0.40},
-                                     claim_bar_passed=True)
-        store = self._publish(tmp_path, seeded)
-        with pytest.raises(PromotionGateError, match="RECOMPUTED pre-declared bar"):
-            self._approve(tmp_path, store)
-
-    def test_foreign_artifact_binding_refused(self, tmp_path):
-        from src.research_orchestrator.release_gate import PromotionGateError
-
-        seeded = _seed_live_artifact(tmp_path)
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root)
         store = self._publish(tmp_path, seeded)
         idx = store.master[store.master["object_id"] == "strategy_candidate::book_pr3"].index[-1]
         store.master.at[idx, "definition_hash"] = "0" * 16
         with pytest.raises(PromotionGateError, match="foreign evidence refused"):
-            self._approve(tmp_path, store)
+            self._approve(store)
 
-    def test_dangling_diagnostic_record_ids_refused(self, tmp_path):
-        # THE R2 M3 probe: artifact-embedded rows with ids that do NOT exist in the
-        # durable StrategyComponentDiagnosticStore refuse.
+    def test_dangling_diagnostic_record_ids_refused(self, tmp_path, monkeypatch):
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        seeded = _seed_live_artifact(tmp_path, drop_durable_rows=True)
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root, drop_durable_rows=True)
         store = self._publish(tmp_path, seeded)
         with pytest.raises(PromotionGateError, match="does not exist in the"):
-            self._approve(tmp_path, store)
+            self._approve(store)
 
-    def test_null_diagnostic_rows_refused(self, tmp_path):
+    def test_null_diagnostic_rows_refused(self, tmp_path, monkeypatch):
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        seeded = _seed_live_artifact(tmp_path, null_metric=True)
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root, null_metric=True)
         store = self._publish(tmp_path, seeded)
         with pytest.raises(PromotionGateError, match="non-finite"):
-            self._approve(tmp_path, store)
+            self._approve(store)
 
-    def test_dryrun_artifact_never_promotable(self, tmp_path):
+    def test_dryrun_artifact_never_promotable(self, tmp_path, monkeypatch):
         from src.research_orchestrator.release_gate import PromotionGateError
 
-        seeded = _seed_live_artifact(tmp_path, mode="dryrun")
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root, mode="dryrun")
         store = self._publish(tmp_path, seeded)
         with pytest.raises(PromotionGateError, match="mode must be 'live'"):
-            self._approve(tmp_path, store)
+            self._approve(store)
 
-    def test_missing_stores_refused(self, tmp_path):
-        from src.research_orchestrator.release_gate import PromotionGateError
-
-        seeded = _seed_live_artifact(tmp_path)
-        store = self._publish(tmp_path, seeded)
-        with pytest.raises(PromotionGateError, match="holdout_seal_dir"):
-            self._approve(tmp_path, store, holdout_seal_dir=None)
-        with pytest.raises(PromotionGateError, match="book_artifact_dir"):
-            self._approve(tmp_path, store, book_artifact_dir=None)
-
-    def test_same_key_republish_with_changed_payload_refused(self, tmp_path):
+    def test_same_key_republish_with_changed_payload_refused(self, tmp_path, monkeypatch):
         from src.research_orchestrator.registries.strategy_registry import (
             publish_strategy_candidate,
         )
 
-        seeded = _seed_live_artifact(tmp_path)
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root)
         store = self._publish(tmp_path, seeded)
         idx = store.master[store.master["object_id"] == "strategy_candidate::book_pr3"].index[-1]
         store.master.at[idx, "definition_payload_json"] = "{\"mutated\": true}"
         with pytest.raises(ValueError, match="immutable"):
             publish_strategy_candidate(store, object_name="book_pr3",
                                        artifact_hash=seeded["artifact_hash"],
-                                       artifact_store=seeded["artifact_store"],
                                        run_dir=tmp_path / "run")
 
-    def test_non_privileged_transitions_unchanged(self, tmp_path):
-        seeded = _seed_live_artifact(tmp_path)
+    def test_non_privileged_transitions_unchanged(self, tmp_path, monkeypatch):
+        root = self._canonical(tmp_path, monkeypatch)
+        seeded = _seed_live_artifact(root)
         store = self._publish(tmp_path, seeded)
         out = store.set_status(object_id="strategy_candidate::book_pr3",
                                status="under_review", reason="triage")
@@ -1407,6 +1533,7 @@ class TestStrategyPromotionWiring:
 
 class TestBookSealArtifactStore:
     def test_state_machine_transitions_and_immutability(self, tmp_path):
+        # R7 B1 states: claimed -> execution_started -> verdict_persisted -> complete.
         store = BookSealArtifactStore(tmp_path / "a")
         kw = dict(book_seal_key="k", request_hash="r")
         store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
@@ -1414,13 +1541,43 @@ class TestBookSealArtifactStore:
         with pytest.raises(BookSealStoreError, match="already has state"):
             store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
                              provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
-        store.persist_verdict(**kw, verdict={"bar_passed": True})
+        # a verdict may NOT land straight from `claimed` (execution never marked)
+        with pytest.raises(BookSealStoreError, match="illegal transition"):
+            store.persist_verdict(**kw, verdict={"bar_passed": True})
+        verdict = store.run_or_load_verdict(
+            **kw, evaluator=lambda: {"m": 1.0},
+            make_verdict=lambda m: {"bar_passed": True, "metrics": dict(m)})
+        assert store.current("k")["state"] == "verdict_persisted"
         with pytest.raises(BookSealStoreError, match="illegal transition"):
             store.persist_verdict(**kw, verdict={"bar_passed": False})
-        store.complete(**kw, artifact={"a": 1})
+        # R7 B3: complete() requires the artifact's embedded verdict to BE the
+        # execution-time persisted verdict — any other verdict refuses.
+        with pytest.raises(BookSealStoreError, match="immutable and final"):
+            store.complete(**kw, artifact={"book_verdict": {"bar_passed": False}})
+        store.complete(**kw, artifact={"book_verdict": verdict, "a": 1})
         with pytest.raises(BookSealStoreError, match="illegal transition"):
-            store.complete(**kw, artifact={"a": 2})
+            store.complete(**kw, artifact={"book_verdict": verdict, "a": 2})
         assert store.current("k")["state"] == "complete"
+
+    def test_crashed_execution_quarantined_at_store_level(self, tmp_path):
+        # R7 B1: an evaluator crash leaves execution_started; a second
+        # run_or_load_verdict call refuses instead of re-running the evaluator.
+        store = BookSealArtifactStore(tmp_path / "a")
+        kw = dict(book_seal_key="k", request_hash="r")
+        store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
+                         provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            raise RuntimeError("mid-backtest crash")
+
+        with pytest.raises(RuntimeError, match="mid-backtest crash"):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        assert store.current("k")["state"] == "execution_started"
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        assert calls["n"] == 1
 
     def test_append_rows_batch_idempotent_and_divergence_refused(self, tmp_path):
         # R3 Minor 1: a resume after a crash between append and complete re-uses ids
@@ -1443,8 +1600,9 @@ class TestBookSealArtifactStore:
         kw = dict(book_seal_key="k", request_hash="r")
         store.open_claim(**kw, run_dir="rd", step_id="s", mode="live", oos_window_id="w",
                          provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
-        store.persist_verdict(**kw, verdict={"bar_passed": True})
-        completed = store.complete(**kw, artifact={"payload": 42})
-        assert store.load_artifact(str(completed["artifact_hash"])) == {"payload": 42}
+        verdict = store.run_or_load_verdict(
+            **kw, evaluator=lambda: {}, make_verdict=lambda m: {"bar_passed": True})
+        completed = store.complete(**kw, artifact={"book_verdict": verdict, "payload": 42})
+        assert store.load_artifact(str(completed["artifact_hash"]))["payload"] == 42
         with pytest.raises(BookSealStoreError, match="no complete artifact"):
             store.load_artifact("0" * 16)
