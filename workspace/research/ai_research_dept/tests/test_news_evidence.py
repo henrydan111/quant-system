@@ -517,6 +517,66 @@ class TestFactorPayloadGate:
                                      consumer_seat="macro",
                                      target_dimension="risk_appetite_environment_fit") == {"M01"}
 
+    # re-review#5 B2: bare/malformed references — the model can read a raw JSON
+    # field regardless of what the scanner calls a reference
+    def test_bare_known_id_in_value_rejected(self):
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload({"id": "NFC01"}, self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_bare_known_id_in_key_rejected(self):
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload({"NFC01": "x"}, self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_whitespace_padded_bracket_rejected(self):
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload("[ NFC01 ]", self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_unbalanced_bracket_rejected(self):
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload("[NFC01", self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_nested_bracket_rejected(self):
+        with pytest.raises(PayloadGateError, match="嵌套"):
+            assert_factor_payload("[[NFC01]]", self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_bare_authorized_id_also_rejected(self):
+        # even an id that WOULD authorize must travel as a typed reference
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload({"id": "NFD01"}, self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_sentence_final_bare_id_rejected(self):
+        with pytest.raises(PayloadGateError, match="裸/畸形"):
+            assert_factor_payload("see NFD01.", self._reg(), consumer_seat="news",
+                                  target_dimension="event_materiality")
+
+    def test_ordinary_prose_not_flagged(self):
+        # Q4/H1-style prose contains no registry ids -> passes untouched
+        got = assert_factor_payload({"note": "Q4营收 H1 2025 展望", "ref": "[NFD01]"},
+                                    self._reg(), consumer_seat="news",
+                                    target_dimension="event_materiality")
+        assert got == {"NFD01"}
+
+    def test_evidence_ref_node_is_a_candidate(self):
+        from workspace.research.ai_research_dept.engine.news_evidence import EvidenceRef
+        got = assert_factor_payload({"refs": [EvidenceRef("NFD01")]}, self._reg(),
+                                    consumer_seat="news",
+                                    target_dimension="event_materiality")
+        assert got == {"NFD01"}
+        # a typed ref to an unauthorized id still fails authorization
+        with pytest.raises(PayloadGateError, match="N00"):
+            assert_factor_payload({"refs": [EvidenceRef("N00")]}, self._reg(),
+                                  consumer_seat="news",
+                                  target_dimension="event_materiality")
+        # malformed ref ids can't even construct
+        with pytest.raises(RegistryError, match="引用语法"):
+            EvidenceRef("nfd01")
+
     def test_metadata_bracket_not_a_reference(self):
         # the render metadata bracket [age|stars|NFD] contains pipes -> not a
         # reference; its bare class label NFD is never extracted (no false unknown)

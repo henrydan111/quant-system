@@ -523,7 +523,8 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
     - **最终注册表在工厂内构造并验证**(重复身份在此拒,不留给下游);
     - 束封 decision_id/cutoff/源注册表哈希/全部子行与降级行 content_hash/最终注册表
       哈希——下游用 `verify_bundle_registry` 要求恰一匹配。
-    返回 (bundle, rows, final_registry)。"""
+    返回**经 verify_d7_artifact 自证的 D7DecisionArtifact**(re-review#5 B1:唯一
+    消费单元;.bundle/.rows/.final_registry 为组件)。"""
     cutoff_iso = pd.Timestamp(cutoff).isoformat()
     # re-review#3 M1:decision_id 严格非空字符串,绝不 str() 强转(1 与 "1" 不同一)
     if not isinstance(decision_id, str) or not decision_id.strip():
@@ -616,13 +617,19 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
         child_record_hashes=tuple(sorted(rec.content_hash for rec in attr_records)),
         demoted_record_hashes=tuple(sorted(rec.content_hash for rec in demoted_records)),
         final_registry_hash=final_registry.registry_hash)
-    return bundle, rows, final_registry
+    # re-review#5 B1:返回**完整可验证工件**并自证一遍——消费侧(未来账本)只收
+    # verify_d7_artifact 过门的工件,自封假血缘束无从入账
+    artifact = D7DecisionArtifact(
+        card=card, base_facts=tuple(base_facts), source_registry=source_registry,
+        rows=tuple(rows), bundle=bundle, final_registry=final_registry)
+    return verify_d7_artifact(artifact)
 
 
 def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
-    """下游消费点强制:**真密封注册表**(re-review#3 B2:duck-typed 冒牌对象在此拒,
-    经 require_sealed_registry 重验封印)且必须恰一匹配束封的 final_registry_hash
-    (M1:两个束/改过的注册表无法都成为同一决策的权威)。"""
+    """窄检查:注册表 ↔ 束的 final_registry_hash 匹配(经 require_sealed_registry)。
+    ⚠ 这**不是**完整血缘边界——一个自封的假血缘束可以自洽地匹配自己的注册表
+    (re-review#5 B1)。完整消费边界 = `verify_d7_artifact`;未来的 decision_id →
+    bundle_hash 首写账本**只许**收经其验证的 D7DecisionArtifact。"""
     if not isinstance(bundle, AttributeBundle):
         raise RegistryError("bundle 必须是密封 AttributeBundle")
     registry = require_sealed_registry(registry)
@@ -630,6 +637,122 @@ def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
         raise RegistryError(
             f"注册表 {registry.registry_hash[:12]} 与束封最终注册表 "
             f"{bundle.final_registry_hash[:12]} 不符——拒绝消费(M1)")
+
+
+@dataclass(frozen=True)
+class D7DecisionArtifact:
+    """一个决策的**完整可验证** D7 工件(re-review#5 B1):卡 + 精确 D7BaseFact 总体 +
+    源注册表 + 属性行 + 束 + 最终注册表,artifact_hash 封全部组件哈希。
+    **`verify_d7_artifact` 是唯一消费边界**——source 血缘在此全量再推导,自封假
+    血缘束(发明的 source 身份)无处遁形;未来账本只收验证过的本工件。"""
+    card: RenderedCard
+    base_facts: tuple
+    source_registry: object          # SealedCardRegistry
+    rows: tuple
+    bundle: AttributeBundle
+    final_registry: object           # SealedCardRegistry
+    artifact_hash: str = field(default="")
+
+    def __post_init__(self):
+        if self.artifact_hash:
+            verify_sealed(self._payload(), self.artifact_hash, field_name="artifact_hash")
+        else:
+            object.__setattr__(self, "artifact_hash", seal_hash(self._payload()))
+
+    def _payload(self) -> dict:
+        return {"card_hash": self.card.card_hash,
+                "base_fact_hashes": sorted(bf.fact_hash for bf in self.base_facts),
+                "source_registry_hash": self.source_registry.registry_hash,
+                "row_hashes": sorted(r.row_hash for r in self.rows),
+                "bundle_hash": self.bundle.bundle_hash,
+                "final_registry_hash": self.final_registry.registry_hash}
+
+
+def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
+    """**完整血缘再推导**(re-review#5 B1:唯一 D7 消费边界;账本只收过此门的工件)。
+    对每个组件重验封印,并全量重算:
+    - 卡封印 + 基事实总体与卡**精确相等**;源注册表记录总体哈希 == 卡封记录总体;
+    - 束的 source_card_hash/base_fact_hashes/source_registry_hash/final_registry_hash/
+      cutoff 五向绑定逐一重对;
+    - **每个 D7 子行**:`source_parent_content_hash == 源注册表[前缀父].content_hash
+      == D7BaseFact.base_content_hash`(re-review#5 B1:source 血缘不再只记录不验证)
+      且 `registry_parent_content_hash == 最终注册表[前缀父].content_hash`;
+    - 总体精确相等:子行/降级行/属性行/claim 集合逐一对上束封;被拆父在源注册表正向、
+      在最终注册表 context_only;未拆记录源↔终逐字节不变;终 ID 集 = 源 ID 集 ∪ 子行。"""
+    if not isinstance(artifact, D7DecisionArtifact):
+        raise RegistryError("只收 D7DecisionArtifact(re-review#5 B1)")
+    verify_sealed(artifact._payload(), artifact.artifact_hash, field_name="artifact_hash")
+    card, bundle = artifact.card, artifact.bundle
+    if not isinstance(card, RenderedCard) or not isinstance(bundle, AttributeBundle):
+        raise RegistryError("工件组件类型不符")
+    verify_sealed(card._payload(), card.card_hash, field_name="card_hash")
+    verify_sealed(bundle._payload(), bundle.bundle_hash, field_name="bundle_hash")
+    src = require_sealed_registry(artifact.source_registry)
+    fin = require_sealed_registry(artifact.final_registry)
+    # 基事实总体精确相等 + 类型
+    facts_by_id = {}
+    for bf in artifact.base_facts:
+        if not isinstance(bf, D7BaseFact):
+            raise RegistryError("base_facts 只收密封 D7BaseFact")
+        facts_by_id[bf.base_record_id] = bf
+    if sorted(bf.fact_hash for bf in artifact.base_facts) \
+            != sorted(card.base_fact_hashes):
+        raise RegistryError("工件基事实总体与卡封不精确相等(B1)")
+    if _records_hash(list(src.records.values())) != card.records_hash:
+        raise RegistryError("源注册表记录总体与卡封不符(B1)")
+    # 束五向绑定
+    if bundle.source_card_hash != card.card_hash \
+            or list(bundle.base_fact_hashes) != sorted(card.base_fact_hashes) \
+            or bundle.source_registry_hash != src.registry_hash \
+            or bundle.final_registry_hash != fin.registry_hash \
+            or bundle.cutoff_iso != card.cutoff_iso:
+        raise RegistryError("束与卡/源注册表/最终注册表绑定不符——自封假血缘拒(B1)")
+    # 逐子行 source+registry 双父再推导
+    child_ids = {rid for rid in fin.records if "." in rid}
+    prefixes = {rid.split(".", 1)[0] for rid in child_ids}
+    for rid in sorted(child_ids):
+        child = fin.records[rid]
+        prefix = rid.split(".", 1)[0]
+        d = dict(tuple(kv) for kv in child.derivation)
+        src_parent = src.records.get(prefix)
+        bf = facts_by_id.get(prefix)
+        if src_parent is None or bf is None:
+            raise RegistryError(f"D7 子行 {rid} 的前缀父不在源注册表/基事实总体(B1)")
+        if not (d.get("source_parent_content_hash") == src_parent.content_hash
+                == bf.base_content_hash):
+            raise RegistryError(
+                f"D7 子行 {rid} 的 source 父血缘不符:封 "
+                f"{str(d.get('source_parent_content_hash'))[:12]} vs 源注册表 "
+                f"{src_parent.content_hash[:12]} vs 基事实 "
+                f"{bf.base_content_hash[:12]}——错 source 血缘拒(re-review#5 B1)")
+        if d.get("registry_parent_content_hash") != fin.records[prefix].content_hash:
+            raise RegistryError(f"D7 子行 {rid} 的 registry 父血缘不符(B1)")
+    # 总体精确相等(子行/降级行/属性行/claim)
+    if sorted(fin.records[rid].content_hash for rid in child_ids) \
+            != list(bundle.child_record_hashes):
+        raise RegistryError("子行总体与束封不精确相等(B1)")
+    if sorted(fin.records[p].content_hash for p in prefixes) \
+            != list(bundle.demoted_record_hashes):
+        raise RegistryError("降级行总体与束封不精确相等(B1)")
+    rows = artifact.rows
+    if any(not isinstance(r, AttributeRow) for r in rows):
+        raise RegistryError("rows 只收密封 AttributeRow")
+    if sorted(r.row_hash for r in rows) != list(bundle.row_hashes):
+        raise RegistryError("属性行总体与束封不精确相等(B1)")
+    if {r.claim_id for r in rows} != set(bundle.claim_ids):
+        raise RegistryError("claim 总体与束封不精确相等(B1)")
+    # 被拆父:源正向 → 终 context_only;未拆记录逐字节不变;终 = 源 ∪ 子行
+    for p in sorted(prefixes):
+        if "factor_positive" not in src.records[p].allowed_uses:
+            raise RegistryError(f"被拆父 {p} 在源注册表非正向——血缘不成立(B1)")
+        if fin.records[p].allowed_uses != frozenset({"context_only"}):
+            raise RegistryError(f"被拆父 {p} 在最终注册表未降级 context_only(B1)")
+    if set(fin.records) != set(src.records) | child_ids:
+        raise RegistryError("最终注册表 ID 集 ≠ 源 ID 集 ∪ 子行——总体被增删(B1)")
+    for rid in set(src.records) - prefixes:
+        if fin.records[rid].content_hash != src.records[rid].content_hash:
+            raise RegistryError(f"未拆记录 {rid} 在源↔终注册表间被改动(B1)")
+    return artifact
 
 
 # --------------------------------------------------- B1′ 存量 ID 语义分类

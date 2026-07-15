@@ -554,25 +554,46 @@ def dimension_ceiling(cited_ids, registry: SealedCardRegistry, *,
 
 # --------------------------------------------------- 正向 payload 门(承重硬失败)
 
-#: 证据引用的**规范语法**:ASCII `[ID]` 方括号组,内文恰为 record-id 语法(D7 后缀
+#: 证据引用的**规范编码**:ASCII `[ID]` 方括号组,内文恰为 record-id 语法(D7 后缀
 #  原子)。外部正文的 ASCII 方括号已被 sanitize_text 全角化(〔〕),故正文物理无法
-#  伪造一个 `[ID]` 引用;渲染器的元数据括号 `[龄|星|类]` 含 `|`,内文不 fullmatch
-#  语法故不被当引用(re-review#4 B2:引用有语法,不再逐"已注册 ID"子串搜索)。
+#  伪造一个 `[ID]` 引用;渲染器的元数据括号有自己的类型化语法(至少含一个 `|`,
+#  见 _META_BRACKET_RE)。re-review#5 B2:`[ID]` 是 EvidenceRef 的**规范输出编码**,
+#  不是授权边界——授权边界另由"裸已知 ID 拒绝"补全(_assert_no_stray_known_ids)。
 _BRACKET_REF_RE = re.compile(r"\[([^\[\]]*)\]")
 _ID_REF_GRAMMAR = re.compile(
     r"[A-Z][A-Z0-9]{1,15}(?:\.(?:fact|economic_linkage|timing|source_status))?")
+#: 渲染器元数据括号的类型化语法(re-review#5 B2):内文至少含一个 `|` 且无嵌套括号
+#  (如 `[2.1h|★★★★|NFD]`)——与证据引用 `[ID]` 语法互斥。
+_META_BRACKET_RE = re.compile(r"[^\[\]|]*\|[^\[\]]*")
+
+
+@dataclass(frozen=True)
+class EvidenceRef:
+    """类型化证据引用节点(re-review#5 B2:引用的**真身**;`[ID]` 只是其规范文本
+    编码)。席位 payload 构造器应放 EvidenceRef 节点,序列化时 encode()。"""
+    record_id: str
+
+    def __post_init__(self):
+        if not isinstance(self.record_id, str) \
+                or not _ID_REF_GRAMMAR.fullmatch(self.record_id):
+            raise RegistryError(f"EvidenceRef record_id {self.record_id!r} 不合引用语法")
+
+    def encode(self) -> str:
+        return f"[{self.record_id}]"
 
 
 def extract_candidate_ids(payload) -> set:
     """从完整序列化 payload 抽取**每一个候选 record 引用**,**与注册表成员无关**
     (re-review#4 B2:伪造/未知 ID 必须可见,不能因"不在已注册集"而静默缺席)。
-    引用 = ASCII `[ID]` 组且内文 fullmatch record-id 语法(D7 后缀作为一个原子——
-    `[NFD01.fact]` 抽出 `NFD01.fact` 整体,绝不退化成父 `NFD01`)。递归遍历
-    dict/list/tuple/str;dict 键与值都扫。"""
+    候选 = 类型化 EvidenceRef 节点,或 ASCII `[ID]` 组且内文 fullmatch record-id
+    语法(D7 后缀作为一个原子——`[NFD01.fact]` 抽出整体,绝不退化成父 `NFD01`)。
+    递归遍历 dict/list/tuple/str;dict 键与值都扫。"""
     found: set = set()
 
     def walk(o):
-        if isinstance(o, str):
+        if isinstance(o, EvidenceRef):
+            found.add(o.record_id)
+        elif isinstance(o, str):
             for inner in _BRACKET_REF_RE.findall(o):
                 if _ID_REF_GRAMMAR.fullmatch(inner):
                     found.add(inner)
@@ -585,6 +606,52 @@ def extract_candidate_ids(payload) -> set:
                 walk(x)
     walk(payload)
     return found
+
+
+def _assert_no_stray_known_ids(payload, known_ids: set, *, context: str) -> None:
+    """re-review#5 B2:**已知注册 ID 在类型化引用之外出现 = 硬失败**。逐字符串
+    (含 dict 键)用最长优先原子边界扫描每个已知 ID;命中位置必须恰好是某个规范
+    `[ID]` 组的内文(裸 `{"id":"NFC01"}`、裸键 `{"NFC01":...}`、空白垫 `[ NFC01 ]`、
+    未闭合 `[NFC01` 全部拒);规范组紧邻内层/外层括号(嵌套 `[[NFC01]]`)也拒。
+    只扫**已知注册 ID**——`Q4`/`H1` 等正常散文不受影响(它们不是注册 ID)。"""
+    if not known_ids:
+        return
+    # 边界不含 `.`:最长优先已保证已注册子行整体优先命中;裸 `NFD01.`(句尾)仍被抓
+    pat = re.compile(r"(?<![A-Za-z0-9_])(?:"
+                     + "|".join(re.escape(k) for k in
+                                sorted(known_ids, key=len, reverse=True))
+                     + r")(?![A-Za-z0-9_])")
+
+    def check(s: str):
+        canonical: list = []
+        for m in _BRACKET_REF_RE.finditer(s):
+            if _ID_REF_GRAMMAR.fullmatch(m.group(1)):
+                # 嵌套/畸形:规范组外侧紧邻另一括号 → 拒(re-review#5 B2)
+                if (m.start() > 0 and s[m.start() - 1] == "[") \
+                        or (m.end() < len(s) and s[m.end()] == "]"):
+                    raise PayloadGateError(
+                        f"{context}:引用 [{m.group(1)}] 处于嵌套/畸形括号内——拒")
+                canonical.append((m.start(1), m.end(1)))
+        for m in pat.finditer(s):
+            if not any(a <= m.start() and m.end() <= b for a, b in canonical):
+                raise PayloadGateError(
+                    f"{context}:已知注册 ID {m.group(0)!r} 以**裸/畸形**形式出现"
+                    f"(非规范 [ID] 引用)——拒(re-review#5 B2:模型看得见就必须"
+                    f"过授权,引用必须走类型化编码)")
+
+    def walk(o):
+        if isinstance(o, str):
+            check(o)
+        elif isinstance(o, EvidenceRef):
+            pass                                   # 类型化节点本身即合法引用
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                walk(k)
+                walk(v)
+        elif isinstance(o, (list, tuple)):
+            for x in o:
+                walk(x)
+    walk(payload)
 
 
 def scan_payload_ids(payload, registry: SealedCardRegistry) -> set:
@@ -610,6 +677,10 @@ def assert_factor_payload(payload, registry: SealedCardRegistry, *,
         raise PayloadGateError(
             f"正向 payload(seat={consumer_seat}, dim={target_dimension})含**未注册** "
             f"record 引用 {sorted(unknown)}——伪造/未知 ID 硬失败(re-review#4 B2)")
+    # re-review#5 B2:已知 ID 以裸/畸形形式出现(非类型化 [ID] 引用)= 硬失败——
+    # 模型看得见的每个注册 ID 都必须走引用编码过授权,{"id":"NFC01"} 无处可藏
+    _assert_no_stray_known_ids(payload, known,
+                               context=f"正向 payload(seat={consumer_seat})")
     offenders = []
     for rid in sorted(candidates):
         rec = registry.get(rid)
