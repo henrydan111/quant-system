@@ -58,11 +58,17 @@ def _df_sha256(df) -> tuple[str, int]:
 _TERMINAL = {"verified", "confirmed_empty"}
 _PLAN_REQUIRED = {"request_id", "endpoint", "dataset", "params", "partition", "empty_policy",
                   "receipt_output", "natural_key", "content_dedup_key", "page_limit",
-                  "baseline_dups", "contract_sha256", "doc_sha256"}
-# a valid terminal claim on the LAST page:
-_TERMINALS = {"last_partial",     # rows < page_limit  -> genuine last page
-              "empty_terminal",   # a trailing empty page confirmed the end
-              "contract_terminal"}  # the signed contract defines another terminal proof (named in the plan)
+                  "pagination_mode", "max_content_dups", "contract_sha256", "doc_sha256"}
+_PAGINATION_MODES = {"single_page", "offset_paged"}
+# TYPED terminal proofs (GPT re-review #5 F2 BLOCKER). The old generic `contract_terminal` was an
+# UNPROVEN claim: a FULL final page marked that way verified, skipping the trailing-empty confirmation
+# — i.e. a truncated fetch could certify as complete. Each terminal now carries a MACHINE-CHECKED
+# invariant and there is NO free-form escape:
+_TERMINALS = {
+    "last_partial":         "offset_paged: page_limit>0 AND last row_count STRICTLY < page_limit",
+    "empty_terminal":       "offset_paged: last page row_count == 0 (a trailing empty page)",
+    "single_page_contract": "single_page: page_limit==0 AND exactly ONE page (contract declares no paging)",
+}
 
 
 class PageReceiptLedger:
@@ -222,6 +228,9 @@ class PageReceiptLedger:
             if nums != list(range(1, len(nums) + 1)):
                 raise LedgerError(f"{rid}: pages not contiguous 1..N: {nums}")
             limit = int(row["page_limit"]) if row["page_limit"] else 0
+            mode = row["pagination_mode"]
+            if mode not in _PAGINATION_MODES:
+                raise LedgerError(f"{rid}: bad pagination_mode {mode!r}")
             # every page except the last must be FULL (== limit) when a limit applies; the last proves termination
             if limit:
                 for p in nums[:-1]:
@@ -231,11 +240,48 @@ class PageReceiptLedger:
             tc = last.get("terminal_claim")
             if tc not in _TERMINALS:
                 raise LedgerError(f"{rid}: last page lacks a valid terminal_claim ({tc})")
-            if limit and last["row_count"] == limit and tc == "last_partial":
-                raise LedgerError(f"{rid}: exact-limit last page needs a trailing empty page (empty_terminal)")
-            # concatenate the receipts, bind ordered page hashes
+            # --- TYPED terminal PROOF: each claim must satisfy its machine-checked invariant --------
+            if mode == "single_page":
+                if tc != "single_page_contract":
+                    raise LedgerError(f"{rid}: single_page mode requires terminal single_page_contract, got {tc}")
+                if limit or len(nums) != 1:
+                    raise LedgerError(f"{rid}: single_page_contract requires page_limit==0 and exactly one "
+                                      f"page (limit={limit}, pages={len(nums)})")
+            else:  # offset_paged
+                if tc == "single_page_contract":
+                    raise LedgerError(f"{rid}: single_page_contract invalid under offset_paged")
+                if not limit:
+                    raise LedgerError(f"{rid}: offset_paged requires a positive page_limit")
+                if tc == "last_partial" and last["row_count"] >= limit:
+                    raise LedgerError(f"{rid}: last_partial claimed but last page is FULL "
+                                      f"({last['row_count']} >= {limit}) — needs a trailing empty page "
+                                      f"(empty_terminal); a full final page never proves termination")
+                if tc == "empty_terminal" and last["row_count"] != 0:
+                    raise LedgerError(f"{rid}: empty_terminal claimed but last page has "
+                                      f"{last['row_count']} rows")
+            # --- RECEIPT INTEGRITY: re-read each receipt and RE-COMPUTE its hash/rowcount ----------
+            # GPT re-review #5 F2: verification used to trust the recorded hash and just read the file,
+            # so a receipt REPLACED after recording still verified and its substituted rows landed in
+            # the staged output. The bytes on disk must re-derive the hash the ledger committed to.
             ordered_hashes = [pages[p]["page_sha256"] for p in nums]
-            frames = [pd.read_parquet(self.rp.root / pages[p]["receipt"]) for p in nums]
+            frames = []
+            for p in nums:
+                rec_rel = pages[p]["receipt"]
+                rec_path = self.rp.root / rec_rel
+                if not rec_path.is_file():
+                    raise LedgerError(f"{rid}: page {p} receipt missing on disk: {rec_rel}")
+                fr = pd.read_parquet(rec_path)
+                got_sha, got_n = _df_sha256(fr)
+                if got_sha != pages[p]["page_sha256"]:
+                    raise LedgerError(f"{rid}: page {p} receipt CONTENT does not match the recorded hash "
+                                      f"({got_sha[:12]} != {pages[p]['page_sha256'][:12]}) — receipt tampered "
+                                      f"or replaced after recording")
+                if got_n != int(pages[p]["row_count"]):
+                    raise LedgerError(f"{rid}: page {p} receipt row count {got_n} != recorded "
+                                      f"{pages[p]['row_count']}")
+                if pages[p].get("request_id", rid) != rid:
+                    raise LedgerError(f"{rid}: page {p} receipt bound to another request")
+                frames.append(fr)
             df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
             nk = list(row["natural_key"])
             miss = [k for k in nk if k not in df.columns]
@@ -244,13 +290,24 @@ class PageReceiptLedger:
             null_keys = int(df[nk].isna().any(axis=1).sum()) if nk else 0
             if null_keys:
                 raise LedgerError(f"{rid}: {null_keys} rows with a null natural key")
+            # --- duplicates: the NATURAL key is the vendor's row identity -> a repeat is ALWAYS a bug -
+            # GPT re-review #5 F2: `baseline_dups=True` was an unlimited free pass that then SILENTLY
+            # dropped the excess, so a duplicated page could mask a missing one. Dups under the natural
+            # key now always refuse; only genuine restatement collapse under the coarser content-dedup
+            # key is allowed, and only up to the plan's DECLARED max_content_dups bound.
+            nk_excess = int(len(df) - len(df.drop_duplicates(subset=nk))) if nk else 0
+            if nk_excess:
+                raise LedgerError(f"{rid}: {nk_excess} duplicate rows under the NATURAL key {nk} — a "
+                                  f"repeated/duplicated page can mask a missing page; refusing")
             dk = list(row["content_dedup_key"]) or nk
             pre = int(len(df))
             deduped = df.drop_duplicates(subset=dk)
             post = int(len(deduped))
             excess = pre - post
-            if excess and not row["baseline_dups"]:
-                raise LedgerError(f"{rid}: {excess} unexpected duplicate rows under {dk} (baseline_dups=False)")
+            max_dups = int(row["max_content_dups"])
+            if excess > max_dups:
+                raise LedgerError(f"{rid}: {excess} duplicate rows under {dk} exceeds the declared "
+                                  f"max_content_dups={max_dups}")
             if pre == 0 and row["empty_policy"] == "dense_refuse":
                 raise LedgerError(f"{rid}: dense dataset verified with 0 rows")
             # write the per-request receipt output + hash
@@ -273,6 +330,20 @@ class PageReceiptLedger:
             row = plan[rid]
             if row["empty_policy"] != "sparse_canary":
                 raise LedgerError(f"{rid}: dense dataset — an empty result can NEVER be accepted")
+            # GPT re-review #5 F2: counting empty ATTEMPTS is not proof — the request must itself be a
+            # STRUCTURALLY VALID terminal request (contiguous pages 1..N with a typed terminal proof),
+            # otherwise a partial/aborted fetch that merely logged empties could certify as "empty".
+            pages = self._latest_pages(rows, rid)
+            if not pages:
+                raise LedgerError(f"{rid}: confirmed_empty needs page receipts")
+            nums = sorted(pages)
+            if nums != list(range(1, len(nums) + 1)):
+                raise LedgerError(f"{rid}: confirmed_empty pages not contiguous 1..N: {nums}")
+            tc = pages[nums[-1]].get("terminal_claim")
+            if tc not in _TERMINALS:
+                raise LedgerError(f"{rid}: confirmed_empty last page lacks a valid terminal_claim ({tc})")
+            if any(pages[p]["row_count"] for p in nums):
+                raise LedgerError(f"{rid}: confirmed_empty but some page has rows")
             empt = [a for a in self._attempts(rows, rid) if a["row_count"] == 0]
             if len({a["page_sha256"] for a in empt}) < 2:  # DISTINCT empty receipts, not one replayed twice
                 raise LedgerError(f"{rid}: confirmed_empty needs >=2 DISTINCT empty page receipts")

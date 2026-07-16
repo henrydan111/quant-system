@@ -37,13 +37,14 @@ def led(monkeypatch):
     shutil.rmtree(base, ignore_errors=True)
 
 
-def _plan_row(endpoint, part, out, *, empty="dense_refuse", limit=2, dedup=None, base_dups=False,
-              nk=("ts_code", "trade_date")):
+def _plan_row(endpoint, part, out, *, empty="dense_refuse", limit=2, dedup=None, max_dups=0,
+              nk=("ts_code", "trade_date"), mode=None):
     params = {"trade_date": part}
     return {"request_id": rl.request_id(endpoint, params, part), "endpoint": endpoint, "dataset": endpoint,
             "params": params, "partition": part, "empty_policy": empty, "receipt_output": out,
             "natural_key": list(nk), "content_dedup_key": list(dedup or nk), "page_limit": limit,
-            "baseline_dups": base_dups, "contract_sha256": "c" * 64, "doc_sha256": "d" * 64}
+            "pagination_mode": mode or ("offset_paged" if limit else "single_page"),
+            "max_content_dups": max_dups, "contract_sha256": "c" * 64, "doc_sha256": "d" * 64}
 
 
 def _df(codes, date="20260702"):
@@ -103,28 +104,100 @@ def test_null_natural_key_rejected(led):
         L.verify_request(rid)
 
 
-def test_unexpected_duplicates_rejected_unless_baseline(led):
+def test_duplicate_under_natural_key_always_refused(led):
+    """GPT re-review #5 F2: `baseline_dups=True` used to allow UNLIMITED excess and then silently drop
+    it, so a duplicated page could mask a MISSING page. A repeat under the vendor's natural key is now
+    always a refusal — there is no free pass."""
     rp, L = led
-    dup = _df(["A.SZ", "A.SZ"])  # duplicate (ts_code,trade_date)
-    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3, base_dups=False)
+    dup = _df(["A.SZ", "A.SZ"])  # duplicate (ts_code,trade_date) = the natural key
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3, max_dups=0)
     L.freeze_plan([row]); rid = row["request_id"]
     L.record_page(rid, 1, dup, terminal_claim="last_partial")
-    with pytest.raises(rl.LedgerError, match="unexpected duplicate"):
+    with pytest.raises(rl.LedgerError, match="duplicate rows under the NATURAL key"):
         L.verify_request(rid)
-    # a dataset that legitimately holds dups (event data) with baseline_dups=True passes
-    monked = _plan_row("top_inst", "20260702", "o/e.parquet", limit=3, base_dups=True)
-    L2 = rl.PageReceiptLedger(rp, coordinator_commit="deadbeef", adapter_bundle_hash="abc123")
-    # a fresh run for the second plan (one plan per run)
-    import uuid as _u
-    base2 = rp.root.parent / _u.uuid4().hex
-    rrc.RECOVERY_ROOT = rp.root.parent
-    rp2 = rrc.RecoveryPaths(_u.uuid4().hex[:16]); rp2.create_root()
-    L3 = rl.PageReceiptLedger(rp2, coordinator_commit="deadbeef", adapter_bundle_hash="abc123")
-    L3.freeze_plan([monked]); rid2 = monked["request_id"]
-    L3.record_page(rid2, 1, dup.rename(columns={}), terminal_claim="last_partial")
-    ev = L3.verify_request(rid2)
-    assert ev["excess_dup_rows"] == 1  # recorded, allowed
-    shutil.rmtree(rp2.root, ignore_errors=True)
+
+
+def test_natural_key_dups_refused_even_with_a_dup_budget(led):
+    """The declared max_content_dups budget applies ONLY to restatement collapse under the coarser
+    content-dedup key — it can never excuse a repeated vendor row (the page-duplication hole)."""
+    rp, L = led
+    dup = _df(["A.SZ", "A.SZ"])
+    row = _plan_row("top_inst", "20260702", "o/e.parquet", limit=3, max_dups=99)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, dup, terminal_claim="last_partial")
+    with pytest.raises(rl.LedgerError, match="duplicate rows under the NATURAL key"):
+        L.verify_request(rid)
+
+
+def test_content_dedup_excess_bounded_by_declared_budget(led):
+    """Genuine restatement collapse: rows DISTINCT under the natural key but colliding under the
+    coarser content-dedup key are allowed only up to the plan's declared bound."""
+    rp, L = led
+    import pandas as pd
+    # distinct natural keys (ts_code,ann_date); both collapse to one under (ts_code,end_date)
+    df = pd.DataFrame([{"ts_code": "A.SZ", "ann_date": "20260701", "end_date": "20260630", "v": 1},
+                       {"ts_code": "A.SZ", "ann_date": "20260702", "end_date": "20260630", "v": 2}])
+    row = _plan_row("income", "20260702", "o/i.parquet", limit=3, max_dups=0,
+                    nk=("ts_code", "ann_date"), dedup=("ts_code", "end_date"))
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, df, terminal_claim="last_partial")
+    with pytest.raises(rl.LedgerError, match="exceeds the declared max_content_dups"):
+        L.verify_request(rid)
+
+
+def test_receipt_replaced_after_recording_is_caught(led):
+    """GPT re-review #5 F2 (reproduced): a receipt REPLACED after recording still verified and its
+    substituted row landed in the staged output. Verification now RE-COMPUTES each receipt's hash."""
+    rp, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    # find the receipt on disk and substitute its content
+    import json as _j
+    rec = None
+    for ln in rp.ledger_path.read_text(encoding="utf-8").splitlines():
+        r = _j.loads(ln)
+        if r.get("kind") == "attempt" and r.get("receipt"):
+            rec = rp.root / r["receipt"]
+    assert rec and rec.is_file()
+    _df(["EVIL.SZ"]).to_parquet(rec, index=False)   # swap the receipt's bytes
+    with pytest.raises(rl.LedgerError, match="does not match the recorded hash"):
+        L.verify_request(rid)
+
+
+def test_full_final_page_cannot_certify_via_a_generic_terminal(led):
+    """GPT re-review #5 F2 (reproduced): a FULL final page marked `contract_terminal` verified,
+    skipping the trailing-empty confirmation. The generic escape is GONE and every terminal now
+    carries a machine-checked invariant."""
+    rp, L = led
+    assert "contract_terminal" not in rl._TERMINALS
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=2)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]), terminal_claim="contract_terminal")  # FULL page
+    with pytest.raises(rl.LedgerError, match="valid terminal_claim"):
+        L.verify_request(rid)
+
+
+def test_single_page_contract_terminal_is_proof_checked(led):
+    """The only contract-declared terminal is `single_page_contract`, and it is PROVEN: page_limit==0
+    and exactly one page. Claiming it under offset paging refuses."""
+    rp, L = led
+    row = _plan_row("stock_basic", "20260702", "o/s.parquet", limit=0)  # -> single_page mode
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="single_page_contract")
+    ev = L.verify_request(rid)
+    assert ev["post_dedup_rows"] == 1
+
+
+def test_single_page_contract_claim_refused_under_offset_paging(led):
+    """Claiming the single-page contract terminal on a PAGED request refuses — the terminal is bound
+    to the declared pagination mode, not to the adapter's say-so."""
+    rp, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=2, mode="offset_paged")
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="single_page_contract")
+    with pytest.raises(rl.LedgerError, match="single_page_contract invalid under offset_paged"):
+        L.verify_request(rid)
 
 
 def test_chain_tamper_detected(led):
