@@ -127,8 +127,10 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
                 "empty_policy": "dense_refuse", "reviewed_by": "henry",
                 "reviewed_at": datetime.now(timezone.utc).isoformat()}
 
-    # a doc WITH a real Tushare-style field table (输出参数 | 名称 | ...) — ts_code/trade_date/close declared
-    _FIELD_DOC = ("# daily interface doc\n输出参数\n| 名称 | 类型 | 默认显示 | 描述 |\n| --- | --- | --- | --- |\n"
+    # a doc WITH a real Tushare-style field table (输出参数 | 名称 | ...) AND its own 接口 declaration
+    # (F4: without the 接口 binding the gate cannot prove the doc documents this endpoint)
+    _FIELD_DOC = ("# (doc_id=27)  daily interface doc\n接口：daily\n输出参数\n"
+                  "| 名称 | 类型 | 默认显示 | 描述 |\n| --- | --- | --- | --- |\n"
                   "| ts_code | str | Y | code |\n| trade_date | str | Y | date |\n| close | float | Y | close |\n")
 
     # (a) "x"-stuffed contract (GPT's exact probe) — scalar AND list-element placeholders — refuses
@@ -138,7 +140,7 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
     errs = rrc.contract_errors("daily", xstuffed)
     assert errs and any("placeholder" in e for e in errs)
     # (b) a real doc under the mirror whose declared fields cover required_fields/natural_key passes
-    doc = fake_mirror / "292_report_rc.md"
+    doc = fake_mirror / "27_股票日线行情.md"
     doc.write_text(_FIELD_DOC, encoding="utf-8")
     assert rrc.contract_errors("daily", _good(doc)) == []
     # (c) wrong hash / path-escape / future timestamp all refuse
@@ -151,10 +153,13 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
     assert any("not in doc field list" in e and "not_a_real_field" in e for e in rrc.contract_errors("daily", fab))
     # (e) M2: a natural_key column that is neither a doc field nor derived refuses
     badnk = dict(_good(doc), natural_key=["ts_code", "invented_key"])
-    assert any("not in doc field list nor derived" in e for e in rrc.contract_errors("daily", badnk))
-    # (f) M2: a coordinator-DERIVED key column (report_rc_payload_digest) IS allowed in natural_key
-    okderived = dict(_good(doc), natural_key=["ts_code", "trade_date", "report_rc_payload_digest"])
+    assert any("declared derived fields" in e for e in rrc.contract_errors("daily", badnk))
+    # (f) M2/F4: a UNIVERSAL derived stamp is allowed in natural_key...
+    okderived = dict(_good(doc), natural_key=["ts_code", "trade_date", "raw_fetch_ts"])
     assert rrc.contract_errors("daily", okderived) == []
+    # ...but another endpoint's derived field is NOT (F4: derived fields are endpoint-scoped)
+    borrowed = dict(_good(doc), natural_key=["ts_code", "trade_date", "report_rc_payload_digest"])
+    assert any("declared derived fields" in e for e in rrc.contract_errors("daily", borrowed))
     # (g) M2: a doc with NO field table (wrong doc cited) refuses
     emptydoc = fake_mirror / "999_no_table.md"
     emptydoc.write_text("# just prose, no field table\n", encoding="utf-8")
@@ -316,7 +321,7 @@ def test_event_families_use_a_lossless_payload_digest():
         row = [r for r in rrc.ENDPOINT_MATRIX if r.output_family == fam][0]
         assert "row_payload_digest" in row.vendor_record_key, f"{fam}: no lossless digest in the key"
         assert "row_payload_digest" in row.content_dedup_key
-        assert "row_payload_digest" in rrc._DERIVED_KEY_ALLOWLIST
+        assert "row_payload_digest" in rrc.derived_fields_for("top_inst")
 
 
 def test_declared_dup_budgets_are_explicit_ints():
@@ -324,3 +329,104 @@ def test_declared_dup_budgets_are_explicit_ints():
     for r in rrc.ENDPOINT_MATRIX:
         assert isinstance(r.max_content_dups, int) and r.max_content_dups >= 0
         assert isinstance(r.profile_key_dups_expected, bool)
+
+
+# ── GPT re-review #5 F4: doc<->endpoint binding + endpoint-scoped derived fields ──────────────────
+def test_parse_doc_identity_on_real_docs():
+    """Every mirrored doc declares its own doc_id + 接口 name; that is what binds it to an endpoint."""
+    ident = rrc.parse_doc_identity(rrc.DOC_MIRROR / "107_龙虎榜机构交易单.md")
+    assert ident["doc_id"] == "107" and ident["api_name"] == "top_inst"
+    ident = rrc.parse_doc_identity(rrc.DOC_MIRROR / "292_券商盈利预测数据.md")
+    assert ident["doc_id"] == "292" and ident["api_name"] == "report_rc"
+    ident = rrc.parse_doc_identity(rrc.DOC_MIRROR / "103_分红送股数据.md")
+    assert ident["api_name"] == "dividend"
+
+
+def test_every_matrix_source_endpoint_has_a_resolvable_doc():
+    """Each of the 32 source endpoints must have exactly one mirror doc that DECLARES it — otherwise
+    its contract can never be proven to cite the right document."""
+    docs = {}
+    for f in rrc.DOC_MIRROR.glob("*.md"):
+        api = rrc.parse_doc_identity(f)["api_name"]
+        if api:
+            docs.setdefault(api, []).append(f.name)
+    unresolved = [ep for ep in rrc.matrix_source_endpoints()
+                  if not any(rrc.doc_declares_endpoint(a, ep) for a in docs)]
+    assert not unresolved, f"no doc declares these endpoints: {sorted(unresolved)}"
+
+
+def test_wrong_doc_for_endpoint_refused(tmp_path, monkeypatch):
+    """GPT F4 (reproduced): a REAL, correctly-hashed doc with a valid field table — but for ANOTHER
+    API — used to approve the contract. The 接口 binding now refuses it."""
+    fake_root = tmp_path
+    fake_mirror = fake_root / "Tushare数据接口" / "content"
+    fake_mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", fake_mirror)
+    # a genuine-looking doc for top_inst (valid table, declares 接口：top_inst)
+    doc = fake_mirror / "107_龙虎榜机构交易单.md"
+    doc.write_text("# (doc_id=107)\n接口：top_inst\n输出参数\n| 名称 | 类型 | 默认显示 | 描述 |\n"
+                   "| --- | --- | --- | --- |\n| ts_code | str | Y | code |\n"
+                   "| trade_date | str | Y | date |\n| exalter | str | Y | branch |\n", encoding="utf-8")
+    base = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+            "required_fields": ["ts_code", "trade_date", "exalter"], "natural_key": ["ts_code", "trade_date"],
+            "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
+            "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
+            "empty_policy": "sparse_canary", "reviewed_by": "henry",
+            "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    # cited for the endpoint it actually documents -> passes
+    assert rrc.contract_errors("top_inst", base) == []
+    # the SAME valid doc cited for a DIFFERENT endpoint -> refused
+    errs = rrc.contract_errors("moneyflow", base)
+    assert any("WRONG doc cited" in e and "top_inst" in e for e in errs), errs
+
+
+def test_doc_id_mismatch_refused(tmp_path, monkeypatch):
+    fake_root = tmp_path
+    fake_mirror = fake_root / "Tushare数据接口" / "content"
+    fake_mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", fake_mirror)
+    doc = fake_mirror / "107_x.md"
+    doc.write_text("# (doc_id=107)\n接口：top_inst\n| 名称 | 类型 |\n| --- | --- |\n"
+                   "| ts_code | str |\n| trade_date | str |\n", encoding="utf-8")
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc), "doc_id": "999",
+         "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
+         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    assert any("doc_id 999" in e for e in rrc.contract_errors("top_inst", c))
+
+
+def test_derived_fields_are_endpoint_scoped(tmp_path, monkeypatch):
+    """GPT F4: the global allowlist let ANY endpoint key on ANY derived field. report_rc's payload
+    digest must not be keyable on `daily`."""
+    assert "report_rc_payload_digest" in rrc.derived_fields_for("report_rc")
+    assert "report_rc_payload_digest" not in rrc.derived_fields_for("daily")
+    assert "row_payload_digest" in rrc.derived_fields_for("top_inst")
+    assert "row_payload_digest" not in rrc.derived_fields_for("income")
+    # universal ingest stamps stay available everywhere, with declared provenance
+    for ep in ("daily", "report_rc", "income"):
+        assert "raw_fetch_ts" in rrc.derived_fields_for(ep)
+    for m in (rrc._DERIVED_UNIVERSAL, *rrc._DERIVED_BY_ENDPOINT.values()):
+        for fld, prov in m.items():
+            assert isinstance(prov, str) and len(prov) > 20, f"{fld} lacks a provenance statement"
+
+
+def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
+    fake_root = tmp_path
+    fake_mirror = fake_root / "Tushare数据接口" / "content"
+    fake_mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", fake_mirror)
+    doc = fake_mirror / "27_daily.md"
+    doc.write_text("# (doc_id=27)\n接口：daily\n| 名称 | 类型 |\n| --- | --- |\n"
+                   "| ts_code | str |\n| trade_date | str |\n| close | float |\n", encoding="utf-8")
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "trade_date", "close"],
+         "natural_key": ["ts_code", "trade_date", "report_rc_payload_digest"],  # borrowed from report_rc
+         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "empty_policy": "dense_refuse", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    errs = rrc.contract_errors("daily", c)
+    assert any("report_rc_payload_digest" in e and "declared derived fields" in e for e in errs), errs

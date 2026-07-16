@@ -436,10 +436,50 @@ CONTRACT_REQUIRED = ("doc_path", "doc_sha256", "required_fields", "natural_key",
 # Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
 # (they are computed during ingest). report_rc_payload_digest is the PIT identity digest; raw_fetch_ts is
 # the first-seen stamp; _src_file/_src_ordinal are the deterministic tie-break columns (§6.3 P0-4).
-_DERIVED_KEY_ALLOWLIST = frozenset({"report_rc_payload_digest", "row_payload_digest", "raw_fetch_ts",
-                                    "_src_file", "_src_ordinal"})
+# GPT re-review #5 F4: a GLOBAL derived allowlist let ANY derived field be keyed on ANY endpoint (e.g.
+# report_rc's payload digest keying `daily`). Derived fields are now ENDPOINT-SCOPED with a declared
+# computation/provenance; only genuinely ingest-universal stamps stay universal.
+_DERIVED_UNIVERSAL = {
+    "raw_fetch_ts": "coordinator first-seen stamp written at page receipt time (PIT visibility floor)",
+    "_src_file": "deterministic tie-break column injected by _normalize_periodic_dataset (§6.3 P0-4)",
+    "_src_ordinal": "deterministic tie-break ordinal injected by _normalize_periodic_dataset (§6.3 P0-4)",
+}
+_DERIVED_BY_ENDPOINT = {
+    "report_rc": {"report_rc_payload_digest":
+                  "sha256 over the normalized analyst-forecast payload; the production PIT identity "
+                  "(pit_backend report_rc handling) — NOT author_name alone"},
+    "top_list": {"row_payload_digest": "sha256 over the FULL vendor row; lossless identity because the "
+                                       "doc establishes no transaction id and (ts_code,trade_date) repeats"},
+    "top_inst": {"row_payload_digest": "sha256 over the FULL vendor row (see top_list rationale)"},
+    "block_trade": {"row_payload_digest": "sha256 over the FULL vendor row (see top_list rationale)"},
+}
+
+
+def derived_fields_for(endpoint: str) -> set:
+    """The derived columns THIS endpoint may legitimately key on (universal ingest stamps + its own
+    declared derivations). An endpoint may never borrow another's derived field."""
+    return set(_DERIVED_UNIVERSAL) | set(_DERIVED_BY_ENDPOINT.get(endpoint, {}))
+
+
 _FIELD_HEADERS = frozenset({"名称", "name", "参数名", "字段", "字段名"})  # markdown field-table header first cell
 _DOC_IDENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
+_DOC_ID_RE = re.compile(r"doc_id=(\d+)")
+_DOC_API_RE = re.compile(r"接口\s*(?:名称)?\s*[：:]\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def parse_doc_identity(doc: Path) -> dict:
+    """Extract the doc's OWN declared identity: its `doc_id=NNN` header and the `接口：<api>` name it
+    documents. GPT re-review #5 F4: the gate checked path+sha but never proved the doc BELONGS to the
+    declared endpoint, so a valid field table from the WRONG API could approve a contract."""
+    text = doc.read_text(encoding="utf-8")
+    mi, ma = _DOC_ID_RE.search(text), _DOC_API_RE.search(text)
+    return {"doc_id": mi.group(1) if mi else None, "api_name": ma.group(1) if ma else None}
+
+
+def doc_declares_endpoint(api_name: str, endpoint: str) -> bool:
+    """A doc matches an endpoint if it documents that api, or its non-VIP base (income_vip -> income:
+    the VIP variants share the base interface doc)."""
+    return bool(api_name) and api_name in (endpoint, endpoint.replace("_vip", ""))
 
 
 def parse_doc_field_vocabulary(doc: Path) -> set:
@@ -509,6 +549,18 @@ def contract_errors(endpoint: str, c: dict) -> list:
         nk_ok = False
     # M2: field membership — required_fields/natural_key must be REAL columns of the pinned doc (a
     # fabricated field list no longer passes). natural_key may also name a coordinator-DERIVED column.
+    if doc_ok:
+        # F4: the doc must PROVE it documents THIS endpoint — a real field table from another API
+        # would otherwise approve the wrong contract.
+        ident = parse_doc_identity(doc)
+        if not ident["api_name"]:
+            errs.append(f"{endpoint}: doc {doc.name} declares no 接口 name — cannot prove it documents "
+                        f"this endpoint")
+        elif not doc_declares_endpoint(ident["api_name"], endpoint):
+            errs.append(f"{endpoint}: doc {doc.name} documents endpoint '{ident['api_name']}' — WRONG "
+                        f"doc cited for '{endpoint}'")
+        if c.get("doc_id") and ident["doc_id"] and str(c["doc_id"]) != ident["doc_id"]:
+            errs.append(f"{endpoint}: contract doc_id {c['doc_id']} != doc's own doc_id {ident['doc_id']}")
     if doc_ok and (rf_ok or nk_ok):
         vocab = parse_doc_field_vocabulary(doc)
         if not vocab:
@@ -519,10 +571,13 @@ def contract_errors(endpoint: str, c: dict) -> list:
                 if missing:
                     errs.append(f"{endpoint}: required_fields not in doc field list: {missing}")
             if nk_ok:
-                allowed = vocab | _DERIVED_KEY_ALLOWLIST | (set(map(str, c["required_fields"])) if rf_ok else set())
+                # derived columns are ENDPOINT-SCOPED (F4): an endpoint cannot borrow another's
+                allowed = vocab | derived_fields_for(endpoint) | (set(map(str, c["required_fields"]))
+                                                                  if rf_ok else set())
                 bad = [f for f in c["natural_key"] if str(f) not in allowed]
                 if bad:
-                    errs.append(f"{endpoint}: natural_key columns not in doc field list nor derived-allowlist: {bad}")
+                    errs.append(f"{endpoint}: natural_key columns not in doc field list nor this "
+                                f"endpoint's declared derived fields: {bad}")
     if c["empty_policy"] not in ("dense_refuse", "sparse_canary"):
         errs.append(f"{endpoint}: empty_policy must be dense_refuse|sparse_canary")
     if len(str(c["reviewed_by"]).strip()) < 3:
