@@ -97,3 +97,50 @@ def test_assert_no_reparse_source_broken_leaf(broot):
     tgt.rmdir()
     with pytest.raises(rwb.WriteBrokerError, match="reparse point"):
         rwb.assert_no_reparse_source(junc)
+
+
+# ── GPT re-review #5 F1 BLOCKER: the reproduced scan->write TOCTOU + hardlink ─────────────────────
+def test_ancestor_junction_swapped_INSIDE_validation_window_refused(broot, monkeypatch):
+    """GPT re-review #5 F1: the REAL TOCTOU — the swap lands AFTER open_for_write's own validation and
+    BEFORE the write. Deterministically simulated by racing the swap in as validate_ancestry returns.
+    The OLD pathname `open(target, ...)` re-walked the path and wrote OUTSIDE the root here; the
+    handle-relative chain opens 'sub' relative to a held root handle, sees the reparse point, refuses."""
+    import _winapi
+    root = broot / "root"; root.mkdir()
+    outside = broot / "outside"; outside.mkdir()
+    child = root / "sub"; child.mkdir()
+    b = rwb.NoFollowWriteBroker(root)
+    target = child / "f.txt"
+    orig_validate = b.validate_ancestry
+    swapped = {"done": False}
+
+    def racing_validate(t):
+        res = orig_validate(t)           # validation PASSES: 'sub' is still a genuine directory
+        if not swapped["done"]:          # ---- the TOCTOU window opens here ----
+            swapped["done"] = True
+            child.rmdir()
+            _winapi.CreateJunction(str(outside), str(child))
+        return res
+
+    monkeypatch.setattr(b, "validate_ancestry", racing_validate)
+    with pytest.raises(rwb.WriteBrokerError, match="reparse point"):
+        with b.open_for_write(target, "wb") as fh:
+            fh.write(b"ESCAPED")
+    assert swapped["done"], "probe never armed — the TOCTOU window was not exercised"
+    assert not (outside / "f.txt").exists(), "broker wrote OUTSIDE the root through a swapped junction"
+
+
+def test_hardlinked_target_refused(broot):
+    """A hard link inside the root aliasing a file OUTSIDE it must refuse (nNumberOfLinks > 1) and the
+    aliased file must keep its bytes — truncation happens only after the leaf proves safe."""
+    import os
+    root = broot / "root"; root.mkdir()
+    outside_file = broot / "outside.bin"
+    outside_file.write_bytes(b"ORIGINAL")
+    target = root / "linked.bin"
+    os.link(outside_file, target)        # same volume; target aliases the outside file
+    b = rwb.NoFollowWriteBroker(root)
+    with pytest.raises(rwb.WriteBrokerError, match="hard link"):
+        with b.open_for_write(target, "wb") as fh:
+            fh.write(b"CLOBBERED")
+    assert outside_file.read_bytes() == b"ORIGINAL", "hard-linked outside file was clobbered"

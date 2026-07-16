@@ -36,7 +36,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from recovery_write_broker import assert_no_reparse_source, walk_no_follow  # noqa: E402
+from recovery_write_broker import (NoFollowWriteBroker, assert_no_reparse_source,  # noqa: E402
+                                   walk_no_follow)
+
+# Staging areas live at the `data\` TOP LEVEL — outside every dataset glob (`market/**` cannot match).
+INCOMING_AREA = ".recovery_incoming"
+TOMBSTONE_AREA = ".recovery_tombstone"
+SENTINEL_NAME = ".recovery_in_progress"
 
 
 class PromotionError(RuntimeError):
@@ -105,7 +111,13 @@ def recovery_action(state: str | None, live: bool, incoming: bool, tomb: bool) -
         raise PromotionError(f"fresh family but pre-existing incoming/tombstone "
                              f"(incoming={incoming} tomb={tomb}) — foreign collision")
     if state == SWAPPED:
-        return ACT_DONE
+        # GPT re-review #5 F5: NEVER trust the journal alone — a crash/corruption/rollback AFTER the
+        # SWAPPED row would otherwise be reported as a completed promotion. Facts must agree, and the
+        # caller re-hashes the live tree against the frozen manifest before accepting DONE.
+        if live and not incoming:
+            return ACT_DONE
+        raise PromotionError(f"SWAPPED journalled but facts disagree (live={live} incoming={incoming}) "
+                             f"— promotion did NOT complete; refusing to report success")
     if state == COPYING:
         if not tomb:                           # copy may be partial -> re-copy+verify; nothing moved yet
             return ACT_COPY
@@ -153,31 +165,57 @@ class PromotionJournal:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def append(self, run_id: str, family: str, state: str, expected: dict) -> None:
-        if state not in _ORDER:
-            raise PromotionError(f"illegal journal state {state!r}")
-        row = {"run_id": run_id, "family": family, "state": state, "expected": expected}
+    def _write(self, row: dict) -> None:
         line = json.dumps(row, ensure_ascii=False, sort_keys=True)
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
             fh.flush()
             os.fsync(fh.fileno())  # write-ahead: durable BEFORE the caller performs the mutation
 
-    def replay(self) -> dict:
-        """Return {family: last_state} from the durable journal (last row per family wins)."""
-        last: dict = {}
+    def append_plan(self, run_id: str, plan_hash: str, families: list) -> None:
+        self._write({"kind": "plan", "run_id": run_id, "plan_hash": plan_hash, "families": families})
+
+    def plan_row(self, run_id: str):
+        for row in self._rows():
+            if row.get("kind") == "plan" and row.get("run_id") == run_id:
+                return row
+        return None
+
+    def append(self, run_id: str, family: str, state: str, expected: dict) -> None:
+        if state not in _ORDER:
+            raise PromotionError(f"illegal journal state {state!r}")
+        self._write({"kind": "state", "run_id": run_id, "family": family, "state": state,
+                     "expected": expected})
+
+    def _rows(self):
         if not self.path.exists():
-            return last
+            return []
+        out = []
         for ln in self.path.read_text(encoding="utf-8").splitlines():
             ln = ln.strip()
-            if not ln:
+            if ln:
+                out.append(json.loads(ln))
+        return out
+
+    def replay(self, run_id: str) -> dict:
+        """Return {family: last_row} for THIS run only. GPT re-review #5 F5: replay used to key on
+        family alone, so a FOREIGN run's `SWAPPED` row was adopted as our own and reported success while
+        the live tree stayed old. run_id is now a hard filter — another run's rows are never our state."""
+        if not run_id:
+            raise PromotionError("replay requires a run_id (run-scoped by construction)")
+        last: dict = {}
+        for row in self._rows():
+            if row.get("kind") != "state" or row.get("run_id") != run_id:
                 continue
-            row = json.loads(ln)
-            last[row["family"]] = row["state"]
+            last[row["family"]] = row
         return last
 
-    def last_state(self, family: str):
-        return self.replay().get(family)
+    def last_row(self, run_id: str, family: str):
+        return self.replay(run_id).get(family)
+
+    def last_state(self, run_id: str, family: str):
+        row = self.last_row(run_id, family)
+        return row["state"] if row else None
 
 
 def _dir_present(p: Path) -> bool:
@@ -201,8 +239,10 @@ class PromotionCoordinator:
 
     def __init__(self, run_id: str, data_root: Path, journal: PromotionJournal, families: list,
                  *, crash_hook=None):
+        if not run_id:
+            raise PromotionError("run_id required")
         self.run_id = run_id
-        self.data_root = Path(data_root)
+        self.data_root = Path(os.path.normpath(str(data_root)))
         self.journal = journal
         # frozen disjoint list fixed before the first move (GPT re-review #3 M3)
         seen = set()
@@ -210,13 +250,55 @@ class PromotionCoordinator:
             if fp.family in seen:
                 raise PromotionError(f"duplicate family in promotion set: {fp.family}")
             seen.add(fp.family)
+            self._assert_contained(fp)
         self.families = list(families)
+        self._broker = None
         self._crash = crash_hook or (lambda _label: None)
+
+    def _assert_contained(self, fp: "FamilyPlan") -> None:
+        """GPT re-review #5 F5: FamilyPlan established no containment — every mutated path must sit
+        under data_root, and incoming/tombstone must live in their top-level staging areas (outside
+        every dataset glob) so `market/**` can never match them."""
+        for label, p in (("live_dir", fp.live_dir), ("incoming_dir", fp.incoming_dir),
+                         ("tombstone_dir", fp.tombstone_dir)):
+            q = Path(os.path.normpath(str(p)))
+            try:
+                q.relative_to(self.data_root)
+            except ValueError:
+                raise PromotionError(f"{fp.family}: {label} {q} escapes data_root {self.data_root}")
+        for label, p, area in (("incoming_dir", fp.incoming_dir, INCOMING_AREA),
+                               ("tombstone_dir", fp.tombstone_dir, TOMBSTONE_AREA)):
+            q = Path(os.path.normpath(str(p)))
+            try:
+                q.relative_to(self.data_root / area)
+            except ValueError:
+                raise PromotionError(f"{fp.family}: {label} {q} must live under {self.data_root / area}")
+
+    def _plan_hash(self) -> str:
+        payload = [{"family": fp.family, "live_dir": str(fp.live_dir), "incoming_dir": str(fp.incoming_dir),
+                    "tombstone_dir": str(fp.tombstone_dir),
+                    "manifest_hash": hashlib.sha256(
+                        json.dumps(fp.manifest, sort_keys=True).encode("utf-8")).hexdigest()}
+                   for fp in sorted(self.families, key=lambda f: f.family)]
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+    def freeze_or_verify_plan(self) -> str:
+        """Bind this run to an IMMUTABLE plan (paths + manifest hashes). A resume whose plan differs —
+        different families, paths, or expected content — is REFUSED rather than silently re-planned."""
+        ph = self._plan_hash()
+        existing = self.journal.plan_row(self.run_id)
+        if existing is None:
+            self.journal.append_plan(self.run_id, ph, [fp.family for fp in self.families])
+        elif existing.get("plan_hash") != ph:
+            raise PromotionError(f"plan hash mismatch for run {self.run_id}: journal has "
+                                 f"{existing.get('plan_hash')!r}, this plan is {ph!r} — the frozen "
+                                 f"promotion plan changed; refusing resume")
+        return ph
 
     # sentinel / quiescence ------------------------------------------------------------------------
     @property
     def sentinel_path(self) -> Path:
-        return self.data_root / ".recovery_in_progress"
+        return self.data_root / SENTINEL_NAME
 
     def write_sentinel(self) -> None:
         self.sentinel_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,22 +324,28 @@ class PromotionCoordinator:
             raise PromotionError(f"{fp.family}: pre-existing incoming/tombstone but no owning journal "
                                  f"intent (foreign collision) — refusing")
 
+    def broker(self) -> NoFollowWriteBroker:
+        """GPT re-review #5 F5: promotion DESTINATIONS were raw open()/copy — every incoming write now
+        goes through the handle-relative no-follow broker rooted at data_root (Foundation 1)."""
+        if self._broker is None:
+            self._broker = NoFollowWriteBroker(self.data_root)
+        return self._broker
+
     def _copy_and_verify(self, fp: FamilyPlan) -> None:
-        """Cross-volume C:->incoming copy (re-runnable), NO-FOLLOW, then verify vs the frozen manifest."""
+        """Cross-volume C:->incoming copy (re-runnable), NO-FOLLOW on BOTH ends, then verify vs the
+        frozen manifest. Destination writes go through the broker (handle-relative, reparse/hardlink-
+        refusing), so a junction planted under .recovery_incoming cannot redirect a recovered file."""
         assert_no_reparse_source(fp.staging_dir)
+        b = self.broker()
         if fp.incoming_dir.exists():
-            # a partial prior copy: rebuild deterministically
             import shutil
-            shutil.rmtree(fp.incoming_dir)
-        fp.incoming_dir.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(fp.incoming_dir)  # a partial prior copy: rebuild deterministically
+        b.mkdirs(fp.incoming_dir)
         for src in sorted(walk_no_follow(fp.staging_dir)):
             rel = src.relative_to(fp.staging_dir)
             dst = fp.incoming_dir / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
             assert_no_reparse_source(src)
-            with open(src, "rb") as r, open(dst, "wb") as w:
-                for chunk in iter(lambda: r.read(1 << 20), b""):
-                    w.write(chunk)
+            b.copy_into(src, dst)
         self._verify_tree(fp, fp.incoming_dir, "incoming")
 
     def _verify_tree(self, fp: FamilyPlan, root: Path, label: str) -> None:
@@ -270,7 +358,21 @@ class PromotionCoordinator:
                                  f"(missing={sorted(missing)[:3]} extra={sorted(extra)[:3]} bad={bad[:3]})")
 
     def _promote_family(self, fp: FamilyPlan) -> None:
-        state = self.journal.last_state(fp.family)
+        row = self.journal.last_row(self.run_id, fp.family)  # run-scoped: a foreign run is never our state
+        state = row["state"] if row else None
+        if row:  # the journalled intent must describe THIS plan's paths, not another shape
+            exp = row.get("expected") or {}
+            for k, want in (("live_dir", str(fp.live_dir)), ("incoming_dir", str(fp.incoming_dir)),
+                            ("tombstone_dir", str(fp.tombstone_dir)), ("to", None), ("from", None)):
+                if k in exp and want is not None and exp[k] != want:
+                    raise PromotionError(f"{fp.family}: journalled {k}={exp[k]!r} != plan {want!r} — "
+                                         f"refusing to resume a differently-shaped promotion")
+        if state == SWAPPED:
+            # Trust-but-VERIFY a completed family on resume: prove it on FACTS + content hashes.
+            live, incoming, tomb = self._facts(fp)
+            recovery_action(SWAPPED, live, incoming, tomb)  # raises if the facts disagree
+            self._verify_tree(fp, fp.live_dir, "live(resume)")
+            return
         self._assert_owned_or_fresh(fp, state)
         # drive the machine to SWAPPED; each loop consults the recovery table on CURRENT facts
         while True:
@@ -327,10 +429,17 @@ class PromotionCoordinator:
 
     def promote_all(self) -> dict:
         """Promote every family in the frozen list; returns {family: final_state}. Resume-safe: a fresh
-        coordinator re-invoking this after a crash rolls each family forward from its durable state."""
+        coordinator re-invoking this after a crash rolls each family forward from its durable state.
+
+        GPT re-review #5 F5: the quiescence SENTINEL is written HERE (it was defined but never armed, so
+        no generation barrier actually existed). It is written BEFORE the first mutation and deliberately
+        LEFT IN PLACE on completion — consumers stay fail-closed until QA + the first verified backup,
+        at which point `clear_sentinel()` is an explicit human step."""
+        self.freeze_or_verify_plan()   # bind the run to an immutable plan before any mutation
+        self.write_sentinel()          # arm the barrier: every raw consumer now fails closed
         for fp in self.families:
             self._promote_family(fp)
-        return self.journal.replay()
+        return {f: r["state"] for f, r in self.journal.replay(self.run_id).items()}
 
     def resume(self) -> dict:
         return self.promote_all()
@@ -340,7 +449,7 @@ def assert_no_active_recovery(data_root: Path) -> None:
     """Consumer-side quiescence hook: every raw reader / daily job / monthly bump / builder calls this
     at entry AND after acquiring its generation barrier, and FAILS CLOSED if a promotion sentinel
     exists. (Wiring into each consumer is the integration phase; this is the shared assertion.)"""
-    sentinel = Path(data_root) / ".recovery_in_progress"
+    sentinel = Path(data_root) / SENTINEL_NAME
     if sentinel.exists():
         raise PromotionError(f"RECOVERY_IN_PROGRESS: raw store is mid-promotion ({sentinel}) — refusing "
                              f"to read/write until promotion completes and the sentinel clears")

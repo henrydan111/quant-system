@@ -14,10 +14,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+# NOTE: register each dynamically-loaded module in sys.modules BEFORE exec — a frozen dataclass under
+# `from __future__ import annotations` resolves its annotations via sys.modules[cls.__module__], which is
+# None mid-exec otherwise. Without this the suite only collected when another test happened to import
+# the coordinator first (GPT re-review #5 MINOR: the batteries were not independent).
 _c = importlib.util.spec_from_file_location("rrc", ROOT / "scripts" / "raw_recovery_coordinator.py")
-rrc = importlib.util.module_from_spec(_c); _c.loader.exec_module(rrc)
+rrc = importlib.util.module_from_spec(_c); sys.modules["rrc"] = rrc; _c.loader.exec_module(rrc)
 _l = importlib.util.spec_from_file_location("rl", ROOT / "scripts" / "recovery_ledger.py")
-rl = importlib.util.module_from_spec(_l); _l.loader.exec_module(rl)
+rl = importlib.util.module_from_spec(_l); sys.modules["rl"] = rl; _l.loader.exec_module(rl)
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="needs the Windows no-follow broker")
 

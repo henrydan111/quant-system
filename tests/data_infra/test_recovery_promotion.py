@@ -40,8 +40,8 @@ def _build(tmp_path: Path, family="market/daily", make_live=True):
     manifest = rp._manifest_from_dir(staging)
     fp = rp.FamilyPlan(
         family=family, staging_dir=staging, live_dir=live,
-        incoming_dir=data_root / ".recovery_incoming" / "run1" / family,
-        tombstone_dir=data_root / ".recovery_tombstone" / "run1" / family,
+        incoming_dir=data_root / rp.INCOMING_AREA / "run1" / family,
+        tombstone_dir=data_root / rp.TOMBSTONE_AREA / "run1" / family,
         manifest=manifest)
     journal = rp.PromotionJournal(data_root / ".recovery_journal.jsonl")
     return fp, journal, data_root, manifest
@@ -151,3 +151,72 @@ def test_multi_family_frozen_set(tmp_path):
     final = rp.PromotionCoordinator("run1", data_root, journal, [fp1, fp2]).promote_all()
     assert final["market/daily"] == rp.SWAPPED and final["fundamentals/income"] == rp.SWAPPED
     assert _live_matches_staging(fp1) and _live_matches_staging(fp2)
+
+
+# -- GPT re-review #5 F5 BLOCKERs: the exact reproductions -----------------------------------------
+def test_foreign_run_swapped_row_is_not_adopted(tmp_path):
+    """GPT reproduced: a foreign-run SWAPPED journal entry was adopted by a new run, which reported
+    success while the live tree stayed OLD. replay() is now run_id-scoped, so the foreign row is
+    invisible and this run must actually do the work."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    # a DIFFERENT run claims this family already completed
+    journal.append("someone_elses_run", fp.family, rp.SWAPPED, {"live_dir": str(fp.live_dir)})
+    final = rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    assert final[fp.family] == rp.SWAPPED
+    assert _live_matches_staging(fp), "adopted a foreign SWAPPED row and skipped the real work"
+    assert (fp.tombstone_dir / "stale.parquet").exists()  # the old tree really was moved aside
+
+
+def test_swapped_journal_with_missing_live_refuses(tmp_path):
+    """A SWAPPED row must never be believed on its own: if the live tree vanished after journalling,
+    resume must REFUSE rather than report a completed promotion."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    import shutil
+    shutil.rmtree(fp.live_dir)  # corruption/rollback AFTER the SWAPPED row
+    with pytest.raises(rp.PromotionError, match="facts disagree"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+
+
+def test_swapped_resume_rehashes_live_and_catches_corruption(tmp_path):
+    """Resume of a SWAPPED family re-hashes the live tree vs the frozen manifest — bit-rot or a
+    substituted file is caught instead of being reported as done."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    (fp.live_dir / "2026" / "daily_20260703.parquet").write_bytes(b"TAMPERED")
+    with pytest.raises(rp.PromotionError, match="frozen manifest"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+
+
+def test_promote_all_arms_the_sentinel(tmp_path):
+    """GPT: the sentinel existed but promote_all never wrote it -> no barrier existed. It must be
+    armed, and consumers stay fail-closed after completion (cleared only by an explicit human step)."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    coord = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+    rp.assert_no_active_recovery(data_root)  # not armed yet
+    coord.promote_all()
+    assert coord.sentinel_path.exists(), "promote_all did not arm the quiescence sentinel"
+    with pytest.raises(rp.PromotionError, match="RECOVERY_IN_PROGRESS"):
+        rp.assert_no_active_recovery(data_root)
+
+
+def test_paths_outside_data_root_refused(tmp_path):
+    fp, journal, data_root, manifest = _build(tmp_path)
+    escaped = rp.FamilyPlan(family="evil", staging_dir=fp.staging_dir,
+                            live_dir=tmp_path / "elsewhere" / "evil",
+                            incoming_dir=data_root / rp.INCOMING_AREA / "run1" / "evil",
+                            tombstone_dir=data_root / rp.TOMBSTONE_AREA / "run1" / "evil",
+                            manifest=fp.manifest)
+    with pytest.raises(rp.PromotionError, match="escapes data_root"):
+        rp.PromotionCoordinator("run1", data_root, journal, [escaped])
+
+
+def test_plan_hash_binds_the_run(tmp_path):
+    """A resume whose frozen plan changed (different expected content) is refused, not re-planned."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).freeze_or_verify_plan()
+    mutated = rp.FamilyPlan(family=fp.family, staging_dir=fp.staging_dir, live_dir=fp.live_dir,
+                            incoming_dir=fp.incoming_dir, tombstone_dir=fp.tombstone_dir,
+                            manifest={"different.parquet": {"sha256": "0" * 64, "size": 1}})
+    with pytest.raises(rp.PromotionError, match="plan hash mismatch"):
+        rp.PromotionCoordinator("run1", data_root, journal, [mutated]).promote_all()
