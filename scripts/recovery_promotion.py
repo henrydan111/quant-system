@@ -33,7 +33,15 @@ IN scope, and defended:
     + re-verification before every destructive step.
   * CORRUPTION of staged bytes between steps — incoming is re-proven against the frozen manifest
     immediately before the old tree is touched, and live is re-hashed on resume.
-  * CONCURRENT runs / consumers — an O_EXCL sentinel claim + the fail-closed consumer hook.
+  * CONCURRENT RUNS — an O_EXCL sentinel claim (a different run_id refuses).
+NOT YET TRUE, do not claim otherwise (GPT re-review #7 M2):
+  * CONCURRENT CONSUMERS are NOT defended today. `assert_no_active_recovery` exists but has NO
+    production caller — no raw reader / daily job / monthly bump / builder calls it, and there is no
+    shared/exclusive generation barrier, so a consumer that started BEFORE the sentinel keeps running.
+    This is a HARD PRE-PROMOTION INTEGRATION GATE (wire the hook into every consumer entry point, and
+    the barrier, before any promotion is authorized) — not a property the code currently has.
+  * Two live processes sharing ONE run_id both pass the sentinel claim (it treats a matching run_id as
+    a resume). Needs a process-lifetime OS lock in addition to the durable sentinel.
 OUT of scope, deliberately NOT defended:
   * An ACTIVE ADVERSARY racing us mid-operation on this machine (swapping a component between two links
     of a handle chain, ADS/8.3-alias tricks, replacing a parent between validation and rename). This is
@@ -50,6 +58,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -238,12 +247,40 @@ class PromotionJournal:
 
 
 def _dir_present(p: Path) -> bool:
-    return p.exists() and p.is_dir()
+    """Is there a REAL directory at p? GPT re-review #7 B3 (reproduced): this used to be
+    `p.exists() and p.is_dir()`, which FOLLOWS a reparse point — so a PRE-EXISTING junction at
+    `data\\market` looked like an ordinary directory, every subsequent path resolved through it, and
+    promotion installed the recovered tree OUTSIDE data_root while reporting SWAPPED.
+
+    A pre-existing junction is the INCIDENT'S OWN MECHANISM and is explicitly IN scope. os.lstat never
+    follows; a reparse point is refused, never silently traversed."""
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise PromotionError(f"cannot lstat {p}: {exc}")
+    if (getattr(st, "st_file_attributes", 0) & 0x400) or stat.S_ISLNK(st.st_mode):
+        raise PromotionError(f"REFUSED: {p} is a reparse point (pre-existing junction) — the 2026-07-13 "
+                             f"incident's exact mechanism; refusing to traverse it")
+    return stat.S_ISDIR(st.st_mode)
+
+
+def _assert_no_reparse_ancestry(p: Path, label: str) -> None:
+    """Refuse a reparse point at ANY component of p (incl. a broken one, which `exists()` reports as
+    absent). Re-checked before every fact read and every rename — cheap, and the only thing standing
+    between a stray junction and another 2026-07-13."""
+    try:
+        assert_no_reparse_source(p)
+    except Exception as exc:  # WriteBrokerError
+        raise PromotionError(f"{label}: {exc}")
 
 
 def _manifest_from_dir(root: Path) -> dict:
     """Build {posix_rel: {sha256,size}} by walking `root` NO-FOLLOW (a reparse point in the tree
-    refuses) — used to freeze the C: staging source and to re-verify an installed live tree."""
+    refuses) — used to freeze the C: staging source and to re-verify an installed live tree.
+    GPT re-review #7 B3: validates its OWN root ancestry rather than trusting the caller."""
+    _assert_no_reparse_ancestry(Path(os.path.normpath(str(root))), f"manifest root {root}")
     out = {}
     for f in sorted(walk_no_follow(root)):
         rel = f.relative_to(root).as_posix()
@@ -277,7 +314,15 @@ class PromotionCoordinator:
     def _assert_contained(self, fp: "FamilyPlan") -> None:
         """GPT re-review #5 F5: FamilyPlan established no containment — every mutated path must sit
         under data_root, and incoming/tombstone must live in their top-level staging areas (outside
-        every dataset glob) so `market/**` can never match them."""
+        every dataset glob) so `market/**` can never match them.
+
+        GPT re-review #7 B3: lexical containment ALONE is not containment — a pre-existing junction at
+        an intermediate component satisfies `relative_to()` while resolving elsewhere. Every path's
+        ancestry is now also proven reparse-free, no-follow."""
+        for label, p in (("data_root", self.data_root), ("live_dir", fp.live_dir),
+                         ("incoming_dir", fp.incoming_dir), ("tombstone_dir", fp.tombstone_dir),
+                         ("journal", self.journal.path), ("sentinel", self.sentinel_path)):
+            _assert_no_reparse_ancestry(Path(os.path.normpath(str(p))), f"{fp.family}: {label}")
         for label, p in (("live_dir", fp.live_dir), ("incoming_dir", fp.incoming_dir),
                          ("tombstone_dir", fp.tombstone_dir)):
             q = Path(os.path.normpath(str(p)))
@@ -318,6 +363,33 @@ class PromotionCoordinator:
     @property
     def sentinel_path(self) -> Path:
         return self.data_root / SENTINEL_NAME
+
+    def _move_old_intent(self, fp: "FamilyPlan") -> dict:
+        """The MOVE_OLD_INTENT row this run journalled for the family (its old_was_present +
+        old_manifest are the ONLY record of what the live tree held before we moved it)."""
+        for r in reversed(self.journal._rows()):
+            if (r.get("kind") == "state" and r.get("run_id") == self.run_id
+                    and r.get("family") == fp.family and r.get("state") == MOVE_OLD_INTENT):
+                return r.get("expected") or {}
+        return {}
+
+    def _assert_tombstone_intact(self, fp: "FamilyPlan") -> None:
+        """GPT re-review #7 B5: the tombstone check tested DIRECTORY EXISTENCE only, so deleting every
+        file inside it still reported SWAPPED. If this run moved a real tree aside, that tombstone is
+        the ONLY copy of what we replaced — prove it by CONTENT against the frozen old manifest."""
+        intent = self._move_old_intent(fp)
+        if not intent.get("old_was_present"):
+            return  # nothing was ever moved aside (OLD_ABSENT) — no tombstone is owed
+        if not _dir_present(fp.tombstone_dir):
+            raise PromotionError(f"{fp.family}: the old tree was moved to {fp.tombstone_dir} but the "
+                                 f"tombstone is GONE — it held the only copy of what we replaced")
+        got = _manifest_from_dir(fp.tombstone_dir)
+        want = intent.get("old_manifest") or {}
+        if got != want:
+            missing = sorted(set(want) - set(got))[:3]
+            raise PromotionError(f"{fp.family}: tombstone CONTENT does not match what was moved aside "
+                                 f"(missing={missing}, {len(got)} of {len(want)} files) — the only copy "
+                                 f"of the replaced tree is damaged")
 
     def _journalled_old_moved(self, fp: "FamilyPlan") -> bool:
         """Did THIS run ever journal OLD_MOVED for this family (i.e. is a tombstone owed)?"""
@@ -421,10 +493,7 @@ class PromotionCoordinator:
             # GPT re-review #6 F5: a DELETED tombstone was silently accepted. If this run journalled
             # OLD_MOVED then the pre-incident tree was preserved there and is the ONLY copy of what was
             # replaced — its disappearance is a real loss, not a detail, and must not read as success.
-            if self._journalled_old_moved(fp) and not tomb:
-                raise PromotionError(f"{fp.family}: SWAPPED with OLD_MOVED journalled but the tombstone "
-                                     f"{fp.tombstone_dir} is GONE — the replaced tree was the only copy; "
-                                     f"refusing to report a clean completion")
+            self._assert_tombstone_intact(fp)   # by CONTENT, not mere existence (B5)
             return
         self._assert_owned_or_fresh(fp, state)
         # drive the machine to SWAPPED; each loop consults the recovery table on CURRENT facts
@@ -450,11 +519,20 @@ class PromotionCoordinator:
                 # is moved until the replacement is known good.
                 self._verify_tree(fp, fp.incoming_dir, "incoming(pre-move)")
                 had_live = _dir_present(fp.live_dir)
+                # B5: the intent must record whether the old tree EXISTED and what it contained.
+                # Without old_was_present, a crash after the rename but before OLD_MOVED is
+                # indistinguishable from "there was never anything to move" (live=False, tomb=False
+                # reads as OLD_ABSENT) — so a DELETED tombstone silently became a clean success.
+                old_manifest = _manifest_from_dir(fp.live_dir) if had_live else {}
                 self.journal.append(self.run_id, fp.family, MOVE_OLD_INTENT,
-                                    {"from": str(fp.live_dir), "to": str(fp.tombstone_dir)})
+                                    {"from": str(fp.live_dir), "to": str(fp.tombstone_dir),
+                                     "old_was_present": bool(had_live),
+                                     "old_manifest": old_manifest})
                 self._crash("after_move_intent")
                 if had_live:
                     fp.tombstone_dir.parent.mkdir(parents=True, exist_ok=True)
+                    _assert_no_reparse_ancestry(fp.live_dir, f"{fp.family}: live_dir pre-rename")
+                    _assert_no_reparse_ancestry(fp.tombstone_dir, f"{fp.family}: tomb pre-rename")
                     os.replace(fp.live_dir, fp.tombstone_dir)  # atomic same-volume
                     self._crash("after_move_rename")
                     self.journal.append(self.run_id, fp.family, OLD_MOVED, {"tombstone_dir": str(fp.tombstone_dir)})
@@ -464,12 +542,22 @@ class PromotionCoordinator:
                     state = OLD_ABSENT
                 self._crash("after_old_moved")
             elif act == ACT_INSTALL_NEW:
+                # B5: live=False+tomb=False after MOVE_OLD_INTENT reads as OLD_ABSENT, but if the
+                # intent recorded old_was_present the rename DID happen and the tombstone has since
+                # been lost — that is data loss, not an absent old tree.
+                if state == MOVE_OLD_INTENT and self._move_old_intent(fp).get("old_was_present") \
+                        and not _dir_present(fp.tombstone_dir):
+                    raise PromotionError(f"{fp.family}: MOVE_OLD_INTENT recorded a REAL old tree, but "
+                                         f"neither live nor tombstone exists — the replaced tree was "
+                                         f"lost; refusing to install over the gap")
                 self.journal.append(self.run_id, fp.family, INSTALL_NEW_INTENT,
                                     {"from": str(fp.incoming_dir), "to": str(fp.live_dir)})
                 self._crash("after_install_intent")
                 if _dir_present(fp.live_dir):
                     raise PromotionError(f"{fp.family}: live present at INSTALL_NEW (would clobber)")
                 fp.live_dir.parent.mkdir(parents=True, exist_ok=True)
+                _assert_no_reparse_ancestry(fp.incoming_dir, f"{fp.family}: incoming pre-install")
+                _assert_no_reparse_ancestry(fp.live_dir, f"{fp.family}: live_dir pre-install")
                 os.replace(fp.incoming_dir, fp.live_dir)  # atomic same-volume
                 self._crash("after_install_rename")
                 self.journal.append(self.run_id, fp.family, NEW_INSTALLED, {"live_dir": str(fp.live_dir)})
@@ -481,6 +569,12 @@ class PromotionCoordinator:
                 state = LIVE_VERIFIED
                 self._crash("after_live_verified")
             elif act == ACT_MARK_SWAPPED:
+                # GPT re-review #7 B4 (reproduced): LIVE_VERIFIED mapped straight to MARK_SWAPPED, so a
+                # crash after LIVE_VERIFIED left a STALE CERTIFICATE — resume trusted it and reported
+                # SWAPPED over a live tree corrupted in between. A verification cannot survive as a
+                # trusted fact across a process boundary: re-hash immediately before appending SWAPPED.
+                self._verify_tree(fp, fp.live_dir, "live(pre-swap)")
+                self._assert_tombstone_intact(fp)
                 self.journal.append(self.run_id, fp.family, SWAPPED, {"live_dir": str(fp.live_dir)})
                 state = SWAPPED
                 self._crash("after_swapped")

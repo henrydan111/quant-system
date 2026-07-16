@@ -280,3 +280,119 @@ def test_promotion_is_human_driven_by_default(tmp_path):
         coord.promote_family("market/nonexistent")
     assert coord.promote_family(fp.family) == {fp.family: rp.SWAPPED}
     assert _live_matches_staging(fp)
+
+
+# ── GPT re-review #7 B3: PRE-EXISTING junction — the incident's own mechanism, explicitly IN scope ──
+def test_preexisting_parent_junction_refused(tmp_path):
+    """GPT re-review #7 B3 (reproduced): `data\\market` was made a junction BEFORE promotion. The old
+    fact reads (`exists()/is_dir()`) FOLLOWED it, so it looked like an ordinary directory, the
+    path-based rename resolved through it, and promotion installed the recovered tree OUTSIDE
+    data_root while reporting SWAPPED. This is not the excluded mid-operation race — the junction was
+    already there, exactly as on 2026-07-13."""
+    import _winapi
+    fp, journal, data_root, manifest = _build(tmp_path, family="market/daily", make_live=False)
+    outside = tmp_path / "outside_target"
+    outside.mkdir()
+    junc = data_root / "market"           # the PARENT of live_dir
+    assert not junc.exists()
+    _winapi.CreateJunction(str(outside), str(junc))
+    with pytest.raises(rp.PromotionError, match="reparse point|pre-existing junction"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    assert not (outside / "daily").exists(), \
+        "promotion installed OUTSIDE data_root through a PRE-EXISTING junction"
+
+
+def test_dir_present_refuses_a_reparse_point(tmp_path):
+    """_dir_present used to be exists()/is_dir(), which follows. It must refuse, not traverse."""
+    import _winapi
+    real = tmp_path / "real"; real.mkdir()
+    junc = tmp_path / "junc"
+    _winapi.CreateJunction(str(real), str(junc))
+    assert rp._dir_present(real) is True
+    assert rp._dir_present(tmp_path / "nope") is False
+    with pytest.raises(rp.PromotionError, match="reparse point"):
+        rp._dir_present(junc)
+
+
+def test_broken_junction_in_ancestry_refused(tmp_path):
+    """A BROKEN junction reports exists()==False and would be SKIPPED by a following check."""
+    import _winapi
+    fp, journal, data_root, manifest = _build(tmp_path, family="market/daily", make_live=False)
+    tgt = tmp_path / "gone"; tgt.mkdir()
+    junc = data_root / "market"
+    _winapi.CreateJunction(str(tgt), str(junc))
+    tgt.rmdir()                            # now broken
+    assert junc.exists() is False          # exists() lies about a broken junction
+    with pytest.raises(rp.PromotionError, match="reparse point|pre-existing junction"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+
+
+# ── GPT re-review #7 B4/B5: stale certificates + tombstone content ────────────────────────────────
+def test_live_verified_is_not_a_stale_certificate(tmp_path):
+    """GPT re-review #7 B4 (reproduced): crash after LIVE_VERIFIED, corrupt live, resume -> SWAPPED.
+    A verification cannot survive as a trusted fact across a process boundary."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+
+    def crash(l):
+        if l == "after_live_verified":
+            raise rp.InjectedCrash(l)
+
+    with pytest.raises(rp.InjectedCrash):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp], crash_hook=crash).promote_all(unattended=True)
+    assert journal.last_state("run1", fp.family) == rp.LIVE_VERIFIED
+    (fp.live_dir / "2026" / "daily_20260703.parquet").write_bytes(b"CORRUPTED-AFTER-VERIFY")
+    with pytest.raises(rp.PromotionError, match="frozen manifest"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    assert journal.last_state("run1", fp.family) != rp.SWAPPED, "stale LIVE_VERIFIED certified a corrupt tree"
+
+
+def test_emptied_tombstone_directory_refused(tmp_path):
+    """GPT re-review #7 B5 (reproduced): deleting every FILE while leaving the tombstone DIRECTORY
+    still produced SWAPPED — the check tested existence, not content."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    (fp.tombstone_dir / "stale.parquet").unlink()      # directory survives, content gone
+    assert fp.tombstone_dir.exists()
+    with pytest.raises(rp.PromotionError, match="tombstone CONTENT|tombstone"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+
+
+def test_lost_tombstone_after_rename_before_old_moved_refused(tmp_path):
+    """GPT re-review #7 B5 (reproduced): crash after the live->tombstone rename but BEFORE OLD_MOVED,
+    delete the tombstone, resume -> SWAPPED. Without old_was_present, live=False+tomb=False reads as
+    'there was never anything to move' — indistinguishable from losing the only copy."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+
+    def crash(l):
+        if l == "after_move_rename":
+            raise rp.InjectedCrash(l)
+
+    with pytest.raises(rp.InjectedCrash):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp], crash_hook=crash).promote_all(unattended=True)
+    assert journal.last_state("run1", fp.family) == rp.MOVE_OLD_INTENT
+    import shutil
+    shutil.rmtree(fp.tombstone_dir)                    # the moved-aside tree disappears
+    with pytest.raises(rp.PromotionError, match="lost|tombstone"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+
+
+def test_move_old_intent_records_what_it_moved(tmp_path):
+    """The intent must carry old_was_present + the frozen old manifest — the only record of what the
+    live tree held before we moved it."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    intent = [r for r in journal._rows()
+              if r.get("state") == rp.MOVE_OLD_INTENT and r.get("run_id") == "run1"][0]["expected"]
+    assert intent["old_was_present"] is True
+    assert "stale.parquet" in intent["old_manifest"]
+
+
+def test_lost_family_records_old_absent_and_owes_no_tombstone(tmp_path):
+    fp, journal, data_root, manifest = _build(tmp_path, make_live=False)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    intent = [r for r in journal._rows()
+              if r.get("state") == rp.MOVE_OLD_INTENT and r.get("run_id") == "run1"][0]["expected"]
+    assert intent["old_was_present"] is False and intent["old_manifest"] == {}
+    # a resume must not demand a tombstone that was never owed
+    assert rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(
+        unattended=True)[fp.family] == rp.SWAPPED

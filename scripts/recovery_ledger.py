@@ -42,6 +42,47 @@ def _h(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
+def _canon_scalar(v) -> bytes:
+    """Exact, type-distinguishing bytes for one vendor value (GPT re-review #7 M1). Floats keep their
+    IEEE-754 bits so -0.0 and 0.0 differ; NaN/inf collapse to fixed tokens (a NaN payload is not
+    stable); strings are NFC-normalized so equal text digests equally regardless of composition form."""
+    import math
+    import struct
+    import unicodedata
+    if v is None:
+        return b"\x00NULL"
+    if isinstance(v, bool):  # BEFORE int — bool is an int subclass
+        return b"B1" if v else b"B0"
+    if isinstance(v, bytes):
+        return b"Y" + v
+    if isinstance(v, str):
+        return b"S" + unicodedata.normalize("NFC", v).encode("utf-8")
+    if isinstance(v, int):
+        return b"I" + str(int(v)).encode("ascii")  # arbitrary precision, exact
+    if isinstance(v, float):
+        if math.isnan(v):
+            return b"\x00NAN"
+        if math.isinf(v):
+            return b"\x00INF+" if v > 0 else b"\x00INF-"
+        return b"F" + struct.pack(">d", v)         # exact bits: distinguishes -0.0 from 0.0
+    try:  # numpy scalars / pandas NA / Timestamps, without importing them at module scope
+        import numpy as _np
+        import pandas as _pd
+        if v is _pd.NaT or (v is not None and _pd.isna(v) is True):
+            return b"\x00NULL"
+        if isinstance(v, _np.integer):
+            return b"I" + str(int(v)).encode("ascii")
+        if isinstance(v, _np.floating):
+            return _canon_scalar(float(v))
+        if isinstance(v, _np.bool_):
+            return b"B1" if bool(v) else b"B0"
+        if isinstance(v, _pd.Timestamp):
+            return b"T" + v.isoformat().encode("utf-8")
+    except (ImportError, TypeError, ValueError):
+        pass
+    return b"R" + repr(v).encode("utf-8")          # tagged fallback: never silently equal to a typed form
+
+
 def request_id(endpoint: str, params: dict, partition: str) -> str:
     return _h(_canon({"e": endpoint, "p": params, "part": partition}))[:24]
 
@@ -182,21 +223,34 @@ class PageReceiptLedger:
         PROSE declaration with no producer — the matrix keyed the event families on a column nothing
         computed, so any adapter built against it would fail 'output missing natural-key columns').
 
-        Canonical serialization: for each row, the VENDOR columns (every column except coordinator-
-        derived ones) in SORTED name order, each rendered as `name=repr` with a NUL separator, sha256'd.
-        MUST be computed on the RAW vendor page BEFORE any non-injective normalization, so the digest
-        stays lossless: two vendor rows differing in ANY field get different digests."""
-        import pandas as _pd  # noqa: F401
+        GPT re-review #7 M1 (reproduced): the first implementation used `iterrows()` + `repr`, which
+        builds a Series PER ROW and coerces every value to one common dtype — so int64(1) beside a
+        float column became float64(1.0) and collided with a genuinely different row. It was not
+        lossless, which is the entire point of the key.
+
+        Canonical TYPED encoding instead, column-wise (never iterrows):
+          * vendor columns only (coordinator-derived columns excluded), in sorted name order;
+          * each field contributes length-delimited (name, dtype-tag, value-bytes) — the dtype tag
+            alone separates int64 from float64;
+          * floats use exact IEEE-754 big-endian bytes (so -0.0 != 0.0), with NaN/±inf as fixed tokens
+            (never a NaN payload); ints are exact decimal; strings are NFC-normalized UTF-8; bytes,
+            bools, and timestamps have their own tags; anything else falls back to a tagged repr.
+        MUST be computed on the RAW vendor page BEFORE any non-injective normalization."""
         cols = sorted(c for c in df.columns if c not in _COORDINATOR_DERIVED_COLS)
         if not cols:
             raise LedgerError("row_payload_digest: no vendor columns to digest")
-
-        def _dig(rec):
-            payload = b"\x00".join(f"{c}={rec[c]!r}".encode("utf-8") for c in cols)
-            return hashlib.sha256(payload).hexdigest()
-
         out = df.reset_index(drop=True).copy()
-        out["row_payload_digest"] = [_dig(r) for _, r in out[cols].iterrows()]
+        encoded = [(c.encode("utf-8"), str(out[c].dtype).encode("utf-8"),
+                    [_canon_scalar(v) for v in out[c].tolist()]) for c in cols]
+        digs = []
+        for i in range(len(out)):
+            h = hashlib.sha256()
+            for name, dtag, vals in encoded:
+                for part in (name, dtag, vals[i]):
+                    h.update(len(part).to_bytes(4, "big"))  # length-delimited: no field-boundary aliasing
+                    h.update(part)
+            digs.append(h.hexdigest())
+        out["row_payload_digest"] = digs
         return out
 
     def record_page(self, rid: str, page: int, df, *, terminal_claim: str = "", fetch_ts: str = "") -> None:

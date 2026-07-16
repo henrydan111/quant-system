@@ -311,3 +311,24 @@ def test_row_payload_digest_producer_is_executable_and_lossless(led):
     again = rl.PageReceiptLedger.add_row_payload_digest(a.assign(raw_fetch_ts="2026-07-16T00:00:00Z"))
     assert again["row_payload_digest"][0] == da["row_payload_digest"][0], \
         "digest must ignore coordinator-derived columns"
+
+
+def test_row_payload_digest_is_typed_and_lossless(led):
+    """GPT re-review #7 M1 (reproduced): iterrows()+repr coerced int64 to float when another column was
+    floating, so int64(1) and float64(1.0) produced the SAME digest — the key was not lossless, which
+    is its entire purpose. Column-wise typed encoding fixes the whole class."""
+    import numpy as np
+    D = rl.PageReceiptLedger.add_row_payload_digest
+    dig = lambda d: D(d)["row_payload_digest"][0]
+    # GPT's exact case
+    a = pd.DataFrame({"a": pd.Series([1], dtype="int64"), "b": pd.Series([2.5], dtype="float64")})
+    b = pd.DataFrame({"a": pd.Series([1.0], dtype="float64"), "b": pd.Series([2.5], dtype="float64")})
+    assert dig(a) != dig(b), "int64(1) and float64(1.0) still collide"
+    # negative zero, type confusion, field-boundary aliasing
+    assert dig(pd.DataFrame({"v": pd.Series([0.0])})) != dig(pd.DataFrame({"v": pd.Series([-0.0])}))
+    assert dig(pd.DataFrame({"v": [1]})) != dig(pd.DataFrame({"v": ["1"]}))
+    assert dig(pd.DataFrame({"x": ["a"], "y": ["bc"]})) != dig(pd.DataFrame({"x": ["ab"], "y": ["c"]}))
+    # NaN/None are stable tokens, not payload-dependent
+    assert dig(pd.DataFrame({"v": [float("nan")]})) == dig(pd.DataFrame({"v": [float("nan")]}))
+    # determinism for identical typed input
+    assert dig(a) == dig(a.copy())
