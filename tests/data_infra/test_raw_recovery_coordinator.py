@@ -186,11 +186,11 @@ def test_endpoint_matrix_unique_owner_per_output():
     # A01 market/daily draws THREE source endpoints
     a01 = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A01"][0]
     assert a01.source_endpoints == ("daily", "daily_basic", "adj_factor")
-    # event families carry allowed_baseline_dups; dense per-date families do not
+    # event families expect profile-key dups; dense per-date families do not
     ti = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A11b"][0]
-    assert ti.allowed_baseline_dups and "exalter" in ti.vendor_record_key
+    assert ti.profile_key_dups_expected and "exalter" in ti.vendor_record_key
     a01d = a01
-    assert not a01d.allowed_baseline_dups
+    assert not a01d.profile_key_dups_expected
     # statements carry a PIT version key (a restatement is a NEW row, not a dup)
     inc = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A03a"][0]
     assert inc.pit_version_key == ("ann_date", "f_ann_date", "update_flag")
@@ -254,3 +254,73 @@ def test_spaced_call_rate_limit_backoff_finite(tmp_path, monkeypatch):
         v = float(tushare_lock._next_allowed_path().read_text())
         assert math.isfinite(v), f"rate-limit backoff {bad!r} persisted non-finite next-allowed"
         tushare_lock._next_allowed_path().unlink()
+
+
+# ── GPT re-review #5 F3: matrix keys BOUND to the production PIT logic ────────────────────────────
+# The matrix must never drift from src/data_infra/pit_backend.py DATASET_SPECS (the production
+# natural keys the live PIT ledger is built on). GPT found dividends omitting record_date/ex_date/
+# pay_date (would COLLAPSE legally distinct dividend records) and the statement content keys omitting
+# ann_date. This test is the anti-drift guard, not a one-time fix.
+_MATRIX_TO_SPEC = {
+    "market/daily": "daily", "market/index": "index_daily", "market/moneyflow": "moneyflow",
+    "market/stk_limit": "stk_limit", "market/margin": "margin", "market/northbound": "northbound",
+    "market/top_list": "top_list", "market/top_inst": "top_inst", "market/block_trade": "block_trade",
+    "market/cyq_perf": "cyq_perf", "fundamentals/income": "income",
+    "fundamentals/balancesheet": "balancesheet", "fundamentals/cashflow": "cashflow",
+    "fundamentals/income_quarterly": "income_quarterly",
+    "fundamentals/cashflow_quarterly": "cashflow_quarterly", "fundamentals/forecast": "forecast",
+    "fundamentals/indicators": "indicators", "corporate/dividends": "dividends",
+    "corporate/holder_number": "holder_number", "corporate/stk_holdertrade": "stk_holdertrade",
+    "analyst/report_rc": "report_rc",
+}
+
+
+def test_matrix_vendor_keys_cover_production_natural_keys():
+    """Every matrix vendor_record_key must COVER its production DATASET_SPEC natural_keys (a superset
+    is fine — extra columns only make identity finer; a MISSING column collapses real records)."""
+    from data_infra.pit_backend import DATASET_SPECS
+    rows = {r.output_family: r for r in rrc.ENDPOINT_MATRIX}
+    checked = 0
+    for fam, spec_name in _MATRIX_TO_SPEC.items():
+        row = rows[fam]
+        spec = DATASET_SPECS[spec_name]
+        prod = set(getattr(spec, "natural_keys", ()) or ())
+        assert prod, f"{spec_name} has no production natural_keys"
+        missing = prod - set(row.vendor_record_key)
+        assert not missing, (f"{fam}: vendor_record_key {row.vendor_record_key} MISSES production "
+                             f"natural key column(s) {sorted(missing)} — would collapse distinct records")
+        checked += 1
+    assert checked == len(_MATRIX_TO_SPEC)
+
+
+def test_dividends_key_carries_the_settlement_dates():
+    """GPT F3 (verified vs pit_backend): dividends identity needs record_date/ex_date/pay_date."""
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.output_family == "corporate/dividends"][0]
+    for col in ("record_date", "ex_date", "pay_date", "div_proc"):
+        assert col in row.vendor_record_key and col in row.content_dedup_key, f"dividends key lost {col}"
+
+
+def test_statement_content_keys_retain_ann_date():
+    """GPT F3: ann_date is visibility-relevant in production statement handling; dropping it from the
+    content-dedup key can collapse rows that differ in when they became visible."""
+    for fam in ("fundamentals/income", "fundamentals/balancesheet", "fundamentals/cashflow"):
+        row = [r for r in rrc.ENDPOINT_MATRIX if r.output_family == fam][0]
+        assert "ann_date" in row.content_dedup_key, f"{fam}: content_dedup_key dropped ann_date"
+
+
+def test_event_families_use_a_lossless_payload_digest():
+    """GPT F3: the docs establish no transaction id for top_list/top_inst/block_trade and the
+    production key (ts_code,trade_date) is NOT unique, so any hand-picked column set is an unproven
+    guess. A lossless row digest makes collapse of a genuinely distinct row impossible."""
+    for fam in ("market/top_list", "market/top_inst", "market/block_trade"):
+        row = [r for r in rrc.ENDPOINT_MATRIX if r.output_family == fam][0]
+        assert "row_payload_digest" in row.vendor_record_key, f"{fam}: no lossless digest in the key"
+        assert "row_payload_digest" in row.content_dedup_key
+        assert "row_payload_digest" in rrc._DERIVED_KEY_ALLOWLIST
+
+
+def test_declared_dup_budgets_are_explicit_ints():
+    """The ledger enforces max_content_dups; the matrix must DECLARE it (no boolean free pass)."""
+    for r in rrc.ENDPOINT_MATRIX:
+        assert isinstance(r.max_content_dups, int) and r.max_content_dups >= 0
+        assert isinstance(r.profile_key_dups_expected, bool)
