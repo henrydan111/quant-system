@@ -105,7 +105,10 @@ def test_resume_clean_ok_and_tamper_refused(crun):
 def _good_contract(tmp_doc: Path) -> dict:
     return {"doc_path": str(tmp_doc.relative_to(rrc.E_ROOT)), "doc_sha256": rrc.sha256_file(tmp_doc),
             "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],
-            "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
+            "pagination": "single page per trade_date",
+            "pagination_spec": {"mode": "single_page", "page_limit": 0},
+            "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+            "rate_limit": "500/min@15000pts",
             "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
             "empty_policy": "dense_refuse", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -123,7 +126,10 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
         return {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
                 "doc_id": rrc.parse_doc_identity(doc)["doc_id"],
                 "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],
-                "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
+                "pagination": "single page per trade_date",
+                "pagination_spec": {"mode": "single_page", "page_limit": 0},
+                "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+                "rate_limit": "500/min@15000pts",
                 "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
                 "empty_policy": "dense_refuse", "reviewed_by": "henry",
                 "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -373,7 +379,10 @@ def test_wrong_doc_for_endpoint_refused(tmp_path, monkeypatch):
     base = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
             "doc_id": "107",
             "required_fields": ["ts_code", "trade_date", "exalter"], "natural_key": ["ts_code", "trade_date"],
-            "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
+            "pagination": "single page per trade_date",
+            "pagination_spec": {"mode": "single_page", "page_limit": 0},
+            "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+            "rate_limit": "500/min@15000pts",
             "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -397,7 +406,10 @@ def test_omitted_doc_id_refused(tmp_path, monkeypatch):
                    "| ts_code | str |\n| trade_date | str |\n", encoding="utf-8")
     c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
          "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
-         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}   # NO doc_id
     assert "doc_id" in rrc.CONTRACT_REQUIRED
@@ -415,7 +427,10 @@ def test_doc_id_mismatch_refused(tmp_path, monkeypatch):
                    "| ts_code | str |\n| trade_date | str |\n", encoding="utf-8")
     c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc), "doc_id": "999",
          "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
-         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
     assert any("doc_id 999" in e for e in rrc.contract_errors("top_inst", c))
@@ -449,7 +464,10 @@ def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
          "doc_id": "27",
          "required_fields": ["ts_code", "trade_date", "close"],
          "natural_key": ["ts_code", "trade_date", "report_rc_payload_digest"],  # borrowed from report_rc
-         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "dense_refuse", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
     errs = rrc.contract_errors("daily", c)
@@ -487,7 +505,10 @@ def test_input_only_field_cannot_be_a_natural_key(tmp_path, monkeypatch):
     assert "trade_date" not in fields["output"], "input parameter leaked into the output vocabulary"
     base = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
             "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "trade_date"],
-            "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+            "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
     assert any("trade_date" in e for e in rrc.contract_errors("top_inst", base))
@@ -504,7 +525,10 @@ def test_required_fields_cannot_vouch_for_a_natural_key(tmp_path, monkeypatch):
     doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
     c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
          "required_fields": ["ts_code", "made_up"], "natural_key": ["ts_code", "made_up"],
-         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
     errs = rrc.contract_errors("top_inst", c)
@@ -535,7 +559,10 @@ def test_reviewed_at_must_be_timezone_aware_and_signer_recognized(tmp_path, monk
     doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
     good = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
             "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
-            "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+            "pagination": "single",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
     assert rrc.contract_errors("top_inst", good) == []
@@ -547,3 +574,83 @@ def test_reviewed_at_must_be_timezone_aware_and_signer_recognized(tmp_path, monk
     # an unrecognized but non-placeholder name must still refuse — a signature names a REAL reviewer
     assert any("not a recognized signer" in e for e in rrc.contract_errors("top_inst",
                                                                            dict(good, reviewed_by="somebody")))
+
+
+# ── GPT re-review #7 F3: typed pagination/population + plan<->contract binding ────────────────────
+def _signed(doc, fake_root, **over):
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
+         "pagination": "one page per trade_date",
+         "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    c.update(over)
+    return c
+
+
+def test_pagination_must_be_a_typed_spec_not_prose(tmp_path, monkeypatch):
+    """GPT re-review #7 F3: `pagination` was free-form prose while the ledger independently received
+    pagination_mode/page_limit — nothing proved execution matched what the human signed."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
+    assert "pagination_spec" in rrc.CONTRACT_REQUIRED and "request_population" in rrc.CONTRACT_REQUIRED
+    assert rrc.contract_errors("top_inst", _signed(doc, fake_root)) == []
+    # prose where a typed spec belongs
+    bad = _signed(doc, fake_root, pagination_spec="offset to cap=3000")
+    assert any("typed mapping" in e for e in rrc.contract_errors("top_inst", bad))
+    # internally inconsistent typed specs
+    assert any("single_page requires page_limit == 0" in e for e in rrc.contract_errors(
+        "top_inst", _signed(doc, fake_root, pagination_spec={"mode": "single_page", "page_limit": 3000})))
+    assert any("POSITIVE page_limit" in e for e in rrc.contract_errors(
+        "top_inst", _signed(doc, fake_root,
+                            pagination_spec={"mode": "offset_paged", "page_limit": 0,
+                                             "offset_param": "offset"})))
+    assert any("offset_param" in e for e in rrc.contract_errors(
+        "top_inst", _signed(doc, fake_root, pagination_spec={"mode": "offset_paged", "page_limit": 3000})))
+    # population must be typed + sourced
+    assert any("typed mapping" in e for e in rrc.contract_errors(
+        "top_inst", _signed(doc, fake_root, request_population="every trading day")))
+    assert any("request_population.source" in e for e in rrc.contract_errors(
+        "top_inst", _signed(doc, fake_root, request_population={"unit": "open_trade_date"})))
+
+
+def test_frozen_plan_must_match_the_signed_contract():
+    """The ledger receives pagination_mode/page_limit independently; they MUST equal what was signed."""
+    contracts = {"top_inst": {"pagination_spec": {"mode": "single_page", "page_limit": 0},
+                              "request_population": {"unit": "open_trade_date", "source": "trade_cal"}}}
+    ok = [{"request_id": "r1", "endpoint": "top_inst", "dataset": "market/top_inst",
+           "pagination_mode": "single_page", "page_limit": 0}]
+    rrc.assert_plan_matches_contracts(ok, contracts)      # matches -> no raise
+    drift_mode = [dict(ok[0], pagination_mode="offset_paged", page_limit=0)]
+    with pytest.raises(RuntimeError, match="pagination_mode .* != signed"):
+        rrc.assert_plan_matches_contracts(drift_mode, contracts)
+    drift_limit = [dict(ok[0], page_limit=3000)]
+    with pytest.raises(RuntimeError, match="page_limit .* != signed"):
+        rrc.assert_plan_matches_contracts(drift_limit, contracts)
+    with pytest.raises(RuntimeError, match="no signed pagination_spec"):
+        rrc.assert_plan_matches_contracts(ok, {})          # unsigned contract cannot back a plan
+
+
+def test_plan_population_unit_must_match_the_matrix_query_mode():
+    """A contract that claims to enumerate months while the matrix enumerates trading days is a
+    coverage lie — caught at plan freeze, before any call."""
+    contracts = {"top_inst": {"pagination_spec": {"mode": "single_page", "page_limit": 0},
+                              "request_population": {"unit": "month", "source": "calendar months"}}}
+    plan = [{"request_id": "r1", "endpoint": "top_inst", "dataset": "market/top_inst",
+             "pagination_mode": "single_page", "page_limit": 0}]
+    with pytest.raises(RuntimeError, match="matrix enumerates .* but the signed contract declares"):
+        rrc.assert_plan_matches_contracts(plan, contracts)
+
+
+def test_every_matrix_query_mode_has_a_population_unit():
+    """A query_mode with no declared unit could never be matched by any signed contract."""
+    modes = {r.query_mode for r in rrc.ENDPOINT_MATRIX if r.query_mode != "UNBOUND"}
+    missing = [q for q in modes if q not in rrc._QUERY_MODE_TO_UNIT]
+    assert not missing, f"query_modes with no population unit: {missing}"
+    assert set(rrc._QUERY_MODE_TO_UNIT.values()) <= rrc._POPULATION_UNITS

@@ -434,8 +434,24 @@ def _coordinator_commit() -> str:
 # ── B4: structural doc-contract gate ─────────────────────────────────────────────────────────────
 # GPT re-review #6 F4: doc_id was OPTIONAL, so a contract that simply omitted it skipped the doc-id
 # binding check entirely (a valid contract with no doc_id produced no errors). It is REQUIRED now.
+# GPT re-review #7 F3: `pagination` was free-form PROSE while the ledger independently received
+# `pagination_mode`/`page_limit` — nothing proved that what executes is what the human signed. The
+# contract now carries TYPED specs and `assert_plan_matches_contracts` compares every frozen ledger
+# request against them before a single call is made.
 CONTRACT_REQUIRED = ("doc_path", "doc_id", "doc_sha256", "required_fields", "natural_key", "pagination",
-                     "rate_limit", "cadence", "pit_anchors", "empty_policy", "reviewed_by", "reviewed_at")
+                     "pagination_spec", "request_population", "rate_limit", "cadence", "pit_anchors",
+                     "empty_policy", "reviewed_by", "reviewed_at")
+_PAGINATION_MODES = {"single_page", "offset_paged"}
+# The unit a request set is enumerated over — must match the matrix row's query_mode.
+_POPULATION_UNITS = {"open_trade_date", "index_range", "stock", "period_report_type", "period",
+                     "month", "report_date_month", "stock_repartition", "year"}
+# matrix query_mode -> the population unit a signed contract must declare for it
+_QUERY_MODE_TO_UNIT = {
+    "per_open_trade_date": "open_trade_date", "per_index_range": "index_range",
+    "per_stock": "stock", "per_period_report_type": "period_report_type", "per_period": "period",
+    "per_month": "month", "per_report_date_month": "report_date_month",
+    "per_stock_repartition": "stock_repartition", "per_year": "year",
+}
 
 # Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
 # (they are computed during ingest). report_rc_payload_digest is the PIT identity digest; raw_fetch_ts is
@@ -548,6 +564,74 @@ def parse_doc_field_vocabulary(doc: Path) -> set:
     return parse_doc_fields(doc)["output"]
 
 
+def _pagination_spec_errors(endpoint: str, spec) -> list:
+    """A TYPED pagination contract (GPT re-review #7 F3): the mode and page limit the human signed,
+    machine-comparable against what the ledger will actually execute."""
+    if not isinstance(spec, dict):
+        return [f"{endpoint}: pagination_spec must be a typed mapping "
+                f"{{mode, page_limit[, offset_param]}}, not prose"]
+    errs = []
+    mode = spec.get("mode")
+    if mode not in _PAGINATION_MODES:
+        errs.append(f"{endpoint}: pagination_spec.mode must be one of {sorted(_PAGINATION_MODES)}")
+    limit = spec.get("page_limit")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+        errs.append(f"{endpoint}: pagination_spec.page_limit must be a non-negative int")
+    elif mode == "single_page" and limit != 0:
+        errs.append(f"{endpoint}: single_page requires page_limit == 0 (got {limit})")
+    elif mode == "offset_paged":
+        if limit <= 0:
+            errs.append(f"{endpoint}: offset_paged requires a POSITIVE page_limit (the doc's cap)")
+        if not str(spec.get("offset_param") or "").strip():
+            errs.append(f"{endpoint}: offset_paged requires the doc's offset_param name")
+    return errs
+
+
+def _population_spec_errors(endpoint: str, spec) -> list:
+    """How the request SET is enumerated — the signed contract must state it (GPT re-review #7 F3/R4:
+    'the signed contract must express its request population now')."""
+    if not isinstance(spec, dict):
+        return [f"{endpoint}: request_population must be a typed mapping {{unit, source}}, not prose"]
+    errs = []
+    if spec.get("unit") not in _POPULATION_UNITS:
+        errs.append(f"{endpoint}: request_population.unit must be one of {sorted(_POPULATION_UNITS)}")
+    if not str(spec.get("source") or "").strip():
+        errs.append(f"{endpoint}: request_population.source must name where the population comes from "
+                    f"(e.g. 'trade_cal open sessions', 'stock_basic L,D,P')")
+    return errs
+
+
+def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
+    """MECHANICALLY compare every frozen ledger request against the SIGNED contract (GPT re-review #7
+    F3: 'nothing proves execution matches what the human signed'). The ledger receives
+    pagination_mode/page_limit independently; here they must EQUAL the signed pagination_spec, and the
+    contract's declared population unit must match the matrix query_mode of the row that owns the
+    output. Call at plan freeze, before any call is made. Raises on the first divergence."""
+    by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
+    for pr in plan_rows:
+        ep = pr["endpoint"]
+        c = contracts.get(ep) or {}
+        spec = c.get("pagination_spec")
+        if not isinstance(spec, dict):
+            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): no signed pagination_spec to "
+                               f"compare against — the contract is unsigned or untyped")
+        if pr.get("pagination_mode") != spec.get("mode"):
+            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): pagination_mode "
+                               f"{pr.get('pagination_mode')!r} != signed {spec.get('mode')!r}")
+        if int(pr.get("page_limit") or 0) != int(spec.get("page_limit") or 0):
+            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): page_limit "
+                               f"{pr.get('page_limit')!r} != signed {spec.get('page_limit')!r}")
+        fam = pr.get("dataset")
+        row = by_family.get(fam)
+        if row is not None:
+            want = _QUERY_MODE_TO_UNIT.get(row.query_mode)
+            got = (c.get("request_population") or {}).get("unit")
+            if want and got != want:
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): the matrix enumerates "
+                                   f"{row.query_mode!r} (unit {want!r}) but the signed contract declares "
+                                   f"population unit {got!r}")
+
+
 def contract_errors(endpoint: str, c: dict) -> list:
     errs = []
     if not isinstance(c, dict) or not c:
@@ -626,6 +710,8 @@ def contract_errors(endpoint: str, c: dict) -> list:
                                 f"endpoint's declared derived fields: {bad}")
     if c["empty_policy"] not in ("dense_refuse", "sparse_canary"):
         errs.append(f"{endpoint}: empty_policy must be dense_refuse|sparse_canary")
+    errs.extend(_pagination_spec_errors(endpoint, c.get("pagination_spec")))
+    errs.extend(_population_spec_errors(endpoint, c.get("request_population")))
     # GPT re-review #7 minor: a RECOGNIZED signer, not merely a >=3-char string ("xxx" passed).
     if str(c["reviewed_by"]).strip().lower() not in _KNOWN_SIGNERS:
         errs.append(f"{endpoint}: reviewed_by {c['reviewed_by']!r} is not a recognized signer "

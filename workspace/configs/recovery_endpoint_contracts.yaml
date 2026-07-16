@@ -13,7 +13,16 @@
 #   doc_sha256      : sha256 of the doc file actually read
 #   required_fields : [real column names; >=2; no placeholders] — must be a subset of the doc's field list
 #   natural_key     : [row-identity columns; no placeholders]
-#   pagination      : typed rule (e.g. "single page per trade_date" | "offset to cap=3000")
+#   pagination      : human prose (kept for the reviewer; NOT machine-authoritative)
+#   pagination_spec : TYPED + machine-compared against every frozen ledger request:
+#                     {mode: single_page|offset_paged, page_limit: int,
+#                      offset_param: <name>   # required when offset_paged}
+#                     single_page => page_limit 0; offset_paged => page_limit > 0 (the doc's cap)
+#   request_population : TYPED — how the request SET is enumerated; the unit MUST match the
+#                     matrix row's query_mode, and source names where the population comes from:
+#                     {unit: open_trade_date|index_range|stock|period_report_type|period|month|
+#                            report_date_month|stock_repartition|year,
+#                      source: "trade_cal open sessions" | "stock_basic L,D,P" | ...}
 #   rate_limit      : from the doc (积分/每分钟限次)
 #   cadence         : from the doc
 #   pit_anchors     : nominal-vs-visible date anchoring (★ create_time/ann_date/f_ann_date/report_date)
