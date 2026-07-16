@@ -111,8 +111,45 @@ class TestDecisionLedger:
         p = tmp_path / "decision_ledger.jsonl"
         line = p.read_text(encoding="utf-8")
         p.write_text(line + line, encoding="utf-8")    # hand-append duplicate id
-        with pytest.raises(RegistryError, match="重复 decision_id"):
+        with pytest.raises(RegistryError, match="物理序|重复"):
             lookup_decision(tmp_path, "d1")
+
+    @pytest.mark.parametrize("fld", ["bundle_hash", "artifact_hash",
+                                     "final_registry_hash", "source_card_hash",
+                                     "cutoff_iso", "seq", "prev_hash"])
+    def test_every_field_mutation_fail_closed(self, tmp_path, fld):
+        # re-review M1: mutating ANY ledger field breaks the per-row hash/chain
+        import json as _json
+        record_decision(tmp_path, "d1", _artifact())
+        p = tmp_path / "decision_ledger.jsonl"
+        entry = _json.loads(p.read_text(encoding="utf-8"))
+        entry[fld] = 0 if fld == "seq" and entry[fld] != 0 else \
+            ("x" * 64 if isinstance(entry[fld], str) else entry[fld] + 1)
+        p.write_text(_json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+        with pytest.raises(RegistryError):
+            lookup_decision(tmp_path, "d1")
+
+    def test_alternate_world_row_replacement_rejected_for_original(self, tmp_path):
+        # re-review M1: an attacker recomputing a self-consistent chain with the
+        # OTHER world's row cannot satisfy require_recorded for the original
+        # artifact (full-field comparison). Wholesale-replacement detection for
+        # the substituted world itself needs the external head anchor (archive
+        # unit integration, documented).
+        art_a = _artifact("d1")
+        record_decision(tmp_path, "d1", art_a)
+        # world B: same decision id, different split text
+        card, records, facts = render_news_flash_section(
+            [_assessed("重大订单甲", importance=5),
+             _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00")], CUT)
+        art_b = build_attribute_bundle(
+            [{"base_record_id": "NFD01", "attributes": {"fact": "另一措辞"}}],
+            facts, records, card=card, decision_id="d1", cutoff=CUT)
+        # attacker rewrites the ledger with a self-consistent B row
+        p = tmp_path / "decision_ledger.jsonl"
+        p.unlink()
+        record_decision(tmp_path, "d1", art_b)
+        with pytest.raises(RegistryError, match="不符"):
+            require_recorded(tmp_path, "d1", art_a)
 
 
 # --------------------------------------------------- closed AST (BINDING #2/#5)
@@ -139,7 +176,7 @@ class TestClosedAst:
                 serialize_payload_ast({"v": bad})
 
     def test_non_str_key_rejected(self):
-        with pytest.raises(RegistryError, match="键须 str"):
+        with pytest.raises(RegistryError, match="键须恰 str"):
             serialize_payload_ast({1: "x"})
 
     def test_identity_bytes_preserved_exactly(self):
@@ -150,6 +187,25 @@ class TestClosedAst:
     def test_deterministic_bytes(self):
         ast = {"b": [EvidenceRef("NFD01")], "a": 1}
         assert serialize_payload_ast(ast) == serialize_payload_ast(ast)
+
+    # re-review M2: EXACT types — subclasses of str/dict/EvidenceRef all refuse
+    def test_str_subclass_rejected(self):
+        class S(str):
+            pass
+        with pytest.raises(RegistryError, match="闭集外"):
+            serialize_payload_ast({"x": S("正文")})
+
+    def test_dict_subclass_rejected(self):
+        class D(dict):
+            pass
+        with pytest.raises(RegistryError, match="闭集外"):
+            serialize_payload_ast(D(a=1))
+
+    def test_evidence_ref_subclass_rejected(self):
+        class R(EvidenceRef):
+            pass
+        with pytest.raises(RegistryError, match="闭集外"):
+            serialize_payload_ast({"r": R("NFD01")})
 
 
 # --------------------------------------------------- choke point (BINDING #1+#3+#4)
@@ -227,5 +283,101 @@ class TestSealedPayloadChokePoint:
                           use=sp.use, target_dimension=sp.target_dimension,
                           payload_text=sp.payload_text + "篡改",
                           registry_hash=sp.registry_hash,
+                          artifact_hash=sp.artifact_hash, bundle_hash=sp.bundle_hash,
+                          ledger_entry_hash=sp.ledger_entry_hash,
+                          expected_ids=sp.expected_ids,
+                          ref_occurrences=sp.ref_occurrences,
                           authorized_ids=sp.authorized_ids,
-                          payload_hash=sp.payload_hash)
+                          payload_ast=sp.payload_ast, payload_hash=sp.payload_hash)
+
+    def test_blank_hash_automint_removed(self, tmp_path):
+        # re-review B2: blank payload_hash must reject (no public auto-mint)
+        art = self._ready(tmp_path)
+        with pytest.raises(RegistryError, match="内部工厂"):
+            SealedPayload(decision_id="d1", consumer_seat="news",
+                          use="factor_positive", target_dimension=None,
+                          payload_text="{}", registry_hash="a" * 64,
+                          artifact_hash="b" * 64, bundle_hash="c" * 64,
+                          ledger_entry_hash="d" * 64, expected_ids=(),
+                          ref_occurrences=(), authorized_ids=(), payload_ast={})
+
+    def test_fresh_self_mint_stopped_at_executor_boundary(self, tmp_path):
+        # re-review B2 named probe: a FRESH self-consistent mint (attacker computes
+        # the seal himself) for an UNRECORDED decision constructs as an object but
+        # is refused by the executor-boundary verifier
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            verify_payload_for_execution,
+        )
+        from workspace.research.ai_research_dept.engine.news_seal import seal_hash
+        art = _artifact(decision_id="d9")               # d9 NOT recorded
+        fields = {"decision_id": "d9", "seat": "news", "use": "factor_positive",
+                  "dimension": None, "payload_text": "{}",
+                  "registry_hash": art.final_registry.registry_hash,
+                  "artifact_hash": art.artifact_hash,
+                  "bundle_hash": art.bundle.bundle_hash,
+                  "ledger_entry_hash": "e" * 64, "expected_ids": [],
+                  "ref_occurrences": [], "authorized_ids": []}
+        forged = SealedPayload(
+            decision_id="d9", consumer_seat="news", use="factor_positive",
+            target_dimension=None, payload_text="{}",
+            registry_hash=art.final_registry.registry_hash,
+            artifact_hash=art.artifact_hash, bundle_hash=art.bundle.bundle_hash,
+            ledger_entry_hash="e" * 64, expected_ids=(), ref_occurrences=(),
+            authorized_ids=(), payload_ast={}, payload_hash=seal_hash(fields))
+        with pytest.raises(RegistryError, match="未入账"):
+            verify_payload_for_execution(forged, art, ledger_dir=tmp_path)
+
+
+class TestLegCompleteness:
+    # re-review B1: expected populations enforced exactly-once before executors
+    def _ready(self, tmp_path):
+        art = _artifact()
+        record_decision(tmp_path, "d1", art)
+        return art
+
+    def _leg_expected(self, art):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            leg_expected_ids,
+        )
+        return leg_expected_ids(art.final_registry, use="factor_positive",
+                                consumer_seat="news")
+
+    def _build(self, tmp_path, art, ast):
+        return build_sealed_payload(ast, art, ledger_dir=tmp_path,
+                                    decision_id="d1", consumer_seat="news",
+                                    use="factor_positive")
+
+    def test_complete_population_passes(self, tmp_path):
+        art = self._ready(tmp_path)
+        ast = {"facts": [EvidenceRef(rid) for rid in self._leg_expected(art)]}
+        sp = self._build(tmp_path, art, ast)
+        assert sp.expected_ids == self._leg_expected(art)
+        assert sorted(sp.ref_occurrences) == list(sp.expected_ids)
+
+    def test_empty_payload_refused(self, tmp_path):
+        art = self._ready(tmp_path)
+        with pytest.raises(RegistryError, match="完整性"):
+            self._build(tmp_path, art, {"facts": []})
+
+    def test_subset_refused(self, tmp_path):
+        art = self._ready(tmp_path)
+        ids = self._leg_expected(art)
+        ast = {"facts": [EvidenceRef(ids[0])]}          # one-record subset
+        with pytest.raises(RegistryError, match="完整性"):
+            self._build(tmp_path, art, ast)
+
+    def test_duplicate_refused(self, tmp_path):
+        art = self._ready(tmp_path)
+        ids = self._leg_expected(art)
+        ast = {"facts": [EvidenceRef(r) for r in ids] + [EvidenceRef(ids[0])]}
+        with pytest.raises(RegistryError, match="完整性"):
+            self._build(tmp_path, art, ast)
+
+    def test_plain_string_ref_lookalike_refused(self, tmp_path):
+        # re-review M2: [ID] syntax is EvidenceRef-exclusive — an ordinary string
+        # carrying an authorized-looking token fails the provenance proof
+        art = self._ready(tmp_path)
+        ids = self._leg_expected(art)
+        ast = {"facts": [EvidenceRef(r) for r in ids[1:]] + [f"[{ids[0]}]"]}
+        with pytest.raises(RegistryError, match="出处"):
+            self._build(tmp_path, art, ast)

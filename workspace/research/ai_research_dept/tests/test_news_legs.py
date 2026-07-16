@@ -267,3 +267,138 @@ class TestLegIsolation:
                               factor_payload_ast=_factor_ast(art),
                               penalty_payload_ast=None,
                               factor_leg_fn=_OK, penalty_leg_fn=_OK)
+
+
+# --------------------------------------------------- prevalidation (re-review M3)
+
+class TestPrevalidation:
+    def test_invalid_output_mode_before_any_executor(self, tmp_path):
+        art = _artifact(with_penalty=False)
+        record_decision(tmp_path, "d1", art)
+        calls = []
+        with pytest.raises(RegistryError, match="output_mode"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                              output_mode="EVIL",
+                              factor_payload_ast=_factor_ast(art),
+                              penalty_payload_ast=None,
+                              factor_leg_fn=lambda sp: calls.append(sp),
+                              penalty_leg_fn=_OK)
+        assert calls == []                              # factor executor never ran
+
+    def test_missing_penalty_payload_detected_before_factor(self, tmp_path):
+        art = _artifact(with_penalty=True)
+        record_decision(tmp_path, "d1", art)
+        calls = []
+        with pytest.raises(RegistryError, match="penalty 适格"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                              output_mode="primary_horizon",
+                              factor_payload_ast=_factor_ast(art),
+                              penalty_payload_ast=None,
+                              factor_leg_fn=lambda sp: calls.append(sp),
+                              penalty_leg_fn=_OK)
+        assert calls == []                              # config error precedes exec
+
+    def test_penalty_payload_with_zero_eligible_refused(self, tmp_path):
+        art = _artifact(with_penalty=False)
+        record_decision(tmp_path, "d1", art)
+        with pytest.raises(RegistryError, match="配置错误"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                              output_mode="primary_horizon",
+                              factor_payload_ast=_factor_ast(art),
+                              penalty_payload_ast={"risks": []},
+                              factor_leg_fn=_OK, penalty_leg_fn=_OK)
+
+    def test_incomplete_factor_payload_before_executor(self, tmp_path):
+        # re-review B1 at the leg level: a factor payload omitting available
+        # positive records never reaches the executor
+        art = _artifact(with_penalty=False)
+        record_decision(tmp_path, "d1", art)
+        calls = []
+        with pytest.raises(RegistryError, match="完整性"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                              output_mode="primary_horizon",
+                              factor_payload_ast={"facts": []},   # empty
+                              penalty_payload_ast=None,
+                              factor_leg_fn=lambda sp: calls.append(sp),
+                              penalty_leg_fn=_OK)
+        assert calls == []
+
+
+# --------------------------------------------------- strict terminal types (B3)
+
+class TestStrictTerminalTypes:
+    def _kw(self, **over):
+        base = dict(decision_id="d1", output_mode="primary_horizon",
+                    factor_leg_status="success", penalty_eligible_count=2,
+                    penalty_eligible_set_hash="0" * 64,
+                    penalty_leg_status="success", news_status="success",
+                    shadow_complete=False, decision_complete=True,
+                    binding_eligible=True, factor_payload_hash="f" * 64,
+                    penalty_payload_hash="e" * 64)
+        base.update(over)
+        return base
+
+    def test_valid_row2_constructs(self):
+        assert NewsLegOutcome(**self._kw()).news_status == "success"
+
+    def test_int_as_bool_rejected(self):
+        # Python 1 == True would pass a loose matrix comparison — exact types
+        with pytest.raises(RegistryError, match="恰 bool"):
+            NewsLegOutcome(**self._kw(binding_eligible=1))
+
+    def test_bool_as_count_rejected(self):
+        with pytest.raises(RegistryError, match="非 bool"):
+            NewsLegOutcome(**self._kw(penalty_eligible_count=True,
+                                      penalty_leg_status="success"))
+
+    def test_penalty_success_requires_hash(self):
+        with pytest.raises(LegIntegrityError, match="必须携带"):
+            NewsLegOutcome(**self._kw(penalty_payload_hash=None))
+
+    def test_fake_short_hash_rejected(self):
+        with pytest.raises(RegistryError, match="64 位小写 hex"):
+            NewsLegOutcome(**self._kw(factor_payload_hash="deadbeef"))
+
+    def test_uppercase_hash_rejected(self):
+        with pytest.raises(LegIntegrityError, match="必须携带"):
+            NewsLegOutcome(**self._kw(penalty_payload_hash="F" * 64))
+
+
+# --------------------------------------------------- binding boundary (B3)
+
+class TestBindingBoundary:
+    def _run(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            build_sealed_payload,
+        )
+        art = _artifact(with_penalty=True)
+        record_decision(tmp_path, "d1", art)
+        f_ast, p_ast = _factor_ast(art), _penalty_ast(art)
+        out = run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                                output_mode="primary_horizon",
+                                factor_payload_ast=f_ast, penalty_payload_ast=p_ast,
+                                factor_leg_fn=_OK, penalty_leg_fn=_OK)
+        # deterministic rebuild of the payloads (same ast + artifact -> same hash)
+        fp = build_sealed_payload(f_ast, art, ledger_dir=tmp_path, decision_id="d1",
+                                  consumer_seat="news", use="factor_positive")
+        pp = build_sealed_payload(p_ast, art, ledger_dir=tmp_path, decision_id="d1",
+                                  consumer_seat="news", use="penalty")
+        return art, out, fp, pp
+
+    def test_binding_boundary_recomputes_and_passes(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            verify_outcome_for_binding,
+        )
+        art, out, fp, pp = self._run(tmp_path)
+        assert fp.payload_hash == out.factor_payload_hash    # deterministic rebuild
+        assert verify_outcome_for_binding(out, art, fp, pp,
+                                          ledger_dir=tmp_path) is out
+
+    def test_binding_boundary_rejects_foreign_artifact(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            verify_outcome_for_binding,
+        )
+        art, out, fp, pp = self._run(tmp_path)
+        other = _artifact(with_penalty=False, decision_id="d2")   # different world
+        with pytest.raises((RegistryError, LegIntegrityError)):
+            verify_outcome_for_binding(out, other, fp, pp, ledger_dir=tmp_path)

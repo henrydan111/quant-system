@@ -35,16 +35,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import re
+
 from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
-    SealedPayload, build_sealed_payload,
+    SealedPayload, build_sealed_payload, verify_payload_for_execution,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+
+_HEX64_RE = re.compile(r"[0-9a-f]{64}")
 
 #: 输出模式(M3‴ hash-bound 二选一;binding 语义由矩阵推导)
 OUTPUT_MODES = frozenset({"primary_horizon", "vector_only"})
@@ -121,6 +125,24 @@ class NewsLegOutcome:
     outcome_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review B3:**精确原语类型**先于矩阵比对(int 0/1 冒充 bool、bool 冒充
+        # count 一律拒——Python 的 0==False 使宽松比较可被伪造)
+        for name in ("decision_id", "output_mode", "factor_leg_status",
+                     "penalty_eligible_set_hash", "penalty_leg_status",
+                     "news_status", "factor_payload_hash"):
+            if type(getattr(self, name)) is not str:
+                raise RegistryError(f"{name} 须恰 str(得 {type(getattr(self, name)).__name__})")
+        for name in ("shadow_complete", "decision_complete", "binding_eligible"):
+            if type(getattr(self, name)) is not bool:
+                raise RegistryError(f"{name} 须恰 bool(int 冒充拒,re-review B3)")
+        if type(self.penalty_eligible_count) is not int \
+                or isinstance(self.penalty_eligible_count, bool) \
+                or self.penalty_eligible_count < 0:
+            raise RegistryError("penalty_eligible_count 须非负 int(非 bool)")
+        # re-review B3:强制哈希 64 位小写 hex
+        for name in ("penalty_eligible_set_hash", "factor_payload_hash"):
+            if not _HEX64_RE.fullmatch(getattr(self, name)):
+                raise RegistryError(f"{name} 须 64 位小写 hex(得 {getattr(self, name)!r})")
         derived = _derive_terminal(self.factor_leg_status, self.penalty_eligible_count,
                                    self.penalty_leg_status, self.output_mode)
         stated = {"news_status": self.news_status,
@@ -131,13 +153,19 @@ class NewsLegOutcome:
             raise LegIntegrityError(
                 f"终态字段与 M3⁴ 矩阵推导不符:声明 {stated} vs 推导 {derived}——"
                 f"状态行不可伪造(verify-not-trust)")
-        if type(self.penalty_eligible_count) is not int or self.penalty_eligible_count < 0:
-            raise RegistryError("penalty_eligible_count 须非负 int")
-        if self.penalty_leg_status in ("empty_success", "not_run") \
-                and self.penalty_payload_hash is not None:
-            raise LegIntegrityError(
-                f"penalty {self.penalty_leg_status} 不该有 payload 哈希——"
-                f"零适格/短路下不存在 penalty payload")
+        # re-review B3:penalty payload 哈希与腿状态**双向**绑定——
+        # success/failed 恰须 64-hex;empty_success/not_run 恰须 None
+        if self.penalty_leg_status in ("success", "failed"):
+            if not (type(self.penalty_payload_hash) is str
+                    and _HEX64_RE.fullmatch(self.penalty_payload_hash)):
+                raise LegIntegrityError(
+                    f"penalty {self.penalty_leg_status} 必须携带 64-hex payload 哈希"
+                    f"(得 {self.penalty_payload_hash!r})——无 payload 的执行不存在(B3)")
+        else:                                     # empty_success / not_run
+            if self.penalty_payload_hash is not None:
+                raise LegIntegrityError(
+                    f"penalty {self.penalty_leg_status} 不该有 payload 哈希——"
+                    f"零适格/短路下不存在 penalty payload")
         if self.outcome_hash:
             verify_sealed(self._payload(), self.outcome_hash, field_name="outcome_hash")
         else:
@@ -169,31 +197,46 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
        (抛异常=腿失败 → news 硬失败,**绝不静默空罚分**);
     4. 终态经 `NewsLegOutcome` 密封(矩阵重算自验)。
     执行体只收 SealedPayload——LLM 看到的就是被门与被封的字节。"""
+    # ---- 预校验(re-review M3:一切确定性配置错误在**任何执行体运行前**发现)----
+    if output_mode not in OUTPUT_MODES:
+        raise RegistryError(f"未注册 output_mode {output_mode!r}(须 ∈ {sorted(OUTPUT_MODES)})"
+                            f"——执行体前拒(M3)")
     verify_d7_artifact(artifact)
     eligible = penalty_eligible_records(artifact)
     count, set_hash = len(eligible), _eligible_set_hash(eligible)
-
+    if count == 0 and penalty_payload_ast is not None:
+        raise RegistryError("penalty 适格=0 却提供了 penalty payload——配置错误,"
+                            "执行体前拒(M3⁴ 行1:零适格不存在 penalty payload)")
+    if count > 0 and penalty_payload_ast is None:
+        raise RegistryError(
+            f"penalty 适格={count} 但未提供 penalty payload——腿必须运行(M2‴),"
+            f"执行体前拒(M3)")
+    # 两腿密封 payload 全部先铸好(账本门/封闭 AST/出处/终字节门/完整性都在此),
+    # 任何失败都发生在 factor 执行体之前
     factor_payload = build_sealed_payload(
         factor_payload_ast, artifact, ledger_dir=ledger_dir, decision_id=decision_id,
         consumer_seat="news", use="factor_positive")
+    penalty_payload: "SealedPayload | None" = None
+    if count > 0:
+        penalty_payload = build_sealed_payload(
+            penalty_payload_ast, artifact, ledger_dir=ledger_dir,
+            decision_id=decision_id, consumer_seat="news", use="penalty")
+
+    # ---- 执行(执行体只经边界校验器可达,re-review B2)----
+    verify_payload_for_execution(factor_payload, artifact, ledger_dir=ledger_dir)
     try:
         factor_leg_fn(factor_payload)
         factor_status = "success"
     except Exception:
         factor_status = "failed"
 
-    penalty_payload: "SealedPayload | None" = None
     if factor_status == "failed":
         penalty_status = "not_run"                    # 短路:必需腿失败即终态
+        penalty_payload = None                        # 终态不携未执行 payload 哈希
     elif count == 0:
         penalty_status = "empty_success"              # 确定性封存,不调 LLM(M3⁴ 行1)
     else:
-        if penalty_payload_ast is None:
-            raise RegistryError(
-                f"penalty 适格={count} 但未提供 penalty payload——腿必须运行(M2‴)")
-        penalty_payload = build_sealed_payload(
-            penalty_payload_ast, artifact, ledger_dir=ledger_dir,
-            decision_id=decision_id, consumer_seat="news", use="penalty")
+        verify_payload_for_execution(penalty_payload, artifact, ledger_dir=ledger_dir)
         try:
             penalty_leg_fn(penalty_payload)
             penalty_status = "success"
@@ -212,3 +255,38 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
         factor_payload_hash=factor_payload.payload_hash,
         penalty_payload_hash=(penalty_payload.payload_hash
                               if penalty_payload is not None else None))
+
+
+def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArtifact,
+                               factor_payload: SealedPayload,
+                               penalty_payload: "SealedPayload | None", *,
+                               ledger_dir) -> NewsLegOutcome:
+    """**档案/绑定边界**(re-review B3:绝不信终态自报值)。从已验工件**重算**
+    penalty 适格计数+集合哈希并比对;两腿 payload 经执行体边界校验器重验且哈希
+    与终态逐字节相等;决策 id 三方一致。绑定/发布只许消费过此门的终态。"""
+    if not isinstance(outcome, NewsLegOutcome):
+        raise RegistryError("绑定边界只收 NewsLegOutcome")
+    verify_sealed(outcome._payload(), outcome.outcome_hash, field_name="outcome_hash")
+    verify_d7_artifact(artifact)
+    if outcome.decision_id != artifact.bundle.decision_id:
+        raise RegistryError("终态 decision_id 与工件不符(绑定边界)")
+    eligible = penalty_eligible_records(artifact)
+    if (outcome.penalty_eligible_count != len(eligible)
+            or outcome.penalty_eligible_set_hash != _eligible_set_hash(eligible)):
+        raise LegIntegrityError(
+            "终态自报的 penalty 适格计数/集合哈希与已验工件重算不符——拒(B3)")
+    verify_payload_for_execution(factor_payload, artifact, ledger_dir=ledger_dir)
+    if (factor_payload.payload_hash != outcome.factor_payload_hash
+            or factor_payload.decision_id != outcome.decision_id):
+        raise LegIntegrityError("factor payload 与终态自报哈希/决策不符(B3)")
+    if outcome.penalty_leg_status in ("success", "failed"):
+        if penalty_payload is None:
+            raise LegIntegrityError("penalty 执行过却未提供其 payload 供重验(B3)")
+        verify_payload_for_execution(penalty_payload, artifact, ledger_dir=ledger_dir)
+        if (penalty_payload.payload_hash != outcome.penalty_payload_hash
+                or penalty_payload.decision_id != outcome.decision_id):
+            raise LegIntegrityError("penalty payload 与终态自报哈希/决策不符(B3)")
+    elif penalty_payload is not None:
+        raise LegIntegrityError(
+            f"penalty {outcome.penalty_leg_status} 不该有 payload(绑定边界)")
+    return outcome
