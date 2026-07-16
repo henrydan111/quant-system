@@ -368,13 +368,20 @@ class TestPromotionGuardBindings:
         _FS.frozen_set_hash = frozen_set_hash
 
         from src.alpha_research.factor_eval_skill._hashing import payload_hash as _ph
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
         from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
         _bar = registration_bar_snapshot()
+        _spec = EvalProtocolSpec(
+            horizon=20, n_quantiles=10, oos_window="2021..2026", metric="rank_icir",
+            universe_filter_policy="u", portfolio_construction="decile_long_short",
+            registration_bar_hash=_ph(_bar))
+        _FS.eval_protocol_hash = _spec.observation_protocol_hash
         return pe.reproduce_sealed_oos(
             frozen_set=_FS(),
             registration_bar=_bar,
             registration_bar_hash=_ph(_bar),
+            eval_protocol=_spec,
             oos_start="2021-01-01",
             oos_end=oos_end,
             qlib_dir="data/qlib_data",

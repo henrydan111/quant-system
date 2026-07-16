@@ -109,12 +109,22 @@ class GitStateTests(unittest.TestCase):
 
 class ReproduceSealedOosTests(unittest.TestCase):
     @staticmethod
-    def _declared_bar():
+    def _protocol_spec():
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+
+        return EvalProtocolSpec(
+            horizon=4, n_quantiles=5, oos_window="2021..2026", metric="rank_icir",
+            universe_filter_policy="csi_all", portfolio_construction="decile_long_short",
+            registration_bar_hash=registration_bar_hash())
+
+    def _declared_bar(self):
         from src.alpha_research.factor_eval_skill._hashing import payload_hash
         from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
         bar = registration_bar_snapshot()
-        return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar)}
+        return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar),
+                "eval_protocol": self._protocol_spec()}
 
     def _patch_sealed_world(self, root):
         """PR3 R4 B1/B3 test seam: the configured-root resolver -> the test scratch dir,
@@ -137,7 +147,8 @@ class ReproduceSealedOosTests(unittest.TestCase):
         from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
         return FrozenSelectionSet(
             selected=(SelectedFactor("f_pos", 1, "h1", "long"), SelectedFactor("f_neg", 1, "h2", "short")),
-            candidate_pool_hash="pool", selection_rule_hash="rule", eval_protocol_hash="proto",
+            candidate_pool_hash="pool", selection_rule_hash="rule",
+            eval_protocol_hash=self._protocol_spec().observation_protocol_hash,
             metric="rank_icir", portfolio_side="long_short", universe="csi_all",
             time_split_window="2021..2026", rebalance="20d", neutralization="industry",
         )

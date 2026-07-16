@@ -131,28 +131,43 @@ def _evaluator_source_hash() -> str:
     })
 
 
-REGISTRATION_BAR: Mapping[str, Any] = MappingProxyType({
-    "bar_id": "registration_bar_v1",
-    "direction_alignment": "held_side_sign_alignment",  # s=+1 long / -1 short on both metrics
-    "rank_icir_rule": "aligned_rank_icir > 0",
-    "ls_sharpe_rule": "aligned_ls_sharpe > ls_sharpe_floor",
-    "ls_sharpe_floor": DEFAULT_LS_SHARPE_FLOOR,
-    "nan_rule": "nan_fails",
-    "sides_source": "frozen_set.selected.expected_direction",
-    "evaluator_hash": _evaluator_source_hash(),
-})
+def canonical_registration_bar_snapshot() -> dict[str, Any]:
+    """R9 Blocker 2 — the EXECUTABLE canonical bar, built from LITERALS + a LIVE
+    recomputation of the evaluator-source hash. It reads NO replaceable module global,
+    so a monkeypatched/mutated ``REGISTRATION_BAR`` (or a caller-forged self-consistent
+    bar dict) can never masquerade as the canonical judgment: the sealed execution
+    layer compares the DECLARED bar against THIS, before any claim or OOS read. The
+    descriptive rule strings are tied to the actual comparison code through
+    ``evaluator_hash`` (the source hash of the judgment + sides functions)."""
+    return {
+        "bar_id": "registration_bar_v1",
+        "direction_alignment": "held_side_sign_alignment",  # s=+1 long / -1 short on both metrics
+        "rank_icir_rule": "aligned_rank_icir > 0",
+        "ls_sharpe_rule": "aligned_ls_sharpe > ls_sharpe_floor",
+        "ls_sharpe_floor": DEFAULT_LS_SHARPE_FLOOR,
+        "nan_rule": "nan_fails",
+        "sides_source": "frozen_set.selected.expected_direction",
+        "evaluator_hash": _evaluator_source_hash(),
+    }
+
+
+# The published reference constant — BUILT FROM the canonical builder (single source)
+# and immutable (a runtime mutation raises). Identity/enforcement paths never read it;
+# they call canonical_registration_bar_snapshot() live.
+REGISTRATION_BAR: Mapping[str, Any] = MappingProxyType(canonical_registration_bar_snapshot())
 
 
 def registration_bar_snapshot() -> dict[str, Any]:
-    """One PLAIN-DICT snapshot of the bar for a single run: hash it, persist it, and
-    evaluate from IT — never re-read the module global mid-run (R7 Major 1)."""
-    return dict(REGISTRATION_BAR)
+    """One PLAIN-DICT snapshot of the CANONICAL bar for a single run: hash it, persist
+    it, and evaluate from IT (R7 Major 1 / R9 B2 — delegates to the literal builder,
+    never the replaceable module global)."""
+    return canonical_registration_bar_snapshot()
 
 
 def registration_bar_hash() -> str:
     from src.alpha_research.factor_eval_skill._hashing import payload_hash
 
-    return payload_hash(registration_bar_snapshot())
+    return payload_hash(canonical_registration_bar_snapshot())
 
 
 def run_sealed_oos(
@@ -166,7 +181,7 @@ def run_sealed_oos(
     hypothesis_id: str,
     registration_bar: Mapping[str, Any],
     registration_bar_hash: str,
-    eval_protocol_hash: str,
+    eval_protocol,
     horizon: int = DEFAULT_HORIZON,
     n_quantiles: int = DEFAULT_N_QUANTILES,
     claim_seal: bool = True,
@@ -220,11 +235,13 @@ def run_sealed_oos(
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(a6_multiplicity_override_id),
         allow_same_run=allow_same_run, step_id=A5_REPRODUCTION_STEP_ID,
-        # R8 Blocker 3: the DECLARED bar snapshot + hashes are threaded down —
-        # reproduce never re-reads the module global.
+        # R8 Blocker 3 + R9 Blocker 2: the DECLARED bar snapshot + the FULL
+        # EvalProtocolSpec are threaded down — reproduce verifies the bar against the
+        # canonical executable bar and the protocol chain (bar hash + frozen-set
+        # observation hash); bare caller-supplied hash strings are never accepted.
         registration_bar=dict(registration_bar),
         registration_bar_hash=str(registration_bar_hash),
-        eval_protocol_hash=str(eval_protocol_hash),
+        eval_protocol=eval_protocol,
     )
     # R5 B4 + R6 B3: the verdict is judged against the CANONICAL registration bar INSIDE
     # reproduce_sealed_oos's locked span and PERSISTED with the completion record — this

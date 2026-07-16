@@ -2,7 +2,8 @@
 the book seal spend IMMUTABLE, AUTHORIZED, and AUDITABLE:
 
 * :class:`BookSealArtifactStore` — the canonical, append-only state machine of a book
-  sealed evaluation (``claimed → verdict_persisted → complete | diagnostics_failed``).
+  sealed evaluation
+  (``claimed → execution_started → verdict_persisted → complete | diagnostics_failed``).
   The FIRST persisted book verdict is immutable; resume can finish unfinished work but
   can never re-run a persisted verdict or reopen a complete artifact (R1 Blocker 1).
   The promotion gate loads the canonical artifact FROM HERE by ``artifact_hash`` —
@@ -113,11 +114,15 @@ class BookSealArtifactStore(AppendOnlyStore):
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("book_seal_key", "state")
+    # R9 Blocker 1: enforced in the BASE record() against the actual instance's class —
+    # the unbound AppendOnlyStore.record(store, ...) bypass refuses too.
+    PUBLIC_RECORD_ENABLED = False
 
     def record(self, **fields: Any) -> dict[str, Any]:
-        # R8 Blocker 2: the inherited public append is DISABLED on state machines — a
-        # caller could otherwise append a forged state="claimed" row after
-        # execution_started and roll the latest state back to re-execute the OOS.
+        # R8 Blocker 2 (belt; the base-method gate above is the suspenders): the
+        # inherited public append is DISABLED on state machines — a caller could
+        # otherwise append a forged state="claimed" row after execution_started and
+        # roll the latest state back to re-execute the OOS.
         raise BookSealStoreError(
             "BookSealArtifactStore.record is disabled — state changes go only through "
             "the sanctioned transitions (open_claim / run_or_load_verdict / "
@@ -183,8 +188,8 @@ class BookSealArtifactStore(AppendOnlyStore):
             # state == "claimed": mark execution_started BEFORE any OOS read, so a crash
             # from here on quarantines instead of silently allowing a second execution.
             self._transition(
-                book_seal_key=book_seal_key, request_hash=request_hash,
-                allowed_from=("claimed",), new_state="execution_started", extra={},
+                action="mark_execution_started",
+                book_seal_key=book_seal_key, request_hash=request_hash, extra={},
             )
             metrics = evaluator()
             verdict = make_verdict(metrics)
@@ -268,15 +273,27 @@ class BookSealArtifactStore(AppendOnlyStore):
                 }
             )
 
+    # R9 Blocker 1: the ONLY legal transitions, fixed HERE — callers name an ACTION,
+    # never source/target states, so no caller (including a future internal one) can
+    # move execution_started back to claimed or invent a rollback edge.
+    _TRANSITIONS: Mapping[str, tuple[tuple[str, ...], str]] = {
+        "mark_execution_started": (("claimed",), "execution_started"),
+        "persist_verdict": (("execution_started",), "verdict_persisted"),
+        "mark_diagnostics_failed": (("verdict_persisted", "diagnostics_failed"), "diagnostics_failed"),
+        "complete": (("verdict_persisted", "diagnostics_failed"), "complete"),
+    }
+
     def _transition(
         self,
         *,
+        action: str,
         book_seal_key: str,
         request_hash: str,
-        allowed_from: tuple[str, ...],
-        new_state: str,
         extra: Mapping[str, Any],
     ) -> dict[str, Any]:
+        if action not in self._TRANSITIONS:
+            raise BookSealStoreError(f"unknown state-machine action {action!r}")
+        allowed_from, new_state = self._TRANSITIONS[action]
         with file_lock(self.lock_path):
             cur = self.current(book_seal_key)
             if cur is None:
@@ -308,10 +325,9 @@ class BookSealArtifactStore(AppendOnlyStore):
         (R7 B1 — the verdict can only land from the run that marked the execution)."""
         verdict_json = canonical_json(dict(verdict))
         return self._transition(
+            action="persist_verdict",
             book_seal_key=book_seal_key,
             request_hash=request_hash,
-            allowed_from=("execution_started",),
-            new_state="verdict_persisted",
             extra={
                 "book_verdict_json": verdict_json,
                 "book_verdict_hash": payload_hash(dict(verdict)),
@@ -322,10 +338,9 @@ class BookSealArtifactStore(AppendOnlyStore):
         self, *, book_seal_key: str, request_hash: str, error: str
     ) -> dict[str, Any]:
         return self._transition(
+            action="mark_diagnostics_failed",
             book_seal_key=book_seal_key,
             request_hash=request_hash,
-            allowed_from=("verdict_persisted", "diagnostics_failed"),
-            new_state="diagnostics_failed",
             extra={"error": str(error)},
         )
 
@@ -358,10 +373,9 @@ class BookSealArtifactStore(AppendOnlyStore):
                 )
         artifact_json = canonical_json(dict(artifact))
         return self._transition(
+            action="complete",
             book_seal_key=book_seal_key,
             request_hash=request_hash,
-            allowed_from=("verdict_persisted", "diagnostics_failed"),
-            new_state="complete",
             extra={
                 "artifact_json": artifact_json,
                 "artifact_hash": payload_hash(dict(artifact)),
@@ -632,9 +646,12 @@ class A5ReproductionStore(AppendOnlyStore):
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("seal_key", "state")
+    # R9 Blocker 1: enforced in the BASE record() too (unbound-call-proof).
+    PUBLIC_RECORD_ENABLED = False
 
     def record(self, **fields: Any) -> dict[str, Any]:
-        # R8 Blocker 2: the inherited public append is DISABLED on state machines — a
+        # R8 Blocker 2 (belt; the base-method gate is the suspenders): the
+        # inherited public append is DISABLED on state machines — a
         # caller could otherwise append a forged state="claimed" row after
         # execution_started and re-execute a spent OOS.
         raise BookSealStoreError(

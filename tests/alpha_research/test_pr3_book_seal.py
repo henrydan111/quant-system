@@ -58,6 +58,23 @@ BURNED_ID = f"{BURNED[0]}..{BURNED[1]}"
 
 # ───────────────────────────────────────────────────────────── fixtures ──
 
+def _protocol_spec():
+    """The full declared protocol (R9 B2: threaded as an object, never a bare hash);
+    its registration_bar_hash binds the CANONICAL bar and its observation hash keys
+    the frozen set."""
+    from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+
+    return EvalProtocolSpec(
+        horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
+        universe_filter_policy="univ_liquid_top300",
+        portfolio_construction="decile_long_short",
+        registration_bar_hash=registration_bar_hash())
+
+
+SPEC = _protocol_spec()
+
+
 def _frozen_set() -> FrozenSelectionSet:
     return FrozenSelectionSet(
         selected=(
@@ -66,7 +83,7 @@ def _frozen_set() -> FrozenSelectionSet:
         ),
         candidate_pool_hash="pool_pr3",
         selection_rule_hash="rule_pr3",
-        eval_protocol_hash="proto_pr3",
+        eval_protocol_hash=SPEC.observation_protocol_hash,
         metric="rank_icir",
         portfolio_side="long_short",
         universe="univ_liquid_top300",
@@ -81,11 +98,12 @@ EXPRS = {"fac_a": "$close", "fac_b": "$open"}
 
 
 def _declared_bar():
-    """The declared-bar triple every direct sealed call must now thread (R8 B3)."""
+    """The declared-judgment triple every direct sealed call must thread (R8 B3 + R9 B2)."""
     from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
     bar = registration_bar_snapshot()
-    return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar)}
+    return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar),
+            "eval_protocol": SPEC}
 
 
 def _plan(**overrides) -> DeploymentFrozenPlan:
@@ -617,8 +635,7 @@ class TestA5FreshWindowEnforcement:
         with pytest.raises(ValueError, match="v1.4_A5_fresh_window_override_required"):
             run_sealed_oos(frozen_set=None, oos_start=VIRGIN[0], oos_end=VIRGIN[1],
                            qlib_dir="q", run_dir="r", design_hash="d",
-                           hypothesis_id="h", claim_seal=True,
-                           eval_protocol_hash="eph", **_declared_bar())
+                           hypothesis_id="h", claim_seal=True, **_declared_bar())
 
     def test_reproduce_sealed_oos_virgin_authorizes_ledgers_then_claims(self, tmp_path, monkeypatch):
         # R2 B4 + R3 B2 + R4 B1: no caller seal_root/factor_exprs exist; everything
@@ -698,24 +715,21 @@ class TestA5FreshWindowEnforcement:
         second = reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
         assert calls["n"] == 1
         assert second == first
-        # THE R6 B3 / R8 B3 probe: change the bar GLOBALS ("deploy new code") — under R8
-        # the declared snapshot governs the whole chain, so the global swap has NO
-        # effect on this request: the identical DECLARED recipe returns the persisted
-        # result unchanged (and a caller declaring the NEW bar would be a different
-        # request that refuses at open_or_resume — pinned in the changed-recipe test).
+        # THE R6 B3 / R8 B3 / R9 B2 probe: change the bar CODE constant ("deploy new
+        # code") — the previously-declared bar is no longer the executable canonical
+        # bar, so the identical old declaration now REFUSES at the canonical gate
+        # (fail-closed: an old bar is never silently accepted and never re-judged by
+        # current code; release requires an explicit versioned migration). The
+        # persisted verdict remains untouched and final.
         import src.alpha_research.factor_eval_skill.sealed_oos as so
 
-        from types import MappingProxyType
+        from src.research_orchestrator.promotion_evidence import PromotionEvidenceError
 
-        mutated = dict(so.REGISTRATION_BAR)
-        mutated["ls_sharpe_floor"] = 5.0
         monkeypatch.setattr(so, "DEFAULT_LS_SHARPE_FLOOR", 5.0)
-        monkeypatch.setattr(so, "REGISTRATION_BAR", MappingProxyType(mutated))
-        third = reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
+        with pytest.raises(PromotionEvidenceError, match="not the executable canonical bar"):
+            reproduce_sealed_oos(**common, fresh_window_override_id="ov_c")
         assert calls["n"] == 1                           # never recomputed
-        assert third == first                            # the persisted verdict stands
-        assert third["bar_verdict"]["n_pass"] == 1
-        assert third["registration_bar"]["ls_sharpe_floor"] == 1.0   # declared, not mutated
+        assert second["bar_verdict"]["n_pass"] == 1      # the persisted verdict stands
 
     def test_direct_a5_changed_recipe_cannot_reuse_the_spend(self, tmp_path, monkeypatch):
         # THE R3 B3 probe under R4 plumbing: the recipe now changes via the CATALOG
@@ -1118,10 +1132,141 @@ class TestR8Hardening:
         kw = dict(book_seal_key="k", request_hash="r")
         store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
                          provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
-        store._transition(**kw, allowed_from=("claimed",), new_state="verdict_persisted",
-                          extra={"book_verdict_json": "{}"})     # NO book_verdict_hash
+        store._transition(action="mark_execution_started", **kw, extra={})
+        store._transition(action="persist_verdict", **kw,
+                          extra={"book_verdict_json": "{}", "book_verdict_hash": ""})  # legacy shape
         with pytest.raises(BookSealStoreError, match="must be explicitly migrated"):
             store.complete(**kw, artifact={"book_verdict": {}})
+
+
+class TestR9Hardening:
+    def test_unbound_append_only_record_cannot_reset_book_or_a5(self, tmp_path):
+        # THE R9 B1 probe: AppendOnlyStore.record(store, ...) — the UNBOUND base-class
+        # entry that skips the subclass overrides — must refuse on both state machines;
+        # the crashed state stays quarantined and the evaluator never runs again.
+        from src.alpha_research.factor_eval_skill._store import (
+            AppendOnlyStore,
+            PublicRecordDisabledError,
+        )
+
+        store = BookSealArtifactStore(tmp_path / "a")
+        kw = dict(book_seal_key="k", request_hash="r")
+        store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
+                         provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            raise RuntimeError("crash")
+
+        with pytest.raises(RuntimeError):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        assert store.current("k")["state"] == "execution_started"
+        with pytest.raises(PublicRecordDisabledError):
+            AppendOnlyStore.record(store, book_seal_key="k", request_hash="r",
+                                   state="claimed")
+        assert store.current("k")["state"] == "execution_started"   # NOT rolled back
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        assert calls["n"] == 1
+
+        a5 = A5ReproductionStore(tmp_path / "a5")
+        a5.open_or_resume(seal_key="s", request_hash="r", run_dir="rd", step_id="st")
+        a5.mark_execution_started(seal_key="s", request_hash="r")
+        with pytest.raises(PublicRecordDisabledError):
+            AppendOnlyStore.record(a5, seal_key="s", request_hash="r", state="claimed")
+        assert a5.current("s")["state"] == "execution_started"
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
+            a5.open_or_resume(seal_key="s", request_hash="r", run_dir="rd",
+                              step_id="st", allow_same_run=True)
+
+    def test_transition_api_cannot_move_execution_started_to_claimed(self, tmp_path):
+        # THE R9 B1 probe (second rollback door): callers name ACTIONS from a fixed
+        # table — no action targets "claimed", the old caller-declared kwargs are gone,
+        # and an invented action refuses.
+        store = BookSealArtifactStore(tmp_path / "a")
+        assert all(target != "claimed"
+                   for _, target in BookSealArtifactStore._TRANSITIONS.values())
+        kw = dict(book_seal_key="k", request_hash="r")
+        store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
+                         provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
+        store._transition(action="mark_execution_started", **kw, extra={})
+        with pytest.raises(TypeError):
+            store._transition(**kw, allowed_from=("execution_started",),
+                              new_state="claimed", extra={})
+        with pytest.raises(BookSealStoreError, match="unknown state-machine action"):
+            store._transition(action="reset_to_claimed", **kw, extra={})
+        assert store.current("k")["state"] == "execution_started"
+
+    def test_self_hashed_noncanonical_bar_fails_before_claim(self, tmp_path, monkeypatch):
+        # THE R9 B2 probe: a self-CONSISTENT but non-canonical declaration
+        # (rank rule "> 100", foreign evaluator_hash, matching self-hash) must refuse
+        # BEFORE any claim — the declared rule can never diverge from the executed rule.
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.research_orchestrator.promotion_evidence import (
+            PromotionEvidenceError,
+            reproduce_sealed_oos,
+        )
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        forged = dict(_declared_bar()["registration_bar"])
+        forged["rank_icir_rule"] = "aligned_rank_icir > 100"
+        forged["evaluator_hash"] = "DECLARED_DIFFERENT_EVALUATOR"
+        forged_hash = payload_hash(forged)
+        forged_spec = EvalProtocolSpec(
+            horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
+            universe_filter_policy="univ_liquid_top300",
+            portfolio_construction="decile_long_short",
+            registration_bar_hash=forged_hash)
+        prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
+        with pytest.raises(PromotionEvidenceError, match="not the executable canonical bar"):
+            reproduce_sealed_oos(
+                frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+                run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
+                fresh_window_override_id="ov_x",
+                registration_bar=forged, registration_bar_hash=forged_hash,
+                eval_protocol=forged_spec)
+        assert HoldoutSealStore(root).list_events().empty     # refused BEFORE any claim
+
+    def test_arbitrary_eval_protocol_hash_is_rejected(self, tmp_path, monkeypatch):
+        # THE R9 B2 probe: bare hash strings are gone from the signatures; a missing or
+        # chain-inconsistent EvalProtocolSpec refuses.
+        import inspect
+
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import run_sealed_oos
+        from src.research_orchestrator import promotion_evidence as pe
+        from src.research_orchestrator.promotion_evidence import (
+            PromotionEvidenceError,
+            reproduce_sealed_oos,
+        )
+
+        assert "eval_protocol_hash" not in inspect.signature(pe.reproduce_sealed_oos).parameters
+        assert "eval_protocol_hash" not in inspect.signature(run_sealed_oos).parameters
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        declared = _declared_bar()
+        prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
+        common = dict(
+            frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+            run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
+            fresh_window_override_id="ov_x",
+            registration_bar=declared["registration_bar"],
+            registration_bar_hash=declared["registration_bar_hash"])
+        with pytest.raises(PromotionEvidenceError, match="requires the full EvalProtocolSpec"):
+            reproduce_sealed_oos(**common, eval_protocol=None)
+        wrong_bar_spec = EvalProtocolSpec(
+            horizon=99, n_quantiles=10, oos_window="w", metric="rank_icir",
+            universe_filter_policy="u", portfolio_construction="c",
+            registration_bar_hash="SOME_OTHER_BAR")
+        with pytest.raises(PromotionEvidenceError, match="protocol/bar mismatch"):
+            reproduce_sealed_oos(**common, eval_protocol=wrong_bar_spec)
+        wrong_obs_spec = EvalProtocolSpec(
+            horizon=99, n_quantiles=10, oos_window="w", metric="rank_icir",
+            universe_filter_policy="u", portfolio_construction="c",
+            registration_bar_hash=declared["registration_bar_hash"])
+        with pytest.raises(PromotionEvidenceError, match="observation protocol mismatch"):
+            reproduce_sealed_oos(**common, eval_protocol=wrong_obs_spec)
+        assert HoldoutSealStore(root).list_events().empty
 
 
 class TestCatalogExpressionResolution:
@@ -1166,7 +1311,7 @@ class TestRunSealedOosPersistedVerdict:
         with pytest.raises(ValueError, match="persisted bar_verdict"):
             run_sealed_oos(frozen_set=FS, oos_start=BURNED[0], oos_end=BURNED[1],
                            qlib_dir="q", run_dir="r", design_hash="d", hypothesis_id="h",
-                           claim_seal=True, eval_protocol_hash="eph", **_declared_bar())
+                           claim_seal=True, **_declared_bar())
 
     def test_sides_and_floor_are_not_parameters(self):
         import inspect

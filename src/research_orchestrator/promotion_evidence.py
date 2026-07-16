@@ -288,7 +288,7 @@ def reproduce_sealed_oos(
     a6_multiplicity_override_id: str = "",
     registration_bar: Mapping[str, Any] | None = None,
     registration_bar_hash: str = "",
-    eval_protocol_hash: str = "",
+    eval_protocol=None,
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
@@ -403,6 +403,43 @@ def reproduce_sealed_oos(
             "re-hash to the DECLARED registration_bar_hash — the executed judgment must "
             "be the declared judgment (R8 B3)"
         )
+    # R9 Blocker 2: a self-consistent (dict, hash) pair is NOT enough — the declared bar
+    # must BE the EXECUTABLE canonical bar (literals + a live evaluator-source hash), so
+    # a forged "aligned_rank_icir > 100" rule with its own matching hash can never be
+    # persisted as the declared judgment while the real evaluator runs something else.
+    # Enforced BEFORE any seal claim or OOS read; a sealed spend under an old bar is a
+    # DIFFERENT recipe that refuses here (versioned-evaluator recovery is future work —
+    # unknown bars fail closed, never "accept the old dict, run the current evaluator").
+    from src.alpha_research.factor_eval_skill.sealed_oos import (
+        canonical_registration_bar_snapshot,
+    )
+
+    if claim_seal:
+        canonical_bar = canonical_registration_bar_snapshot()
+        if _bar != canonical_bar or _bar_hash != _phash(canonical_bar):
+            raise PromotionEvidenceError(
+                "declared registration bar is not the executable canonical bar — only "
+                "canonical_registration_bar_snapshot() may govern a sealed spend (R9 B2)"
+            )
+    # R9 Blocker 2: the FULL EvalProtocolSpec travels (never a bare hash string) and the
+    # identity chain is verified: protocol↔bar and frozen-set↔observation-protocol.
+    if eval_protocol is None or not hasattr(eval_protocol, "protocol_hash"):
+        raise PromotionEvidenceError(
+            "reproduce_sealed_oos requires the full EvalProtocolSpec (eval_protocol=...) "
+            "— a bare protocol-hash string is not verifiable identity (R9 B2)"
+        )
+    if str(eval_protocol.registration_bar_hash) != _bar_hash:
+        raise PromotionEvidenceError(
+            "protocol/bar mismatch: eval_protocol.registration_bar_hash does not equal "
+            "the declared bar hash (R9 B2)"
+        )
+    _fs_obs = getattr(frozen_set, "eval_protocol_hash", None)
+    if str(eval_protocol.observation_protocol_hash) != str(_fs_obs):
+        raise PromotionEvidenceError(
+            "frozen-set observation protocol mismatch: the frozen set was not built "
+            "from this protocol's observation identity (R9 B2)"
+        )
+    eval_protocol_hash = str(eval_protocol.protocol_hash)
     a5_request_hash = _phash(
         {
             "kind": "a5_sealed_oos_reproduction",

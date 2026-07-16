@@ -669,10 +669,11 @@ def cmd_seal(
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(multiplicity_override_id),
         allow_same_run=resume_same_run,
-        # R8 Blocker 3: the declared snapshot travels with the execution.
+        # R8 B3 + R9 B2: the declared snapshot AND the full protocol spec travel with
+        # the execution (the chain protocol↔bar↔frozen-set is verified downstream).
         registration_bar=bar_snapshot,
         registration_bar_hash=bar_hash,
-        eval_protocol_hash=spec.protocol_hash,
+        eval_protocol=spec,
     )
     verdict = result["verdict"]
     # burned windows keep the legacy post-claim record (pre-claim failure never overcounts);

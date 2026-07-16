@@ -39,6 +39,12 @@ def _atomic_write_dataframe(df: pd.DataFrame, path: Path) -> None:
     os.replace(temp_path, path)
 
 
+class PublicRecordDisabledError(RuntimeError):
+    """Raised when public ``record()`` is invoked on a STATE-MACHINE store (PR3 R9 B1):
+    state changes must go through the sanctioned typed transitions — even via the
+    unbound base-class entry ``AppendOnlyStore.record(store, ...)``."""
+
+
 class AppendOnlyStore:
     """Append-only parquet store with a string schema and file-locked writes.
 
@@ -46,12 +52,19 @@ class AppendOnlyStore:
     ``SCHEMA`` (all-``"string"`` dtype map), and ``KEY_FIELDS`` (the columns identifying a
     logical record). ``record(**fields)`` writes one row inside ``file_lock``;
     ``latest(**key_filter)`` returns the most-recently-recorded matching row.
+
+    PR3 R9 Blocker 1: a STATE-MACHINE subclass declares ``PUBLIC_RECORD_ENABLED = False``
+    — the guard lives IN THE BASE METHOD (checking the actual instance's class), so the
+    unbound call ``AppendOnlyStore.record(state_store, state="claimed", ...)`` cannot
+    bypass a subclass override and roll an observed state (e.g. ``execution_started``)
+    back to re-execute a spent OOS.
     """
 
     FILENAME: str = ""
     COLUMNS: tuple[str, ...] = ()
     SCHEMA: Mapping[str, str] = {}
     KEY_FIELDS: tuple[str, ...] = ()
+    PUBLIC_RECORD_ENABLED: bool = True
 
     def __init__(self, root_dir: str | Path) -> None:
         self.root_dir = Path(root_dir).resolve()
@@ -90,6 +103,14 @@ class AppendOnlyStore:
         """Append one row inside ``file_lock``. Unknown keys are rejected fail-closed;
         omitted columns default to empty string. ``record_id`` + ``recorded_at`` are
         stamped here. Returns the written row."""
+        # R9 Blocker 1: the check sits HERE (the base method, against the actual
+        # instance's class) so AppendOnlyStore.record(state_store, ...) — the unbound
+        # bypass of a subclass override — also refuses.
+        if type(self).PUBLIC_RECORD_ENABLED is not True:
+            raise PublicRecordDisabledError(
+                f"{type(self).__name__} is a state machine; public record() is disabled "
+                "— state changes go only through the sanctioned typed transitions"
+            )
         unknown = set(fields) - set(self.COLUMNS)
         unknown -= {"record_id", "recorded_at"}
         if unknown:
