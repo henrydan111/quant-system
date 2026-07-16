@@ -3,6 +3,7 @@ and the no-follow source walker. Windows-only (the broker fails closed elsewhere
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import sys
 import uuid
@@ -18,9 +19,30 @@ _spec.loader.exec_module(rwb)
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="broker is Windows-only")
 
 
+def _recovery_test_root(sub: str) -> Path:
+    """A writable NON-E: root for the recovery batteries.
+
+    NOT pytest tmp_path and NOT tempfile.mkdtemp(): this repo points tmp_path *and* TEMP at
+    E:\\量化系统\\workspace\\outputs\\pytest_runtime_tmp, and the coordinator REFUSES every E: write by
+    design — that refusal is the invariant under test, so running these there would test nothing.
+    Default is the sanctioned C:\\quant_recovery area; set QUANT_RECOVERY_TEST_ROOT to any writable
+    non-E: path if that drive is unavailable (GPT re-review #8: a sandboxed reviewer could not write it,
+    so the full battery could not serve as passing evidence)."""
+    base = Path(os.environ.get("QUANT_RECOVERY_TEST_ROOT") or r"C:\quant_recovery")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        probe = base / f".writeprobe_{uuid.uuid4().hex}"
+        probe.write_bytes(b"x")
+        probe.unlink()
+    except OSError as exc:
+        pytest.skip(f"recovery test root {base} is not writable ({exc}); set QUANT_RECOVERY_TEST_ROOT to "
+                    f"a writable NON-E: path (E: is refused by the coordinator by design)")
+    return base / sub / uuid.uuid4().hex
+
+
 @pytest.fixture()
 def broot():
-    base = Path(r"C:\quant_recovery") / "brokertest" / uuid.uuid4().hex
+    base = _recovery_test_root("brokertest")
     base.mkdir(parents=True)
     yield base
     shutil.rmtree(base, ignore_errors=True)
