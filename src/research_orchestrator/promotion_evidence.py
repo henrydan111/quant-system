@@ -286,6 +286,9 @@ def reproduce_sealed_oos(
     fresh_window_override_id: str = "",
     multiplicity_ack: bool = False,
     a6_multiplicity_override_id: str = "",
+    registration_bar: Mapping[str, Any] | None = None,
+    registration_bar_hash: str = "",
+    eval_protocol_hash: str = "",
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
@@ -377,13 +380,29 @@ def reproduce_sealed_oos(
     # access context are all bound to it — a changed recipe (different expressions/
     # horizon/quantiles/window/provider generation) can never resume a prior spend.
     from src.alpha_research.factor_eval_skill._hashing import payload_hash as _phash
-    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
-    # R7 Major 1: ONE plain-dict snapshot of the bar for this whole run — the hash, the
-    # persisted payload, and the evaluation floor all come from THIS snapshot; the module
-    # global is read exactly once (a mid-run mutation cannot desynchronize them).
-    _bar = registration_bar_snapshot()
+    # R8 Blocker 3: the bar snapshot is threaded down from the ONE declaration point
+    # (cmd_seal reads the global exactly once, binds its hash into EvalProtocolSpec, and
+    # passes the SAME snapshot here) — this function NEVER re-reads the module global,
+    # and it VERIFIES the snapshot re-hashes to the declared identity, so the judgment
+    # actually executed is provably the judgment that was declared.
+    if not isinstance(registration_bar, Mapping) or not registration_bar:
+        raise PromotionEvidenceError(
+            "reproduce_sealed_oos requires the DECLARED registration_bar snapshot "
+            "(threaded from the seal declaration; the global is never re-read here — R8 B3)"
+        )
+    if not str(registration_bar_hash).strip():
+        raise PromotionEvidenceError(
+            "reproduce_sealed_oos requires the declared registration_bar_hash (R8 B3)"
+        )
+    _bar = dict(registration_bar)
     _bar_hash = _phash(_bar)
+    if _bar_hash != str(registration_bar_hash):
+        raise PromotionEvidenceError(
+            "registration bar/protocol mismatch: the supplied bar snapshot does not "
+            "re-hash to the DECLARED registration_bar_hash — the executed judgment must "
+            "be the declared judgment (R8 B3)"
+        )
     a5_request_hash = _phash(
         {
             "kind": "a5_sealed_oos_reproduction",
@@ -398,6 +417,9 @@ def reproduce_sealed_oos(
             # R6 Blocker 3: the registration bar is part of the sealed recipe identity —
             # a changed bar is a DIFFERENT request, never a reinterpretation.
             "registration_bar_hash": _bar_hash,
+            # R8 Blocker 3: the FULL declared protocol identity travels in the request
+            # hash and the completion record too.
+            "eval_protocol_hash": str(eval_protocol_hash),
         }
     )
     import pandas as pd
@@ -453,6 +475,7 @@ def reproduce_sealed_oos(
         return {
             "registration_bar": dict(_bar),
             "registration_bar_hash": _bar_hash,
+            "eval_protocol_hash": str(eval_protocol_hash),
             "bar_verdict": bar_verdict,
             "independent_reproduction": {
                 "source": "qlib_windowed_features",

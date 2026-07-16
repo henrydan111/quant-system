@@ -1139,6 +1139,29 @@ def handle_validation_event_backtest_oos(context: StepExecutionContext) -> StepE
     # found" error.
     _claim_holdout_access_if_needed(context)
 
+    # PR3 R8 Blocker 1: mark execution_started at the CANONICAL guard AFTER the claim
+    # and BEFORE reading the schedule or any OOS data. This handler computes DIRECTLY
+    # (run_event_driven_window, not SealedBacktestRunner), so without the marker a
+    # same-run resume could execute the OOS twice under one claim. Once marked, any
+    # later attempt — including a crash-resume — refuses (this runner path persists no
+    # reloadable OOS result; the holdout may already have been observed).
+    holdout = _holdout_context_for_step(context)
+    if holdout is None:
+        raise ValueError(
+            "handle_validation_event_backtest_oos: no HoldoutContext for a formal OOS "
+            "step — refusing to execute unguarded"
+        )
+    from src.research_orchestrator.holdout_seal import (
+        OosExecutionGuardStore,
+        resolve_configured_global_holdout_root,
+    )
+
+    OosExecutionGuardStore(resolve_configured_global_holdout_root()).assert_and_mark_execution(
+        seal_key=holdout.effective_seal_key,
+        run_dir=holdout.run_dir,
+        step_id=holdout.step_id,
+    )
+
     pc_step_dir = context.run_dir / "steps" / "validation_portfolio_construction"
     schedule_df = pd.read_parquet(pc_step_dir / "target_weights_schedule.parquet")
     schedule_dict = _schedule_dataframe_to_dict(schedule_df)

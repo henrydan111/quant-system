@@ -538,14 +538,21 @@ def cmd_seal(
         for m in sel["members"]
     )
     # CANONICAL eval-protocol identity (GPT re-review #3.1): the full protocol, not a thin dict.
-    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+    from src.alpha_research.factor_eval_skill._hashing import payload_hash as _bar_phash
+    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
+    # R8 Blocker 3: THE single declaration point — the bar global is read ONCE here;
+    # this exact snapshot is hashed into the protocol identity AND threaded down to the
+    # execution (which verifies snapshot-vs-declared-hash and never re-reads the global),
+    # so the judgment executed is provably the judgment declared.
+    bar_snapshot = registration_bar_snapshot()
+    bar_hash = _bar_phash(bar_snapshot)
     spec = EvalProtocolSpec(
         horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}", metric=metric,
         universe_filter_policy=sel.get("selection_universe", tud_a["target_universe_id"]),
         portfolio_construction=f"decile_{portfolio_side}", neutralization=neutralization, rebalance=rebalance,
         # R6 Blocker 3: the judgment bar is protocol identity — a changed bar is a new protocol.
-        registration_bar_hash=registration_bar_hash(),
+        registration_bar_hash=bar_hash,
     )
     # R7 Blocker 2: the SEAL KEY is derived from the OBSERVATION protocol (bar EXCLUDED)
     # — changing the judgment bar after an observation hits the SAME seal key and
@@ -662,6 +669,10 @@ def cmd_seal(
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(multiplicity_override_id),
         allow_same_run=resume_same_run,
+        # R8 Blocker 3: the declared snapshot travels with the execution.
+        registration_bar=bar_snapshot,
+        registration_bar_hash=bar_hash,
+        eval_protocol_hash=spec.protocol_hash,
     )
     verdict = result["verdict"]
     # burned windows keep the legacy post-claim record (pre-claim failure never overcounts);

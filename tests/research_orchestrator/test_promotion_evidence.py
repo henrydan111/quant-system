@@ -108,6 +108,14 @@ class GitStateTests(unittest.TestCase):
 
 
 class ReproduceSealedOosTests(unittest.TestCase):
+    @staticmethod
+    def _declared_bar():
+        from src.alpha_research.factor_eval_skill._hashing import payload_hash
+        from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
+
+        bar = registration_bar_snapshot()
+        return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar)}
+
     def _patch_sealed_world(self, root):
         """PR3 R4 B1/B3 test seam: the configured-root resolver -> the test scratch dir,
         and the catalog-expression resolver -> the fake fixture factors (not in the live
@@ -164,6 +172,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
         with self.assertRaises(PromotionEvidenceError):
             reproduce_sealed_oos(
                 frozen_set=self._frozen_set(), oos_start="2021-01-01",
+                **self._declared_bar(),
                 qlib_dir=".", run_dir=".", design_hash="d", claim_seal=False,
                 provider_provenance={"provider_build_id": "b", "calendar_policy_id": "c",
                                      "calendar_end": "2025-01-01"},  # != OOS_END 2026-02-27
@@ -182,7 +191,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
             store = HoldoutSealStore(d)
             with self._patch_sealed_world(d):
                 rep = reproduce_sealed_oos(
-                    frozen_set=fs, oos_start="2021-01-01",
+                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(),
                     qlib_dir=".", run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},
@@ -223,7 +232,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
             store = HoldoutSealStore(d)
             with self._patch_sealed_world(d):
                 reproduce_sealed_oos(
-                    frozen_set=fs, oos_start="2021-01-01",
+                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(),
                     qlib_dir=".", run_dir=d, design_hash="dh", horizon=4,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},

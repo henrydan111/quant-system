@@ -120,9 +120,14 @@ def _evaluator_source_hash() -> str:
 
     from src.alpha_research.factor_eval_skill._hashing import payload_hash
 
+    # R8 Major 1: the hash covers EVERY function that determines the judgment — the
+    # bar comparisons AND the held-side derivation (sides_from_frozen_set decides what
+    # long/short MEAN; changing it flips verdicts without touching the bar functions).
     return payload_hash({
         "direction_aligned_pass": inspect.getsource(direction_aligned_pass),
         "evaluate_sealed_oos_bar": inspect.getsource(evaluate_sealed_oos_bar),
+        "sides_from_frozen_set": inspect.getsource(sides_from_frozen_set),
+        "valid_sides": sorted(VALID_SIDES),
     })
 
 
@@ -159,6 +164,9 @@ def run_sealed_oos(
     run_dir: str,
     design_hash: str,
     hypothesis_id: str,
+    registration_bar: Mapping[str, Any],
+    registration_bar_hash: str,
+    eval_protocol_hash: str,
     horizon: int = DEFAULT_HORIZON,
     n_quantiles: int = DEFAULT_N_QUANTILES,
     claim_seal: bool = True,
@@ -212,6 +220,11 @@ def run_sealed_oos(
         multiplicity_ack=multiplicity_ack,
         a6_multiplicity_override_id=str(a6_multiplicity_override_id),
         allow_same_run=allow_same_run, step_id=A5_REPRODUCTION_STEP_ID,
+        # R8 Blocker 3: the DECLARED bar snapshot + hashes are threaded down —
+        # reproduce never re-reads the module global.
+        registration_bar=dict(registration_bar),
+        registration_bar_hash=str(registration_bar_hash),
+        eval_protocol_hash=str(eval_protocol_hash),
     )
     # R5 B4 + R6 B3: the verdict is judged against the CANONICAL registration bar INSIDE
     # reproduce_sealed_oos's locked span and PERSISTED with the completion record — this

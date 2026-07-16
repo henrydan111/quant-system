@@ -1950,6 +1950,65 @@ class TestOOSHandlerSealClaimBehavior:
         # And the result indicates skip.
         assert result.outputs["decision"] == "skipped_due_to_is_gate"
 
+    def test_oos_handler_resume_never_reexecutes_after_execution_started(
+        self, tmp_path: Path
+    ) -> None:
+        """PR3 R8 Blocker 1: the formal OOS handler marks execution_started at the
+        CANONICAL OosExecutionGuardStore after the claim and BEFORE reading the
+        schedule — after a mid-backtest crash, a resume under the same claim REFUSES
+        instead of executing the OOS a second time (GPT's direct_oos_compute_calls=2
+        probe)."""
+        from src.research_orchestrator.validation_steps import (
+            handle_validation_event_backtest_oos,
+        )
+
+        context = self._make_context(tmp_path)
+        holdout_stub = MagicMock(
+            run_dir=str(tmp_path / "run"), step_id="validation_event_backtest_oos"
+        )
+        holdout_stub.effective_seal_key = "deadbeefcafebabe"
+        oos_calls = {"n": 0}
+
+        def _crashing_run(*args, **kwargs):
+            oos_calls["n"] += 1
+            raise RuntimeError("engine crashed mid-OOS")
+
+        def _invoke():
+            with patch(
+                "src.research_orchestrator.steps._claim_holdout_access_if_needed",
+            ), patch(
+                "workspace.research.alpha_mining.event_driven_strategy_research"
+                ".run_event_driven_window",
+                side_effect=_crashing_run,
+            ), patch(
+                "src.research_orchestrator.steps._run_with_cache_context",
+                side_effect=lambda _ctx, fn, **kw: fn(**kw),
+            ), patch(
+                "src.research_orchestrator.validation_steps._schedule_dataframe_to_dict",
+                return_value={},
+            ), patch(
+                "src.research_orchestrator.validation_steps._slippage_rate_from_prescription",
+                return_value=0.0003,
+            ), patch(
+                "src.research_orchestrator.validation_steps._build_cost_config",
+                return_value=None,
+            ), patch(
+                "src.research_orchestrator.steps._time_split_payload_for_step",
+                return_value={"stage": "oos_test"},
+            ), patch(
+                "src.research_orchestrator.steps._holdout_context_for_step",
+                return_value=holdout_stub,
+            ):
+                handle_validation_event_backtest_oos(context)
+
+        with pytest.raises(RuntimeError, match="engine crashed mid-OOS"):
+            _invoke()
+        assert oos_calls["n"] == 1
+        # resume under the same claim: the canonical guard refuses BEFORE any OOS work
+        with pytest.raises(ValueError, match="already STARTED"):
+            _invoke()
+        assert oos_calls["n"] == 1                    # the OOS never ran a second time
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Live-registry integration smoke — the ONE test in this file allowed to

@@ -78,35 +78,51 @@ def pytest_configure(config):  # noqa: ARG001
 #      its bytes changed during the session.
 _REAL_HOLDOUT_ROOT: str | None = None
 _HOLDOUT_SENTINEL: dict = {}
+# transient coordination files that legitimately churn; everything else is governance
+_SENTINEL_EXCLUDE_SUFFIXES = (".lock", ".tmp")
 
 
-def _real_holdout_file() -> Path | None:
-    if _REAL_HOLDOUT_ROOT is None:
-        return None
-    p = Path(_REAL_HOLDOUT_ROOT) / "holdout_events.parquet"
-    return p if p.exists() else None
-
-
-def _hash_real_holdout() -> str:
+def _hash_real_holdout() -> dict:
+    """R8 Major 2: a {relative_path: sha256} snapshot of EVERY regular file under the
+    real canonical root (not just holdout_events.parquet — the A5 reproduction records,
+    ledgers, authorizations, and guard markers are equally governance), plus the
+    configured root value itself (a mid-session config repoint must also trip)."""
     import hashlib
 
-    p = _real_holdout_file()
-    if p is None:
-        return ""
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+    snapshot: dict[str, str] = {}
+    if _REAL_HOLDOUT_ROOT is not None:
+        root = Path(_REAL_HOLDOUT_ROOT)
+        if root.exists():
+            for f in sorted(root.rglob("*")):
+                if not f.is_file():
+                    continue
+                name = f.name.lower()
+                if any(name.endswith(suf) or f".tmp." in name for suf in _SENTINEL_EXCLUDE_SUFFIXES):
+                    continue
+                snapshot[str(f.relative_to(root))] = hashlib.sha256(f.read_bytes()).hexdigest()
+    config = PROJECT_ROOT / "config.yaml"
+    if config.exists():
+        snapshot["__config.yaml__"] = hashlib.sha256(config.read_bytes()).hexdigest()
+    return snapshot
 
 
 def _install_real_holdout_guard() -> None:
+    """R8 Major 2: guard-establishment failures are LOUD — a session that cannot prove
+    the real canonical store is protected must not run at all."""
     global _REAL_HOLDOUT_ROOT
     try:
         import src.research_orchestrator.holdout_seal as hs_mod
         from src.alpha_research.factor_eval_skill import _store as fes_store
-    except Exception:
-        return
+    except Exception as exc:
+        raise pytest.UsageError(
+            f"cannot establish canonical holdout-store guard (imports failed): {exc}"
+        ) from exc
     try:
         _REAL_HOLDOUT_ROOT = str(hs_mod._resolve_configured_global_holdout_root_uncached())
-    except Exception:
-        return
+    except Exception as exc:
+        raise pytest.UsageError(
+            f"cannot establish canonical holdout-store guard (root unresolvable): {exc}"
+        ) from exc
     real = _REAL_HOLDOUT_ROOT
 
     def _guard(root_dir) -> None:
@@ -135,14 +151,20 @@ _install_real_holdout_guard()
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
-    """R7 Major 3: fail the run LOUDLY if the real canonical store changed bytes."""
+    """R7 Major 3 + R8 Major 2: fail the run LOUDLY if ANY file under the real
+    canonical store (or the configured root itself) changed during the session."""
     if _REAL_HOLDOUT_ROOT is None:
         return
+    before = _HOLDOUT_SENTINEL.get("before", {})
     after = _hash_real_holdout()
-    if after != _HOLDOUT_SENTINEL.get("before", ""):
+    if after != before:
+        changed = sorted(
+            (set(before) ^ set(after))
+            | {k for k in set(before) & set(after) if before[k] != after[k]}
+        )
         print(
             "\n[FATAL TEST GUARD] the REAL canonical holdout store changed during this "
-            f"pytest session (sha256 {_HOLDOUT_SENTINEL.get('before')!r} -> {after!r}). "
+            f"pytest session — changed entries: {changed}. "
             "Investigate + restore from backup immediately.",
         )
         session.exitstatus = 3

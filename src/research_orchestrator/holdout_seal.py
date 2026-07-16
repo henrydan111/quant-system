@@ -163,9 +163,10 @@ class OosExecutionGuardStore:
                 raise ValueError(
                     f"OOS execution for seal_key {seal_key} already STARTED at "
                     f"{row['recorded_at']} (run_dir={row['run_dir']!r}) and this runner "
-                    "persists no reloadable result — a resume must not re-run the "
-                    "backtest (the holdout may already have been observed); explicit "
-                    "human migration required (R7 B1)"
+                    "persists no reloadable result — the seal is TERMINALLY SPENT; "
+                    "re-execution is forbidden. Recovery may only APPEND a "
+                    "result_recovered or abandoned_after_execution_started verdict with "
+                    "forensic evidence — never delete or reset prior rows (R7/R8 B1)"
                 )
             new_row = pd.DataFrame([{
                 "recorded_at": _now_str(),

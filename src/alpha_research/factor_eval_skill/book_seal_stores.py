@@ -49,7 +49,13 @@ from src.alpha_research.factor_eval_skill._store import (
 )
 from src.research_orchestrator.file_lock import file_lock
 
-ARTIFACT_STATES = ("claimed", "verdict_persisted", "diagnostics_failed", "complete")
+ARTIFACT_STATES = (
+    "claimed",
+    "execution_started",
+    "verdict_persisted",
+    "diagnostics_failed",
+    "complete",
+)
 OVERRIDE_KINDS = ("a5_fresh_window", "a6_multiplicity")
 
 
@@ -67,9 +73,10 @@ class BookSealArtifactStore(AppendOnlyStore):
     - R7 B1: states run ``claimed → execution_started → verdict_persisted →
       complete | diagnostics_failed``. ``execution_started`` is written BEFORE the
       backtest touches OOS data; a crash after it leaves a PERMANENTLY QUARANTINED
-      record (resume refuses — the OOS may already have been observed; only an
-      explicit human migration can release it). A crash while still ``claimed``
-      (before any OOS read) may resume.
+      record — the seal is TERMINALLY SPENT (the OOS may already have been observed);
+      recovery may only APPEND a result_recovered / abandoned_after_execution_started
+      verdict with forensic evidence, never delete or reset rows. A crash while still
+      ``claimed`` (before any OOS read) may resume.
     - ``persist_verdict`` only from ``execution_started``, and only ONCE — the verdict
       is immutable thereafter (every later row carries it verbatim);
     - ``complete`` only from ``verdict_persisted`` / ``diagnostics_failed``, only once,
@@ -106,6 +113,16 @@ class BookSealArtifactStore(AppendOnlyStore):
     )
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("book_seal_key", "state")
+
+    def record(self, **fields: Any) -> dict[str, Any]:
+        # R8 Blocker 2: the inherited public append is DISABLED on state machines — a
+        # caller could otherwise append a forged state="claimed" row after
+        # execution_started and roll the latest state back to re-execute the OOS.
+        raise BookSealStoreError(
+            "BookSealArtifactStore.record is disabled — state changes go only through "
+            "the sanctioned transitions (open_claim / run_or_load_verdict / "
+            "persist_verdict / mark_diagnostics_failed / complete)"
+        )
 
     def current(self, book_seal_key: str) -> dict[str, Any] | None:
         frame = self._load()
@@ -157,10 +174,11 @@ class BookSealArtifactStore(AppendOnlyStore):
                 return json.loads(str(cur["book_verdict_json"]))
             if state == "execution_started":
                 raise BookSealStoreError(
-                    f"book_seal_key {book_seal_key} is QUARANTINED: a prior run crashed "
-                    "AFTER the OOS execution started (the data may have been observed) — "
-                    "resume never re-runs the backtest; an explicit human migration is "
-                    "required to release this seal"
+                    f"book_seal_key {book_seal_key} is QUARANTINED: the seal is TERMINALLY "
+                    "SPENT after execution_started (the OOS may have been observed); "
+                    "re-execution is forbidden. Recovery may only APPEND a "
+                    "result_recovered or abandoned_after_execution_started verdict with "
+                    "forensic evidence — never delete or reset prior rows"
                 )
             # state == "claimed": mark execution_started BEFORE any OOS read, so a crash
             # from here on quarantines instead of silently allowing a second execution.
@@ -314,21 +332,30 @@ class BookSealArtifactStore(AppendOnlyStore):
     def complete(
         self, *, book_seal_key: str, request_hash: str, artifact: Mapping[str, Any]
     ) -> dict[str, Any]:
-        # R7 B3: the artifact's embedded verdict must BE the execution-time persisted
-        # verdict — a completing artifact carrying any other verdict refuses. The
-        # persisted verdict is the FINAL arbiter; no later code re-judges it.
+        # R7 B3 + R8 Major 3: the artifact's embedded verdict must BE the execution-time
+        # persisted verdict — FAIL CLOSED on a missing record AND on a blank historical
+        # hash (a pre-R7 record must be explicitly migrated before completing; skipping
+        # the check would let a wrong embedded verdict through on legacy rows).
         with file_lock(self.lock_path):
             cur = self.current(book_seal_key)
-            if cur is not None and str(cur.get("book_verdict_hash") or "").strip():
-                embedded = artifact.get("book_verdict") if isinstance(artifact, Mapping) else None
-                if not isinstance(embedded, Mapping) or (
-                    payload_hash(dict(embedded)) != str(cur["book_verdict_hash"])
-                ):
-                    raise BookSealStoreError(
-                        f"complete refused for {book_seal_key}: the artifact's embedded "
-                        "book_verdict does not re-hash to the execution-time persisted "
-                        "verdict — the persisted verdict is immutable and final"
-                    )
+            if cur is None:
+                raise BookSealStoreError(f"no record for book_seal_key {book_seal_key}")
+            persisted_hash = str(cur.get("book_verdict_hash") or "").strip()
+            if not persisted_hash:
+                raise BookSealStoreError(
+                    f"complete refused for {book_seal_key}: the record carries no "
+                    "execution-time book_verdict_hash (pre-R7) — it must be explicitly "
+                    "migrated before complete, never accepted unverified"
+                )
+            embedded = artifact.get("book_verdict") if isinstance(artifact, Mapping) else None
+            if not isinstance(embedded, Mapping) or (
+                payload_hash(dict(embedded)) != persisted_hash
+            ):
+                raise BookSealStoreError(
+                    f"complete refused for {book_seal_key}: the artifact's embedded "
+                    "book_verdict does not re-hash to the execution-time persisted "
+                    "verdict — the persisted verdict is immutable and final"
+                )
         artifact_json = canonical_json(dict(artifact))
         return self._transition(
             book_seal_key=book_seal_key,
@@ -586,7 +613,8 @@ class A5ReproductionStore(AppendOnlyStore):
     (``open_or_resume`` returns the persisted result); only an unfinished ``claimed``
     state may resume, and only under the IDENTICAL ``request_hash`` AND the same
     ``run_dir + step_id`` with ``allow_same_run=True`` (crash recovery, never a foreign
-    concurrent run). :meth:`execution_lock` gives the CALLER a per-seal-key mutex that
+    concurrent run); an ``execution_started`` record is TERMINALLY SPENT (append-only
+    forensic recovery, never re-execution). :meth:`execution_lock` gives the CALLER a per-seal-key mutex that
     must be held across ``read-state → compute → complete`` so two runs cannot both
     enter the OOS computation."""
 
@@ -605,11 +633,22 @@ class A5ReproductionStore(AppendOnlyStore):
     SCHEMA = {column: "string" for column in COLUMNS}
     KEY_FIELDS = ("seal_key", "state")
 
+    def record(self, **fields: Any) -> dict[str, Any]:
+        # R8 Blocker 2: the inherited public append is DISABLED on state machines — a
+        # caller could otherwise append a forged state="claimed" row after
+        # execution_started and re-execute a spent OOS.
+        raise BookSealStoreError(
+            "A5ReproductionStore.record is disabled — state changes go only through "
+            "the sanctioned transitions (open_or_resume / mark_execution_started / "
+            "complete)"
+        )
+
     def mark_execution_started(self, *, seal_key: str, request_hash: str) -> dict[str, Any]:
         """R7 B1: written BEFORE the OOS computation begins. Any crash after this row
         leaves the seal PERMANENTLY QUARANTINED (``open_or_resume`` refuses) — the OOS
-        data may already have been observed, so recovery is an explicit human migration,
-        never an automatic re-run. Only ``claimed`` may transition here."""
+        data may already have been observed, so the seal is TERMINALLY SPENT; recovery
+        may only APPEND a forensic verdict, never re-run. Only ``claimed`` may
+        transition here."""
         with file_lock(self.lock_path):
             cur = self.current(seal_key)
             if cur is None or str(cur.get("request_hash")) != str(request_hash):
@@ -677,10 +716,12 @@ class A5ReproductionStore(AppendOnlyStore):
                     # R7 B1: the OOS computation had STARTED when the prior run died —
                     # the data may have been observed; recovery must never re-run.
                     raise BookSealStoreError(
-                        f"A5 reproduction for seal_key {seal_key} is QUARANTINED: a prior "
-                        "run crashed after execution_started (result never persisted) — "
-                        "resume never recomputes an OOS whose execution began; explicit "
-                        "human migration required"
+                        f"A5 reproduction for seal_key {seal_key} is QUARANTINED: the seal "
+                        "is TERMINALLY SPENT after execution_started (result never "
+                        "persisted; the OOS may have been observed); re-execution is "
+                        "forbidden. Recovery may only APPEND a result_recovered or "
+                        "abandoned_after_execution_started verdict with forensic evidence "
+                        "— never delete or reset prior rows"
                     )
                 # a still-`claimed` record (crash BEFORE any OOS read): only the SAME run
                 # may recover it, explicitly.

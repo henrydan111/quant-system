@@ -367,8 +367,14 @@ class TestPromotionGuardBindings:
 
         _FS.frozen_set_hash = frozen_set_hash
 
+        from src.alpha_research.factor_eval_skill._hashing import payload_hash as _ph
+        from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
+
+        _bar = registration_bar_snapshot()
         return pe.reproduce_sealed_oos(
             frozen_set=_FS(),
+            registration_bar=_bar,
+            registration_bar_hash=_ph(_bar),
             oos_start="2021-01-01",
             oos_end=oos_end,
             qlib_dir="data/qlib_data",
