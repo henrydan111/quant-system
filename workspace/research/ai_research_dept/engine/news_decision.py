@@ -397,6 +397,30 @@ def build_sealed_payload(payload_ast, artifact: D7DecisionArtifact, *,
                          payload_hash=seal_hash(seal_fields))
 
 
+@dataclass(frozen=True)
+class ExecutionView:
+    """执行体的**唯一**输入(链单元 BINDING #1,re-review#3 R2/终裁点名):
+    verified `payload_text` 的**新铸不可变视图**——全字段为不可变 str,**不暴露**
+    `payload_ast` 或 SealedPayload 本体(验证后变异对执行体不可见的唯一途径)。
+    只在 `verify_payload_for_execution` 通过后、每次执行前由状态机新铸;
+    执行体消费 view.payload_text,别无他物。"""
+    decision_id: str
+    consumer_seat: str
+    use: str
+    payload_text: str
+    payload_hash: str
+
+
+def make_execution_view(sp: SealedPayload) -> ExecutionView:
+    """从**已过边界校验**的 SealedPayload 新铸执行视图(调用方契约:必须紧跟
+    verify_payload_for_execution 之后;视图不携带任何可变结构)。"""
+    if not isinstance(sp, SealedPayload):
+        raise RegistryError("执行视图只能铸自 SealedPayload")
+    return ExecutionView(decision_id=sp.decision_id, consumer_seat=sp.consumer_seat,
+                         use=sp.use, payload_text=sp.payload_text,
+                         payload_hash=sp.payload_hash)
+
+
 def verify_payload_for_execution(sp: SealedPayload, artifact: D7DecisionArtifact, *,
                                  ledger_dir, expected_decision_id: str,
                                  expected_consumer_seat: str, expected_use: str,

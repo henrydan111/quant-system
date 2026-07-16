@@ -41,7 +41,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
-    SealedPayload, build_sealed_payload, verify_payload_for_execution,
+    SealedPayload, build_sealed_payload, make_execution_view,
+    verify_payload_for_execution,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
@@ -236,7 +237,8 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
         expected_decision_id=decision_id, expected_consumer_seat="news",
         expected_use="factor_positive", expected_target_dimension=None)
     try:
-        factor_leg_fn(factor_payload)
+        # 链单元 BINDING #1:执行体唯一输入 = 校验后**新铸**的不可变视图
+        factor_leg_fn(make_execution_view(factor_payload))
         factor_status = "success"
     except Exception:
         factor_status = "failed"
@@ -252,7 +254,7 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
             expected_decision_id=decision_id, expected_consumer_seat="news",
             expected_use="penalty", expected_target_dimension=None)
         try:
-            penalty_leg_fn(penalty_payload)
+            penalty_leg_fn(make_execution_view(penalty_payload))
             penalty_status = "success"
         except Exception:
             penalty_status = "failed"
