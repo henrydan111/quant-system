@@ -421,13 +421,46 @@ def reproduce_sealed_oos(
                 "declared registration bar is not the executable canonical bar — only "
                 "canonical_registration_bar_snapshot() may govern a sealed spend (R9 B2)"
             )
-    # R9 Blocker 2: the FULL EvalProtocolSpec travels (never a bare hash string) and the
-    # identity chain is verified: protocol↔bar and frozen-set↔observation-protocol.
-    if eval_protocol is None or not hasattr(eval_protocol, "protocol_hash"):
+    # R9 Blocker 2 + R10 Blocker 1: the FULL EvalProtocolSpec travels (never a bare hash
+    # string, never a duck-typed look-alike) and it must BE the recipe the runner will
+    # actually execute — every identity field is verified against the runtime, not
+    # merely hashed. A protocol declaring anything the runtime does not do refuses
+    # BEFORE any claim.
+    from src.alpha_research.factor_eval_skill.identity import (
+        EvalProtocolSpec,
+        normalize_enum,
+    )
+    from src.alpha_research.factor_eval_skill.sealed_oos import EXECUTABLE_PROTOCOL_FIELDS
+
+    if type(eval_protocol) is not EvalProtocolSpec:
         raise PromotionEvidenceError(
             "reproduce_sealed_oos requires the full EvalProtocolSpec (eval_protocol=...) "
-            "— a bare protocol-hash string is not verifiable identity (R9 B2)"
+            f"— got {type(eval_protocol).__name__!r}; a bare hash string or a shaped "
+            "look-alike object is not verifiable identity (R9 B2 / R10 B1)"
         )
+    _runtime = {
+        "horizon": int(horizon),
+        "n_quantiles": int(n_quantiles),
+        "oos_window": f"{oos_start}..{oos_end}",
+    }
+    if (int(eval_protocol.horizon) != _runtime["horizon"]
+            or int(eval_protocol.n_quantiles) != _runtime["n_quantiles"]
+            or str(eval_protocol.oos_window) != _runtime["oos_window"]):
+        raise PromotionEvidenceError(
+            f"protocol/runtime mismatch: the declared protocol "
+            f"(horizon={eval_protocol.horizon}, n_quantiles={eval_protocol.n_quantiles}, "
+            f"oos_window={eval_protocol.oos_window!r}) is not the recipe this runner "
+            f"will execute ({_runtime}) — declarations are executed, never merely hashed "
+            "(R10 B1)"
+        )
+    for field, executable_value in EXECUTABLE_PROTOCOL_FIELDS.items():
+        declared_value = normalize_enum(str(getattr(eval_protocol, field)))
+        if declared_value != normalize_enum(str(executable_value)):
+            raise PromotionEvidenceError(
+                f"protocol/runtime mismatch: declared {field}={declared_value!r} but the "
+                f"sealed registration runtime executes only {executable_value!r} — "
+                "unsupported declarations refuse, they are never merely hashed (R10 B1)"
+            )
     if str(eval_protocol.registration_bar_hash) != _bar_hash:
         raise PromotionEvidenceError(
             "protocol/bar mismatch: eval_protocol.registration_bar_hash does not equal "
@@ -440,6 +473,7 @@ def reproduce_sealed_oos(
             "from this protocol's observation identity (R9 B2)"
         )
     eval_protocol_hash = str(eval_protocol.protocol_hash)
+    _eval_protocol_payload = eval_protocol._payload()
     a5_request_hash = _phash(
         {
             "kind": "a5_sealed_oos_reproduction",
@@ -513,6 +547,8 @@ def reproduce_sealed_oos(
             "registration_bar": dict(_bar),
             "registration_bar_hash": _bar_hash,
             "eval_protocol_hash": str(eval_protocol_hash),
+            # R10 B1: the CANONICAL protocol payload is persisted verbatim with its hash.
+            "eval_protocol_payload": dict(_eval_protocol_payload),
             "bar_verdict": bar_verdict,
             "independent_reproduction": {
                 "source": "qlib_windowed_features",

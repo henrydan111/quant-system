@@ -103,13 +103,19 @@ class AppendOnlyStore:
         """Append one row inside ``file_lock``. Unknown keys are rejected fail-closed;
         omitted columns default to empty string. ``record_id`` + ``recorded_at`` are
         stamped here. Returns the written row."""
-        # R9 Blocker 1: the check sits HERE (the base method, against the actual
-        # instance's class) so AppendOnlyStore.record(state_store, ...) — the unbound
-        # bypass of a subclass override — also refuses.
-        if type(self).PUBLIC_RECORD_ENABLED is not True:
+        # R9 Blocker 1 + R10 Blocker 2: the check sits HERE (the base method) and walks
+        # the MRO for an EXPLICIT False — so neither the unbound bypass
+        # AppendOnlyStore.record(state_store, ...) NOR a subclass that re-declares
+        # PUBLIC_RECORD_ENABLED = True can reopen the door once any ancestor state
+        # machine closed it. Disabling is a one-way ratchet down the hierarchy.
+        if any(
+            cls.__dict__.get("PUBLIC_RECORD_ENABLED") is False
+            for cls in type(self).__mro__
+        ):
             raise PublicRecordDisabledError(
-                f"{type(self).__name__} is a state machine; public record() is disabled "
-                "— state changes go only through the sanctioned typed transitions"
+                f"{type(self).__name__} is (or derives from) a state machine; public "
+                "record() is disabled — state changes go only through the sanctioned "
+                "typed transitions"
             )
         unknown = set(fields) - set(self.COLUMNS)
         unknown -= {"record_id", "recorded_at"}

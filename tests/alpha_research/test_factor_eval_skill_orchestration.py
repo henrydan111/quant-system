@@ -244,12 +244,27 @@ def test_seal_dryrun_mode_removed(tmp_path):
 
 
 def test_portfolio_side_is_identity_bearing(tmp_path):
+    # R10 B1: cmd_seal now REFUSES a portfolio_side the sealed registration runtime
+    # cannot execute (declarations are executed, never merely hashed) — the identity-
+    # bearing property is pinned at the FrozenSelectionSet layer instead.
     ctx = _ctx(tmp_path)
     _full_pipeline_to_select(ctx, tmp_path)
     ls = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27", portfolio_side="long_short")
-    lo = cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27", portfolio_side="long_only")
-    assert ls["frozen_set_hash"] != lo["frozen_set_hash"]  # portfolio_side moves the hash
-    assert lo["portfolio_side"] == "long_only"
+    assert ls["portfolio_side"] == "long_short"
+    with pytest.raises(FactorEvalError, match="unsupported portfolio_side"):
+        cmd_seal(ctx, mode="show", oos_start="2021-01-01", oos_end="2026-02-27",
+                 portfolio_side="long_only")
+    # portfolio_side remains FrozenSelectionSet identity material
+    from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
+
+    base = dict(
+        selected=(SelectedFactor("tf", 2, "def_tf", "long"),),
+        candidate_pool_hash="p", selection_rule_hash="r", eval_protocol_hash="e",
+        metric="rank_icir", universe="u", time_split_window="w",
+        rebalance="20d", neutralization="none",
+    )
+    assert (FrozenSelectionSet(**base, portfolio_side="long_short").frozen_set_hash
+            != FrozenSelectionSet(**base, portfolio_side="long_only").frozen_set_hash)
 
 
 def test_select_uses_declared_target_universe_not_univ_all(tmp_path):

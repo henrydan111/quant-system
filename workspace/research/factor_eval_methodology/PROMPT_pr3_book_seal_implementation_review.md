@@ -1,100 +1,92 @@
-# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 10)
+# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 11)
 
-R1..R8 REWORK → all folded. R9 REWORK (2B/1m — the UNBOUND base-class `AppendOnlyStore.record(store,…)`
-rolls both state machines back past the subclass overrides + `_transition` accepts caller-declared
-states; a self-consistent NON-canonical bar (forged rule + forged evaluator_hash + matching self-hash)
-is accepted and persisted as the "declared" judgment, and bare `eval_protocol_hash` strings are
-unverifiable; module docstring missing execution_started) → **all folded**. R9 confirmed: the formal
-handler execution guard, the mid-call bar-swap threading, the sides-covering evaluator hash, the
-full-dir sentinel, blank-hash quarantine, terminal wording, and ARTIFACT_STATES all hold.
-Branch: `calendar-unfreeze`.
+R1..R9 REWORK → all folded. R10 REWORK (2B/1m — protocol identity accepted duck-typed look-alikes and
+was never verified against the recipe the runner actually executes [two real specs with different
+horizons both ran the same 20d/10q recipe as two seals]; a subclass re-declaring
+PUBLIC_RECORD_ENABLED=True reopened the base record() door; the R9 prompt named a pinned test that did
+not exist) → **all folded**. Branch: `calendar-unfreeze`.
 
 ---
 
 ```text
 ROLE
-You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-10 re-review of PR3: verify each R9 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. Top invariants: (1) ONE canonical sealed world; (2) one seal/request executes OOS at most once — across concurrency, crashes, the formal orchestrator path, AND raw store-level forgeries; (3) the declared judgment IS the executable canonical judgment, immutable after observation.
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-11 re-review of PR3: verify each R10 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. Top invariants: (1) ONE canonical sealed world; (2) one seal/request executes OOS at most once — including raw store-level forgeries and subclass tricks; (3) the declared judgment/protocol IS the executable canonical recipe — declarations are executed, never merely hashed.
 
 REPO (public) https://github.com/henrydan111/quant-system  (branch: calendar-unfreeze)
 Raw form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
 
 FETCH (authoritative):
-- src/alpha_research/factor_eval_skill/_store.py            (PUBLIC_RECORD_ENABLED gate in the BASE record())
-- src/alpha_research/factor_eval_skill/book_seal_stores.py  (_TRANSITIONS action table; PUBLIC_RECORD_ENABLED=False ×2; docstring)
-- src/alpha_research/factor_eval_skill/sealed_oos.py        (canonical_registration_bar_snapshot; REGISTRATION_BAR built from it)
-- src/research_orchestrator/promotion_evidence.py           (canonical-bar gate before claim; EvalProtocolSpec chain checks)
-- src/alpha_research/factor_eval_skill/orchestration.py     (cmd_seal passes eval_protocol=spec)
-- tests/alpha_research/test_pr3_book_seal.py                (R1..R9 probes pinned)
+- src/alpha_research/factor_eval_skill/_store.py            (MRO-walk PUBLIC_RECORD_ENABLED gate)
+- src/alpha_research/factor_eval_skill/sealed_oos.py        (EXECUTABLE_PROTOCOL_FIELDS + executable_protocol_spec)
+- src/research_orchestrator/promotion_evidence.py           (exact-type + runtime-recipe verification + payload persistence)
+- src/alpha_research/factor_eval_skill/orchestration.py     (cmd_seal: executable constructor + unsupported-declaration refusals)
+- tests/alpha_research/test_pr3_book_seal.py                (R1..R10 probes pinned)
 
-YOUR R9 FINDINGS — how each was closed (verify in code; probes pinned as named tests):
-B1 (unbound base record() + caller-declared transitions) → your exact replacement:
-   * AppendOnlyStore.record now checks `type(self).PUBLIC_RECORD_ENABLED is not True` IN THE BASE
-     METHOD (against the actual instance's class) and raises the typed PublicRecordDisabledError —
-     `AppendOnlyStore.record(state_store, state="claimed", ...)` refuses; both state machines declare
-     PUBLIC_RECORD_ENABLED = False (their R8 overrides remain as the belt).
-   * BookSealArtifactStore._transition takes an ACTION name resolved against the fixed _TRANSITIONS
-     table (mark_execution_started / persist_verdict / mark_diagnostics_failed / complete) — the
-     allowed_from/new_state caller parameters are GONE; no table entry targets "claimed", so
-     execution_started → claimed is unrepresentable; unknown actions refuse. (The A5 machine's
-     transitions were already hard-coded per method.)
-   Pinned with your two named regressions: test_unbound_append_only_record_cannot_reset_book_or_a5
-   (both machines: crash → unbound record refuses → state stays execution_started → evaluator calls
-   stay 1) and test_transition_api_cannot_move_execution_started_to_claimed (no "claimed" target in
-   the table; old kwargs are a TypeError; invented action refuses).
-B2 (self-signed non-canonical bar accepted; bare protocol hash) → your exact replacement:
-   * sealed_oos.canonical_registration_bar_snapshot(): LITERALS + a LIVE _evaluator_source_hash()
-     recomputation, reading NO replaceable module global; REGISTRATION_BAR is now BUILT FROM it
-     (single source, immutable) and registration_bar_snapshot()/registration_bar_hash() delegate to it.
-   * reproduce_sealed_oos, BEFORE any claim (claim_seal): the declared bar must EQUAL the canonical
-     bar and its hash the canonical hash — your forged probe (rank rule "> 100", evaluator_hash
-     "DECLARED_DIFFERENT_EVALUATOR", matching self-hash) now refuses "declared registration bar is not
-     the executable canonical bar" with ZERO seal events. Old/unknown bars fail closed (versioned-
-     evaluator recovery = future work; never "accept the old dict, run the current evaluator").
-   * bare eval_protocol_hash strings are GONE from reproduce_sealed_oos and run_sealed_oos — the FULL
-     EvalProtocolSpec travels, and the chain is verified: eval_protocol.registration_bar_hash == the
-     declared bar hash ("protocol/bar mismatch"), eval_protocol.observation_protocol_hash ==
-     frozen_set.eval_protocol_hash ("frozen-set observation protocol mismatch"); the recorded
-     eval_protocol_hash is derived from the spec, never accepted as a string.
-   Pinned with your three named regressions: test_self_hashed_noncanonical_bar_fails_before_claim,
-   test_declared_rank_rule_is_the_rule_actually_executed (the same probe: the ONLY acceptable
-   declaration is the canonical executable bar, so a declared rule can never diverge from the executed
-   rule — divergent declarations refuse pre-claim), test_arbitrary_eval_protocol_hash_is_rejected
-   (signature pins + None/chain-mismatch refusals, zero seal events).
-   Consequence pinned in test_completed_a5_reproduction_is_never_recomputed: after a bar-constant code
-   change, the OLD declared bar refuses at the canonical gate (fail-closed, persisted verdict stands) —
-   the exact "deploy new code" path can neither re-judge nor re-execute.
-Minor (module docstring) → the header now reads claimed → execution_started → verdict_persisted →
-   complete | diagnostics_failed.
+YOUR R10 FINDINGS — how each was closed (verify in code; probes pinned as named tests):
+B1 (protocol identity not bound to the executed recipe) → your exact repair:
+   * `type(eval_protocol) is EvalProtocolSpec` (exact type — your SimpleNamespace probe refuses with
+     zero governance actions).
+   * the spec IS the runtime recipe, verified field by field BEFORE any claim: horizon, n_quantiles,
+     and oos_window must equal the runner's actual parameters ("protocol/runtime mismatch" — your
+     two-horizons-one-recipe probe now refuses instead of minting two seals), and EVERY remaining
+     identity field must equal the new EXECUTABLE_PROTOCOL_FIELDS constants (metric=rank_icir,
+     construction=decile_long_short, universe_filter_policy=full_provider_universe [the runtime
+     truthfully computes over the full provider universe — the SELECTION universe remains
+     FrozenSelectionSet/TUD identity, no longer smuggled into a runtime claim], neutralization=none,
+     rebalance=none, label/rank/winsor/missing/tie/cost = the actual screening path). Unsupported
+     declarations REFUSE — never merely hashed.
+   * cmd_seal declares ONLY through the new sealed_oos.executable_protocol_spec() constructor and
+     itself refuses non-executable metric / neutralization / portfolio_side up front (pinned:
+     test_cmd_seal_refuses_unsupported_runtime_declarations; the old
+     "portfolio_side moves the seal hash via cmd_seal" pin was rewritten — the FS identity property
+     is retained at the FrozenSelectionSet layer, the cmd_seal reachability now refuses).
+   * the canonical protocol payload is PERSISTED verbatim with its hash in the completion record
+     (eval_protocol_payload).
+   Pinned: test_declared_rank_rule_is_the_rule_actually_executed (NOW REAL — see Minor below;
+   protocol/runtime mismatch on horizon + an unsupported neutralization, both refusing pre-claim with
+   zero seal events) + the reworked test_arbitrary_eval_protocol_hash_is_rejected (signature pins,
+   None, SimpleNamespace, wrong-bar-hash chain, foreign-frozen-set observation mismatch — all zero
+   seal events).
+B2 (subclass re-enables the record() door) → your exact replacement: the base gate now walks the MRO
+   for an EXPLICIT `PUBLIC_RECORD_ENABLED is False` — once any ancestor state machine disabled it, a
+   subclass re-declaring True cannot reopen it (one-way ratchet). Pinned:
+   test_reenabled_subclass_cannot_reopen_record_door (both machines, over the SAME log, bound and
+   unbound calls, crashed state stays execution_started, evaluator calls stay 1).
+Minor (the R9 prompt named a non-existent test) → CORRECTED HONESTLY: that was a prompt-authoring
+   error on my side in round 9 — the closest real pin then was the forged-bar canonical refusal. The
+   named test now EXISTS as a real probe (protocol/runtime mismatch + unsupported-field refusal +
+   zero-seal-event assertions), and this record supersedes the R9 claim.
 
-TEST STATE: 587 passed across the full affected suite (serial); the full-dir sentinel remained clean.
-Subsets fitting a 124s budget:
+TEST STATE: 590 passed across the full affected suite (serial); full-dir sentinel clean. Subsets
+fitting a 124s budget:
   pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_evidence.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~10s)
   pytest tests/alpha_research/test_v14_book_level_promotion.py tests/research_orchestrator/test_pr9_validation_field_gate.py tests/alpha_research/test_factor_eval_skill_orchestration.py -q   (~10s)
 Clean-checkout data-dependent failures (gitignored provider_build.json / calendars) remain environment.
 
-SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 10.
+SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 11.
 RESIDUAL CONCERNS (honest list):
-(a) The canonical-bar gate binds cmd_seal-declared bars to the CURRENT code's bar. A mid-flight code
-    deploy between declaration and execution (same process: impossible — one snapshot; across a
-    crash-resume: the resumed call re-declares from the same code or refuses at the canonical gate)
-    is fail-closed; a completed record under an old bar stays retrievable only through the future
-    versioned-migration path.
-(b) PUBLIC_RECORD_ENABLED protects the record() door; object.__setattr__/direct parquet writes remain
-    the in-process Python trust boundary (the conftest sentinel + canonical-root guard cover the test
-    surface; a hostile in-process actor is out of scope per your earlier rulings).
-(c) The A5 store's transitions are per-method hard-coded rather than table-driven — same guarantees
-    (no method writes "claimed" after open), different shape; flagging in case you want the table form
-    there too.
-(d) Runner-routing unification + the AST lint banning direct run_event_driven_window in formal OOS
-    handlers remain the pre-S6 follow-up you scoped in R9.
+(a) EXECUTABLE_PROTOCOL_FIELDS declares universe_filter_policy="full_provider_universe" and
+    rebalance="none" — truthful to the runtime, and a DELIBERATE semantic change from the pre-R10
+    specs that hashed the selection universe / a "20d" cadence into the protocol. No live spend
+    passed through the old protocol identity; the selection universe remains FS/TUD identity.
+    Flagging the re-declaration for your confirmation.
+(b) The runtime-match check trusts `horizon`/`n_quantiles` as reproduce's own parameters — the spec
+    is verified against what reproduce WILL pass to the metric computation; a divergence between
+    reproduce's parameters and _compute_oos_per_factor_metrics' actual use would be a code bug inside
+    the single audited function (no caller seam).
+(c) Your R10 final residual stands and is the agreed next scope: NO versioned evaluator/bar migration
+    path yet — intentional bar/protocol code changes leave historical sealed results fail-closed and
+    unreplayable until a versioned registry (evaluator_hash → historical callable) ships. Proposed as
+    the explicit follow-up PR alongside the S6 governed runner and the runner-routing lint.
 
 REVIEW QUESTIONS
-1. Re-run your R9 probes (unbound base record on both machines; _transition rollback; self-hashed
-   forged bar; arbitrary protocol hash). Any still land?
-2. Residual (c): is the A5 per-method form acceptable, or do you want the _TRANSITIONS table there?
+1. Re-run your R10 probes (SimpleNamespace protocol; two-specs-one-recipe; subclass re-enable over the
+   same log). Any still land?
+2. Residual (a): confirm the executable-truth re-declaration of universe/rebalance in the protocol
+   (selection semantics stay in FS/TUD identity)?
 3. Anything else blocking SHIP for the machinery layer (S6 governed runner + real-data burned-window
-   pilot + versioned bar-migration tooling remain future PRs; live promotion is unreachable until a
-   verifier registers).
+   pilot + versioned bar/evaluator migration remain scoped future PRs; live promotion is unreachable
+   until a verifier registers).
 
 OUTPUT FORMAT
 - Issues ranked Blocker / Major / Minor, each with the offending line quoted and an exact suggested

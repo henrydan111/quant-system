@@ -109,22 +109,19 @@ class GitStateTests(unittest.TestCase):
 
 class ReproduceSealedOosTests(unittest.TestCase):
     @staticmethod
-    def _protocol_spec():
-        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
-        from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+    def _protocol_spec(horizon=4, n_quantiles=10):
+        from src.alpha_research.factor_eval_skill.sealed_oos import executable_protocol_spec
 
-        return EvalProtocolSpec(
-            horizon=4, n_quantiles=5, oos_window="2021..2026", metric="rank_icir",
-            universe_filter_policy="csi_all", portfolio_construction="decile_long_short",
-            registration_bar_hash=registration_bar_hash())
+        return executable_protocol_spec(horizon=horizon, n_quantiles=n_quantiles,
+                                        oos_window="2021-01-01..2026-02-27")
 
-    def _declared_bar(self):
+    def _declared_bar(self, horizon=4, n_quantiles=10):
         from src.alpha_research.factor_eval_skill._hashing import payload_hash
         from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
         bar = registration_bar_snapshot()
         return {"registration_bar": bar, "registration_bar_hash": payload_hash(bar),
-                "eval_protocol": self._protocol_spec()}
+                "eval_protocol": self._protocol_spec(horizon, n_quantiles)}
 
     def _patch_sealed_world(self, root):
         """PR3 R4 B1/B3 test seam: the configured-root resolver -> the test scratch dir,
@@ -143,12 +140,12 @@ class ReproduceSealedOosTests(unittest.TestCase):
             lambda frozen_set, **kw: {"f_pos": "x", "f_neg": "y"}))
         return stack
 
-    def _frozen_set(self):
+    def _frozen_set(self, horizon=4, n_quantiles=10):
         from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
         return FrozenSelectionSet(
             selected=(SelectedFactor("f_pos", 1, "h1", "long"), SelectedFactor("f_neg", 1, "h2", "short")),
             candidate_pool_hash="pool", selection_rule_hash="rule",
-            eval_protocol_hash=self._protocol_spec().observation_protocol_hash,
+            eval_protocol_hash=self._protocol_spec(horizon, n_quantiles).observation_protocol_hash,
             metric="rank_icir", portfolio_side="long_short", universe="csi_all",
             time_split_window="2021..2026", rebalance="20d", neutralization="industry",
         )
@@ -195,14 +192,14 @@ class ReproduceSealedOosTests(unittest.TestCase):
         from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
         OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
         from src.research_orchestrator.holdout_seal import HoldoutSealStore
-        fs = self._frozen_set()
+        fs = self._frozen_set(4, 5)
         cal, cf = self._fake_cf()
         _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
             store = HoldoutSealStore(d)
             with self._patch_sealed_world(d):
                 rep = reproduce_sealed_oos(
-                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(),
+                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(4, 5),
                     qlib_dir=".", run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},

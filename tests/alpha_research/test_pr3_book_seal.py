@@ -58,21 +58,16 @@ BURNED_ID = f"{BURNED[0]}..{BURNED[1]}"
 
 # ───────────────────────────────────────────────────────────── fixtures ──
 
-def _protocol_spec():
-    """The full declared protocol (R9 B2: threaded as an object, never a bare hash);
-    its registration_bar_hash binds the CANONICAL bar and its observation hash keys
-    the frozen set."""
-    from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
-    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_hash
+def _protocol_spec(window=VIRGIN):
+    """The full declared protocol (R9 B2 + R10 B1: threaded as an object, built ONLY
+    through the executable constructor — its fields ARE the runtime recipe)."""
+    from src.alpha_research.factor_eval_skill.sealed_oos import executable_protocol_spec
 
-    return EvalProtocolSpec(
-        horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
-        universe_filter_policy="univ_liquid_top300",
-        portfolio_construction="decile_long_short",
-        registration_bar_hash=registration_bar_hash())
+    return executable_protocol_spec(
+        horizon=20, n_quantiles=10, oos_window=f"{window[0]}..{window[1]}")
 
 
-SPEC = _protocol_spec()
+SPEC = _protocol_spec()   # the A5 direct tests run on the VIRGIN window
 
 
 def _frozen_set() -> FrozenSelectionSet:
@@ -1254,19 +1249,167 @@ class TestR9Hardening:
             registration_bar_hash=declared["registration_bar_hash"])
         with pytest.raises(PromotionEvidenceError, match="requires the full EvalProtocolSpec"):
             reproduce_sealed_oos(**common, eval_protocol=None)
+        # THE R10 B1 probe: a shaped look-alike (SimpleNamespace with all three hashes)
+        # is NOT verifiable identity — exact type required.
+        from types import SimpleNamespace
+
+        shaped = SimpleNamespace(
+            protocol_hash="X", observation_protocol_hash=str(FS.eval_protocol_hash),
+            registration_bar_hash=declared["registration_bar_hash"])
+        with pytest.raises(PromotionEvidenceError, match="requires the full EvalProtocolSpec"):
+            reproduce_sealed_oos(**common, eval_protocol=shaped)
+        # a REAL spec whose bar hash diverges (runtime fields correct) -> bar-chain refusal
+        from src.alpha_research.factor_eval_skill.sealed_oos import EXECUTABLE_PROTOCOL_FIELDS
+
         wrong_bar_spec = EvalProtocolSpec(
-            horizon=99, n_quantiles=10, oos_window="w", metric="rank_icir",
-            universe_filter_policy="u", portfolio_construction="c",
-            registration_bar_hash="SOME_OTHER_BAR")
+            horizon=20, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            registration_bar_hash="SOME_OTHER_BAR", **EXECUTABLE_PROTOCOL_FIELDS)
         with pytest.raises(PromotionEvidenceError, match="protocol/bar mismatch"):
             reproduce_sealed_oos(**common, eval_protocol=wrong_bar_spec)
-        wrong_obs_spec = EvalProtocolSpec(
-            horizon=99, n_quantiles=10, oos_window="w", metric="rank_icir",
-            universe_filter_policy="u", portfolio_construction="c",
-            registration_bar_hash=declared["registration_bar_hash"])
+        # a REAL runtime-correct spec against a FOREIGN frozen set -> observation refusal
+        foreign_fs = FrozenSelectionSet(
+            selected=FS.selected, candidate_pool_hash="pool_pr3",
+            selection_rule_hash="rule_pr3", eval_protocol_hash="FOREIGN_OBS",
+            metric="rank_icir", portfolio_side="long_short",
+            universe="univ_liquid_top300", time_split_window=BURNED_ID,
+            rebalance="20d", neutralization="none")
         with pytest.raises(PromotionEvidenceError, match="observation protocol mismatch"):
-            reproduce_sealed_oos(**common, eval_protocol=wrong_obs_spec)
+            reproduce_sealed_oos(**{**common, "frozen_set": foreign_fs},
+                                 eval_protocol=SPEC)
         assert HoldoutSealStore(root).list_events().empty
+
+
+class TestR10Hardening:
+    def test_reenabled_subclass_cannot_reopen_record_door(self, tmp_path):
+        # THE R10 B2 probe: a subclass re-declaring PUBLIC_RECORD_ENABLED=True over the
+        # SAME log must still refuse (the base gate walks the MRO for an explicit False
+        # — disabling is a one-way ratchet), for both state machines.
+        from src.alpha_research.factor_eval_skill._store import (
+            AppendOnlyStore,
+            PublicRecordDisabledError,
+        )
+
+        class SneakyBook(BookSealArtifactStore):
+            PUBLIC_RECORD_ENABLED = True
+
+            def record(self, **fields):                    # re-exposes the base door
+                return AppendOnlyStore.record(self, **fields)
+
+        store = BookSealArtifactStore(tmp_path / "a")
+        kw = dict(book_seal_key="k", request_hash="r")
+        store.open_claim(**kw, run_dir="rd", step_id="s", mode="dryrun", oos_window_id="w",
+                         provider_build_id="pb", calendar_policy_id="cp", seal_event_id="e")
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            raise RuntimeError("crash")
+
+        with pytest.raises(RuntimeError):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        sneaky = SneakyBook(tmp_path / "a")                 # same log directory
+        with pytest.raises(PublicRecordDisabledError):
+            sneaky.record(book_seal_key="k", request_hash="r", state="claimed")
+        with pytest.raises(PublicRecordDisabledError):
+            AppendOnlyStore.record(sneaky, book_seal_key="k", request_hash="r",
+                                   state="claimed")
+        assert store.current("k")["state"] == "execution_started"
+        with pytest.raises(BookSealStoreError, match="QUARANTINED"):
+            store.run_or_load_verdict(**kw, evaluator=boom, make_verdict=dict)
+        assert calls["n"] == 1
+
+        class SneakyA5(A5ReproductionStore):
+            PUBLIC_RECORD_ENABLED = True
+
+        a5 = A5ReproductionStore(tmp_path / "a5")
+        a5.open_or_resume(seal_key="s", request_hash="r", run_dir="rd", step_id="st")
+        a5.mark_execution_started(seal_key="s", request_hash="r")
+        with pytest.raises(PublicRecordDisabledError):
+            AppendOnlyStore.record(SneakyA5(tmp_path / "a5"), seal_key="s",
+                                   request_hash="r", state="claimed")
+        assert a5.current("s")["state"] == "execution_started"
+
+    def test_declared_rank_rule_is_the_rule_actually_executed(self, tmp_path, monkeypatch):
+        # THE R10 B1 probe (and the R9-prompt-named pin, now real): a protocol declaring
+        # ANY recipe the runtime does not execute — a different horizon, window, or an
+        # unsupported field value — refuses BEFORE any claim with zero seal events; the
+        # only declarable protocol is the executable one, so the declared rule can never
+        # diverge from the executed rule.
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            EXECUTABLE_PROTOCOL_FIELDS,
+        )
+        from src.research_orchestrator.promotion_evidence import (
+            PromotionEvidenceError,
+            reproduce_sealed_oos,
+        )
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        declared = _declared_bar()
+        prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
+        common = dict(
+            frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+            run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
+            fresh_window_override_id="ov_x",
+            registration_bar=declared["registration_bar"],
+            registration_bar_hash=declared["registration_bar_hash"])
+        # declared horizon 60 while the runtime executes 20 -> refuse
+        wrong_horizon = EvalProtocolSpec(
+            horizon=60, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            registration_bar_hash=declared["registration_bar_hash"],
+            **EXECUTABLE_PROTOCOL_FIELDS)
+        with pytest.raises(PromotionEvidenceError, match="protocol/runtime mismatch"):
+            reproduce_sealed_oos(**common, eval_protocol=wrong_horizon)
+        # declared neutralization the runtime does not perform -> refuse (never hashed)
+        unsupported = dict(EXECUTABLE_PROTOCOL_FIELDS)
+        unsupported["neutralization"] = "industry"
+        wrong_field = EvalProtocolSpec(
+            horizon=20, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            registration_bar_hash=declared["registration_bar_hash"], **unsupported)
+        with pytest.raises(PromotionEvidenceError, match="executes only"):
+            reproduce_sealed_oos(**common, eval_protocol=wrong_field)
+        assert HoldoutSealStore(root).list_events().empty
+
+    def test_cmd_seal_refuses_unsupported_runtime_declarations(self, tmp_path, monkeypatch):
+        # R10 B1 at the CLI layer: metric/neutralization/portfolio_side values the
+        # runtime cannot execute refuse up front (never silently hashed into identity).
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalContext,
+            FactorEvalError,
+            FactorIdentity,
+            cmd_characterize,
+            cmd_declare_target,
+            cmd_gate,
+            cmd_register,
+            cmd_seal,
+            cmd_select,
+        )
+        from src.alpha_research.factor_eval_skill.stage3_reader import ALL_UNIVERSES
+
+        _patch_sealed_world(monkeypatch, tmp_path)
+        rows = [{"factor": "tf", "universe_id": u, "heldout_rank_icir": 0.45,
+                 "mean_rank_ic": 0.045, "sign_consistency": 1.0, "coverage_tier": "broad",
+                 "effective_ic_days": 2600, "field_eligible": True,
+                 "layer1_methodology_hash": "l1hash"} for u in ALL_UNIVERSES]
+        matrix = tmp_path / "m.jsonl"
+        matrix.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        ctx = FactorEvalContext.create(
+            run_dir=tmp_path / "run", store_root=tmp_path / "store", registry_root=tmp_path / "reg",
+            resolve_factor=lambda fid: FactorIdentity(fid, f"def_{fid}", 2, "", "$close"),
+        )
+        cmd_register(ctx, factor_id="tf", mode="deployment_bound", evidence_tier="theory_a_priori",
+                     direction_source="theory", role="ranking", role_direction="long")
+        cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l",
+                           asof_policy="pit_lag_1")
+        cmd_characterize(ctx, matrix_path=matrix)
+        cmd_gate(ctx)
+        cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+        with pytest.raises(FactorEvalError, match="unsupported neutralization"):
+            cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1],
+                     neutralization="industry")
+        with pytest.raises(FactorEvalError, match="unsupported metric"):
+            cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1],
+                     metric="sharpe")
 
 
 class TestCatalogExpressionResolution:

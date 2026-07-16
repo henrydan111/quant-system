@@ -539,7 +539,10 @@ def cmd_seal(
     )
     # CANONICAL eval-protocol identity (GPT re-review #3.1): the full protocol, not a thin dict.
     from src.alpha_research.factor_eval_skill._hashing import payload_hash as _bar_phash
-    from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
+    from src.alpha_research.factor_eval_skill.sealed_oos import (
+        executable_protocol_spec,
+        registration_bar_snapshot,
+    )
 
     # R8 Blocker 3: THE single declaration point — the bar global is read ONCE here;
     # this exact snapshot is hashed into the protocol identity AND threaded down to the
@@ -547,12 +550,24 @@ def cmd_seal(
     # so the judgment executed is provably the judgment declared.
     bar_snapshot = registration_bar_snapshot()
     bar_hash = _bar_phash(bar_snapshot)
-    spec = EvalProtocolSpec(
-        horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}", metric=metric,
-        universe_filter_policy=sel.get("selection_universe", tud_a["target_universe_id"]),
-        portfolio_construction=f"decile_{portfolio_side}", neutralization=neutralization, rebalance=rebalance,
-        # R6 Blocker 3: the judgment bar is protocol identity — a changed bar is a new protocol.
-        registration_bar_hash=bar_hash,
+    # R10 Blocker 1: declarations are EXECUTED, never merely hashed — cmd_seal refuses
+    # any request the sealed registration runtime cannot execute, then declares the
+    # protocol ONLY through the executable constructor. Selection-time semantics
+    # (selection universe / rebalance cadence / held sides) remain FrozenSelectionSet
+    # identity — they are not runtime claims.
+    for name, declared_v, executable_v in (
+        ("metric", metric, "rank_icir"),
+        ("neutralization", neutralization, "none"),
+        ("portfolio_side", portfolio_side, "long_short"),
+    ):
+        if str(declared_v).strip().lower() != executable_v:
+            raise FactorEvalError(
+                f"unsupported {name}={declared_v!r}: the sealed registration runtime "
+                f"executes only {executable_v!r}; a declaration the runtime cannot "
+                "execute refuses (R10 B1)"
+            )
+    spec = executable_protocol_spec(
+        horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}"
     )
     # R7 Blocker 2: the SEAL KEY is derived from the OBSERVATION protocol (bar EXCLUDED)
     # — changing the judgment bar after an observation hits the SAME seal key and

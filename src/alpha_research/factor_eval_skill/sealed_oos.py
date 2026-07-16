@@ -170,6 +170,41 @@ def registration_bar_hash() -> str:
     return payload_hash(canonical_registration_bar_snapshot())
 
 
+# R10 Blocker 1 — the EXECUTABLE runtime protocol: what the sealed registration-metric
+# runner ACTUALLY does, as data. reproduce_sealed_oos executes decile long-short gross
+# registration metrics (rank_icir at `horizon` + primary-horizon ls_sharpe) over the
+# FULL provider universe with cs_rank / forward_return / no neutralization / no
+# rebalanced book. A declared EvalProtocolSpec must match these values EXACTLY (plus the
+# runtime horizon/n_quantiles/window) — declaring anything the runtime does not execute
+# REFUSES before any claim; it is never merely hashed into identity.
+EXECUTABLE_PROTOCOL_FIELDS: Mapping[str, str] = MappingProxyType({
+    "metric": "rank_icir",
+    "portfolio_construction": "decile_long_short",
+    "universe_filter_policy": "full_provider_universe",
+    "neutralization": "none",
+    "rebalance": "none",
+    "label_definition": "forward_return",
+    "rank_transform": "cs_rank",
+    "winsorization": "none",
+    "missing_data_policy": "drop",
+    "tie_break_policy": "average",
+    "cost_slippage_for_registration": "gross",
+})
+
+
+def executable_protocol_spec(*, horizon: int, n_quantiles: int, oos_window: str):
+    """Build THE declarable protocol for the sealed registration runtime: executable
+    constants + the runtime horizon/quantiles/window + the canonical bar hash. cmd_seal
+    (and any sanctioned caller) declares protocols ONLY through this constructor."""
+    from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+
+    return EvalProtocolSpec(
+        horizon=int(horizon), n_quantiles=int(n_quantiles), oos_window=str(oos_window),
+        registration_bar_hash=registration_bar_hash(),
+        **EXECUTABLE_PROTOCOL_FIELDS,
+    )
+
+
 def run_sealed_oos(
     *,
     frozen_set,
