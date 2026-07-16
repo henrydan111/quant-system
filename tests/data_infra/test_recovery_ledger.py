@@ -68,8 +68,8 @@ def test_contiguous_and_terminal_happy_path(led):
     row = _plan_row("daily", "20260702", "market/daily/2026/daily_20260702.parquet", limit=2)
     L.freeze_plan([row])
     rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]))                       # full page (==limit)
-    L.record_page(rid, 2, _df(["C.SZ"]), terminal_claim="last_partial")  # short -> terminal
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ", "B.SZ"]))                       # full page (==limit)
+    L.fetch_page(rid, 2, lambda: _df(["C.SZ"]), terminal_claim="last_partial")  # short -> terminal
     ev = L.verify_request(rid)
     assert ev["pre_dedup_rows"] == 3 and ev["post_dedup_rows"] == 3 and ev["excess_dup_rows"] == 0
     assert len(ev["ordered_page_hashes"]) == 2
@@ -80,8 +80,8 @@ def test_non_contiguous_pages_refused(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/a.parquet")
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]))
-    L.record_page(rid, 3, _df(["C.SZ"]), terminal_claim="last_partial")  # gap: no page 2
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ", "B.SZ"]))
+    L.fetch_page(rid, 3, lambda: _df(["C.SZ"]), terminal_claim="last_partial")  # gap: no page 2
     with pytest.raises(rl.LedgerError, match="contiguous"):
         L.verify_request(rid)
 
@@ -90,11 +90,11 @@ def test_exact_limit_last_page_needs_empty_terminal(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/b.parquet", limit=2)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]), terminal_claim="last_partial")  # rows==limit but claims terminal
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ", "B.SZ"]), terminal_claim="last_partial")  # rows==limit but claims terminal
     with pytest.raises(rl.LedgerError, match="trailing empty page"):
         L.verify_request(rid)
     # a trailing empty page fixes it
-    L.record_page(rid, 2, _df([]), terminal_claim="empty_terminal")
+    L.fetch_page(rid, 2, lambda: _df([]), terminal_claim="empty_terminal")
     assert L.verify_request(rid)["post_dedup_rows"] == 2
 
 
@@ -103,7 +103,7 @@ def test_null_natural_key_rejected(led):
     row = _plan_row("daily", "20260702", "o/c.parquet", limit=3)
     L.freeze_plan([row]); rid = row["request_id"]
     bad = pd.DataFrame({"ts_code": ["A.SZ", None], "trade_date": ["20260702", "20260702"], "v": [1, 2]})
-    L.record_page(rid, 1, bad, terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: bad, terminal_claim="last_partial")
     with pytest.raises(rl.LedgerError, match="null natural key"):
         L.verify_request(rid)
 
@@ -116,7 +116,7 @@ def test_duplicate_under_natural_key_always_refused(led):
     dup = _df(["A.SZ", "A.SZ"])  # duplicate (ts_code,trade_date) = the natural key
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=3, max_dups=0)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, dup, terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: dup, terminal_claim="last_partial")
     with pytest.raises(rl.LedgerError, match="duplicate rows under the NATURAL key"):
         L.verify_request(rid)
 
@@ -128,7 +128,7 @@ def test_natural_key_dups_refused_even_with_a_dup_budget(led):
     dup = _df(["A.SZ", "A.SZ"])
     row = _plan_row("top_inst", "20260702", "o/e.parquet", limit=3, max_dups=99)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, dup, terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: dup, terminal_claim="last_partial")
     with pytest.raises(rl.LedgerError, match="duplicate rows under the NATURAL key"):
         L.verify_request(rid)
 
@@ -144,7 +144,7 @@ def test_content_dedup_excess_bounded_by_declared_budget(led):
     row = _plan_row("income", "20260702", "o/i.parquet", limit=3, max_dups=0,
                     nk=("ts_code", "ann_date"), dedup=("ts_code", "end_date"))
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, df, terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: df, terminal_claim="last_partial")
     with pytest.raises(rl.LedgerError, match="exceeds the declared max_content_dups"):
         L.verify_request(rid)
 
@@ -155,7 +155,7 @@ def test_receipt_replaced_after_recording_is_caught(led):
     rp, L = led
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
     # find the receipt on disk and substitute its content
     import json as _j
     rec = None
@@ -177,7 +177,7 @@ def test_full_final_page_cannot_certify_via_a_generic_terminal(led):
     assert "contract_terminal" not in rl._TERMINALS
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=2)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]), terminal_claim="contract_terminal")  # FULL page
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ", "B.SZ"]), terminal_claim="contract_terminal")  # FULL page
     with pytest.raises(rl.LedgerError, match="valid terminal_claim"):
         L.verify_request(rid)
 
@@ -188,7 +188,7 @@ def test_single_page_contract_terminal_is_proof_checked(led):
     rp, L = led
     row = _plan_row("stock_basic", "20260702", "o/s.parquet", limit=0)  # -> single_page mode
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="single_page_contract")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="single_page_contract")
     ev = L.verify_request(rid)
     assert ev["post_dedup_rows"] == 1
 
@@ -199,7 +199,7 @@ def test_single_page_contract_claim_refused_under_offset_paging(led):
     rp, L = led
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=2, mode="offset_paged")
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="single_page_contract")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="single_page_contract")
     with pytest.raises(rl.LedgerError, match="single_page_contract invalid under offset_paged"):
         L.verify_request(rid)
 
@@ -208,7 +208,7 @@ def test_chain_tamper_detected(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/f.parquet")
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
     # edit a committed jsonl line -> the hash chain replay must fail
     lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[0]); rec["event"] = "tampered"; lines[0] = json.dumps(rec)
@@ -221,39 +221,117 @@ def test_truncated_tail_detected(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/g.parquet")
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
     lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
     L.ledger_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")  # drop the last line
     with pytest.raises(rl.LedgerError, match="head does not match|hash-chain"):
         L.verify_request(rid)
 
 
-def test_confirm_empty_requires_independent_attempts_and_a_verified_canary(led):
-    """GPT re-review #6 F2: the old gate demanded two empty receipts with DIFFERENT payload hashes —
-    unsatisfiable for honest identical-schema empties, and the old test only passed by ADDING A COLUMN
-    to change the schema. Independence is a property of the attempt ENVELOPE (a separate, separately
-    stamped fetch); two genuine empty responses are SUPPOSED to be byte-identical."""
+def test_confirm_empty_requires_two_completed_call_leases(led):
+    """GPT re-review #7 B1 (reproduced): attempt_uid/recorded_at were minted at RECORD time, so ONE
+    empty response recorded twice certified as two independent attempts — and the old test did exactly
+    that. Independence must evidence a real CALL: the ledger opens a lease BEFORE it invokes the
+    callable and closes it after, so two empty confirmations require two completed call leases with
+    disjoint windows."""
     _, L = led
     empt = _plan_row("moneyflow", "20260702", "o/mf1.parquet", empty="sparse_canary")
     can = _plan_row("moneyflow", "20260703", "o/mf2.parquet", empty="sparse_canary")
     L.freeze_plan([empt, can]); ride, ridc = empt["request_id"], can["request_id"]
-    # ONE empty attempt is never enough
-    L.record_page(ride, 1, _df([]), terminal_claim="empty_terminal")
-    with pytest.raises(rl.LedgerError, match="INDEPENDENT empty attempts"):
+    # ONE completed call lease is never enough
+    L.fetch_page(ride, 1, lambda: _df([]), terminal_claim="empty_terminal")
+    with pytest.raises(rl.LedgerError, match="COMPLETED CALL LEASES"):
         L.confirm_empty(ride, canary_request_id=ridc)
-    # a SECOND, BYTE-IDENTICAL empty attempt is a valid independent envelope (no schema games)...
-    L.record_page(ride, 1, _df([]), terminal_claim="empty_terminal")
+    # a SECOND real call (byte-identical empty response — no schema games) is a valid re-attempt...
+    L.fetch_page(ride, 1, lambda: _df([]), terminal_claim="empty_terminal")
     # ...but without a verified NONEMPTY same-endpoint canary it still refuses
     with pytest.raises(rl.LedgerError, match="canary"):
         L.confirm_empty(ride, canary_request_id=ridc)
-    # verify the canary (proves the endpoint really returns data) -> the empty is now confirmable
-    L.record_page(ridc, 1, _df(["X.SZ", "Y.SZ"]))
-    L.record_page(ridc, 2, _df(["Z.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(ridc, 1, lambda: _df(["X.SZ", "Y.SZ"]))
+    L.fetch_page(ridc, 2, lambda: _df(["Z.SZ"]), terminal_claim="last_partial")
     L.verify_request(ridc)
     L.confirm_empty(ride, canary_request_id=ridc)
     ok, pending = L.consolidation_allowed("moneyflow")
     assert ok and not pending
 
+
+def test_the_ledger_makes_the_call_itself(led):
+    """The adapter supplies a CALLABLE, never data it claims to have fetched. The ledger must invoke
+    it exactly once per lease, and a lease must not be reusable."""
+    _, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    calls = {"n": 0}
+
+    def one_call():
+        calls["n"] += 1
+        return _df(["A.SZ"])
+
+    n = L.fetch_page(rid, 1, one_call, terminal_claim="last_partial")
+    assert calls["n"] == 1 and n == 1, "the ledger must invoke the callable exactly once"
+    rows = json_rows(L)
+    opens = [r for r in rows if r.get("kind") == "lease_open"]
+    atts = [r for r in rows if r.get("kind") == "attempt"]
+    assert len(opens) == 1 and len(atts) == 1
+    # the lease was OPENED BEFORE the response was recorded — that ordering is the whole proof
+    assert opens[0]["seq"] < atts[0]["seq"]
+    assert atts[0]["lease_id"] == opens[0]["lease_id"]
+    assert atts[0]["opened_at"] == opens[0]["opened_at"] and atts[0]["closed_at"]
+
+
+def test_failed_call_leaves_a_failed_lease_and_no_attempt(led):
+    """A call that raises must leave durable evidence of the attempt and NO recorded page."""
+    _, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+
+    def boom():
+        raise RuntimeError("vendor 500")
+
+    with pytest.raises(RuntimeError, match="vendor 500"):
+        L.fetch_page(rid, 1, boom)
+    rows = json_rows(L)
+    assert [r for r in rows if r.get("kind") == "lease_open"], "no lease evidence for the failed call"
+    assert [r for r in rows if r.get("kind") == "lease_failed"], "failure not journalled"
+    assert not [r for r in rows if r.get("kind") == "attempt"], "a failed call recorded a page"
+    with pytest.raises(rl.LedgerError, match="no page receipts|contiguous"):
+        L.verify_request(rid)
+
+
+def test_adapter_supplied_raw_fetch_ts_refused(led):
+    """First-seen is coordinator-owned: a response that pre-stamps raw_fetch_ts is refused, and the
+    caller-controlled fetch_ts parameter is gone."""
+    _, L = led
+    import inspect
+    assert "fetch_ts" not in inspect.signature(rl.PageReceiptLedger.fetch_page).parameters
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    spiked = _df(["A.SZ"]).assign(raw_fetch_ts="2020-01-01T00:00:00Z")   # backdated by the adapter
+    with pytest.raises(rl.LedgerError, match="pre-supplied raw_fetch_ts"):
+        L.fetch_page(rid, 1, lambda: spiked, terminal_claim="last_partial")
+
+
+def test_non_dataframe_response_refused(led):
+    _, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    with pytest.raises(rl.LedgerError, match="not a DataFrame"):
+        L.fetch_page(rid, 1, lambda: {"rows": []})
+    assert [r for r in json_rows(L) if r.get("kind") == "lease_failed"]
+
+
+def test_confirm_empty_reuses_the_mode_specific_terminal_proof(led):
+    """GPT re-review #7 B1: confirm_empty did not reuse verify_request's typed proof, so an
+    offset_paged empty request could be confirmed on a single_page_contract claim."""
+    _, L = led
+    empt = _plan_row("moneyflow", "20260702", "o/mf1.parquet", empty="sparse_canary",
+                     limit=2, mode="offset_paged")
+    can = _plan_row("moneyflow", "20260703", "o/mf2.parquet", empty="sparse_canary")
+    L.freeze_plan([empt, can]); ride, ridc = empt["request_id"], can["request_id"]
+    L.fetch_page(ride, 1, lambda: _df([]), terminal_claim="single_page_contract")
+    L.fetch_page(ride, 1, lambda: _df([]), terminal_claim="single_page_contract")
+    with pytest.raises(rl.LedgerError, match="single_page_contract invalid under offset_paged"):
+        L.confirm_empty(ride, canary_request_id=ridc)
 
 def test_sparse_zero_rows_can_never_be_verified(led):
     """GPT re-review #6 F2 BLOCKER (reproduced): a SPARSE zero-row result fell through to `verified`,
@@ -263,7 +341,7 @@ def test_sparse_zero_rows_can_never_be_verified(led):
     _, L = led
     row = _plan_row("top_inst", "20260702", "o/ti.parquet", empty="sparse_canary", limit=2)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df([]), terminal_claim="empty_terminal")
+    L.fetch_page(rid, 1, lambda: _df([]), terminal_claim="empty_terminal")
     with pytest.raises(rl.LedgerError, match="can NEVER"):
         L.verify_request(rid)
     ok, pending = L.consolidation_allowed("top_inst")
@@ -276,8 +354,8 @@ def test_receipt_paths_are_attempt_unique_and_immutable(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
-    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]), terminal_claim="last_partial")  # retry of page 1
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ", "B.SZ"]), terminal_claim="last_partial")  # retry of page 1
     recs = [r["receipt"] for r in json_rows(L) if r.get("kind") == "attempt"]
     assert len(recs) == 2 and len(set(recs)) == 2, "retry reused the earlier attempt's receipt path"
     for r in recs:
@@ -290,7 +368,7 @@ def test_raw_fetch_ts_is_injected_by_the_coordinator(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
     L.freeze_plan([row]); rid = row["request_id"]
-    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
     rec = [r for r in json_rows(L) if r.get("kind") == "attempt"][0]
     fr = pd.read_parquet(L.rp.root / rec["receipt"])
     assert "raw_fetch_ts" in fr.columns and fr["raw_fetch_ts"].notna().all()
@@ -332,3 +410,36 @@ def test_row_payload_digest_is_typed_and_lossless(led):
     assert dig(pd.DataFrame({"v": [float("nan")]})) == dig(pd.DataFrame({"v": [float("nan")]}))
     # determinism for identical typed input
     assert dig(a) == dig(a.copy())
+
+
+def test_corrupted_staged_output_blocks_consolidation(led):
+    """GPT re-review #7 B2 (reproduced): the verdict recorded only an in-memory logical hash and
+    consolidation_allowed() trusted terminal STATE alone, so replacing the staged output with a valid
+    but DIFFERENT parquet after verification still allowed consolidation and staged the corrupt value.
+    A verdict is a statement about the bytes that existed at verify time — never about today's."""
+    rp, L = led
+    row = _plan_row("daily", "20260702", "market/daily/2026/daily_20260702.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
+    ev = L.verify_request(rid)
+    assert ev["output_bytes_sha256"] and ev["output_size"] > 0 and ev["output_path"]
+    ok, pending = L.consolidation_allowed("daily")
+    assert ok and not pending
+    # ---- replace the staged output with a VALID but different parquet ----
+    out = rp.staging_data / row["receipt_output"]
+    pd.DataFrame({"ts_code": ["EVIL.SZ"], "trade_date": ["20260702"], "v": [999]}).to_parquet(out, index=False)
+    with pytest.raises(rl.LedgerError, match="CHANGED since verification"):
+        L.consolidation_allowed("daily")
+    with pytest.raises(rl.LedgerError, match="CHANGED since verification"):
+        L.assert_staged_outputs_intact("daily")
+
+
+def test_deleted_staged_output_blocks_consolidation(led):
+    rp, L = led
+    row = _plan_row("daily", "20260702", "market/daily/2026/daily_20260702.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.fetch_page(rid, 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
+    L.verify_request(rid)
+    (rp.staging_data / row["receipt_output"]).unlink()
+    with pytest.raises(rl.LedgerError, match="is GONE since verification"):
+        L.consolidation_allowed("daily")

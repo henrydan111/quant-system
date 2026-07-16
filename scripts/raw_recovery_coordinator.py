@@ -62,7 +62,9 @@ RECOVERY_ROOT = Path(r"C:\quant_recovery") / "runs"
 CONTRACTS_YAML = E_ROOT / "workspace" / "configs" / "recovery_endpoint_contracts.yaml"
 MIN_STAGING_FREE_GB = 200
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_PLACEHOLDERS = {"", "x", "xx", "tbd", "todo", "na", "n/a", "-", "?", "pending"}
+_PLACEHOLDERS = {"", "x", "xx", "xxx", "tbd", "todo", "na", "n/a", "-", "?", "pending"}
+# Contracts are signed by a HUMAN who read the Tushare doc; the signature must name one.
+_KNOWN_SIGNERS = {"henry"}
 
 SURVIVOR_TREES = ["reference", "universe"]
 EVIDENCE_GLOBS = [
@@ -478,20 +480,50 @@ def parse_doc_identity(doc: Path) -> dict:
     return {"doc_id": mi.group(1) if mi else None, "api_name": ma.group(1) if ma else None}
 
 
+# GPT re-review #7 B7: a GENERIC `_vip` suffix strip let ANY `<x>_vip` endpoint claim `<x>`'s doc,
+# including combinations nobody reviewed. Aliases are now an EXPLICIT, reviewed map — one line per
+# accepted (endpoint -> documenting api) pair, with the reason it is legitimate.
+_DOC_ALIASES = {
+    # VIP bulk variants share their base interface's response schema; only the query/permission
+    # envelope differs, so the base doc IS the authority for their output fields.
+    "income_vip": "income",
+    "cashflow_vip": "cashflow",
+    "fina_indicator_vip": "fina_indicator",
+}
+
+
 def doc_declares_endpoint(api_name: str, endpoint: str) -> bool:
-    """A doc matches an endpoint if it documents that api, or its non-VIP base (income_vip -> income:
-    the VIP variants share the base interface doc)."""
-    return bool(api_name) and api_name in (endpoint, endpoint.replace("_vip", ""))
+    """A doc matches an endpoint if it documents that api exactly, or is that endpoint's EXPLICITLY
+    reviewed alias (no generic suffix stripping — see _DOC_ALIASES)."""
+    if not api_name:
+        return False
+    return api_name == endpoint or api_name == _DOC_ALIASES.get(endpoint)
 
 
-def parse_doc_field_vocabulary(doc: Path) -> set:
-    """Parse the DECLARED field vocabulary from a Tushare interface doc (M2). Every markdown table
-    whose header first cell is a field-name header (名称/字段/name) contributes its first-column
-    identifiers — the union across the input AND output tables is the doc's declared field set. Returns
-    an empty set if no field table is present (a wrong/output-less doc → the membership check refuses)."""
-    vocab, armed = set(), False
+_OUTPUT_MARKERS = frozenset({"输出参数", "输出指标", "返回参数", "返回指标"})
+_INPUT_MARKERS = frozenset({"输入参数", "请求参数"})
+
+
+def parse_doc_fields(doc: Path) -> dict:
+    """Parse a Tushare interface doc into its INPUT and OUTPUT field sets, kept SEPARATE.
+
+    GPT re-review #7 B7 (reproduced): this used to UNION the input and output tables, so a column that
+    exists only as a QUERY PARAMETER passed as a `natural_key` — e.g. `trade_date` is an input to
+    top_inst and appears in no output row, yet a contract keying on it validated clean. A row-identity
+    key must name a column the response actually CONTAINS.
+
+    Section markers (输出参数/输出指标/返回参数 vs 输入参数/请求参数) select which set a following
+    field table feeds. Tables before any marker are treated as INPUT — never silently as output."""
+    out, inp = set(), set()
+    section, armed = "input", False   # fail-safe default: unmarked tables are NOT output
     for line in doc.read_text(encoding="utf-8").splitlines():
         s = line.strip()
+        if s in _OUTPUT_MARKERS:
+            section, armed = "output", False
+            continue
+        if s in _INPUT_MARKERS:
+            section, armed = "input", False
+            continue
         if not s.startswith("|"):
             armed = False  # any non-table line ends the current table
             continue
@@ -505,8 +537,15 @@ def parse_doc_field_vocabulary(doc: Path) -> set:
         if armed:
             m = _DOC_IDENT.match(first)
             if m:
-                vocab.add(m.group(1))
-    return vocab
+                (out if section == "output" else inp).add(m.group(1))
+    return {"output": out, "input": inp,
+            "has_output_section": bool(out)}
+
+
+def parse_doc_field_vocabulary(doc: Path) -> set:
+    """The doc's OUTPUT (response) field set — the only vocabulary a row-identity key may draw on.
+    Empty when the doc declares no output section (wrong doc cited) → the membership check refuses."""
+    return parse_doc_fields(doc)["output"]
 
 
 def contract_errors(endpoint: str, c: dict) -> list:
@@ -577,20 +616,28 @@ def contract_errors(endpoint: str, c: dict) -> list:
                 if missing:
                     errs.append(f"{endpoint}: required_fields not in doc field list: {missing}")
             if nk_ok:
-                # derived columns are ENDPOINT-SCOPED (F4): an endpoint cannot borrow another's
-                allowed = vocab | derived_fields_for(endpoint) | (set(map(str, c["required_fields"]))
-                                                                  if rf_ok else set())
+                # derived columns are ENDPOINT-SCOPED (F4): an endpoint cannot borrow another's.
+                # required_fields are NOT unioned in — they are themselves validated against `vocab`
+                # above, so including them would let a FABRICATED required field vouch for a key.
+                allowed = vocab | derived_fields_for(endpoint)
                 bad = [f for f in c["natural_key"] if str(f) not in allowed]
                 if bad:
                     errs.append(f"{endpoint}: natural_key columns not in doc field list nor this "
                                 f"endpoint's declared derived fields: {bad}")
     if c["empty_policy"] not in ("dense_refuse", "sparse_canary"):
         errs.append(f"{endpoint}: empty_policy must be dense_refuse|sparse_canary")
-    if len(str(c["reviewed_by"]).strip()) < 3:
-        errs.append(f"{endpoint}: reviewed_by placeholder")
+    # GPT re-review #7 minor: a RECOGNIZED signer, not merely a >=3-char string ("xxx" passed).
+    if str(c["reviewed_by"]).strip().lower() not in _KNOWN_SIGNERS:
+        errs.append(f"{endpoint}: reviewed_by {c['reviewed_by']!r} is not a recognized signer "
+                    f"({sorted(_KNOWN_SIGNERS)}) — a contract signature must name a real reviewer")
+    # GPT re-review #7 minor: a timezone-NAIVE reviewed_at was silently assigned UTC, so a local
+    # timestamp could read as up to a day off (and slip a future review past the check).
     try:
         ts = datetime.fromisoformat(str(c["reviewed_at"]))
-        if ts.replace(tzinfo=ts.tzinfo or timezone.utc) > datetime.now(timezone.utc):
+        if ts.tzinfo is None or ts.tzinfo.utcoffset(ts) is None:
+            errs.append(f"{endpoint}: reviewed_at must be timezone-AWARE (got a naive timestamp; it "
+                        f"was previously assumed UTC, which silently accepts a wrong instant)")
+        elif ts > datetime.now(timezone.utc):
             errs.append(f"{endpoint}: reviewed_at in the future")
     except ValueError:
         errs.append(f"{endpoint}: reviewed_at not ISO-parseable")

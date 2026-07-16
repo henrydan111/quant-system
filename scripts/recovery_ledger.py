@@ -115,6 +115,37 @@ _TERMINALS = {
 }
 
 
+def _assert_terminal_proof(rid: str, row: dict, pages: dict, nums: list) -> None:
+    """The ONE typed terminal-proof validator (GPT re-review #7 B1: confirm_empty did not reuse
+    verify_request's mode-specific proof, so an `offset_paged` empty request could be confirmed on a
+    `single_page_contract` claim). Both verification paths call this; there is no second copy to drift."""
+    limit = int(row["page_limit"]) if row["page_limit"] else 0
+    mode = row["pagination_mode"]
+    if mode not in _PAGINATION_MODES:
+        raise LedgerError(f"{rid}: bad pagination_mode {mode!r}")
+    last = pages[nums[-1]]
+    tc = last.get("terminal_claim")
+    if tc not in _TERMINALS:
+        raise LedgerError(f"{rid}: last page lacks a valid terminal_claim ({tc})")
+    if mode == "single_page":
+        if tc != "single_page_contract":
+            raise LedgerError(f"{rid}: single_page mode requires terminal single_page_contract, got {tc}")
+        if limit or len(nums) != 1:
+            raise LedgerError(f"{rid}: single_page_contract requires page_limit==0 and exactly one page "
+                              f"(limit={limit}, pages={len(nums)})")
+    else:  # offset_paged
+        if tc == "single_page_contract":
+            raise LedgerError(f"{rid}: single_page_contract invalid under offset_paged")
+        if not limit:
+            raise LedgerError(f"{rid}: offset_paged requires a positive page_limit")
+        if tc == "last_partial" and last["row_count"] >= limit:
+            raise LedgerError(f"{rid}: last_partial claimed but last page is FULL "
+                              f"({last['row_count']} >= {limit}) — needs a trailing empty page "
+                              f"(empty_terminal); a full final page never proves termination")
+        if tc == "empty_terminal" and last["row_count"] != 0:
+            raise LedgerError(f"{rid}: empty_terminal claimed but last page has {last['row_count']} rows")
+
+
 class PageReceiptLedger:
     def __init__(self, rp, *, coordinator_commit: str, adapter_bundle_hash: str):
         # rp is the coordinator's RecoveryPaths (provides .broker() + run-root paths).
@@ -253,17 +284,27 @@ class PageReceiptLedger:
         out["row_payload_digest"] = digs
         return out
 
-    def record_page(self, rid: str, page: int, df, *, terminal_claim: str = "", fetch_ts: str = "") -> None:
-        """Persist a fetched page as an IMMUTABLE receipt; the COORDINATOR computes its row count and
-        BOTH hashes. GPT re-review #6 F2: receipt paths used to be reused on retry (so attempt bytes
-        were mutable) and only the LOGICAL frame was hashed. Now every attempt gets its OWN
-        attempt_uid-suffixed receipt that is never rewritten, is written THROUGH the broker, and is
-        bound by the sha256 of its PERSISTED BYTES as well as its logical content hash.
+    def fetch_page(self, rid: str, page: int, call, *, terminal_claim: str = ""):
+        """THE coordinator-owned fetch-attempt boundary (GPT re-review #7 B1).
 
-        `raw_fetch_ts` (the declared universal derivation) is injected HERE — the coordinator owns
-        first-seen; an adapter never supplies it."""
+        The old `record_page(df)` took data the adapter CLAIMED to have fetched and minted an
+        `attempt_uid` at RECORD time — so `attempt_uid`/`recorded_at` proved a LEDGER WRITE happened,
+        not an API CALL. One empty response recorded twice therefore certified as two independent
+        attempts (reproduced), and `confirm_empty` counted those. My own test did exactly that.
+
+        Now the ledger owns the call:
+          1. an OPEN lease row is fsync'd BEFORE the call — a call that crashes still leaves evidence;
+          2. the ledger INVOKES `call()` itself (a zero-arg callable performing EXACTLY ONE vendor API
+             call and returning its DataFrame) — an adapter never hands us data it says it fetched;
+          3. the response is recorded bound to that lease and the lease is CLOSED exactly once.
+        Two empty confirmations therefore require two COMPLETED CALL LEASES with disjoint time windows
+        — two calls the ledger actually made — never two record calls.
+
+        The lock is NOT held across the call (that would serialize the network and fight the §6.1
+        throttle); lease-open and lease-close each take it."""
         import io
         import uuid as _uuid
+        # ---- 1. OPEN the lease (durable, before the call) --------------------------------------
         with self.rp._lock():
             rows = self._load()
             plan = self._plan()
@@ -271,27 +312,62 @@ class PageReceiptLedger:
                 raise LedgerError(f"request {rid} not in the frozen plan")
             if self._state_of(rows, rid) in _TERMINAL:
                 raise LedgerError(f"request {rid} already terminal")
-            attempt_uid = _uuid.uuid4().hex
-            ts = fetch_ts or datetime.now(timezone.utc).isoformat()
+            lease_id = _uuid.uuid4().hex
+            opened_at = datetime.now(timezone.utc).isoformat()
+            self._append({"kind": "lease_open", "request_id": rid, "page": int(page),
+                          "lease_id": lease_id, "opened_at": opened_at})
+        # ---- 2. the LEDGER makes the call (outside the lock) ------------------------------------
+        try:
+            df = call()
+        except Exception as exc:
+            with self.rp._lock():
+                self._append({"kind": "lease_failed", "request_id": rid, "page": int(page),
+                              "lease_id": lease_id, "error": repr(exc)[:300]})
+            raise
+        if df is None or not hasattr(df, "columns"):
+            with self.rp._lock():
+                self._append({"kind": "lease_failed", "request_id": rid, "page": int(page),
+                              "lease_id": lease_id, "error": "call returned no DataFrame"})
+            raise LedgerError(f"{rid} page {page}: the fetch callable returned {type(df).__name__}, "
+                              f"not a DataFrame")
+        # ---- 3. record bound to the lease + CLOSE it exactly once --------------------------------
+        with self.rp._lock():
+            rows = self._load()
+            if any(r.get("kind") == "attempt" and r.get("lease_id") == lease_id for r in rows):
+                raise LedgerError(f"lease {lease_id} already consumed — a lease closes exactly once")
+            closed_at = datetime.now(timezone.utc).isoformat()
             body = df.reset_index(drop=True).copy()
-            if "raw_fetch_ts" not in body.columns:
-                body["raw_fetch_ts"] = ts  # coordinator-owned first-seen stamp (declared derivation)
+            # the coordinator OWNS first-seen: an adapter may never supply or pre-stamp it
+            if "raw_fetch_ts" in body.columns:
+                raise LedgerError(f"{rid} page {page}: the response carries a pre-supplied raw_fetch_ts "
+                                  f"— first-seen is coordinator-owned and may never come from the adapter")
+            body["raw_fetch_ts"] = opened_at   # stamped from the LEASE, not from a caller argument
             page_sha, n = _df_sha256(body)
             receipt = self.rp.assert_write(
-                self.receipts_dir / rid / f"page_{int(page)}__{attempt_uid}.parquet")
+                self.receipts_dir / rid / f"page_{int(page)}__{lease_id}.parquet")
             self.rp.broker().mkdirs(receipt.parent)
             buf = io.BytesIO()
             body.to_parquet(buf, index=False)
             payload = buf.getvalue()
             with self.rp.broker().open_for_write(receipt, "wb") as fh:  # broker-mediated, no raw path write
                 fh.write(payload)
-            self._append({"kind": "attempt", "request_id": rid, "endpoint": plan[rid]["endpoint"],
-                          "params": plan[rid]["params"], "page": int(page), "row_count": n,
-                          "attempt_uid": attempt_uid, "recorded_at": ts,
+            self._append({"kind": "attempt", "request_id": rid, "endpoint": self._plan()[rid]["endpoint"],
+                          "params": self._plan()[rid]["params"], "page": int(page), "row_count": n,
+                          "lease_id": lease_id, "attempt_uid": lease_id,
+                          "opened_at": opened_at, "closed_at": closed_at, "recorded_at": closed_at,
                           "page_sha256": page_sha,
                           "receipt_bytes_sha256": hashlib.sha256(payload).hexdigest(),
                           "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
                           "terminal_claim": terminal_claim})
+        return n
+
+    def _closed_leases(self, rows, rid):
+        """Attempts backed by a lease the ledger OPENED before the call and CLOSED after it — i.e.
+        calls the ledger actually made. This, not a count of record calls, is what proves a re-attempt."""
+        opened = {r["lease_id"]: r for r in rows
+                  if r.get("kind") == "lease_open" and r.get("request_id") == rid}
+        return [a for a in self._attempts(rows, rid)
+                if a.get("lease_id") in opened and a.get("closed_at")]
 
     def _attempts(self, rows, rid):
         return [r for r in rows if r.get("kind") == "attempt" and r.get("request_id") == rid]
@@ -337,29 +413,7 @@ class PageReceiptLedger:
                 for p in nums[:-1]:
                     if pages[p]["row_count"] != limit:
                         raise LedgerError(f"{rid}: short page {p} before the end (gap/truncation)")
-            last = pages[nums[-1]]
-            tc = last.get("terminal_claim")
-            if tc not in _TERMINALS:
-                raise LedgerError(f"{rid}: last page lacks a valid terminal_claim ({tc})")
-            # --- TYPED terminal PROOF: each claim must satisfy its machine-checked invariant --------
-            if mode == "single_page":
-                if tc != "single_page_contract":
-                    raise LedgerError(f"{rid}: single_page mode requires terminal single_page_contract, got {tc}")
-                if limit or len(nums) != 1:
-                    raise LedgerError(f"{rid}: single_page_contract requires page_limit==0 and exactly one "
-                                      f"page (limit={limit}, pages={len(nums)})")
-            else:  # offset_paged
-                if tc == "single_page_contract":
-                    raise LedgerError(f"{rid}: single_page_contract invalid under offset_paged")
-                if not limit:
-                    raise LedgerError(f"{rid}: offset_paged requires a positive page_limit")
-                if tc == "last_partial" and last["row_count"] >= limit:
-                    raise LedgerError(f"{rid}: last_partial claimed but last page is FULL "
-                                      f"({last['row_count']} >= {limit}) — needs a trailing empty page "
-                                      f"(empty_terminal); a full final page never proves termination")
-                if tc == "empty_terminal" and last["row_count"] != 0:
-                    raise LedgerError(f"{rid}: empty_terminal claimed but last page has "
-                                      f"{last['row_count']} rows")
+            _assert_terminal_proof(rid, row, pages, nums)
             # --- RECEIPT INTEGRITY: re-read each receipt and RE-COMPUTE its hash/rowcount ----------
             # GPT re-review #5 F2: verification used to trust the recorded hash and just read the file,
             # so a receipt REPLACED after recording still verified and its substituted rows landed in
@@ -427,13 +481,32 @@ class PageReceiptLedger:
                 raise LedgerError(f"{rid}: sparse dataset returned 0 rows — verify_request can NEVER "
                                   f"certify an empty result; use confirm_empty (>=2 independent attempt "
                                   f"envelopes + a verified nonempty same-endpoint canary)")
-            # write the per-request receipt output + hash
+            # Write the per-request staged output and bind it to its PERSISTED BYTES.
+            # GPT re-review #7 B2 (reproduced): the verdict recorded only an in-memory logical hash and
+            # consolidation_allowed() trusted terminal STATE alone — so replacing the output with a
+            # valid, different parquet after verification still passed consolidation and the corrupt
+            # value went on to be staged. That is exactly the in-scope "staged bytes corrupted between
+            # steps" case. The verdict now carries path/size/byte-hash/logical-hash, fsync'd, re-read
+            # and re-hashed from disk before it is recorded, and revalidated at consolidation.
+            import io as _io
             out = self.rp.assert_write(self.rp.staging_data / row["receipt_output"])
             self.rp.broker().mkdirs(out.parent)
-            deduped.reset_index(drop=True).to_parquet(out, index=False)
+            buf = _io.BytesIO()
+            deduped.reset_index(drop=True).to_parquet(buf, index=False)
+            out_payload = buf.getvalue()
+            with self.rp.broker().open_for_write(out, "wb") as fh:
+                fh.write(out_payload)
+                fh.flush()
+                os.fsync(fh.fileno())          # durable BEFORE we certify it
+            on_disk = out.read_bytes()          # re-READ: never certify the buffer we hoped we wrote
+            out_bytes_sha = hashlib.sha256(on_disk).hexdigest()
+            if out_bytes_sha != hashlib.sha256(out_payload).hexdigest():
+                raise LedgerError(f"{rid}: staged output on disk does not match what was written")
             out_sha, _ = _df_sha256(deduped)
             ev = {"pre_dedup_rows": pre, "post_dedup_rows": post, "excess_dup_rows": excess,
                   "null_key_rows": 0, "ordered_page_hashes": ordered_hashes, "output_sha256": out_sha,
+                  "output_path": row["receipt_output"], "output_size": len(on_disk),
+                  "output_bytes_sha256": out_bytes_sha,
                   "contract_sha256": row["contract_sha256"], "doc_sha256": row["doc_sha256"]}
             self._append({"kind": "verdict", "request_id": rid, "state": "verified", "evidence": ev})
             return ev
@@ -456,9 +529,7 @@ class PageReceiptLedger:
             nums = sorted(pages)
             if nums != list(range(1, len(nums) + 1)):
                 raise LedgerError(f"{rid}: confirmed_empty pages not contiguous 1..N: {nums}")
-            tc = pages[nums[-1]].get("terminal_claim")
-            if tc not in _TERMINALS:
-                raise LedgerError(f"{rid}: confirmed_empty last page lacks a valid terminal_claim ({tc})")
+            _assert_terminal_proof(rid, row, pages, nums)   # the SAME proof verify_request applies
             if any(pages[p]["row_count"] for p in nums):
                 raise LedgerError(f"{rid}: confirmed_empty but some page has rows")
             # GPT re-review #6 F2: the old rule required two empty receipts with DIFFERENT payload
@@ -467,16 +538,18 @@ class PageReceiptLedger:
             # schema. Independence is a property of the ATTEMPT ENVELOPE (a separate fetch, separately
             # stamped), never of the payload bytes: two genuine empty fetches are SUPPOSED to be
             # byte-identical.
-            empt = [a for a in self._attempts(rows, rid) if a["row_count"] == 0]
-            uids = {a.get("attempt_uid") for a in empt if a.get("attempt_uid")}
-            stamps = {a.get("recorded_at") for a in empt if a.get("recorded_at")}
-            if len(uids) < 2:
-                raise LedgerError(f"{rid}: confirmed_empty needs >=2 INDEPENDENT empty attempts "
-                                  f"(distinct attempt_uid envelopes); got {len(uids)}")
-            if len(stamps) < 2:
-                raise LedgerError(f"{rid}: confirmed_empty needs >=2 empty attempts separated in TIME "
-                                  f"(distinct recorded_at); got {len(stamps)} — one fetch recorded twice "
-                                  f"is not a re-attempt")
+            # GPT re-review #7 B1: counting attempt_uids counted LEDGER WRITES — one empty response
+            # recorded twice certified as two independent attempts. Only a COMPLETED CALL LEASE (opened
+            # by the ledger BEFORE it made the call, closed after) evidences a real fetch, and two of
+            # them must not overlap in time — concurrent leases would be one response fanned out.
+            empt = [a for a in self._closed_leases(rows, rid) if a["row_count"] == 0]
+            if len({a["lease_id"] for a in empt}) < 2:
+                raise LedgerError(f"{rid}: confirmed_empty needs >=2 COMPLETED CALL LEASES returning "
+                                  f"empty (the ledger must have made two real calls); got {len(empt)}")
+            windows = sorted((a["opened_at"], a["closed_at"]) for a in empt)
+            if not any(windows[i][1] <= windows[i + 1][0] for i in range(len(windows) - 1)):
+                raise LedgerError(f"{rid}: confirmed_empty needs two SEQUENTIAL empty calls (disjoint "
+                                  f"lease windows); the leases overlap, which is one response fanned out")
             can = plan.get(canary_request_id)
             if not can or can["endpoint"] != row["endpoint"]:
                 raise LedgerError(f"{rid}: canary must be a planned SAME-endpoint request")
@@ -486,9 +559,43 @@ class PageReceiptLedger:
             self._append({"kind": "verdict", "request_id": rid, "state": "confirmed_empty",
                           "canary_request_id": canary_request_id})
 
-    def consolidation_allowed(self, dataset: str):
+    def verdict_of(self, rows, rid):
+        ev = None
+        for r in rows:
+            if r.get("kind") == "verdict" and r.get("request_id") == rid:
+                ev = r.get("evidence") or ev
+        return ev
+
+    def assert_staged_outputs_intact(self, dataset: str) -> None:
+        """GPT re-review #7 B2: re-prove every VERIFIED staged output against the path/size/byte-hash
+        recorded in its verdict. A verdict is a statement about bytes that existed at verify time; it
+        is not evidence about the bytes that exist now. Called under the ledger lock at consolidation
+        and again immediately before any dataset build."""
         rows = self._load()
         plan = self._plan()
-        pend = [rid for rid, r in plan.items() if r["dataset"] == dataset
-                and self._state_of(rows, rid) not in _TERMINAL]
-        return (len(pend) == 0, pend)
+        for rid, r in plan.items():
+            if r["dataset"] != dataset or self._state_of(rows, rid) != "verified":
+                continue
+            ev = self.verdict_of(rows, rid) or {}
+            want = ev.get("output_bytes_sha256")
+            if not want:
+                raise LedgerError(f"{rid}: verified without a persisted-byte binding — re-verify")
+            out = self.rp.staging_data / ev.get("output_path", r["receipt_output"])
+            if not out.is_file():
+                raise LedgerError(f"{rid}: staged output {out} is GONE since verification")
+            raw = out.read_bytes()
+            if len(raw) != int(ev.get("output_size", -1)) or hashlib.sha256(raw).hexdigest() != want:
+                raise LedgerError(f"{rid}: staged output {out} CHANGED since verification "
+                                  f"(bytes/size mismatch) — rebuild it from the immutable receipts or "
+                                  f"refuse; a verified verdict is not evidence about today's bytes")
+
+    def consolidation_allowed(self, dataset: str):
+        with self.rp._lock():
+            rows = self._load()
+            plan = self._plan()
+            pend = [rid for rid, r in plan.items() if r["dataset"] == dataset
+                    and self._state_of(rows, rid) not in _TERMINAL]
+            if pend:
+                return (False, pend)
+            self.assert_staged_outputs_intact(dataset)   # bytes, not just state
+            return (True, [])

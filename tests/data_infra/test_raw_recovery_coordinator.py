@@ -443,7 +443,7 @@ def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(rrc, "E_ROOT", fake_root)
     monkeypatch.setattr(rrc, "DOC_MIRROR", fake_mirror)
     doc = fake_mirror / "27_daily.md"
-    doc.write_text("# (doc_id=27)\n接口：daily\n| 名称 | 类型 |\n| --- | --- |\n"
+    doc.write_text("# (doc_id=27)\n接口：daily\n输出参数\n| 名称 | 类型 |\n| --- | --- |\n"
                    "| ts_code | str |\n| trade_date | str |\n| close | float |\n", encoding="utf-8")
     c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
          "doc_id": "27",
@@ -454,3 +454,96 @@ def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
     errs = rrc.contract_errors("daily", c)
     assert any("report_rc_payload_digest" in e and "declared derived fields" in e for e in errs), errs
+
+
+# ── GPT re-review #7 B7 + minors: output-only fields, explicit aliases, real signatures ────────────
+def _mk_doc(mirror, name, body):
+    d = mirror / name
+    d.write_text(body, encoding="utf-8")
+    return d
+
+
+def _io_doc(api, doc_id):
+    """A doc whose INPUT table declares trade_date and whose OUTPUT table does NOT."""
+    return (f"# (doc_id={doc_id})\n\u63a5\u53e3\uff1a{api}\n"
+            "\u8f93\u5165\u53c2\u6570\n| \u540d\u79f0 | \u7c7b\u578b | \u5fc5\u9009 |\n| --- | --- | --- |\n"
+            "| trade_date | str | Y |\n\n"
+            "\u8f93\u51fa\u53c2\u6570\n| \u540d\u79f0 | \u7c7b\u578b | \u9ed8\u8ba4\u663e\u793a |\n| --- | --- | --- |\n"
+            "| ts_code | str | Y |\n| exalter | str | Y |\n")
+
+
+def test_input_only_field_cannot_be_a_natural_key(tmp_path, monkeypatch):
+    """GPT re-review #7 B7 (reproduced): the parser UNIONED input and output tables, so a column that
+    is only a QUERY PARAMETER passed as a natural_key. A row-identity key must name a column the
+    RESPONSE actually contains."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
+    fields = rrc.parse_doc_fields(doc)
+    assert fields["output"] == {"ts_code", "exalter"} and "trade_date" in fields["input"]
+    assert "trade_date" not in fields["output"], "input parameter leaked into the output vocabulary"
+    base = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
+            "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "trade_date"],
+            "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+            "empty_policy": "sparse_canary", "reviewed_by": "henry",
+            "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    assert any("trade_date" in e for e in rrc.contract_errors("top_inst", base))
+    assert rrc.contract_errors("top_inst", dict(base, natural_key=["ts_code", "exalter"])) == []
+
+
+def test_required_fields_cannot_vouch_for_a_natural_key(tmp_path, monkeypatch):
+    """A fabricated required field must not authorize the same fabricated natural-key column."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "made_up"], "natural_key": ["ts_code", "made_up"],
+         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    errs = rrc.contract_errors("top_inst", c)
+    assert any("required_fields not in doc field list" in e for e in errs)
+    assert any("natural_key columns not in doc field list" in e for e in errs), \
+        "a fabricated required field vouched for the natural key"
+
+
+def test_vip_aliases_are_explicit_not_a_suffix_strip():
+    """GPT re-review #7 B7: a generic `_vip` strip let ANY <x>_vip claim <x>'s doc. Aliases must be an
+    explicit reviewed map."""
+    assert rrc.doc_declares_endpoint("income", "income_vip") is True      # declared alias
+    assert rrc.doc_declares_endpoint("income", "income") is True
+    assert rrc.doc_declares_endpoint("daily", "daily_vip") is False       # never reviewed -> refuse
+    assert rrc.doc_declares_endpoint("moneyflow", "top_inst") is False
+    for ep, base in rrc._DOC_ALIASES.items():
+        assert ep.endswith("_vip") and base == ep[:-4]
+
+
+def test_reviewed_at_must_be_timezone_aware_and_signer_recognized(tmp_path, monkeypatch):
+    """GPT re-review #7 minors: a NAIVE reviewed_at was silently assumed UTC; reviewed_by accepted
+    'xxx' because it merely checked length >= 3."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "107_x.md", _io_doc("top_inst", 107))
+    good = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "107", "doc_sha256": rrc.sha256_file(doc),
+            "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
+            "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+            "empty_policy": "sparse_canary", "reviewed_by": "henry",
+            "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    assert rrc.contract_errors("top_inst", good) == []
+    naive = dict(good, reviewed_at=datetime.now().replace(tzinfo=None).isoformat())
+    assert any("timezone-AWARE" in e for e in rrc.contract_errors("top_inst", naive))
+    # "xxx" is refused as a placeholder (caught earlier); either refusal is correct, but it MUST refuse
+    xxx_errs = rrc.contract_errors("top_inst", dict(good, reviewed_by="xxx"))
+    assert any("reviewed_by" in e for e in xxx_errs), xxx_errs
+    # an unrecognized but non-placeholder name must still refuse — a signature names a REAL reviewer
+    assert any("not a recognized signer" in e for e in rrc.contract_errors("top_inst",
+                                                                           dict(good, reviewed_by="somebody")))
