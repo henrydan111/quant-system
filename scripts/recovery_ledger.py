@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -60,6 +60,9 @@ _PLAN_REQUIRED = {"request_id", "endpoint", "dataset", "params", "partition", "e
                   "receipt_output", "natural_key", "content_dedup_key", "page_limit",
                   "pagination_mode", "max_content_dups", "contract_sha256", "doc_sha256"}
 _PAGINATION_MODES = {"single_page", "offset_paged"}
+# columns the COORDINATOR injects — never part of a vendor payload digest
+_COORDINATOR_DERIVED_COLS = frozenset({"raw_fetch_ts", "row_payload_digest",
+                                       "report_rc_payload_digest", "_src_file", "_src_ordinal"})
 # TYPED terminal proofs (GPT re-review #5 F2 BLOCKER). The old generic `contract_terminal` was an
 # UNPROVEN claim: a FULL final page marked that way verified, skipping the trailing-empty confirmation
 # — i.e. a truncated fetch could certify as complete. Each terminal now carries a MACHINE-CHECKED
@@ -173,9 +176,40 @@ class PageReceiptLedger:
             self._append({"kind": "lifecycle", "event": name, **kw})
 
     # ── page receipts (coordinator-owned) ────────────────────────────────────────────────────────
-    def record_page(self, rid: str, page: int, df, *, terminal_claim: str = "") -> None:
-        """Persist a fetched page (a DataFrame) as an immutable receipt; the COORDINATOR computes its
-        row count + sha256. A retry of the same page supersedes the earlier attempt."""
+    @staticmethod
+    def add_row_payload_digest(df):
+        """EXECUTABLE producer for the `row_payload_digest` derivation (GPT re-review #6 F3: it was a
+        PROSE declaration with no producer — the matrix keyed the event families on a column nothing
+        computed, so any adapter built against it would fail 'output missing natural-key columns').
+
+        Canonical serialization: for each row, the VENDOR columns (every column except coordinator-
+        derived ones) in SORTED name order, each rendered as `name=repr` with a NUL separator, sha256'd.
+        MUST be computed on the RAW vendor page BEFORE any non-injective normalization, so the digest
+        stays lossless: two vendor rows differing in ANY field get different digests."""
+        import pandas as _pd  # noqa: F401
+        cols = sorted(c for c in df.columns if c not in _COORDINATOR_DERIVED_COLS)
+        if not cols:
+            raise LedgerError("row_payload_digest: no vendor columns to digest")
+
+        def _dig(rec):
+            payload = b"\x00".join(f"{c}={rec[c]!r}".encode("utf-8") for c in cols)
+            return hashlib.sha256(payload).hexdigest()
+
+        out = df.reset_index(drop=True).copy()
+        out["row_payload_digest"] = [_dig(r) for _, r in out[cols].iterrows()]
+        return out
+
+    def record_page(self, rid: str, page: int, df, *, terminal_claim: str = "", fetch_ts: str = "") -> None:
+        """Persist a fetched page as an IMMUTABLE receipt; the COORDINATOR computes its row count and
+        BOTH hashes. GPT re-review #6 F2: receipt paths used to be reused on retry (so attempt bytes
+        were mutable) and only the LOGICAL frame was hashed. Now every attempt gets its OWN
+        attempt_uid-suffixed receipt that is never rewritten, is written THROUGH the broker, and is
+        bound by the sha256 of its PERSISTED BYTES as well as its logical content hash.
+
+        `raw_fetch_ts` (the declared universal derivation) is injected HERE — the coordinator owns
+        first-seen; an adapter never supplies it."""
+        import io
+        import uuid as _uuid
         with self.rp._lock():
             rows = self._load()
             plan = self._plan()
@@ -183,13 +217,26 @@ class PageReceiptLedger:
                 raise LedgerError(f"request {rid} not in the frozen plan")
             if self._state_of(rows, rid) in _TERMINAL:
                 raise LedgerError(f"request {rid} already terminal")
-            receipt = self.rp.assert_write(self.receipts_dir / rid / f"page_{int(page)}.parquet")
+            attempt_uid = _uuid.uuid4().hex
+            ts = fetch_ts or datetime.now(timezone.utc).isoformat()
+            body = df.reset_index(drop=True).copy()
+            if "raw_fetch_ts" not in body.columns:
+                body["raw_fetch_ts"] = ts  # coordinator-owned first-seen stamp (declared derivation)
+            page_sha, n = _df_sha256(body)
+            receipt = self.rp.assert_write(
+                self.receipts_dir / rid / f"page_{int(page)}__{attempt_uid}.parquet")
             self.rp.broker().mkdirs(receipt.parent)
-            df.reset_index(drop=True).to_parquet(receipt, index=False)
-            page_sha, n = _df_sha256(df)
+            buf = io.BytesIO()
+            body.to_parquet(buf, index=False)
+            payload = buf.getvalue()
+            with self.rp.broker().open_for_write(receipt, "wb") as fh:  # broker-mediated, no raw path write
+                fh.write(payload)
             self._append({"kind": "attempt", "request_id": rid, "endpoint": plan[rid]["endpoint"],
                           "params": plan[rid]["params"], "page": int(page), "row_count": n,
-                          "page_sha256": page_sha, "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
+                          "attempt_uid": attempt_uid, "recorded_at": ts,
+                          "page_sha256": page_sha,
+                          "receipt_bytes_sha256": hashlib.sha256(payload).hexdigest(),
+                          "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
                           "terminal_claim": terminal_claim})
 
     def _attempts(self, rows, rid):
@@ -270,6 +317,11 @@ class PageReceiptLedger:
                 rec_path = self.rp.root / rec_rel
                 if not rec_path.is_file():
                     raise LedgerError(f"{rid}: page {p} receipt missing on disk: {rec_rel}")
+                raw = rec_path.read_bytes()
+                if "receipt_bytes_sha256" in pages[p] and \
+                        hashlib.sha256(raw).hexdigest() != pages[p]["receipt_bytes_sha256"]:
+                    raise LedgerError(f"{rid}: page {p} receipt BYTES on disk do not match the recorded "
+                                      f"byte hash — the receipt file was rewritten after recording")
                 fr = pd.read_parquet(rec_path)
                 got_sha, got_n = _df_sha256(fr)
                 if got_sha != pages[p]["page_sha256"]:
@@ -308,8 +360,19 @@ class PageReceiptLedger:
             if excess > max_dups:
                 raise LedgerError(f"{rid}: {excess} duplicate rows under {dk} exceeds the declared "
                                   f"max_content_dups={max_dups}")
-            if pre == 0 and row["empty_policy"] == "dense_refuse":
-                raise LedgerError(f"{rid}: dense dataset verified with 0 rows")
+            # GPT re-review #6 F2 BLOCKER (reproduced): a SPARSE zero-row result used to fall straight
+            # through to `verified` — bypassing the canary/confirmation gate entirely — and
+            # consolidation_allowed() accepts `verified`. So a request that returned nothing because the
+            # FETCH failed was indistinguishable from a partition the vendor genuinely has no data for:
+            # missing data could certify as complete. A zero-row result is now NEVER verifiable by
+            # verify_request under ANY empty_policy; sparse partitions must go through confirm_empty
+            # (independent re-attempt envelopes + a verified nonempty same-endpoint canary).
+            if pre == 0:
+                if row["empty_policy"] == "dense_refuse":
+                    raise LedgerError(f"{rid}: dense dataset verified with 0 rows")
+                raise LedgerError(f"{rid}: sparse dataset returned 0 rows — verify_request can NEVER "
+                                  f"certify an empty result; use confirm_empty (>=2 independent attempt "
+                                  f"envelopes + a verified nonempty same-endpoint canary)")
             # write the per-request receipt output + hash
             out = self.rp.assert_write(self.rp.staging_data / row["receipt_output"])
             self.rp.broker().mkdirs(out.parent)
@@ -344,9 +407,22 @@ class PageReceiptLedger:
                 raise LedgerError(f"{rid}: confirmed_empty last page lacks a valid terminal_claim ({tc})")
             if any(pages[p]["row_count"] for p in nums):
                 raise LedgerError(f"{rid}: confirmed_empty but some page has rows")
+            # GPT re-review #6 F2: the old rule required two empty receipts with DIFFERENT payload
+            # hashes — but two identical-schema empty responses hash IDENTICALLY, so the gate was
+            # unsatisfiable by honest data and my own test only passed by adding a column to change the
+            # schema. Independence is a property of the ATTEMPT ENVELOPE (a separate fetch, separately
+            # stamped), never of the payload bytes: two genuine empty fetches are SUPPOSED to be
+            # byte-identical.
             empt = [a for a in self._attempts(rows, rid) if a["row_count"] == 0]
-            if len({a["page_sha256"] for a in empt}) < 2:  # DISTINCT empty receipts, not one replayed twice
-                raise LedgerError(f"{rid}: confirmed_empty needs >=2 DISTINCT empty page receipts")
+            uids = {a.get("attempt_uid") for a in empt if a.get("attempt_uid")}
+            stamps = {a.get("recorded_at") for a in empt if a.get("recorded_at")}
+            if len(uids) < 2:
+                raise LedgerError(f"{rid}: confirmed_empty needs >=2 INDEPENDENT empty attempts "
+                                  f"(distinct attempt_uid envelopes); got {len(uids)}")
+            if len(stamps) < 2:
+                raise LedgerError(f"{rid}: confirmed_empty needs >=2 empty attempts separated in TIME "
+                                  f"(distinct recorded_at); got {len(stamps)} — one fetch recorded twice "
+                                  f"is not a re-attempt")
             can = plan.get(canary_request_id)
             if not can or can["endpoint"] != row["endpoint"]:
                 raise LedgerError(f"{rid}: canary must be a planned SAME-endpoint request")

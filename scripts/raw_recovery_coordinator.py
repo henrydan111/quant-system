@@ -430,7 +430,9 @@ def _coordinator_commit() -> str:
 
 
 # ── B4: structural doc-contract gate ─────────────────────────────────────────────────────────────
-CONTRACT_REQUIRED = ("doc_path", "doc_sha256", "required_fields", "natural_key", "pagination",
+# GPT re-review #6 F4: doc_id was OPTIONAL, so a contract that simply omitted it skipped the doc-id
+# binding check entirely (a valid contract with no doc_id produced no errors). It is REQUIRED now.
+CONTRACT_REQUIRED = ("doc_path", "doc_id", "doc_sha256", "required_fields", "natural_key", "pagination",
                      "rate_limit", "cadence", "pit_anchors", "empty_policy", "reviewed_by", "reviewed_at")
 
 # Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
@@ -559,8 +561,12 @@ def contract_errors(endpoint: str, c: dict) -> list:
         elif not doc_declares_endpoint(ident["api_name"], endpoint):
             errs.append(f"{endpoint}: doc {doc.name} documents endpoint '{ident['api_name']}' — WRONG "
                         f"doc cited for '{endpoint}'")
-        if c.get("doc_id") and ident["doc_id"] and str(c["doc_id"]) != ident["doc_id"]:
-            errs.append(f"{endpoint}: contract doc_id {c['doc_id']} != doc's own doc_id {ident['doc_id']}")
+        if not ident["doc_id"]:
+            errs.append(f"{endpoint}: doc {doc.name} carries no doc_id header — cannot bind the "
+                        f"contract to a specific interface document")
+        elif str(c["doc_id"]) != ident["doc_id"]:
+            errs.append(f"{endpoint}: contract doc_id {c['doc_id']} != doc's own doc_id "
+                        f"{ident['doc_id']}")
     if doc_ok and (rf_ok or nk_ok):
         vocab = parse_doc_field_vocabulary(doc)
         if not vocab:

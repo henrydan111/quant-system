@@ -121,6 +121,7 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
 
     def _good(doc):
         return {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+                "doc_id": rrc.parse_doc_identity(doc)["doc_id"],
                 "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],
                 "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
                 "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
@@ -160,9 +161,10 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
     # ...but another endpoint's derived field is NOT (F4: derived fields are endpoint-scoped)
     borrowed = dict(_good(doc), natural_key=["ts_code", "trade_date", "report_rc_payload_digest"])
     assert any("declared derived fields" in e for e in rrc.contract_errors("daily", borrowed))
-    # (g) M2: a doc with NO field table (wrong doc cited) refuses
+    # (g) M2: a doc with NO field table (wrong doc cited) refuses — it carries a valid identity header
+    # and 接口 binding so it reaches the field-table check rather than failing earlier on doc_id
     emptydoc = fake_mirror / "999_no_table.md"
-    emptydoc.write_text("# just prose, no field table\n", encoding="utf-8")
+    emptydoc.write_text("# (doc_id=999)\n接口：daily\njust prose, no field table\n", encoding="utf-8")
     assert any("no field table parsed" in e for e in rrc.contract_errors("daily", _good(emptydoc)))
 
 
@@ -369,6 +371,7 @@ def test_wrong_doc_for_endpoint_refused(tmp_path, monkeypatch):
                    "| --- | --- | --- | --- |\n| ts_code | str | Y | code |\n"
                    "| trade_date | str | Y | date |\n| exalter | str | Y | branch |\n", encoding="utf-8")
     base = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+            "doc_id": "107",
             "required_fields": ["ts_code", "trade_date", "exalter"], "natural_key": ["ts_code", "trade_date"],
             "pagination": "single page per trade_date", "rate_limit": "500/min@15000pts",
             "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
@@ -379,6 +382,26 @@ def test_wrong_doc_for_endpoint_refused(tmp_path, monkeypatch):
     # the SAME valid doc cited for a DIFFERENT endpoint -> refused
     errs = rrc.contract_errors("moneyflow", base)
     assert any("WRONG doc cited" in e and "top_inst" in e for e in errs), errs
+
+
+def test_omitted_doc_id_refused(tmp_path, monkeypatch):
+    """GPT re-review #6 F4 (reproduced): doc_id was OPTIONAL, so a valid contract that simply OMITTED it
+    skipped the binding check and produced no errors. It is REQUIRED now."""
+    fake_root = tmp_path
+    fake_mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    fake_mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", fake_mirror)
+    doc = fake_mirror / "107_x.md"
+    doc.write_text("# (doc_id=107)\n\u63a5\u53e3\uff1atop_inst\n| \u540d\u79f0 | \u7c7b\u578b |\n| --- | --- |\n"
+                   "| ts_code | str |\n| trade_date | str |\n", encoding="utf-8")
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
+         "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
+         "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}   # NO doc_id
+    assert "doc_id" in rrc.CONTRACT_REQUIRED
+    assert any("doc_id missing" in e for e in rrc.contract_errors("top_inst", c))
 
 
 def test_doc_id_mismatch_refused(tmp_path, monkeypatch):
@@ -423,6 +446,7 @@ def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
     doc.write_text("# (doc_id=27)\n接口：daily\n| 名称 | 类型 |\n| --- | --- |\n"
                    "| ts_code | str |\n| trade_date | str |\n| close | float |\n", encoding="utf-8")
     c = {"doc_path": str(doc.relative_to(fake_root)), "doc_sha256": rrc.sha256_file(doc),
+         "doc_id": "27",
          "required_fields": ["ts_code", "trade_date", "close"],
          "natural_key": ["ts_code", "trade_date", "report_rc_payload_digest"],  # borrowed from report_rc
          "pagination": "single", "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",

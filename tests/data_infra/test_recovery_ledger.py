@@ -47,6 +47,10 @@ def _plan_row(endpoint, part, out, *, empty="dense_refuse", limit=2, dedup=None,
             "max_content_dups": max_dups, "contract_sha256": "c" * 64, "doc_sha256": "d" * 64}
 
 
+def json_rows(L):
+    return [json.loads(x) for x in L.ledger_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
 def _df(codes, date="20260702"):
     return pd.DataFrame({"ts_code": list(codes), "trade_date": [date] * len(codes), "v": range(len(codes))})
 
@@ -161,7 +165,7 @@ def test_receipt_replaced_after_recording_is_caught(led):
             rec = rp.root / r["receipt"]
     assert rec and rec.is_file()
     _df(["EVIL.SZ"]).to_parquet(rec, index=False)   # swap the receipt's bytes
-    with pytest.raises(rl.LedgerError, match="does not match the recorded hash"):
+    with pytest.raises(rl.LedgerError, match="BYTES on disk do not match|does not match the recorded hash"):
         L.verify_request(rid)
 
 
@@ -224,25 +228,86 @@ def test_truncated_tail_detected(led):
         L.verify_request(rid)
 
 
-def test_confirm_empty_needs_distinct_receipts_and_verified_canary(led):
+def test_confirm_empty_requires_independent_attempts_and_a_verified_canary(led):
+    """GPT re-review #6 F2: the old gate demanded two empty receipts with DIFFERENT payload hashes —
+    unsatisfiable for honest identical-schema empties, and the old test only passed by ADDING A COLUMN
+    to change the schema. Independence is a property of the attempt ENVELOPE (a separate, separately
+    stamped fetch); two genuine empty responses are SUPPOSED to be byte-identical."""
     _, L = led
     empt = _plan_row("moneyflow", "20260702", "o/mf1.parquet", empty="sparse_canary")
     can = _plan_row("moneyflow", "20260703", "o/mf2.parquet", empty="sparse_canary")
     L.freeze_plan([empt, can]); ride, ridc = empt["request_id"], can["request_id"]
-    # two BYTE-IDENTICAL empty receipts do not count as distinct
+    # ONE empty attempt is never enough
     L.record_page(ride, 1, _df([]), terminal_claim="empty_terminal")
-    L.record_page(ride, 1, _df([]), terminal_claim="empty_terminal")
-    with pytest.raises(rl.LedgerError, match="DISTINCT empty"):
+    with pytest.raises(rl.LedgerError, match="INDEPENDENT empty attempts"):
         L.confirm_empty(ride, canary_request_id=ridc)
-    # verify the same-endpoint nonempty canary, then confirm_empty is admissible (distinct receipts via
-    # different page content on two pages)
+    # a SECOND, BYTE-IDENTICAL empty attempt is a valid independent envelope (no schema games)...
+    L.record_page(ride, 1, _df([]), terminal_claim="empty_terminal")
+    # ...but without a verified NONEMPTY same-endpoint canary it still refuses
+    with pytest.raises(rl.LedgerError, match="canary"):
+        L.confirm_empty(ride, canary_request_id=ridc)
+    # verify the canary (proves the endpoint really returns data) -> the empty is now confirmable
     L.record_page(ridc, 1, _df(["X.SZ", "Y.SZ"]))
     L.record_page(ridc, 2, _df(["Z.SZ"]), terminal_claim="last_partial")
     L.verify_request(ridc)
-    L.record_page(ride, 2, _df([], "20260702"), terminal_claim="empty_terminal")  # page 2 empty (distinct sha via page col? no)
-    # force two DISTINCT empty receipts by an empty page with a different column shape
-    empt2 = pd.DataFrame({"ts_code": [], "trade_date": [], "v": [], "extra": []})
-    L.record_page(ride, 2, empt2, terminal_claim="empty_terminal")
     L.confirm_empty(ride, canary_request_id=ridc)
     ok, pending = L.consolidation_allowed("moneyflow")
     assert ok and not pending
+
+
+def test_sparse_zero_rows_can_never_be_verified(led):
+    """GPT re-review #6 F2 BLOCKER (reproduced): a SPARSE zero-row result fell through to `verified`,
+    and consolidation_allowed() accepts `verified` — so a partition that returned nothing because the
+    FETCH failed was indistinguishable from one the vendor genuinely has no data for. Missing data
+    could certify as complete. verify_request must never certify an empty result."""
+    _, L = led
+    row = _plan_row("top_inst", "20260702", "o/ti.parquet", empty="sparse_canary", limit=2)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df([]), terminal_claim="empty_terminal")
+    with pytest.raises(rl.LedgerError, match="can NEVER"):
+        L.verify_request(rid)
+    ok, pending = L.consolidation_allowed("top_inst")
+    assert not ok and pending == [rid], "an unconfirmed sparse empty must BLOCK consolidation"
+
+
+def test_receipt_paths_are_attempt_unique_and_immutable(led):
+    """GPT re-review #6 F2: receipts used to reuse page_{n}.parquet, so a retry REWROTE the earlier
+    attempt's bytes. Each attempt now owns an attempt_uid-suffixed receipt."""
+    _, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    L.record_page(rid, 1, _df(["A.SZ", "B.SZ"]), terminal_claim="last_partial")  # retry of page 1
+    recs = [r["receipt"] for r in json_rows(L) if r.get("kind") == "attempt"]
+    assert len(recs) == 2 and len(set(recs)) == 2, "retry reused the earlier attempt's receipt path"
+    for r in recs:
+        assert (L.rp.root / r).is_file()  # BOTH attempts' bytes survive
+
+
+def test_raw_fetch_ts_is_injected_by_the_coordinator(led):
+    """GPT re-review #6 F4: `raw_fetch_ts` was a DECLARED derivation with no producer — record_page
+    never injected it. The coordinator owns first-seen; an adapter never supplies it."""
+    _, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
+    L.freeze_plan([row]); rid = row["request_id"]
+    L.record_page(rid, 1, _df(["A.SZ"]), terminal_claim="last_partial")
+    rec = [r for r in json_rows(L) if r.get("kind") == "attempt"][0]
+    fr = pd.read_parquet(L.rp.root / rec["receipt"])
+    assert "raw_fetch_ts" in fr.columns and fr["raw_fetch_ts"].notna().all()
+    assert rec.get("attempt_uid") and rec.get("recorded_at")
+
+
+def test_row_payload_digest_producer_is_executable_and_lossless(led):
+    """GPT re-review #6 F3: `row_payload_digest` was PROSE — the matrix keyed the event families on a
+    column nothing computed. The producer must exist and be lossless (any field change -> new digest)."""
+    _, L = led
+    a = pd.DataFrame([{"ts_code": "A.SZ", "trade_date": "20260702", "exalter": "X", "buy": 1.0}])
+    b = pd.DataFrame([{"ts_code": "A.SZ", "trade_date": "20260702", "exalter": "X", "buy": 2.0}])  # buy differs
+    da = rl.PageReceiptLedger.add_row_payload_digest(a)
+    db = rl.PageReceiptLedger.add_row_payload_digest(b)
+    assert "row_payload_digest" in da.columns
+    assert da["row_payload_digest"][0] != db["row_payload_digest"][0], "digest is NOT lossless"
+    # identical rows -> identical digest (deterministic); coordinator-derived cols are excluded
+    again = rl.PageReceiptLedger.add_row_payload_digest(a.assign(raw_fetch_ts="2026-07-16T00:00:00Z"))
+    assert again["row_payload_digest"][0] == da["row_payload_digest"][0], \
+        "digest must ignore coordinator-derived columns"

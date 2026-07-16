@@ -8,6 +8,8 @@
 #
 # Required keys per endpoint (validator schema):
 #   doc_path        : "Tushare数据接口/content/<doc_id>_<名称>.md"
+#   doc_id          : the interface doc id; MUST equal the doc's own `doc_id=` header AND the
+#                     doc must declare `接口：<this endpoint>` (or its non-VIP base)
 #   doc_sha256      : sha256 of the doc file actually read
 #   required_fields : [real column names; >=2; no placeholders] — must be a subset of the doc's field list
 #   natural_key     : [row-identity columns; no placeholders]
