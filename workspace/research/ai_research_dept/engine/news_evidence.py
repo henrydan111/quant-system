@@ -316,6 +316,26 @@ def _enforce_protected_namespaces(record_id: str, domain: str, evidence_class: s
     if schema_id != "generic_v1":
         raise RegistryError(f"{record_id!r} 非保护命名空间——只许 record_schema_id="
                             f"generic_v1(得 {schema_id!r};schema 与命名空间双向绑定)")
+    # re-review#3(chain) Major:news 罚分映射在**铸造点**强制——三条注册映射之外的
+    # penalty 授权不可铸(执行体信任的注册表元数据必须在 mint 时即合法):
+    # NFR 恰 {manipulation_risk};coordination_risk 恰 {coordination_risk};
+    # confidence_cap **只经** d7_child_v2 source_status 类型化分支(上方已 return);
+    # MFR 在 MF 命名空间分支(已 return)。其余任何类携带 penalty 用途 = 拒。
+    if "penalty" in uses:
+        if evidence_class == "NFR":
+            if dims != frozenset({"manipulation_risk"}):
+                raise RegistryError(
+                    f"{record_id}(NFR)penalty 维须恰 {{manipulation_risk}}"
+                    f"(得 {sorted(dims)})——注册映射不可跨/不可多维(re-review#3)")
+        elif evidence_class == "coordination_risk":
+            if dims != frozenset({"coordination_risk"}):
+                raise RegistryError(
+                    f"{record_id}(coordination_risk)penalty 维须恰 "
+                    f"{{coordination_risk}}(得 {sorted(dims)})——注册映射不可跨(re-review#3)")
+        else:
+            raise RegistryError(
+                f"{record_id}:类 {evidence_class!r} 不得携带 penalty 用途——news 罚分"
+                f"只能由 NFR/coordination_risk/D7 source_status(/宏观 MFR)接地(re-review#3)")
 
 
 # --------------------------------------------------- 逐卡注册记录(封印)

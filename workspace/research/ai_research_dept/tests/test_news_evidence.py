@@ -376,6 +376,54 @@ class TestRequireSealedRegistry:
                               target_dimension="event_materiality")
 
 
+class TestPenaltyMintMappings:
+    # re-review#3(chain) Major: the three sanctioned news-penalty mappings are
+    # enforced at the canonical MINT boundary (factory AND direct construction)
+    def test_multi_dimension_nfr_refused(self):
+        with pytest.raises(RegistryError, match="不可跨/不可多维"):
+            build_card_record("NFR01", domain="news", evidence_class="NFR",
+                              allowed_uses={"penalty", "bear"},
+                              allowed_consumers={"news", "bear"},
+                              allowed_dimensions={"manipulation_risk",
+                                                  "coordination_risk"})
+
+    def test_multi_dimension_nfc_refused(self):
+        with pytest.raises(RegistryError, match="注册映射不可跨"):
+            build_card_record("NFC01", domain="coordination",
+                              evidence_class="coordination_risk",
+                              allowed_uses={"penalty", "bear"},
+                              allowed_consumers={"news", "bear"},
+                              allowed_dimensions={"coordination_risk",
+                                                  "confidence_cap"})
+
+    def test_generic_positive_class_with_penalty_use_refused(self):
+        # an NFD record carrying penalty use could otherwise ground a penalty
+        with pytest.raises(RegistryError, match="不得携带 penalty"):
+            build_card_record("NFD01", domain="news", evidence_class="NFD",
+                              allowed_uses={"penalty", "bear"},
+                              allowed_consumers={"news"},
+                              allowed_dimensions={"confidence_cap"})
+
+    def test_direct_construction_same_lock(self):
+        # enforcement lives in __post_init__ — direct CardRecord construction
+        # takes the identical path
+        with pytest.raises(RegistryError, match="不可跨/不可多维"):
+            CardRecord(record_id="NFR01", domain="news", evidence_class="NFR",
+                       allowed_uses=frozenset({"penalty", "bear"}),
+                       allowed_consumers=frozenset({"news", "bear"}),
+                       allowed_dimensions=frozenset({"manipulation_risk",
+                                                     "coordination_risk"}))
+
+    def test_sanctioned_single_dim_mints_still_pass(self):
+        assert _coordination("NFC01").allowed_dimensions == frozenset(
+            {"coordination_risk"})
+        nfr = build_card_record("NFR01", domain="news", evidence_class="NFR",
+                                allowed_uses={"penalty", "bear"},
+                                allowed_consumers={"news", "bear"},
+                                allowed_dimensions={"manipulation_risk"})
+        assert nfr.positive_ceiling == 0
+
+
 # --------------------------------------------------- sealed registry
 
 class TestRegistry:
