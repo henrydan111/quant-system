@@ -770,6 +770,18 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
             f"D7 拆分覆盖不符:importance≥{D7_IMPORTANCE_FLOOR} 的基事实必须逐一被拆"
             f"(要求 {sorted(required)},实际 {sorted(prefixes)}——零拆/漏拆/多拆拒,"
             f"re-review#6 B2)")
+    # re-review#7 Blocker:claim **全局唯一**(工厂查过,手搭全重封工件必须同样过;
+    # 列表比对而非 set 化——绝不静默吞掉违规)。两个基事实共用一个 claim_id 会铸出
+    # 同 (claim_id, attribute_type) 的两份计分身份 = 双重授权。
+    split_claim_ids = [facts_by_id[p].claim_id for p in sorted(prefixes)]
+    if len(set(split_claim_ids)) != len(split_claim_ids):
+        raise RegistryError(
+            f"D7 拆分 claim 全局唯一性违反(得 {split_claim_ids})——两基共用 claim "
+            f"= 同 (claim, attribute) 双计分身份,拒(re-review#7 Blocker)")
+    claim_attr_keys = [(r.claim_id, r.attribute_type) for r in rows]
+    if len(set(claim_attr_keys)) != len(claim_attr_keys):
+        raise RegistryError(
+            "(claim_id, attribute_type) 重复——exact-once 是全局契约(re-review#7 Blocker)")
     # 重建:重铸降级父(源父的确定性变换)+ 重跑 _build_attribute_records
     rebuilt_rows, rebuilt_children, demoted_by_id = [], [], {}
     for p in sorted(prefixes):

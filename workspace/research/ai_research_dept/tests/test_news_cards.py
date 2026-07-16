@@ -812,6 +812,91 @@ class TestD7Artifact:
         with pytest.raises(RegistryError, match="子行集合"):
             verify_d7_artifact(empty)
 
+    def _hand_sealed_artifact(self, forged_facts):
+        """绕过工厂、全组件自洽重封地手搭工件(re-review#7 探针形态):对给定
+        (可能伪造的)基事实总体铸卡→手建行/子行/降级父/终注册表/束/工件。"""
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            AttributeBundle, D7DecisionArtifact,
+        )
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            build_card_record, build_card_registry as bcr,
+        )
+        card, records, _ = self._rendered()
+        recs_by_id = {r.record_id: r for r in records}
+        forged_card = RenderedCard(
+            card_name=card.card_name, cutoff_iso=card.cutoff_iso,
+            factor_payload_text=card.factor_payload_text,
+            restricted_text=card.restricted_text, record_ids=card.record_ids,
+            records_hash=card.records_hash,
+            base_fact_hashes=tuple(sorted(bf.fact_hash for bf in forged_facts)))
+        src = bcr(forged_card.cutoff_iso, records)
+        bf_by_id = {bf.base_record_id: bf for bf in forged_facts}
+        attrs = {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}
+        rows, children, demoted = [], [], {}
+        for p in ("NFD01", "NFI01"):
+            bf, base = bf_by_id[p], recs_by_id[p]
+            dem = build_card_record(p, domain=base.domain,
+                                    evidence_class=base.evidence_class,
+                                    allowed_uses={"context_only"},
+                                    allowed_consumers=base.allowed_consumers)
+            demoted[p] = dem
+            pairs = _build_attribute_records(
+                p, claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
+                evidence_class=bf.evidence_class, importance=bf.importance,
+                source_parent_content_hash=bf.base_content_hash,
+                registry_parent_content_hash=dem.content_hash, attributes=attrs)
+            rows.extend(r for r, _ in pairs)
+            children.extend(c for _, c in pairs)
+        fin = bcr(forged_card.cutoff_iso,
+                  [demoted.get(rid, rec) for rid, rec in src.records.items()] + children)
+        bundle = AttributeBundle(
+            decision_id="d1", cutoff_iso=forged_card.cutoff_iso,
+            source_card_hash=forged_card.card_hash,
+            base_fact_hashes=tuple(sorted(forged_card.base_fact_hashes)),
+            source_registry_hash=src.registry_hash,
+            claim_ids=tuple(sorted(bf_by_id[p].claim_id for p in ("NFD01", "NFI01"))),
+            row_hashes=tuple(sorted(r.row_hash for r in rows)),
+            child_record_hashes=tuple(sorted(c.content_hash for c in children)),
+            demoted_record_hashes=tuple(sorted(d.content_hash for d in demoted.values())),
+            final_registry_hash=fin.registry_hash)
+        return D7DecisionArtifact(card=forged_card, base_facts=tuple(forged_facts),
+                                  source_registry=src, rows=tuple(rows),
+                                  bundle=bundle, final_registry=fin)
+
+    def test_duplicate_claim_across_bases_rejected(self):
+        # re-review#7 Blocker probe: two major-event bases sharing ONE claim_id,
+        # everything self-consistently re-sealed -> must refuse (double authorization)
+        from workspace.research.ai_research_dept.engine.news_cards import verify_d7_artifact
+        _, _, facts = self._rendered()
+        bf_by_id = {bf.base_record_id: bf for bf in facts}
+        forged_nfi = D7BaseFact(
+            base_record_id="NFI01",
+            base_content_hash=bf_by_id["NFI01"].base_content_hash,
+            claim_id=bf_by_id["NFD01"].claim_id,              # SHARED claim
+            fact_cluster_id=bf_by_id["NFI01"].fact_cluster_id,
+            evidence_class="NFI", importance=4)
+        forged_facts = tuple(forged_nfi if bf.base_record_id == "NFI01" else bf
+                             for bf in facts)
+        art = self._hand_sealed_artifact(forged_facts)
+        with pytest.raises(RegistryError, match="claim 全局唯一"):
+            verify_d7_artifact(art)
+
+    def test_distinct_claims_shared_fact_cluster_allowed(self):
+        # control: distinct claims may legitimately share a fact_cluster_id
+        from workspace.research.ai_research_dept.engine.news_cards import verify_d7_artifact
+        _, _, facts = self._rendered()
+        bf_by_id = {bf.base_record_id: bf for bf in facts}
+        forged_nfi = D7BaseFact(
+            base_record_id="NFI01",
+            base_content_hash=bf_by_id["NFI01"].base_content_hash,
+            claim_id=bf_by_id["NFI01"].claim_id,              # own claim
+            fact_cluster_id=bf_by_id["NFD01"].fact_cluster_id,  # shared fact cluster
+            evidence_class="NFI", importance=4)
+        forged_facts = tuple(forged_nfi if bf.base_record_id == "NFI01" else bf
+                             for bf in facts)
+        art = self._hand_sealed_artifact(forged_facts)
+        assert verify_d7_artifact(art) is art                 # accepted
+
     def test_shifted_registry_cutoff_rejected(self):
         # re-review#6 Major-1: registries dated differently from card/bundle refuse
         from workspace.research.ai_research_dept.engine.news_cards import (
