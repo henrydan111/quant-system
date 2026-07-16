@@ -53,7 +53,12 @@ FAILED = "failed"
 # while rank_icir is read per-horizon (rank_icir_20d). Reproducing with this set + the
 # engine="batch" path matches the screening report bit-for-bit (verified: grow_total_
 # revenue 3.4441 vs 3.444, rev_turnover 2.6818 vs 2.682).
-SCREENING_HORIZONS = (5, 10, 20)
+# R11 Blocker: ONE constant — the executable axes ARE the screening horizons; a
+# declared horizon outside this set was runtime-EQUAL but never computed (NaN metrics
+# on a consumed seal).
+from src.alpha_research.factor_eval_skill.sealed_oos import EXECUTABLE_HORIZONS
+
+SCREENING_HORIZONS = EXECUTABLE_HORIZONS
 
 # The 6 PIT canary keys (mirrors pit_canaries.CANARY_KEYS; duplicated here to avoid importing the
 # heavy pit chain at module load — validated equal by test).
@@ -302,6 +307,21 @@ def reproduce_sealed_oos(
     ``independent_reproduction`` block with `source='qlib_windowed_features'`, provenance, and
     per-factor `oos_rank_icir` (read at `horizon`) + `oos_ls_sharpe` (primary horizon). The
     metrics GOVERN approval. Injectable deps for tests; live by default."""
+    # R11 Blocker: runtime-EQUAL is not runtime-EXECUTABLE — validate the axes
+    # INDEPENDENTLY here (exact-type callers can construct EvalProtocolSpec directly,
+    # bypassing the sanctioned constructor), BEFORE any claim or governance action.
+    from src.alpha_research.factor_eval_skill.sealed_oos import (
+        validate_executable_protocol_axes,
+    )
+
+    try:
+        horizon, n_quantiles = validate_executable_protocol_axes(
+            horizon=horizon,
+            n_quantiles=n_quantiles,
+        )
+    except ValueError as exc:
+        raise PromotionEvidenceError(str(exc)) from exc
+
     oos_end = oos_end or _default_oos_end()
     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
     calendar_end = str(prov.get("calendar_end"))

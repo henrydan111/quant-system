@@ -566,9 +566,14 @@ def cmd_seal(
                 f"executes only {executable_v!r}; a declaration the runtime cannot "
                 "execute refuses (R10 B1)"
             )
-    spec = executable_protocol_spec(
-        horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}"
-    )
+    try:
+        spec = executable_protocol_spec(
+            horizon=horizon, n_quantiles=n_quantiles, oos_window=f"{oos_start}..{oos_end}"
+        )
+    except ValueError as exc:
+        # R11 Blocker: non-executable axes (a horizon the screening never computes, a
+        # non-decile quantile count) refuse up front as a caller error.
+        raise FactorEvalError(str(exc)) from exc
     # R7 Blocker 2: the SEAL KEY is derived from the OBSERVATION protocol (bar EXCLUDED)
     # — changing the judgment bar after an observation hits the SAME seal key and
     # refuses at the spent-preflight / request-hash layer, instead of silently minting

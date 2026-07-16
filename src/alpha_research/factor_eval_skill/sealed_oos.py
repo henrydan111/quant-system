@@ -192,14 +192,46 @@ EXECUTABLE_PROTOCOL_FIELDS: Mapping[str, str] = MappingProxyType({
 })
 
 
+# R11 Blocker — the axes the sealed registration runtime can ACTUALLY execute.
+# runtime-EQUAL is not runtime-EXECUTABLE: run_batch_screening computes exactly these
+# horizons (a matched-but-uncomputed horizon like 60 would yield NaN metrics while
+# still consuming a seal), and the canonical protocol is the DECILE standard (a
+# quintile n_quantiles=5 would execute a different spread than the declared
+# decile_long_short construction).
+EXECUTABLE_HORIZONS = (5, 10, 20)
+
+
+def validate_executable_protocol_axes(
+    *, horizon: int, n_quantiles: int
+) -> tuple[int, int]:
+    horizon = int(horizon)
+    n_quantiles = int(n_quantiles)
+
+    if horizon not in EXECUTABLE_HORIZONS:
+        raise ValueError(
+            f"unsupported horizon={horizon}; executable horizons are "
+            f"{EXECUTABLE_HORIZONS}"
+        )
+    if n_quantiles != DEFAULT_N_QUANTILES:
+        raise ValueError(
+            f"unsupported n_quantiles={n_quantiles}; the canonical sealed "
+            f"protocol requires {DEFAULT_N_QUANTILES} deciles"
+        )
+    return horizon, n_quantiles
+
+
 def executable_protocol_spec(*, horizon: int, n_quantiles: int, oos_window: str):
     """Build THE declarable protocol for the sealed registration runtime: executable
-    constants + the runtime horizon/quantiles/window + the canonical bar hash. cmd_seal
+    constants + VALIDATED-executable runtime axes + the canonical bar hash. cmd_seal
     (and any sanctioned caller) declares protocols ONLY through this constructor."""
     from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
 
+    horizon, n_quantiles = validate_executable_protocol_axes(
+        horizon=horizon,
+        n_quantiles=n_quantiles,
+    )
     return EvalProtocolSpec(
-        horizon=int(horizon), n_quantiles=int(n_quantiles), oos_window=str(oos_window),
+        horizon=horizon, n_quantiles=n_quantiles, oos_window=str(oos_window),
         registration_bar_hash=registration_bar_hash(),
         **EXECUTABLE_PROTOCOL_FIELDS,
     )

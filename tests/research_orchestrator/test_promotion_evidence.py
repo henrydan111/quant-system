@@ -109,13 +109,13 @@ class GitStateTests(unittest.TestCase):
 
 class ReproduceSealedOosTests(unittest.TestCase):
     @staticmethod
-    def _protocol_spec(horizon=4, n_quantiles=10):
+    def _protocol_spec(horizon=20, n_quantiles=10):
         from src.alpha_research.factor_eval_skill.sealed_oos import executable_protocol_spec
 
         return executable_protocol_spec(horizon=horizon, n_quantiles=n_quantiles,
                                         oos_window="2021-01-01..2026-02-27")
 
-    def _declared_bar(self, horizon=4, n_quantiles=10):
+    def _declared_bar(self, horizon=20, n_quantiles=10):
         from src.alpha_research.factor_eval_skill._hashing import payload_hash
         from src.alpha_research.factor_eval_skill.sealed_oos import registration_bar_snapshot
 
@@ -140,7 +140,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
             lambda frozen_set, **kw: {"f_pos": "x", "f_neg": "y"}))
         return stack
 
-    def _frozen_set(self, horizon=4, n_quantiles=10):
+    def _frozen_set(self, horizon=20, n_quantiles=10):
         from src.research_orchestrator.frozen_selection_set import FrozenSelectionSet, SelectedFactor
         return FrozenSelectionSet(
             selected=(SelectedFactor("f_pos", 1, "h1", "long"), SelectedFactor("f_neg", 1, "h2", "short")),
@@ -192,15 +192,15 @@ class ReproduceSealedOosTests(unittest.TestCase):
         from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
         OOS_END = "2026-02-27"  # legacy-fixture literal (the recorded spent window)
         from src.research_orchestrator.holdout_seal import HoldoutSealStore
-        fs = self._frozen_set(4, 5)
+        fs = self._frozen_set(20, 10)
         cal, cf = self._fake_cf()
         _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
             store = HoldoutSealStore(d)
             with self._patch_sealed_world(d):
                 rep = reproduce_sealed_oos(
-                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(4, 5),
-                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=4, n_quantiles=5,
+                    frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(20, 10),
+                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=20, n_quantiles=10,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},
                     compute_factors_fn=cf, trade_cal=cal,
@@ -241,7 +241,7 @@ class ReproduceSealedOosTests(unittest.TestCase):
             with self._patch_sealed_world(d):
                 reproduce_sealed_oos(
                     frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(),
-                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=4,
+                    qlib_dir=".", run_dir=d, design_hash="dh", horizon=20,
                     provider_provenance={"provider_build_id": "pb1", "calendar_policy_id": "cp1",
                                          "calendar_end": OOS_END},
                     compute_factors_fn=cf, trade_cal=cal,

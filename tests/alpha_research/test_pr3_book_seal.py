@@ -1412,6 +1412,110 @@ class TestR10Hardening:
                      metric="sharpe")
 
 
+class TestR11ExecutableAxes:
+    def test_constructor_refuses_non_executable_axes(self):
+        # R11 B: the sanctioned constructor validates the axes.
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            EXECUTABLE_HORIZONS,
+            executable_protocol_spec,
+        )
+
+        assert EXECUTABLE_HORIZONS == (5, 10, 20)
+        with pytest.raises(ValueError, match="unsupported horizon=60"):
+            executable_protocol_spec(horizon=60, n_quantiles=10, oos_window="w")
+        with pytest.raises(ValueError, match="unsupported n_quantiles=5"):
+            executable_protocol_spec(horizon=20, n_quantiles=5, oos_window="w")
+
+    @pytest.mark.parametrize("horizon,n_quantiles,msg", [
+        (60, 10, "unsupported horizon=60"),   # runtime-EQUAL but never computed (NaN)
+        (20, 5, "unsupported n_quantiles=5"), # quintile execution vs declared deciles
+    ])
+    def test_matched_but_non_executable_axes_refuse_before_claim(
+        self, tmp_path, monkeypatch, horizon, n_quantiles, msg
+    ):
+        # THE R11 B probe: spec and runtime AGREE on the axes, but the runtime cannot
+        # execute them — refuse BEFORE any claim: zero evaluator calls, zero A5 rows,
+        # zero seal events. (Exact-type callers can build EvalProtocolSpec directly,
+        # so reproduce validates the axes independently of the constructor.)
+        import src.research_orchestrator.promotion_evidence as pe
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            EXECUTABLE_PROTOCOL_FIELDS,
+        )
+        from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
+        from src.research_orchestrator.promotion_evidence import (
+            PromotionEvidenceError,
+            reproduce_sealed_oos,
+        )
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        calls = {"n": 0}
+
+        def counting_metrics(**kw):
+            calls["n"] += 1
+            return ({}, "")
+
+        monkeypatch.setattr(pe, "_compute_oos_per_factor_metrics", counting_metrics)
+        declared = _declared_bar()
+        spec = EvalProtocolSpec(
+            horizon=horizon, n_quantiles=n_quantiles,
+            oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            registration_bar_hash=declared["registration_bar_hash"],
+            **EXECUTABLE_PROTOCOL_FIELDS)
+        with pytest.raises(PromotionEvidenceError, match=msg):
+            reproduce_sealed_oos(
+                frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+                run_dir=str(tmp_path / "run"), design_hash="d",
+                provider_provenance={"provider_build_id": "pb",
+                                     "calendar_policy_id": "cp",
+                                     "calendar_end": VIRGIN[1]},
+                fresh_window_override_id="ov_x",
+                horizon=horizon, n_quantiles=n_quantiles,
+                registration_bar=declared["registration_bar"],
+                registration_bar_hash=declared["registration_bar_hash"],
+                eval_protocol=spec)
+        assert calls["n"] == 0                                    # zero evaluator calls
+        assert HoldoutSealStore(root).list_events().empty          # zero seal events
+        assert OosWindowLedgerStore(root).list_all().empty         # zero A5 rows
+
+    def test_cmd_seal_wraps_axes_error(self, tmp_path, monkeypatch):
+        from src.alpha_research.factor_eval_skill.orchestration import (
+            FactorEvalContext,
+            FactorEvalError,
+            FactorIdentity,
+            cmd_characterize,
+            cmd_declare_target,
+            cmd_gate,
+            cmd_register,
+            cmd_seal,
+            cmd_select,
+        )
+        from src.alpha_research.factor_eval_skill.stage3_reader import ALL_UNIVERSES
+
+        _patch_sealed_world(monkeypatch, tmp_path)
+        rows = [{"factor": "tf", "universe_id": u, "heldout_rank_icir": 0.45,
+                 "mean_rank_ic": 0.045, "sign_consistency": 1.0, "coverage_tier": "broad",
+                 "effective_ic_days": 2600, "field_eligible": True,
+                 "layer1_methodology_hash": "l1hash"} for u in ALL_UNIVERSES]
+        matrix = tmp_path / "m.jsonl"
+        matrix.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        ctx = FactorEvalContext.create(
+            run_dir=tmp_path / "run", store_root=tmp_path / "store", registry_root=tmp_path / "reg",
+            resolve_factor=lambda fid: FactorIdentity(fid, f"def_{fid}", 2, "", "$close"),
+        )
+        cmd_register(ctx, factor_id="tf", mode="deployment_bound", evidence_tier="theory_a_priori",
+                     direction_source="theory", role="ranking", role_direction="long")
+        cmd_declare_target(ctx, target_universe_id="univ_liquid_top300", eligibility_policy="l",
+                           asof_policy="pit_lag_1")
+        cmd_characterize(ctx, matrix_path=matrix)
+        cmd_gate(ctx)
+        cmd_select(ctx, matrix_path=matrix, pool={"tf": "x"}, caps={"x": 1}, floor=0.10)
+        with pytest.raises(FactorEvalError, match="unsupported horizon=60"):
+            cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1], horizon=60)
+        with pytest.raises(FactorEvalError, match="unsupported n_quantiles=5"):
+            cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1], n_quantiles=5)
+
+
 class TestCatalogExpressionResolution:
     def _resolve(self, **kw):
         from src.research_orchestrator.promotion_evidence import (

@@ -231,7 +231,7 @@ class EvalProtocolSpec:
     n_quantiles: int
     oos_window: str
     metric: str
-    universe_filter_policy: str          # the selection/target universe the test is bound to
+    universe_filter_policy: str          # observation universe; A5 requires full_provider_universe
     portfolio_construction: str          # registration-metric book (e.g. decile_long_short)
     label_definition: str = "forward_return"
     rank_transform: str = "cs_rank"
@@ -239,7 +239,7 @@ class EvalProtocolSpec:
     missing_data_policy: str = "drop"
     tie_break_policy: str = "average"
     neutralization: str = "none"
-    rebalance: str = "20d"
+    rebalance: str = "none"              # registration observations have no rebalance schedule
     cost_slippage_for_registration: str = "gross"
     # R6 Blocker 3 + R7 Minor: the registration bar (judgment semantics) is part of the
     # FULL protocol identity — a changed bar is a DIFFERENT protocol, never a
