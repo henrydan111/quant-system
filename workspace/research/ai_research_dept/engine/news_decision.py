@@ -40,7 +40,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     EvidenceRef, RegistryError, assert_factor_payload, assert_leg_payload,
-    build_factor_payload_ids, extract_candidate_ids, require_sealed_registry,
+    build_factor_payload_ids, extract_candidate_id_occurrences,
+    require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -146,8 +147,9 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
     """原子首写胜出入账(BINDING #1)。账本持有**权威** decision_id;工件必须
     `verify_d7_artifact` 过门且其束 decision_id 与之逐字节相等。幂等 = 全部工件
     派生字段逐一相等;任一不同 = 拒(第二个世界线无法成为同一决策的权威)。"""
-    if not isinstance(decision_id, str) or not decision_id.strip():
-        raise RegistryError(f"权威 decision_id 须非空 str(得 {decision_id!r})")
+    if type(decision_id) is not str or not decision_id.strip():
+        raise RegistryError(f"权威 decision_id 须恰 str 非空(得 "
+                            f"{type(decision_id).__name__} {decision_id!r};子类拒)")
     verify_d7_artifact(artifact)
     if artifact.bundle.decision_id != decision_id:
         raise RegistryError(
@@ -325,12 +327,15 @@ def _derive_payload_facts(payload_ast, artifact, *, use: str, consumer_seat: str
     occurrences: list = []
     converted = _walk_ast(payload_ast, occurrences)
     text = json.dumps(converted, ensure_ascii=False, allow_nan=False)
-    extracted = extract_candidate_ids(text)
-    if set(occurrences) != extracted:
+    # re-review#2(seat) B2:**逐次出现序列**相等(有序+保多重性)——类型化引用无法
+    # 掩护同 ID 的裸副本(类型化 1 次 + 裸 2 次 = 终字节 3 次 ≠ 类型化 1 次,拒);
+    # 合法 payload 的类型化 DFS 序 == 序列化文本从左到右的出现序,逐一相等。
+    extracted_occ = extract_candidate_id_occurrences(text)
+    if list(occurrences) != extracted_occ:
         raise RegistryError(
-            f"引用出处不符:类型化 EvidenceRef 出现 {sorted(set(occurrences))} vs "
-            f"终字节抽取 {sorted(extracted)}——`[ID]` 语法为 EvidenceRef 专属,"
-            f"普通字符串引用样 token 拒(实现审 M2)")
+            f"引用出处不符(含重数):类型化 EvidenceRef 出现 {occurrences} vs "
+            f"终字节逐次抽取 {extracted_occ}——`[ID]` 语法为 EvidenceRef 专属,"
+            f"裸副本/引用样 token 拒(实现审 M2 + re-review#2 B2)")
     registry = artifact.final_registry
     if target_dimension is not None:
         if use != "factor_positive":
@@ -358,7 +363,14 @@ def build_sealed_payload(payload_ast, artifact: D7DecisionArtifact, *,
                          target_dimension: "str | None" = None) -> SealedPayload:
     """**咽喉点**(BINDING #1+#3+#4 + 实现审 B1/B2/M2):
     decision → 账本(全字段)→ 工件 → 终注册表 → 类型化 AST → 出处证明 →
-    终字节门 → 完整性 → 内部工厂铸印,一条不可分链。"""
+    终字节门 → 完整性 → 内部工厂铸印,一条不可分链。
+    re-review#2(seat) M1:席位/用途/维度/决策 id 全部**精确类型**先验(str 子类拒)。"""
+    if type(decision_id) is not str or not decision_id.strip():
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {type(decision_id).__name__})")
+    if type(consumer_seat) is not str or type(use) is not str:
+        raise RegistryError("consumer_seat/use 须恰 str(子类拒,re-review#2 M1)")
+    if target_dimension is not None and type(target_dimension) is not str:
+        raise RegistryError("target_dimension 须恰 str 或 None(子类拒)")
     entry = require_recorded(ledger_dir, decision_id, artifact)
     text, occurrences, authorized, expected = _derive_payload_facts(
         payload_ast, artifact, use=use, consumer_seat=consumer_seat,
@@ -386,13 +398,33 @@ def build_sealed_payload(payload_ast, artifact: D7DecisionArtifact, *,
 
 
 def verify_payload_for_execution(sp: SealedPayload, artifact: D7DecisionArtifact, *,
-                                 ledger_dir) -> SealedPayload:
-    """**执行体边界校验器**(实现审 B2:LLM 执行体只经此可达)。自洽自铸的
-    SealedPayload 在此无路——重跑账本门(全字段)、比对账本行/工件/束/注册表哈希、
-    **重序列化保留 AST** 并逐字节比对、终字节重门、期望总体/出现序列/授权集重推导
-    逐一比对。"""
+                                 ledger_dir, expected_decision_id: str,
+                                 expected_consumer_seat: str, expected_use: str,
+                                 expected_target_dimension: "str | None"
+                                 ) -> SealedPayload:
+    """**执行体边界校验器**(实现审 B2 + re-review#2 B1:**调用方声明期望上下文**,
+    绝不信对象自封的角色/槽位——penalty payload 冒充 factor 槽在此拒)。
+    期望四元组(decision_id, seat, use, dimension)先做**精确类型+精确值**比对,
+    再做语义重推导:重跑账本门(全字段)、比对账本行/工件/束/注册表哈希、
+    **重序列化保留 AST** 并逐字节比对、终字节重门、期望总体/出现序列/授权集重比。"""
     if not isinstance(sp, SealedPayload):
         raise RegistryError("执行体只收 SealedPayload(经边界校验器)")
+    # re-review#2 B1:期望上下文精确类型 + 精确值,先于一切语义重推导
+    if type(expected_decision_id) is not str or type(expected_consumer_seat) is not str \
+            or type(expected_use) is not str \
+            or (expected_target_dimension is not None
+                and type(expected_target_dimension) is not str):
+        raise RegistryError("期望上下文须恰 str(/None)——子类拒(re-review#2 B1)")
+    if (sp.decision_id != expected_decision_id
+            or sp.consumer_seat != expected_consumer_seat
+            or sp.use != expected_use
+            or sp.target_dimension != expected_target_dimension):
+        raise RegistryError(
+            f"payload 角色/槽位与期望上下文不符:对象自封 (decision={sp.decision_id!r}, "
+            f"seat={sp.consumer_seat!r}, use={sp.use!r}, dim={sp.target_dimension!r}) vs "
+            f"期望 ({expected_decision_id!r}, {expected_consumer_seat!r}, "
+            f"{expected_use!r}, {expected_target_dimension!r})——重放进错槽拒"
+            f"(re-review#2 B1)")
     verify_sealed(sp._payload(), sp.payload_hash, field_name="payload_hash")
     entry = require_recorded(ledger_dir, sp.decision_id, artifact)
     if seal_hash(entry) != sp.ledger_entry_hash:

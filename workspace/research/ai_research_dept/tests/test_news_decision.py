@@ -325,7 +325,113 @@ class TestSealedPayloadChokePoint:
             ledger_entry_hash="e" * 64, expected_ids=(), ref_occurrences=(),
             authorized_ids=(), payload_ast={}, payload_hash=seal_hash(fields))
         with pytest.raises(RegistryError, match="未入账"):
-            verify_payload_for_execution(forged, art, ledger_dir=tmp_path)
+            verify_payload_for_execution(
+                forged, art, ledger_dir=tmp_path, expected_decision_id="d9",
+                expected_consumer_seat="news", expected_use="factor_positive",
+                expected_target_dimension=None)
+
+
+class TestRoleReplay:
+    # re-review#2(seat) B1: the boundary must verify the CALLER'S expected
+    # context, never trust the object's sealed role/mode
+    def _ready(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            leg_expected_ids,
+        )
+        card, records, facts = render_news_flash_section(
+            [_assessed("重大订单甲", importance=5),
+             _assessed("传闻将重组", status="传闻", importance=3,
+                       dt="2025-01-27 08:00:00")], CUT)
+        art = build_attribute_bundle(
+            [{"base_record_id": "NFD01",
+              "attributes": {"fact": "签订 12 亿订单",
+                             "source_status": "公司公告官方证实"}}],
+            facts, records, card=card, decision_id="d1", cutoff=CUT)
+        record_decision(tmp_path, "d1", art)
+        pen_ids = leg_expected_ids(art.final_registry, use="penalty",
+                                   consumer_seat="news")
+        pen = build_sealed_payload({"risks": [EvidenceRef(r) for r in pen_ids]},
+                                   art, ledger_dir=tmp_path, decision_id="d1",
+                                   consumer_seat="news", use="penalty")
+        return art, pen
+
+    def test_penalty_payload_replayed_into_factor_slot_refused(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            verify_payload_for_execution,
+        )
+        art, pen = self._ready(tmp_path)
+        with pytest.raises(RegistryError, match="重放进错槽"):
+            verify_payload_for_execution(
+                pen, art, ledger_dir=tmp_path, expected_decision_id="d1",
+                expected_consumer_seat="news", expected_use="factor_positive",
+                expected_target_dimension=None)
+
+    def test_wrong_seat_or_dimension_replay_refused(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            verify_payload_for_execution,
+        )
+        art, pen = self._ready(tmp_path)
+        with pytest.raises(RegistryError, match="重放进错槽"):
+            verify_payload_for_execution(
+                pen, art, ledger_dir=tmp_path, expected_decision_id="d1",
+                expected_consumer_seat="bear", expected_use="penalty",
+                expected_target_dimension=None)
+        with pytest.raises(RegistryError, match="重放进错槽"):
+            verify_payload_for_execution(
+                pen, art, ledger_dir=tmp_path, expected_decision_id="d1",
+                expected_consumer_seat="news", expected_use="penalty",
+                expected_target_dimension="coordination_risk")
+
+    def test_subclass_expected_context_refused(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            verify_payload_for_execution,
+        )
+        art, pen = self._ready(tmp_path)
+
+        class S(str):
+            pass
+        with pytest.raises(RegistryError, match="子类拒"):
+            verify_payload_for_execution(
+                pen, art, ledger_dir=tmp_path, expected_decision_id=S("d1"),
+                expected_consumer_seat="news", expected_use="penalty",
+                expected_target_dimension=None)
+
+
+class TestProvenanceMultiplicity:
+    # re-review#2(seat) B2: a typed reference cannot shield bare same-id copies
+    def _ready(self, tmp_path):
+        art = _artifact()
+        record_decision(tmp_path, "d1", art)
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            leg_expected_ids,
+        )
+        ids = leg_expected_ids(art.final_registry, use="factor_positive",
+                               consumer_seat="news")
+        return art, ids
+
+    def test_typed_plus_bare_copy_refused(self, tmp_path):
+        art, ids = self._ready(tmp_path)
+        ast = {"facts": [EvidenceRef(r) for r in ids],
+               "note": f"[{ids[0]}]"}                   # bare same-id copy
+        with pytest.raises(RegistryError, match="重数|出处"):
+            build_sealed_payload(ast, art, ledger_dir=tmp_path, decision_id="d1",
+                                 consumer_seat="news", use="factor_positive")
+
+    def test_typed_plus_two_bare_copies_refused(self, tmp_path):
+        art, ids = self._ready(tmp_path)
+        ast = {"facts": [EvidenceRef(r) for r in ids],
+               "a": f"[{ids[0]}]", "b": f"参见 [{ids[0]}]"}
+        with pytest.raises(RegistryError, match="重数|出处"):
+            build_sealed_payload(ast, art, ledger_dir=tmp_path, decision_id="d1",
+                                 consumer_seat="news", use="factor_positive")
+
+    def test_bare_copy_in_dict_key_refused(self, tmp_path):
+        art, ids = self._ready(tmp_path)
+        ast = {"facts": [EvidenceRef(r) for r in ids],
+               f"[{ids[0]}]": "键里的裸副本"}
+        with pytest.raises(RegistryError, match="重数|出处"):
+            build_sealed_payload(ast, art, ledger_dir=tmp_path, decision_id="d1",
+                                 consumer_seat="news", use="factor_positive")
 
 
 class TestLegCompleteness:

@@ -582,21 +582,21 @@ class EvidenceRef:
         return f"[{self.record_id}]"
 
 
-def extract_candidate_ids(payload) -> set:
-    """从完整序列化 payload 抽取**每一个候选 record 引用**,**与注册表成员无关**
-    (re-review#4 B2:伪造/未知 ID 必须可见,不能因"不在已注册集"而静默缺席)。
-    候选 = 类型化 EvidenceRef 节点,或 ASCII `[ID]` 组且内文 fullmatch record-id
-    语法(D7 后缀作为一个原子——`[NFD01.fact]` 抽出整体,绝不退化成父 `NFD01`)。
-    递归遍历 dict/list/tuple/str;dict 键与值都扫。"""
-    found: set = set()
+def extract_candidate_id_occurrences(payload) -> list:
+    """从完整序列化 payload 抽取候选 record 引用的**逐次出现**(有序列表,
+    **保多重性**;re-review#2(seat) B2:set 形态会让"类型化引用 + 同 ID 裸副本"
+    互相掩护——重数必须可见)。候选 = 类型化 EvidenceRef 节点,或 ASCII `[ID]` 组
+    且内文 fullmatch record-id 语法(D7 后缀原子)。递归遍历 dict/list/tuple/str;
+    dict 键与值都扫;字符串内按出现位置从左到右。"""
+    found: list = []
 
     def walk(o):
         if isinstance(o, EvidenceRef):
-            found.add(o.record_id)
+            found.append(o.record_id)
         elif isinstance(o, str):
-            for inner in _BRACKET_REF_RE.findall(o):
-                if _ID_REF_GRAMMAR.fullmatch(inner):
-                    found.add(inner)
+            for m in _BRACKET_REF_RE.finditer(o):
+                if _ID_REF_GRAMMAR.fullmatch(m.group(1)):
+                    found.append(m.group(1))
         elif isinstance(o, dict):
             for k, v in o.items():
                 walk(k)
@@ -606,6 +606,12 @@ def extract_candidate_ids(payload) -> set:
                 walk(x)
     walk(payload)
     return found
+
+
+def extract_candidate_ids(payload) -> set:
+    """候选引用**集合**形态(仅用于成员/授权判定;重数判定用
+    `extract_candidate_id_occurrences`,re-review#2(seat) B2)。"""
+    return set(extract_candidate_id_occurrences(payload))
 
 
 def _assert_no_stray_known_ids(payload, known_ids: set, *, context: str) -> None:

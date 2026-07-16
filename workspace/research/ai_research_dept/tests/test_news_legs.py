@@ -391,8 +391,9 @@ class TestBindingBoundary:
         )
         art, out, fp, pp = self._run(tmp_path)
         assert fp.payload_hash == out.factor_payload_hash    # deterministic rebuild
-        assert verify_outcome_for_binding(out, art, fp, pp,
-                                          ledger_dir=tmp_path) is out
+        assert verify_outcome_for_binding(
+            out, art, fp, pp, ledger_dir=tmp_path,
+            expected_output_mode="primary_horizon") is out
 
     def test_binding_boundary_rejects_foreign_artifact(self, tmp_path):
         from workspace.research.ai_research_dept.engine.news_legs import (
@@ -401,4 +402,60 @@ class TestBindingBoundary:
         art, out, fp, pp = self._run(tmp_path)
         other = _artifact(with_penalty=False, decision_id="d2")   # different world
         with pytest.raises((RegistryError, LegIntegrityError)):
-            verify_outcome_for_binding(out, other, fp, pp, ledger_dir=tmp_path)
+            verify_outcome_for_binding(out, other, fp, pp, ledger_dir=tmp_path,
+                                       expected_output_mode="primary_horizon")
+
+    def test_mode_replay_refused_at_binding(self, tmp_path):
+        # re-review#2 B1: the frozen contract's expected mode is authoritative —
+        # an outcome sealed under a different mode (vector->primary re-mint or
+        # vice versa) refuses at the binding boundary
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            verify_outcome_for_binding,
+        )
+        art, out, fp, pp = self._run(tmp_path)          # out is primary_horizon
+        with pytest.raises(LegIntegrityError, match="模式重放"):
+            verify_outcome_for_binding(out, art, fp, pp, ledger_dir=tmp_path,
+                                       expected_output_mode="vector_only")
+
+    def test_swapped_leg_payloads_refused_at_binding(self, tmp_path):
+        # re-review#2 B1: the same penalty payload cannot satisfy both slots
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            verify_outcome_for_binding,
+        )
+        art, out, fp, pp = self._run(tmp_path)
+        with pytest.raises((RegistryError, LegIntegrityError)):
+            verify_outcome_for_binding(out, art, pp, pp, ledger_dir=tmp_path,
+                                       expected_output_mode="primary_horizon")
+
+
+class TestExactTypePrevalidation:
+    # re-review#2 M1: str subclasses must be refused BEFORE any executor runs
+    def test_output_mode_subclass_before_executor(self, tmp_path):
+        class S(str):
+            pass
+        art = _artifact(with_penalty=False)
+        record_decision(tmp_path, "d1", art)
+        calls = []
+        with pytest.raises(RegistryError, match="output_mode"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
+                              output_mode=S("primary_horizon"),
+                              factor_payload_ast=_factor_ast(art),
+                              penalty_payload_ast=None,
+                              factor_leg_fn=lambda sp: calls.append(sp),
+                              penalty_leg_fn=_OK)
+        assert calls == []
+
+    def test_decision_id_subclass_before_executor(self, tmp_path):
+        class S(str):
+            pass
+        art = _artifact(with_penalty=False)
+        record_decision(tmp_path, "d1", art)
+        calls = []
+        with pytest.raises(RegistryError, match="decision_id"):
+            run_news_two_legs(art, ledger_dir=tmp_path, decision_id=S("d1"),
+                              output_mode="primary_horizon",
+                              factor_payload_ast=_factor_ast(art),
+                              penalty_payload_ast=None,
+                              factor_leg_fn=lambda sp: calls.append(sp),
+                              penalty_leg_fn=_OK)
+        assert calls == []

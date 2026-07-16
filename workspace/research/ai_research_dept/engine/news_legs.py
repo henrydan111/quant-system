@@ -197,11 +197,18 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
        (抛异常=腿失败 → news 硬失败,**绝不静默空罚分**);
     4. 终态经 `NewsLegOutcome` 密封(矩阵重算自验)。
     执行体只收 SealedPayload——LLM 看到的就是被门与被封的字节。"""
-    # ---- 预校验(re-review M3:一切确定性配置错误在**任何执行体运行前**发现)----
-    if output_mode not in OUTPUT_MODES:
-        raise RegistryError(f"未注册 output_mode {output_mode!r}(须 ∈ {sorted(OUTPUT_MODES)})"
-                            f"——执行体前拒(M3)")
+    # ---- 预校验(re-review M3 + re-review#2 M1:一切确定性配置错误——含**精确
+    # 类型**(str 子类冒充 mode/decision_id)——在任何执行体运行前发现)----
+    if type(output_mode) is not str or output_mode not in OUTPUT_MODES:
+        raise RegistryError(f"未注册 output_mode {output_mode!r}"
+                            f"(须恰 str ∈ {sorted(OUTPUT_MODES)},子类拒)——执行体前拒(M3)")
+    if type(decision_id) is not str or not decision_id.strip():
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {type(decision_id).__name__})"
+                            f"——执行体前拒(re-review#2 M1)")
     verify_d7_artifact(artifact)
+    if decision_id != artifact.bundle.decision_id:
+        raise RegistryError(f"decision_id {decision_id!r} ≠ 工件 "
+                            f"{artifact.bundle.decision_id!r}——执行体前拒")
     eligible = penalty_eligible_records(artifact)
     count, set_hash = len(eligible), _eligible_set_hash(eligible)
     if count == 0 and penalty_payload_ast is not None:
@@ -222,8 +229,12 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
             penalty_payload_ast, artifact, ledger_dir=ledger_dir,
             decision_id=decision_id, consumer_seat="news", use="penalty")
 
-    # ---- 执行(执行体只经边界校验器可达,re-review B2)----
-    verify_payload_for_execution(factor_payload, artifact, ledger_dir=ledger_dir)
+    # ---- 执行(执行体只经边界校验器可达,且**调用方声明期望槽位**——penalty
+    # payload 冒充 factor 槽在此拒,re-review B2 + re-review#2 B1)----
+    verify_payload_for_execution(
+        factor_payload, artifact, ledger_dir=ledger_dir,
+        expected_decision_id=decision_id, expected_consumer_seat="news",
+        expected_use="factor_positive", expected_target_dimension=None)
     try:
         factor_leg_fn(factor_payload)
         factor_status = "success"
@@ -236,7 +247,10 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
     elif count == 0:
         penalty_status = "empty_success"              # 确定性封存,不调 LLM(M3⁴ 行1)
     else:
-        verify_payload_for_execution(penalty_payload, artifact, ledger_dir=ledger_dir)
+        verify_payload_for_execution(
+            penalty_payload, artifact, ledger_dir=ledger_dir,
+            expected_decision_id=decision_id, expected_consumer_seat="news",
+            expected_use="penalty", expected_target_dimension=None)
         try:
             penalty_leg_fn(penalty_payload)
             penalty_status = "success"
@@ -260,13 +274,23 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
 def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArtifact,
                                factor_payload: SealedPayload,
                                penalty_payload: "SealedPayload | None", *,
-                               ledger_dir) -> NewsLegOutcome:
-    """**档案/绑定边界**(re-review B3:绝不信终态自报值)。从已验工件**重算**
-    penalty 适格计数+集合哈希并比对;两腿 payload 经执行体边界校验器重验且哈希
-    与终态逐字节相等;决策 id 三方一致。绑定/发布只许消费过此门的终态。"""
+                               ledger_dir, expected_output_mode: str) -> NewsLegOutcome:
+    """**档案/绑定边界**(re-review B3 + re-review#2 B1:绝不信终态自报值,也绝不
+    信其自封 output_mode)。`expected_output_mode` 来自**冻结评分契约**——精确类型
+    +精确值比对(vector 跑的 payload 挂上新铸 primary 终态在此拒:契约说 vector 则
+    primary 终态不符,契约说 primary 则那才是合法模式);从已验工件**重算** penalty
+    适格计数+集合哈希;两腿 payload 经执行体边界校验器(**带期望槽位**——penalty
+    payload 冒充 factor 槽拒)重验且哈希与终态逐字节相等。"""
     if not isinstance(outcome, NewsLegOutcome):
         raise RegistryError("绑定边界只收 NewsLegOutcome")
+    if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
+        raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"
+                            f"(来自冻结评分契约;得 {expected_output_mode!r})")
     verify_sealed(outcome._payload(), outcome.outcome_hash, field_name="outcome_hash")
+    if outcome.output_mode != expected_output_mode:
+        raise LegIntegrityError(
+            f"终态自封 output_mode {outcome.output_mode!r} ≠ 冻结契约期望 "
+            f"{expected_output_mode!r}——模式重放/翻铸拒(re-review#2 B1)")
     verify_d7_artifact(artifact)
     if outcome.decision_id != artifact.bundle.decision_id:
         raise RegistryError("终态 decision_id 与工件不符(绑定边界)")
@@ -275,17 +299,21 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
             or outcome.penalty_eligible_set_hash != _eligible_set_hash(eligible)):
         raise LegIntegrityError(
             "终态自报的 penalty 适格计数/集合哈希与已验工件重算不符——拒(B3)")
-    verify_payload_for_execution(factor_payload, artifact, ledger_dir=ledger_dir)
-    if (factor_payload.payload_hash != outcome.factor_payload_hash
-            or factor_payload.decision_id != outcome.decision_id):
-        raise LegIntegrityError("factor payload 与终态自报哈希/决策不符(B3)")
+    verify_payload_for_execution(
+        factor_payload, artifact, ledger_dir=ledger_dir,
+        expected_decision_id=outcome.decision_id, expected_consumer_seat="news",
+        expected_use="factor_positive", expected_target_dimension=None)
+    if factor_payload.payload_hash != outcome.factor_payload_hash:
+        raise LegIntegrityError("factor payload 与终态自报哈希不符(B3)")
     if outcome.penalty_leg_status in ("success", "failed"):
         if penalty_payload is None:
             raise LegIntegrityError("penalty 执行过却未提供其 payload 供重验(B3)")
-        verify_payload_for_execution(penalty_payload, artifact, ledger_dir=ledger_dir)
-        if (penalty_payload.payload_hash != outcome.penalty_payload_hash
-                or penalty_payload.decision_id != outcome.decision_id):
-            raise LegIntegrityError("penalty payload 与终态自报哈希/决策不符(B3)")
+        verify_payload_for_execution(
+            penalty_payload, artifact, ledger_dir=ledger_dir,
+            expected_decision_id=outcome.decision_id, expected_consumer_seat="news",
+            expected_use="penalty", expected_target_dimension=None)
+        if penalty_payload.payload_hash != outcome.penalty_payload_hash:
+            raise LegIntegrityError("penalty payload 与终态自报哈希不符(B3)")
     elif penalty_payload is not None:
         raise LegIntegrityError(
             f"penalty {outcome.penalty_leg_status} 不该有 payload(绑定边界)")
