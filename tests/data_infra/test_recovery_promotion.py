@@ -396,3 +396,22 @@ def test_lost_family_records_old_absent_and_owes_no_tombstone(tmp_path):
     # a resume must not demand a tombstone that was never owed
     assert rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(
         unattended=True)[fp.family] == rp.SWAPPED
+
+
+def test_two_live_processes_same_run_id_refused(tmp_path):
+    """GPT re-review #7 B6 (reproduced): the O_EXCL sentinel treats a matching run_id as a resume, so
+    two coordinators alive concurrently under `run1` BOTH acquired the claim. Only a process-lifetime
+    OS lock can distinguish 'the previous process crashed' from 'a sibling is running right now'."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    first = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+    first._acquire_process_lock()
+    sibling = rp.PromotionCoordinator("run1", data_root, journal, [fp])   # SAME run_id, still alive
+    try:
+        with pytest.raises(rp.PromotionError, match="another LIVE process"):
+            sibling._acquire_process_lock()
+        # once the holder releases (process exit/crash does this for us), a genuine resume acquires it
+        first.release_process_lock()
+        sibling._acquire_process_lock()
+    finally:
+        sibling.release_process_lock()
+        first.release_process_lock()

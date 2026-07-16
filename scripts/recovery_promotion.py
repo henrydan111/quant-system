@@ -33,15 +33,15 @@ IN scope, and defended:
     + re-verification before every destructive step.
   * CORRUPTION of staged bytes between steps — incoming is re-proven against the frozen manifest
     immediately before the old tree is touched, and live is re-hashed on resume.
-  * CONCURRENT RUNS — an O_EXCL sentinel claim (a different run_id refuses).
+  * CONCURRENT RUNS and concurrent PROCESSES — an O_EXCL durable sentinel (a different run_id
+    refuses) PLUS a process-lifetime OS lock held across the mutation window (so two live processes
+    cannot both mutate even under ONE run_id; the kernel frees it on crash, so a genuine resume works).
 NOT YET TRUE, do not claim otherwise (GPT re-review #7 M2):
   * CONCURRENT CONSUMERS are NOT defended today. `assert_no_active_recovery` exists but has NO
     production caller — no raw reader / daily job / monthly bump / builder calls it, and there is no
     shared/exclusive generation barrier, so a consumer that started BEFORE the sentinel keeps running.
     This is a HARD PRE-PROMOTION INTEGRATION GATE (wire the hook into every consumer entry point, and
     the barrier, before any promotion is authorized) — not a property the code currently has.
-  * Two live processes sharing ONE run_id both pass the sentinel claim (it treats a matching run_id as
-    a resume). Needs a process-lifetime OS lock in addition to the durable sentinel.
 OUT of scope, deliberately NOT defended:
   * An ACTIVE ADVERSARY racing us mid-operation on this machine (swapping a component between two links
     of a handle chain, ADS/8.3-alias tricks, replacing a parent between validation and rename). This is
@@ -309,6 +309,7 @@ class PromotionCoordinator:
             self._assert_contained(fp)
         self.families = list(families)
         self._broker = None
+        self._lock_fd = None
         self._crash = crash_hook or (lambda _label: None)
 
     def _assert_contained(self, fp: "FamilyPlan") -> None:
@@ -397,11 +398,51 @@ class PromotionCoordinator:
                    and r.get("family") == fp.family and r.get("state") == OLD_MOVED
                    for r in self.journal._rows())
 
+    @property
+    def lock_path(self) -> Path:
+        return self.data_root / ".recovery_promotion.lock"
+
+    def _acquire_process_lock(self) -> None:
+        """PROCESS-LIFETIME exclusive lock (GPT re-review #7 B6). The durable sentinel records WHICH RUN
+        owns the promotion and survives a crash — but it treats a matching run_id as a resume, so TWO
+        LIVE PROCESSES sharing one run_id both passed it. An OS lock is the only thing that can answer
+        "is the previous process still alive?": the kernel releases it on exit or crash, so a genuine
+        crash-resume acquires it while a concurrent sibling cannot."""
+        if getattr(self, "_lock_fd", None) is not None:
+            return
+        import msvcrt
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)   # non-blocking: fail fast, never queue behind a peer
+        except OSError:
+            os.close(fd)
+            raise PromotionError(
+                f"another LIVE process already holds the promotion lock {self.lock_path} — two "
+                f"concurrent promotions would race the same live tree even under one run_id; REFUSING. "
+                f"(If the previous process crashed, the OS has already released this lock.)")
+        self._lock_fd = fd
+
+    def release_process_lock(self) -> None:
+        fd = getattr(self, "_lock_fd", None)
+        if fd is not None:
+            try:
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            os.close(fd)
+            self._lock_fd = None
+
     def acquire_exclusive(self) -> None:
         """Durable, EXCLUSIVE promotion claim (GPT re-review #6 F5: the sentinel was written with a
         plain truncating open, so a SECOND run simply overwrote the first run's claim and both mutated
         the live tree — one replaced the other's generation). Created O_EXCL: whoever wins owns the
-        promotion; a different run_id finding it REFUSES; our own run_id is a legitimate resume."""
+        promotion; a different run_id finding it REFUSES; our own run_id is a legitimate resume.
+
+        Paired with the PROCESS-LIFETIME OS lock (B6) taken around the mutation window by
+        promote_family/promote_all, so that "our own run_id" cannot mean two live processes: the
+        sentinel is the durable cross-crash record, the lock is the liveness check."""
         self.sentinel_path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"run_id": self.run_id, "families": [f.family for f in self.families]})
         try:
@@ -594,8 +635,12 @@ class PromotionCoordinator:
             raise PromotionError(f"{family!r} is not in this run's frozen plan "
                                  f"({[f.family for f in self.families]})")
         self.freeze_or_verify_plan()   # bind the run to an immutable plan before any mutation
-        self.acquire_exclusive()       # exclusive claim + arm the barrier
-        self._promote_family(match[0])
+        self.acquire_exclusive()       # durable run-level claim + arm the barrier
+        self._acquire_process_lock()   # B6: no sibling process may mutate concurrently, even same run
+        try:
+            self._promote_family(match[0])
+        finally:
+            self.release_process_lock()   # a real crash: the OS releases it for us
         row = self.journal.last_row(self.run_id, family)
         return {family: row["state"] if row else None}
 
@@ -610,8 +655,12 @@ class PromotionCoordinator:
                 "whole store is mutated without a per-family operator check")
         self.freeze_or_verify_plan()
         self.acquire_exclusive()
-        for fp in self.families:
-            self._promote_family(fp)
+        self._acquire_process_lock()   # B6
+        try:
+            for fp in self.families:
+                self._promote_family(fp)
+        finally:
+            self.release_process_lock()
         return {f: r["state"] for f, r in self.journal.replay(self.run_id).items()}
 
     def resume(self, *, unattended: bool = False) -> dict:
