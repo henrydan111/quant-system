@@ -224,7 +224,7 @@ class TestSealedPayloadChokePoint:
                                   target_dimension="event_materiality")
         with pytest.raises(SealError):
             SealedPayload(decision_id=sp.decision_id, consumer_seat=sp.consumer_seat,
-                          target_dimension=sp.target_dimension,
+                          use=sp.use, target_dimension=sp.target_dimension,
                           payload_text=sp.payload_text + "篡改",
                           registry_hash=sp.registry_hash,
                           authorized_ids=sp.authorized_ids,

@@ -694,6 +694,37 @@ def assert_factor_payload(payload, registry: SealedCardRegistry, *,
     return candidates
 
 
+def assert_leg_payload(payload, registry: SealedCardRegistry, *, use: str,
+                       consumer_seat: str) -> set:
+    """**腿级** payload 门(M2‴ 元数据过滤):factor/penalty 腿的整体 payload 校验——
+    每个引用必须 (a) 已注册(未知/伪造硬失败)、(b) `use ∈ allowed_uses ∧
+    consumer_seat ∈ allowed_consumers`;裸已知 ID 同样硬失败。与逐维
+    `assert_factor_payload` 的区别:腿 payload 合法地含多维记录(D7 属性行各限一维),
+    维度绑定在**计分时**由 `dimension_ceiling` 逐维执行,此处只门 use×seat。"""
+    if use not in USES:
+        raise RegistryError(f"未注册 use {use!r}(须 ∈ {sorted(USES)})")
+    registry = require_sealed_registry(registry)
+    candidates = extract_candidate_ids(payload)
+    known = set(registry.records)
+    unknown = candidates - known
+    if unknown:
+        raise PayloadGateError(
+            f"{use} 腿 payload(seat={consumer_seat})含**未注册** record 引用 "
+            f"{sorted(unknown)}——伪造/未知 ID 硬失败")
+    _assert_no_stray_known_ids(payload, known,
+                               context=f"{use} 腿 payload(seat={consumer_seat})")
+    offenders = []
+    for rid in sorted(candidates):
+        rec = registry.get(rid)
+        if use not in rec.allowed_uses or consumer_seat not in rec.allowed_consumers:
+            offenders.append((rid, rec.evidence_class, sorted(rec.allowed_uses)))
+    if offenders:
+        raise PayloadGateError(
+            f"{use} 腿 payload(seat={consumer_seat})含未授权注册 ID:"
+            + "; ".join(f"{rid}[{ec},uses={u}]" for rid, ec, u in offenders))
+    return candidates
+
+
 def build_factor_payload_ids(registry: SealedCardRegistry, *, consumer_seat: str,
                              target_dimension: str) -> list:
     """构造-自-注册表方向(M1″):返回对 (seat, dimension) **授权 factor_positive** 的

@@ -38,7 +38,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
-    EvidenceRef, RegistryError, assert_factor_payload, build_factor_payload_ids,
+    EvidenceRef, RegistryError, assert_factor_payload, assert_leg_payload,
+    build_factor_payload_ids,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -218,11 +219,12 @@ def factor_refs(artifact: D7DecisionArtifact, *, consumer_seat: str,
 @dataclass(frozen=True)
 class SealedPayload:
     """LLM 调用的唯一输入单元(BINDING #4):精确 payload 文本 + 注册表哈希 +
-    决策/席位/维度身份,payload_hash 全 SHA-256 密封。调用方消费 payload_text,
-    档案封 payload_hash + registry_hash。"""
+    决策/席位/用途/维度身份,payload_hash 全 SHA-256 密封。调用方消费
+    payload_text,档案封 payload_hash + registry_hash。"""
     decision_id: str
     consumer_seat: str
-    target_dimension: str
+    use: str                         # factor_positive | penalty(腿级门)
+    target_dimension: "str | None"   # 逐维门时给;腿级门为 None
     payload_text: str
     registry_hash: str
     authorized_ids: tuple
@@ -236,27 +238,37 @@ class SealedPayload:
 
     def _payload(self) -> dict:
         return {"decision_id": self.decision_id, "seat": self.consumer_seat,
-                "dimension": self.target_dimension, "payload_text": self.payload_text,
+                "use": self.use, "dimension": self.target_dimension,
+                "payload_text": self.payload_text,
                 "registry_hash": self.registry_hash,
                 "authorized_ids": list(self.authorized_ids)}
 
 
 def build_sealed_payload(payload_ast, artifact: D7DecisionArtifact, *,
                          ledger_dir, decision_id: str, consumer_seat: str,
-                         target_dimension: str) -> SealedPayload:
+                         use: str = "factor_positive",
+                         target_dimension: "str | None" = None) -> SealedPayload:
     """**咽喉点**(BINDING #1+#3+#4):decision → 账本 → 工件 → 终注册表 → 精确
     payload 一条不可分链:
     1. `require_recorded`——决策必须已原子入账且与工件逐字节一致(先账本后 payload);
     2. 封闭 AST 序列化 → **最终字节**;
-    3. `assert_factor_payload` 跑在最终字节上(LLM 看到什么门什么,BINDING #3:
-       未注册引用/裸已知 ID/未授权记录在此硬失败);
-    4. 密封 (payload 文本, 注册表哈希, 决策/席位/维度) 五元组 → SealedPayload。"""
+    3. 门跑在最终字节上(LLM 看到什么门什么,BINDING #3):给 `target_dimension` =
+       逐维 `assert_factor_payload`(仅 factor_positive);不给 = 腿级
+       `assert_leg_payload`(use×seat,M2‴ 双腿元数据过滤);
+    4. 密封 (payload 文本, 注册表哈希, 决策/席位/用途/维度) → SealedPayload。"""
     require_recorded(ledger_dir, decision_id, artifact)
     text = serialize_payload_ast(payload_ast)
-    authorized = assert_factor_payload(text, artifact.final_registry,
-                                       consumer_seat=consumer_seat,
-                                       target_dimension=target_dimension)
+    if target_dimension is not None:
+        if use != "factor_positive":
+            raise RegistryError("逐维门仅限 use=factor_positive(penalty 腿走腿级门)")
+        authorized = assert_factor_payload(text, artifact.final_registry,
+                                           consumer_seat=consumer_seat,
+                                           target_dimension=target_dimension)
+    else:
+        authorized = assert_leg_payload(text, artifact.final_registry, use=use,
+                                        consumer_seat=consumer_seat)
     return SealedPayload(decision_id=decision_id, consumer_seat=consumer_seat,
-                         target_dimension=target_dimension, payload_text=text,
+                         use=use, target_dimension=target_dimension,
+                         payload_text=text,
                          registry_hash=artifact.final_registry.registry_hash,
                          authorized_ids=tuple(sorted(authorized)))
