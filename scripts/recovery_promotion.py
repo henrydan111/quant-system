@@ -351,7 +351,16 @@ class PromotionCoordinator:
         """Bind this run to an IMMUTABLE plan (paths + manifest hashes). A resume whose plan differs —
         different families, paths, or expected content — is REFUSED rather than silently re-planned."""
         ph = self._plan_hash()
-        existing = self.journal.plan_row(self.run_id)
+        # GPT re-review #8: re-verify the plan is UNIQUE after taking the lock — if a pre-lock race
+        # already appended two plan rows for this run, neither is authoritative and we must not pick one.
+        rows = [r for r in self.journal._rows()
+                if r.get("kind") == "plan" and r.get("run_id") == self.run_id]
+        if len(rows) > 1:
+            raise PromotionError(
+                f"run {self.run_id} has {len(rows)} plan rows with "
+                f"{len({r.get('plan_hash') for r in rows})} distinct hashes — a concurrent freeze raced; "
+                f"no frozen plan is authoritative. Resolve by hand before any mutation.")
+        existing = rows[0] if rows else None
         if existing is None:
             self.journal.append_plan(self.run_id, ph, [fp.family for fp in self.families])
         elif existing.get("plan_hash") != ph:
@@ -634,10 +643,14 @@ class PromotionCoordinator:
         if not match:
             raise PromotionError(f"{family!r} is not in this run's frozen plan "
                                  f"({[f.family for f in self.families]})")
-        self.freeze_or_verify_plan()   # bind the run to an immutable plan before any mutation
-        self.acquire_exclusive()       # durable run-level claim + arm the barrier
-        self._acquire_process_lock()   # B6: no sibling process may mutate concurrently, even same run
+        # GPT re-review #8: the lock came AFTER freeze_or_verify_plan, so two processes under one
+        # run_id could BOTH see "no plan yet" and append DIFFERENT plan_hashes; the lock then only
+        # serialized the mutation, and the winner executed against a plan inconsistent with the frozen
+        # record. The freeze is a compare-and-append: it must itself be exclusive.
+        self._acquire_process_lock()   # FIRST — covers the plan freeze, not just the mutation
         try:
+            self.freeze_or_verify_plan()   # compare-and-append, now serialized
+            self.acquire_exclusive()       # durable run-level claim + arm the barrier
             self._promote_family(match[0])
         finally:
             self.release_process_lock()   # a real crash: the OS releases it for us
@@ -653,10 +666,10 @@ class PromotionCoordinator:
                 "promote_all() is an UNATTENDED sweep over every family; promotion is human-driven — "
                 "use promote_family(<name>) per family, or pass unattended=True to accept that the "
                 "whole store is mutated without a per-family operator check")
-        self.freeze_or_verify_plan()
-        self.acquire_exclusive()
-        self._acquire_process_lock()   # B6
+        self._acquire_process_lock()   # FIRST — the plan freeze is itself a compare-and-append (R8)
         try:
+            self.freeze_or_verify_plan()
+            self.acquire_exclusive()
             for fp in self.families:
                 self._promote_family(fp)
         finally:

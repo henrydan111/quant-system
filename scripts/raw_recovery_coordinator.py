@@ -107,6 +107,9 @@ class EndpointRow:
     consolidation_group: str
     tail_rule: str
     max_content_dups: int = 0  # DECLARED bound the ledger enforces under content_dedup_key (0 = none)
+    # REQUIRED when len(source_endpoints) > 1 (GPT re-review #8): the EXPLICIT join/output rule.
+    #   {join_on: (cols...), base: <endpoint>, how: left|inner}
+    merge_spec: dict = _dcfield(default_factory=dict)
     callable: str = "UNBOUND (bind post-contract)"
     note: str = ""
     sidecars: tuple = ()
@@ -123,7 +126,9 @@ ENDPOINT_MATRIX = [
        pit_version_key=(), content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
        empty_policy="dense_refuse", profile_key_dups_expected=False, consolidation_group="daily_per_date",
        tail_rule="sessions 20260702..last-complete",
-       note="THREE source endpoints merged into one per-date file; bypass init_market_data.main()"),
+       merge_spec={"join_on": ("ts_code", "trade_date"), "base": "daily", "how": "left"},
+       note="THREE source endpoints merged into one per-date file over ONE population snapshot "
+            "(identical trade_date partitions per leg); bypass init_market_data.main()"),
     _r(owner="A02", output_family="market/index", source_endpoints=("index_daily",), query_mode="per_index_range",
        vendor_record_key=("ts_code", "trade_date"), pit_version_key=(), content_dedup_key=("ts_code", "trade_date"),
        profile_key=("ts_code", "trade_date"), empty_policy="dense_refuse", profile_key_dups_expected=False,
@@ -601,28 +606,96 @@ def _population_spec_errors(endpoint: str, spec) -> list:
     return errs
 
 
-def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
-    """MECHANICALLY compare every frozen ledger request against the SIGNED contract (GPT re-review #7
-    F3: 'nothing proves execution matches what the human signed'). The ledger receives
-    pagination_mode/page_limit independently; here they must EQUAL the signed pagination_spec, and the
-    contract's declared population unit must match the matrix query_mode of the row that owns the
-    output. Call at plan freeze, before any call is made. Raises on the first divergence."""
+def canonical_contract_sha256(c: dict) -> str:
+    """The identity of the SIGNED contract (GPT re-review #8 BLOCKER-1: plan rows carry a
+    `contract_sha256` that nothing ever checked). Canonical = sorted keys, stable separators, over the
+    whole signed mapping — so any edit to what was signed changes the hash and every plan row bound to
+    it refuses."""
+    return hashlib.sha256(
+        json.dumps(c, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None:
+    """A multi-source output (A01 `market/daily` = daily + daily_basic + adj_factor) is only correct if
+    the three legs cover the SAME population, partition-for-partition, and the row declares how they
+    join (GPT re-review #8 BLOCKER-1: 'A01 三来源分别使用不同交易日的计划' was ACCEPTED —
+    `_QUERY_MODE_TO_UNIT` proves category consistency, NOT coverage or merge consistency)."""
     by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
+    for fam, row in by_family.items():
+        if len(row.source_endpoints) < 2:
+            continue
+        legs = {}
+        for pr in plan_rows:
+            if pr.get("dataset") == fam:
+                legs.setdefault(pr["endpoint"], set()).add(pr["partition"])
+        if not legs:
+            continue
+        missing = set(row.source_endpoints) - set(legs)
+        if missing:
+            raise RuntimeError(f"{fam}: the plan omits source leg(s) {sorted(missing)} — a merged output "
+                               f"whose legs are not all planned cannot be complete")
+        extra = set(legs) - set(row.source_endpoints)
+        if extra:
+            raise RuntimeError(f"{fam}: the plan carries unexpected source leg(s) {sorted(extra)}")
+        ref_ep = row.source_endpoints[0]
+        ref = legs[ref_ep]
+        for ep, parts in legs.items():
+            if parts != ref:
+                only_ref, only_ep = sorted(ref - parts)[:3], sorted(parts - ref)[:3]
+                raise RuntimeError(
+                    f"{fam}: source legs cover DIFFERENT partitions — {ref_ep} has {len(ref)} and {ep} "
+                    f"has {len(parts)} (only in {ref_ep}: {only_ref}; only in {ep}: {only_ep}). The legs "
+                    f"of a merged output must be fetched over one identical population snapshot.")
+        # the legs must also agree on WHAT population they claim to enumerate
+        pops = {ep: (contracts.get(ep) or {}).get("request_population") for ep in row.source_endpoints}
+        distinct = {json.dumps(v, sort_keys=True) for v in pops.values()}
+        if len(distinct) != 1:
+            raise RuntimeError(f"{fam}: source legs declare DIFFERENT request_population specs {pops} — "
+                               f"they must share one population snapshot to merge row-for-row")
+        if not isinstance(row.merge_spec, dict) or not row.merge_spec.get("join_on"):
+            raise RuntimeError(f"{fam}: draws {len(row.source_endpoints)} sources but declares no "
+                               f"merge_spec.join_on — the join/output rule must be explicit, not implied")
+
+
+def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
+    """MECHANICALLY bind every frozen ledger request to the SIGNED contract, before any call.
+
+    GPT re-review #8 BLOCKER-1: this used to compare ONLY the pagination axis and the population unit —
+    it never called `contract_errors` and never checked the plan's `contract_sha256`, so a plan backed
+    by a contract with no doc, no signer and no field constraints was ACCEPTED. Checking two fields of
+    a contract is not checking the contract. Now:
+      * the contract must be fully VALID+SIGNED (contract_errors == []) — the same gate `--plan` runs;
+      * the row's `contract_sha256` must equal the canonical hash of that signed contract;
+      * pagination mode/limit must equal the signed pagination_spec;
+      * the declared population unit must match the matrix query_mode;
+      * multi-source outputs must prove merge coverage (see assert_multi_source_merge_coverage).
+    Raises on the first divergence."""
+    by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
+    validated: dict = {}
     for pr in plan_rows:
         ep = pr["endpoint"]
         c = contracts.get(ep) or {}
-        spec = c.get("pagination_spec")
-        if not isinstance(spec, dict):
-            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): no signed pagination_spec to "
-                               f"compare against — the contract is unsigned or untyped")
+        if ep not in validated:
+            errs = contract_errors(ep, c)
+            if errs:
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): its contract is NOT a valid "
+                                   f"signature — {errs}")
+            validated[ep] = canonical_contract_sha256(c)
+        want_hash = validated[ep]
+        got_hash = str(pr.get("contract_sha256") or "")
+        if got_hash != want_hash:
+            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): contract_sha256 {got_hash[:12]!r} "
+                               f"!= the canonical hash of the signed contract {want_hash[:12]!r} — the "
+                               f"plan is bound to a contract that is not the one on disk")
+        spec = c["pagination_spec"]
         if pr.get("pagination_mode") != spec.get("mode"):
             raise RuntimeError(f"plan row {pr['request_id']} ({ep}): pagination_mode "
                                f"{pr.get('pagination_mode')!r} != signed {spec.get('mode')!r}")
         if int(pr.get("page_limit") or 0) != int(spec.get("page_limit") or 0):
             raise RuntimeError(f"plan row {pr['request_id']} ({ep}): page_limit "
                                f"{pr.get('page_limit')!r} != signed {spec.get('page_limit')!r}")
-        fam = pr.get("dataset")
-        row = by_family.get(fam)
+        row = by_family.get(pr.get("dataset"))
         if row is not None:
             want = _QUERY_MODE_TO_UNIT.get(row.query_mode)
             got = (c.get("request_population") or {}).get("unit")
@@ -630,6 +703,16 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): the matrix enumerates "
                                    f"{row.query_mode!r} (unit {want!r}) but the signed contract declares "
                                    f"population unit {got!r}")
+    assert_multi_source_merge_coverage(plan_rows, contracts)
+
+
+def freeze_request_plan(ledger, plan_rows: list, contracts: dict) -> str:
+    """THE single, non-bypassable door to freezing a request plan (GPT re-review #8 BLOCKER-1: contract
+    validation, the canonical contract hash, the population snapshot and freeze_plan were separate, so
+    a plan could be frozen without any of them). Validate-then-freeze, in one call; the ledger's
+    freeze_plan is never invoked directly by recovery code."""
+    assert_plan_matches_contracts(plan_rows, contracts)
+    return ledger.freeze_plan(plan_rows)
 
 
 def contract_errors(endpoint: str, c: dict) -> list:

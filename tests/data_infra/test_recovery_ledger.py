@@ -443,3 +443,37 @@ def test_deleted_staged_output_blocks_consolidation(led):
     (rp.staging_data / row["receipt_output"]).unlink()
     with pytest.raises(rl.LedgerError, match="is GONE since verification"):
         L.consolidation_allowed("daily")
+
+
+def test_missing_sentinels_do_not_collide(led):
+    """GPT re-review #8 MAJOR (reproduced): None, pd.NA and pd.NaT all encoded to ONE `NULL` token, so
+    event rows differing only in WHICH missing-sentinel they carry merged."""
+    c = rl._canon_scalar
+    enc = [c(None), c(pd.NA), c(pd.NaT), c(float("nan"))]
+    assert len(set(enc)) == 4, f"missing sentinels collide: {enc}"
+    D = rl.PageReceiptLedger.add_row_payload_digest
+    a = pd.DataFrame({"k": ["A"], "v": pd.Series([None], dtype="object")})
+    b = pd.DataFrame({"k": ["A"], "v": pd.Series([pd.NA], dtype="object")})
+    assert D(a)["row_payload_digest"][0] != D(b)["row_payload_digest"][0], \
+        "object-column None and pd.NA still produce one digest"
+
+
+def test_decimal_and_datetime_are_exactly_encoded(led):
+    import datetime
+    import decimal
+    c = rl._canon_scalar
+    assert c(decimal.Decimal("1.10")) != c(decimal.Decimal("1.1"))   # scale is part of the value
+    assert c(decimal.Decimal("1.5")) != c(1.5)                       # Decimal is not a float
+    aware = datetime.datetime(2026, 7, 16, tzinfo=datetime.timezone.utc)
+    naive = datetime.datetime(2026, 7, 16)
+    assert c(aware) != c(naive)                                      # tz-aware != naive
+    assert c(datetime.date(2026, 7, 16)) != c(datetime.datetime(2026, 7, 16))
+
+
+def test_unknown_object_type_refuses_instead_of_repr(led):
+    """A repr fallback makes the key depend on an unstable __repr__ and can alias distinct values."""
+    class Weird:
+        def __repr__(self):
+            return "<same>"
+    with pytest.raises(rl.LedgerError, match="no canonical encoding"):
+        rl._canon_scalar(Weird())

@@ -415,3 +415,30 @@ def test_two_live_processes_same_run_id_refused(tmp_path):
     finally:
         sibling.release_process_lock()
         first.release_process_lock()
+
+
+def test_plan_freeze_is_serialized_by_the_process_lock(tmp_path):
+    """GPT re-review #8 BLOCKER-2 (reproduced): the lock came AFTER freeze_or_verify_plan, so two
+    processes under ONE run_id could both see "no plan yet" and append DIFFERENT plan_hashes; the lock
+    then only serialized the mutation and the winner executed against a plan inconsistent with the
+    frozen record. The freeze is a compare-and-append and must itself be exclusive."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    holder = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+    holder._acquire_process_lock()
+    try:
+        sibling = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+        with pytest.raises(rp.PromotionError, match="another LIVE process"):
+            sibling.promote_all(unattended=True)
+        assert not [r for r in journal._rows() if r.get("kind") == "plan"], \
+            "a sibling froze a plan while another process held the lock"
+    finally:
+        holder.release_process_lock()
+
+
+def test_two_raced_plan_rows_refuse_rather_than_picking_one(tmp_path):
+    """If a pre-lock race already appended two plan rows for one run, NEITHER is authoritative."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    journal.append_plan("run1", "aaaa", [fp.family])
+    journal.append_plan("run1", "bbbb", [fp.family])   # a second, divergent freeze
+    with pytest.raises(rp.PromotionError, match="concurrent freeze raced"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)

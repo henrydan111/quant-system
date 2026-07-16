@@ -43,14 +43,29 @@ def _h(s: str) -> str:
 
 
 def _canon_scalar(v) -> bytes:
-    """Exact, type-distinguishing bytes for one vendor value (GPT re-review #7 M1). Floats keep their
-    IEEE-754 bits so -0.0 and 0.0 differ; NaN/inf collapse to fixed tokens (a NaN payload is not
-    stable); strings are NFC-normalized so equal text digests equally regardless of composition form."""
+    """Exact, type-distinguishing bytes for one vendor value (GPT re-review #7 M1 / #8 MAJOR).
+
+    Floats keep their IEEE-754 bits so -0.0 and 0.0 differ; strings are NFC-normalized so equal text
+    digests equally. GPT re-review #8: `None`, `pd.NA` and `pd.NaT` all collapsed to ONE `NULL` token,
+    so event rows differing ONLY in which missing-sentinel they carry merged — each now has its own
+    token. An UNKNOWN object type REFUSES rather than falling back to `repr`: a repr fallback silently
+    makes the digest depend on a type's __repr__ (unstable across versions) and can alias distinct
+    values, which defeats the losslessness the key exists for."""
+    import datetime as _dt
+    import decimal as _dec
     import math
     import struct
     import unicodedata
+    # --- distinct missing sentinels (never one shared NULL) ---
+    # These come FIRST and by type NAME: pd.NaT subclasses datetime.datetime, so a later isoformat()
+    # branch would swallow it and its distinctness would rest on `NaT.isoformat() == "NaT"` — an
+    # accident, not a guarantee. Name checks avoid importing pandas just to classify a sentinel.
     if v is None:
-        return b"\x00NULL"
+        return b"\x00NONE"
+    if v.__class__.__name__ == "NaTType":
+        return b"\x00NAT"
+    if v.__class__.__name__ == "NAType":
+        return b"\x00PDNA"
     if isinstance(v, bool):  # BEFORE int — bool is an int subclass
         return b"B1" if v else b"B0"
     if isinstance(v, bytes):
@@ -61,26 +76,50 @@ def _canon_scalar(v) -> bytes:
         return b"I" + str(int(v)).encode("ascii")  # arbitrary precision, exact
     if isinstance(v, float):
         if math.isnan(v):
-            return b"\x00NAN"
+            return b"\x00FNAN"          # a float NaN is NOT pd.NA and NOT None
         if math.isinf(v):
             return b"\x00INF+" if v > 0 else b"\x00INF-"
         return b"F" + struct.pack(">d", v)         # exact bits: distinguishes -0.0 from 0.0
-    try:  # numpy scalars / pandas NA / Timestamps, without importing them at module scope
+    if isinstance(v, _dec.Decimal):
+        # exact, and NEVER via float: sign/digits/exponent is the value's own identity
+        sign, digits, exp = v.as_tuple()
+        if not isinstance(exp, int):                # NaN / sNaN / Infinity
+            return b"\x00DEC-" + str(exp).encode("ascii")
+        return b"D" + f"{sign}:{''.join(map(str, digits))}:{exp}".encode("ascii")
+    if isinstance(v, _dt.datetime):                 # BEFORE date — datetime subclasses date
+        return b"TS" + v.isoformat().encode("utf-8")   # isoformat carries the tz offset (or its absence)
+    if isinstance(v, _dt.date):
+        return b"DT" + v.isoformat().encode("utf-8")
+    if isinstance(v, _dt.time):
+        return b"TM" + v.isoformat().encode("utf-8")
+    try:
         import numpy as _np
         import pandas as _pd
-        if v is _pd.NaT or (v is not None and _pd.isna(v) is True):
-            return b"\x00NULL"
-        if isinstance(v, _np.integer):
-            return b"I" + str(int(v)).encode("ascii")
-        if isinstance(v, _np.floating):
-            return _canon_scalar(float(v))
-        if isinstance(v, _np.bool_):
-            return b"B1" if bool(v) else b"B0"
-        if isinstance(v, _pd.Timestamp):
-            return b"T" + v.isoformat().encode("utf-8")
-    except (ImportError, TypeError, ValueError):
-        pass
-    return b"R" + repr(v).encode("utf-8")          # tagged fallback: never silently equal to a typed form
+    except ImportError:
+        raise LedgerError(f"row_payload_digest: cannot canonicalize {type(v).__name__} without pandas")
+    if v is _pd.NaT:
+        return b"\x00NAT"
+    if v is _pd.NA:
+        return b"\x00PDNA"
+    if isinstance(v, _pd.Timestamp):
+        return b"TS" + v.isoformat().encode("utf-8")
+    if isinstance(v, _np.datetime64):
+        return b"TS" + str(v).encode("ascii")
+    if isinstance(v, _np.integer):
+        return b"I" + str(int(v)).encode("ascii")
+    if isinstance(v, _np.floating):
+        return _canon_scalar(float(v))
+    if isinstance(v, _np.bool_):
+        return b"B1" if bool(v) else b"B0"
+    if isinstance(v, _np.bytes_):
+        return b"Y" + bytes(v)
+    if isinstance(v, _np.str_):
+        return b"S" + unicodedata.normalize("NFC", str(v)).encode("utf-8")
+    # No repr fallback: an unrecognized type must be reviewed and given an encoding, not guessed at.
+    raise LedgerError(
+        f"row_payload_digest: no canonical encoding for {type(v).__module__}.{type(v).__name__} "
+        f"({v!r:.60}). A repr fallback would make the key depend on an unstable __repr__ and could "
+        f"alias distinct values — add an explicit encoding instead.")
 
 
 def request_id(endpoint: str, params: dict, partition: str) -> str:
