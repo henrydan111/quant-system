@@ -49,6 +49,9 @@ Each item names the review finding, the threat model (why it is not a
 normal-operation bug), and GPT's prescribed exact fix.
 
 ### H1 — Tagged, collision-free canonical AST  (review B1, `news_seal.canon`)
+> **补充(re-review#8 R2, 2026-07-16):** 空白垫 claim_id 变体(` CLAIM:x `)因 canon
+> 的空白折叠与原身同印——同属本项。**席位接线必须逐字节保存身份字符串**(不折叠、
+> 不 strip、不大小写化),把身份规范化整体留给 H1 的 tagged AST。
 - **Threat:** `canon()` uses bare strings as type markers, so distinct values
   can share a seal: `None` vs the literal `"\x00NULL\x00"`; a timestamp vs the
   literal `"T:<iso>"` string; `{1:"x"}` vs `{"1":"x"}` (keys via `str(k)`);
@@ -145,6 +148,33 @@ normal-operation bug), and GPT's prescribed exact fix.
   clustering so cross-midnight syndication of ONE event stays one occurrence.
 
 ---
+
+## Seat-wiring REQUIREMENTS (from the 8-round step-5/6 GPT arc — binding on the next block)
+
+The step-5/6 substrate passed its gate (SOUND-TO-PROCEED, 2026-07-16, commit
+`272c13e`). The reviewer's accumulated requirements for the seat-wiring block are
+BINDING inputs to its design, collected here verbatim-in-substance:
+
+1. **Ledger owns the authoritative `decision_id`** — atomic first-write-wins
+   `decision_id → bundle_hash` under ONE lock; the ledger checks the EXPECTED id,
+   requires `verify_d7_artifact` to pass on the exact artifact, and commits the
+   first write atomically BEFORE any payload construction or LLM call. A second
+   different hash for the same id must fail; identical recomputation may be
+   idempotent. It accepts ONLY `D7DecisionArtifact`s passing `verify_d7_artifact`
+   — never a bare self-sealed `AttributeBundle` (`verify_bundle_registry` is NOT
+   the lineage boundary).
+2. **Closed payload AST** — the serializer consumes a closed set of node types
+   (typed `EvidenceRef` nodes for references; `[ID]` is only their canonical
+   output encoding); reject sets/custom objects; NEVER `default=str`.
+3. **No fragment concatenation** — a known id split across strings (`["NFD","01"]`)
+   is tolerated at the gate because the canonical serialization keeps fragments
+   separated; seat wiring must therefore PROHIBIT any later concatenation and
+   re-gate the EXACT final serialized bytes.
+4. **Seal the exact payload/registry pair** — seal the exact serialized payload
+   bytes + registry hash before every positive LLM call; construct payloads
+   exclusively from `build_factor_payload_ids` over the artifact's final registry.
+5. **Identity bytes preserved exactly** — no strip/casefold/whitespace-collapse on
+   claim/record identities anywhere in seat wiring (H1 owns canonicalization).
 
 ## Closure checklist (all must be ✅ before the first forward run)
 - [ ] H1 tagged canonical AST + injectivity matrix
