@@ -24,6 +24,25 @@ Per-family lifecycle (each transition names the exact expected on-disk state):
   consumer fails closed while it exists (`assert_no_active_recovery`). Promotion additionally takes the
   generation barrier EXCLUSIVE so no shared consumer is mid-operation.
 
+THREAT MODEL — EXPLICITLY SCOPED (user decision, 2026-07-16; GPT re-review #6):
+IN scope, and defended:
+  * PRE-EXISTING reparse points / junctions anywhere in a path we walk or write (this is what actually
+    happened on 2026-07-13: `git worktree remove --force` followed junctions that were already there
+    and deleted the live store). Refused via the no-follow broker + handle-relative writes.
+  * CRASHES at any point (power loss, kill) — the write-ahead journal + the total recovery_action table
+    + re-verification before every destructive step.
+  * CORRUPTION of staged bytes between steps — incoming is re-proven against the frozen manifest
+    immediately before the old tree is touched, and live is re-hashed on resume.
+  * CONCURRENT runs / consumers — an O_EXCL sentinel claim + the fail-closed consumer hook.
+OUT of scope, deliberately NOT defended:
+  * An ACTIVE ADVERSARY racing us mid-operation on this machine (swapping a component between two links
+    of a handle chain, ADS/8.3-alias tricks, replacing a parent between validation and rename). This is
+    a single-user workstation; an attacker with local write access to `E:\\量化系统\\data` can destroy the
+    store directly and needs no race. Hardening against it was adding NT-API complexity that itself
+    became the source of new defects across three review rounds, for no reduction in real risk.
+The consequence: promotion is HUMAN-DRIVEN and attended (`promote_family` one family at a time; the
+machine verifies and refuses, the operator decides), not an unattended automated sweep.
+
 Nothing here runs automatically. The live Qlib provider is untouched throughout. NO Tushare involvement.
 """
 from __future__ import annotations
@@ -300,12 +319,39 @@ class PromotionCoordinator:
     def sentinel_path(self) -> Path:
         return self.data_root / SENTINEL_NAME
 
-    def write_sentinel(self) -> None:
+    def _journalled_old_moved(self, fp: "FamilyPlan") -> bool:
+        """Did THIS run ever journal OLD_MOVED for this family (i.e. is a tombstone owed)?"""
+        return any(r.get("kind") == "state" and r.get("run_id") == self.run_id
+                   and r.get("family") == fp.family and r.get("state") == OLD_MOVED
+                   for r in self.journal._rows())
+
+    def acquire_exclusive(self) -> None:
+        """Durable, EXCLUSIVE promotion claim (GPT re-review #6 F5: the sentinel was written with a
+        plain truncating open, so a SECOND run simply overwrote the first run's claim and both mutated
+        the live tree — one replaced the other's generation). Created O_EXCL: whoever wins owns the
+        promotion; a different run_id finding it REFUSES; our own run_id is a legitimate resume."""
         self.sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.sentinel_path, "w", encoding="utf-8") as fh:
-            json.dump({"run_id": self.run_id, "families": [f.family for f in self.families]}, fh)
+        payload = json.dumps({"run_id": self.run_id, "families": [f.family for f in self.families]})
+        try:
+            fd = os.open(str(self.sentinel_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                held = json.loads(self.sentinel_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raise PromotionError(f"promotion sentinel {self.sentinel_path} exists but is unreadable "
+                                     f"— refusing (resolve by hand)")
+            if held.get("run_id") != self.run_id:
+                raise PromotionError(f"promotion already claimed by run {held.get('run_id')!r} — a second "
+                                     f"concurrent promotion would replace its live generation; REFUSING")
+            return  # our own claim: legitimate resume
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
             fh.flush()
             os.fsync(fh.fileno())
+
+    def write_sentinel(self) -> None:
+        """Back-compat alias for the exclusive claim (never a bare overwrite)."""
+        self.acquire_exclusive()
 
     def clear_sentinel(self) -> None:
         # retained until QA + first verified backup complete; explicit call only
@@ -372,6 +418,13 @@ class PromotionCoordinator:
             live, incoming, tomb = self._facts(fp)
             recovery_action(SWAPPED, live, incoming, tomb)  # raises if the facts disagree
             self._verify_tree(fp, fp.live_dir, "live(resume)")
+            # GPT re-review #6 F5: a DELETED tombstone was silently accepted. If this run journalled
+            # OLD_MOVED then the pre-incident tree was preserved there and is the ONLY copy of what was
+            # replaced — its disappearance is a real loss, not a detail, and must not read as success.
+            if self._journalled_old_moved(fp) and not tomb:
+                raise PromotionError(f"{fp.family}: SWAPPED with OLD_MOVED journalled but the tombstone "
+                                     f"{fp.tombstone_dir} is GONE — the replaced tree was the only copy; "
+                                     f"refusing to report a clean completion")
             return
         self._assert_owned_or_fresh(fp, state)
         # drive the machine to SWAPPED; each loop consults the recovery table on CURRENT facts
@@ -389,6 +442,13 @@ class PromotionCoordinator:
                 self._crash("after_copy_verified")
                 state = COPY_VERIFIED
             elif act == ACT_MOVE_OLD:
+                # GPT re-review #6 F5 (reproduced): COPY_VERIFIED was journalled BEFORE the crash, so a
+                # resume trusted it and moved the OLD tree aside before ever re-checking incoming — if
+                # incoming was corrupted in between, the corrupted bytes were installed, the old tree
+                # was already tombstoned, and only the LIVE manifest check failed, after the damage.
+                # Re-prove incoming against the frozen manifest BEFORE touching the live tree: nothing
+                # is moved until the replacement is known good.
+                self._verify_tree(fp, fp.incoming_dir, "incoming(pre-move)")
                 had_live = _dir_present(fp.live_dir)
                 self.journal.append(self.run_id, fp.family, MOVE_OLD_INTENT,
                                     {"from": str(fp.live_dir), "to": str(fp.tombstone_dir)})
@@ -427,22 +487,41 @@ class PromotionCoordinator:
             else:
                 raise PromotionError(f"unhandled action {act} for {fp.family}")
 
-    def promote_all(self) -> dict:
-        """Promote every family in the frozen list; returns {family: final_state}. Resume-safe: a fresh
-        coordinator re-invoking this after a crash rolls each family forward from its durable state.
+    def promote_family(self, family: str) -> dict:
+        """THE human-driven door: promote ONE named family, attended, and report its state. The machine
+        VERIFIES (manifests, facts, hashes) and refuses; the operator decides to proceed to the next
+        family. Resume-safe — re-invoking after a crash rolls this family forward from its durable state.
 
-        GPT re-review #5 F5: the quiescence SENTINEL is written HERE (it was defined but never armed, so
-        no generation barrier actually existed). It is written BEFORE the first mutation and deliberately
-        LEFT IN PLACE on completion — consumers stay fail-closed until QA + the first verified backup,
-        at which point `clear_sentinel()` is an explicit human step."""
+        The quiescence sentinel is claimed EXCLUSIVELY before the first mutation and deliberately LEFT
+        ARMED afterwards: consumers stay fail-closed until QA + the first verified backup, at which point
+        `clear_sentinel()` is an explicit human step."""
+        match = [fp for fp in self.families if fp.family == family]
+        if not match:
+            raise PromotionError(f"{family!r} is not in this run's frozen plan "
+                                 f"({[f.family for f in self.families]})")
         self.freeze_or_verify_plan()   # bind the run to an immutable plan before any mutation
-        self.write_sentinel()          # arm the barrier: every raw consumer now fails closed
+        self.acquire_exclusive()       # exclusive claim + arm the barrier
+        self._promote_family(match[0])
+        row = self.journal.last_row(self.run_id, family)
+        return {family: row["state"] if row else None}
+
+    def promote_all(self, *, unattended: bool = False) -> dict:
+        """Promote EVERY family in the frozen list in one go. Promotion is meant to be human-driven one
+        family at a time (`promote_family`) so an operator sees each verification before the next tree is
+        touched; an unattended sweep over the whole store must be an explicit, deliberate choice."""
+        if not unattended:
+            raise PromotionError(
+                "promote_all() is an UNATTENDED sweep over every family; promotion is human-driven — "
+                "use promote_family(<name>) per family, or pass unattended=True to accept that the "
+                "whole store is mutated without a per-family operator check")
+        self.freeze_or_verify_plan()
+        self.acquire_exclusive()
         for fp in self.families:
             self._promote_family(fp)
         return {f: r["state"] for f, r in self.journal.replay(self.run_id).items()}
 
-    def resume(self) -> dict:
-        return self.promote_all()
+    def resume(self, *, unattended: bool = False) -> dict:
+        return self.promote_all(unattended=unattended)
 
 
 def assert_no_active_recovery(data_root: Path) -> None:

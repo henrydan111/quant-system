@@ -54,7 +54,7 @@ def _live_matches_staging(fp) -> bool:
 def test_happy_path_promotes_and_tombstones(tmp_path):
     fp, journal, data_root, manifest = _build(tmp_path)
     coord = rp.PromotionCoordinator("run1", data_root, journal, [fp])
-    final = coord.promote_all()
+    final = coord.promote_all(unattended=True)
     assert final[fp.family] == rp.SWAPPED
     assert _live_matches_staging(fp)                 # recovered content is now live
     assert not fp.incoming_dir.exists()              # incoming consumed
@@ -72,10 +72,10 @@ def test_crash_at_every_checkpoint_resumes_to_swapped(tmp_path, label):
 
     crashed = rp.PromotionCoordinator("run1", data_root, journal, [fp], crash_hook=crash)
     with pytest.raises(rp.InjectedCrash):
-        crashed.promote_all()
+        crashed.promote_all(unattended=True)
     # a FRESH coordinator (no crash hook) resumes from the durable journal + facts
     resumed = rp.PromotionCoordinator("run1", data_root, journal, [fp])
-    final = resumed.promote_all()
+    final = resumed.promote_all(unattended=True)
     assert final[fp.family] == rp.SWAPPED, f"did not converge after crash@{label}"
     assert _live_matches_staging(fp), f"live content wrong after crash@{label}"
     assert not fp.incoming_dir.exists()
@@ -85,7 +85,7 @@ def test_lost_family_no_live_dir_still_installs(tmp_path):
     # the incident DELETED the family — live_dir never existed. Promotion must still install incoming.
     fp, journal, data_root, manifest = _build(tmp_path, make_live=False)
     assert not fp.live_dir.exists()
-    final = rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    final = rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
     assert final[fp.family] == rp.SWAPPED
     assert _live_matches_staging(fp)
     assert not fp.tombstone_dir.exists()  # nothing to tombstone (OLD_ABSENT)
@@ -97,7 +97,7 @@ def test_foreign_incoming_refused(tmp_path):
     fp.incoming_dir.mkdir(parents=True)
     (fp.incoming_dir / "foreign.parquet").write_bytes(b"NOT OURS")
     with pytest.raises(rp.PromotionError, match="foreign collision"):
-        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
 
 
 def test_corrupt_incoming_fails_verification(tmp_path):
@@ -106,7 +106,7 @@ def test_corrupt_incoming_fails_verification(tmp_path):
     # corrupt the staging source AFTER freezing the manifest -> the copied incoming won't match
     (fp.staging_dir / "2026" / "daily_20260703.parquet").write_bytes(b"CORRUPT")
     with pytest.raises(rp.PromotionError, match="incoming != frozen manifest"):
-        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
     assert fp.live_dir.exists() and (fp.live_dir / "stale.parquet").exists()  # live untouched
 
 
@@ -148,7 +148,7 @@ def test_multi_family_frozen_set(tmp_path):
     fp1, journal, data_root, _ = _build(tmp_path, family="market/daily")
     fp2, _, data_root2, _ = _build(tmp_path, family="fundamentals/income")
     assert data_root == data_root2
-    final = rp.PromotionCoordinator("run1", data_root, journal, [fp1, fp2]).promote_all()
+    final = rp.PromotionCoordinator("run1", data_root, journal, [fp1, fp2]).promote_all(unattended=True)
     assert final["market/daily"] == rp.SWAPPED and final["fundamentals/income"] == rp.SWAPPED
     assert _live_matches_staging(fp1) and _live_matches_staging(fp2)
 
@@ -161,7 +161,7 @@ def test_foreign_run_swapped_row_is_not_adopted(tmp_path):
     fp, journal, data_root, manifest = _build(tmp_path)
     # a DIFFERENT run claims this family already completed
     journal.append("someone_elses_run", fp.family, rp.SWAPPED, {"live_dir": str(fp.live_dir)})
-    final = rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    final = rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
     assert final[fp.family] == rp.SWAPPED
     assert _live_matches_staging(fp), "adopted a foreign SWAPPED row and skipped the real work"
     assert (fp.tombstone_dir / "stale.parquet").exists()  # the old tree really was moved aside
@@ -171,21 +171,21 @@ def test_swapped_journal_with_missing_live_refuses(tmp_path):
     """A SWAPPED row must never be believed on its own: if the live tree vanished after journalling,
     resume must REFUSE rather than report a completed promotion."""
     fp, journal, data_root, manifest = _build(tmp_path)
-    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
     import shutil
     shutil.rmtree(fp.live_dir)  # corruption/rollback AFTER the SWAPPED row
     with pytest.raises(rp.PromotionError, match="facts disagree"):
-        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
 
 
 def test_swapped_resume_rehashes_live_and_catches_corruption(tmp_path):
     """Resume of a SWAPPED family re-hashes the live tree vs the frozen manifest — bit-rot or a
     substituted file is caught instead of being reported as done."""
     fp, journal, data_root, manifest = _build(tmp_path)
-    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
     (fp.live_dir / "2026" / "daily_20260703.parquet").write_bytes(b"TAMPERED")
     with pytest.raises(rp.PromotionError, match="frozen manifest"):
-        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all()
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
 
 
 def test_promote_all_arms_the_sentinel(tmp_path):
@@ -194,7 +194,7 @@ def test_promote_all_arms_the_sentinel(tmp_path):
     fp, journal, data_root, manifest = _build(tmp_path)
     coord = rp.PromotionCoordinator("run1", data_root, journal, [fp])
     rp.assert_no_active_recovery(data_root)  # not armed yet
-    coord.promote_all()
+    coord.promote_all(unattended=True)
     assert coord.sentinel_path.exists(), "promote_all did not arm the quiescence sentinel"
     with pytest.raises(rp.PromotionError, match="RECOVERY_IN_PROGRESS"):
         rp.assert_no_active_recovery(data_root)
@@ -219,4 +219,64 @@ def test_plan_hash_binds_the_run(tmp_path):
                             incoming_dir=fp.incoming_dir, tombstone_dir=fp.tombstone_dir,
                             manifest={"different.parquet": {"sha256": "0" * 64, "size": 1}})
     with pytest.raises(rp.PromotionError, match="plan hash mismatch"):
-        rp.PromotionCoordinator("run1", data_root, journal, [mutated]).promote_all()
+        rp.PromotionCoordinator("run1", data_root, journal, [mutated]).promote_all(unattended=True)
+
+
+# ── GPT re-review #6 F5: crash/correctness (threat model scoped to accidents+crashes, not attackers) ─
+def test_corrupted_incoming_after_copy_verified_never_touches_live(tmp_path):
+    """GPT re-review #6 F5 (reproduced): COPY_VERIFIED was journalled before the crash, so resume
+    trusted it, moved the OLD tree to tombstone, installed CORRUPTED incoming bytes, and only then
+    failed the live check — after the damage. Incoming must be re-proven BEFORE the live tree moves."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+
+    def crash(l):
+        if l == "after_copy_verified":
+            raise rp.InjectedCrash(l)
+
+    with pytest.raises(rp.InjectedCrash):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp], crash_hook=crash).promote_all(unattended=True)
+    assert journal.last_state("run1", fp.family) == rp.COPY_VERIFIED
+    # corrupt the staged incoming AFTER it was certified
+    (fp.incoming_dir / "2026" / "daily_20260703.parquet").write_bytes(b"CORRUPTED-IN-FLIGHT")
+    with pytest.raises(rp.PromotionError, match=r"incoming\(pre-move\) != frozen manifest"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    # the LIVE tree must be completely untouched: still the old content, nothing tombstoned
+    assert (fp.live_dir / "stale.parquet").read_bytes() == b"STALE"
+    assert not fp.tombstone_dir.exists(), "old tree was moved aside before incoming was re-proven"
+
+
+def test_deleted_tombstone_on_resume_refuses(tmp_path):
+    """GPT re-review #6 F5: a SWAPPED family whose tombstone vanished was reported as clean success —
+    but that tombstone held the only copy of the tree we replaced."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+    assert fp.tombstone_dir.exists()
+    import shutil
+    shutil.rmtree(fp.tombstone_dir)          # the replaced tree's only copy disappears
+    with pytest.raises(rp.PromotionError, match="tombstone .* is GONE|tombstone"):
+        rp.PromotionCoordinator("run1", data_root, journal, [fp]).promote_all(unattended=True)
+
+
+def test_second_concurrent_run_refused(tmp_path):
+    """GPT re-review #6 F5 (reproduced): the sentinel was a plain truncating write, so a SECOND run
+    overwrote the first run's claim and replaced its live generation. The claim is O_EXCL now."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    first = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+    first.acquire_exclusive()
+    other = rp.PromotionCoordinator("run2", data_root, journal, [fp])
+    with pytest.raises(rp.PromotionError, match="already claimed by run"):
+        other.acquire_exclusive()
+    first.acquire_exclusive()   # our OWN claim is a legitimate resume, not a conflict
+
+
+def test_promotion_is_human_driven_by_default(tmp_path):
+    """Promotion is attended: one family at a time, machine verifies + refuses, operator proceeds.
+    An unattended sweep over the whole store must be an explicit choice."""
+    fp, journal, data_root, manifest = _build(tmp_path)
+    coord = rp.PromotionCoordinator("run1", data_root, journal, [fp])
+    with pytest.raises(rp.PromotionError, match="UNATTENDED sweep"):
+        coord.promote_all()
+    with pytest.raises(rp.PromotionError, match="not in this run's frozen plan"):
+        coord.promote_family("market/nonexistent")
+    assert coord.promote_family(fp.family) == {fp.family: rp.SWAPPED}
+    assert _live_matches_staging(fp)
