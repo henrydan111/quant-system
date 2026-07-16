@@ -48,11 +48,13 @@ def _default_oos_end() -> str:
 PASSED = "passed"
 FAILED = "failed"
 # The screening's horizon set, mirroring workspace/scripts/run_sealed_oos.py::HORIZONS.
-# run_batch_screening produces ls_sharpe at the PRIMARY (first) horizon (5d) — that is
-# the exact metric the Round-6 registration bar (LS Sharpe > 1.0) was defined against —
-# while rank_icir is read per-horizon (rank_icir_20d). Reproducing with this set + the
-# engine="batch" path matches the screening report bit-for-bit (verified: grow_total_
-# revenue 3.4441 vs 3.444, rev_turnover 2.6818 vs 2.682).
+# run_batch_screening produces ls_sharpe at the PRIMARY (first) horizon (5d) — the
+# registration-bar LS metric — while rank_icir is read per-horizon (rank_icir_20d).
+# R12 Major: the CURRENT sealed path is the post-2026-06-11 DECILE protocol; the
+# historical Round-6 evidence was QUINTILE-based (batch_screening.py header) and its
+# ls_sharpe values are legacy audit evidence, NOT bit-for-bit comparable. (The old
+# bit-for-bit note referred to a quintile-era reproduction: grow_total_revenue 3.4441
+# vs 3.444, rev_turnover 2.6818 vs 2.682 — kept only as historical context.)
 # R11 Blocker: ONE constant — the executable axes ARE the screening horizons; a
 # declared horizon outside this set was runtime-EQUAL but never computed (NaN metrics
 # on a consumed seal).
@@ -298,10 +300,11 @@ def reproduce_sealed_oos(
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
     ``run_batch_screening(engine="batch", horizons=SCREENING_HORIZONS)`` over factors recomputed
-    through ``compute_factors(stage="oos_test")`` (→ source ``qlib_windowed_features``). This
-    matches the Round-6 registration bit-for-bit (it is the same code + same horizons), so the
+    through ``compute_factors(stage="oos_test")`` (→ source ``qlib_windowed_features``). This is
+    the CANONICAL post-2026-06-11 DECILE sealed protocol (R12 Major: the historical Round-6
+    evidence was quintile-based and is legacy audit evidence — NOT bit-for-bit comparable); the
     bar (LS Sharpe > 1.0, defined against ``ls_sharpe`` = the primary-horizon long-short Sharpe)
-    is applied on the exact scale. Leak-freedom is guaranteed by the calendar_end == OOS_END
+    is applied on the current decile scale. Leak-freedom is guaranteed by the calendar_end == OOS_END
     assertion (Ref(-h) is NaN past the data boundary for every horizon); the Phase-4 belt
     (``build_is_windowed_panel``) is retained as a redundant explicit leak-guard. Returns the
     ``independent_reproduction`` block with `source='qlib_windowed_features'`, provenance, and
@@ -321,6 +324,31 @@ def reproduce_sealed_oos(
         )
     except ValueError as exc:
         raise PromotionEvidenceError(str(exc)) from exc
+
+    # R12 Blocker: the JUDGMENT-metric axes must be pre-declared identity that matches
+    # the runtime — verified HERE, before any provider/store/authorization action. The
+    # ordered screening horizons select the primary LS horizon (horizons[0]); a code
+    # drift reordering them can never execute under an old protocol identity.
+    from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec as _EPS
+
+    if type(eval_protocol) is not _EPS:
+        raise PromotionEvidenceError(
+            "reproduce_sealed_oos requires the full EvalProtocolSpec (eval_protocol=...) "
+            f"— got {type(eval_protocol).__name__!r}; a bare hash string or a shaped "
+            "look-alike object is not verifiable identity (R9 B2 / R10 B1)"
+        )
+    declared_horizons = tuple(int(h) for h in eval_protocol.screening_horizons)
+    runtime_horizons = tuple(int(h) for h in SCREENING_HORIZONS)
+    if declared_horizons != runtime_horizons:
+        raise PromotionEvidenceError(
+            f"protocol/runtime mismatch: screening_horizons="
+            f"{declared_horizons} != {runtime_horizons}"
+        )
+    if int(eval_protocol.ls_sharpe_horizon) != runtime_horizons[0]:
+        raise PromotionEvidenceError(
+            "protocol/runtime mismatch: ls_sharpe_horizon must equal "
+            f"the executed primary horizon {runtime_horizons[0]}"
+        )
 
     oos_end = oos_end or _default_oos_end()
     prov = dict(provider_provenance) if provider_provenance is not None else _load_provider_provenance(qlib_dir)
@@ -580,11 +608,13 @@ def reproduce_sealed_oos(
                 "rank_icir_horizon": horizon,
                 "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
                 "metric_note": (
-                    f"Approval bar reproduced exactly as the Round-6 screening defined it: "
-                    f"rank_icir at {horizon}d + run_batch_screening's primary-horizon ls_sharpe "
-                    f"from horizons={tuple(SCREENING_HORIZONS)} (i.e. {SCREENING_HORIZONS[0]}d "
-                    f"long-short Sharpe). This is the registration metric, not a horizon-consistent "
-                    f"tradability metric; strategy-level deployment validation is a separate gate."
+                    f"Canonical post-2026-06-11 sealed protocol: rank_icir at {horizon}d "
+                    f"plus decile long-short ls_sharpe at {SCREENING_HORIZONS[0]}d, "
+                    f"computed with screening_horizons={tuple(SCREENING_HORIZONS)}. "
+                    "Pre-2026-06-11 Round-6 evidence used quintiles and is legacy audit "
+                    "evidence; its ls_sharpe values are not bit-for-bit comparable. This "
+                    "is the registration metric, not a horizon-consistent tradability "
+                    "metric; strategy-level deployment validation is a separate gate."
                 ),
                 "max_label_realization_date": max_label_realization,
                 "per_factor": per_factor,

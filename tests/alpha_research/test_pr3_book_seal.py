@@ -939,7 +939,8 @@ class TestRegistrationBarIdentity:
         from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
 
         base = dict(horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
-                    universe_filter_policy="u", portfolio_construction="decile_long_short")
+                    universe_filter_policy="u", portfolio_construction="decile_long_short",
+                    screening_horizons=(5, 10, 20), ls_sharpe_horizon=5)
         a = EvalProtocolSpec(**base, registration_bar_hash="bar_A")
         b = EvalProtocolSpec(**base, registration_bar_hash="bar_B")
         assert a.observation_protocol_hash == b.observation_protocol_hash   # seal-key stable
@@ -1108,7 +1109,8 @@ class TestR8Hardening:
                 run_dir=str(tmp_path / "run"), design_hash="d", provider_provenance=prov,
                 fresh_window_override_id="ov_x",
                 registration_bar=declared["registration_bar"],
-                registration_bar_hash="DECLARED_SOMETHING_ELSE")
+                registration_bar_hash="DECLARED_SOMETHING_ELSE",
+                eval_protocol=declared["eval_protocol"])
         assert HoldoutSealStore(root).list_events().empty
 
     def test_evaluator_hash_covers_sides_derivation(self):
@@ -1212,6 +1214,7 @@ class TestR9Hardening:
             horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
             universe_filter_policy="univ_liquid_top300",
             portfolio_construction="decile_long_short",
+            screening_horizons=(5, 10, 20), ls_sharpe_horizon=5,
             registration_bar_hash=forged_hash)
         prov = {"provider_build_id": "pb", "calendar_policy_id": "cp", "calendar_end": VIRGIN[1]}
         with pytest.raises(PromotionEvidenceError, match="not the executable canonical bar"):
@@ -1263,6 +1266,7 @@ class TestR9Hardening:
 
         wrong_bar_spec = EvalProtocolSpec(
             horizon=20, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            screening_horizons=(5, 10, 20), ls_sharpe_horizon=5,
             registration_bar_hash="SOME_OTHER_BAR", **EXECUTABLE_PROTOCOL_FIELDS)
         with pytest.raises(PromotionEvidenceError, match="protocol/bar mismatch"):
             reproduce_sealed_oos(**common, eval_protocol=wrong_bar_spec)
@@ -1356,6 +1360,7 @@ class TestR10Hardening:
         # declared horizon 60 while the runtime executes 20 -> refuse
         wrong_horizon = EvalProtocolSpec(
             horizon=60, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            screening_horizons=(5, 10, 20), ls_sharpe_horizon=5,
             registration_bar_hash=declared["registration_bar_hash"],
             **EXECUTABLE_PROTOCOL_FIELDS)
         with pytest.raises(PromotionEvidenceError, match="protocol/runtime mismatch"):
@@ -1365,6 +1370,7 @@ class TestR10Hardening:
         unsupported["neutralization"] = "industry"
         wrong_field = EvalProtocolSpec(
             horizon=20, n_quantiles=10, oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            screening_horizons=(5, 10, 20), ls_sharpe_horizon=5,
             registration_bar_hash=declared["registration_bar_hash"], **unsupported)
         with pytest.raises(PromotionEvidenceError, match="executes only"):
             reproduce_sealed_oos(**common, eval_protocol=wrong_field)
@@ -1460,11 +1466,21 @@ class TestR11ExecutableAxes:
         spec = EvalProtocolSpec(
             horizon=horizon, n_quantiles=n_quantiles,
             oos_window=f"{VIRGIN[0]}..{VIRGIN[1]}",
+            screening_horizons=(5, 10, 20), ls_sharpe_horizon=5,
             registration_bar_hash=declared["registration_bar_hash"],
             **EXECUTABLE_PROTOCOL_FIELDS)
+        # R12 Minor: bind the frozen set to THE ILLEGAL spec's observation hash so the
+        # refusal is provably the axes gate, and check the A5 STATE store too.
+        from dataclasses import replace
+
+        from src.alpha_research.factor_eval_skill.book_seal_stores import (
+            A5ReproductionStore,
+        )
+
+        matched_fs = replace(FS, eval_protocol_hash=spec.observation_protocol_hash)
         with pytest.raises(PromotionEvidenceError, match=msg):
             reproduce_sealed_oos(
-                frozen_set=FS, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
+                frozen_set=matched_fs, oos_start=VIRGIN[0], oos_end=VIRGIN[1], qlib_dir="q",
                 run_dir=str(tmp_path / "run"), design_hash="d",
                 provider_provenance={"provider_build_id": "pb",
                                      "calendar_policy_id": "cp",
@@ -1476,7 +1492,8 @@ class TestR11ExecutableAxes:
                 eval_protocol=spec)
         assert calls["n"] == 0                                    # zero evaluator calls
         assert HoldoutSealStore(root).list_events().empty          # zero seal events
-        assert OosWindowLedgerStore(root).list_all().empty         # zero A5 rows
+        assert OosWindowLedgerStore(root).list_all().empty         # zero A5 budget rows
+        assert A5ReproductionStore(root).list_all().empty          # zero A5 state rows
 
     def test_cmd_seal_wraps_axes_error(self, tmp_path, monkeypatch):
         from src.alpha_research.factor_eval_skill.orchestration import (
@@ -1514,6 +1531,82 @@ class TestR11ExecutableAxes:
             cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1], horizon=60)
         with pytest.raises(FactorEvalError, match="unsupported n_quantiles=5"):
             cmd_seal(ctx, mode="show", oos_start=BURNED[0], oos_end=BURNED[1], n_quantiles=5)
+
+
+class TestR12JudgmentAxesIdentity:
+    def test_judgment_axes_move_the_observation_hash(self):
+        # THE R12 B pin: reordering the screening horizons or moving the LS judgment
+        # horizon changes the OBSERVATION identity before anything executes.
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            EXECUTABLE_PROTOCOL_FIELDS,
+        )
+
+        base = dict(horizon=20, n_quantiles=10, oos_window="w",
+                    registration_bar_hash="b", **EXECUTABLE_PROTOCOL_FIELDS)
+        a = EvalProtocolSpec(**base, screening_horizons=(5, 10, 20), ls_sharpe_horizon=5)
+        b = EvalProtocolSpec(**base, screening_horizons=(10, 5, 20), ls_sharpe_horizon=10)
+        c = EvalProtocolSpec(**base, screening_horizons=(5, 10, 20), ls_sharpe_horizon=10)
+        hashes = {a.observation_protocol_hash, b.observation_protocol_hash,
+                  c.observation_protocol_hash}
+        assert len(hashes) == 3
+
+    def test_required_judgment_axes_fail_closed(self):
+        from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
+        from src.alpha_research.factor_eval_skill.sealed_oos import (
+            EXECUTABLE_PROTOCOL_FIELDS,
+        )
+
+        base = dict(horizon=20, n_quantiles=10, oos_window="w",
+                    registration_bar_hash="b", **EXECUTABLE_PROTOCOL_FIELDS)
+        with pytest.raises(ValueError, match="screening_horizons"):
+            EvalProtocolSpec(**base, ls_sharpe_horizon=5)
+        with pytest.raises(ValueError, match="ls_sharpe_horizon"):
+            EvalProtocolSpec(**base, screening_horizons=(5, 10, 20))
+
+    def test_declared_horizons_must_match_runtime_zero_side_effects(
+        self, tmp_path, monkeypatch
+    ):
+        # THE R12 B probe (code-drift direction): the DECLARED ordered horizons no
+        # longer match the runtime constant — refuse before any provider/store action;
+        # zero evaluator calls, zero A5 state/budget rows, zero seal events.
+        import src.research_orchestrator.promotion_evidence as pe
+        from dataclasses import replace
+
+        from src.alpha_research.factor_eval_skill.book_seal_stores import (
+            A5ReproductionStore,
+        )
+        from src.alpha_research.factor_eval_skill.stores import OosWindowLedgerStore
+        from src.research_orchestrator.promotion_evidence import (
+            PromotionEvidenceError,
+            reproduce_sealed_oos,
+        )
+
+        root, _ = _patch_sealed_world(monkeypatch, tmp_path)
+        calls = {"n": 0}
+
+        def counting_metrics(**kw):
+            calls["n"] += 1
+            return ({}, "")
+
+        monkeypatch.setattr(pe, "_compute_oos_per_factor_metrics", counting_metrics)
+        declared = _declared_bar()                      # declares (5, 10, 20) / ls 5
+        monkeypatch.setattr(pe, "SCREENING_HORIZONS", (10, 5, 20))   # "code drift"
+        matched_fs = replace(
+            FS, eval_protocol_hash=declared["eval_protocol"].observation_protocol_hash)
+        with pytest.raises(PromotionEvidenceError,
+                           match="protocol/runtime mismatch: screening_horizons"):
+            reproduce_sealed_oos(
+                frozen_set=matched_fs, oos_start=VIRGIN[0], oos_end=VIRGIN[1],
+                qlib_dir="q", run_dir=str(tmp_path / "run"), design_hash="d",
+                provider_provenance={"provider_build_id": "pb",
+                                     "calendar_policy_id": "cp",
+                                     "calendar_end": VIRGIN[1]},
+                fresh_window_override_id="ov_x", **declared)
+        assert calls["n"] == 0
+        assert HoldoutSealStore(root).list_events().empty
+        assert OosWindowLedgerStore(root).list_all().empty
+        assert A5ReproductionStore(root).list_all().empty
 
 
 class TestCatalogExpressionResolution:
@@ -1573,7 +1666,8 @@ class TestRunSealedOosPersistedVerdict:
         from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
 
         base = dict(horizon=20, n_quantiles=10, oos_window="w", metric="rank_icir",
-                    universe_filter_policy="u", portfolio_construction="decile_long_short")
+                    universe_filter_policy="u", portfolio_construction="decile_long_short",
+                    screening_horizons=(5, 10, 20), ls_sharpe_horizon=5)
         a = EvalProtocolSpec(**base, registration_bar_hash="bar_A")
         b = EvalProtocolSpec(**base, registration_bar_hash="bar_B")
         assert a.protocol_hash != b.protocol_hash

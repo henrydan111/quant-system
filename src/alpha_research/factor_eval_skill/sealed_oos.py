@@ -199,6 +199,9 @@ EXECUTABLE_PROTOCOL_FIELDS: Mapping[str, str] = MappingProxyType({
 # quintile n_quantiles=5 would execute a different spread than the declared
 # decile_long_short construction).
 EXECUTABLE_HORIZONS = (5, 10, 20)
+# R12 Blocker: the LS-Sharpe judgment horizon IS the primary (first) screening horizon
+# — pre-declared identity, never an after-the-fact note.
+EXECUTABLE_LS_SHARPE_HORIZON = EXECUTABLE_HORIZONS[0]
 
 
 def validate_executable_protocol_axes(
@@ -232,6 +235,10 @@ def executable_protocol_spec(*, horizon: int, n_quantiles: int, oos_window: str)
     )
     return EvalProtocolSpec(
         horizon=horizon, n_quantiles=n_quantiles, oos_window=str(oos_window),
+        # R12 Blocker: the ordered horizon set + LS judgment horizon are declared
+        # identity — a code drift reordering horizons mints a DIFFERENT protocol.
+        screening_horizons=EXECUTABLE_HORIZONS,
+        ls_sharpe_horizon=EXECUTABLE_LS_SHARPE_HORIZON,
         registration_bar_hash=registration_bar_hash(),
         **EXECUTABLE_PROTOCOL_FIELDS,
     )

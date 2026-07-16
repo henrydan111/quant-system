@@ -233,6 +233,12 @@ class EvalProtocolSpec:
     metric: str
     universe_filter_policy: str          # observation universe; A5 requires full_provider_universe
     portfolio_construction: str          # registration-metric book (e.g. decile_long_short)
+    # R12 Blocker: any axis that changes the JUDGMENT metric is pre-declared identity —
+    # the ORDERED screening horizons (their order selects the primary LS horizon) and
+    # the LS-Sharpe horizon itself. A code drift reordering the horizons changes the
+    # observation hash; it can never execute under an old protocol identity.
+    screening_horizons: tuple[int, ...] = ()
+    ls_sharpe_horizon: int = 0
     label_definition: str = "forward_return"
     rank_transform: str = "cs_rank"
     winsorization: str = "none"
@@ -255,6 +261,17 @@ class EvalProtocolSpec:
                 "EvalProtocolSpec requires a non-blank registration_bar_hash — a sealed "
                 "protocol must bind the judgment bar (R7 Minor, fail-closed)"
             )
+        # R12 Blocker: both judgment-metric axes are REQUIRED identity (fail-closed).
+        if not tuple(self.screening_horizons):
+            raise ValueError(
+                "EvalProtocolSpec requires non-empty screening_horizons — the ordered "
+                "horizon set selects the primary LS horizon and is judgment identity (R12)"
+            )
+        if int(self.ls_sharpe_horizon) <= 0:
+            raise ValueError(
+                "EvalProtocolSpec requires a positive ls_sharpe_horizon — the LS-Sharpe "
+                "judgment horizon is pre-declared identity (R12)"
+            )
 
     def _observation_payload(self) -> dict[str, Any]:
         """R7 Blocker 2 — the OBSERVATION identity: everything that determines WHAT the
@@ -267,6 +284,11 @@ class EvalProtocolSpec:
             "horizon": int(self.horizon),
             "n_quantiles": int(self.n_quantiles),
             "oos_window": str(self.oos_window),
+            # R12 Blocker: the ordered screening horizons + the LS judgment horizon are
+            # OBSERVATION identity — reordering horizons or moving the LS horizon
+            # changes the hash before anything executes.
+            "screening_horizons": [int(h) for h in self.screening_horizons],
+            "ls_sharpe_horizon": int(self.ls_sharpe_horizon),
             "metric": normalize_enum(self.metric),
             "universe_filter_policy": normalize_enum(self.universe_filter_policy),
             "portfolio_construction": normalize_enum(self.portfolio_construction),
