@@ -176,6 +176,36 @@ BINDING inputs to its design, collected here verbatim-in-substance:
 5. **Identity bytes preserved exactly** — no strip/casefold/whitespace-collapse on
    claim/record identities anywhere in seat wiring (H1 owns canonicalization).
 
+## Chain-touching-unit REQUIREMENTS (from the seat-wiring units-1+2 GPT arc — binding)
+
+Seat-wiring units 1+2 (decision ledger + choke point + two-leg state machine)
+passed their gate (SOUND-TO-PROCEED, 2026-07-16, commit `bdf8e73`, 3-round arc).
+The reviewer's requirements for the chain-touching unit are BINDING:
+
+1. **The chain's ONLY executor input is a freshly created immutable view of the
+   verified `payload_text`** — never expose `payload_ast` (or any mutable
+   component) to an executor; mutation-after-verification is otherwise
+   undetectable (the reviewer's headline requirement).
+2. **Expected-context provenance**: `expected_decision_id` comes from the
+   ledger/artifact; `expected_consumer_seat` / `expected_use` /
+   `expected_target_dimension` / `expected_output_mode` come ONLY from the
+   frozen scoring contract — never from payloads, LLM output, or caller input.
+3. **Persist execution/output provenance before binding** (which payload hash was
+   executed, raw output hash, validation verdict) — self-minted `NewsLegOutcome`
+   objects are possible in-process (H2-deferred); the archive/binding path must
+   rely on persisted provenance + `verify_outcome_for_binding`, never on an
+   outcome object alone.
+4. **M2⁴ zero-evidence path**: a zero-factor-positive population is legal —
+   deterministic NO-SCORE contribution 0. Prefer emitting the required all-zero
+   factor/horizon result WITHOUT an LLM call; otherwise output validation must
+   enforce all required (dimension, horizon) pairs, zero scores, and no citations.
+5. **Output validation binds every (dimension, horizon) result to typed evidence
+   and recomputes `dimension_ceiling` per result** before acceptance (the leg
+   input gate is use×seat; the dimension binding bites here).
+6. **Ledger head anchoring**: the decision ledger's hash-chain head anchors into
+   the append-only publication/seal ledger (wholesale chain re-computation is
+   undetectable self-contained).
+
 ## Closure checklist (all must be ✅ before the first forward run)
 - [ ] H1 tagged canonical AST + injectivity matrix
 - [ ] H1-legacy 4-source structured-hash migration
