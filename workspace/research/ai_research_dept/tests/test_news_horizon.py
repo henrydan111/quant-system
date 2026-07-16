@@ -230,6 +230,42 @@ class TestLegSchemas:
             {"name": "manipulation_risk", "score_0_5": 5, "citations": []}]), _reg())
         assert compute_news_final_by_horizon(f, p)["next_open"] == 100.0
 
+    # re-review Major: penalty authorization is DIMENSION-AWARE — the three
+    # sanctioned mappings are exclusive (NFR→manipulation only, NFC→coordination
+    # only, D7 source_status→confidence_cap only); cross-dimension = NO-SCORE
+    @pytest.mark.parametrize("cit,dim,grounded", [
+        ("NFR01", "manipulation_risk", True),
+        ("NFR01", "coordination_risk", False),
+        ("NFR01", "confidence_cap", False),
+        ("NFC01", "coordination_risk", True),
+        ("NFC01", "manipulation_risk", False),
+        ("NFC01", "confidence_cap", False),
+    ])
+    def test_penalty_dimension_mapping_matrix(self, cit, dim, grounded):
+        p = validate_penalty_leg_output(_penalty([
+            {"name": dim, "score_0_5": 3, "citations": [cit]}]), _reg())
+        assert p["penalties"][dim][1] is grounded
+        assert p["penalties"][dim][0] == (3.0 if grounded else 0.0)
+
+    def test_d7_source_status_grounds_only_confidence_cap(self):
+        # a D7 source_status child (dims={confidence_cap}) — full sanctioned matrix
+        parent = _pos("NFD09")
+        child = build_card_record(
+            "NFD09.source_status", domain="news", evidence_class="NFD",
+            allowed_uses={"penalty", "bear"}, allowed_consumers={"news", "bear"},
+            allowed_dimensions={"confidence_cap"},
+            record_schema_id="d7_child_v2",
+            derivation=(("source_parent_content_hash", "a" * 64),
+                        ("registry_parent_content_hash", parent.content_hash),
+                        ("attribute_type", "source_status")))
+        reg = build_card_registry(CUT, [parent, child])
+        for dim, ok in (("confidence_cap", True), ("manipulation_risk", False),
+                        ("coordination_risk", False)):
+            p = validate_penalty_leg_output(_penalty([
+                {"name": dim, "score_0_5": 2,
+                 "citations": ["NFD09.source_status"]}]), reg)
+            assert p["penalties"][dim][1] is ok
+
 
 # --------------------------------------------------- theses (D2/D3)
 

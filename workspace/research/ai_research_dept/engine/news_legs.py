@@ -28,7 +28,8 @@
   shadow_complete / decision_complete / binding_eligible)+ 两腿 payload 哈希,
   outcome_hash 全 SHA-256 密封。
 
-LLM 执行体可注入(`factor_leg_fn/penalty_leg_fn` 收 SealedPayload;抛异常=腿失败)
+LLM 执行体可注入(`factor_leg_fn/penalty_leg_fn` 收**新铸 ExecutionView**——校验后
+即铸的不可变视图,只暴露 payload_text,不暴露 AST/SealedPayload;抛异常=腿失败)
 ——本单元零 LLM 依赖;真实 prompt/route/schema 校验在下一单元接上。
 """
 from __future__ import annotations
@@ -191,13 +192,15 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
                       factor_leg_fn, penalty_leg_fn) -> NewsLegOutcome:
     """双腿执行状态机(M2‴/M3⁴)。执行序(确定性,短路):
     1. 工件过门 + penalty 适格集从终注册表推导(计数+集合哈希封存);
-    2. factor 腿:经咽喉点铸密封 payload(账本门在内)→ `factor_leg_fn(SealedPayload)`
-       (抛异常=腿失败 → penalty **不跑**(not_run)→ 硬失败终态);
+    2. factor 腿:经咽喉点铸密封 payload(账本门在内)→ 边界校验 → **新铸
+       ExecutionView** → `factor_leg_fn(view)`(抛异常=腿失败 → penalty **不跑**
+       (not_run)→ 硬失败终态);
     3. penalty 腿:适格=0 → **确定性 empty_success,结构上不调** `penalty_leg_fn`;
-       适格>0 → 经咽喉点(use=penalty 腿级门)→ `penalty_leg_fn(SealedPayload)`
-       (抛异常=腿失败 → news 硬失败,**绝不静默空罚分**);
+       适格>0 → 经咽喉点(use=penalty 腿级门)→ 边界校验 → 新铸视图 →
+       `penalty_leg_fn(view)`(抛异常=腿失败 → news 硬失败,**绝不静默空罚分**);
     4. 终态经 `NewsLegOutcome` 密封(矩阵重算自验)。
-    执行体只收 SealedPayload——LLM 看到的就是被门与被封的字节。"""
+    执行体只收校验后新铸的不可变 ExecutionView(链单元 BINDING #1)——消费
+    view.payload_text,LLM 看到的就是被门与被封的字节。"""
     # ---- 预校验(re-review M3 + re-review#2 M1:一切确定性配置错误——含**精确
     # 类型**(str 子类冒充 mode/decision_id)——在任何执行体运行前发现)----
     if type(output_mode) is not str or output_mode not in OUTPUT_MODES:

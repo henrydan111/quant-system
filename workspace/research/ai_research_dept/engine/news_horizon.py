@@ -112,8 +112,10 @@ def _entry_effective(score: float, citations: list, registry, *, use: str,
     - factor 项:每个引用须 authorize(factor_positive, news, dimension);
       有效分 = min(score, dimension_ceiling(citations));空/未授权/未注册引用 →
       NO-SCORE 0(M2⁴:非失败);
-    - penalty 项:每个引用须 authorize(penalty, news);grounded 即计
-      (罚分无类上限,风险方向不节流——沿用 c16 语义)。
+    - penalty 项:每个引用须 authorize(penalty, news, **dimension**)——
+      **维度感知**(re-review Major:NFR 只封 manipulation_risk、NFC 只封
+      coordination_risk、D7 source_status 只封 confidence_cap;错维引用 =
+      NO-SCORE,注册映射不可跨);grounded 即计(罚分无类上限,风险方向不节流)。
     返回 (effective_score, grounded)。"""
     if not citations:
         return 0.0, False                        # 证据空 → NO-SCORE 贡献恰 0
@@ -129,9 +131,10 @@ def _entry_effective(score: float, citations: list, registry, *, use: str,
         if ceiling <= 0:
             return 0.0, False
         return min(score, float(ceiling)), True
-    for rid in citations:                        # penalty
+    for rid in citations:                        # penalty:维度感知授权(Major)
         rec = registry.get(rid)
-        if rec is None or not authorize(rec, use="penalty", consumer_seat="news"):
+        if rec is None or not authorize(rec, use="penalty", consumer_seat="news",
+                                        target_dimension=dimension):
             return 0.0, False
     return score, True
 
