@@ -45,12 +45,16 @@ def _h(s: str) -> str:
 def _canon_scalar(v) -> bytes:
     """Exact, type-distinguishing bytes for one vendor value (GPT re-review #7 M1 / #8 MAJOR).
 
-    Floats keep their IEEE-754 bits so -0.0 and 0.0 differ; strings are NFC-normalized so equal text
-    digests equally. GPT re-review #8: `None`, `pd.NA` and `pd.NaT` all collapsed to ONE `NULL` token,
-    so event rows differing ONLY in which missing-sentinel they carry merged — each now has its own
-    token. An UNKNOWN object type REFUSES rather than falling back to `repr`: a repr fallback silently
-    makes the digest depend on a type's __repr__ (unstable across versions) and can alias distinct
-    values, which defeats the losslessness the key exists for."""
+    This is SEMANTIC canonicalization, NOT physical-type fidelity (GPT re-review #10 MINOR): equal
+    VALUES digest equally regardless of carrier type — Python `int(1)` and `numpy.int64(1)` collapse
+    (they are the same number), as do a mixed-object column's `datetime` and `pd.Timestamp` for the same
+    instant. That is the INTENT for a vendor-row dedup key: two rows differing only in pandas' physical
+    dtype are the same row. What it still distinguishes are values that are genuinely different: int vs
+    float vs Decimal, tz-aware vs naive, -0.0 vs 0.0 (IEEE-754 bits), and each missing sentinel
+    (`None`/`pd.NA`/`pd.NaT`/float-NaN — GPT re-review #8: these had collapsed to one `NULL` token, so
+    rows differing only in which sentinel they carried merged; each now has its own). Strings are
+    NFC-normalized. An UNKNOWN object type REFUSES rather than falling back to `repr` (an unstable
+    __repr__ could alias distinct values — the one aliasing this key must never permit)."""
     import datetime as _dt
     import decimal as _dec
     import math
@@ -123,6 +127,25 @@ def _canon_scalar(v) -> bytes:
         f"row_payload_digest: no canonical encoding for {type(v).__module__}.{type(v).__name__} "
         f"({v!r:.60}). A repr fallback would make the key depend on an unstable __repr__ and could "
         f"alias distinct values — add an explicit encoding instead.")
+
+
+def _assert_contained_receipt_output(rel: str, staging_data: Path) -> None:
+    """A receipt_output must be a RELATIVE path with no traversal, resolving strictly under
+    staging_data (GPT re-review #10 MAJOR). Absolute paths, `..`, drive-relative and UNC forms all
+    refuse — otherwise a signed plan could write a fetched page outside the recovery staging area."""
+    if not isinstance(rel, str) or not rel.strip():
+        raise LedgerError(f"receipt_output must be a non-empty relative path (got {rel!r})")
+    pr = Path(rel)
+    if pr.is_absolute() or pr.drive or pr.anchor:
+        raise LedgerError(f"receipt_output {rel!r} must be RELATIVE (no drive/anchor/absolute)")
+    if ".." in pr.parts:
+        raise LedgerError(f"receipt_output {rel!r} contains '..' — traversal is refused")
+    base = Path(os.path.normpath(str(staging_data)))
+    dest = Path(os.path.normpath(str(base / pr)))
+    try:
+        dest.relative_to(base)
+    except ValueError:
+        raise LedgerError(f"receipt_output {rel!r} resolves to {dest} — OUTSIDE staging_data {base}")
 
 
 def request_id(endpoint: str, params: dict, partition: str) -> str:
@@ -269,6 +292,11 @@ class PageReceiptLedger:
                     raise LedgerError(f"duplicate request_id {r['request_id']}")
                 if r["empty_policy"] not in ("dense_refuse", "sparse_canary"):
                     raise LedgerError(f"bad empty_policy {r['empty_policy']}")
+                # GPT re-review #10 MAJOR (reproduced): receipt_output was joined onto staging_data and
+                # only checked for uniqueness. `../reports/escaped.parquet` normalizes to <run>/reports/
+                # — outside staging_data but inside the run root, so assert_write waved it through. It
+                # must be a NORMALIZED RELATIVE path whose resolved destination stays UNDER staging_data.
+                _assert_contained_receipt_output(r["receipt_output"], self.rp.staging_data)
                 # per-request receipt outputs must be UNIQUE (no shared-output cross-verify)
                 if r["receipt_output"] in outs:
                     raise LedgerError(f"two requests share receipt_output {r['receipt_output']}")

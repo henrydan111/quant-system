@@ -34,6 +34,13 @@ def _recovery_test_root(sub: str) -> Path:
     non-E: path if that drive is unavailable (GPT re-review #8: a sandboxed reviewer could not write it,
     so the full battery could not serve as passing evidence)."""
     base = Path(os.environ.get("QUANT_RECOVERY_TEST_ROOT") or r"C:\quant_recovery")
+    # GPT re-review #10 MINOR: VALIDATE the root BEFORE creating or writing anything — the previous
+    # order mkdir'd/wrote a relative or E: override before rejecting it.
+    if not base.is_absolute():
+        pytest.skip(f"QUANT_RECOVERY_TEST_ROOT {base} must be ABSOLUTE")
+    if base.drive.upper() == "E:":
+        pytest.skip(f"recovery test root must be NON-E: (E: is refused by the coordinator by design); "
+                    f"got {base}")
     try:
         base.mkdir(parents=True, exist_ok=True)
         probe = base / f".writeprobe_{uuid.uuid4().hex}"
