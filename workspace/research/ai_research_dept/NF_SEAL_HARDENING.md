@@ -206,6 +206,11 @@ The reviewer's requirements for the chain-touching unit are BINDING:
    the append-only publication/seal ledger (wholesale chain re-computation is
    undetectable self-contained).
 
+### 附注(chain-unit sub-block-1 终审,2026-07-16):domain 钉扎
+> penalty 授权契约 = use × consumer × dimension(domain 不参与授权)。当前无计分
+> 扩张;**若 domain 未来成为路由或授权输入,必须先钉 NFR→domain=news、
+> NFC→domain=coordination**(可选出处加固,非门问题——审阅者原话)。
+
 ## Closure checklist (all must be ✅ before the first forward run)
 - [ ] H1 tagged canonical AST + injectivity matrix
 - [ ] H1-legacy 4-source structured-hash migration
