@@ -770,9 +770,15 @@ def _resolve_open_sessions(bounds: dict) -> set:
 def _listed_codes(bounds: dict, label: str) -> set:
     sb = _pinned_reference("reference/stock_basic.parquet", bounds, label)
     want = set(str(bounds.get("list_status") or "L,D,P").split(","))
-    if "list_status" in sb.columns:
-        sb = sb[sb["list_status"].astype(str).isin(want)]
-    return {str(c) for c in sb["ts_code"]}
+    # GPT sign-off HOLD #4 (latent fail-open): this SKIPPED the filter when `list_status` was absent, so
+    # a reference missing the column would silently sign the full universe as if it were the declared
+    # subset. The column is required — a population that filters on data the pinned reference does not
+    # carry cannot be signed against it.
+    if "list_status" not in sb.columns:
+        raise RuntimeError(f"{label}: the pinned stock_basic has no `list_status` column — the "
+                           f"declared list_status filter cannot be applied to it; the population is "
+                           f"not resolvable against this reference")
+    return {str(c) for c in sb[sb["list_status"].astype(str).isin(want)]["ts_code"]}
 
 
 def _resolve_stock_codes(bounds: dict) -> set:
@@ -1194,9 +1200,17 @@ def assert_plan_scope_is_complete(plan_rows: list, declared_families) -> None:
     for fam in sorted(declared):
         row = by_family[fam]
         legs = {pr["endpoint"] for pr in plan_rows if pr.get("dataset") == fam}
-        absent = set(row.source_endpoints) - legs
+        # GPT sign-off HOLD #4 (reproduced): this checked only for MISSING legs, so a plan declaring
+        # market/moneyflow but carrying fully-signed moneyflow AND hk_hold rows under that family passed
+        # both scope and contract. Ownership must be EXACT — legs == the row's source_endpoints — or a
+        # foreign endpoint's requests ride in under a family that does not own them.
+        want = set(row.source_endpoints)
+        absent, foreign = want - legs, legs - want
         if absent:
             raise RuntimeError(f"{fam}: declared but source leg(s) {sorted(absent)} have no requests")
+        if foreign:
+            raise RuntimeError(f"{fam}: carries requests for endpoint(s) {sorted(foreign)} that this "
+                               f"family does not own — it draws only {sorted(want)}")
 
 
 def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, declared_families=None,

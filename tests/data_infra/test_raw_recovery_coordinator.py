@@ -1309,3 +1309,29 @@ def test_a15_labels_derive_from_their_requests():
                                                           "end_date": "20241231"}
     with pytest.raises(RuntimeError, match="derives label"):
         rrc._request_population_key(dict(pr, partition="2025"), row)
+
+
+def test_foreign_endpoint_under_a_declared_family_refused(signed):
+    """GPT sign-off HOLD #4 (reproduced): the scope check rejected MISSING legs but not EXTRA ones — a
+    plan declaring market/moneyflow but carrying signed moneyflow AND hk_hold rows under it passed both
+    scope and contract. Ownership must be EXACT."""
+    fake_root, mirror, cs, hashes = signed
+    mf = _prow("mf:20260702", "moneyflow", "20260702", hashes["daily"],
+               dataset="market/moneyflow", c=cs["daily"])
+    foreign = _prow("hk:20260702", "hk_hold", "20260702", hashes["daily"],
+                    dataset="market/moneyflow", c=cs["daily"])   # hk_hold does NOT own market/moneyflow
+    with pytest.raises(RuntimeError, match="does not own"):
+        rrc.assert_plan_scope_is_complete([mf, foreign], ["market/moneyflow"])
+
+
+def test_listed_codes_requires_the_list_status_column(monkeypatch, tmp_path):
+    """GPT sign-off HOLD #4 (latent fail-open): _listed_codes SKIPPED filtering when list_status was
+    absent, silently signing the full universe as the declared subset."""
+    import pandas as pd
+    sb = tmp_path / "reference" / "stock_basic.parquet"
+    sb.parent.mkdir(parents=True)
+    pd.DataFrame({"ts_code": ["000001.SZ", "600000.SH"]}).to_parquet(sb)   # NO list_status column
+    monkeypatch.setattr(rrc, "E_DATA", tmp_path)
+    bounds = {"list_status": "L,D,P", "reference_sha256": rrc.sha256_file(sb)}
+    with pytest.raises(RuntimeError, match="no `list_status` column"):
+        rrc._listed_codes(bounds, "stock_basic_codes")
