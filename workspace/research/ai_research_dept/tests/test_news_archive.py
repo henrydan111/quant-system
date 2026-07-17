@@ -26,6 +26,9 @@ from workspace.research.ai_research_dept.engine.news_evidence import (  # noqa: 
 from workspace.research.ai_research_dept.engine.news_executors import (  # noqa: E402
     NewsScoringContract, execute_news_decision,
 )
+from workspace.research.ai_research_dept.engine.news_horizon import (  # noqa: E402
+    deterministic_zero_factor_record, evaluate_news_horizon,
+)
 from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
     build_cluster_snapshots,
 )
@@ -138,6 +141,54 @@ def _dirs(tmp_path):
                 contract=_contract())
 
 
+_TERMINALS = {"valid", "invalid", "call_error", "deterministic_zero",
+              "empty_penalty"}
+
+
+def _prov_rows(tmp_path):
+    p = tmp_path / "prov" / "execution_provenance.jsonl"
+    return [json.loads(ln)
+            for ln in p.read_text(encoding="utf-8").splitlines() if ln]
+
+
+def _write_prov_rows(tmp_path, rows):
+    """direct-file write BYPASSING the controlled writer (the attacker's move):
+    re-seq + re-seal each row so every row stays individually self-consistent."""
+    out = []
+    for i, r in enumerate(rows):
+        body = {k: v for k, v in r.items() if k not in ("entry_hash", "seq")}
+        body["seq"] = i
+        out.append({**body, "entry_hash": seal_hash(body)})
+    (tmp_path / "prov" / "execution_provenance.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out),
+        encoding="utf-8")
+    return out
+
+
+def _replace_terminal(tmp_path, execution_id, leg, drop_attempt=False,
+                      **overrides):
+    """replace the on-disk terminal for (execution_id, leg) with a forged
+    self-consistent row; optionally drop its attempt_started row."""
+    kept = []
+    for r in _prov_rows(tmp_path):
+        mine = r["execution_id"] == execution_id and r["leg"] == leg
+        if mine and r["verdict"] in _TERMINALS:
+            r = {**r, **overrides}
+        if mine and drop_attempt and r["verdict"] == "attempt_started":
+            continue
+        kept.append(r)
+    written = _write_prov_rows(tmp_path, kept)
+    return next(r for r in written
+                if r["execution_id"] == execution_id and r["leg"] == leg
+                and r["verdict"] in _TERMINALS)
+
+
+def _reeval(bundle, art, record):
+    return evaluate_news_horizon(
+        record, bundle["records"]["penalty"], art.final_registry,
+        output_mode="primary_horizon", primary_decision_horizon="1-3d")
+
+
 # --------------------------------------------------- happy paths
 
 class TestSealAndVerify:
@@ -193,37 +244,34 @@ class TestJointRefusals:
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_selected_row_field_tamper_refused(self, tmp_path):
+        # dies at the bundle-vs-on-disk equality (the resolved on-disk row is
+        # the authority now — re-review#2 moved the kill earlier)
         art, bundle = _setup(tmp_path)
         bundle["selected_provenance"]["factor"]["raw_sha256"] = "a" * 64
-        with pytest.raises(RegistryError, match="entry_hash 重算不符"):
+        with pytest.raises(RegistryError, match="与盘上唯一状态机终态不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_self_sealed_row_not_on_disk_refused(self, tmp_path):
         # a self-consistent row (entry_hash recomputed) that was never persisted
+        # — the bundle is not the authority; must equal the on-disk resolved fact
         art, bundle = _setup(tmp_path)
         row = dict(bundle["selected_provenance"]["factor"])
         row["raw_sha256"] = "b" * 64
         body = {k: v for k, v in row.items() if k != "entry_hash"}
         row["entry_hash"] = seal_hash(body)             # self-sealed, valid shape
         bundle["selected_provenance"]["factor"] = row
-        with pytest.raises(RegistryError, match="不在盘上出处文件"):
+        with pytest.raises(RegistryError, match="与盘上唯一状态机终态不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_verdict_status_semantics_refused(self, tmp_path):
-        # outcome says factor success, but the selected row claims call_error —
-        # craft a persisted-looking row via a REAL persisted attempt row (wrong
-        # verdict class) to isolate the semantic check
+        # outcome says factor success, but the on-disk terminal claims
+        # call_error — forged by direct file rewrite (bypassing the writer);
+        # the verdict/leg-status semantics check is the kill
         art, bundle = _setup(tmp_path)
-        from workspace.research.ai_research_dept.engine.news_executors import (
-            persist_execution_provenance,
-        )
-        wrong = persist_execution_provenance(
-            tmp_path / "prov", execution_id=bundle["execution_id"],
-            decision_id="d1", leg="factor",
-            payload_hash=bundle["selected_provenance"]["factor"]["payload_hash"],
-            raw_sha256=None, verdict="call_error",
-            schema_id="c16_news_horizon_v1")
-        bundle["selected_provenance"]["factor"] = wrong
+        forged = _replace_terminal(tmp_path, bundle["execution_id"], "factor",
+                                   verdict="call_error", raw_sha256=None,
+                                   parsed_record_hash=None)
+        bundle["selected_provenance"]["factor"] = forged
         with pytest.raises(RegistryError, match="语义不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
@@ -234,9 +282,10 @@ class TestJointRefusals:
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_foreign_execution_id_refused(self, tmp_path):
+        # a foreign execution_id has NO on-disk terminals — resolution refuses
         art, bundle = _setup(tmp_path)
         bundle["execution_id"] = "d1:deadbeefdeadbeef"   # not the rows' attempt
-        with pytest.raises(RegistryError, match="身份不符"):
+        with pytest.raises(RegistryError, match="须恰一"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
 
@@ -246,64 +295,62 @@ class TestJointRefusals:
 class TestTerminalRecordBinding:
     def test_foreign_leg_name_refused_at_persist(self, tmp_path):
         from workspace.research.ai_research_dept.engine.news_executors import (
-            persist_execution_provenance,
+            _persist_execution_provenance,
         )
         with pytest.raises(RegistryError, match="未注册出处 leg"):
-            persist_execution_provenance(
+            _persist_execution_provenance(
                 tmp_path / "prov", execution_id="e", decision_id="d1",
-                leg="foreign_leg", payload_hash="0" * 64, raw_sha256="a" * 64,
-                verdict="valid", schema_id="c16_news_horizon_v1",
-                parsed_record_hash="b" * 64)
+                leg="foreign_leg", payload_hash="0" * 64, verdict="valid",
+                schema_id="c16_news_horizon_v1", raw="{}",
+                parsed_record={"a": 1})
 
     def test_cross_leg_row_in_factor_slot_refused(self, tmp_path):
-        # the reviewer's probe: a REAL persisted row of the OTHER leg placed in
-        # the factor terminal slot — its bytes are genuine (entry_hash + on-disk
-        # both pass), so the leg binding must be the kill
+        # a REAL persisted row of the OTHER leg placed in the factor terminal
+        # slot — the bundle row must equal the on-disk resolved FACTOR terminal
         art, bundle = _setup(tmp_path)
         bundle["selected_provenance"]["factor"] = dict(
             bundle["selected_provenance"]["penalty"])   # leg == "penalty"
-        with pytest.raises(RegistryError, match="终态槽装的是"):
+        with pytest.raises(RegistryError, match="与盘上唯一状态机终态不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_forged_deterministic_zero_with_evidence_refused(self, tmp_path):
-        # forged zero terminal + all-zero records + CONSISTENTLY recomputed
-        # evaluation, while the real factor population is NON-empty — must die
-        # on the population re-derivation, not on the evaluation compare
-        from workspace.research.ai_research_dept.engine.news_executors import (
-            persist_execution_provenance,
-        )
-        from workspace.research.ai_research_dept.engine.news_horizon import (
-            deterministic_zero_factor_record, evaluate_news_horizon,
-        )
+        # forged zero terminal REPLACING the real one on disk (attempt row
+        # dropped so the state machine reads as a clean no-LLM path) + all-zero
+        # records + CONSISTENTLY recomputed evaluation, while the real factor
+        # population is NON-empty — must die on the population re-derivation
         art, bundle = _setup(tmp_path)
         zero = deterministic_zero_factor_record()
-        forged = persist_execution_provenance(
-            tmp_path / "prov", execution_id=bundle["execution_id"],
-            decision_id="d1", leg="factor",
-            payload_hash=bundle["selected_provenance"]["factor"]["payload_hash"],
-            raw_sha256="c" * 64, verdict="deterministic_zero",
-            schema_id="c16_news_horizon_v1", parsed_record_hash=seal_hash(zero))
+        forged = _replace_terminal(tmp_path, bundle["execution_id"], "factor",
+                                   drop_attempt=True,
+                                   verdict="deterministic_zero",
+                                   parsed_record_hash=seal_hash(zero))
         bundle["selected_provenance"]["factor"] = forged
         bundle["records"]["factor"] = zero
-        bundle["evaluation"] = evaluate_news_horizon(
-            zero, bundle["records"]["penalty"], art.final_registry,
-            output_mode="primary_horizon", primary_decision_horizon="1-3d")
+        bundle["evaluation"] = _reeval(bundle, art, zero)
         with pytest.raises(RegistryError, match="总体为空时合法"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    def test_deterministic_terminal_with_attempt_row_refused(self, tmp_path):
+        # same forgery WITHOUT dropping the attempt row — the on-disk state
+        # machine (deterministic terminal must have no attempt) kills earlier
+        art, bundle = _setup(tmp_path)
+        zero = deterministic_zero_factor_record()
+        forged = _replace_terminal(tmp_path, bundle["execution_id"], "factor",
+                                   verdict="deterministic_zero",
+                                   parsed_record_hash=seal_hash(zero))
+        bundle["selected_provenance"]["factor"] = forged
+        bundle["records"]["factor"] = zero
+        bundle["evaluation"] = _reeval(bundle, art, zero)
+        with pytest.raises(RegistryError, match="状态机断裂"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_records_and_evaluation_joint_tamper_refused(self, tmp_path):
         # tamper the record AND recompute the evaluation consistently — the
         # old evaluation-recompute alone would pass; the record<->terminal-row
         # hash binding must be the kill
-        from workspace.research.ai_research_dept.engine.news_horizon import (
-            evaluate_news_horizon,
-        )
         art, bundle = _setup(tmp_path)
         bundle["records"]["factor"]["factor_scores"][0]["score_0_5"] = 1
-        bundle["evaluation"] = evaluate_news_horizon(
-            bundle["records"]["factor"], bundle["records"]["penalty"],
-            art.final_registry, output_mode="primary_horizon",
-            primary_decision_horizon="1-3d")
+        bundle["evaluation"] = _reeval(bundle, art, bundle["records"]["factor"])
         with pytest.raises(RegistryError, match="parsed_record_hash 不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
@@ -330,15 +377,67 @@ class TestTerminalRecordBinding:
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_row_key_set_strict_refused(self, tmp_path):
-        # a row with an extra key, re-sealed self-consistently — strict schema kill
+        # a bundle row with an extra key, re-sealed self-consistently — it is
+        # no longer the on-disk fact, the resolved-equality check kills it
         art, bundle = _setup(tmp_path)
         row = dict(bundle["selected_provenance"]["factor"])
         del row["entry_hash"]
         row["note"] = "x"
         row["entry_hash"] = seal_hash(row)
         bundle["selected_provenance"]["factor"] = row
-        with pytest.raises(RegistryError, match="键集不符"):
+        with pytest.raises(RegistryError, match="与盘上唯一状态机终态不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    # ---- archive-re-review#2 Blocker regressions (the reviewer's probes)
+
+    def test_appended_forged_terminal_breaks_key_verifiability(self, tmp_path):
+        # the reviewer's probe, file-level form: a SECOND self-consistent valid
+        # terminal appended directly to the provenance file (the controlled
+        # writer refuses it — the attacker bypasses the writer) + swapped
+        # record + consistently recomputed evaluation. Two terminals for the
+        # key = the key has lost verifiability -> fail-closed
+        art, bundle = _setup(tmp_path)
+        forged_record = _valid_factor_record()
+        forged_record["factor_scores"][0]["score_0_5"] = 1
+        forged = {**bundle["selected_provenance"]["factor"],
+                  "parsed_record_hash": seal_hash(forged_record)}
+        written = _write_prov_rows(tmp_path, _prov_rows(tmp_path) + [forged])
+        bundle["selected_provenance"]["factor"] = written[-1]
+        bundle["records"]["factor"] = forged_record
+        bundle["evaluation"] = _reeval(bundle, art, forged_record)
+        with pytest.raises(RegistryError, match="须恰一"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    def test_replaced_terminal_dies_at_ledger_commitment(self, tmp_path):
+        # the reviewer's 74.0 -> 50.0 probe, strongest surviving form: REPLACE
+        # the real terminal in place (unique on disk, state machine intact,
+        # record + evaluation consistently recomputed) — the ledger-committed
+        # terminal entry_hash is the kill: the forged row is not the terminal
+        # the controlled executor committed to the non-rewritable chain
+        art, bundle = _setup(tmp_path)
+        forged_record = _valid_factor_record()
+        forged_record["factor_scores"][0]["score_0_5"] = 1
+        forged = _replace_terminal(tmp_path, bundle["execution_id"], "factor",
+                                   parsed_record_hash=seal_hash(forged_record))
+        bundle["selected_provenance"]["factor"] = forged
+        bundle["records"]["factor"] = forged_record
+        bundle["evaluation"] = _reeval(bundle, art, forged_record)
+        with pytest.raises(RegistryError, match="承诺不符"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    def test_forged_commitment_first_write_wins(self, tmp_path):
+        # the public commitment API cannot re-commit a different terminal set
+        # for an already-committed execution
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            record_execution_commitment,
+        )
+        art, bundle = _setup(tmp_path)
+        with pytest.raises(RegistryError, match="首写胜出"):
+            record_execution_commitment(
+                tmp_path / "ledger", decision_id="d1",
+                execution_id=bundle["execution_id"],
+                factor_entry_hash="a" * 64, penalty_entry_hash=None,
+                outcome_hash="b" * 64)
 
 
 # --------------------------------------------------- archive integrity + anchor
@@ -489,6 +588,53 @@ class TestLoadIdentity:
         doc["archive_sha256"] = seal_hash(body)
         p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
         with pytest.raises(RegistryError, match="顶层键集"):
+            load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
+                                             archive_dir=tmp_path / "arch")
+
+    def _reseal(self, p, doc):
+        body = {k: v for k, v in doc.items() if k != "archive_sha256"}
+        doc["archive_sha256"] = seal_hash(body)
+        p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    def test_outcome_alias_key_reseal_refused(self, tmp_path):
+        # archive-re-review#2 Major: top-level was strict but nested objects
+        # could smuggle unverified alias fields — outcome must equal the
+        # rebuilt canonical payload field-for-field
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        p = next((tmp_path / "arch").glob("news_decision_*.json"))
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc["outcome"]["unverified_alias"] = {"x": 1}
+        self._reseal(p, doc)
+        with pytest.raises(RegistryError, match="outcome 载荷"):
+            load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
+                                             archive_dir=tmp_path / "arch")
+
+    def test_selected_provenance_alias_key_reseal_refused(self, tmp_path):
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        p = next((tmp_path / "arch").glob("news_decision_*.json"))
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc["selected_provenance"]["unverified_alias"] = {"x": 1}
+        self._reseal(p, doc)
+        with pytest.raises(RegistryError, match="两键 dict"):
+            load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
+                                             archive_dir=tmp_path / "arch")
+
+    def test_genesis_anchor_downgrade_refused(self, tmp_path):
+        # archive-re-review#2 Major: rewriting the anchor to genesis + reseal
+        # must be refused — sealing always postdates decision registration +
+        # execution commitment, so genesis is never a legal anchored head
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        p = next((tmp_path / "arch").glob("news_decision_*.json"))
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc["ledger_head_at_seal"] = "0" * 64
+        self._reseal(p, doc)
+        with pytest.raises(RegistryError, match="不在当前账本链内"):
             load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
                                              archive_dir=tmp_path / "arch")
 

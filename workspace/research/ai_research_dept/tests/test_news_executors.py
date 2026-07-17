@@ -421,46 +421,100 @@ class TestMalformedEnvelope:
         import workspace.research.ai_research_dept.engine.news_executors as mod
         art = _artifact_full()
         record_decision(tmp_path / "ledger", "d1", art)
-        real = mod.persist_execution_provenance
+        real = mod._persist_execution_provenance
 
         def flaky(*a, **kw):
             if kw.get("verdict") == "call_error":
                 raise OSError("disk full")
             return real(*a, **kw)
-        monkeypatch.setattr(mod, "persist_execution_provenance", flaky)
+        monkeypatch.setattr(mod, "_persist_execution_provenance", flaky)
         with pytest.raises(RegistryError, match="完整性违规"):
             mod.execute_news_decision(
                 art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
                 decision_id="d1", contract=_contract(),
                 call_fn=lambda m: _Reply(None))
 
-    def test_nonhex_raw_sha_refused(self, tmp_path):
+    def test_writer_computes_hashes_non_str_raw_refused(self, tmp_path):
+        # archive-re-review#2 Blocker: the writer takes the ACTUAL raw text and
+        # computes the hash internally — caller-supplied hashes are gone; a
+        # non-str raw is refused before any state is touched
         from workspace.research.ai_research_dept.engine.news_executors import (
-            persist_execution_provenance,
+            _persist_execution_provenance,
         )
-        for bad in ("z" * 64, "A" * 64, "ab", None):
+        for bad in (b"bytes", 123, None):
             with pytest.raises(RegistryError):
-                persist_execution_provenance(
+                _persist_execution_provenance(
                     tmp_path, execution_id="e", decision_id="d", leg="factor",
-                    payload_hash="0" * 64, raw_sha256=bad, verdict="valid",
-                    schema_id="c16_news_horizon_v1")
+                    payload_hash="0" * 64, verdict="valid",
+                    schema_id="c16_news_horizon_v1", raw=bad,
+                    parsed_record={"a": 1})
 
-    def test_parsed_record_hash_rules(self, tmp_path):
-        # archive-review B2: record-bearing verdicts REQUIRE a 64-hex
-        # parsed_record_hash; record-free verdicts must NOT carry one
+    def test_parsed_record_rules(self, tmp_path):
+        # record-bearing verdicts REQUIRE the actual parsed dict (hash computed
+        # internally); record-free verdicts must NOT carry one
         from workspace.research.ai_research_dept.engine.news_executors import (
-            persist_execution_provenance,
+            _persist_execution_provenance,
         )
-        with pytest.raises(RegistryError, match="parsed_record_hash"):
-            persist_execution_provenance(
+        with pytest.raises(RegistryError, match="解析记录"):
+            _persist_execution_provenance(
                 tmp_path, execution_id="e", decision_id="d", leg="factor",
-                payload_hash="0" * 64, raw_sha256="a" * 64, verdict="valid",
-                schema_id="c16_news_horizon_v1")           # missing -> refuse
-        with pytest.raises(RegistryError, match="不得携带 parsed_record_hash"):
-            persist_execution_provenance(
+                payload_hash="0" * 64, verdict="valid",
+                schema_id="c16_news_horizon_v1", raw="{}")   # missing record
+        with pytest.raises(RegistryError, match="不得携带解析记录"):
+            _persist_execution_provenance(
                 tmp_path, execution_id="e", decision_id="d", leg="factor",
-                payload_hash="0" * 64, raw_sha256=None, verdict="attempt_started",
-                schema_id="c16_news_horizon_v1", parsed_record_hash="b" * 64)
+                payload_hash="0" * 64, verdict="attempt_started",
+                schema_id="c16_news_horizon_v1", parsed_record={"a": 1})
+
+    def test_state_machine_second_terminal_refused(self, tmp_path):
+        # archive-re-review#2 Blocker (the reviewer's probe, first kill door):
+        # appending a SECOND terminal for the same (execution, leg) through the
+        # writer is refused outright — one attempt, exactly one terminal
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            _persist_execution_provenance,
+        )
+        _persist_execution_provenance(
+            tmp_path, execution_id="e", decision_id="d", leg="factor",
+            payload_hash="0" * 64, verdict="attempt_started",
+            schema_id="c16_news_horizon_v1")
+        _persist_execution_provenance(
+            tmp_path, execution_id="e", decision_id="d", leg="factor",
+            payload_hash="0" * 64, verdict="valid",
+            schema_id="c16_news_horizon_v1", raw="{}", parsed_record={"a": 1})
+        with pytest.raises(RegistryError, match="恰一终态"):
+            _persist_execution_provenance(
+                tmp_path, execution_id="e", decision_id="d", leg="factor",
+                payload_hash="0" * 64, verdict="valid",
+                schema_id="c16_news_horizon_v1", raw="{}",
+                parsed_record={"b": 2})
+
+    def test_state_machine_llm_terminal_needs_attempt(self, tmp_path):
+        # an LLM terminal without its same-payload attempt_started row is a
+        # broken state machine — refused at write
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            _persist_execution_provenance,
+        )
+        with pytest.raises(RegistryError, match="状态机"):
+            _persist_execution_provenance(
+                tmp_path, execution_id="e", decision_id="d", leg="factor",
+                payload_hash="0" * 64, verdict="valid",
+                schema_id="c16_news_horizon_v1", raw="{}", parsed_record={"a": 1})
+
+    def test_state_machine_deterministic_terminal_no_attempt(self, tmp_path):
+        # deterministic terminals are the no-LLM path: an attempt_started row
+        # for the same key means someone is splicing paths — refused
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            _persist_execution_provenance,
+        )
+        _persist_execution_provenance(
+            tmp_path, execution_id="e", decision_id="d", leg="factor",
+            payload_hash="0" * 64, verdict="attempt_started",
+            schema_id="c16_news_horizon_v1")
+        with pytest.raises(RegistryError, match="状态机"):
+            _persist_execution_provenance(
+                tmp_path, execution_id="e", decision_id="d", leg="factor",
+                payload_hash="0" * 64, verdict="deterministic_zero",
+                schema_id="c16_news_horizon_v1", raw="{}", parsed_record={"a": 1})
 
 
 # --------------------------------------------------- zero path + input contract

@@ -9,7 +9,11 @@ step5/6 底物终门后的第一承重单元,落 [NF_SEAL_HARDENING.md](../NF_SE
    键集+物理 seq+哈希链 prev_hash/entry_hash,任一字段被改/链断/行被换=读即 fail-closed;
    注:自含链无法察觉整本重算替换——链头锚定进发布/封印账本是档案单元的集成项);
    `require_recorded` 对**全部工件派生字段**逐一比对(不再只比两个哈希);写入
-   flush+fsync 后 `os.replace`(LLM 前持久提交)。
+   flush+fsync 后 `os.replace`(LLM 前持久提交)。**archive-re-review#2:链承载
+   两类行**——`kind=decision`(决策注册)+ `kind=execution_commitment`
+   (`record_execution_commitment`:受控执行器把一次执行的选定终态出处
+   entry_hash + outcome_hash 提交进链;首写胜出 per (decision, execution),
+   承诺必须晚于其决策注册)。
 2. **封闭 payload AST**(BINDING #2 + 实现审 M2):**精确类型**闭集(`type(x) is …`,
    str/dict 子类、EvidenceRef 子类一律拒);无 `default=` 回退;
    **`[ID]` 语法为 EvidenceRef 专属**——普通字符串里的引用样 token 经"类型化出处
@@ -49,13 +53,21 @@ _LEDGER_NAME = "decision_ledger.jsonl"
 _GENESIS = "0" * 64
 _HEX64_RE = re.compile(r"[0-9a-f]{64}")
 
-#: 账本行严格 schema(实现审 M1:精确键集,多/少键=fail-closed)
-_ENTRY_KEYS = frozenset({"decision_id", "bundle_hash", "artifact_hash",
-                         "final_registry_hash", "source_card_hash", "cutoff_iso",
-                         "seq", "prev_hash", "entry_hash"})
+#: 账本行严格 schema(实现审 M1:精确键集,多/少键=fail-closed)。
+#  archive-re-review#2 Blocker:账本承载**两类**行——决策注册行 + 执行承诺行
+#  (受控执行器把选定终态出处 entry_hash 提交进这条不可重写哈希链;归档验证对
+#  承诺行复验,出处文件里事后追加/替换的伪造终态到不了档案)。
+_DECISION_KEYS = frozenset({"kind", "decision_id", "bundle_hash", "artifact_hash",
+                            "final_registry_hash", "source_card_hash", "cutoff_iso",
+                            "seq", "prev_hash", "entry_hash"})
+_COMMITMENT_KEYS = frozenset({"kind", "decision_id", "execution_id",
+                              "factor_entry_hash", "penalty_entry_hash",
+                              "outcome_hash", "seq", "prev_hash", "entry_hash"})
 #: 工件派生字段(require_recorded 全字段比对的范围)
 _ARTIFACT_FIELDS = ("bundle_hash", "artifact_hash", "final_registry_hash",
                     "source_card_hash", "cutoff_iso")
+#: 承诺行身份外字段(record_execution_commitment 幂等比对的范围)
+_COMMITMENT_FIELDS = ("factor_entry_hash", "penalty_entry_hash", "outcome_hash")
 
 
 # --------------------------------------------------- 账本(原子首写胜出+哈希链)
@@ -87,19 +99,30 @@ def _ledger_path(ledger_dir) -> Path:
 
 
 def _read_chain(path: Path) -> list:
-    """读并**全量验证**账本(实现审 M1 fail-closed):精确键集、物理 seq、prev_hash
-    链、每行 entry_hash 重算、decision_id 唯一。任一不符=拒。"""
+    """读并**全量验证**账本(实现审 M1 fail-closed):每行 kind ∈ {decision,
+    execution_commitment}、按 kind 精确键集、物理 seq、prev_hash 链、每行
+    entry_hash 重算、决策行 decision_id 唯一、承诺行 (decision_id, execution_id)
+    唯一且其 decision 必已在前文注册。任一不符=拒。"""
     if not path.exists():
         return []
     entries: list = []
     seen: set = set()
+    seen_commit: set = set()
     prev = _GENESIS
     with open(path, encoding="utf-8") as f:
         for i, line in enumerate(x for x in (ln.strip() for ln in f) if x):
             entry = json.loads(line)
-            if set(entry) != _ENTRY_KEYS:
-                raise RegistryError(
-                    f"账本行 {i} 键集不符 {sorted(entry)}——严格 schema 拒(M1)")
+            kind = entry.get("kind")
+            if kind == "decision":
+                if set(entry) != _DECISION_KEYS:
+                    raise RegistryError(
+                        f"账本行 {i} 键集不符 {sorted(entry)}——严格 schema 拒(M1)")
+            elif kind == "execution_commitment":
+                if set(entry) != _COMMITMENT_KEYS:
+                    raise RegistryError(
+                        f"账本行 {i} 承诺行键集不符 {sorted(entry)}——严格 schema 拒")
+            else:
+                raise RegistryError(f"账本行 {i} 未注册 kind {kind!r}——拒")
             if entry["seq"] != i:
                 raise RegistryError(f"账本行 {i} 物理序被改(seq={entry['seq']!r})——拒(M1)")
             if entry["prev_hash"] != prev:
@@ -108,9 +131,20 @@ def _read_chain(path: Path) -> list:
             if seal_hash(body) != entry["entry_hash"]:
                 raise RegistryError(f"账本行 {i} entry_hash 重算不符——行被改,拒(M1)")
             did = entry["decision_id"]
-            if did in seen:
-                raise RegistryError(f"账本含重复 decision_id {did!r}——append-only 被外改,拒")
-            seen.add(did)
+            if kind == "decision":
+                if did in seen:
+                    raise RegistryError(
+                        f"账本含重复 decision_id {did!r}——append-only 被外改,拒")
+                seen.add(did)
+            else:
+                key = (did, entry["execution_id"])
+                if key in seen_commit:
+                    raise RegistryError(
+                        f"账本含重复执行承诺 {key!r}——append-only 被外改,拒")
+                if did not in seen:
+                    raise RegistryError(
+                        f"账本行 {i} 执行承诺先于决策注册({did!r})——状态机违规,拒")
+                seen_commit.add(key)
             entries.append(entry)
             prev = entry["entry_hash"]
     return entries
@@ -160,7 +194,8 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
     path.parent.mkdir(parents=True, exist_ok=True)
     with _ledger_lock(path):
         entries = _read_chain(path)
-        existing = next((e for e in entries if e["decision_id"] == decision_id), None)
+        existing = next((e for e in entries if e["kind"] == "decision"
+                         and e["decision_id"] == decision_id), None)
         if existing is not None:
             if all(existing[k] == expected[k] for k in _ARTIFACT_FIELDS):
                 return dict(existing)              # 逐字节相同重算 → 幂等
@@ -169,16 +204,75 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
                 f"{existing['bundle_hash'][:12]}——首写胜出,第二个不同世界线 "
                 f"{artifact.bundle.bundle_hash[:12]} 拒(BINDING #1)")
         prev = entries[-1]["entry_hash"] if entries else _GENESIS
-        body = {"decision_id": decision_id, **expected,
+        body = {"kind": "decision", "decision_id": decision_id, **expected,
                 "seq": len(entries), "prev_hash": prev}
         entry = {**body, "entry_hash": seal_hash(body)}
         _atomic_durable_write(entries + [entry], path)
     return dict(entry)
 
 
+def record_execution_commitment(ledger_dir, *, decision_id: str, execution_id: str,
+                                factor_entry_hash: str,
+                                penalty_entry_hash: "str | None",
+                                outcome_hash: str) -> dict:
+    """执行承诺入链(archive-re-review#2 Blocker):受控执行器把一次执行的**选定
+    终态出处 entry_hash**(+ outcome_hash)提交进决策账本哈希链。首写胜出 per
+    (decision_id, execution_id):幂等 = 三承诺字段逐一相等,任一不同 = 拒——
+    同一执行的第二套"终态"无法成为承诺;出处文件里事后追加/替换的伪造行因不在
+    承诺内而被归档验证拒绝。决策必须已注册。"""
+    if type(decision_id) is not str or not decision_id.strip():
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {decision_id!r})")
+    if type(execution_id) is not str or not execution_id.strip():
+        raise RegistryError(f"execution_id 须恰 str 非空(得 {execution_id!r})")
+    if not (type(factor_entry_hash) is str and _HEX64_RE.fullmatch(factor_entry_hash)):
+        raise RegistryError(f"factor_entry_hash 须 64-hex(得 {factor_entry_hash!r})")
+    if penalty_entry_hash is not None and not (
+            type(penalty_entry_hash) is str
+            and _HEX64_RE.fullmatch(penalty_entry_hash)):
+        raise RegistryError(f"penalty_entry_hash 须 None/64-hex(得 {penalty_entry_hash!r})")
+    if not (type(outcome_hash) is str and _HEX64_RE.fullmatch(outcome_hash)):
+        raise RegistryError(f"outcome_hash 须 64-hex(得 {outcome_hash!r})")
+    expected = {"factor_entry_hash": factor_entry_hash,
+                "penalty_entry_hash": penalty_entry_hash,
+                "outcome_hash": outcome_hash}
+    path = _ledger_path(ledger_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _ledger_lock(path):
+        entries = _read_chain(path)
+        if not any(e["kind"] == "decision" and e["decision_id"] == decision_id
+                   for e in entries):
+            raise RegistryError(
+                f"decision {decision_id!r} 未注册——执行承诺必须晚于决策入账")
+        existing = next((e for e in entries if e["kind"] == "execution_commitment"
+                         and e["decision_id"] == decision_id
+                         and e["execution_id"] == execution_id), None)
+        if existing is not None:
+            if all(existing[k] == expected[k] for k in _COMMITMENT_FIELDS):
+                return dict(existing)              # 逐字节相同重试 → 幂等
+            raise RegistryError(
+                f"执行 ({decision_id!r}, {execution_id!r}) 已承诺终态——首写胜出,"
+                f"同一执行的第二套终态拒(archive-re-review#2 Blocker)")
+        prev = entries[-1]["entry_hash"] if entries else _GENESIS
+        body = {"kind": "execution_commitment", "decision_id": decision_id,
+                "execution_id": execution_id, **expected,
+                "seq": len(entries), "prev_hash": prev}
+        entry = {**body, "entry_hash": seal_hash(body)}
+        _atomic_durable_write(entries + [entry], path)
+    return dict(entry)
+
+
+def find_execution_commitment(ledger_dir, decision_id: str,
+                              execution_id: str) -> "dict | None":
+    return next((e for e in _read_chain(_ledger_path(ledger_dir))
+                 if e["kind"] == "execution_commitment"
+                 and e["decision_id"] == decision_id
+                 and e["execution_id"] == execution_id), None)
+
+
 def lookup_decision(ledger_dir, decision_id: str) -> "dict | None":
     return next((e for e in _read_chain(_ledger_path(ledger_dir))
-                 if e["decision_id"] == decision_id), None)
+                 if e["kind"] == "decision"
+                 and e["decision_id"] == decision_id), None)
 
 
 def ledger_head(ledger_dir) -> str:

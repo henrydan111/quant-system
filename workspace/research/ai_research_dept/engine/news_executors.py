@@ -20,6 +20,14 @@
   文件级链由档案单元收编;**persist 返回该行本体**,选定行(每腿终态)的
   entry_hash **绑进返回执行束**——共享目录/崩溃重试的歧义由 execution_id +
   选定行绑定消解,绝不整目录重读作结果。
+- **受控写入器 + 状态机 + 账本承诺**(archive-re-review#2 Blocker):公开
+  persist API 撤除——`_persist_execution_provenance` 模块私有,收**实际
+  raw/解析记录**内算哈希(绝不收调用方哈希),写时状态机(每 (execution, leg)
+  恰一 attempt/恰一终态;LLM 终态连着同 payload 的 attempt;确定性终态无
+  attempt);`execute_news_decision` 返回束前把选定终态 entry_hash +
+  outcome_hash **承诺进决策账本哈希链**(`record_execution_commitment`,
+  首写胜出 per (decision, execution))——伪造终态行要么被写入器拒,要么
+  (绕写入器直接改文件)不在承诺内被归档验证拒。
 - **零总体门在 runner**(BINDING #4):正向期望总体为空 → 免 LLM 确定性零记录;
   penalty 适格=0 → empty_success + 确定性空罚分。
 - **输出经契约核心校验**(BINDING #5):parse → validate(逐项重算授权+ceiling)
@@ -45,6 +53,7 @@ from pathlib import Path
 from workspace.research.ai_research_dept.engine.news_cards import D7DecisionArtifact
 from workspace.research.ai_research_dept.engine.news_decision import (
     ExecutionView, build_leg_payload_ast, leg_expected_ids,
+    record_execution_commitment,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
 from workspace.research.ai_research_dept.engine.news_horizon import (
@@ -156,43 +165,81 @@ _PROV_LEGS = frozenset({"factor", "penalty"})
 PROV_ROW_KEYS = frozenset({"execution_id", "decision_id", "leg", "payload_hash",
                            "raw_sha256", "verdict", "schema_id",
                            "parsed_record_hash", "seq", "entry_hash"})
+#: 需要真实 LLM raw 字节的终态(状态机:必须连着同 payload 的 attempt_started 行)
+_LLM_TERMINALS = frozenset({"valid", "invalid", "call_error"})
+#: 免 LLM 确定性终态(状态机:该键不得有 attempt_started 行)
+_DETERMINISTIC_TERMINALS = frozenset({"deterministic_zero", "empty_penalty"})
 
 
-def persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: str,
-                                 leg: str, payload_hash: str,
-                                 raw_sha256: "str | None", verdict: str,
-                                 schema_id: str,
-                                 parsed_record_hash: "str | None" = None) -> dict:
-    """append-only 尝试绑定出处(BINDING #3 + review Major + archive-review B2)。
-    每行:{execution_id, decision_id, leg(∈{factor,penalty}), payload_hash,
-    raw_sha256(attempt_started/call_error 为 None), verdict, schema_id,
-    **parsed_record_hash**(canonical 解析记录哈希——valid/deterministic_zero/
-    empty_penalty 必带,把"终态行↔封存解析记录"绑死;其余必为 None), seq,
-    entry_hash(封印)}。原子 fsync 写;**返回该行本体**。"""
+def _persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: str,
+                                  leg: str, payload_hash: str, verdict: str,
+                                  schema_id: str, raw: "str | None" = None,
+                                  parsed_record: "dict | None" = None) -> dict:
+    """**受控**(模块私有)append-only 尝试绑定出处写入器(BINDING #3 +
+    archive-re-review#2 Blocker:公开 persist API 撤除)。哈希**只在此内部计算**
+    ——写入器收**实际 raw 文本 / 实际解析记录**,绝不接受调用方供给的哈希;并在
+    同一把锁内执行**状态机门**:
+    - 每 (execution_id, leg) **恰一** attempt_started、**恰一**终态——同一尝试的
+      第二条终态被写入器直接拒(伪造替换记录的第一道死点);
+    - LLM 终态(valid/invalid/call_error)必须连着同 payload_hash 的
+      attempt_started 行;确定性终态(deterministic_zero/empty_penalty)该键
+      不得有 attempt 行。
+    每行:{execution_id, decision_id, leg, payload_hash, raw_sha256(精确字节,
+    attempt_started/call_error 为 None), verdict, schema_id, parsed_record_hash
+    (canonical,记录承载终态必带), seq, entry_hash(封印)}。原子 fsync 写;
+    **返回该行本体**。"""
     if verdict not in PROV_VERDICTS:
         raise RegistryError(f"未注册出处 verdict {verdict!r}")
     if leg not in _PROV_LEGS:
         raise RegistryError(f"未注册出处 leg {leg!r}(须 ∈ {sorted(_PROV_LEGS)})")
     if verdict in ("attempt_started", "call_error"):
-        if raw_sha256 is not None:
-            raise RegistryError(f"{verdict} 行不得携带 raw_sha256(无 raw 字节)")
-    elif not (type(raw_sha256) is str and _HEX64_RE.fullmatch(raw_sha256)):
-        # executor-review#2 Minor:真 64 位小写 hex("z"*64 拒),非仅长度
-        raise RegistryError(f"{verdict} 行须携带 64 位小写 hex raw_sha256"
-                            f"(得 {raw_sha256!r})")
+        if raw is not None:
+            raise RegistryError(f"{verdict} 行不得携带 raw(无 raw 字节)")
+        raw_sha256 = None
+    else:
+        if type(raw) is not str:
+            # executor-review#2:恰 str;哈希由写入器内算(re-review#2 Blocker)
+            raise RegistryError(f"{verdict} 行须携带恰 str raw"
+                                f"(得 {type(raw).__name__})")
+        raw_sha256 = _raw_sha256(raw)
     if verdict in ("valid", "deterministic_zero", "empty_penalty"):
-        if not (type(parsed_record_hash) is str
-                and _HEX64_RE.fullmatch(parsed_record_hash)):
-            raise RegistryError(f"{verdict} 行须携带 64-hex parsed_record_hash"
+        if type(parsed_record) is not dict:
+            raise RegistryError(f"{verdict} 行须携带恰 dict 解析记录"
                                 f"(终态行↔解析记录绑定,archive-review B2)")
-    elif parsed_record_hash is not None:
-        raise RegistryError(f"{verdict} 行不得携带 parsed_record_hash(无解析记录)")
+        parsed_record_hash = seal_hash(parsed_record)
+    else:
+        if parsed_record is not None:
+            raise RegistryError(f"{verdict} 行不得携带解析记录")
+        parsed_record_hash = None
     path = Path(prov_dir) / _PROV_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prov_lock(path):
         lines = []
         if path.exists():
             lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln]
+        rows = [json.loads(ln) for ln in lines]
+        key_rows = [r for r in rows if r.get("execution_id") == execution_id
+                    and r.get("leg") == leg]
+        attempts = [r for r in key_rows if r.get("verdict") == "attempt_started"]
+        terminals = [r for r in key_rows if r.get("verdict") in _TERMINAL_VERDICTS]
+        if terminals:
+            raise RegistryError(
+                f"({execution_id!r}, {leg}) 已有终态 {terminals[0]['verdict']!r}——"
+                f"一次尝试恰一终态,第二条终态拒(archive-re-review#2 Blocker)")
+        if verdict == "attempt_started":
+            if attempts:
+                raise RegistryError(
+                    f"({execution_id!r}, {leg}) 已有 attempt_started——恰一尝试行,拒")
+        elif verdict in _LLM_TERMINALS:
+            if len(attempts) != 1 or attempts[0].get("payload_hash") != payload_hash:
+                raise RegistryError(
+                    f"{verdict} 终态必须连着同 payload 的恰一 attempt_started 行"
+                    f"(({execution_id!r}, {leg}) 得 {len(attempts)} 条)——状态机拒")
+        else:                                      # deterministic terminals
+            if attempts:
+                raise RegistryError(
+                    f"{verdict} 为免 LLM 确定性终态,({execution_id!r}, {leg}) "
+                    f"不得有 attempt_started 行——状态机拒")
         body = {"execution_id": execution_id, "decision_id": decision_id, "leg": leg,
                 "payload_hash": payload_hash, "raw_sha256": raw_sha256,
                 "verdict": verdict, "schema_id": schema_id,
@@ -245,40 +292,39 @@ def _make_leg_executor(call_fn, contract: NewsScoringContract, registry, *,
 
     def executor(view):
         view = _require_view(view)
-        results[f"{leg}_attempt"] = persist_execution_provenance(
+        results[f"{leg}_attempt"] = _persist_execution_provenance(
             prov_dir, execution_id=execution_id, decision_id=view.decision_id,
-            leg=leg, payload_hash=view.payload_hash, raw_sha256=None,
+            leg=leg, payload_hash=view.payload_hash,
             verdict="attempt_started", schema_id=contract.schema_id)
         try:
-            # executor-review#2 Major-2:响应提取 + 恰 str 校验 + 精确字节哈希
-            # 全部在守卫路径内——.text=None/bytes/不可编码文本一律落 call_error
-            # 类型化终态,绝不留下无终态的已开始尝试
+            # executor-review#2 Major-2:响应提取 + 恰 str 校验全部在守卫路径内
+            # ——.text=None/bytes/不可编码文本一律落 call_error 类型化终态,绝不
+            # 留下无终态的已开始尝试(精确字节哈希由写入器内算,re-review#2)
             reply = call_fn([{"role": "system", "content": prompt},
                              {"role": "user", "content": view.payload_text}])
             raw = reply.text
             if type(raw) is not str:
                 raise RegistryError(f"LLM raw text 须为恰 str(得 {type(raw).__name__})")
-            raw_hash = _raw_sha256(raw)
+            raw.encode("utf-8")                    # 不可编码文本在守卫内暴露
         except Exception:
-            results[f"{leg}_prov"] = persist_execution_provenance(
+            results[f"{leg}_prov"] = _persist_execution_provenance(
                 prov_dir, execution_id=execution_id, decision_id=view.decision_id,
-                leg=leg, payload_hash=view.payload_hash, raw_sha256=None,
+                leg=leg, payload_hash=view.payload_hash,
                 verdict="call_error", schema_id=contract.schema_id)
             raise
         try:
             record = parse_json_reply(raw)
             validator(record, registry)
         except Exception:
-            results[f"{leg}_prov"] = persist_execution_provenance(
+            results[f"{leg}_prov"] = _persist_execution_provenance(
                 prov_dir, execution_id=execution_id, decision_id=view.decision_id,
-                leg=leg, payload_hash=view.payload_hash, raw_sha256=raw_hash,
+                leg=leg, payload_hash=view.payload_hash, raw=raw,
                 verdict="invalid", schema_id=contract.schema_id)
             raise
-        results[f"{leg}_prov"] = persist_execution_provenance(
+        results[f"{leg}_prov"] = _persist_execution_provenance(
             prov_dir, execution_id=execution_id, decision_id=view.decision_id,
-            leg=leg, payload_hash=view.payload_hash, raw_sha256=raw_hash,
-            verdict="valid", schema_id=contract.schema_id,
-            parsed_record_hash=seal_hash(record))
+            leg=leg, payload_hash=view.payload_hash, raw=raw,
+            verdict="valid", schema_id=contract.schema_id, parsed_record=record)
         results[leg] = record
     return executor
 
@@ -316,13 +362,12 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
 
         def factor_fn(view):
             view = _require_view(view)
-            results["factor_prov"] = persist_execution_provenance(
+            results["factor_prov"] = _persist_execution_provenance(
                 prov_dir, execution_id=execution_id, decision_id=view.decision_id,
                 leg="factor", payload_hash=view.payload_hash,
-                raw_sha256=_raw_sha256(json.dumps(zero, ensure_ascii=False,
-                                                  sort_keys=True)),
+                raw=json.dumps(zero, ensure_ascii=False, sort_keys=True),
                 verdict="deterministic_zero", schema_id=contract.schema_id,
-                parsed_record_hash=seal_hash(zero))
+                parsed_record=zero)
             results["factor"] = zero
     else:
         factor_fn = _make_leg_executor(
@@ -354,13 +399,12 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
     if outcome.news_status == "success":
         if outcome.penalty_leg_status == "empty_success":
             results["penalty"] = dict(_EMPTY_PENALTY_RECORD)
-            results["penalty_prov"] = persist_execution_provenance(
+            results["penalty_prov"] = _persist_execution_provenance(
                 prov_dir, execution_id=execution_id, decision_id=decision_id,
                 leg="penalty", payload_hash="0" * 64,
-                raw_sha256=_raw_sha256(json.dumps(_EMPTY_PENALTY_RECORD,
-                                                  sort_keys=True)),
+                raw=json.dumps(_EMPTY_PENALTY_RECORD, sort_keys=True),
                 verdict="empty_penalty", schema_id=contract.schema_id,
-                parsed_record_hash=seal_hash(_EMPTY_PENALTY_RECORD))
+                parsed_record=dict(_EMPTY_PENALTY_RECORD))
         evaluation = evaluate_news_horizon(
             results["factor"], results["penalty"], registry,
             output_mode=contract.output_mode,
@@ -375,6 +419,15 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
                 f"{leg} 腿尝试 {execution_id} 已开始却无选定终态出处(终态写入失败等)"
                 f"——完整性违规,拒绝返回执行束(executor-review#2 Major-2)")
     selected = {leg: results.get(f"{leg}_prov") for leg in ("factor", "penalty")}
+    # archive-re-review#2 Blocker:选定终态 entry_hash + outcome_hash **承诺进
+    # 决策账本哈希链**(首写胜出 per (decision, execution))——出处文件里事后
+    # 追加/替换的伪造终态不在承诺内,归档验证一律拒
+    record_execution_commitment(
+        ledger_dir, decision_id=decision_id, execution_id=execution_id,
+        factor_entry_hash=selected["factor"]["entry_hash"],
+        penalty_entry_hash=(selected["penalty"]["entry_hash"]
+                            if selected["penalty"] else None),
+        outcome_hash=outcome.outcome_hash)
     return {"execution_id": execution_id, "outcome": outcome,
             "evaluation": evaluation, "selected_provenance": selected,
             "selected_entry_hashes": {leg: (e["entry_hash"] if e else None)
