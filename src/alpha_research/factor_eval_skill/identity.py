@@ -262,15 +262,30 @@ class EvalProtocolSpec:
                 "protocol must bind the judgment bar (R7 Minor, fail-closed)"
             )
         # R12 Blocker: both judgment-metric axes are REQUIRED identity (fail-closed).
-        if not tuple(self.screening_horizons):
+        # R13 Blocker: R12's payload `int()`-coercion COLLAPSED genuinely-different
+        # judgment axes into ONE sealed identity — (5.9,10,20)/5.9 hashed identically to
+        # (5,10,20)/5 while the execution path still passed the raw 5.9 to screening
+        # (reproduced: same observation_protocol_hash, runtime check passed, persisted
+        # protocol said [5,10,20]/5 while metric_note said 5.9d). An axis that changes the
+        # judgment metric must enter identity VERBATIM, so it must BE a built-in int —
+        # enforced at construction, never normalized away. `type(...) is not int` (never
+        # isinstance) deliberately rejects bool, which would otherwise collide with 1.
+        if (
+            type(self.screening_horizons) is not tuple
+            or not self.screening_horizons
+            or any(type(h) is not int or h <= 0 for h in self.screening_horizons)
+        ):
             raise ValueError(
-                "EvalProtocolSpec requires non-empty screening_horizons — the ordered "
-                "horizon set selects the primary LS horizon and is judgment identity (R12)"
+                "EvalProtocolSpec requires screening_horizons to be a non-empty "
+                "tuple of positive built-in ints"
             )
-        if int(self.ls_sharpe_horizon) <= 0:
+        if type(self.ls_sharpe_horizon) is not int or self.ls_sharpe_horizon <= 0:
             raise ValueError(
-                "EvalProtocolSpec requires a positive ls_sharpe_horizon — the LS-Sharpe "
-                "judgment horizon is pre-declared identity (R12)"
+                "EvalProtocolSpec requires a positive built-in-int ls_sharpe_horizon"
+            )
+        if self.ls_sharpe_horizon not in self.screening_horizons:
+            raise ValueError(
+                "EvalProtocolSpec requires ls_sharpe_horizon to be in screening_horizons"
             )
 
     def _observation_payload(self) -> dict[str, Any]:
@@ -287,8 +302,12 @@ class EvalProtocolSpec:
             # R12 Blocker: the ordered screening horizons + the LS judgment horizon are
             # OBSERVATION identity — reordering horizons or moving the LS horizon
             # changes the hash before anything executes.
-            "screening_horizons": [int(h) for h in self.screening_horizons],
-            "ls_sharpe_horizon": int(self.ls_sharpe_horizon),
+            # R13 Blocker: NEVER coerce here. `int()` normalized (5.9,10,20)/5.9 into the
+            # (5,10,20)/5 identity while execution used the raw 5.9 — a judgment-axis
+            # change hiding under an unchanged seal. __post_init__ guarantees these are
+            # already positive built-in ints, so they enter identity verbatim.
+            "screening_horizons": list(self.screening_horizons),
+            "ls_sharpe_horizon": self.ls_sharpe_horizon,
             "metric": normalize_enum(self.metric),
             "universe_filter_policy": normalize_enum(self.universe_filter_policy),
             "portfolio_construction": normalize_enum(self.portfolio_construction),

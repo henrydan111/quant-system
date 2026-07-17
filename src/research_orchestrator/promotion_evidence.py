@@ -62,6 +62,29 @@ from src.alpha_research.factor_eval_skill.sealed_oos import EXECUTABLE_HORIZONS
 
 SCREENING_HORIZONS = EXECUTABLE_HORIZONS
 
+
+def _validated_runtime_horizons() -> tuple:
+    """R13 Blocker — the EXECUTED judgment axes must be verbatim positive built-in ints.
+
+    A float / bool / non-positive runtime horizon changes (or invalidates) the judgment
+    metric, while the old ``int()`` coercion hid that behind an UNCHANGED sealed identity
+    (reproduced: ``(5.9,10,20)`` hashed as ``(5,10,20)`` yet 5.9 still reached screening;
+    the persisted protocol said 5d while ``metric_note`` said 5.9d). Fail closed HERE —
+    before any evaluator / A5 / budget / seal action. Shared by the entry guard and the
+    compute leaf so a direct leaf call cannot bypass it.
+    """
+    h = SCREENING_HORIZONS
+    if (
+        type(h) is not tuple
+        or not h
+        or any(type(x) is not int or x <= 0 for x in h)
+    ):
+        raise PromotionEvidenceError(
+            "invalid runtime screening_horizons: expected a non-empty tuple "
+            "of positive built-in ints"
+        )
+    return h
+
 # The 6 PIT canary keys (mirrors pit_canaries.CANARY_KEYS; duplicated here to avoid importing the
 # heavy pit chain at module load — validated equal by test).
 CANARY_KEYS = (
@@ -195,9 +218,14 @@ def _compute_oos_per_factor_metrics(
     import pandas as pd
     from src.alpha_research.factor_eval.batch_screening import run_batch_screening
 
+    # R13 Blocker: the compute leaf reuses the SAME strict validation as the entry guard,
+    # so a direct leaf call (or a drifted SCREENING_HORIZONS) is refused here too — before
+    # any evaluator work — instead of silently screening on a coerced horizon.
+    runtime_horizons = _validated_runtime_horizons()
+
     qdir = str(qlib_dir)
     factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
-                                            horizons=list(SCREENING_HORIZONS), qlib_dir=qdir, kernels=1,
+                                            horizons=list(runtime_horizons), qlib_dir=qdir, kernels=1,
                                             stage="oos_test")
     factors_df = factors_df[[c for c in factor_exprs if c in factors_df.columns]]
     apanel, _ = compute_factors_fn(catalog={"adj_close": adj_expr}, start_date=oos_start, end_date=oos_end,
@@ -205,8 +233,8 @@ def _compute_oos_per_factor_metrics(
     # The explicit label-realization leak-guard (raises IsEndLeakageError if the longest-horizon
     # label would realize past oos_end); its panel is NOT the scoring metric.
     panel = build_is_windowed_panel(factors_df, apanel["adj_close"], is_end=oos_end,
-                                    horizon=max(SCREENING_HORIZONS), trade_cal=trade_cal)
-    screen = run_batch_screening(factors_df, fwd_df, horizons=tuple(SCREENING_HORIZONS),
+                                    horizon=max(runtime_horizons), trade_cal=trade_cal)
+    screen = run_batch_screening(factors_df, fwd_df, horizons=runtime_horizons,
                                  engine="batch", progress_every=0, n_quantiles=n_quantiles)
     per_factor: dict[str, dict] = {}
     for name in factor_exprs:
@@ -217,7 +245,7 @@ def _compute_oos_per_factor_metrics(
         per_factor[str(name)] = {
             "oos_rank_icir": float(ricir) if ricir is not None and not pd.isna(ricir) else float("nan"),
             "oos_ls_sharpe": float(ls) if ls is not None and not pd.isna(ls) else float("nan"),
-            "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
+            "ls_sharpe_horizon": runtime_horizons[0],
         }
     return per_factor, str(getattr(panel, "max_label_realization_date", ""))
 
@@ -337,14 +365,18 @@ def reproduce_sealed_oos(
             f"— got {type(eval_protocol).__name__!r}; a bare hash string or a shaped "
             "look-alike object is not verifiable identity (R9 B2 / R10 B1)"
         )
-    declared_horizons = tuple(int(h) for h in eval_protocol.screening_horizons)
-    runtime_horizons = tuple(int(h) for h in SCREENING_HORIZONS)
+    # R13 Blocker: compare VERBATIM — never coerce. `int()` on either side collapsed a
+    # (5.9,10,20)/5.9 protocol onto the (5,10,20)/5 identity and let it pass this very
+    # check while 5.9 executed. The runtime tuple is type-validated first, so a drifted
+    # non-int SCREENING_HORIZONS is refused before any provider/store/seal action.
+    declared_horizons = eval_protocol.screening_horizons
+    runtime_horizons = _validated_runtime_horizons()
     if declared_horizons != runtime_horizons:
         raise PromotionEvidenceError(
             f"protocol/runtime mismatch: screening_horizons="
             f"{declared_horizons} != {runtime_horizons}"
         )
-    if int(eval_protocol.ls_sharpe_horizon) != runtime_horizons[0]:
+    if eval_protocol.ls_sharpe_horizon != runtime_horizons[0]:
         raise PromotionEvidenceError(
             "protocol/runtime mismatch: ls_sharpe_horizon must equal "
             f"the executed primary horizon {runtime_horizons[0]}"
@@ -606,7 +638,10 @@ def reproduce_sealed_oos(
                 "oos_window": f"{oos_start}..{oos_end}",
                 "horizon": horizon,
                 "rank_icir_horizon": horizon,
-                "ls_sharpe_horizon": int(SCREENING_HORIZONS[0]),
+                # R13 Blocker: persist the executed axis VERBATIM — an `int()` here would
+                # write 5 while screening ran 5.9, exactly the protocol/metric_note split
+                # the probe reproduced.
+                "ls_sharpe_horizon": SCREENING_HORIZONS[0],
                 "metric_note": (
                     f"Canonical post-2026-06-11 sealed protocol: rank_icir at {horizon}d "
                     f"plus decile long-short ls_sharpe at {SCREENING_HORIZONS[0]}d, "
