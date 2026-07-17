@@ -512,7 +512,14 @@ def run_book_sealed_evaluation(
             "R1 Blocker 4): the promotion-driving number must come from an attested "
             "event-driven total-return 1x engine bound to a formal execution profile — a "
             "caller-supplied callable cannot attest that. Run mode='dryrun' for the "
-            "burned-window pilot; the S6 runner PR lifts this."
+            "burned-window pilot; the S6 runner PR lifts this. "
+            "S6 PRECONDITIONS (GPT R14 Major — MUST close before lifting): (1) this entry "
+            "takes the full EvalProtocolSpec, never a bare eval_protocol_hash string, and "
+            "verifies its observation_protocol_hash == frozen_set.eval_protocol_hash; "
+            "(2) live mode FORBIDS injected book_backtest_fn / compute_metrics_fn (the "
+            "default guarded leaf is the only executor — an injected callable bypasses "
+            "the validated-horizons guard); (3) the runner registers its verifier in "
+            "REGISTERED_GOVERNED_RUNNER_VERIFIERS."
         )
     if not str(oos_start).strip() or not str(oos_end).strip():
         raise BookSealError("oos_start and oos_end are required")

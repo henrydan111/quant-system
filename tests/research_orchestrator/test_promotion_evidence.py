@@ -216,6 +216,63 @@ class ReproduceSealedOosTests(unittest.TestCase):
             self.assertLessEqual(str(ir["max_label_realization_date"])[:10], OOS_END)  # leak-free belt
             self.assertEqual(len(store.list_events(seal_key=fs.frozen_set_hash)), 1)  # seal claimed
 
+    def test_midcall_horizon_rebind_cannot_swap_executed_axis(self):
+        # GPT R14 Blocker (TOCTOU): declare (5,10,20)/5, pass the entry guard, then
+        # rebind the global to the still-LEGAL (10,5,20) BEFORE the compute leaf runs
+        # (hooked via the expression resolver, which executes between the guard and the
+        # leaf). The leaf and the persisted record must use the ENTRY snapshot: the
+        # executed horizons stay [5,10,20] and the persisted LS axis stays 5d.
+        import contextlib
+        import tempfile
+        from pathlib import Path as _P
+        from unittest.mock import patch
+
+        import src.research_orchestrator.promotion_evidence as pe
+        from src.research_orchestrator.promotion_evidence import reproduce_sealed_oos
+
+        OOS_END = "2026-02-27"
+        fs = self._frozen_set(20, 10)
+        cal, base_cf = self._fake_cf()
+        captured = {}
+
+        def cf(catalog, start_date, end_date, horizons, **kw):
+            if horizons:
+                captured["horizons"] = list(horizons)
+            return base_cf(catalog, start_date, end_date, horizons, **kw)
+
+        orig_horizons = pe.SCREENING_HORIZONS
+
+        def rebinding_resolver(frozen_set, **kw):
+            pe.SCREENING_HORIZONS = (10, 5, 20)     # mid-call LEGAL reordering
+            return {"f_pos": "x", "f_neg": "y"}
+
+        _P("workspace/outputs").mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(dir=str(_P("workspace/outputs"))) as d:
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch(
+                        "src.research_orchestrator.holdout_seal."
+                        "resolve_configured_global_holdout_root",
+                        lambda: _P(d)))
+                    stack.enter_context(patch(
+                        "src.research_orchestrator.promotion_evidence."
+                        "resolve_frozen_catalog_expressions",
+                        rebinding_resolver))
+                    rep = reproduce_sealed_oos(
+                        frozen_set=fs, oos_start="2021-01-01", **self._declared_bar(20, 10),
+                        qlib_dir=".", run_dir=d, design_hash="dh", horizon=20, n_quantiles=10,
+                        provider_provenance={"provider_build_id": "pb1",
+                                             "calendar_policy_id": "cp1",
+                                             "calendar_end": OOS_END},
+                        compute_factors_fn=cf, trade_cal=cal,
+                    )
+        finally:
+            pe.SCREENING_HORIZONS = orig_horizons
+        assert captured["horizons"] == [5, 10, 20], captured   # the ENTRY snapshot executed
+        ir = rep["independent_reproduction"]
+        assert ir["ls_sharpe_horizon"] == 5                    # persisted from the snapshot
+        assert "screening_horizons=(5, 10, 20)" in ir["metric_note"]
+
     def test_oos_reads_run_under_research_access_context(self):
         # GPT post-impl review Fix 3: the compute_factors reads must run under an OOS
         # ResearchAccessContext (stage=oos_test, seal_key=frozen_set_hash, window=[oos_start,

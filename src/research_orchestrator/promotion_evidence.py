@@ -63,7 +63,7 @@ from src.alpha_research.factor_eval_skill.sealed_oos import EXECUTABLE_HORIZONS
 SCREENING_HORIZONS = EXECUTABLE_HORIZONS
 
 
-def _validated_runtime_horizons() -> tuple:
+def _validated_runtime_horizons(horizons: tuple | None = None) -> tuple:
     """R13 Blocker — the EXECUTED judgment axes must be verbatim positive built-in ints.
 
     A float / bool / non-positive runtime horizon changes (or invalidates) the judgment
@@ -72,8 +72,13 @@ def _validated_runtime_horizons() -> tuple:
     the persisted protocol said 5d while ``metric_note`` said 5.9d). Fail closed HERE —
     before any evaluator / A5 / budget / seal action. Shared by the entry guard and the
     compute leaf so a direct leaf call cannot bypass it.
+
+    R14 Blocker (TOCTOU): when ``horizons`` is passed, validate THAT immutable snapshot
+    (the entry-captured tuple threaded through the whole call) instead of re-reading the
+    module global — a mid-call rebind of ``SCREENING_HORIZONS`` to another LEGAL ordering
+    could otherwise execute a different LS judgment axis than the sealed declaration.
     """
-    h = SCREENING_HORIZONS
+    h = SCREENING_HORIZONS if horizons is None else horizons
     if (
         type(h) is not tuple
         or not h
@@ -190,6 +195,7 @@ def _compute_oos_per_factor_metrics(
     n_quantiles: int,
     compute_factors_fn=None,
     trade_cal=None,
+    runtime_horizons: tuple | None = None,
 ) -> tuple[dict[str, dict], str]:
     """The screening's EXACT per-factor OOS metric path (``compute_factors(stage="oos_test")`` →
     the ``build_is_windowed_panel`` label-realization belt → ``run_batch_screening``), extracted
@@ -221,7 +227,11 @@ def _compute_oos_per_factor_metrics(
     # R13 Blocker: the compute leaf reuses the SAME strict validation as the entry guard,
     # so a direct leaf call (or a drifted SCREENING_HORIZONS) is refused here too — before
     # any evaluator work — instead of silently screening on a coerced horizon.
-    runtime_horizons = _validated_runtime_horizons()
+    # R14 Blocker (TOCTOU): a sealed caller (reproduce_sealed_oos) passes its ENTRY
+    # snapshot and this leaf executes EXACTLY that tuple — the module global is read only
+    # on standalone calls (book diagnostics), so a mid-call rebind of SCREENING_HORIZONS
+    # after the entry guard can never swap the executed LS judgment axis.
+    runtime_horizons = _validated_runtime_horizons(runtime_horizons)
 
     qdir = str(qlib_dir)
     factors_df, fwd_df = compute_factors_fn(catalog=dict(factor_exprs), start_date=oos_start, end_date=oos_end,
@@ -600,6 +610,9 @@ def reproduce_sealed_oos(
                 factor_exprs=factor_exprs, oos_start=oos_start, oos_end=oos_end, qlib_dir=qlib_dir,
                 horizon=horizon, n_quantiles=n_quantiles, compute_factors_fn=compute_factors_fn,
                 trade_cal=trade_cal,
+                # R14 Blocker (TOCTOU): the ENTRY-captured snapshot is executed — never a
+                # re-read of the module global after the declaration was verified.
+                runtime_horizons=runtime_horizons,
             )
         # R6 Blocker 3: the registration-bar VERDICT is computed HERE — inside the same
         # locked span that persists the completion record — against the CANONICAL bar
@@ -640,12 +653,14 @@ def reproduce_sealed_oos(
                 "rank_icir_horizon": horizon,
                 # R13 Blocker: persist the executed axis VERBATIM — an `int()` here would
                 # write 5 while screening ran 5.9, exactly the protocol/metric_note split
-                # the probe reproduced.
-                "ls_sharpe_horizon": SCREENING_HORIZONS[0],
+                # the probe reproduced. R14 Blocker (TOCTOU): the persisted values come
+                # from the ENTRY snapshot — the same tuple the declaration was verified
+                # against and the leaf executed — never a fresh global read.
+                "ls_sharpe_horizon": runtime_horizons[0],
                 "metric_note": (
                     f"Canonical post-2026-06-11 sealed protocol: rank_icir at {horizon}d "
-                    f"plus decile long-short ls_sharpe at {SCREENING_HORIZONS[0]}d, "
-                    f"computed with screening_horizons={tuple(SCREENING_HORIZONS)}. "
+                    f"plus decile long-short ls_sharpe at {runtime_horizons[0]}d, "
+                    f"computed with screening_horizons={tuple(runtime_horizons)}. "
                     "Pre-2026-06-11 Round-6 evidence used quintiles and is legacy audit "
                     "evidence; its ls_sharpe values are not bit-for-bit comparable. This "
                     "is the registration metric, not a horizon-consistent tradability "

@@ -1,80 +1,88 @@
-# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 13)
+# PR3 (book-level promotion machinery) — GPT §10 implementation review prompt (ROUND 15)
 
-R1..R11 REWORK → all folded. R12 REWORK (1B/1M/1m — the LS judgment horizon and the ORDERED screening
-horizons were not protocol identity [your drift probe: (5,10,20) and (10,5,20) produced the SAME
-protocol_hash while executing 5d vs 10d LS judgments]; the persisted metric_note falsely claimed the
-decile path matches Round-6 quintile evidence bit-for-bit; the R11 regression neither bound the frozen
-set to the illegal spec's observation hash nor checked the A5 state store) → **all folded**.
-R12 confirmed R11 truly closed (both illegal-axes probes: zero provider/root/catalog/evaluator calls,
-zero A5, zero seals). Branch: `calendar-unfreeze`.
+R1..R13 REWORK → all folded. R14 REWORK (1B/1M/1m — VERIFIED TOCTOU: the entry guard captured
+`_validated_runtime_horizons()` but the compute leaf and the persistence re-read the global, so a
+mid-call rebind to the still-LEGAL (10,5,20) executed a 10d LS judgment under a sealed 5d declaration
+WITH seal + A5 state written; the book path's injectable `compute_metrics_fn` + bare
+`eval_protocol_hash` are an S6-precondition bypass surface; my "zero int() coercion in src" claim was
+too broad) → **all folded**. Branch: `calendar-unfreeze`.
 
 ---
 
 ```text
 ROLE
-You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-13 re-review of PR3: verify the R12 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. Top invariant at stake: EVERY axis that changes the judgment metric is pre-declared hash material, verified against the runtime before any governance action — never an after-the-fact note.
+You are a senior reviewer for an A-share quantitative research system where RESEARCH VALIDITY outranks code that merely runs. ROUND-15 re-review of PR3: verify the R14 finding is genuinely closed (re-run your probes) and surface anything new. Do not rubber-stamp. Top invariant at stake: the judgment axes verified at declaration time must be THE axes that execute and THE axes that persist — one immutable snapshot, no re-read window.
 
 REPO (public) https://github.com/henrydan111/quant-system  (branch: calendar-unfreeze)
 Raw form: https://raw.githubusercontent.com/henrydan111/quant-system/calendar-unfreeze/<path>
 
 FETCH (authoritative):
-- src/alpha_research/factor_eval_skill/identity.py         (screening_horizons + ls_sharpe_horizon = REQUIRED observation identity)
-- src/alpha_research/factor_eval_skill/sealed_oos.py       (EXECUTABLE_LS_SHARPE_HORIZON; constructor declares both)
-- src/research_orchestrator/promotion_evidence.py          (entry-point horizon-chain verification; corrected metric_note/docstrings)
-- tests/alpha_research/test_pr3_book_seal.py               (R1..R12 probes pinned)
+- src/research_orchestrator/promotion_evidence.py          (snapshot threading: entry → leaf → persistence)
+- src/alpha_research/factor_eval_skill/book_seal.py        (S6 preconditions pinned in the live refusal)
+- tests/research_orchestrator/test_promotion_evidence.py   (the mid-call rebind regression)
+- tests/alpha_research/test_pr3_book_seal.py               (R1..R14 probes pinned)
 
-YOUR R12 FINDINGS — how each was closed (your exact replacements, verbatim where given):
-Blocker (LS horizon + ordered screening horizons not identity) →
-   * EvalProtocolSpec gains REQUIRED fields screening_horizons: tuple[int, ...] and
-     ls_sharpe_horizon: int, serialized into the OBSERVATION payload
-     ("screening_horizons": [int(h)...], "ls_sharpe_horizon": int(...)) — reordering the horizons or
-     moving the LS horizon changes observation_protocol_hash (and therefore the seal key) BEFORE
-     anything executes; __post_init__ fails closed on empty/non-positive values.
-   * sealed_oos: EXECUTABLE_LS_SHARPE_HORIZON = EXECUTABLE_HORIZONS[0]; executable_protocol_spec()
-     declares both (your exact constructor).
-   * reproduce_sealed_oos: immediately after the entry axes validation — before ANY provider/store/
-     authorization action — the exact-type check runs EARLY and then your exact two checks:
-     declared screening_horizons must equal tuple(SCREENING_HORIZONS) and ls_sharpe_horizon must equal
-     runtime_horizons[0] ("protocol/runtime mismatch: ...").
-   * Pinned: test_judgment_axes_move_the_observation_hash (your drift probe inverted — (5,10,20)/5,
-     (10,5,20)/10 and (5,10,20)/10 give THREE distinct observation hashes),
-     test_required_judgment_axes_fail_closed, and
-     test_declared_horizons_must_match_runtime_zero_side_effects (runtime constant monkeypatched to
-     (10,5,20) against a (5,10,20) declaration bound to a MATCHED frozen set: refusal with zero
-     evaluator calls, zero A5 state rows, zero A5 budget rows, zero seal events).
-Major (false Round-6 bit-for-bit claim) → your exact metric_note replacement applied ("Canonical
-   post-2026-06-11 sealed protocol ... Pre-2026-06-11 Round-6 evidence used quintiles and is legacy
-   audit evidence; its ls_sharpe values are not bit-for-bit comparable"), plus the module-level
-   SCREENING_HORIZONS comment and the reproduce docstring no longer claim Round-6 equivalence (the
-   old quintile-era verification numbers are kept only as explicitly-historical context).
-Minor (R11 regression gaps) → your exact replacement applied: the parameterized illegal-axes probe now
-   binds matched_fs = dataclasses.replace(FS, eval_protocol_hash=spec.observation_protocol_hash) and
-   asserts A5ReproductionStore + OosWindowLedgerStore + HoldoutSealStore ALL empty.
+YOUR R14 FINDINGS — how each was closed (your exact prescription):
+Blocker (TOCTOU axis drift) → the ENTRY-captured immutable snapshot is now threaded end-to-end:
+   * `_validated_runtime_horizons(horizons=None)` validates a PASSED snapshot when given; it reads the
+     module global only when none is passed (standalone callers, e.g. book diagnostics).
+   * `reproduce_sealed_oos` passes its entry snapshot into `_compute_oos_per_factor_metrics(...,
+     runtime_horizons=snapshot)` — the leaf executes EXACTLY that tuple (compute_factors horizons,
+     run_batch_screening horizons, per-factor ls_sharpe_horizon).
+   * the PERSISTED record (`ls_sharpe_horizon`, `metric_note`) is built from the SAME snapshot — no
+     `SCREENING_HORIZONS` re-read anywhere after the entry guard on the sealed path.
+   * Pinned with your exact probe shape: test_midcall_horizon_rebind_cannot_swap_executed_axis —
+     declare (5,10,20)/5, pass the entry guard, rebind the global to the LEGAL (10,5,20) via a hook
+     that runs between the guard and the leaf (the expression resolver), and assert the leaf received
+     [5,10,20], the persisted ls_sharpe_horizon is 5, and the metric_note carries
+     screening_horizons=(5, 10, 20).
+Major (book-path S6 bypass surface) → per your scoping this is an S6 PRECONDITION, not a live hole
+   (live is hard-refused). The live-refusal message in run_book_sealed_evaluation now PINS the three
+   preconditions verbatim so the S6 implementer cannot miss them: (1) full EvalProtocolSpec instead of
+   the bare eval_protocol_hash string, verified observation_protocol_hash ==
+   frozen_set.eval_protocol_hash; (2) live FORBIDS injected book_backtest_fn / compute_metrics_fn (an
+   injected callable bypasses the validated-horizons guarded leaf); (3) verifier registration in
+   REGISTERED_GOVERNED_RUNNER_VERIFIERS. No behavioral change to the intentional
+   reserve→claim→backtest→diagnostics ordering (v1.4 one-seal-per-book with in-book diagnostics).
+Minor (overbroad claim) → CORRECTED: the accurate statement is that the R13 judgment-axis fields
+   (screening_horizons / ls_sharpe_horizon) carry NO coercion anywhere; `int(self.horizon)` /
+   `int(self.n_quantiles)` normalization remains in identity/sealed_oos payloads and constructor-axes
+   validation — those are validated-then-normalized BEFORE execution and are not an identity/execution
+   fork. This record supersedes the previous wording.
 
-TEST STATE: 597 passed across the full affected suite (serial); full-dir sentinel clean. Subsets
-fitting a 124s budget:
-  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_promotion_evidence.py tests/research_orchestrator/test_r4_wall_hardening.py -q   (~10s)
-  pytest tests/alpha_research/test_v14_book_level_promotion.py tests/research_orchestrator/test_pr9_validation_field_gate.py tests/alpha_research/test_factor_eval_skill_identity.py -q   (~10s)
+Your five clarifications are absorbed: (1) noted — your 133+96 comes from your two attachment
+commands, which I cannot reconstruct exactly from the totals; to avoid another counting mismatch, THIS
+round's suggested subsets are named explicitly below with locally-verified counts; (2) book-path
+claim-before-diagnostics is by design; (3) construction-level `ls_sharpe_horizon in
+screening_horizons` + runtime `== runtime[0]` layering retained as you endorsed; (4) no Python
+`assert` guards any invariant (none was added; the runtime validator is the enforcement);
+(5) production EvalProtocolSpec construction remains exclusively in sealed_oos's official constructor.
+
+TEST STATE: 601 passed across the full affected suite (serial); full-dir sentinel clean. Named
+subsets with locally-verified counts (each <30s):
+  pytest tests/alpha_research/test_pr3_book_seal.py tests/research_orchestrator/test_r4_wall_hardening.py -q            -> 116 passed
+  pytest tests/research_orchestrator/test_promotion_evidence.py tests/alpha_research/test_v14_book_level_promotion.py tests/alpha_research/test_factor_eval_skill_identity.py -q   -> 57 passed
 Clean-checkout data-dependent failures (gitignored provider_build.json / calendars) remain environment.
 
-SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 13.
+SELF-REVIEW PREFLIGHT — VERDICT: clean for GPT round 15.
 RESIDUAL CONCERNS (honest list):
-(a) The observation-identity extension changes observation_protocol_hash (and hence frozen-set/seal
-    keys) relative to R10/R11-era specs — consistent with the standing position: no live spend exists
-    under any prior protocol identity; the alias store bridges if a historical equivalence ever needs
-    proving.
-(b) SCREENING_HORIZONS remains the runtime truth the declaration is verified AGAINST; the constant and
-    the executable set are one object (R11), so a drift needs a code change that also changes the
-    canonical declaration — at which point old declarations refuse (your intended fail-closed
-    direction).
+(a) The snapshot threading covers the SEALED path (reproduce → leaf → persistence). The book
+    diagnostics leg calls the leaf WITHOUT a snapshot (validates the global at call time) — it runs
+    inside an already-claimed book context whose protocol identity is the bare-hash surface already
+    scoped to S6 precondition (1); the S6 runner should thread its own verified snapshot the same way.
+(b) The mid-call rebind pin hooks the expression resolver as the between-guard-and-leaf interception
+    point; a rebind at OTHER interleavings (e.g. inside compute_factors_fn itself) is covered by the
+    same mechanism (the leaf already holds the snapshot before calling compute_factors_fn).
 (c) Your standing final residual is unchanged and remains the agreed follow-up scope: versioned,
-    fail-closed replay/migration for historical bar/evaluator versions (planned with the S6 governed
-    runner + the formal-OOS routing lint).
+    fail-closed replay/migration for historical bar/evaluator versions (with the S6 governed runner +
+    the formal-OOS routing lint).
 
 REVIEW QUESTIONS
-1. Re-run your R12 drift probe (both orderings through the official constructor — the hashes must now
-   differ) and the declared-vs-runtime mismatch probe (zero side effects). Any variant still landing?
-2. Anything else blocking SHIP for the machinery layer (S6 governed runner + real-data burned-window
+1. Re-run your R14 TOCTOU probe (entry-pass then legal rebind). EXECUTED_HORIZONS must stay [5,10,20]
+   with the persisted record matching the declaration. Any interleaving still landing?
+2. Residual (a): is deferring the book-leg snapshot threading to the S6 runner (with the bare-hash
+   fix) acceptable, or do you want the diagnostics leg to thread a snapshot now?
+3. Anything else blocking SHIP for the machinery layer (S6 governed runner + real-data burned-window
    pilot + versioned bar/evaluator migration remain scoped future PRs; live promotion is unreachable
    until a verifier registers).
 
