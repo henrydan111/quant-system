@@ -154,8 +154,13 @@ ENDPOINT_MATRIX = [
        content_dedup_key=("ts_code", "trade_date"), profile_key=("ts_code", "trade_date"),
        empty_policy="sparse_canary", profile_key_dups_expected=False, consolidation_group="northbound_per_date",
        tail_rule="sessions tail", sidecars=("reference/northbound_nonconnect_days.txt",)),
+    # GPT re-review #10: query_mode was `per_year`, but `year` is NOT an official suspend_d input — the
+    # doc's params are ts_code / trade_date / start_date / end_date / suspend_type. The yearly
+    # suspension_<yr>.parquet files are an OUTPUT PARTITIONING (consolidation_group), never a request
+    # unit; the population is the open trading sessions, exactly as for the per-date store (A10b).
     _r(owner="A10a", output_family="market/suspension", source_endpoints=("suspend_d",),
-       query_mode="per_year", vendor_record_key=("ts_code", "trade_date", "suspend_type"), pit_version_key=(),
+       query_mode="per_open_trade_date", vendor_record_key=("ts_code", "trade_date", "suspend_type"),
+       pit_version_key=(),
        content_dedup_key=("ts_code", "trade_date", "suspend_type"), profile_key=("ts_code", "trade_date"),
        empty_policy="sparse_canary", profile_key_dups_expected=False, consolidation_group="suspension_yearly",
        tail_rule="per-year", note="yearly suspension_<yr> files; DISTINCT output family from the per-date store"),
@@ -448,14 +453,16 @@ CONTRACT_REQUIRED = ("doc_path", "doc_id", "doc_sha256", "required_fields", "nat
                      "empty_policy", "reviewed_by", "reviewed_at")
 _PAGINATION_MODES = {"single_page", "offset_paged"}
 # The unit a request set is enumerated over — must match the matrix row's query_mode.
+# NOTE: no `year` — it was fictional (suspend_d has no such vendor input); the yearly suspension files
+# are an output partitioning, not a request unit (GPT re-review #10).
 _POPULATION_UNITS = {"open_trade_date", "index_range", "stock", "period_report_type", "period",
-                     "month", "report_date_month", "stock_repartition", "year"}
+                     "month", "report_date_month", "stock_repartition"}
 # matrix query_mode -> the population unit a signed contract must declare for it
 _QUERY_MODE_TO_UNIT = {
     "per_open_trade_date": "open_trade_date", "per_index_range": "index_range",
     "per_stock": "stock", "per_period_report_type": "period_report_type", "per_period": "period",
     "per_month": "month", "per_report_date_month": "report_date_month",
-    "per_stock_repartition": "stock_repartition", "per_year": "year",
+    "per_stock_repartition": "stock_repartition",
 }
 
 # Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
@@ -696,10 +703,6 @@ def _resolve_report_periods(bounds: dict) -> set:
     return out
 
 
-def _resolve_years(bounds: dict) -> set:
-    return {str(y) for y in range(int(str(bounds["start"])[:4]), int(str(bounds["end"])[:4]) + 1)}
-
-
 def _resolve_index_codes(bounds: dict) -> set:
     """The explicitly signed index codes — an index leg is a per-code RANGE, so the population is the
     code set and the range bounds are part of every request (see _POPULATION_PARAMS)."""
@@ -714,7 +717,6 @@ _POPULATION_RESOLVERS = {
     "stock_basic_codes": _resolve_listed_stocks,
     "calendar_months": _resolve_calendar_months,
     "report_periods": _resolve_report_periods,
-    "years": _resolve_years,
     "index_codes": _resolve_index_codes,
 }
 
@@ -724,7 +726,6 @@ _POPULATION_PARAMS = {
     "open_trade_date": ("trade_date",),
     "month": ("month",),
     "report_date_month": ("report_date",),
-    "year": ("year",),
     "period": ("period",),
     "period_report_type": ("period", "report_type"),
     "stock": ("ts_code",),
@@ -736,7 +737,7 @@ _UNIT_RESOLVERS = {
     "open_trade_date": "trade_cal_open_sessions", "stock": "stock_basic_codes",
     "stock_repartition": "stock_basic_codes", "month": "calendar_months",
     "report_date_month": "calendar_months", "period": "report_periods",
-    "period_report_type": "report_periods", "year": "years", "index_range": "index_codes",
+    "period_report_type": "report_periods", "index_range": "index_codes",
 }
 
 
