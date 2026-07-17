@@ -318,11 +318,11 @@ class TestEmptyContentLock:
 
     def test_control_chars_only_refused(self):
         # the round-2 probe: "\0\t " sanitizes to "" and could ground a 5
-        with pytest.raises(RegistryError, match="空白"):
+        with pytest.raises(RegistryError, match="实质性"):
             self._try_split("\0\t ")
 
     def test_whitespace_only_refused(self):
-        with pytest.raises(RegistryError, match="空白"):
+        with pytest.raises(RegistryError, match="实质性"):
             self._try_split("   ")
 
     def test_none_refused(self):
@@ -331,10 +331,39 @@ class TestEmptyContentLock:
 
     def test_direct_attribute_row_empty_refused(self):
         from workspace.research.ai_research_dept.engine.news_cards import AttributeRow
-        with pytest.raises(RegistryError, match="空白"):
+        with pytest.raises(RegistryError, match="实质性"):
             AttributeRow(row_id="NFD01.fact", claim_id="c", fact_cluster_id="f",
                          evidence_group_id="c:attrs", attribute_type="fact",
                          text="  ")
+
+    # executor-review#3 Major: Unicode default-ignorable-only content is
+    # semantically empty — the shared substantive-text predicate refuses it
+    @pytest.mark.parametrize("invisible", ["️", "͏", "️͏ "])
+    def test_default_ignorable_only_refused_at_factory(self, invisible):
+        with pytest.raises(RegistryError, match="实质性"):
+            self._try_split(invisible)
+
+    @pytest.mark.parametrize("invisible", ["️", "͏"])
+    def test_default_ignorable_only_refused_direct_row(self, invisible):
+        from workspace.research.ai_research_dept.engine.news_cards import AttributeRow
+        with pytest.raises(RegistryError, match="实质性"):
+            AttributeRow(row_id="NFD01.fact", claim_id="c", fact_cluster_id="f",
+                         evidence_group_id="c:attrs", attribute_type="fact",
+                         text=invisible)
+
+    def test_emoji_control_passes(self):
+        # ⚠ is category So — real content with emoji must NOT be refused
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            has_substantive_text,
+        )
+        assert has_substantive_text("⚠️产能预警") is True
+        assert has_substantive_text("⚠️") is True   # So codepoint alone
+        assert has_substantive_text("️") is False
+        assert has_substantive_text("͏") is False
+        assert has_substantive_text(None) is False
+        # end-to-end control: an emoji-bearing fact splits fine
+        art = self._try_split("⚠️产能利用率预警")
+        assert "NFD01.fact" in art.final_registry.records
 
 
 # --------------------------------------------------- malformed envelope (rr#2 M2)

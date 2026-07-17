@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from workspace.research.ai_research_dept.engine.news_cards import (
-    D7DecisionArtifact, verify_d7_artifact,
+    D7DecisionArtifact, has_substantive_text, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     EvidenceRef, RegistryError, assert_factor_payload, assert_leg_payload,
@@ -313,10 +313,11 @@ def build_leg_payload_ast(artifact: D7DecisionArtifact, *, use: str,
             raise RegistryError(
                 f"{rid} 在期望总体内却无内容来源(卡行/属性行均无)——canonical "
                 f"渲染拒(executor-review Blocker:证据正文必须可见)")
-        # executor-review#2 Major-1:防御性收尾——选中内容必须恰 str 且非空白
-        if type(content) is not str or not content.strip():
-            raise RegistryError(f"{rid} 内容非法({content!r})——空/非 str 证据正文"
-                                f"不得进 payload(executor-review#2 Major-1)")
+        # executor-review#2 Major-1 + #3 Major:防御性收尾——选中内容必须过
+        # 共享实质性文本谓词(与 AttributeRow/拆行工厂同一把尺)
+        if not has_substantive_text(content):
+            raise RegistryError(f"{rid} 内容非实质性({content!r})——空/语义空证据"
+                                f"正文不得进 payload(executor-review#2/#3)")
         items.append({"ref": EvidenceRef(rid), "content": content})
     return {"evidence": items}
 

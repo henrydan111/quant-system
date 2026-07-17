@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata as _ud
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -188,6 +189,16 @@ def _c70(content: str) -> str:
 
 
 # --------------------------------------------------- 正向快讯节 + 风险/上下文切片
+
+def has_substantive_text(s) -> bool:
+    """**实质性文本**谓词(executor-review#3 Major:三处内容锁共用一把尺)。
+    恰 str 且至少含一个 Unicode 类别不以 C(控制)/M(标记)/Z(分隔)开头的
+    码点——`\\ufe0f`(变体选择符)/`\\u034f`(组合字位连接符)/空白-only 的
+    "语义空"字符串拒;正常文本与 ⚠️ 等 emoji(⚠ = So)保留。"""
+    if type(s) is not str:
+        return False
+    return any(_ud.category(ch)[0] not in "CMZ" for ch in s)
+
 
 #: 事实级证据身份(re-review Blocker:去重前先比这组字段——冲突=硬失败,
 #  importance 只许排序、绝不选择证据类/安全旗)
@@ -407,12 +418,12 @@ class AttributeRow:
     row_hash: str = field(default="")
 
     def __post_init__(self):
-        # executor-review#2 Major-1:空/空白正文不得封印——"content":"" 曾能接
-        # event_materiality=5(no silent gaps)
-        if type(self.text) is not str or not self.text.strip():
+        # executor-review#2 Major-1 + #3 Major:非实质性正文不得封印——""/"\\0\\t "/
+        # "\\ufe0f"(默认可忽略-only)都曾能接 event_materiality=5(no silent gaps)
+        if not has_substantive_text(self.text):
             raise RegistryError(
-                f"AttributeRow.text 须为恰 str 且非空白(得 {self.text!r})——"
-                f"空证据正文不得封印(executor-review#2 Major-1)")
+                f"AttributeRow.text 须为恰 str 且含实质性字符(得 {self.text!r})——"
+                f"空/语义空证据正文不得封印(executor-review#2/#3)")
         if self.row_hash:
             verify_sealed(self._payload(), self.row_hash, field_name="attribute row_hash")
         else:
@@ -452,13 +463,14 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
     for attr, text in attributes.items():   # dict 键唯一 = 本调用内每属性恰一
         if attr not in ATTRIBUTE_TYPES:
             raise RegistryError(f"未注册 attribute_type {attr!r}(须 ∈ {ATTRIBUTE_TYPES})")
-        # executor-review#2 Major-1:非 str 先拒;净化后空白(控制符-only 输入)拒
+        # executor-review#2 Major-1 + #3 Major:非 str 先拒;净化后无实质性字符
+        # (控制符/变体选择符/组合标记-only 输入)拒
         if type(text) is not str:
             raise RegistryError(f"属性 {attr!r} 正文须为恰 str(得 {type(text).__name__})")
         clean = sanitize_text(text)
-        if not clean.strip():
-            raise RegistryError(f"属性 {attr!r} 正文净化后为空白({text!r})——"
-                                f"空证据不得拆行(executor-review#2 Major-1)")
+        if not has_substantive_text(clean):
+            raise RegistryError(f"属性 {attr!r} 正文净化后无实质性字符({text!r})——"
+                                f"空/语义空证据不得拆行(executor-review#2/#3)")
         rid = f"{base_record_id}.{attr}"
         # 规范键序(_SCHEMA_DERIVATION_KEYS['d7_child_v2']):source, registry, attribute_type
         deriv = (("source_parent_content_hash", source_parent_content_hash),
