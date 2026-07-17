@@ -129,7 +129,7 @@ def _good_contract(tmp_doc: Path) -> dict:
             "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],
             "pagination": "single page per trade_date",
             "pagination_spec": {"mode": "single_page", "page_limit": 0},
-            "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+            "request_population": _open_sessions_pop("20260702", "20260703"),
             "rate_limit": "500/min@15000pts",
             "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
             "empty_policy": "dense_refuse", "reviewed_by": "henry",
@@ -150,7 +150,7 @@ def test_contract_gate_rejects_placeholders_and_bad_docs(tmp_path, monkeypatch):
                 "required_fields": ["ts_code", "trade_date", "close"], "natural_key": ["ts_code", "trade_date"],
                 "pagination": "single page per trade_date",
                 "pagination_spec": {"mode": "single_page", "page_limit": 0},
-                "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+                "request_population": _open_sessions_pop("20260702", "20260703"),
                 "rate_limit": "500/min@15000pts",
                 "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
                 "empty_policy": "dense_refuse", "reviewed_by": "henry",
@@ -403,7 +403,7 @@ def test_wrong_doc_for_endpoint_refused(tmp_path, monkeypatch):
             "required_fields": ["ts_code", "trade_date", "exalter"], "natural_key": ["ts_code", "trade_date"],
             "pagination": "single page per trade_date",
             "pagination_spec": {"mode": "single_page", "page_limit": 0},
-            "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+            "request_population": _open_sessions_pop("20260702", "20260703"),
             "rate_limit": "500/min@15000pts",
             "cadence": "daily ~16:00 CST", "pit_anchors": "trade_date session-open-knowable",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
@@ -430,7 +430,7 @@ def test_omitted_doc_id_refused(tmp_path, monkeypatch):
          "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
          "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}   # NO doc_id
@@ -451,7 +451,7 @@ def test_doc_id_mismatch_refused(tmp_path, monkeypatch):
          "required_fields": ["ts_code", "trade_date"], "natural_key": ["ts_code", "trade_date"],
          "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -488,7 +488,7 @@ def test_borrowed_derived_field_in_natural_key_refused(tmp_path, monkeypatch):
          "natural_key": ["ts_code", "trade_date", "report_rc_payload_digest"],  # borrowed from report_rc
          "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "dense_refuse", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -529,7 +529,7 @@ def test_input_only_field_cannot_be_a_natural_key(tmp_path, monkeypatch):
             "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "trade_date"],
             "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -549,7 +549,7 @@ def test_required_fields_cannot_vouch_for_a_natural_key(tmp_path, monkeypatch):
          "required_fields": ["ts_code", "made_up"], "natural_key": ["ts_code", "made_up"],
          "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -583,7 +583,7 @@ def test_reviewed_at_must_be_timezone_aware_and_signer_recognized(tmp_path, monk
             "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
             "pagination": "single",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
             "empty_policy": "sparse_canary", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -604,7 +604,7 @@ def _signed(doc, fake_root, **over):
          "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
          "pagination": "one page per trade_date",
          "pagination_spec": {"mode": "single_page", "page_limit": 0},
-         "request_population": {"unit": "open_trade_date", "source": "trade_cal open sessions"},
+         "request_population": _open_sessions_pop("20260702", "20260703"),
          "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
          "empty_policy": "sparse_canary", "reviewed_by": "henry",
          "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -635,11 +635,13 @@ def test_pagination_must_be_a_typed_spec_not_prose(tmp_path, monkeypatch):
                                              "offset_param": "offset"})))
     assert any("offset_param" in e for e in rrc.contract_errors(
         "top_inst", _signed(doc, fake_root, pagination_spec={"mode": "offset_paged", "page_limit": 3000})))
-    # population must be typed + sourced
+    # population must be typed AND executable AND set-pinned (GPT re-review #10: `source` was prose)
     assert any("typed mapping" in e for e in rrc.contract_errors(
         "top_inst", _signed(doc, fake_root, request_population="every trading day")))
-    assert any("request_population.source" in e for e in rrc.contract_errors(
-        "top_inst", _signed(doc, fake_root, request_population={"unit": "open_trade_date"})))
+    errs = rrc.contract_errors("top_inst", _signed(doc, fake_root,
+                                                   request_population={"resolver": "trade_cal_open_sessions"}))
+    assert any("bounds must state the selection rule" in e for e in errs), errs
+    assert any("expected_set_sha256 must pin the population" in e for e in errs), errs
 
 
 def test_frozen_plan_pagination_must_match_the_signature(signed):
@@ -661,15 +663,14 @@ def test_frozen_plan_pagination_must_match_the_signature(signed):
         rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), {})   # unsigned cannot back a plan
 
 
-def test_plan_population_unit_must_match_the_matrix_query_mode(signed):
-    """A contract that claims to enumerate months while the matrix enumerates trading days is a
-    coverage lie — caught at plan freeze, before any call."""
+def test_plan_population_resolver_must_match_the_matrix_query_mode(signed):
+    """A contract resolving MONTHS while the matrix enumerates trading days is a coverage lie."""
     fake_root, mirror, cs, hashes = signed
-    wrong = {ep: (dict(c, request_population={"unit": "month", "source": "calendar months"})
-                  if ep == "daily" else c) for ep, c in cs.items()}
+    months = {"resolver": "calendar_months", "bounds": {"start": "202607", "end": "202607"}}
+    months["expected_set_sha256"] = rrc.population_set_sha256(rrc.resolve_population(months))
+    wrong = {ep: (dict(c, request_population=months) if ep == "daily" else c) for ep, c in cs.items()}
     h = {ep: rrc.canonical_contract_sha256(c) for ep, c in wrong.items()}
-    with pytest.raises(RuntimeError, match="matrix enumerates .* but the signed contract declares|"
-                                           "DIFFERENT request_population"):
+    with pytest.raises(RuntimeError, match="resolves via|DIFFERENT request_population"):
         rrc.assert_plan_matches_contracts(_a01_plan(h, cs_map=wrong), wrong)
 
 
@@ -682,7 +683,17 @@ def test_every_matrix_query_mode_has_a_population_unit():
 
 
 # ── GPT re-review #8 BLOCKER-1: the plan must be bound to a VALID, SIGNED contract ─────────────────
-def _valid_contract(mirror, fake_root, api="daily", doc_id="27", unit="open_trade_date"):
+def _open_sessions_pop(start: str, end: str) -> dict:
+    """A SIGNED population: an executable resolver + bounds + the sha256 of the set that resolves.
+    The hash is computed from the REAL trade calendar, so the fixture signs the same set production
+    would (GPT re-review #10 BLOCKER-1)."""
+    spec = {"resolver": "trade_cal_open_sessions",
+            "bounds": {"start": start, "end": end, "exchange": "SSE"}}
+    spec["expected_set_sha256"] = rrc.population_set_sha256(rrc.resolve_population(spec))
+    return spec
+
+
+def _valid_contract(mirror, fake_root, api="daily", doc_id="27", pop=None):
     body = (f"# (doc_id={doc_id})\n\u63a5\u53e3\uff1a{api}\n"
             "\u8f93\u51fa\u53c2\u6570\n| \u540d\u79f0 | \u7c7b\u578b |\n| --- | --- |\n"
             "| ts_code | str |\n| trade_date | str |\n| close | float |\n")
@@ -693,7 +704,7 @@ def _valid_contract(mirror, fake_root, api="daily", doc_id="27", unit="open_trad
             "required_fields": ["ts_code", "trade_date", "close"],
             "natural_key": ["ts_code", "trade_date"], "pagination": "one page per trade_date",
             "pagination_spec": {"mode": "single_page", "page_limit": 0},
-            "request_population": {"unit": unit, "source": "trade_cal open sessions"},
+            "request_population": pop or _open_sessions_pop("20260702", "20260703"),
             "rate_limit": "500/min", "cadence": "daily", "pit_anchors": "trade_date",
             "empty_policy": "dense_refuse", "reviewed_by": "henry",
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
@@ -741,7 +752,7 @@ def test_plan_backed_by_an_unsigned_contract_refused(signed):
     rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), cs)      # fully signed -> clean
     # a contract that merely carries the two compared fields, and nothing else
     naked = {"pagination_spec": {"mode": "single_page", "page_limit": 0},
-             "request_population": {"unit": "open_trade_date", "source": "trade_cal"}}
+             "request_population": _open_sessions_pop("20260702", "20260702")}
     bad = dict(cs, daily=naked)
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
         rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), bad)
@@ -772,12 +783,12 @@ def test_a01_legs_on_different_trade_dates_refused(signed):
     skewed = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702", "20260703"),
                                        "daily_basic": ("20260702",),           # missing a session
                                        "adj_factor": ("20260702", "20260703")})
-    with pytest.raises(RuntimeError, match="REQUEST different populations"):
+    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
         rrc.assert_plan_matches_contracts(skewed, cs)
     # a leg on an entirely different session
     disjoint = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702",), "daily_basic": ("20260703",),
                                          "adj_factor": ("20260702",)})
-    with pytest.raises(RuntimeError, match="REQUEST different populations"):
+    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
         rrc.assert_plan_matches_contracts(disjoint, cs)
 
 
@@ -789,11 +800,13 @@ def test_a01_missing_source_leg_refused(signed):
 
 
 def test_a01_legs_must_share_one_population_snapshot(signed):
+    """The legs of a merged output must be fetched over ONE population snapshot — a leg signing
+    different bounds is a different snapshot even though the resolver matches."""
     fake_root, mirror, cs, hashes = signed
     cs2 = dict(cs, adj_factor=_valid_contract(mirror, fake_root, api="adj_factor", doc_id="29",
-                                              unit="stock"))       # a DIFFERENT population
+                                              pop=_open_sessions_pop("20260702", "20260706")))
     h2 = {ep: rrc.canonical_contract_sha256(c) for ep, c in cs2.items()}
-    with pytest.raises(RuntimeError, match="population unit|DIFFERENT request_population"):
+    with pytest.raises(RuntimeError, match="DIFFERENT request_population|signed population"):
         rrc.assert_plan_matches_contracts(_a01_plan(h2, cs_map=cs2), cs2)
 
 
@@ -823,7 +836,7 @@ def test_freeze_request_plan_is_the_single_door(signed):
     assert rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), cs) == "planhash"
     assert calls["n"] == 1
     naked = {"pagination_spec": {"mode": "single_page", "page_limit": 0},
-             "request_population": {"unit": "open_trade_date", "source": "trade_cal"}}
+             "request_population": _open_sessions_pop("20260702", "20260702")}
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
         rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), dict(cs, daily=naked))
     assert calls["n"] == 1, "an invalid plan reached the ledger's freeze_plan"
@@ -865,7 +878,7 @@ def test_legs_requesting_different_sessions_refused_even_with_honest_labels(sign
     rows = [r for r in _a01_plan(hashes, cs_map=cs, parts=("20260702",)) if r["endpoint"] != "daily_basic"]
     rows.append(_prow("daily_basic:20260703", "daily_basic", "20260703", hashes["daily_basic"],
                       c=cs["daily_basic"]))
-    with pytest.raises(RuntimeError, match="REQUEST different populations"):
+    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
         rrc.assert_plan_matches_contracts(rows, cs)
 
 
@@ -889,3 +902,108 @@ def test_freeze_door_installs_a_LIVE_contract_loader(signed):
     L = _FakeLedger()
     rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs)
     assert L.contract_loader is rrc.load_signed_contracts
+
+
+# ── GPT re-review #10 BLOCKER-1: the population must be CORRECT, not merely agreed ────────────────
+def test_a_sunday_is_refused_against_the_real_trade_calendar(signed):
+    """GPT re-review #10 (reproduced): ALL A01 legs using a Sunday passed while the contract claimed
+    'trade_cal open sessions'. Coverage proved the legs agreed with EACH OTHER — never that they
+    covered the correct set. `source` was unenforced prose; no calendar check existed."""
+    fake_root, mirror, cs, hashes = signed
+    # 20260704/05 are a real weekend and are genuinely absent from the resolved population
+    sessions = rrc.resolve_population(cs["daily"]["request_population"])
+    assert "20260705" not in sessions and {"20260702", "20260703"} <= sessions
+    sunday = _a01_plan(hashes, cs_map=cs, parts=("20260702", "20260705"))   # every leg agrees...
+    with pytest.raises(RuntimeError, match="NOT in it|does not cover the signed population"):
+        rrc.assert_plan_matches_contracts(sunday, cs)                       # ...and is still wrong
+
+
+def test_missing_session_is_refused(signed):
+    """A plan that skips a signed session is an INCOMPLETE recovery, not a smaller job."""
+    fake_root, mirror, cs, hashes = signed
+    short = _a01_plan(hashes, cs_map=cs, parts=("20260702",))   # 20260703 signed but unplanned
+    with pytest.raises(RuntimeError, match="missing"):
+        rrc.assert_plan_matches_contracts(short, cs)
+
+
+def test_population_must_resolve_to_the_signed_hash(signed):
+    """expected_set_sha256 pins the set the human signed: if the reference data or the bounds move,
+    the contract no longer describes the population and must be re-signed."""
+    fake_root, mirror, cs, hashes = signed
+    drifted = dict(cs["daily"])
+    drifted["request_population"] = dict(drifted["request_population"], expected_set_sha256="0" * 64)
+    errs = rrc.contract_errors("daily", drifted)
+    assert any("sign the set that resolves" in e for e in errs), errs
+    # widening the bounds without re-signing also refuses
+    wider = dict(cs["daily"])
+    wider["request_population"] = dict(wider["request_population"],
+                                       bounds={"start": "20260701", "end": "20260710", "exchange": "SSE"})
+    assert any("sign the set that resolves" in e for e in rrc.contract_errors("daily", wider))
+
+
+def test_population_spec_must_be_executable_not_prose(signed):
+    fake_root, mirror, cs, hashes = signed
+    for bad in ({"unit": "open_trade_date", "source": "trade_cal open sessions"},   # the OLD schema
+                {"resolver": "every trading day", "bounds": {"start": "1", "end": "2"},
+                 "expected_set_sha256": "0" * 64},
+                "all sessions"):
+        errs = rrc.contract_errors("daily", dict(cs["daily"], request_population=bad))
+        assert any("resolver must be one of" in e or "typed mapping" in e for e in errs), (bad, errs)
+
+
+def test_empty_population_refused(signed):
+    fake_root, mirror, cs, hashes = signed
+    empty = {"resolver": "trade_cal_open_sessions",
+             "bounds": {"start": "20260704", "end": "20260705", "exchange": "SSE"}}   # a weekend only
+    empty["expected_set_sha256"] = rrc.population_set_sha256(set())
+    assert any("EMPTY set" in e for e in rrc.contract_errors("daily", dict(cs["daily"],
+                                                                          request_population=empty)))
+
+
+def test_every_determining_parameter_is_required_not_just_one():
+    """GPT re-review #10: `_UNIT_PARAM` carried ONE param per unit — period_report_type ignored
+    report_type and index_range ignored its range bounds. The key is the TUPLE of all of them."""
+    assert rrc._POPULATION_PARAMS["period_report_type"] == ("period", "report_type")
+    assert rrc._POPULATION_PARAMS["index_range"] == ("ts_code", "start_date", "end_date")
+    assert rrc._POPULATION_PARAMS["open_trade_date"] == ("trade_date",)
+    # every matrix query_mode still resolves to a unit, and every unit to params AND a resolver
+    for r in rrc.ENDPOINT_MATRIX:
+        if r.query_mode == "UNBOUND":
+            continue
+        unit = rrc._QUERY_MODE_TO_UNIT[r.query_mode]
+        assert unit in rrc._POPULATION_PARAMS, f"{unit} has no determining parameters"
+        assert rrc._UNIT_RESOLVERS[unit] in rrc._POPULATION_RESOLVERS, f"{unit} has no resolver"
+
+
+def test_period_report_type_request_key_carries_both_params():
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_period_report_type"][0]
+    pr = {"request_id": "r", "endpoint": "income_vip", "dataset": row.output_family,
+          "partition": "20260630", "params": {"period": "20260630", "report_type": "1"}}
+    assert rrc._request_population_key(pr, row) == ("20260630", "1")
+    # dropping report_type is now a refusal, not a silently-narrower key
+    pr_missing = dict(pr, params={"period": "20260630"})
+    with pytest.raises(RuntimeError, match="report_type"):
+        rrc._request_population_key(pr_missing, row)
+
+
+def test_index_range_request_key_carries_its_bounds():
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_index_range"][0]
+    pr = {"request_id": "r", "endpoint": "index_daily", "dataset": row.output_family,
+          "partition": "000300.SH",
+          "params": {"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260702"}}
+    assert rrc._request_population_key(pr, row) == ("000300.SH", "20260101", "20260702")
+    with pytest.raises(RuntimeError, match="start_date|end_date"):
+        rrc._request_population_key(dict(pr, params={"ts_code": "000300.SH"}), row)
+
+
+def test_resolvers_read_the_real_reference_data():
+    """The resolver is the FACT: it reads the surviving trade_cal, so a weekend is simply not in it."""
+    sessions = rrc.resolve_population({"resolver": "trade_cal_open_sessions",
+                                       "bounds": {"start": "20260701", "end": "20260710",
+                                                  "exchange": "SSE"}})
+    assert "20260705" not in sessions          # Sunday
+    assert "20260704" not in sessions          # Saturday
+    assert {"20260701", "20260702", "20260703", "20260706"} <= sessions
+    assert rrc.population_set_sha256(sessions) == rrc.population_set_sha256(sorted(sessions))
+    with pytest.raises(RuntimeError, match="unknown population resolver"):
+        rrc.resolve_population({"resolver": "vibes", "bounds": {}})

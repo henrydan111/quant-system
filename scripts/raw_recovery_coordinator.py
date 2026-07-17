@@ -593,16 +593,37 @@ def _pagination_spec_errors(endpoint: str, spec) -> list:
 
 
 def _population_spec_errors(endpoint: str, spec) -> list:
-    """How the request SET is enumerated — the signed contract must state it (GPT re-review #7 F3/R4:
-    'the signed contract must express its request population now')."""
+    """How the request SET is enumerated — EXECUTABLE, not prose (GPT re-review #10 BLOCKER-1: `source`
+    was unenforced text, so "trade_cal open sessions" was a claim nobody could check and a plan of
+    SUNDAYS passed). The signature must name a resolver the code can RUN, its bounds, and the sha256 of
+    the population that resolves — so the human signs a specific, reproducible set."""
     if not isinstance(spec, dict):
-        return [f"{endpoint}: request_population must be a typed mapping {{unit, source}}, not prose"]
+        return [f"{endpoint}: request_population must be a typed mapping "
+                f"{{resolver, bounds, expected_set_sha256}}, not prose"]
     errs = []
-    if spec.get("unit") not in _POPULATION_UNITS:
-        errs.append(f"{endpoint}: request_population.unit must be one of {sorted(_POPULATION_UNITS)}")
-    if not str(spec.get("source") or "").strip():
-        errs.append(f"{endpoint}: request_population.source must name where the population comes from "
-                    f"(e.g. 'trade_cal open sessions', 'stock_basic L,D,P')")
+    if spec.get("resolver") not in _POPULATION_RESOLVERS:
+        errs.append(f"{endpoint}: request_population.resolver must be one of "
+                    f"{sorted(_POPULATION_RESOLVERS)} — an executable resolver, not a description")
+    bounds = spec.get("bounds")
+    if not isinstance(bounds, dict) or not bounds:
+        errs.append(f"{endpoint}: request_population.bounds must state the selection rule "
+                    f"(e.g. {{start, end}} / {{codes: [...]}} / {{list_status}})")
+    sha = str(spec.get("expected_set_sha256") or "")
+    if len(sha) != 64:
+        errs.append(f"{endpoint}: request_population.expected_set_sha256 must pin the population the "
+                    f"reviewer actually signed (sha256 of the sorted resolved set)")
+    if errs:
+        return errs
+    try:
+        resolved = resolve_population(spec)
+    except Exception as exc:                       # a resolver that cannot run cannot be signed
+        return [f"{endpoint}: request_population does not resolve: {exc}"]
+    if not resolved:
+        return [f"{endpoint}: request_population resolves to an EMPTY set — nothing would be fetched"]
+    got = population_set_sha256(resolved)
+    if got != sha:
+        errs.append(f"{endpoint}: request_population resolves to {len(resolved)} items hashing "
+                    f"{got[:12]}, but the contract signs {sha[:12]} — sign the set that resolves")
     return errs
 
 
@@ -616,37 +637,185 @@ def canonical_contract_sha256(c: dict) -> str:
     ).hexdigest()
 
 
-# The request parameter that carries each population unit's value — the FACT a partition label claims.
-_UNIT_PARAM = {
-    "open_trade_date": "trade_date", "month": "month", "report_date_month": "report_date",
-    "year": "year", "period": "period", "period_report_type": "period", "stock": "ts_code",
-    "stock_repartition": "ts_code", "index_range": "ts_code",
+# ── EXECUTABLE population resolvers (GPT re-review #10 BLOCKER-1) ────────────────────────────────
+# The old `_UNIT_PARAM` mapped each unit to ONE request parameter and compared the legs to EACH OTHER.
+# That proves AGREEMENT, never CORRECTNESS — reproduced: every A01 leg requesting a SUNDAY passed while
+# the contract claimed "trade_cal open sessions", `period_report_type` ignored `report_type`, and
+# `index_range` ignored its bounds. `request_population.source` was unenforced prose.
+#
+# A signed contract now declares a RESOLVER the code can EXECUTE against the real reference data, the
+# COMPLETE tuple of population-determining parameters, the BOUNDS, and the sha256 of the resolved set —
+# so the human signs a specific, reproducible population and the plan is compared to it EXACTLY.
+
+
+def _resolve_open_sessions(bounds: dict) -> set:
+    """The REAL open trading sessions from data/reference/trade_cal.parquet (which survived the
+    incident) — the fact a 'trade_cal open sessions' claim refers to. A weekend or a holiday is simply
+    not in it."""
+    import pandas as pd
+    cal = pd.read_parquet(E_DATA / "reference" / "trade_cal.parquet")
+    exch = str(bounds.get("exchange") or "SSE")
+    sel = cal[(cal["exchange"] == exch) & (cal["is_open"] == 1)]
+    lo, hi = str(bounds["start"]), str(bounds["end"])
+    return {str(d) for d in sel["cal_date"] if lo <= str(d) <= hi}
+
+
+def _resolve_listed_stocks(bounds: dict) -> set:
+    """Every ts_code in stock_basic within the declared list_status set (delisted names INCLUDED by
+    default — survivorship bias is a research defect, and recovery must restore what existed)."""
+    import pandas as pd
+    sb = pd.read_parquet(E_DATA / "reference" / "stock_basic.parquet")
+    want = set(str(bounds.get("list_status") or "L,D,P").split(","))
+    if "list_status" in sb.columns:
+        sb = sb[sb["list_status"].astype(str).isin(want)]
+    return {str(c) for c in sb["ts_code"]}
+
+
+def _resolve_calendar_months(bounds: dict) -> set:
+    """YYYYMM strings inclusive of both bounds."""
+    lo, hi = str(bounds["start"]), str(bounds["end"])
+    y, mth = int(lo[:4]), int(lo[4:6])
+    out = set()
+    while f"{y:04d}{mth:02d}" <= hi:
+        out.add(f"{y:04d}{mth:02d}")
+        mth += 1
+        if mth > 12:
+            y, mth = y + 1, 1
+    return out
+
+
+def _resolve_report_periods(bounds: dict) -> set:
+    """Quarter-end period stamps (YYYYMMDD) inclusive of both bounds."""
+    lo, hi = str(bounds["start"]), str(bounds["end"])
+    out = set()
+    for y in range(int(lo[:4]), int(hi[:4]) + 1):
+        for md in ("0331", "0630", "0930", "1231"):
+            p = f"{y}{md}"
+            if lo <= p <= hi:
+                out.add(p)
+    return out
+
+
+def _resolve_years(bounds: dict) -> set:
+    return {str(y) for y in range(int(str(bounds["start"])[:4]), int(str(bounds["end"])[:4]) + 1)}
+
+
+def _resolve_index_codes(bounds: dict) -> set:
+    """The explicitly signed index codes — an index leg is a per-code RANGE, so the population is the
+    code set and the range bounds are part of every request (see _POPULATION_PARAMS)."""
+    codes = bounds.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise RuntimeError("index_codes resolver requires an explicit `codes` list in bounds")
+    return {str(c) for c in codes}
+
+
+_POPULATION_RESOLVERS = {
+    "trade_cal_open_sessions": _resolve_open_sessions,
+    "stock_basic_codes": _resolve_listed_stocks,
+    "calendar_months": _resolve_calendar_months,
+    "report_periods": _resolve_report_periods,
+    "years": _resolve_years,
+    "index_codes": _resolve_index_codes,
+}
+
+# EVERY population-determining parameter per unit — not one (GPT re-review #10: `period_report_type`
+# ignored `report_type`; `index_range` ignored its range bounds). The plan's request key is the TUPLE.
+_POPULATION_PARAMS = {
+    "open_trade_date": ("trade_date",),
+    "month": ("month",),
+    "report_date_month": ("report_date",),
+    "year": ("year",),
+    "period": ("period",),
+    "period_report_type": ("period", "report_type"),
+    "stock": ("ts_code",),
+    "stock_repartition": ("ts_code",),
+    "index_range": ("ts_code", "start_date", "end_date"),
+}
+# which resolver legitimately produces each unit's population
+_UNIT_RESOLVERS = {
+    "open_trade_date": "trade_cal_open_sessions", "stock": "stock_basic_codes",
+    "stock_repartition": "stock_basic_codes", "month": "calendar_months",
+    "report_date_month": "calendar_months", "period": "report_periods",
+    "period_report_type": "report_periods", "year": "years", "index_range": "index_codes",
 }
 
 
-def _request_population_key(pr: dict, row) -> str:
-    """The population value this request ACTUALLY asks for, read from its params — never from the
-    `partition` label (GPT re-review #9 BLOCKER-2: the label and the params could disagree, and only
-    the label was compared). Also refuses a label that misdescribes its own request."""
+def resolve_population(spec: dict) -> set:
+    """Execute the signed resolver and return the EXACT expected population."""
+    fn = _POPULATION_RESOLVERS.get(spec.get("resolver"))
+    if fn is None:
+        raise RuntimeError(f"unknown population resolver {spec.get('resolver')!r}; known: "
+                           f"{sorted(_POPULATION_RESOLVERS)}")
+    return fn(spec.get("bounds") or {})
+
+
+def population_set_sha256(values) -> str:
+    """Identity of a resolved population — what the human actually signed."""
+    payload = "\n".join(sorted(str(v) for v in values))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _request_population_key(pr: dict, row) -> tuple:
+    """The population value this request ACTUALLY asks for: the TUPLE of EVERY determining parameter,
+    read from its own params — never from the `partition` label. The first element is compared to the
+    label so a label that misdescribes its request refuses."""
     unit = _QUERY_MODE_TO_UNIT.get(row.query_mode)
-    param = _UNIT_PARAM.get(unit)
+    names = _POPULATION_PARAMS.get(unit)
     params = pr.get("params") or {}
     if not isinstance(params, dict) or not params:
         raise RuntimeError(f"plan row {pr.get('request_id')}: no params — a request with no parameters "
                            f"cannot be proven to cover anything")
-    if param is None:
-        raise RuntimeError(f"plan row {pr.get('request_id')}: population unit {unit!r} has no known "
-                           f"request parameter; add it to _UNIT_PARAM before planning this endpoint")
-    if param not in params:
+    if names is None:
+        raise RuntimeError(f"plan row {pr.get('request_id')}: population unit {unit!r} declares no "
+                           f"determining parameters; add it to _POPULATION_PARAMS before planning it")
+    missing = [n for n in names if n not in params]
+    if missing:
         raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): params {params} "
-                           f"carry no {param!r} — it enumerates {unit!r} and must request one")
-    actual = str(params[param])
+                           f"carry no {missing} — {unit!r} is determined by {list(names)}")
+    key = tuple(str(params[n]) for n in names)
     label = str(pr.get("partition"))
-    if label != actual:
+    if label != key[0]:
         raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): partition label "
-                           f"{label!r} but the request actually asks for {param}={actual!r} — the label "
-                           f"is not evidence about the request")
-    return actual
+                           f"{label!r} but the request actually asks for {names[0]}={key[0]!r} — the "
+                           f"label is not evidence about the request")
+    return key
+
+
+def assert_population_is_correct(plan_rows: list, contracts: dict) -> None:
+    """The plan's requests must equal the RESOLVED population EXACTLY (GPT re-review #10 BLOCKER-1:
+    the legs agreeing with each other proved nothing — a Sunday passed while the contract claimed
+    trade-calendar open sessions). Missing = incomplete recovery; extra = a request the signed
+    population does not contain."""
+    by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
+    seen = {}
+    for pr in plan_rows:
+        row = by_family.get(pr.get("dataset"))
+        if row is None:
+            continue
+        seen.setdefault((pr["endpoint"], pr["dataset"]), set()).add(_request_population_key(pr, row))
+    for (ep, fam), asked in seen.items():
+        c = contracts.get(ep) or {}
+        spec = c.get("request_population") or {}
+        row = by_family[fam]
+        unit = _QUERY_MODE_TO_UNIT.get(row.query_mode)
+        want_resolver = _UNIT_RESOLVERS.get(unit)
+        if spec.get("resolver") != want_resolver:
+            raise RuntimeError(f"{ep}/{fam}: enumerates {unit!r} which resolves via {want_resolver!r}, "
+                               f"but the signed contract declares resolver {spec.get('resolver')!r}")
+        expected = resolve_population(spec)
+        got_sha = population_set_sha256(expected)
+        if spec.get("expected_set_sha256") != got_sha:
+            raise RuntimeError(f"{ep}: the resolved population ({len(expected)} items, {got_sha[:12]}) is "
+                               f"not the one signed ({str(spec.get('expected_set_sha256'))[:12]}) — the "
+                               f"reference data changed since signing, or the bounds do not describe it")
+        asked_primary = {k[0] for k in asked}
+        missing, extra = expected - asked_primary, asked_primary - expected
+        if missing or extra:
+            raise RuntimeError(
+                f"{ep}/{fam}: the plan does not cover the signed population — {len(missing)} missing "
+                f"(e.g. {sorted(missing)[:3]}), {len(extra)} NOT in it (e.g. {sorted(extra)[:3]}). An "
+                f"extra request is one the signed population does not contain (a weekend, a delisted "
+                f"code); a missing one is an incomplete recovery.")
 
 
 def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None:
@@ -754,12 +923,13 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): max_content_dups "
                                    f"{pr.get('max_content_dups')!r} != the matrix's "
                                    f"{row.max_content_dups!r}")
-            want = _QUERY_MODE_TO_UNIT.get(row.query_mode)
-            got = (c.get("request_population") or {}).get("unit")
+            want = _UNIT_RESOLVERS.get(_QUERY_MODE_TO_UNIT.get(row.query_mode))
+            got = (c.get("request_population") or {}).get("resolver")
             if want and got != want:
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): the matrix enumerates "
-                                   f"{row.query_mode!r} (unit {want!r}) but the signed contract declares "
-                                   f"population unit {got!r}")
+                                   f"{row.query_mode!r}, whose population resolves via {want!r}, but the "
+                                   f"signed contract declares resolver {got!r}")
+    assert_population_is_correct(plan_rows, contracts)   # EXACT set vs the signed resolver
     assert_multi_source_merge_coverage(plan_rows, contracts)
 
 

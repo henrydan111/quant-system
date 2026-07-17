@@ -18,11 +18,24 @@
 #                     {mode: single_page|offset_paged, page_limit: int,
 #                      offset_param: <name>   # required when offset_paged}
 #                     single_page => page_limit 0; offset_paged => page_limit > 0 (the doc's cap)
-#   request_population : TYPED — how the request SET is enumerated; the unit MUST match the
-#                     matrix row's query_mode, and source names where the population comes from:
-#                     {unit: open_trade_date|index_range|stock|period_report_type|period|month|
-#                            report_date_month|stock_repartition|year,
-#                      source: "trade_cal open sessions" | "stock_basic L,D,P" | ...}
+#   request_population : TYPED + EXECUTABLE + SET-PINNED. `source: "trade_cal open sessions"` used to
+#                     be PROSE nobody could check — a plan of SUNDAYS passed it. You now sign a
+#                     resolver the code RUNS against the real reference data, its bounds, and the
+#                     sha256 of the population that resolves:
+#                       {resolver: trade_cal_open_sessions | stock_basic_codes | calendar_months |
+#                                  report_periods | years | index_codes,
+#                        bounds:   {start: YYYYMMDD, end: YYYYMMDD, exchange: SSE}      # sessions
+#                                | {list_status: "L,D,P"}                                # stocks
+#                                | {codes: ["000300.SH", ...]}                           # index legs
+#                        expected_set_sha256: <sha256 of the sorted resolved set>}
+#                     The resolver must match the matrix row's query_mode, the set must resolve
+#                     NON-EMPTY, and its hash must equal what you signed — so re-signing is required
+#                     whenever the bounds or the reference data move. The frozen plan is then compared
+#                     to that set EXACTLY: a missing item is an incomplete recovery, an extra item is a
+#                     request the signed population does not contain (a weekend, a delisted code).
+#                     Every population-determining parameter must appear in each request's params
+#                     (period_report_type needs period AND report_type; index_range needs ts_code AND
+#                     start_date AND end_date) — one param per unit was not enough.
 #   rate_limit      : from the doc (积分/每分钟限次)
 #   cadence         : from the doc
 #   pit_anchors     : nominal-vs-visible date anchoring (★ create_time/ann_date/f_ann_date/report_date)
