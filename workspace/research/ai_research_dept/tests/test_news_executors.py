@@ -445,6 +445,23 @@ class TestMalformedEnvelope:
                     payload_hash="0" * 64, raw_sha256=bad, verdict="valid",
                     schema_id="c16_news_horizon_v1")
 
+    def test_parsed_record_hash_rules(self, tmp_path):
+        # archive-review B2: record-bearing verdicts REQUIRE a 64-hex
+        # parsed_record_hash; record-free verdicts must NOT carry one
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            persist_execution_provenance,
+        )
+        with pytest.raises(RegistryError, match="parsed_record_hash"):
+            persist_execution_provenance(
+                tmp_path, execution_id="e", decision_id="d", leg="factor",
+                payload_hash="0" * 64, raw_sha256="a" * 64, verdict="valid",
+                schema_id="c16_news_horizon_v1")           # missing -> refuse
+        with pytest.raises(RegistryError, match="不得携带 parsed_record_hash"):
+            persist_execution_provenance(
+                tmp_path, execution_id="e", decision_id="d", leg="factor",
+                payload_hash="0" * 64, raw_sha256=None, verdict="attempt_started",
+                schema_id="c16_news_horizon_v1", parsed_record_hash="b" * 64)
+
 
 # --------------------------------------------------- zero path + input contract
 

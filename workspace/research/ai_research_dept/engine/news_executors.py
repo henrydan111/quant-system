@@ -151,16 +151,28 @@ def _raw_sha256(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+_PROV_LEGS = frozenset({"factor", "penalty"})
+#: 出处行严格键集(archive-review B2:行 schema 精确,多/少键=拒)
+PROV_ROW_KEYS = frozenset({"execution_id", "decision_id", "leg", "payload_hash",
+                           "raw_sha256", "verdict", "schema_id",
+                           "parsed_record_hash", "seq", "entry_hash"})
+
+
 def persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: str,
                                  leg: str, payload_hash: str,
                                  raw_sha256: "str | None", verdict: str,
-                                 schema_id: str) -> dict:
-    """append-only 尝试绑定出处(BINDING #3 + review Major)。每行:
-    {execution_id, decision_id, leg, payload_hash, raw_sha256(attempt_started/
-    call_error 为 None——无 raw 字节), verdict, schema_id, seq, entry_hash(封印)}。
-    原子 fsync 写;**返回该行本体**——调用方绑定选定行,绝不整目录重读作结果。"""
+                                 schema_id: str,
+                                 parsed_record_hash: "str | None" = None) -> dict:
+    """append-only 尝试绑定出处(BINDING #3 + review Major + archive-review B2)。
+    每行:{execution_id, decision_id, leg(∈{factor,penalty}), payload_hash,
+    raw_sha256(attempt_started/call_error 为 None), verdict, schema_id,
+    **parsed_record_hash**(canonical 解析记录哈希——valid/deterministic_zero/
+    empty_penalty 必带,把"终态行↔封存解析记录"绑死;其余必为 None), seq,
+    entry_hash(封印)}。原子 fsync 写;**返回该行本体**。"""
     if verdict not in PROV_VERDICTS:
         raise RegistryError(f"未注册出处 verdict {verdict!r}")
+    if leg not in _PROV_LEGS:
+        raise RegistryError(f"未注册出处 leg {leg!r}(须 ∈ {sorted(_PROV_LEGS)})")
     if verdict in ("attempt_started", "call_error"):
         if raw_sha256 is not None:
             raise RegistryError(f"{verdict} 行不得携带 raw_sha256(无 raw 字节)")
@@ -168,6 +180,13 @@ def persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: st
         # executor-review#2 Minor:真 64 位小写 hex("z"*64 拒),非仅长度
         raise RegistryError(f"{verdict} 行须携带 64 位小写 hex raw_sha256"
                             f"(得 {raw_sha256!r})")
+    if verdict in ("valid", "deterministic_zero", "empty_penalty"):
+        if not (type(parsed_record_hash) is str
+                and _HEX64_RE.fullmatch(parsed_record_hash)):
+            raise RegistryError(f"{verdict} 行须携带 64-hex parsed_record_hash"
+                                f"(终态行↔解析记录绑定,archive-review B2)")
+    elif parsed_record_hash is not None:
+        raise RegistryError(f"{verdict} 行不得携带 parsed_record_hash(无解析记录)")
     path = Path(prov_dir) / _PROV_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prov_lock(path):
@@ -176,7 +195,8 @@ def persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: st
             lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln]
         body = {"execution_id": execution_id, "decision_id": decision_id, "leg": leg,
                 "payload_hash": payload_hash, "raw_sha256": raw_sha256,
-                "verdict": verdict, "schema_id": schema_id, "seq": len(lines)}
+                "verdict": verdict, "schema_id": schema_id,
+                "parsed_record_hash": parsed_record_hash, "seq": len(lines)}
         entry = {**body, "entry_hash": seal_hash(body)}
         fd, tmp = tempfile.mkstemp(suffix=".jsonl.tmp", dir=path.parent)
         try:
@@ -257,7 +277,8 @@ def _make_leg_executor(call_fn, contract: NewsScoringContract, registry, *,
         results[f"{leg}_prov"] = persist_execution_provenance(
             prov_dir, execution_id=execution_id, decision_id=view.decision_id,
             leg=leg, payload_hash=view.payload_hash, raw_sha256=raw_hash,
-            verdict="valid", schema_id=contract.schema_id)
+            verdict="valid", schema_id=contract.schema_id,
+            parsed_record_hash=seal_hash(record))
         results[leg] = record
     return executor
 
@@ -300,7 +321,8 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
                 leg="factor", payload_hash=view.payload_hash,
                 raw_sha256=_raw_sha256(json.dumps(zero, ensure_ascii=False,
                                                   sort_keys=True)),
-                verdict="deterministic_zero", schema_id=contract.schema_id)
+                verdict="deterministic_zero", schema_id=contract.schema_id,
+                parsed_record_hash=seal_hash(zero))
             results["factor"] = zero
     else:
         factor_fn = _make_leg_executor(
@@ -337,7 +359,8 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
                 leg="penalty", payload_hash="0" * 64,
                 raw_sha256=_raw_sha256(json.dumps(_EMPTY_PENALTY_RECORD,
                                                   sort_keys=True)),
-                verdict="empty_penalty", schema_id=contract.schema_id)
+                verdict="empty_penalty", schema_id=contract.schema_id,
+                parsed_record_hash=seal_hash(_EMPTY_PENALTY_RECORD))
         evaluation = evaluate_news_horizon(
             results["factor"], results["penalty"], registry,
             output_mode=contract.output_mode,
