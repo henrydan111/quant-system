@@ -1638,8 +1638,13 @@ class TestR12JudgmentAxesIdentity:
             EvalProtocolSpec(**base, screening_horizons=(5, 10, 20), ls_sharpe_horizon=7)
 
     def test_canonical_axes_enter_the_payload_verbatim(self):
-        # R13: dropping the `int()` must NOT churn any already-sealed identity — canonical
-        # all-int axes still enter the payload exactly as declared (same hash as pre-fix).
+        # R13 STABILITY PIN — NOT a discriminating probe. It passes on the pre-fix code
+        # too (canonical all-int axes hash identically with or without the `int()`), and
+        # that is exactly its point: dropping the coercion must NOT churn any
+        # already-sealed identity. Verified out-of-band: canonical (5,10,20)/5 hashes to
+        # ae3a666e1048caae both pre- and post-fix. The DISCRIMINATING probes (they fail on
+        # the pre-fix code) are test_non_int_axes_refused_at_construction and
+        # test_runtime_non_int_horizons_refused_zero_side_effects.
         from src.alpha_research.factor_eval_skill.identity import EvalProtocolSpec
         from src.alpha_research.factor_eval_skill.sealed_oos import (
             EXECUTABLE_PROTOCOL_FIELDS,
