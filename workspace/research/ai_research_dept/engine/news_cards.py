@@ -190,14 +190,26 @@ def _c70(content: str) -> str:
 
 # --------------------------------------------------- 正向快讯节 + 风险/上下文切片
 
+#: 命名空白码点集(executor-review#4 Major;**版本钉定**——集合本体即钉,独立于
+#  unicodedata 版本):类别为 Lo/So 却**视觉空白**的已知码点——Hangul 填充系
+#  U+115F/U+1160/U+3164/U+FFA0、盲文空点阵 U+2800、圣书体空白 U+13441/U+13442。
+_NAMED_BLANK_CODEPOINTS = frozenset(
+    {0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x13441, 0x13442})
+
+
 def has_substantive_text(s) -> bool:
-    """**实质性文本**谓词(executor-review#3 Major:三处内容锁共用一把尺)。
-    恰 str 且至少含一个 Unicode 类别不以 C(控制)/M(标记)/Z(分隔)开头的
-    码点——`\\ufe0f`(变体选择符)/`\\u034f`(组合字位连接符)/空白-only 的
-    "语义空"字符串拒;正常文本与 ⚠️ 等 emoji(⚠ = So)保留。"""
+    """**实质性文本**谓词(executor-review#3/#4 Major:三处内容锁共用一把尺)。
+    恰 str → **NFKC 归一**(U+3164 归一成不可见 U+1160 之类的变体在归一后统一
+    判定)→ 至少含一个码点满足:Unicode 类别不以 C(控制)/M(标记)/Z(分隔)
+    开头 **且** 不在命名空白码点集内。`\\ufe0f`/`\\u034f`/Hangul 填充/盲文空点阵/
+    圣书体空白/空白-only 的"语义空"字符串拒;正常文本、⚠️(So)、盲文实点
+    U+2801、CJK+组合标记保留。"""
     if type(s) is not str:
         return False
-    return any(_ud.category(ch)[0] not in "CMZ" for ch in s)
+    normalized = _ud.normalize("NFKC", s)
+    return any(_ud.category(ch)[0] not in "CMZ"
+               and ord(ch) not in _NAMED_BLANK_CODEPOINTS
+               for ch in normalized)
 
 
 #: 事实级证据身份(re-review Blocker:去重前先比这组字段——冲突=硬失败,

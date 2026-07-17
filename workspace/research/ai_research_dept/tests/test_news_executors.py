@@ -351,6 +351,24 @@ class TestEmptyContentLock:
                          evidence_group_id="c:attrs", attribute_type="fact",
                          text=invisible)
 
+    # executor-review#4 Major: visually blank Lo/So codepoints are semantically
+    # empty — the named version-pinned blank set refuses every member
+    @pytest.mark.parametrize("cp", [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800,
+                                    0x13441, 0x13442])
+    def test_named_blank_codepoints_refused_at_factory(self, cp):
+        # end-to-end no-grounding: the factory refuses, so no artifact — and
+        # therefore no payload, no executor, no grounding — can ever exist
+        with pytest.raises(RegistryError, match="实质性"):
+            self._try_split(chr(cp))
+
+    @pytest.mark.parametrize("cp", [0x3164, 0x2800, 0x13441])
+    def test_named_blank_codepoints_refused_direct_row(self, cp):
+        from workspace.research.ai_research_dept.engine.news_cards import AttributeRow
+        with pytest.raises(RegistryError, match="实质性"):
+            AttributeRow(row_id="NFD01.fact", claim_id="c", fact_cluster_id="f",
+                         evidence_group_id="c:attrs", attribute_type="fact",
+                         text=chr(cp))
+
     def test_emoji_control_passes(self):
         # ⚠ is category So — real content with emoji must NOT be refused
         from workspace.research.ai_research_dept.engine.news_cards import (
@@ -358,8 +376,12 @@ class TestEmptyContentLock:
         )
         assert has_substantive_text("⚠️产能预警") is True
         assert has_substantive_text("⚠️") is True   # So codepoint alone
+        assert has_substantive_text(chr(0x2801)) is True   # braille dot-1 = content
+        assert has_substantive_text("汉̀字") is True  # CJK + combining mark
         assert has_substantive_text("️") is False
         assert has_substantive_text("͏") is False
+        assert has_substantive_text(chr(0x3164)) is False  # Hangul filler
+        assert has_substantive_text(chr(0x2800)) is False  # braille blank
         assert has_substantive_text(None) is False
         # end-to-end control: an emoji-bearing fact splits fine
         art = self._try_split("⚠️产能利用率预警")
