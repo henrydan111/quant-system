@@ -140,6 +140,27 @@ def test_contiguous_and_terminal_happy_path(led):
     assert (rp.staging_data / row["receipt_output"]).is_file()
 
 
+def test_verify_request_enforces_response_required_fields(led):
+    """GPT sign-off MINOR: the seam makes the battery standalone, but with NO required_fields in the
+    fake contracts nothing proved verify_request() actually invokes the response-field gate — a no-op
+    seam would pass every test. Two requests in ONE frozen plan: `daily` REQUIRES `close` (the `_df`
+    helper supplies only ts_code/trade_date/v → REJECT), `moneyflow` requires only `ts_code` (present
+    → PASS). Same response feeds both, so the difference is the missing field, not the setup."""
+    rp, L = led
+    _LIVE_CONTRACTS["daily"] = dict(_fake_contract("daily"), required_fields=["ts_code", "close"])
+    _LIVE_CONTRACTS["moneyflow"] = dict(_fake_contract("moneyflow"), required_fields=["ts_code"])
+    r_bad = _plan_row("daily", "20260702", "market/daily/2026/daily_20260702.parquet", limit=2)
+    r_bad["contract_sha256"] = rrc.canonical_contract_sha256(_LIVE_CONTRACTS["daily"])
+    r_ok = _plan_row("moneyflow", "20260702", "market/moneyflow/2026/mf_20260702.parquet", limit=2)
+    r_ok["contract_sha256"] = rrc.canonical_contract_sha256(_LIVE_CONTRACTS["moneyflow"])
+    L._freeze_plan_unvalidated([r_bad, r_ok])
+    L.fetch_page(r_bad["request_id"], 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
+    L.fetch_page(r_ok["request_id"], 1, lambda: _df(["A.SZ"]), terminal_claim="last_partial")
+    with pytest.raises(rl.LedgerError, match="MISSING signed required_fields"):
+        L.verify_request(r_bad["request_id"])                     # missing `close` -> rejected
+    assert L.verify_request(r_ok["request_id"])["post_dedup_rows"] == 1   # `ts_code` present -> ok
+
+
 def test_non_contiguous_pages_refused(led):
     _, L = led
     row = _plan_row("daily", "20260702", "o/a.parquet")

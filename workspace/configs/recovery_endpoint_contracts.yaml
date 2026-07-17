@@ -74,7 +74,7 @@
 #   forecast (NOT forecast_vip): the live path is pro.forecast per-stock (fetchers.__init__ fetch_forecast)
 #   income/balancesheet/cashflow : pro.* STANDARD; income_vip/cashflow_vip = the direct-quarter path only
 adj_factor:
-  cadence: daily, after close
+  cadence: premarket ~9:15–9:20 CST (T)
   doc_id: '28'
   doc_path: Tushare数据接口/content/28_复权因子.md
   doc_sha256: bbd3efec2236bad7656086d887dd69148f45b31d34e30558e4aa565584cda827
@@ -82,12 +82,13 @@ adj_factor:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.adj_factor ~120 calls/min — single_page
+  pagination: pro.adj_factor per-date, 单次≤5000 < 5528 listed → offset_paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.adj_factor ~120 calls/min (doc 28)
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 5000
+  pit_anchors: adj_factor[T] computed premarket (~9:15–9:20 CST) — session-open-knowable
+  rate_limit: pro.adj_factor per-date, 单次≤5000 < 5528 listed → offset_paged (doc 28)
   request_population:
     bounds:
       end: '20260701'
@@ -100,7 +101,7 @@ adj_factor:
   - adj_factor
   - ts_code
   - trade_date
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 balancesheet:
   cadence: quarterly report season
@@ -115,12 +116,13 @@ balancesheet:
   - end_date
   - report_type
   - update_flag
-  pagination: pro.balancesheet per-stock — single_page
+  pagination: pro.balancesheet per-stock, offset-paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 2000
   pit_anchors: max(ann_date,f_ann_date); shift(1)
-  rate_limit: pro.balancesheet per-stock (doc 36)
+  rate_limit: pro.balancesheet per-stock, offset-paged (limit=2000) (doc 36)
   request_population:
     bounds:
       list_status: L,D,P
@@ -131,7 +133,7 @@ balancesheet:
   - total_assets
   - total_liab
   - total_hldr_eqy_inc_min_int
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 block_trade:
   cadence: daily 大宗交易, after close
@@ -145,12 +147,13 @@ block_trade:
   - buyer
   - seller
   - price
-  pagination: pro.block_trade per-date 单次≤1000 — single_page
+  pagination: pro.block_trade per-date, 单次≤1000; a busy day can exceed → offset_paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.block_trade per-date 单次≤1000 (doc 161)
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 1000
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.block_trade per-date, 单次≤1000; a busy day can exceed → offset_paged (doc 161)
   request_population:
     bounds:
       end: '20260701'
@@ -165,10 +168,10 @@ block_trade:
   - amount
   - buyer
   - seller
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 broker_recommend:
-  cadence: monthly broker 金股; month visibility
+  cadence: monthly broker 金股
   doc_id: '267'
   doc_path: Tushare数据接口/content/267_券商月度金股.md
   doc_sha256: d66ffc82df6713a98c1cc51b6a3567ad90c6e9af401014b197a27eba25869175
@@ -181,7 +184,8 @@ broker_recommend:
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: anchor month
+  pit_anchors: month M list usable no earlier than the first trading day on/after ~the 4th of M (publication
+    lag), NOT month-open
   rate_limit: pro.broker_recommend per-month (doc 267)
   request_population:
     bounds:
@@ -192,7 +196,7 @@ broker_recommend:
   required_fields:
   - broker
   - ts_code
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 cashflow:
   cadence: quarterly report season
@@ -207,12 +211,13 @@ cashflow:
   - end_date
   - report_type
   - update_flag
-  pagination: pro.cashflow per-stock — single_page
+  pagination: pro.cashflow per-stock, offset-paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 2000
   pit_anchors: max(ann_date,f_ann_date); shift(1)
-  rate_limit: pro.cashflow per-stock (doc 44)
+  rate_limit: pro.cashflow per-stock, offset-paged (limit=2000) (doc 44)
   request_population:
     bounds:
       list_status: L,D,P
@@ -223,26 +228,27 @@ cashflow:
   - n_cashflow_act
   - c_fr_sale_sg
   - n_cashflow_inv_act
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 cashflow_vip:
   cadence: quarterly; direct single-quarter report_type 2/3
   doc_id: '44'
   doc_path: Tushare数据接口/content/44_现金流量表.md
   doc_sha256: 8f106ab12580b769ccc9246540257bb69a0322b8632dd69b0a84edec079e5172
-  empty_policy: dense_refuse
+  empty_policy: sparse_canary
   natural_key:
   - ts_code
   - end_date
   - report_type
   - f_ann_date
   - update_flag
-  pagination: pro.cashflow_vip per-period full-market — single_page
+  pagination: pro.cashflow_vip per- — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 10000
   pit_anchors: max(ann_date,f_ann_date); shift(1)
-  rate_limit: pro.cashflow_vip per-period full-market (doc 44)
+  rate_limit: pro.cashflow_vip per-(period,report_type), offset-paged (limit=10000) (doc 44)
   request_population:
     bounds:
       end: '20260331'
@@ -255,14 +261,14 @@ cashflow_vip:
   required_fields:
   - n_cashflow_act
   - c_fr_sale_sg
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 cyq_perf:
-  cadence: daily chip distribution 2018+
+  cadence: daily chip distribution 2018+, ~18:00–19:00 CST
   doc_id: '293'
   doc_path: Tushare数据接口/content/293_每日筹码及胜率.md
   doc_sha256: c5b66b984e7e6cfff7e01789131ae138ead58ff0177ecbf30dadc47485a7dca0
-  empty_policy: dense_refuse
+  empty_policy: sparse_canary
   natural_key:
   - ts_code
   - trade_date
@@ -270,8 +276,8 @@ cyq_perf:
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.cyq_perf per-stock (doc 293)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.cyq_perf per-stock (~2000 rows/stock) < cap → single call (doc 293)
   request_population:
     bounds:
       end_date: '20260701'
@@ -287,10 +293,10 @@ cyq_perf:
   - cost_50pct
   - winner_rate
   - weight_avg
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 daily:
-  cadence: daily, ~15:00–17:00 CST after close
+  cadence: daily, ~15:00–16:00 CST after close
   doc_id: '27'
   doc_path: Tushare数据接口/content/27_历史日线.md
   doc_sha256: 52c346446d020a02410e59de37b061d14d452e70629e7df4c809a11b6c8aaba0
@@ -298,12 +304,12 @@ daily:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.daily 120 calls/min @5000+ pts — single_page
+  pagination: pro.daily per-date, 单次≤6000 rows > max 5528 listed → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable (no ann_date lag)
-  rate_limit: pro.daily 120 calls/min @5000+ pts (doc 27 积分/限量)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.daily per-date, 单次≤6000 rows > max 5528 listed → single call (doc 27)
   request_population:
     bounds:
       end: '20260701'
@@ -320,10 +326,10 @@ daily:
   - vol
   - amount
   - pre_close
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 daily_basic:
-  cadence: daily, after close
+  cadence: daily, ~15:00–17:00 CST after close
   doc_id: '32'
   doc_path: Tushare数据接口/content/32_每日指标.md
   doc_sha256: eff48e2ca27954494d515ac24fe589de06ab94d971e5a83a88191bcbf829c27e
@@ -331,12 +337,12 @@ daily_basic:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.daily_basic ~120 calls/min — single_page
+  pagination: pro.daily_basic per-date, 单次≤6000 > 5528 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.daily_basic ~120 calls/min (doc 32)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.daily_basic per-date, 单次≤6000 > 5528 → single call (doc 32)
   request_population:
     bounds:
       end: '20260701'
@@ -352,7 +358,7 @@ daily_basic:
   - pb
   - total_mv
   - circ_mv
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 disclosure_date:
   cadence: disclosure schedule; ann_date visibility
@@ -364,12 +370,13 @@ disclosure_date:
   - ts_code
   - end_date
   - ann_date
-  pagination: pro.disclosure_date per-quarter — single_page
+  pagination: pro.disclosure_date per-quarter, offset-paged 单次≤3000 — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 3000
   pit_anchors: anchor ann_date
-  rate_limit: pro.disclosure_date per-quarter (doc 162)
+  rate_limit: pro.disclosure_date per-quarter, offset-paged 单次≤3000 (doc 162; ~3647 rows/quarter > cap)
   request_population:
     bounds:
       end: '20260331'
@@ -380,7 +387,7 @@ disclosure_date:
   - pre_date
   - actual_date
   - modify_date
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 dividend:
   cadence: dividend season; ann_date/ex_date
@@ -414,7 +421,7 @@ dividend:
   - cash_div
   - record_date
   - ex_date
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 express:
   cadence: 业绩快报 windows; ann_date visibility
@@ -443,7 +450,7 @@ express:
   - n_income
   - total_profit
   - total_assets
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 fina_audit:
   cadence: annual audit; ann_date visibility
@@ -471,38 +478,9 @@ fina_audit:
   - audit_result
   - audit_agency
   - audit_sign
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
-fina_indicator_vip:
-  cadence: quarterly; VIP full-market
-  doc_id: '79'
-  doc_path: Tushare数据接口/content/79_财务指标数据.md
-  doc_sha256: c5733cada130c844961770f7154832c38e5dc9e47c08685f56ca23d75c267a5f
-  empty_policy: dense_refuse
-  natural_key:
-  - ts_code
-  - end_date
-  - ann_date
-  - update_flag
-  pagination: pro.fina_indicator_vip per-period full-market — single_page
-  pagination_spec:
-    mode: single_page
-    page_limit: 0
-  pit_anchors: anchor ann_date; shift(1)
-  rate_limit: pro.fina_indicator_vip per-period full-market (doc 79)
-  request_population:
-    bounds:
-      end: '20260331'
-      start: '20080331'
-    expected_set_sha256: d35dff645ad0eb3e39d01518f16719361c467b7f5f37279b078de9044fdc8a0e
-    resolver: report_periods
-  required_fields:
-  - eps
-  - roe
-  - roa
-  - bps
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
-  reviewed_by: henry
+fina_indicator_vip: {}
 fina_mainbz:
   cadence: semiannual/annual segment; ann_date visibility
   doc_id: '81'
@@ -514,13 +492,13 @@ fina_mainbz:
   - end_date
   - bz_item
   - bz_code
-  pagination: pro.fina_mainbz_vip per-period, offset-paged 单次≤10000 — offset_paged
+  pagination: pro.fina_mainbz_vip per-period, offset-paged 单次最大100行 — offset_paged
   pagination_spec:
     mode: offset_paged
     offset_param: offset
-    page_limit: 10000
+    page_limit: 100
   pit_anchors: anchor ann_date; shift(1)
-  rate_limit: pro.fina_mainbz_vip per-period, offset-paged 单次≤10000 (doc 81)
+  rate_limit: pro.fina_mainbz_vip per-period, offset-paged 单次最大100行 (doc 81 — NOT the tracker's 10000)
   request_population:
     bounds:
       end: '20260331'
@@ -532,7 +510,7 @@ fina_mainbz:
   - bz_sales
   - bz_profit
   - bz_cost
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 forecast:
   cadence: forecast windows; ann_date visibility
@@ -562,7 +540,7 @@ forecast:
   - p_change_min
   - p_change_max
   - net_profit_min
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 hk_hold:
   cadence: daily 沪深港通持股 2017+, after close
@@ -573,12 +551,12 @@ hk_hold:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.hk_hold per-date 单次≤3800 — single_page
+  pagination: pro.hk_hold per-date, ~2600 held < 单次≤3800 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.hk_hold per-date 单次≤3800 (doc 188)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.hk_hold per-date, ~2600 held < 单次≤3800 → single call (doc 188)
   request_population:
     bounds:
       end: '20260630'
@@ -590,7 +568,7 @@ hk_hold:
   required_fields:
   - vol
   - ratio
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 income:
   cadence: quarterly report season; ann_date/f_ann_date visibility
@@ -605,12 +583,13 @@ income:
   - end_date
   - report_type
   - update_flag
-  pagination: pro.income per-stock — single_page
+  pagination: pro.income per-stock, offset-paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 2000
   pit_anchors: PIT anchor max(ann_date,f_ann_date); shift(1) downstream
-  rate_limit: pro.income per-stock (doc 33)
+  rate_limit: pro.income per-stock, offset-paged (fetcher _fetch_statement limit=2000) (doc 33)
   request_population:
     bounds:
       list_status: L,D,P
@@ -622,26 +601,27 @@ income:
   - operate_profit
   - total_profit
   - n_income
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 income_vip:
   cadence: quarterly; direct single-quarter report_type 2/3
   doc_id: '33'
   doc_path: Tushare数据接口/content/33_利润表.md
   doc_sha256: 585d29d63c014bbfca88de6ef7b3c617013ea8b5fa7f49b5101b262e3fd4b396
-  empty_policy: dense_refuse
+  empty_policy: sparse_canary
   natural_key:
   - ts_code
   - end_date
   - report_type
   - f_ann_date
   - update_flag
-  pagination: pro.income_vip per-period full-market — single_page
+  pagination: pro.income_vip per- — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 10000
   pit_anchors: max(ann_date,f_ann_date); shift(1)
-  rate_limit: pro.income_vip per-period full-market (doc 33)
+  rate_limit: pro.income_vip per-(period,report_type), offset-paged (limit=10000) (doc 33)
   request_population:
     bounds:
       end: '20260331'
@@ -655,7 +635,7 @@ income_vip:
   - total_revenue
   - operate_profit
   - n_income
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 index_daily:
   cadence: daily, after close
@@ -666,12 +646,12 @@ index_daily:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.index_daily 单次≤8000 rows — single_page
+  pagination: pro.index_daily per-code range ~4500 rows < 单次≤8000 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.index_daily 单次≤8000 rows (doc 95)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.index_daily per-code range ~4500 rows < 单次≤8000 → single call (doc 95)
   request_population:
     bounds:
       codes:
@@ -692,7 +672,7 @@ index_daily:
   - close
   - vol
   - amount
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 margin_detail:
   cadence: daily 融资融券, after close
@@ -703,12 +683,12 @@ margin_detail:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.margin_detail per-date 单次≤6000 — single_page
+  pagination: pro.margin_detail per-date, ~2500 margin stocks < 单次≤6000 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.margin_detail per-date 单次≤6000 (doc 59)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.margin_detail per-date, ~2500 margin stocks < 单次≤6000 → single call (doc 59)
   request_population:
     bounds:
       end: '20260701'
@@ -721,7 +701,7 @@ margin_detail:
   - rzye
   - rqye
   - rzmre
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 moneyflow:
   cadence: daily, after close
@@ -732,12 +712,12 @@ moneyflow:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.moneyflow per-date 单次≤6000 — single_page
+  pagination: pro.moneyflow per-date, 单次≤6000 > 5528 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.moneyflow per-date 单次≤6000 (doc 170)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.moneyflow per-date, 单次≤6000 > 5528 → single call (doc 170)
   request_population:
     bounds:
       end: '20260701'
@@ -750,10 +730,10 @@ moneyflow:
   - buy_lg_amount
   - sell_lg_amount
   - net_mf_amount
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 pledge_stat:
-  cadence: weekly pledge stats; end_date visibility
+  cadence: weekly pledge stats
   doc_id: '110'
   doc_path: Tushare数据接口/content/110_股权质押统计数据.md
   doc_sha256: f96dcc0c5099058fb9816783e5caecb3bed97e48404a48a19bcc51291edef455
@@ -761,13 +741,14 @@ pledge_stat:
   natural_key:
   - ts_code
   - end_date
-  pagination: pro.pledge_stat weekly, offset-paged 单次≤3000 — offset_paged
+  pagination: pro.pledge_stat weekly, offset-paged 单次最大1000 — offset_paged
   pagination_spec:
     mode: offset_paged
     offset_param: offset
-    page_limit: 3000
-  pit_anchors: anchor end_date
-  rate_limit: pro.pledge_stat weekly, offset-paged 单次≤3000 (doc 110)
+    page_limit: 1000
+  pit_anchors: end_date = Friday; vendor publication LAG vs end_date UNRESOLVED — treat conservatively
+    (not end_date-knowable)
+  rate_limit: pro.pledge_stat weekly, offset-paged 单次最大1000 (doc 110 — NOT the tracker's 3000)
   request_population:
     bounds:
       end: '20261231'
@@ -778,7 +759,7 @@ pledge_stat:
   - pledge_count
   - pledge_ratio
   - total_share
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 report_rc:
   cadence: analyst reports; report_date/create_time visibility
@@ -813,7 +794,7 @@ report_rc:
   - pe
   - rd
   - op_rt
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 repurchase:
   cadence: buyback events; ann_date visibility
@@ -845,7 +826,7 @@ repurchase:
   - vol
   - amount
   - high_limit
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 stk_holdernumber:
   cadence: periodic; ann_date visibility
@@ -874,7 +855,7 @@ stk_holdernumber:
   - ts_code
   - ann_date
   - end_date
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 stk_holdertrade:
   cadence: event-driven; ann_date visibility
@@ -907,10 +888,10 @@ stk_holdertrade:
   - in_de
   - change_vol
   - avg_price
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 stk_limit:
-  cadence: daily, session-open (limit prices)
+  cadence: daily, limit prices published pre-open
   doc_id: '183'
   doc_path: Tushare数据接口/content/183_每日涨跌停价格.md
   doc_sha256: 22c4a58b2452bf6cd90a5b329aa62083b93000a2abc3b1f356206970f047a96f
@@ -918,12 +899,14 @@ stk_limit:
   natural_key:
   - ts_code
   - trade_date
-  pagination: pro.stk_limit per-date — single_page
+  pagination: pro.stk_limit per-date, 单次≤5800; A/B/fund universe can exceed → offset_paged — offset_paged
   pagination_spec:
-    mode: single_page
-    page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.stk_limit per-date (doc 183)
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 5800
+  pit_anchors: trade_date T; knowable at T's open (computed from T-1 close) — session-open-knowable, no
+    ann_date lag
+  rate_limit: pro.stk_limit per-date, 单次≤5800; A/B/fund universe can exceed → offset_paged (doc 183)
   request_population:
     bounds:
       end: '20260701'
@@ -936,10 +919,10 @@ stk_limit:
   - up_limit
   - down_limit
   - pre_close
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 suspend_d:
-  cadence: daily 停复牌, after close
+  cadence: daily 停复牌
   doc_id: '214'
   doc_path: Tushare数据接口/content/214_每日停复牌信息.md
   doc_sha256: f0a9d37b78ab5f4690f3692cec005f130fe19d60a7df4256321d184fd99fca53
@@ -948,24 +931,25 @@ suspend_d:
   - ts_code
   - trade_date
   - suspend_type
-  pagination: pro.suspend_d per-date — single_page
+  pagination: pro.suspend_d per-date, sparse — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.suspend_d per-date (doc 214)
+  pit_anchors: suspension status for T; vendor publication time NOT guaranteed pre-open — treat as T+1
+    to avoid lookahead
+  rate_limit: pro.suspend_d per-date, sparse (doc 214)
   request_population:
     bounds:
       end: '20260701'
       exchange: SSE
       reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
-      start: '20080102'
-    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+      start: '19901219'
+    expected_set_sha256: b79eb1500fe127946f7a8108a17149c0f2d320cb37c6f4649a5a5b6d9675cdda
     resolver: trade_cal_open_sessions
   required_fields:
   - suspend_type
   - suspend_timing
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 top10_floatholders:
   cadence: quarterly; ann_date visibility
@@ -977,13 +961,13 @@ top10_floatholders:
   - ts_code
   - end_date
   - holder_name
-  pagination: pro.top10_floatholders per-period, offset-paged 单次≤6000 — offset_paged
+  pagination: pro.top10_floatholders per-period, offset-paged 单次≤5000 — offset_paged
   pagination_spec:
     mode: offset_paged
     offset_param: offset
-    page_limit: 6000
+    page_limit: 5000
   pit_anchors: anchor ann_date; shift(1)
-  rate_limit: pro.top10_floatholders per-period, offset-paged 单次≤6000 (doc 62)
+  rate_limit: pro.top10_floatholders per-period, offset-paged 单次≤5000 (doc 62 — NOT the tracker's 6000)
   request_population:
     bounds:
       end: '20260331'
@@ -994,7 +978,7 @@ top10_floatholders:
   - holder_name
   - hold_amount
   - hold_ratio
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 top_inst:
   cadence: daily 龙虎榜机构 2012+, after close
@@ -1008,12 +992,12 @@ top_inst:
   - exalter
   - side
   - reason
-  pagination: pro.top_inst per-date 单次≤10000 — single_page
+  pagination: pro.top_inst per-date, seats <单次≤10000 → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.top_inst per-date 单次≤10000 (doc 107)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.top_inst per-date, seats <单次≤10000 → single call (doc 107)
   request_population:
     bounds:
       end: '20260701'
@@ -1027,7 +1011,7 @@ top_inst:
   - buy
   - sell
   - net_buy
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry
 top_list:
   cadence: daily 龙虎榜, after close
@@ -1039,12 +1023,12 @@ top_list:
   - ts_code
   - trade_date
   - reason
-  pagination: pro.top_list per-date — single_page
+  pagination: pro.top_list per-date, 龙虎榜 <100/day << cap → single call — single_page
   pagination_spec:
     mode: single_page
     page_limit: 0
-  pit_anchors: trade_date session-open-knowable
-  rate_limit: pro.top_list per-date (doc 106)
+  pit_anchors: trade_date T OUTCOME; published after close (~15:00–17:00 CST); usable T+1 — NOT session-open-knowable
+  rate_limit: pro.top_list per-date, 龙虎榜 <100/day << cap → single call (doc 106)
   request_population:
     bounds:
       end: '20260701'
@@ -1059,5 +1043,5 @@ top_list:
   - turnover_rate
   - amount
   - net_amount
-  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_at: '2026-07-17T20:13:36.548858+00:00'
   reviewed_by: henry

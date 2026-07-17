@@ -43,7 +43,11 @@ INCOME_LEDGER = LEDGER_ROOT / "income" / "income.parquet"
 DEDUP_KEYS = {
     "express": ["ts_code", "end_date"],
     "fina_audit": ["ts_code", "end_date"],
-    "fina_mainbz": ["ts_code", "end_date", "bz_item"],
+    # bz_code (P按产品 / D按地区 / I按行业) is part of the row identity — the SAME bz_item text can
+    # appear under different breakdown dimensions, so omitting bz_code collapses distinct segment rows
+    # (GPT sign-off HOLD MAJOR; matches the corrected fina_mainbz vendor_record_key in
+    # raw_recovery_coordinator.py). See test_build_aux_pit_ledgers_fina_mainbz_bz_code.
+    "fina_mainbz": ["ts_code", "end_date", "bz_item", "bz_code"],
 }
 
 
