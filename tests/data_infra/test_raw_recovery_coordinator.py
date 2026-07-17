@@ -670,7 +670,8 @@ def test_plan_population_resolver_must_match_the_matrix_query_mode(signed):
     months["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(months))
     wrong = {ep: (dict(c, request_population=months) if ep == "daily" else c) for ep, c in cs.items()}
     h = {ep: rrc.canonical_contract_sha256(c) for ep, c in wrong.items()}
-    with pytest.raises(RuntimeError, match="resolves via|DIFFERENT request_population"):
+    with pytest.raises(RuntimeError, match="does not belong to this endpoint|resolves via|"
+                                           "DIFFERENT request_population"):
         rrc.assert_plan_matches_contracts(_a01_plan(h, cs_map=wrong), wrong)
 
 
@@ -838,12 +839,14 @@ def test_freeze_request_plan_is_the_single_door(signed):
             calls["n"] += 1
             return "planhash"
 
-    assert rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), cs) == "planhash"
+    assert rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), cs,
+                            declared_families=["market/daily"]) == "planhash"
     assert calls["n"] == 1
     naked = {"pagination_spec": {"mode": "single_page", "page_limit": 0},
              "request_population": _open_sessions_pop("20260702", "20260702")}
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
-        rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), dict(cs, daily=naked))
+        rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), dict(cs, daily=naked),
+                                declared_families=["market/daily"])
     assert calls["n"] == 1, "an invalid plan reached the ledger's freeze_plan"
 
 
@@ -874,7 +877,7 @@ def test_a01_coverage_reads_request_params_not_the_partition_label(signed):
     for i, r in enumerate(rows):
         if r["endpoint"] == "daily_basic":
             rows[i] = dict(r, params={"trade_date": "20260703"})
-    with pytest.raises(RuntimeError, match="partition label .* but the request asks for"):
+    with pytest.raises(RuntimeError, match="partition label .* but the request derives label"):
         rrc.assert_plan_matches_contracts(rows, cs)
 
 
@@ -905,7 +908,8 @@ def test_freeze_door_installs_a_LIVE_contract_loader(signed):
             return "ph"
 
     L = _FakeLedger()
-    rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs)
+    rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs,
+                            declared_families=["market/daily"])
     assert L.contract_loader is rrc.load_signed_contracts
 
 
@@ -977,7 +981,7 @@ def test_every_unit_resolves_to_complete_requests():
         unit = rrc._QUERY_MODE_TO_UNIT[r.query_mode]
         assert unit in rrc._UNIT_RESOLVERS, f"{unit} reaches no resolver"
         assert rrc._UNIT_RESOLVERS[unit] in rrc._POPULATION_RESOLVERS
-        assert unit in rrc._UNIT_LABEL_PARAM, f"{unit} declares no label axis"
+        assert unit in rrc._UNIT_LABEL_FROM_REQUEST, f"{unit} declares no label axis"
     # the multi-parameter units carry their full request shape
     rt = rrc.resolve_population({"resolver": "report_periods_x_types",
                                  "bounds": {"periods": ["20260331"], "report_types": ["2"]}})
@@ -1111,3 +1115,100 @@ def test_plan_with_an_unsigned_parameter_refused(signed):
     rows[0] = dict(rows[0], params=dict(rows[0]["params"], adj="qfq"))   # an extra, unsigned param
     with pytest.raises(RuntimeError, match="does not make the signed REQUESTS|NOT signed"):
         rrc.assert_plan_matches_contracts(rows, cs)
+
+
+# ── GPT sign-off HOLD #2: the endpoint's REAL recipe, and a plan that must declare its scope ──────
+def test_report_rc_signs_a_monthly_RANGE_not_a_month_label():
+    """GPT (reproduced through the complete gate): _resolve_report_date_months emitted
+    {"report_date": "202607"}, but the pinned doc's report_date is an EXACT report date and the real
+    monthly recipe is report_rc(start_date=YYYYMM01, end_date=<month end>) (scripts/fetch_bucket_a.py).
+    The monthly partition LABEL was standing in for the vendor request — my class, one more corner."""
+    reqs = rrc.resolve_population({"resolver": "report_rc_month_ranges",
+                                   "bounds": {"start": "202601", "end": "202602"}})
+    assert rrc._canon_request({"start_date": "20260101", "end_date": "20260131"}) in reqs
+    assert rrc._canon_request({"start_date": "20260201", "end_date": "20260228"}) in reqs   # real Feb
+    # the month label is NOT a request parameter any more
+    assert all("report_date" not in dict(r) for r in reqs)
+    assert rrc._canon_request({"report_date": "202601"}) not in reqs
+
+
+def test_report_rc_label_is_derived_from_the_range():
+    """The YYYYMM label is DERIVED from start_date — a label is not always a parameter, so deriving it
+    is the only honest way to check one."""
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_report_date_month"][0]
+    pr = {"request_id": "r", "endpoint": "report_rc", "dataset": row.output_family,
+          "partition": "202601", "params": {"start_date": "20260101", "end_date": "20260131"}}
+    assert dict(rrc._request_population_key(pr, row)) == {"start_date": "20260101",
+                                                          "end_date": "20260131"}
+    with pytest.raises(RuntimeError, match="derives label"):
+        rrc._request_population_key(dict(pr, partition="202602"), row)   # label lies about its range
+
+
+def test_contract_validation_is_endpoint_aware(tmp_path, monkeypatch):
+    """GPT (reproduced): a fully valid `daily` contract using `calendar_months` returned ZERO errors —
+    the mismatch surfaced only once an adapter supplied a plan, far too late for a human signing it."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    assert rrc.endpoint_expected_resolvers("daily") == {"trade_cal_open_sessions"}
+    assert rrc.endpoint_expected_resolvers("report_rc") == {"report_rc_month_ranges"}
+    assert rrc.endpoint_expected_resolvers("cyq_perf") == {"stock_basic_ranges"}
+    assert rrc.endpoint_expected_resolvers("income_vip") == {"report_periods_x_types"}
+    doc = _mk_doc(mirror, "27_daily.md", _io_doc("daily", 27))
+    months = {"resolver": "calendar_months", "bounds": {"start": "202607", "end": "202607"}}
+    months["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(months))
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "27", "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
+         "pagination": "single", "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": months, "rate_limit": "500/min", "cadence": "daily",
+         "pit_anchors": "trade_date", "empty_policy": "dense_refuse", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    errs = rrc.contract_errors("daily", c)
+    assert any("does not belong to this endpoint" in e for e in errs), errs
+
+
+def test_empty_plan_and_undeclared_scope_refused(signed):
+    """GPT (reproduced): assert_plan_matches_contracts([], {}) and freeze_request_plan(..., [], {}) both
+    SUCCEEDED — the check iterates the groups it FINDS, so nothing-at-all passed vacuously."""
+    fake_root, mirror, cs, hashes = signed
+    with pytest.raises(RuntimeError, match="EMPTY plan"):
+        rrc.assert_plan_matches_contracts([], {})
+    with pytest.raises(RuntimeError, match="empty plan"):
+        rrc.assert_plan_scope_is_complete([], ["market/daily"])
+    with pytest.raises(RuntimeError, match="explicit declared_families"):
+        rrc.assert_plan_scope_is_complete(_a01_plan(hashes, cs_map=cs), [])
+    # a declared family with no requests is an OMISSION, not an empty family
+    with pytest.raises(RuntimeError, match="NO requests for"):
+        rrc.assert_plan_scope_is_complete(_a01_plan(hashes, cs_map=cs),
+                                          ["market/daily", "market/moneyflow"])
+    # requests outside the declared scope refuse (every DECLARED family is covered here, so only the
+    # undeclared-extra branch can fire)
+    extra = _a01_plan(hashes, cs_map=cs) + [
+        _prow("mf:20260702", "moneyflow", "20260702", hashes["daily"], dataset="market/moneyflow",
+              c=cs["daily"])]
+    with pytest.raises(RuntimeError, match="does not declare"):
+        rrc.assert_plan_scope_is_complete(extra, ["market/daily"])
+    with pytest.raises(RuntimeError, match="matrix does not own"):
+        rrc.assert_plan_scope_is_complete(_a01_plan(hashes, cs_map=cs), ["market/invented"])
+    rrc.assert_plan_scope_is_complete(_a01_plan(hashes, cs_map=cs), ["market/daily"])   # honest scope
+
+
+def test_declared_family_missing_a_source_leg_refused(signed):
+    fake_root, mirror, cs, hashes = signed
+    rows = [r for r in _a01_plan(hashes, cs_map=cs) if r["endpoint"] != "adj_factor"]
+    with pytest.raises(RuntimeError, match="source leg"):
+        rrc.assert_plan_scope_is_complete(rows, ["market/daily"])
+
+
+def test_empty_plan_cannot_be_frozen(signed):
+    fake_root, mirror, cs, hashes = signed
+
+    class _FakeLedger:
+        contract_loader = None
+        def _freeze_plan_unvalidated(self, rows):
+            raise AssertionError("an empty plan reached the ledger")
+
+    with pytest.raises(RuntimeError, match="empty plan"):
+        rrc.freeze_request_plan(_FakeLedger(), [], cs, declared_families=["market/daily"])

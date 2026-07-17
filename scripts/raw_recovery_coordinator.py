@@ -611,6 +611,14 @@ def _population_spec_errors(endpoint: str, spec) -> list:
     if spec.get("resolver") not in _POPULATION_RESOLVERS:
         errs.append(f"{endpoint}: request_population.resolver must be one of "
                     f"{sorted(_POPULATION_RESOLVERS)} — an executable resolver, not a description")
+    else:
+        # ENDPOINT-AWARE: the resolver must be one THIS endpoint's matrix rows actually imply, checked
+        # at SIGN-OFF, not deferred until an adapter hands over a plan (GPT sign-off HOLD #2).
+        allowed = endpoint_expected_resolvers(endpoint)
+        if allowed and spec.get("resolver") not in allowed:
+            errs.append(f"{endpoint}: resolver {spec.get('resolver')!r} does not belong to this endpoint "
+                        f"— its matrix rows enumerate {sorted(allowed)}. Signing it would bind the wrong "
+                        f"request recipe.")
     bounds = spec.get("bounds")
     if not isinstance(bounds, dict) or not bounds:
         errs.append(f"{endpoint}: request_population.bounds must state the selection rule "
@@ -748,8 +756,18 @@ def _resolve_calendar_months(bounds: dict) -> set:
     return {_canon_request({"month": m}) for m in _month_strings(bounds)}
 
 
-def _resolve_report_date_months(bounds: dict) -> set:
-    return {_canon_request({"report_date": m}) for m in _month_strings(bounds)}
+def _resolve_report_rc_month_ranges(bounds: dict) -> set:
+    """report_rc's REAL monthly recipe is a RANGE: report_rc(start_date=YYYYMM01, end_date=<month end>)
+    (scripts/fetch_bucket_a.py). GPT sign-off HOLD #2: this used to emit {"report_date": "YYYYMM"} — but
+    the pinned doc's `report_date` is an EXACT report date, not a month, so the monthly PARTITION LABEL
+    was standing in for the vendor request. The label is derived from the range, never sent as one."""
+    import calendar as _cal
+    out = set()
+    for m in _month_strings(bounds):
+        y, mth = int(m[:4]), int(m[4:6])
+        last = _cal.monthrange(y, mth)[1]
+        out.add(_canon_request({"start_date": f"{m}01", "end_date": f"{m}{last:02d}"}))
+    return out
 
 
 def _period_strings(bounds: dict) -> set:
@@ -789,7 +807,7 @@ _POPULATION_RESOLVERS = {
     "stock_basic_ranges": _resolve_stock_ranges,
     "index_code_ranges": _resolve_index_ranges,
     "calendar_months": _resolve_calendar_months,
-    "report_date_months": _resolve_report_date_months,
+    "report_rc_month_ranges": _resolve_report_rc_month_ranges,
     "report_periods": _resolve_report_periods,
     "report_periods_x_types": _resolve_report_periods_x_types,
 }
@@ -801,16 +819,48 @@ _UNIT_RESOLVERS = {
     "stock_repartition": "stock_basic_ranges",
     "index_range": "index_code_ranges",
     "month": "calendar_months",
-    "report_date_month": "report_date_months",
+    "report_date_month": "report_rc_month_ranges",
     "period": "report_periods",
     "period_report_type": "report_periods_x_types",
 }
-# the axis a `partition` label names (label honesty only — NEVER the comparison key)
-_UNIT_LABEL_PARAM = {
-    "open_trade_date": "trade_date", "stock": "ts_code", "stock_repartition": "ts_code",
-    "index_range": "ts_code", "month": "month", "report_date_month": "report_date",
-    "period": "period", "period_report_type": "period",
+# How a `partition` LABEL is DERIVED from the request it names (honesty check only — the label is
+# NEVER the comparison key). GPT sign-off HOLD #2: report_date_month's label is a MONTH while its
+# request is a start_date/end_date RANGE — a label is not always a parameter, so deriving it is the only
+# honest way to check one. Each entry raises if the request lacks what the label is derived from.
+def _label_from_param(name):
+    def _f(params):
+        if name not in params:
+            raise RuntimeError(f"request {params} carries no {name!r} — its partition label is named by it")
+        return str(params[name])
+    return _f
+
+
+def _label_from_month_range(params):
+    if "start_date" not in params:
+        raise RuntimeError(f"request {params} carries no 'start_date' — its monthly label derives from it")
+    return str(params["start_date"])[:6]
+
+
+_UNIT_LABEL_FROM_REQUEST = {
+    "open_trade_date": _label_from_param("trade_date"), "stock": _label_from_param("ts_code"),
+    "stock_repartition": _label_from_param("ts_code"), "index_range": _label_from_param("ts_code"),
+    "month": _label_from_param("month"), "report_date_month": _label_from_month_range,
+    "period": _label_from_param("period"), "period_report_type": _label_from_param("period"),
 }
+
+
+def endpoint_expected_resolvers(endpoint: str) -> set:
+    """The resolver(s) this endpoint's own matrix rows imply. GPT sign-off HOLD #2: contract_errors
+    accepted ANY known resolver — a valid `daily` contract using `calendar_months` returned ZERO errors,
+    and the mismatch surfaced only once an adapter supplied a plan, which is far too late for a HUMAN
+    to be signing the thing."""
+    out = set()
+    for r in ENDPOINT_MATRIX:
+        if endpoint in r.source_endpoints and r.query_mode != "UNBOUND":
+            res = _UNIT_RESOLVERS.get(_QUERY_MODE_TO_UNIT.get(r.query_mode))
+            if res:
+                out.add(res)
+    return out
 
 
 def resolve_population(spec: dict) -> set:
@@ -831,18 +881,18 @@ def _request_population_key(pr: dict, row) -> tuple:
     if not isinstance(params, dict) or not params:
         raise RuntimeError(f"plan row {pr.get('request_id')}: no params — a request with no parameters "
                            f"cannot be proven to cover anything")
-    label_param = _UNIT_LABEL_PARAM.get(unit)
-    if label_param is None:
-        raise RuntimeError(f"plan row {pr.get('request_id')}: unit {unit!r} declares no label axis; add "
-                           f"it to _UNIT_LABEL_PARAM before planning this endpoint")
-    if label_param not in params:
-        raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): params {params} "
-                           f"carry no {label_param!r} — {unit!r} is named by it")
-    if str(pr.get("partition")) != str(params[label_param]):
+    deriver = _UNIT_LABEL_FROM_REQUEST.get(unit)
+    if deriver is None:
+        raise RuntimeError(f"plan row {pr.get('request_id')}: unit {unit!r} declares no label derivation; "
+                           f"add it to _UNIT_LABEL_FROM_REQUEST before planning this endpoint")
+    try:
+        want_label = deriver(params)
+    except RuntimeError as exc:
+        raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): {exc}")
+    if str(pr.get("partition")) != want_label:
         raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): partition label "
-                           f"{pr.get('partition')!r} but the request asks for "
-                           f"{label_param}={params[label_param]!r} — the label is not evidence about "
-                           f"the request")
+                           f"{pr.get('partition')!r} but the request derives label {want_label!r} — the "
+                           f"label is not evidence about the request")
     return _canon_request(params)
 
 
@@ -945,6 +995,9 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
       * the declared population unit must match the matrix query_mode;
       * multi-source outputs must prove merge coverage (see assert_multi_source_merge_coverage).
     Raises on the first divergence."""
+    if not plan_rows:
+        raise RuntimeError("assert_plan_matches_contracts called with an EMPTY plan — it would pass "
+                           "vacuously; an empty plan is refused at the freeze door")
     by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
     validated: dict = {}
     for pr in plan_rows:
@@ -1009,11 +1062,50 @@ def load_signed_contracts() -> dict:
     return yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {}
 
 
-def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, contract_loader=None) -> str:
+def assert_plan_scope_is_complete(plan_rows: list, declared_families) -> None:
+    """A plan must SAY what it covers, and cover it (GPT sign-off HOLD #2 MAJOR): the population check
+    iterates the groups it FINDS, so an empty plan compared vacuously true and an omitted family was
+    simply invisible. Nothing can verify a request that was never planned — only a declared scope makes
+    absence detectable."""
+    if not plan_rows:
+        raise RuntimeError("empty plan: there is nothing to verify, and 'nothing' is not a recovery. "
+                           "An empty plan previously passed every check vacuously.")
+    declared = set(declared_families or ())
+    if not declared:
+        raise RuntimeError("freeze requires an explicit declared_families scope — without it an omitted "
+                           "family is indistinguishable from one that was never intended")
+    known = {r.output_family for r in ENDPOINT_MATRIX}
+    unknown = declared - known
+    if unknown:
+        raise RuntimeError(f"declared_families names families the matrix does not own: {sorted(unknown)}")
+    covered = {pr.get("dataset") for pr in plan_rows}
+    missing = declared - covered
+    if missing:
+        raise RuntimeError(f"the plan declares {sorted(declared)} but has NO requests for "
+                           f"{sorted(missing)} — a declared family with no requests is an omission, not "
+                           f"an empty one")
+    undeclared = covered - declared
+    if undeclared:
+        raise RuntimeError(f"the plan carries requests for {sorted(undeclared)}, which it does not "
+                           f"declare — every fetched family must be in the declared scope")
+    # every SOURCE LEG of each declared family must be planned (single-source families too; the
+    # multi-source merge check only sees families that already have legs present)
+    by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
+    for fam in sorted(declared):
+        row = by_family[fam]
+        legs = {pr["endpoint"] for pr in plan_rows if pr.get("dataset") == fam}
+        absent = set(row.source_endpoints) - legs
+        if absent:
+            raise RuntimeError(f"{fam}: declared but source leg(s) {sorted(absent)} have no requests")
+
+
+def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, declared_families=None,
+                        contract_loader=None) -> str:
     """THE single, non-bypassable door to freezing a request plan (GPT re-review #8 BLOCKER-1: contract
     validation, the canonical contract hash, the population snapshot and freeze_plan were separate, so
     a plan could be frozen without any of them). Validate-then-freeze, in one call; the ledger's
     freeze_plan is never invoked directly by recovery code."""
+    assert_plan_scope_is_complete(plan_rows, declared_families)   # an empty/partial plan is not a plan
     assert_plan_matches_contracts(plan_rows, contracts)
     # Install the fetch-time re-binding (GPT re-review #9 BLOCKER-1): validation at freeze proves what
     # WAS signed; every later call re-proves the contract is still that one. A ledger frozen through the
