@@ -73,36 +73,991 @@
 #   daily_basic + adj_factor : SEPARATE source endpoints merged into the A01 market/daily output
 #   forecast (NOT forecast_vip): the live path is pro.forecast per-stock (fetchers.__init__ fetch_forecast)
 #   income/balancesheet/cashflow : pro.* STANDARD; income_vip/cashflow_vip = the direct-quarter path only
-daily: {}
-daily_basic: {}      # A01 source endpoint (valuation join into market/daily), distinct from daily
-adj_factor: {}       # A01 source endpoint (adj factors join into market/daily), distinct from daily
-index_daily: {}
-income: {}            # NOTE: FundamentalsInitializer.download_fundamentals uses pro.income (NOT income_vip)
-balancesheet: {}      # NOTE: uses pro.balancesheet (NOT balancesheet_vip)
-income_vip: {}        # direct-quarter path (fetch_quarterly_statements)
-cashflow_vip: {}
-forecast: {}          # RECONCILED: live path is pro.forecast per-stock (was mislabelled forecast_vip)
-fina_indicator_vip: {}
-cashflow: {}
-dividend: {}
-moneyflow: {}
-stk_limit: {}
-margin_detail: {}
-hk_hold: {}
-stk_holdernumber: {}
-suspend_d: {}
-top_list: {}
-top_inst: {}
-block_trade: {}
-stk_holdertrade: {}
-cyq_perf: {}
-report_rc: {}         # NOTE: doc cap = 3000/page; natural_key = normalized analyst (org+author) +
-                      # report_rc_payload_digest (current PIT identity), NOT author_name alone
-express: {}
-disclosure_date: {}
-fina_mainbz: {}
-fina_audit: {}
-repurchase: {}
-pledge_stat: {}
-top10_floatholders: {}
-broker_recommend: {}
+adj_factor:
+  cadence: daily, after close
+  doc_id: '28'
+  doc_path: Tushare数据接口/content/28_复权因子.md
+  doc_sha256: bbd3efec2236bad7656086d887dd69148f45b31d34e30558e4aa565584cda827
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.adj_factor ~120 calls/min — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.adj_factor ~120 calls/min (doc 28)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - adj_factor
+  - ts_code
+  - trade_date
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+balancesheet:
+  cadence: quarterly report season
+  doc_id: '36'
+  doc_path: Tushare数据接口/content/36_资产负债表.md
+  doc_sha256: 393180daac067c72a2b81be2ec84e481c1fecb1c0b3cd376c1997f25dfa64c61
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - f_ann_date
+  - end_date
+  - report_type
+  - update_flag
+  pagination: pro.balancesheet per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: max(ann_date,f_ann_date); shift(1)
+  rate_limit: pro.balancesheet per-stock (doc 36)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - total_assets
+  - total_liab
+  - total_hldr_eqy_inc_min_int
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+block_trade:
+  cadence: daily 大宗交易, after close
+  doc_id: '161'
+  doc_path: Tushare数据接口/content/161_大宗交易.md
+  doc_sha256: 9838fed1ef44f25ffcd7a1776de3437c3fb900b3e1de863a0a9e5e81da89f786
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  - buyer
+  - seller
+  - price
+  pagination: pro.block_trade per-date 单次≤1000 — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.block_trade per-date 单次≤1000 (doc 161)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080118'
+    expected_set_sha256: 7270a073ded51b40595df27b696035dc7bdce91f21985e4343a41d264d2cb133
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - price
+  - vol
+  - amount
+  - buyer
+  - seller
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+broker_recommend:
+  cadence: monthly broker 金股; month visibility
+  doc_id: '267'
+  doc_path: Tushare数据接口/content/267_券商月度金股.md
+  doc_sha256: d66ffc82df6713a98c1cc51b6a3567ad90c6e9af401014b197a27eba25869175
+  empty_policy: sparse_canary
+  natural_key:
+  - month
+  - broker
+  - ts_code
+  pagination: pro.broker_recommend per-month — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor month
+  rate_limit: pro.broker_recommend per-month (doc 267)
+  request_population:
+    bounds:
+      end: '202606'
+      start: '202007'
+    expected_set_sha256: 9b8ff105e0505b1e6cb2512cdf526281a4df0ec17e77b4afe6cf87eacbde0e22
+    resolver: calendar_months
+  required_fields:
+  - broker
+  - ts_code
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+cashflow:
+  cadence: quarterly report season
+  doc_id: '44'
+  doc_path: Tushare数据接口/content/44_现金流量表.md
+  doc_sha256: 8f106ab12580b769ccc9246540257bb69a0322b8632dd69b0a84edec079e5172
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - f_ann_date
+  - end_date
+  - report_type
+  - update_flag
+  pagination: pro.cashflow per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: max(ann_date,f_ann_date); shift(1)
+  rate_limit: pro.cashflow per-stock (doc 44)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - n_cashflow_act
+  - c_fr_sale_sg
+  - n_cashflow_inv_act
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+cashflow_vip:
+  cadence: quarterly; direct single-quarter report_type 2/3
+  doc_id: '44'
+  doc_path: Tushare数据接口/content/44_现金流量表.md
+  doc_sha256: 8f106ab12580b769ccc9246540257bb69a0322b8632dd69b0a84edec079e5172
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - end_date
+  - report_type
+  - f_ann_date
+  - update_flag
+  pagination: pro.cashflow_vip per-period full-market — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: max(ann_date,f_ann_date); shift(1)
+  rate_limit: pro.cashflow_vip per-period full-market (doc 44)
+  request_population:
+    bounds:
+      end: '20260331'
+      report_types:
+      - '2'
+      - '3'
+      start: '20080331'
+    expected_set_sha256: 8b9995e6bd08a13637faa76b0330626d7b3d0b35d506e1f797d067dd6e8412ee
+    resolver: report_periods_x_types
+  required_fields:
+  - n_cashflow_act
+  - c_fr_sale_sg
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+cyq_perf:
+  cadence: daily chip distribution 2018+
+  doc_id: '293'
+  doc_path: Tushare数据接口/content/293_每日筹码及胜率.md
+  doc_sha256: c5b66b984e7e6cfff7e01789131ae138ead58ff0177ecbf30dadc47485a7dca0
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.cyq_perf per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.cyq_perf per-stock (doc 293)
+  request_population:
+    bounds:
+      end_date: '20260701'
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+      start_date: '20180102'
+    expected_set_sha256: 5d464a4b9700eb97263c8e00628350b778bc425f0b525d3f4e74b3e0a82f2e0a
+    resolver: stock_basic_ranges
+  required_fields:
+  - his_low
+  - his_high
+  - cost_5pct
+  - cost_50pct
+  - winner_rate
+  - weight_avg
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+daily:
+  cadence: daily, ~15:00–17:00 CST after close
+  doc_id: '27'
+  doc_path: Tushare数据接口/content/27_历史日线.md
+  doc_sha256: 52c346446d020a02410e59de37b061d14d452e70629e7df4c809a11b6c8aaba0
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.daily 120 calls/min @5000+ pts — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable (no ann_date lag)
+  rate_limit: pro.daily 120 calls/min @5000+ pts (doc 27 积分/限量)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - open
+  - high
+  - low
+  - close
+  - vol
+  - amount
+  - pre_close
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+daily_basic:
+  cadence: daily, after close
+  doc_id: '32'
+  doc_path: Tushare数据接口/content/32_每日指标.md
+  doc_sha256: eff48e2ca27954494d515ac24fe589de06ab94d971e5a83a88191bcbf829c27e
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.daily_basic ~120 calls/min — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.daily_basic ~120 calls/min (doc 32)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - close
+  - turnover_rate
+  - pe
+  - pb
+  - total_mv
+  - circ_mv
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+disclosure_date:
+  cadence: disclosure schedule; ann_date visibility
+  doc_id: '162'
+  doc_path: Tushare数据接口/content/162_财报披露日期表.md
+  doc_sha256: 48045f1b851ef2484aeb41ed0b7040842059dcc2efb5898c2c1ce0b86eb69a15
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - end_date
+  - ann_date
+  pagination: pro.disclosure_date per-quarter — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date
+  rate_limit: pro.disclosure_date per-quarter (doc 162)
+  request_population:
+    bounds:
+      end: '20260331'
+      start: '20080331'
+    expected_set_sha256: 2bd6c007c764a77c51aef72f878e1ca7b54aa32c282928fed3674e5d8f5ab481
+    resolver: quarter_end_dates
+  required_fields:
+  - pre_date
+  - actual_date
+  - modify_date
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+dividend:
+  cadence: dividend season; ann_date/ex_date
+  doc_id: '103'
+  doc_path: Tushare数据接口/content/103_分红送股数据.md
+  doc_sha256: c0e2fd1d6a80783db33be95ad2011bd81fbd44a7be30e8a6aa66fb04e97b5b18
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - end_date
+  - record_date
+  - ex_date
+  - pay_date
+  - div_proc
+  pagination: pro.dividend per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; ex_date event
+  rate_limit: pro.dividend per-stock (doc 103)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - div_proc
+  - stk_div
+  - cash_div
+  - record_date
+  - ex_date
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+express:
+  cadence: 业绩快报 windows; ann_date visibility
+  doc_id: '46'
+  doc_path: Tushare数据接口/content/46_业绩快报.md
+  doc_sha256: bb71dc0bb428c8cdc3f9457786a09076db51bfb0040f59c73d3d3c9f218d316c
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - end_date
+  pagination: pro.express per-period — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.express per-period (doc 46)
+  request_population:
+    bounds:
+      end: '20260331'
+      start: '20080331'
+    expected_set_sha256: d35dff645ad0eb3e39d01518f16719361c467b7f5f37279b078de9044fdc8a0e
+    resolver: report_periods
+  required_fields:
+  - revenue
+  - n_income
+  - total_profit
+  - total_assets
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+fina_audit:
+  cadence: annual audit; ann_date visibility
+  doc_id: '80'
+  doc_path: Tushare数据接口/content/80_财务审计意见.md
+  doc_sha256: 2629f97742209044853cc6d43da70c88317287f2d830018e936aad464684f840
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - end_date
+  - ann_date
+  pagination: pro.fina_audit per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.fina_audit per-stock (doc 80)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - audit_result
+  - audit_agency
+  - audit_sign
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+fina_indicator_vip:
+  cadence: quarterly; VIP full-market
+  doc_id: '79'
+  doc_path: Tushare数据接口/content/79_财务指标数据.md
+  doc_sha256: c5733cada130c844961770f7154832c38e5dc9e47c08685f56ca23d75c267a5f
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - end_date
+  - ann_date
+  - update_flag
+  pagination: pro.fina_indicator_vip per-period full-market — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.fina_indicator_vip per-period full-market (doc 79)
+  request_population:
+    bounds:
+      end: '20260331'
+      start: '20080331'
+    expected_set_sha256: d35dff645ad0eb3e39d01518f16719361c467b7f5f37279b078de9044fdc8a0e
+    resolver: report_periods
+  required_fields:
+  - eps
+  - roe
+  - roa
+  - bps
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+fina_mainbz:
+  cadence: semiannual/annual segment; ann_date visibility
+  doc_id: '81'
+  doc_path: Tushare数据接口/content/81_主营业务构成.md
+  doc_sha256: 5e1c4df1f6bcb66fe0f8e242e80e9f2205eb8764211473cd1c2c6a94b90de021
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - end_date
+  - bz_item
+  - bz_code
+  pagination: pro.fina_mainbz_vip per-period, offset-paged 单次≤10000 — offset_paged
+  pagination_spec:
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 10000
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.fina_mainbz_vip per-period, offset-paged 单次≤10000 (doc 81)
+  request_population:
+    bounds:
+      end: '20260331'
+      start: '20100331'
+    expected_set_sha256: 47a58c0f0686b14cc51ef9d0a707a8d5a8a3048f0342128f7139223ddabf5fb6
+    resolver: report_periods
+  required_fields:
+  - bz_item
+  - bz_sales
+  - bz_profit
+  - bz_cost
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+forecast:
+  cadence: forecast windows; ann_date visibility
+  doc_id: '45'
+  doc_path: Tushare数据接口/content/45_业绩预告.md
+  doc_sha256: 2d424f5a46e4b8247bf4cebe8af138f6a854bbcdeebc3d56d56028080eb911e8
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - end_date
+  - type
+  pagination: pro.forecast per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.forecast per-stock (doc 45)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - type
+  - p_change_min
+  - p_change_max
+  - net_profit_min
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+hk_hold:
+  cadence: daily 沪深港通持股 2017+, after close
+  doc_id: '188'
+  doc_path: Tushare数据接口/content/188_沪深股通持股明细.md
+  doc_sha256: e0f698fc8ec63dd80c6e5b1b8af1c4ed4cf4e9e0ac01b6f4314c885220fbcf87
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.hk_hold per-date 单次≤3800 — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.hk_hold per-date 单次≤3800 (doc 188)
+  request_population:
+    bounds:
+      end: '20260630'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20170103'
+    expected_set_sha256: 1d309dfc3326408706bd85db1b8aaa598f0f789e6a70b0b549a6a31121fd63e8
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - vol
+  - ratio
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+income:
+  cadence: quarterly report season; ann_date/f_ann_date visibility
+  doc_id: '33'
+  doc_path: Tushare数据接口/content/33_利润表.md
+  doc_sha256: 585d29d63c014bbfca88de6ef7b3c617013ea8b5fa7f49b5101b262e3fd4b396
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - f_ann_date
+  - end_date
+  - report_type
+  - update_flag
+  pagination: pro.income per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: PIT anchor max(ann_date,f_ann_date); shift(1) downstream
+  rate_limit: pro.income per-stock (doc 33)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - total_revenue
+  - operate_profit
+  - total_profit
+  - n_income
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+income_vip:
+  cadence: quarterly; direct single-quarter report_type 2/3
+  doc_id: '33'
+  doc_path: Tushare数据接口/content/33_利润表.md
+  doc_sha256: 585d29d63c014bbfca88de6ef7b3c617013ea8b5fa7f49b5101b262e3fd4b396
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - end_date
+  - report_type
+  - f_ann_date
+  - update_flag
+  pagination: pro.income_vip per-period full-market — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: max(ann_date,f_ann_date); shift(1)
+  rate_limit: pro.income_vip per-period full-market (doc 33)
+  request_population:
+    bounds:
+      end: '20260331'
+      report_types:
+      - '2'
+      - '3'
+      start: '20080331'
+    expected_set_sha256: 8b9995e6bd08a13637faa76b0330626d7b3d0b35d506e1f797d067dd6e8412ee
+    resolver: report_periods_x_types
+  required_fields:
+  - total_revenue
+  - operate_profit
+  - n_income
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+index_daily:
+  cadence: daily, after close
+  doc_id: '95'
+  doc_path: Tushare数据接口/content/95_指数日线行情.md
+  doc_sha256: 032921102e876a481ee733fce203fa5cf94150fd3f93a6f5f7d30a5dcde910b9
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.index_daily 单次≤8000 rows — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.index_daily 单次≤8000 rows (doc 95)
+  request_population:
+    bounds:
+      codes:
+      - 000001.SH
+      - 000300.SH
+      - 000905.SH
+      - 000852.SH
+      - 399001.SZ
+      - 399006.SZ
+      end_date: '20260701'
+      start_date: '20080102'
+    expected_set_sha256: 6cc2e3588ec3c797cbfe0a26ee72f514b3ab5805b98967f1a77876cf35d78482
+    resolver: index_code_ranges
+  required_fields:
+  - open
+  - high
+  - low
+  - close
+  - vol
+  - amount
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+margin_detail:
+  cadence: daily 融资融券, after close
+  doc_id: '59'
+  doc_path: Tushare数据接口/content/59_融资融券交易明细.md
+  doc_sha256: f28ecdae2c980be0c32ce478d0db383d121a226b8ceef617ba297ed3f5a29f20
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.margin_detail per-date 单次≤6000 — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.margin_detail per-date 单次≤6000 (doc 59)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20100331'
+    expected_set_sha256: b3110cf734847c02554b01a15be7212f3e0e472d660b1875781e6c3437e17f59
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - rzye
+  - rqye
+  - rzmre
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+moneyflow:
+  cadence: daily, after close
+  doc_id: '170'
+  doc_path: Tushare数据接口/content/170_个股资金流向.md
+  doc_sha256: 1236a4e89899a89aa3083c8e326fb1f9b2ba72dfcd631bf91a2a12e21484cb09
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.moneyflow per-date 单次≤6000 — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.moneyflow per-date 单次≤6000 (doc 170)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - buy_lg_amount
+  - sell_lg_amount
+  - net_mf_amount
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+pledge_stat:
+  cadence: weekly pledge stats; end_date visibility
+  doc_id: '110'
+  doc_path: Tushare数据接口/content/110_股权质押统计数据.md
+  doc_sha256: f96dcc0c5099058fb9816783e5caecb3bed97e48404a48a19bcc51291edef455
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - end_date
+  pagination: pro.pledge_stat weekly, offset-paged 单次≤3000 — offset_paged
+  pagination_spec:
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 3000
+  pit_anchors: anchor end_date
+  rate_limit: pro.pledge_stat weekly, offset-paged 单次≤3000 (doc 110)
+  request_population:
+    bounds:
+      end: '20261231'
+      start: '20140101'
+    expected_set_sha256: fecf2d27f9f220fcd863ed0e1b7d3880738f685fb6841686f02950ce787e222d
+    resolver: weekly_friday_end_dates
+  required_fields:
+  - pledge_count
+  - pledge_ratio
+  - total_share
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+report_rc:
+  cadence: analyst reports; report_date/create_time visibility
+  doc_id: '292'
+  doc_path: Tushare数据接口/content/292_券商盈利预测数据.md
+  doc_sha256: 0534656ab5338661914defed1261bf614e4ac2980d44c4731137eeb0d381d1a7
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - report_date
+  - org_name
+  - author_name
+  - quarter
+  pagination: pro.report_rc month range, offset-paged 单次≤3000 — offset_paged
+  pagination_spec:
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 3000
+  pit_anchors: anchor max(report_date,create_time); deep bulk-backfill report_date+2
+  rate_limit: pro.report_rc month range, offset-paged 单次≤3000 (doc 292)
+  request_population:
+    bounds:
+      end: '202606'
+      start: '201001'
+    expected_set_sha256: 0fa4600652bec2390f57e4c4f82f717a17db8dc0f4376236e07cd2997ee00a5a
+    resolver: report_rc_month_ranges
+  required_fields:
+  - report_date
+  - org_name
+  - quarter
+  - eps
+  - pe
+  - rd
+  - op_rt
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+repurchase:
+  cadence: buyback events; ann_date visibility
+  doc_id: '124'
+  doc_path: Tushare数据接口/content/124_股票回购.md
+  doc_sha256: 7f7584a11851051d6e2b8b184cc2a8ac3f80d346ededa7c264873b411018668d
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - end_date
+  - proc
+  pagination: pro.repurchase year range, offset-paged 单次≤2000 — offset_paged
+  pagination_spec:
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 2000
+  pit_anchors: anchor ann_date
+  rate_limit: pro.repurchase year range, offset-paged 单次≤2000 (doc 124)
+  request_population:
+    bounds:
+      end: '20261231'
+      start: '20100101'
+    expected_set_sha256: b978465c5147f0851c672e7e7f2ca71016afc88828c701b7ebc84ea39059c6d7
+    resolver: year_ranges
+  required_fields:
+  - proc
+  - exp_date
+  - vol
+  - amount
+  - high_limit
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+stk_holdernumber:
+  cadence: periodic; ann_date visibility
+  doc_id: '166'
+  doc_path: Tushare数据接口/content/166_股东人数.md
+  doc_sha256: c1181355002b408963b21d157524d0f92cdaa9f0d08c1ad1a343b3746fdddef6
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - end_date
+  pagination: pro.stk_holdernumber per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.stk_holdernumber per-stock (doc 166)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - holder_num
+  - ts_code
+  - ann_date
+  - end_date
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+stk_holdertrade:
+  cadence: event-driven; ann_date visibility
+  doc_id: '175'
+  doc_path: Tushare数据接口/content/175_股东增减持.md
+  doc_sha256: 205475676c31158620a85310ec186a501230dda28f5c94f7ded6477f0002353c
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - ann_date
+  - holder_name
+  - in_de
+  - change_vol
+  - begin_date
+  pagination: pro.stk_holdertrade per-stock — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.stk_holdertrade per-stock (doc 175)
+  request_population:
+    bounds:
+      list_status: L,D,P
+      reference_sha256: ba59dedf83b524e3617cf1ded8421a411e966f8e22b40cdead22263daa69d4bd
+    expected_set_sha256: dcac4c9d81aa9ed11ce108794f12718f362c4d52454211714c9fad735294368e
+    resolver: stock_basic_codes
+  required_fields:
+  - holder_name
+  - holder_type
+  - in_de
+  - change_vol
+  - avg_price
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+stk_limit:
+  cadence: daily, session-open (limit prices)
+  doc_id: '183'
+  doc_path: Tushare数据接口/content/183_每日涨跌停价格.md
+  doc_sha256: 22c4a58b2452bf6cd90a5b329aa62083b93000a2abc3b1f356206970f047a96f
+  empty_policy: dense_refuse
+  natural_key:
+  - ts_code
+  - trade_date
+  pagination: pro.stk_limit per-date — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.stk_limit per-date (doc 183)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - up_limit
+  - down_limit
+  - pre_close
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+suspend_d:
+  cadence: daily 停复牌, after close
+  doc_id: '214'
+  doc_path: Tushare数据接口/content/214_每日停复牌信息.md
+  doc_sha256: f0a9d37b78ab5f4690f3692cec005f130fe19d60a7df4256321d184fd99fca53
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  - suspend_type
+  pagination: pro.suspend_d per-date — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.suspend_d per-date (doc 214)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - suspend_type
+  - suspend_timing
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+top10_floatholders:
+  cadence: quarterly; ann_date visibility
+  doc_id: '62'
+  doc_path: Tushare数据接口/content/62_前十大流通股东.md
+  doc_sha256: 3d6860f67f4bd5ee4facaab17bd5bdbe8e44ae2abb605fcbe081ba27abf1bfea
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - end_date
+  - holder_name
+  pagination: pro.top10_floatholders per-period, offset-paged 单次≤6000 — offset_paged
+  pagination_spec:
+    mode: offset_paged
+    offset_param: offset
+    page_limit: 6000
+  pit_anchors: anchor ann_date; shift(1)
+  rate_limit: pro.top10_floatholders per-period, offset-paged 单次≤6000 (doc 62)
+  request_population:
+    bounds:
+      end: '20260331'
+      start: '20070331'
+    expected_set_sha256: 0638239a3d5a1745c0f317d096756ffef9d8a2cd08d9de42e9a05c5f90fbe999
+    resolver: report_periods
+  required_fields:
+  - holder_name
+  - hold_amount
+  - hold_ratio
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+top_inst:
+  cadence: daily 龙虎榜机构 2012+, after close
+  doc_id: '107'
+  doc_path: Tushare数据接口/content/107_龙虎榜机构交易单.md
+  doc_sha256: 2d3a187064b2db8a7ed2c94f7378a2937ad3824955607da4ad5afeee76387a25
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  - exalter
+  - side
+  - reason
+  pagination: pro.top_inst per-date 单次≤10000 — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.top_inst per-date 单次≤10000 (doc 107)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20120104'
+    expected_set_sha256: 8906fc704b9a585122bb5847a888e47e7876fa7891a1807de9953109fa86d262
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - exalter
+  - buy
+  - sell
+  - net_buy
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry
+top_list:
+  cadence: daily 龙虎榜, after close
+  doc_id: '106'
+  doc_path: Tushare数据接口/content/106_龙虎榜每日统计单.md
+  doc_sha256: 5c01f1929548ad9e0593ad75bb6da1622aa40fc05caa3d38ea1b09bda895befe
+  empty_policy: sparse_canary
+  natural_key:
+  - ts_code
+  - trade_date
+  - reason
+  pagination: pro.top_list per-date — single_page
+  pagination_spec:
+    mode: single_page
+    page_limit: 0
+  pit_anchors: trade_date session-open-knowable
+  rate_limit: pro.top_list per-date (doc 106)
+  request_population:
+    bounds:
+      end: '20260701'
+      exchange: SSE
+      reference_sha256: 73fcad6a1834d3d46ce5f06613cebfa83d03091114db51e484cbe3cf5a25ecb9
+      start: '20080102'
+    expected_set_sha256: d6dc1d0a725b64fd1fb28578d472a920d2fd37833f12a4a81c46d38761822ad3
+    resolver: trade_cal_open_sessions
+  required_fields:
+  - close
+  - pct_change
+  - turnover_rate
+  - amount
+  - net_amount
+  reviewed_at: '2026-07-17T17:12:02.847316+00:00'
+  reviewed_by: henry

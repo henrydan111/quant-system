@@ -75,6 +75,16 @@ def led(monkeypatch):
         if rrc.canonical_contract_sha256(c) != row["contract_sha256"]:
             raise rl.LedgerError(f"{row['endpoint']}: the signed contract CHANGED since the plan froze")
     ledger._revalidate_contract = _seam
+    # Same per-instance seam for the response-field check: this battery is below the full contract
+    # layer, so it validates against the fixture's fake contracts (which carry no required_fields =>
+    # a no-op) rather than the LIVE YAML. Without this the battery depended on the live `daily`
+    # contract being UNsigned — signing it (2026-07-17) made the real check fire on the fake responses.
+    def _resp_seam(endpoint, columns):
+        try:
+            rrc.assert_response_has_required_fields(endpoint, columns, contracts=_LIVE_CONTRACTS)
+        except RuntimeError as exc:
+            raise rl.LedgerError(str(exc))
+    ledger._assert_response_fields = _resp_seam
     yield rp, ledger
     shutil.rmtree(base, ignore_errors=True)
 

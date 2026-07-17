@@ -302,12 +302,14 @@ ENDPOINT_MATRIX += [
        consolidation_group="disclosure_date_period", tail_rule="quarterly end_dates",
        note="disclosure_date(end_date=<quarter end>) — the quarter goes in end_date, NOT period"),
     _r(owner="A15c", output_family="fundamentals/fina_mainbz", source_endpoints=("fina_mainbz",),
-       query_mode="per_period", vendor_record_key=("ts_code", "end_date", "bz_item", "type"),
-       pit_version_key=(), content_dedup_key=("ts_code", "end_date", "bz_item", "type"),
+       query_mode="per_period", vendor_record_key=("ts_code", "end_date", "bz_item", "bz_code"),
+       pit_version_key=(), content_dedup_key=("ts_code", "end_date", "bz_item", "bz_code"),
        profile_key=("ts_code", "end_date"), empty_policy="sparse_canary",
        profile_key_dups_expected=True, consolidation_group="fina_mainbz_period",
        tail_rule="quarterly periods", max_content_dups=0,
-       note="fina_mainbz_vip(period=<quarter end>), paginated (doc cap 10000); multi-row per period"),
+       note="fina_mainbz_vip(period=<quarter end>), paginated (doc cap 10000); multi-row per period. "
+            "The P/D/I breakdown dimension is the OUTPUT column `bz_code` (doc 81 输出参数), NOT the "
+            "`type` INPUT param — keying on the input name mis-identified rows (sign-off fix 2026-07-17)"),
     _r(owner="A15d", output_family="fundamentals/fina_audit", source_endpoints=("fina_audit",),
        query_mode="per_stock", vendor_record_key=("ts_code", "end_date", "ann_date"),
        pit_version_key=("ann_date",), content_dedup_key=("ts_code", "end_date", "ann_date"),
