@@ -181,6 +181,14 @@ def lookup_decision(ledger_dir, decision_id: str) -> "dict | None":
                  if e["decision_id"] == decision_id), None)
 
 
+def ledger_head(ledger_dir) -> str:
+    """账本哈希链**当前链头**(空账本 = 创世哨兵)。档案封印时把链头封进档案 =
+    链头外锚(整本重算会换掉全部 entry_hash → 档案验证时旧链头不在新链内 → 抓获;
+    M1 已知盲区的外锚闭合,最终集成 BINDING #6)。"""
+    entries = _read_chain(_ledger_path(ledger_dir))
+    return entries[-1]["entry_hash"] if entries else _GENESIS
+
+
 def require_recorded(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) -> dict:
     """payload 构造/执行前的账本门(BINDING #1 + 实现审 M1):工件重验过门、决策
     已入账、且账本行与**全部工件派生字段**逐一相等(改任一字段/换行=拒)。"""

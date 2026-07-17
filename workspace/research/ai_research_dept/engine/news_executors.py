@@ -355,4 +355,7 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
     return {"execution_id": execution_id, "outcome": outcome,
             "evaluation": evaluation, "selected_provenance": selected,
             "selected_entry_hashes": {leg: (e["entry_hash"] if e else None)
-                                      for leg, e in selected.items()}}
+                                      for leg, e in selected.items()},
+            # 档案封印需要原始解析记录(封存条目重算 = M2⁴ 不信封存计算值的输入)
+            "records": {"factor": results.get("factor"),
+                        "penalty": results.get("penalty")}}
