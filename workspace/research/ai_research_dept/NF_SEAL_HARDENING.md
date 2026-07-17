@@ -211,6 +211,34 @@ The reviewer's requirements for the chain-touching unit are BINDING:
 > 扩张;**若 domain 未来成为路由或授权输入,必须先钉 NFR→domain=news、
 > NFC→domain=coordination**(可选出处加固,非门问题——审阅者原话)。
 
+## Final-integration REQUIREMENTS (from the executor sub-block 5-round GPT arc — binding)
+
+The executor sub-block passed its gate (SOUND-TO-PROCEED, 2026-07-17, commit
+`d0467a5`; arc R1 1B/1M → R2 2M/1m → R3 1M → R4 1M → R5 0/0/0). Accumulated
+binding requirements for the FINAL integration sub-block:
+
+1. **Integration boundary rederives and JOINTLY verifies the complete
+   outcome / selected-terminal / empty-penalty tuple before archive sealing**
+   (the reviewer's terminal invariant): an execution bundle without exactly one
+   selected, reverified terminal provenance row per attempted leg is refused;
+   the empty-penalty "0"*64 sentinel is valid ONLY jointly with
+   penalty_eligible_count==0 + empty_success + no payload + empty_penalty
+   verdict — never by hash alone.
+2. **Expose only `execute_news_decision`** — raw executor factories and
+   `make_execution_view` are not public wiring surfaces.
+3. **NewsScoringContract derived from the verified on-disk ChainContract**
+   (its self-seal proves consistency, not manifest authority).
+4. **Adversarial payload-text tests before freezing the v1 prompts** (prompt
+   injection via evidence content: role separation limits but cannot prevent
+   score manipulation — pin adversarial content probes at freeze time).
+5. **Substantive-text predicate is FROZEN as-is** (NFKC + C/M/Z + the named
+   7-codepoint blank set; reviewer swept all 4,174 Unicode 15.0
+   Default_Ignorable code points — zero passed). Any future addition or
+   Unicode-data upgrade = a VERSIONED predicate change with the UCD sweep rerun.
+   Broader confusables/linguistic rules stay under H1.
+6. Ledger head anchoring + archive sealing of exact bytes with selected-attempt
+   semantics (carried forward from the seat-wiring list).
+
 ## Closure checklist (all must be ✅ before the first forward run)
 - [ ] H1 tagged canonical AST + injectivity matrix
 - [ ] H1-legacy 4-source structured-hash migration
