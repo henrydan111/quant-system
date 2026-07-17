@@ -337,7 +337,9 @@ def reproduce_sealed_oos(
 ) -> dict:
     """GUARDS #1-3: claim the holdout seal (keyed by the FULL frozen set), assert the provider
     calendar end == OOS_END, then reproduce the OOS by re-running the SCREENING'S EXACT path —
-    ``run_batch_screening(engine="batch", horizons=SCREENING_HORIZONS)`` over factors recomputed
+    ``run_batch_screening(engine="batch", horizons=entry-captured runtime_horizons)`` (the R14
+    TOCTOU snapshot — validated once at entry, threaded through the leaf and persistence, never
+    a global re-read) over factors recomputed
     through ``compute_factors(stage="oos_test")`` (→ source ``qlib_windowed_features``). This is
     the CANONICAL post-2026-06-11 DECILE sealed protocol (R12 Major: the historical Round-6
     evidence was quintile-based and is legacy audit evidence — NOT bit-for-bit comparable); the
