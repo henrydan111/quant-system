@@ -591,3 +591,57 @@ def test_digest_is_semantic_not_physical(led):
     assert c(1) == c(np.int64(1))                 # same NUMBER, different carrier -> same digest
     assert c(1) != c(1.0) and c(1) != c("1")      # genuinely different values stay distinct
     assert len({c(None), c(pd.NA), c(pd.NaT), c(float("nan"))}) == 4   # every sentinel distinct
+
+
+def test_rewritten_plan_json_refused(led):
+    """GPT re-review #10 BLOCKER (reproduced): _plan checked only the plan's embedded self-hash, so a
+    rewritten request_plan.json with a recomputed hash was accepted despite disagreeing with the
+    hash-chained plan_frozen event."""
+    import json as _j
+    rp, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=2)
+    L._freeze_plan_unvalidated([row])
+    L._plan()   # attested, matches -> ok
+    # rewrite the payload with a DIFFERENT plan and a freshly-recomputed self-hash
+    evil = _plan_row("moneyflow", "20260703", "o/evil.parquet", limit=2)
+    L.plan_path.write_text(_j.dumps({"sha256": rl._h(rl._canon([evil])),
+                                   "coordinator_commit": "x", "adapter_bundle_hash": "y",
+                                   "rows": [evil]}), encoding="utf-8")
+    with pytest.raises(rl.LedgerError, match="the plan was rewritten|hash-chained plan_frozen"):
+        L._plan()
+
+
+def test_orphan_plan_after_crash_refused_then_healed(led):
+    """GPT re-review #10 BLOCKER (reproduced): a crash between writing plan.json and appending the
+    plan_frozen event left an orphan plan that _plan still accepted. Now the AUTHORITY is appended
+    first; a payload lost by the crash refuses until a same-plan resume HEALS it."""
+    rp, L = led
+    row = _plan_row("daily", "20260702", "o/d.parquet", limit=2)
+    L._freeze_plan_unvalidated([row])
+    # simulate the crash-lost payload: the event survives, the file does not
+    L.plan_path.unlink()
+    with pytest.raises(rl.LedgerError, match="request_plan.json is MISSING"):
+        L._plan()
+    # re-freezing the SAME plan heals the payload and appends NO second event
+    L._freeze_plan_unvalidated([row])
+    assert L.plan_path.exists()
+    assert len([r for r in L._load() if r.get("event") == "plan_frozen"]) == 1
+    assert list(L._plan()) == [row["request_id"]]
+
+
+def test_refreezing_a_different_plan_refused(led):
+    _, L = led
+    a = _plan_row("daily", "20260702", "o/a.parquet", limit=2)
+    L._freeze_plan_unvalidated([a])
+    b = _plan_row("moneyflow", "20260703", "o/b.parquet", limit=2)
+    with pytest.raises(rl.LedgerError, match="already frozen for this run"):
+        L._freeze_plan_unvalidated([b])
+    # re-freezing the SAME plan is idempotent (no second event)
+    L._freeze_plan_unvalidated([a])
+    assert len([r for r in L._load() if r.get("event") == "plan_frozen"]) == 1
+
+
+def test_no_plan_frozen_event_refused(led):
+    _, L = led
+    with pytest.raises(rl.LedgerError, match="not attested|no plan_frozen"):
+        L._plan()

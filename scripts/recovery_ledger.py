@@ -279,8 +279,13 @@ class PageReceiptLedger:
         sanctioned door and is the sole caller. Kept reachable for the ledger's own unit tests, where the
         contract layer is deliberately out of scope."""
         with self.rp._lock():
-            if self.plan_path.exists():
-                raise LedgerError("request plan already frozen")
+            # GPT re-review #10 BLOCKER: the frozen plan self-authenticated (its own embedded hash) and
+            # the file was written BEFORE the hash-chained plan_frozen event, so a crash between them
+            # left an ORPHAN plan.json that _plan still accepted — inside the stated crash threat model.
+            # The hash-chained event is now the authority; the guard keys off IT, not the file, and a
+            # same-plan resume HEALS a payload the crash lost.
+            existing = [r for r in self._load()
+                        if r.get("kind") == "lifecycle" and r.get("event") == "plan_frozen"]
             seen = set()
             outs = {}
             for r in plan_rows:
@@ -302,21 +307,49 @@ class PageReceiptLedger:
                     raise LedgerError(f"two requests share receipt_output {r['receipt_output']}")
                 outs[r["receipt_output"]] = r["request_id"]
                 seen.add(r["request_id"])
-            blob = _canon(plan_rows)
-            sha = _h(blob)
-            self.rp.write_json(self.plan_path, {"sha256": sha, "coordinator_commit": self.coordinator_commit,
-                                                "adapter_bundle_hash": self.adapter_bundle_hash, "rows": plan_rows})
+            sha = _h(_canon(plan_rows))
+            payload = {"sha256": sha, "coordinator_commit": self.coordinator_commit,
+                       "adapter_bundle_hash": self.adapter_bundle_hash, "rows": plan_rows}
+            if existing:
+                # a plan is already attested for this run: it must be EXACTLY this one, else refuse.
+                if len(existing) != 1 or existing[0].get("plan_sha256") != sha:
+                    raise LedgerError(f"a plan is already frozen for this run "
+                                      f"({len(existing)} plan_frozen event(s)); this one hashes {sha[:12]} "
+                                      f"— re-freezing a DIFFERENT plan is refused")
+                # same plan — HEAL the payload if the crash lost or corrupted it, then done (no 2nd event)
+                if not self.plan_path.exists() or \
+                        _h(_canon(json.loads(self.plan_path.read_text(encoding="utf-8"))["rows"])) != sha:
+                    self.rp.write_json(self.plan_path, payload)
+                return sha
+            # FRESH freeze: the hash-chained AUTHORITY is appended BEFORE the payload file, so a crash
+            # after it leaves an attested-but-missing plan (healable above), never an un-attested one.
             self._append({"kind": "lifecycle", "event": "plan_frozen", "plan_sha256": sha,
                           "coordinator_commit": self.coordinator_commit,
                           "adapter_bundle_hash": self.adapter_bundle_hash, "request_count": len(plan_rows)})
+            self.rp.write_json(self.plan_path, payload)
             return sha
 
     def _plan(self) -> dict:
+        """The frozen plan, ANCHORED to the hash-chained `plan_frozen` event (GPT re-review #10 BLOCKER).
+        request_plan.json is only a payload; the tamper-evident chain is the authority. A rewritten
+        plan.json (recomputed self-hash) and an orphan plan.json (crash before the event) both refuse."""
+        frozen = [r for r in self._load()
+                  if r.get("kind") == "lifecycle" and r.get("event") == "plan_frozen"]
+        if not frozen:
+            raise LedgerError("no plan_frozen event in the ledger — the plan is not attested")
+        if len(frozen) != 1:
+            raise LedgerError(f"{len(frozen)} plan_frozen events — a run freezes its plan exactly once")
+        attested = frozen[0].get("plan_sha256")
         if not self.plan_path.exists():
-            raise LedgerError("no frozen request plan")
+            raise LedgerError("plan_frozen is attested but request_plan.json is MISSING (orphaned by a "
+                              "crash between the event and the file); re-freeze the SAME plan to heal it")
         plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
-        if _h(_canon(plan["rows"])) != plan["sha256"]:
-            raise LedgerError("request plan hash mismatch (tampered)")
+        recomputed = _h(_canon(plan["rows"]))
+        if recomputed != plan["sha256"]:
+            raise LedgerError("request plan self-hash mismatch (tampered)")
+        if recomputed != attested:
+            raise LedgerError(f"request_plan.json ({recomputed[:12]}) != the hash-chained plan_frozen "
+                              f"event ({str(attested)[:12]}) — the plan was rewritten after freezing")
         return {r["request_id"]: r for r in plan["rows"]}
 
     def event(self, name: str, **kw) -> None:
