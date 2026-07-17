@@ -1168,6 +1168,32 @@ def load_signed_contracts() -> dict:
     return yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {}
 
 
+def revalidate_contract_for_fetch(row: dict, *, contracts=None) -> None:
+    """Re-prove at FETCH time that the endpoint's signed contract is STILL VALID and STILL the one the
+    plan froze against — reading the LIVE contracts INTERNALLY (GPT re-review #10 BLOCKER: the binding
+    used a PUBLIC MUTABLE `ledger.contract_loader` that production trusted, so swapping it hid a changed
+    contract; and it only re-hashed the canonical form, never re-running doc validation, so editing the
+    referenced doc did not stop the fetch). `contracts` is a TEST seam only — production passes nothing
+    and the live YAML is read here, with no caller-replaceable state.
+
+    FULL `contract_errors` re-run catches an edited doc (its `doc_sha256` no longer matches); the
+    canonical-hash check catches a swapped contract."""
+    ep = row["endpoint"]
+    live = (contracts if contracts is not None else load_signed_contracts()).get(ep)
+    if not live:
+        raise RuntimeError(f"{ep}: no live contract at fetch time — it was signed when the plan froze "
+                           f"and is gone now; refusing to fetch")
+    errs = contract_errors(ep, live)
+    if errs:
+        raise RuntimeError(f"{ep}: the signed contract is NO LONGER VALID at fetch time (an edited doc "
+                           f"or reference?) — {errs}")
+    now = canonical_contract_sha256(live)
+    if now != row.get("contract_sha256"):
+        raise RuntimeError(f"{ep}: the signed contract CHANGED since the plan froze "
+                           f"({str(row.get('contract_sha256'))[:12]} -> {now[:12]}); a frozen hash proves "
+                           f"what WAS signed, not what is signed now — re-validate and re-freeze.")
+
+
 def assert_plan_scope_is_complete(plan_rows: list, declared_families) -> None:
     """A plan must SAY what it covers, and cover it (GPT sign-off HOLD #2 MAJOR): the population check
     iterates the groups it FINDS, so an empty plan compared vacuously true and an omitted family was
@@ -1213,21 +1239,17 @@ def assert_plan_scope_is_complete(plan_rows: list, declared_families) -> None:
                                f"family does not own — it draws only {sorted(want)}")
 
 
-def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, declared_families=None,
-                        contract_loader=None) -> str:
+def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, declared_families=None) -> str:
     """THE single, non-bypassable door to freezing a request plan (GPT re-review #8 BLOCKER-1: contract
     validation, the canonical contract hash, the population snapshot and freeze_plan were separate, so
     a plan could be frozen without any of them). Validate-then-freeze, in one call; the ledger's
     freeze_plan is never invoked directly by recovery code."""
     assert_plan_scope_is_complete(plan_rows, declared_families)   # an empty/partial plan is not a plan
     assert_plan_matches_contracts(plan_rows, contracts)
-    # Install the fetch-time re-binding (GPT re-review #9 BLOCKER-1): validation at freeze proves what
-    # WAS signed; every later call re-proves the contract is still that one. A ledger frozen through the
-    # raw `_freeze_plan_unvalidated` has no loader and therefore cannot fetch at all.
-    # The loader MUST read the LIVE contracts from disk. A snapshot captured here would be re-verified
-    # against my own frozen copy and could never detect the edit it exists to catch — the same
-    # proxy-for-the-fact error this whole class of finding is about.
-    ledger.contract_loader = contract_loader or load_signed_contracts
+    # No loader is installed on the ledger (GPT re-review #10 BLOCKER): fetch-time re-binding reads the
+    # LIVE contracts INTERNALLY via revalidate_contract_for_fetch — there is no caller-replaceable state
+    # to swap. Validation at freeze proves what WAS signed; every later page re-proves it is STILL signed
+    # and still valid (a doc edit refuses).
     return ledger._freeze_plan_unvalidated(plan_rows)
 
 

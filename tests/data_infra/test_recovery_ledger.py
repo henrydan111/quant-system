@@ -65,7 +65,16 @@ def led(monkeypatch):
     _LIVE_CONTRACTS.clear()
     for ep in ("daily", "moneyflow", "top_inst", "income", "stock_basic"):
         _LIVE_CONTRACTS[ep] = _fake_contract(ep)
-    ledger.contract_loader = lambda: _LIVE_CONTRACTS   # LIVE, not a snapshot
+    # PRIVATE per-instance seam (GPT re-review #10 BLOCKER: tests replace this method, never a public
+    # attribute production reads). The battery is below the full contract layer, so it re-checks the
+    # fake live contracts by hash rather than running the real doc validator.
+    def _seam(row):
+        c = _LIVE_CONTRACTS.get(row["endpoint"])
+        if not c:
+            raise rl.LedgerError(f"{row['endpoint']}: NO live contract at fetch time")
+        if rrc.canonical_contract_sha256(c) != row["contract_sha256"]:
+            raise rl.LedgerError(f"{row['endpoint']}: the signed contract CHANGED since the plan froze")
+    ledger._revalidate_contract = _seam
     yield rp, ledger
     shutil.rmtree(base, ignore_errors=True)
 
@@ -547,13 +556,15 @@ def test_deleted_contract_after_freeze_stops_fetching(led):
         L.fetch_page(rid, 1, lambda: _df(["A.SZ"]))
 
 
-def test_no_contract_loader_cannot_fetch_at_all(led):
-    """A plan not frozen through the validated door has no binding to honour -> fail closed."""
+def test_endpoint_absent_from_live_contracts_cannot_fetch(led):
+    """GPT re-review #10 BLOCKER: fetch-time re-binding reads the LIVE contracts internally — there is
+    no injectable loader. An endpoint gone from the live set (signed when the plan froze, absent now)
+    fails closed."""
     _, L = led
     row = _plan_row("daily", "20260702", "o/d.parquet", limit=3)
     L._freeze_plan_unvalidated([row]); rid = row["request_id"]
-    L.contract_loader = None
-    with pytest.raises(rl.LedgerError, match="no contract_loader"):
+    del _LIVE_CONTRACTS["daily"]
+    with pytest.raises(rl.LedgerError, match="NO live contract"):
         L.fetch_page(rid, 1, lambda: _df(["A.SZ"]))
 
 

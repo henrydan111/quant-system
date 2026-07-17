@@ -909,19 +909,36 @@ def test_plan_row_without_params_refused(signed):
         rrc.assert_plan_matches_contracts(rows, cs)
 
 
-def test_freeze_door_installs_a_LIVE_contract_loader(signed):
-    """The loader must read the LIVE contracts, never a snapshot taken at freeze — a snapshot would be
-    compared against my own frozen copy and could never detect the edit it exists to catch."""
+def test_freeze_door_installs_no_mutable_loader(signed):
+    """GPT re-review #10 BLOCKER: the door used to install a PUBLIC MUTABLE `ledger.contract_loader`
+    that production trusted (swappable to hide a changed contract). It installs NOTHING now — fetch-time
+    re-binding reads the live contracts INTERNALLY via revalidate_contract_for_fetch."""
     fake_root, mirror, cs, hashes = signed
+
     class _FakeLedger:
-        contract_loader = None
         def _freeze_plan_unvalidated(self, rows):
             return "ph"
 
     L = _FakeLedger()
-    rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs,
-                            declared_families=["market/daily"])
-    assert L.contract_loader is rrc.load_signed_contracts
+    rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs, declared_families=["market/daily"])
+    assert not hasattr(L, "contract_loader"), "the door installed a mutable loader attribute"
+
+
+def test_revalidate_contract_for_fetch_reads_live_and_full_validates(signed):
+    """The internal revalidator refuses an absent contract, a hash-changed contract, AND (unlike the
+    old check) a contract whose DOC was edited — it re-runs full contract_errors, not just the hash."""
+    fake_root, mirror, cs, hashes = signed
+    row = {"endpoint": "daily", "contract_sha256": hashes["daily"]}
+    rrc.revalidate_contract_for_fetch(row, contracts=cs)                     # valid + unchanged -> ok
+    with pytest.raises(RuntimeError, match="no live contract"):
+        rrc.revalidate_contract_for_fetch(row, contracts={})                # gone
+    with pytest.raises(RuntimeError, match="CHANGED since the plan froze"):
+        rrc.revalidate_contract_for_fetch(dict(row, contract_sha256="0" * 64), contracts=cs)
+    # an edited DOC (its doc_sha256 no longer matches) is caught by the FULL re-validation
+    edited = dict(cs, daily=dict(cs["daily"], doc_sha256="0" * 64))
+    with pytest.raises(RuntimeError, match="NO LONGER VALID|no longer valid"):
+        rrc.revalidate_contract_for_fetch(dict(row, contract_sha256=rrc.canonical_contract_sha256(
+            edited["daily"])), contracts=edited)
 
 
 # ── GPT re-review #10 BLOCKER-1: the population must be CORRECT, not merely agreed ────────────────

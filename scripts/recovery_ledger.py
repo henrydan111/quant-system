@@ -221,9 +221,6 @@ class PageReceiptLedger:
         self.receipts_dir = rp.root / "ledger" / "page_receipts"
         self.coordinator_commit = coordinator_commit
         self.adapter_bundle_hash = adapter_bundle_hash
-        # Set by raw_recovery_coordinator.freeze_request_plan: returns the LIVE contracts mapping so
-        # every fetch can re-prove its plan row is still backed by the contract that was signed.
-        self.contract_loader = None
 
     # ── hash chain (head anchored OUTSIDE the editable jsonl) ────────────────────────────────────
     def _genesis(self) -> str:
@@ -423,7 +420,7 @@ class PageReceiptLedger:
             plan = self._plan()
             if rid not in plan:
                 raise LedgerError(f"request {rid} not in the frozen plan")
-        self._assert_contract_binding(rid, plan[rid])
+        self._revalidate_contract(plan[rid])
         # ---- 1. OPEN the lease (durable, before the call) --------------------------------------
         with self.rp._lock():
             rows = self._load()
@@ -479,25 +476,17 @@ class PageReceiptLedger:
                           "terminal_claim": terminal_claim})
         return n
 
-    def _assert_contract_binding(self, rid: str, row: dict) -> None:
-        """The frozen plan row names the contract it was validated against; prove that contract is STILL
-        the one on disk. Without a loader there is nothing to re-verify, so fetching refuses (a plan not
-        frozen through the validated door has no binding to honour)."""
-        if self.contract_loader is None:
-            raise LedgerError(
-                f"{rid}: no contract_loader — the plan's contract binding cannot be re-verified. Freeze "
-                f"through raw_recovery_coordinator.freeze_request_plan, which installs it.")
-        from raw_recovery_coordinator import canonical_contract_sha256  # local: avoid an import cycle
-        live = (self.contract_loader() or {}).get(row["endpoint"])
-        if not live:
-            raise LedgerError(f"{rid}: endpoint {row['endpoint']!r} has NO live contract — it was signed "
-                              f"when the plan froze and is gone now; refusing to fetch")
-        now = canonical_contract_sha256(live)
-        if now != row["contract_sha256"]:
-            raise LedgerError(
-                f"{rid}: the signed contract for {row['endpoint']!r} CHANGED since the plan froze "
-                f"({row['contract_sha256'][:12]} -> {now[:12]}). A frozen hash proves what WAS signed, "
-                f"not what is signed now; re-validate and re-freeze before fetching.")
+    def _revalidate_contract(self, row: dict) -> None:
+        """FETCH-time contract re-binding (GPT re-review #10 BLOCKER). Delegates to the coordinator,
+        which reads the LIVE contracts INTERNALLY and re-runs FULL validation (an edited doc refuses).
+        There is NO injectable loader state on the ledger — production cannot be redirected by swapping
+        an attribute. Tests replace THIS method (a private per-instance seam), never a public attribute
+        that production also reads."""
+        import raw_recovery_coordinator as _rrc  # local: avoid an import cycle
+        try:
+            _rrc.revalidate_contract_for_fetch(row)
+        except RuntimeError as exc:
+            raise LedgerError(str(exc))
 
     def _closed_leases(self, rows, rid):
         """Attempts backed by a lease the ledger OPENED before the call and CLOSED after it — i.e.
