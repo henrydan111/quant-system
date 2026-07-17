@@ -84,7 +84,10 @@ def _canon_scalar(v) -> bytes:
         # exact, and NEVER via float: sign/digits/exponent is the value's own identity
         sign, digits, exp = v.as_tuple()
         if not isinstance(exp, int):                # NaN / sNaN / Infinity
-            return b"\x00DEC-" + str(exp).encode("ascii")
+            # GPT re-review #9 MAJOR: this returned only the exponent tag, DROPPING sign and digits —
+            # so Decimal("Infinity") == Decimal("-Infinity") and NaN123 == NaN456 at the digest layer.
+            # A special value's identity is still (sign, digits, tag).
+            return b"\x00DEC-" + f"{sign}:{''.join(map(str, digits))}:{exp}".encode("ascii")
         return b"D" + f"{sign}:{''.join(map(str, digits))}:{exp}".encode("ascii")
     if isinstance(v, _dt.datetime):                 # BEFORE date — datetime subclasses date
         return b"TS" + v.isoformat().encode("utf-8")   # isoformat carries the tz offset (or its absence)
@@ -195,6 +198,9 @@ class PageReceiptLedger:
         self.receipts_dir = rp.root / "ledger" / "page_receipts"
         self.coordinator_commit = coordinator_commit
         self.adapter_bundle_hash = adapter_bundle_hash
+        # Set by raw_recovery_coordinator.freeze_request_plan: returns the LIVE contracts mapping so
+        # every fetch can re-prove its plan row is still backed by the contract that was signed.
+        self.contract_loader = None
 
     # ── hash chain (head anchored OUTSIDE the editable jsonl) ────────────────────────────────────
     def _genesis(self) -> str:
@@ -244,7 +250,11 @@ class PageReceiptLedger:
         return rows
 
     # ── plan ─────────────────────────────────────────────────────────────────────────────────────
-    def freeze_plan(self, plan_rows: list) -> str:
+    def _freeze_plan_unvalidated(self, plan_rows: list) -> str:
+        """The RAW freeze. Named for what it is (GPT re-review #9): it performs NO contract validation,
+        so recovery code must never call it — `raw_recovery_coordinator.freeze_request_plan` is the only
+        sanctioned door and is the sole caller. Kept reachable for the ledger's own unit tests, where the
+        contract layer is deliberately out of scope."""
         with self.rp._lock():
             if self.plan_path.exists():
                 raise LedgerError("request plan already frozen")
@@ -304,7 +314,8 @@ class PageReceiptLedger:
             alone separates int64 from float64;
           * floats use exact IEEE-754 big-endian bytes (so -0.0 != 0.0), with NaN/±inf as fixed tokens
             (never a NaN payload); ints are exact decimal; strings are NFC-normalized UTF-8; bytes,
-            bools, and timestamps have their own tags; anything else falls back to a tagged repr.
+            bools, Decimals and timestamps have their own tags; an UNRECOGNIZED type REFUSES
+            (there is no repr fallback — a repr-dependent key is the opposite of lossless).
         MUST be computed on the RAW vendor page BEFORE any non-injective normalization."""
         cols = sorted(c for c in df.columns if c not in _COORDINATOR_DERIVED_COLS)
         if not cols:
@@ -343,12 +354,19 @@ class PageReceiptLedger:
         throttle); lease-open and lease-close each take it."""
         import io
         import uuid as _uuid
+        # ---- 0. RE-VERIFY the contract binding (GPT re-review #9 BLOCKER-1) ---------------------
+        # The contract hash was checked once, at freeze. Editing the signed contract afterwards left
+        # fetching enabled — a frozen hash proves what WAS signed, never what is signed NOW. Re-verify
+        # against the live contract before every call; no loader = no binding to check = fail closed.
+        with self.rp._lock():
+            plan = self._plan()
+            if rid not in plan:
+                raise LedgerError(f"request {rid} not in the frozen plan")
+        self._assert_contract_binding(rid, plan[rid])
         # ---- 1. OPEN the lease (durable, before the call) --------------------------------------
         with self.rp._lock():
             rows = self._load()
             plan = self._plan()
-            if rid not in plan:
-                raise LedgerError(f"request {rid} not in the frozen plan")
             if self._state_of(rows, rid) in _TERMINAL:
                 raise LedgerError(f"request {rid} already terminal")
             lease_id = _uuid.uuid4().hex
@@ -399,6 +417,26 @@ class PageReceiptLedger:
                           "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
                           "terminal_claim": terminal_claim})
         return n
+
+    def _assert_contract_binding(self, rid: str, row: dict) -> None:
+        """The frozen plan row names the contract it was validated against; prove that contract is STILL
+        the one on disk. Without a loader there is nothing to re-verify, so fetching refuses (a plan not
+        frozen through the validated door has no binding to honour)."""
+        if self.contract_loader is None:
+            raise LedgerError(
+                f"{rid}: no contract_loader — the plan's contract binding cannot be re-verified. Freeze "
+                f"through raw_recovery_coordinator.freeze_request_plan, which installs it.")
+        from raw_recovery_coordinator import canonical_contract_sha256  # local: avoid an import cycle
+        live = (self.contract_loader() or {}).get(row["endpoint"])
+        if not live:
+            raise LedgerError(f"{rid}: endpoint {row['endpoint']!r} has NO live contract — it was signed "
+                              f"when the plan froze and is gone now; refusing to fetch")
+        now = canonical_contract_sha256(live)
+        if now != row["contract_sha256"]:
+            raise LedgerError(
+                f"{rid}: the signed contract for {row['endpoint']!r} CHANGED since the plan froze "
+                f"({row['contract_sha256'][:12]} -> {now[:12]}). A frozen hash proves what WAS signed, "
+                f"not what is signed now; re-validate and re-freeze before fetching.")
 
     def _closed_leases(self, rows, rid):
         """Attempts backed by a lease the ledger OPENED before the call and CLOSED after it — i.e.

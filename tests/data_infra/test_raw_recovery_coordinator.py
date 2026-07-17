@@ -648,17 +648,17 @@ def test_frozen_plan_pagination_must_match_the_signature(signed):
     carried ONLY the two compared fields — which is exactly the hole #8 found, so it now refuses as an
     invalid signature. A drift probe must start from a genuinely VALID signed contract.)"""
     fake_root, mirror, cs, hashes = signed
-    rrc.assert_plan_matches_contracts(_a01_plan(hashes), cs)      # baseline: clean
-    drift_mode = _a01_plan(hashes)
+    rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), cs)      # baseline: clean
+    drift_mode = _a01_plan(hashes, cs_map=cs)
     drift_mode[0] = dict(drift_mode[0], pagination_mode="offset_paged")
     with pytest.raises(RuntimeError, match="pagination_mode .* != signed"):
         rrc.assert_plan_matches_contracts(drift_mode, cs)
-    drift_limit = _a01_plan(hashes)
+    drift_limit = _a01_plan(hashes, cs_map=cs)
     drift_limit[0] = dict(drift_limit[0], page_limit=3000)
     with pytest.raises(RuntimeError, match="page_limit .* != signed"):
         rrc.assert_plan_matches_contracts(drift_limit, cs)
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
-        rrc.assert_plan_matches_contracts(_a01_plan(hashes), {})   # unsigned cannot back a plan
+        rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), {})   # unsigned cannot back a plan
 
 
 def test_plan_population_unit_must_match_the_matrix_query_mode(signed):
@@ -670,7 +670,7 @@ def test_plan_population_unit_must_match_the_matrix_query_mode(signed):
     h = {ep: rrc.canonical_contract_sha256(c) for ep, c in wrong.items()}
     with pytest.raises(RuntimeError, match="matrix enumerates .* but the signed contract declares|"
                                            "DIFFERENT request_population"):
-        rrc.assert_plan_matches_contracts(_a01_plan(h), wrong)
+        rrc.assert_plan_matches_contracts(_a01_plan(h, cs_map=wrong), wrong)
 
 
 def test_every_matrix_query_mode_has_a_population_unit():
@@ -699,9 +699,16 @@ def _valid_contract(mirror, fake_root, api="daily", doc_id="27", unit="open_trad
             "reviewed_at": datetime.now(timezone.utc).isoformat()}
 
 
-def _prow(rid, ep, part, chash, dataset="market/daily"):
+def _prow(rid, ep, part, chash, dataset="market/daily", c=None, params=None):
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.output_family == dataset][0]
     return {"request_id": rid, "endpoint": ep, "dataset": dataset, "partition": part,
-            "pagination_mode": "single_page", "page_limit": 0, "contract_sha256": chash}
+            "params": params if params is not None else {"trade_date": part},
+            "pagination_mode": "single_page", "page_limit": 0, "contract_sha256": chash,
+            "empty_policy": (c or {}).get("empty_policy", "dense_refuse"),
+            "doc_sha256": (c or {}).get("doc_sha256", ""),
+            "natural_key": list((c or {}).get("natural_key", [])),
+            "content_dedup_key": list(row.content_dedup_key),
+            "max_content_dups": row.max_content_dups}
 
 
 @pytest.fixture()
@@ -717,11 +724,11 @@ def signed(tmp_path, monkeypatch):
     return fake_root, mirror, cs, hashes
 
 
-def _a01_plan(hashes, parts=("20260702", "20260703"), per_ep=None):
+def _a01_plan(hashes, parts=("20260702", "20260703"), per_ep=None, cs_map=None):
     rows = []
     for ep in ("daily", "daily_basic", "adj_factor"):
         for pt in (per_ep or {}).get(ep, parts):
-            rows.append(_prow(f"{ep}:{pt}", ep, pt, hashes[ep]))
+            rows.append(_prow(f"{ep}:{pt}", ep, pt, hashes[ep], c=cs_map[ep] if cs_map else None))
     return rows
 
 
@@ -731,16 +738,16 @@ def test_plan_backed_by_an_unsigned_contract_refused(signed):
     contract with NO doc / NO signer / NO field constraints was ACCEPTED. Checking two fields of a
     contract is not checking the contract."""
     fake_root, mirror, cs, hashes = signed
-    rrc.assert_plan_matches_contracts(_a01_plan(hashes), cs)      # fully signed -> clean
+    rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), cs)      # fully signed -> clean
     # a contract that merely carries the two compared fields, and nothing else
     naked = {"pagination_spec": {"mode": "single_page", "page_limit": 0},
              "request_population": {"unit": "open_trade_date", "source": "trade_cal"}}
     bad = dict(cs, daily=naked)
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
-        rrc.assert_plan_matches_contracts(_a01_plan(hashes), bad)
+        rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), bad)
     # an unsigned reviewer / stale doc hash must also refuse
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
-        rrc.assert_plan_matches_contracts(_a01_plan(hashes),
+        rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs),
                                           dict(cs, daily=dict(cs["daily"], reviewed_by="somebody")))
 
 
@@ -748,35 +755,35 @@ def test_plan_contract_sha256_must_match_the_signed_contract(signed):
     """The plan carries a contract_sha256 that NOTHING checked — a plan could be bound to a contract
     that is not the one on disk."""
     fake_root, mirror, cs, hashes = signed
-    tampered = _a01_plan(hashes)
+    tampered = _a01_plan(hashes, cs_map=cs)
     tampered[0] = dict(tampered[0], contract_sha256="0" * 64)
     with pytest.raises(RuntimeError, match="contract_sha256 .* != the canonical hash"):
         rrc.assert_plan_matches_contracts(tampered, cs)
     # editing the signed contract after the plan froze changes its identity -> every bound row refuses
     edited = dict(cs, daily=dict(cs["daily"], cadence="hourly"))
     with pytest.raises(RuntimeError, match="contract_sha256 .* != the canonical hash"):
-        rrc.assert_plan_matches_contracts(_a01_plan(hashes), edited)
+        rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), edited)
 
 
 def test_a01_legs_on_different_trade_dates_refused(signed):
     """GPT re-review #8 BLOCKER-1 (reproduced): 'A01 三来源分别使用不同交易日的计划' was ACCEPTED.
     _QUERY_MODE_TO_UNIT proves CATEGORY consistency, never COVERAGE or MERGE consistency."""
     fake_root, mirror, cs, hashes = signed
-    skewed = _a01_plan(hashes, per_ep={"daily": ("20260702", "20260703"),
+    skewed = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702", "20260703"),
                                        "daily_basic": ("20260702",),           # missing a session
                                        "adj_factor": ("20260702", "20260703")})
-    with pytest.raises(RuntimeError, match="source legs cover DIFFERENT partitions"):
+    with pytest.raises(RuntimeError, match="REQUEST different populations"):
         rrc.assert_plan_matches_contracts(skewed, cs)
     # a leg on an entirely different session
-    disjoint = _a01_plan(hashes, per_ep={"daily": ("20260702",), "daily_basic": ("20260703",),
+    disjoint = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702",), "daily_basic": ("20260703",),
                                          "adj_factor": ("20260702",)})
-    with pytest.raises(RuntimeError, match="source legs cover DIFFERENT partitions"):
+    with pytest.raises(RuntimeError, match="REQUEST different populations"):
         rrc.assert_plan_matches_contracts(disjoint, cs)
 
 
 def test_a01_missing_source_leg_refused(signed):
     fake_root, mirror, cs, hashes = signed
-    rows = [r for r in _a01_plan(hashes) if r["endpoint"] != "adj_factor"]   # a whole leg omitted
+    rows = [r for r in _a01_plan(hashes, cs_map=cs) if r["endpoint"] != "adj_factor"]   # a whole leg omitted
     with pytest.raises(RuntimeError, match="omits source leg"):
         rrc.assert_plan_matches_contracts(rows, cs)
 
@@ -787,7 +794,7 @@ def test_a01_legs_must_share_one_population_snapshot(signed):
                                               unit="stock"))       # a DIFFERENT population
     h2 = {ep: rrc.canonical_contract_sha256(c) for ep, c in cs2.items()}
     with pytest.raises(RuntimeError, match="population unit|DIFFERENT request_population"):
-        rrc.assert_plan_matches_contracts(_a01_plan(h2), cs2)
+        rrc.assert_plan_matches_contracts(_a01_plan(h2, cs_map=cs2), cs2)
 
 
 def test_multi_source_rows_declare_an_explicit_merge_rule():
@@ -807,14 +814,78 @@ def test_freeze_request_plan_is_the_single_door(signed):
     calls = {"n": 0}
 
     class _FakeLedger:
-        def freeze_plan(self, rows):
+        contract_loader = None
+
+        def _freeze_plan_unvalidated(self, rows):
             calls["n"] += 1
             return "planhash"
 
-    assert rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes), cs) == "planhash"
+    assert rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), cs) == "planhash"
     assert calls["n"] == 1
     naked = {"pagination_spec": {"mode": "single_page", "page_limit": 0},
              "request_population": {"unit": "open_trade_date", "source": "trade_cal"}}
     with pytest.raises(RuntimeError, match="NOT a valid signature"):
-        rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes), dict(cs, daily=naked))
+        rrc.freeze_request_plan(_FakeLedger(), _a01_plan(hashes, cs_map=cs), dict(cs, daily=naked))
     assert calls["n"] == 1, "an invalid plan reached the ledger's freeze_plan"
+
+
+# ── GPT re-review #9 BLOCKER-1/2: the plan must IMPLEMENT its contract; coverage reads PARAMS ─────
+def test_plan_must_implement_the_contract_not_merely_cite_it(signed):
+    """GPT re-review #9 BLOCKER-1 (reproduced): the hash proved the contract was UNCHANGED, never that
+    the PLAN IMPLEMENTS IT — a fully valid contract was accepted beside a plan that changed
+    empty_policy, natural_key and doc_sha256."""
+    fake_root, mirror, cs, hashes = signed
+    rrc.assert_plan_matches_contracts(_a01_plan(hashes, cs_map=cs), cs)      # baseline clean
+    for field, bad in (("empty_policy", "sparse_canary"), ("doc_sha256", "0" * 64)):
+        rows = _a01_plan(hashes, cs_map=cs)
+        rows[0] = dict(rows[0], **{field: bad})
+        with pytest.raises(RuntimeError, match=f"{field}.*!= signed|does not implement its contract"):
+            rrc.assert_plan_matches_contracts(rows, cs)
+    rows = _a01_plan(hashes, cs_map=cs)
+    rows[0] = dict(rows[0], natural_key=["ts_code"])          # narrower than signed
+    with pytest.raises(RuntimeError, match="natural_key .* != signed"):
+        rrc.assert_plan_matches_contracts(rows, cs)
+
+
+def test_a01_coverage_reads_request_params_not_the_partition_label(signed):
+    """GPT re-review #9 BLOCKER-2 (reproduced): coverage compared only the `partition` LABEL, so a plan
+    where every leg CLAIMED 20260702 while daily_basic actually requested 20260703 was accepted."""
+    fake_root, mirror, cs, hashes = signed
+    rows = _a01_plan(hashes, cs_map=cs, parts=("20260702",))
+    # the label still says 20260702; the REQUEST asks for 20260703
+    for i, r in enumerate(rows):
+        if r["endpoint"] == "daily_basic":
+            rows[i] = dict(r, params={"trade_date": "20260703"})
+    with pytest.raises(RuntimeError, match="partition label .* but the request actually asks for"):
+        rrc.assert_plan_matches_contracts(rows, cs)
+
+
+def test_legs_requesting_different_sessions_refused_even_with_honest_labels(signed):
+    fake_root, mirror, cs, hashes = signed
+    rows = [r for r in _a01_plan(hashes, cs_map=cs, parts=("20260702",)) if r["endpoint"] != "daily_basic"]
+    rows.append(_prow("daily_basic:20260703", "daily_basic", "20260703", hashes["daily_basic"],
+                      c=cs["daily_basic"]))
+    with pytest.raises(RuntimeError, match="REQUEST different populations"):
+        rrc.assert_plan_matches_contracts(rows, cs)
+
+
+def test_plan_row_without_params_refused(signed):
+    fake_root, mirror, cs, hashes = signed
+    rows = _a01_plan(hashes, cs_map=cs, parts=("20260702",))
+    rows[0] = dict(rows[0], params={})
+    with pytest.raises(RuntimeError, match="no params"):
+        rrc.assert_plan_matches_contracts(rows, cs)
+
+
+def test_freeze_door_installs_a_LIVE_contract_loader(signed):
+    """The loader must read the LIVE contracts, never a snapshot taken at freeze — a snapshot would be
+    compared against my own frozen copy and could never detect the edit it exists to catch."""
+    fake_root, mirror, cs, hashes = signed
+    class _FakeLedger:
+        contract_loader = None
+        def _freeze_plan_unvalidated(self, rows):
+            return "ph"
+
+    L = _FakeLedger()
+    rrc.freeze_request_plan(L, _a01_plan(hashes, cs_map=cs), cs)
+    assert L.contract_loader is rrc.load_signed_contracts

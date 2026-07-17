@@ -616,6 +616,39 @@ def canonical_contract_sha256(c: dict) -> str:
     ).hexdigest()
 
 
+# The request parameter that carries each population unit's value — the FACT a partition label claims.
+_UNIT_PARAM = {
+    "open_trade_date": "trade_date", "month": "month", "report_date_month": "report_date",
+    "year": "year", "period": "period", "period_report_type": "period", "stock": "ts_code",
+    "stock_repartition": "ts_code", "index_range": "ts_code",
+}
+
+
+def _request_population_key(pr: dict, row) -> str:
+    """The population value this request ACTUALLY asks for, read from its params — never from the
+    `partition` label (GPT re-review #9 BLOCKER-2: the label and the params could disagree, and only
+    the label was compared). Also refuses a label that misdescribes its own request."""
+    unit = _QUERY_MODE_TO_UNIT.get(row.query_mode)
+    param = _UNIT_PARAM.get(unit)
+    params = pr.get("params") or {}
+    if not isinstance(params, dict) or not params:
+        raise RuntimeError(f"plan row {pr.get('request_id')}: no params — a request with no parameters "
+                           f"cannot be proven to cover anything")
+    if param is None:
+        raise RuntimeError(f"plan row {pr.get('request_id')}: population unit {unit!r} has no known "
+                           f"request parameter; add it to _UNIT_PARAM before planning this endpoint")
+    if param not in params:
+        raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): params {params} "
+                           f"carry no {param!r} — it enumerates {unit!r} and must request one")
+    actual = str(params[param])
+    label = str(pr.get("partition"))
+    if label != actual:
+        raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): partition label "
+                           f"{label!r} but the request actually asks for {param}={actual!r} — the label "
+                           f"is not evidence about the request")
+    return actual
+
+
 def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None:
     """A multi-source output (A01 `market/daily` = daily + daily_basic + adj_factor) is only correct if
     the three legs cover the SAME population, partition-for-partition, and the row declares how they
@@ -627,8 +660,12 @@ def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None
             continue
         legs = {}
         for pr in plan_rows:
-            if pr.get("dataset") == fam:
-                legs.setdefault(pr["endpoint"], set()).add(pr["partition"])
+            if pr.get("dataset") != fam:
+                continue
+            # GPT re-review #9 BLOCKER-2 (reproduced): this grouped on pr["partition"] — a LABEL the
+            # planner writes — so legs that all CLAIMED "20260702" while daily_basic actually requested
+            # "20260703" were accepted. Group on the REQUEST ITSELF, and prove the label is not lying.
+            legs.setdefault(pr["endpoint"], set()).add(_request_population_key(pr, row))
         if not legs:
             continue
         missing = set(row.source_endpoints) - set(legs)
@@ -644,7 +681,7 @@ def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None
             if parts != ref:
                 only_ref, only_ep = sorted(ref - parts)[:3], sorted(parts - ref)[:3]
                 raise RuntimeError(
-                    f"{fam}: source legs cover DIFFERENT partitions — {ref_ep} has {len(ref)} and {ep} "
+                    f"{fam}: source legs REQUEST different populations — {ref_ep} has {len(ref)} and {ep} "
                     f"has {len(parts)} (only in {ref_ep}: {only_ref}; only in {ep}: {only_ep}). The legs "
                     f"of a merged output must be fetched over one identical population snapshot.")
         # the legs must also agree on WHAT population they claim to enumerate
@@ -688,6 +725,18 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
             raise RuntimeError(f"plan row {pr['request_id']} ({ep}): contract_sha256 {got_hash[:12]!r} "
                                f"!= the canonical hash of the signed contract {want_hash[:12]!r} — the "
                                f"plan is bound to a contract that is not the one on disk")
+        # GPT re-review #9 BLOCKER-1 (reproduced): the hash proved the contract was UNCHANGED, never
+        # that the PLAN IMPLEMENTS IT — a fully valid contract was accepted beside a plan that changed
+        # empty_policy, natural_key and doc_sha256. Every contract-derived execution field must AGREE.
+        for field in ("empty_policy", "doc_sha256"):
+            if str(pr.get(field)) != str(c.get(field)):
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): {field} {pr.get(field)!r} != "
+                                   f"signed {c.get(field)!r} — the plan does not implement its contract")
+        if list(pr.get("natural_key") or []) != list(c.get("natural_key") or []):
+            raise RuntimeError(f"plan row {pr['request_id']} ({ep}): natural_key "
+                               f"{list(pr.get('natural_key') or [])} != signed "
+                               f"{list(c.get('natural_key') or [])} — the plan does not implement its "
+                               f"contract")
         spec = c["pagination_spec"]
         if pr.get("pagination_mode") != spec.get("mode"):
             raise RuntimeError(f"plan row {pr['request_id']} ({ep}): pagination_mode "
@@ -697,6 +746,14 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
                                f"{pr.get('page_limit')!r} != signed {spec.get('page_limit')!r}")
         row = by_family.get(pr.get("dataset"))
         if row is not None:
+            if list(pr.get("content_dedup_key") or []) != list(row.content_dedup_key):
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): content_dedup_key "
+                                   f"{list(pr.get('content_dedup_key') or [])} != the matrix's "
+                                   f"{list(row.content_dedup_key)}")
+            if int(pr.get("max_content_dups") or 0) != int(row.max_content_dups):
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): max_content_dups "
+                                   f"{pr.get('max_content_dups')!r} != the matrix's "
+                                   f"{row.max_content_dups!r}")
             want = _QUERY_MODE_TO_UNIT.get(row.query_mode)
             got = (c.get("request_population") or {}).get("unit")
             if want and got != want:
@@ -706,13 +763,28 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
     assert_multi_source_merge_coverage(plan_rows, contracts)
 
 
-def freeze_request_plan(ledger, plan_rows: list, contracts: dict) -> str:
+def load_signed_contracts() -> dict:
+    """Read the LIVE signed contracts from disk (the fact), never a cached copy."""
+    import yaml
+    if not CONTRACTS_YAML.exists():
+        return {}
+    return yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {}
+
+
+def freeze_request_plan(ledger, plan_rows: list, contracts: dict, *, contract_loader=None) -> str:
     """THE single, non-bypassable door to freezing a request plan (GPT re-review #8 BLOCKER-1: contract
     validation, the canonical contract hash, the population snapshot and freeze_plan were separate, so
     a plan could be frozen without any of them). Validate-then-freeze, in one call; the ledger's
     freeze_plan is never invoked directly by recovery code."""
     assert_plan_matches_contracts(plan_rows, contracts)
-    return ledger.freeze_plan(plan_rows)
+    # Install the fetch-time re-binding (GPT re-review #9 BLOCKER-1): validation at freeze proves what
+    # WAS signed; every later call re-proves the contract is still that one. A ledger frozen through the
+    # raw `_freeze_plan_unvalidated` has no loader and therefore cannot fetch at all.
+    # The loader MUST read the LIVE contracts from disk. A snapshot captured here would be re-verified
+    # against my own frozen copy and could never detect the edit it exists to catch — the same
+    # proxy-for-the-fact error this whole class of finding is about.
+    ledger.contract_loader = contract_loader or load_signed_contracts
+    return ledger._freeze_plan_unvalidated(plan_rows)
 
 
 def contract_errors(endpoint: str, c: dict) -> list:
