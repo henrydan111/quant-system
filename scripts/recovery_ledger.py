@@ -476,6 +476,16 @@ class PageReceiptLedger:
                           "terminal_claim": terminal_claim})
         return n
 
+    def _assert_response_fields(self, endpoint: str, columns) -> None:
+        """FETCH/verify-time check that the response carries the contract's signed required_fields
+        (GPT re-review #10 BLOCKER). Delegates to the coordinator (reads the LIVE contract internally);
+        a private per-instance seam for tests below the contract layer."""
+        import raw_recovery_coordinator as _rrc  # local: avoid an import cycle
+        try:
+            _rrc.assert_response_has_required_fields(endpoint, columns)
+        except RuntimeError as exc:
+            raise LedgerError(str(exc))
+
     def _revalidate_contract(self, row: dict) -> None:
         """FETCH-time contract re-binding (GPT re-review #10 BLOCKER). Delegates to the coordinator,
         which reads the LIVE contracts INTERNALLY and re-runs FULL validation (an edited doc refuses).
@@ -570,6 +580,9 @@ class PageReceiptLedger:
                     raise LedgerError(f"{rid}: page {p} receipt bound to another request")
                 frames.append(fr)
             df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+            # GPT re-review #10 BLOCKER: the signed required_fields were never checked against the
+            # FETCHED response. A vendor schema change dropping a signed column would pass verification.
+            self._assert_response_fields(row["endpoint"], df.columns)
             nk = list(row["natural_key"])
             miss = [k for k in nk if k not in df.columns]
             if miss:

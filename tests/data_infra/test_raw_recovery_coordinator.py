@@ -1359,3 +1359,61 @@ def test_listed_codes_requires_the_list_status_column(monkeypatch, tmp_path):
     bounds = {"list_status": "L,D,P", "reference_sha256": rrc.sha256_file(sb)}
     with pytest.raises(RuntimeError, match="no `list_status` column"):
         rrc._listed_codes(bounds, "stock_basic_codes")
+
+
+# ── GPT re-review #10 BLOCKER: response-level matrix binding (ownership / empty / key / required) ──
+def _rehash(cs: dict) -> dict:
+    return {ep: rrc.canonical_contract_sha256(c) for ep, c in cs.items()}
+
+
+def test_endpoint_must_own_the_family_it_is_planned_under(signed):
+    """GPT (reproduced): the comparator accepted a moneyflow contract as OWNER of market/stk_limit. A
+    plan row's endpoint must be in the matrix row's source_endpoints."""
+    fake_root, mirror, cs, hashes = signed
+    # a daily-signed row mis-declared under market/moneyflow (daily does not own it)
+    rogue = _prow("d:20260702", "daily", "20260702", hashes["daily"],
+                  dataset="market/moneyflow", c=cs["daily"])
+    with pytest.raises(RuntimeError, match="does not OWN family"):
+        rrc.assert_plan_matches_contracts([rogue], cs)
+
+
+def test_sparse_contract_for_a_dense_matrix_row_refused(signed):
+    """GPT (reproduced): a sparse signed contract was accepted for a dense matrix row. The signed
+    empty_policy must equal the matrix's."""
+    fake_root, mirror, cs, hashes = signed
+    # market/daily is dense_refuse; sign daily as sparse_canary (still a VALID signature)
+    sparse = dict(cs, daily=dict(cs["daily"], empty_policy="sparse_canary"))
+    h = _rehash(sparse)
+    rows = _a01_plan(h, cs_map=sparse)
+    with pytest.raises(RuntimeError, match="empty_policy .* != the matrix"):
+        rrc.assert_plan_matches_contracts(rows, sparse)
+
+
+def test_natural_key_narrower_than_the_matrix_vendor_key_refused(signed):
+    """GPT (reproduced): a natural_key NARROWER than the matrix vendor key was accepted — it would
+    collapse distinct vendor rows. The signed key must COVER the matrix vendor_record_key."""
+    fake_root, mirror, cs, hashes = signed
+    # market/daily vendor key is (ts_code, trade_date); sign only (ts_code)
+    narrow = dict(cs, daily=dict(cs["daily"], natural_key=["ts_code"]))
+    h = _rehash(narrow)
+    rows = _a01_plan(h, cs_map=narrow)
+    # the plan rows implement the narrow contract, so the vendor-key coverage check is what must fire
+    for r in rows:
+        if r["endpoint"] == "daily":
+            r["natural_key"] = ["ts_code"]
+    with pytest.raises(RuntimeError, match="does NOT cover the matrix vendor key"):
+        rrc.assert_plan_matches_contracts(rows, narrow)
+
+
+def test_response_missing_a_required_field_refused():
+    """GPT (reproduced): signed required_fields were never checked against the FETCHED response. A
+    vendor schema change dropping a signed column must refuse at verify."""
+    contracts = {"daily": {"required_fields": ["ts_code", "trade_date", "close"]}}
+    # the response has every required column -> ok
+    rrc.assert_response_has_required_fields("daily", ["ts_code", "trade_date", "close", "vol"],
+                                            contracts=contracts)
+    # a dropped signed column refuses
+    with pytest.raises(RuntimeError, match="MISSING signed required_fields"):
+        rrc.assert_response_has_required_fields("daily", ["ts_code", "trade_date"], contracts=contracts)
+    # a contract with no required_fields (below the full layer) enforces nothing
+    rrc.assert_response_has_required_fields("daily", ["anything"], contracts={"daily": {}})

@@ -1142,6 +1142,23 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
                                f"{pr.get('page_limit')!r} != signed {spec.get('page_limit')!r}")
         row = by_family.get(pr.get("dataset"))
         if row is not None:
+            # GPT re-review #10 BLOCKER (reproduced): the comparator accepted a moneyflow contract as
+            # OWNER of market/stk_limit, a sparse contract for a dense matrix row, and a natural_key
+            # NARROWER than the matrix vendor key. Bind endpoint ownership + empty policy + the complete
+            # key EXACTLY to the matrix row.
+            if ep not in row.source_endpoints:
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): endpoint does not OWN family "
+                                   f"{row.output_family} — it draws only {sorted(row.source_endpoints)}")
+            if str(c.get("empty_policy")) != str(row.empty_policy):
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): signed empty_policy "
+                                   f"{c.get('empty_policy')!r} != the matrix's {row.empty_policy!r} "
+                                   f"(a sparse contract for a dense row, or vice versa)")
+            miss_vk = set(row.vendor_record_key) - derived_fields_for(ep) - set(c.get("natural_key") or [])
+            if miss_vk:
+                raise RuntimeError(f"plan row {pr['request_id']} ({ep}): signed natural_key "
+                                   f"{list(c.get('natural_key') or [])} does NOT cover the matrix vendor "
+                                   f"key column(s) {sorted(miss_vk)} — a narrower key collapses distinct "
+                                   f"vendor rows")
             if list(pr.get("content_dedup_key") or []) != list(row.content_dedup_key):
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): content_dedup_key "
                                    f"{list(pr.get('content_dedup_key') or [])} != the matrix's "
@@ -1166,6 +1183,21 @@ def load_signed_contracts() -> dict:
     if not CONTRACTS_YAML.exists():
         return {}
     return yaml.safe_load(CONTRACTS_YAML.read_text(encoding="utf-8")) or {}
+
+
+def assert_response_has_required_fields(endpoint: str, columns, *, contracts=None) -> None:
+    """The FETCHED response must contain every field the signed contract declared as required (GPT
+    re-review #10 BLOCKER: signed `required_fields` were never checked against the actual response, so a
+    vendor schema change dropping a column would pass verification). Reads the LIVE contract INTERNALLY;
+    `contracts` is a TEST seam only."""
+    live = (contracts if contracts is not None else load_signed_contracts()).get(endpoint) or {}
+    required = [str(f) for f in (live.get("required_fields") or [])]
+    if not required:
+        return  # no signed requirement (e.g. below the full contract layer) — nothing to enforce
+    missing = [f for f in required if f not in set(map(str, columns))]
+    if missing:
+        raise RuntimeError(f"{endpoint}: the fetched response is MISSING signed required_fields "
+                           f"{missing} — the vendor schema changed or the wrong endpoint answered")
 
 
 def revalidate_contract_for_fetch(row: dict, *, contracts=None) -> None:
