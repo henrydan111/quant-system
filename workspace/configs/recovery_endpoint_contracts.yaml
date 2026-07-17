@@ -28,7 +28,10 @@
 #                               | stock_basic_ranges         # -> {ts_code,start_date,end_date}
 #                               | index_code_ranges          # -> {ts_code,start_date,end_date}
 #                               | calendar_months            # -> {month}
-#                               | report_date_months         # -> {report_date}
+#                               | report_rc_month_ranges     # -> {start_date,end_date} per month
+#                               | quarter_end_dates          # -> {end_date}   (the quarter, as end_date)
+#                               | year_ranges                # -> {start_date,end_date} per year
+#                               | weekly_friday_end_dates    # -> {end_date}   (each weekly Friday)
 #                               | report_periods             # -> {period}
 #                               | report_periods_x_types,    # -> {period,report_type}  (Cartesian)
 #                        bounds: {start, end, exchange, reference_sha256}      # sessions
@@ -36,6 +39,8 @@
 #                              | {list_status, start_date, end_date, reference_sha256}   # stock ranges
 #                              | {codes: [...], start_date, end_date}          # index legs
 #                              | {start, end, report_types: ["2","3"]}         # direct-quarter
+#                              | {start, end}                                  # months / periods /
+#                              #   quarter end_dates / year ranges / weekly Fridays
 #                              | {periods: [...], report_types: [...]}         # EXPLICIT signed periods
 #                        expected_set_sha256: <sha256 over every param of every resolved request>}
 #                     * reference_sha256 PINS the reference bytes the population derives from
@@ -46,7 +51,10 @@
 #                       contains NON-quarter-end periods (see data/data_tracker.md), which a generated
 #                       quarter calendar cannot describe.
 #                     * report_types must be signed explicitly (the direct-quarter recipe uses 2 and 3).
-#                     * The resolver must match the matrix row's query_mode; an empty resolution refuses.
+#                     * The resolver must BELONG TO THIS ENDPOINT (checked against its own matrix rows
+#                       at SIGN-OFF, not deferred to plan time). An endpoint with NO binding is a
+#                       sign-off ERROR — an unbound endpoint must never be signable. An empty
+#                       resolution refuses.
 #                     * The frozen plan is compared to the resolved requests EXACTLY (asked == expected,
 #                       whole requests both sides): a MISSING request is an incomplete recovery, an
 #                       EXTRA one is a request nobody signed. A resumed run keeps the ORIGINAL full

@@ -278,15 +278,63 @@ ENDPOINT_MATRIX = [
        content_dedup_key=("month", "broker", "ts_code"), profile_key=("month", "broker"),
        empty_policy="sparse_canary", profile_key_dups_expected=False, consolidation_group="broker_recommend_monthly",
        tail_rule="monthly tail", note="fetch_broker_recommend_historical EXISTS; inject E: paths"),
-] + [
-    # A15: bucket-A siblings — WHOLLY UNBOUND placeholders that HARD-BLOCK until their contract is signed
-    _r(owner=f"A15_{ep}", output_family=f"UNBOUND/{ep}", source_endpoints=(ep,), query_mode="UNBOUND",
-       vendor_record_key=("UNBOUND",), pit_version_key=(), content_dedup_key=("UNBOUND",),
-       profile_key=("UNBOUND",), empty_policy="sparse_canary", profile_key_dups_expected=False,
-       consolidation_group=f"UNBOUND_{ep}", tail_rule="UNBOUND", callable="UNBOUND (contract unsigned)",
-       note="output family / keys UNRESOLVED until the signed contract defines them")
-    for ep in ("express", "disclosure_date", "fina_mainbz", "fina_audit", "repurchase", "pledge_stat",
-               "top10_floatholders")
+]
+
+# ── A15: the bucket-A siblings, BOUND to their real request shapes ───────────────────────────────
+# GPT sign-off HOLD #3 (reproduced): these were UNBOUND placeholders, so endpoint_expected_resolvers()
+# returned an EMPTY set and the fail-open check let ANY resolver be signed — disclosure_date +
+# calendar_months -> {month: 202607} returned zero errors though its real caller sends end_date. Each
+# shape below is read from its ACTUAL caller (scripts/fetch_bucket_a.py) and cross-checked against the
+# pinned doc's input params. `callable` stays UNBOUND: the shape is known, the adapter is not.
+ENDPOINT_MATRIX += [
+    _r(owner="A15a", output_family="fundamentals/express", source_endpoints=("express",),
+       query_mode="per_period", vendor_record_key=("ts_code", "ann_date", "end_date"),
+       pit_version_key=("ann_date",), content_dedup_key=("ts_code", "ann_date", "end_date"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary",
+       profile_key_dups_expected=True, consolidation_group="express_period",
+       tail_rule="quarterly periods",
+       note="express_vip(period=<quarter end>) per fetch_bucket_a._fetch_by_period"),
+    _r(owner="A15b", output_family="fundamentals/disclosure_date", source_endpoints=("disclosure_date",),
+       query_mode="per_quarter_end_date", vendor_record_key=("ts_code", "end_date", "ann_date"),
+       pit_version_key=("ann_date", "actual_date", "modify_date"),
+       content_dedup_key=("ts_code", "end_date", "ann_date"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", profile_key_dups_expected=True,
+       consolidation_group="disclosure_date_period", tail_rule="quarterly end_dates",
+       note="disclosure_date(end_date=<quarter end>) — the quarter goes in end_date, NOT period"),
+    _r(owner="A15c", output_family="fundamentals/fina_mainbz", source_endpoints=("fina_mainbz",),
+       query_mode="per_period", vendor_record_key=("ts_code", "end_date", "bz_item", "type"),
+       pit_version_key=(), content_dedup_key=("ts_code", "end_date", "bz_item", "type"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary",
+       profile_key_dups_expected=True, consolidation_group="fina_mainbz_period",
+       tail_rule="quarterly periods", max_content_dups=0,
+       note="fina_mainbz_vip(period=<quarter end>), paginated (doc cap 10000); multi-row per period"),
+    _r(owner="A15d", output_family="fundamentals/fina_audit", source_endpoints=("fina_audit",),
+       query_mode="per_stock", vendor_record_key=("ts_code", "end_date", "ann_date"),
+       pit_version_key=("ann_date",), content_dedup_key=("ts_code", "end_date", "ann_date"),
+       profile_key=("ts_code", "end_date"), empty_policy="sparse_canary",
+       profile_key_dups_expected=True, consolidation_group="fina_audit_stock",
+       tail_rule="per stock", note="fina_audit(ts_code=<code>) per stock — full history per call"),
+    _r(owner="A15e", output_family="corporate/repurchase", source_endpoints=("repurchase",),
+       query_mode="per_year_range", vendor_record_key=("ts_code", "ann_date", "end_date", "proc"),
+       pit_version_key=("ann_date",),
+       content_dedup_key=("ts_code", "ann_date", "end_date", "proc"),
+       profile_key=("ts_code", "ann_date"), empty_policy="sparse_canary",
+       profile_key_dups_expected=True, consolidation_group="repurchase_yearly",
+       tail_rule="per year range",
+       note="repurchase(start_date=YYYY0101, end_date=YYYY1231) per YEAR, paginated (cap 2000+)"),
+    _r(owner="A15f", output_family="corporate/pledge_stat", source_endpoints=("pledge_stat",),
+       query_mode="per_weekly_friday", vendor_record_key=("ts_code", "end_date"), pit_version_key=(),
+       content_dedup_key=("ts_code", "end_date"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", profile_key_dups_expected=False,
+       consolidation_group="pledge_stat_weekly", tail_rule="weekly Fridays",
+       note="pledge_stat(end_date=<Friday>) per week, paginated (HARD cap 3000)"),
+    _r(owner="A15g", output_family="corporate/top10_floatholders",
+       source_endpoints=("top10_floatholders",), query_mode="per_period",
+       vendor_record_key=("ts_code", "end_date", "holder_name"), pit_version_key=("ann_date",),
+       content_dedup_key=("ts_code", "end_date", "holder_name"), profile_key=("ts_code", "end_date"),
+       empty_policy="sparse_canary", profile_key_dups_expected=True,
+       consolidation_group="top10_floatholders_period", tail_rule="quarterly periods",
+       note="top10_floatholders(period=<quarter end>), paginated (cap 6000); 10 rows per period"),
 ]
 
 GLOBAL_SIDECARS = ("raw_cache/manifests/* (ingest provenance manifests regenerated during recovery are "
@@ -456,13 +504,16 @@ _PAGINATION_MODES = {"single_page", "offset_paged"}
 # NOTE: no `year` — it was fictional (suspend_d has no such vendor input); the yearly suspension files
 # are an output partitioning, not a request unit (GPT re-review #10).
 _POPULATION_UNITS = {"open_trade_date", "index_range", "stock", "period_report_type", "period",
-                     "month", "report_date_month", "stock_repartition"}
+                     "month", "report_date_month", "stock_repartition", "quarter_end_date",
+                     "year_range", "weekly_friday"}
 # matrix query_mode -> the population unit a signed contract must declare for it
 _QUERY_MODE_TO_UNIT = {
     "per_open_trade_date": "open_trade_date", "per_index_range": "index_range",
     "per_stock": "stock", "per_period_report_type": "period_report_type", "per_period": "period",
     "per_month": "month", "per_report_date_month": "report_date_month",
     "per_stock_repartition": "stock_repartition",
+    "per_quarter_end_date": "quarter_end_date", "per_year_range": "year_range",
+    "per_weekly_friday": "weekly_friday",
 }
 
 # Coordinator-DERIVED key columns: legitimate in a natural_key WITHOUT appearing in the vendor doc
@@ -612,10 +663,16 @@ def _population_spec_errors(endpoint: str, spec) -> list:
         errs.append(f"{endpoint}: request_population.resolver must be one of "
                     f"{sorted(_POPULATION_RESOLVERS)} — an executable resolver, not a description")
     else:
-        # ENDPOINT-AWARE: the resolver must be one THIS endpoint's matrix rows actually imply, checked
-        # at SIGN-OFF, not deferred until an adapter hands over a plan (GPT sign-off HOLD #2).
+        # ENDPOINT-AWARE and FAIL-CLOSED: the resolver must be one THIS endpoint's matrix rows imply,
+        # checked at SIGN-OFF. GPT sign-off HOLD #3: this read `if allowed and ...`, so an endpoint with
+        # NO binding (the UNBOUND A15 rows) admitted ANY known resolver — a fail-open guard in the one
+        # place whose whole job is to refuse. An absent binding is now an ERROR, not a free pass.
         allowed = endpoint_expected_resolvers(endpoint)
-        if allowed and spec.get("resolver") not in allowed:
+        if not allowed:
+            errs.append(f"{endpoint}: NO request-shape binding — its matrix rows declare no query_mode, "
+                        f"so nothing establishes what a request for it even looks like. Bind it in the "
+                        f"matrix before signing; an unbound endpoint must never be signable.")
+        elif spec.get("resolver") not in allowed:
             errs.append(f"{endpoint}: resolver {spec.get('resolver')!r} does not belong to this endpoint "
                         f"— its matrix rows enumerate {sorted(allowed)}. Signing it would bind the wrong "
                         f"request recipe.")
@@ -801,6 +858,38 @@ def _resolve_report_periods_x_types(bounds: dict) -> set:
             for p in _period_strings(bounds) for t in types}
 
 
+def _resolve_quarter_end_dates(bounds: dict) -> set:
+    """disclosure_date(end_date=<quarter end>) — the quarter stamp is sent as `end_date`, NOT `period`
+    (scripts/fetch_bucket_a.py fetch_disclosure_date)."""
+    return {_canon_request({"end_date": p}) for p in _period_strings(bounds)}
+
+
+def _resolve_year_ranges(bounds: dict) -> set:
+    """repurchase(start_date=YYYY0101, end_date=YYYY1231) — one request per YEAR
+    (scripts/fetch_bucket_a.py fetch_repurchase)."""
+    lo, hi = int(str(bounds["start"])[:4]), int(str(bounds["end"])[:4])
+    if hi < lo:
+        raise RuntimeError("year_ranges: end year precedes start year")
+    return {_canon_request({"start_date": f"{y}0101", "end_date": f"{y}1231"})
+            for y in range(lo, hi + 1)}
+
+
+def _resolve_weekly_friday_end_dates(bounds: dict) -> set:
+    """pledge_stat(end_date=<Friday>) — one request per weekly Friday
+    (scripts/fetch_bucket_a.py fetch_pledge_stat)."""
+    import datetime as _dt
+    lo = _dt.datetime.strptime(str(bounds["start"]), "%Y%m%d").date()
+    hi = _dt.datetime.strptime(str(bounds["end"]), "%Y%m%d").date()
+    if hi < lo:
+        raise RuntimeError("weekly_friday_end_dates: end precedes start")
+    first = lo + _dt.timedelta(days=(4 - lo.weekday()) % 7)   # 4 = Friday
+    out, d = set(), first
+    while d <= hi:
+        out.add(_canon_request({"end_date": d.strftime("%Y%m%d")}))
+        d += _dt.timedelta(days=7)
+    return out
+
+
 _POPULATION_RESOLVERS = {
     "trade_cal_open_sessions": _resolve_open_sessions,
     "stock_basic_codes": _resolve_stock_codes,
@@ -810,6 +899,9 @@ _POPULATION_RESOLVERS = {
     "report_rc_month_ranges": _resolve_report_rc_month_ranges,
     "report_periods": _resolve_report_periods,
     "report_periods_x_types": _resolve_report_periods_x_types,
+    "quarter_end_dates": _resolve_quarter_end_dates,
+    "year_ranges": _resolve_year_ranges,
+    "weekly_friday_end_dates": _resolve_weekly_friday_end_dates,
 }
 
 # which resolver legitimately produces each unit's COMPLETE request set
@@ -822,6 +914,9 @@ _UNIT_RESOLVERS = {
     "report_date_month": "report_rc_month_ranges",
     "period": "report_periods",
     "period_report_type": "report_periods_x_types",
+    "quarter_end_date": "quarter_end_dates",
+    "year_range": "year_ranges",
+    "weekly_friday": "weekly_friday_end_dates",
 }
 # How a `partition` LABEL is DERIVED from the request it names (honesty check only — the label is
 # NEVER the comparison key). GPT sign-off HOLD #2: report_date_month's label is a MONTH while its
@@ -846,6 +941,11 @@ _UNIT_LABEL_FROM_REQUEST = {
     "stock_repartition": _label_from_param("ts_code"), "index_range": _label_from_param("ts_code"),
     "month": _label_from_param("month"), "report_date_month": _label_from_month_range,
     "period": _label_from_param("period"), "period_report_type": _label_from_param("period"),
+    # disclosure_date labels its partition by the quarter it asks for, which it sends as end_date
+    "quarter_end_date": _label_from_param("end_date"),
+    # repurchase's yearly file is named by the year its range covers
+    "year_range": lambda params: _label_from_param("start_date")(params)[:4],
+    "weekly_friday": _label_from_param("end_date"),
 }
 
 

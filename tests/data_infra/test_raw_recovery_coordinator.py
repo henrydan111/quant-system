@@ -247,16 +247,20 @@ def test_matrix_source_endpoints_equal_contract_yaml():
         f"orphan={sorted(set(contracts) - rrc.matrix_source_endpoints())}")
 
 
-def test_a15_rows_are_wholly_unbound():
-    # A15 bucket-A siblings hard-block: UNBOUND callable + UNBOUND query_mode + UNBOUND keys.
-    a15 = [r for r in rrc.ENDPOINT_MATRIX if r.owner.startswith("A15_")]
+def test_a15_rows_are_shape_bound_but_callable_unbound():
+    """GPT sign-off HOLD #3: A15 used to be WHOLLY unbound, which made endpoint_expected_resolvers()
+    empty and the binding check fail OPEN. They now carry their real request shapes (read from
+    scripts/fetch_bucket_a.py) while their `callable` stays UNBOUND — the shape is known, the adapter
+    is not, so fetch still hard-blocks."""
+    a15 = [r for r in rrc.ENDPOINT_MATRIX if r.owner.startswith("A15")]
     assert len(a15) == 7
     for r in a15:
-        assert r.callable.startswith("UNBOUND") and r.query_mode == "UNBOUND"
-        assert r.vendor_record_key == ("UNBOUND",) and r.output_family.startswith("UNBOUND/")
+        assert r.callable.startswith("UNBOUND"), f"{r.owner} bound a callable without an adapter"
+        assert r.query_mode != "UNBOUND", f"{r.owner} still has no request shape"
+        assert not r.output_family.startswith("UNBOUND/"), f"{r.owner} has no real output family"
+        assert rrc.endpoint_expected_resolvers(r.source_endpoints[0]), f"{r.owner} fails open"
 
 
-# ── minor: non-finite throttle input ─────────────────────────────────────────────────────────────
 def test_spaced_call_rejects_non_finite_base_sleep(tmp_path, monkeypatch):
     import time as _time
     from data_infra import tushare_lock
@@ -1212,3 +1216,96 @@ def test_empty_plan_cannot_be_frozen(signed):
 
     with pytest.raises(RuntimeError, match="empty plan"):
         rrc.freeze_request_plan(_FakeLedger(), [], cs, declared_families=["market/daily"])
+
+
+# ── GPT sign-off HOLD #3: NO endpoint may fail open; every one is bound to its real shape ─────────
+def test_every_matrix_endpoint_has_a_nonempty_binding():
+    """GPT (reproduced): the seven A15 rows were UNBOUND, so endpoint_expected_resolvers() returned an
+    EMPTY set and `if allowed and ...` let ANY known resolver be signed. The old test sampled only four
+    ALREADY-BOUND endpoints and could never have seen it — so this asserts over ALL 32, not a sample."""
+    eps = sorted(rrc.matrix_source_endpoints())
+    assert len(eps) == 32
+    unbound = [ep for ep in eps if not rrc.endpoint_expected_resolvers(ep)]
+    assert not unbound, f"these endpoints fail open — any resolver could be signed: {unbound}"
+    for ep in eps:
+        for res in rrc.endpoint_expected_resolvers(ep):
+            assert res in rrc._POPULATION_RESOLVERS, f"{ep} names unknown resolver {res}"
+
+
+def test_unbound_endpoint_cannot_be_signed(tmp_path, monkeypatch):
+    """An endpoint with no binding must be a sign-off ERROR, never a free pass: nothing establishes
+    what a request for it even looks like."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "999_ghost.md", _io_doc("ghost_endpoint", 999))
+    months = {"resolver": "calendar_months", "bounds": {"start": "202607", "end": "202607"}}
+    months["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(months))
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "999", "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
+         "pagination": "single", "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": months, "rate_limit": "500/min", "cadence": "daily",
+         "pit_anchors": "trade_date", "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    errs = rrc.contract_errors("ghost_endpoint", c)      # in no matrix row -> no binding
+    assert any("NO request-shape binding" in e for e in errs), errs
+
+
+def test_a15_endpoints_reject_foreign_resolvers(tmp_path, monkeypatch):
+    """GPT's exact probe: disclosure_date + calendar_months -> {month: 202607} returned ZERO errors,
+    although its real caller sends end_date."""
+    fake_root = tmp_path
+    mirror = fake_root / "Tushare\u6570\u636e\u63a5\u53e3" / "content"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(rrc, "E_ROOT", fake_root)
+    monkeypatch.setattr(rrc, "DOC_MIRROR", mirror)
+    doc = _mk_doc(mirror, "162_disclosure.md", _io_doc("disclosure_date", 162))
+    months = {"resolver": "calendar_months", "bounds": {"start": "202607", "end": "202607"}}
+    months["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(months))
+    c = {"doc_path": str(doc.relative_to(fake_root)), "doc_id": "162",
+         "doc_sha256": rrc.sha256_file(doc),
+         "required_fields": ["ts_code", "exalter"], "natural_key": ["ts_code", "exalter"],
+         "pagination": "single", "pagination_spec": {"mode": "single_page", "page_limit": 0},
+         "request_population": months, "rate_limit": "500/min", "cadence": "quarterly",
+         "pit_anchors": "ann_date", "empty_policy": "sparse_canary", "reviewed_by": "henry",
+         "reviewed_at": datetime.now(timezone.utc).isoformat()}
+    errs = rrc.contract_errors("disclosure_date", c)
+    assert any("does not belong to this endpoint" in e for e in errs), errs
+    assert any("quarter_end_dates" in e for e in errs), errs
+
+
+def test_a15_shapes_match_their_real_callers():
+    """Each A15 shape is read from scripts/fetch_bucket_a.py, not inferred from a query_mode I picked —
+    the procedure that would have caught report_rc."""
+    # disclosure_date sends the QUARTER as end_date, not period
+    q = rrc.resolve_population({"resolver": "quarter_end_dates",
+                                "bounds": {"start": "20260331", "end": "20260630"}})
+    assert rrc._canon_request({"end_date": "20260331"}) in q
+    assert rrc._canon_request({"period": "20260331"}) not in q
+    # repurchase is a YEAR range
+    y = rrc.resolve_population({"resolver": "year_ranges",
+                                "bounds": {"start": "20240101", "end": "20241231"}})
+    assert y == {rrc._canon_request({"start_date": "20240101", "end_date": "20241231"})}
+    # pledge_stat is weekly FRIDAYS
+    import datetime as _dt
+    f = rrc.resolve_population({"resolver": "weekly_friday_end_dates",
+                                "bounds": {"start": "20260701", "end": "20260722"}})
+    days = sorted(dict(r)["end_date"] for r in f)
+    assert days == ["20260703", "20260710", "20260717"]
+    for d in days:
+        assert _dt.datetime.strptime(d, "%Y%m%d").weekday() == 4, f"{d} is not a Friday"
+    # fina_audit is per stock (its caller passes ts_code only)
+    assert rrc._UNIT_RESOLVERS[rrc._QUERY_MODE_TO_UNIT["per_stock"]] == "stock_basic_codes"
+
+
+def test_a15_labels_derive_from_their_requests():
+    """repurchase's yearly file is named by the year its RANGE covers — the label is derived, not sent."""
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.owner == "A15e"][0]
+    pr = {"request_id": "r", "endpoint": "repurchase", "dataset": row.output_family,
+          "partition": "2024", "params": {"start_date": "20240101", "end_date": "20241231"}}
+    assert dict(rrc._request_population_key(pr, row)) == {"start_date": "20240101",
+                                                          "end_date": "20241231"}
+    with pytest.raises(RuntimeError, match="derives label"):
+        rrc._request_population_key(dict(pr, partition="2025"), row)
