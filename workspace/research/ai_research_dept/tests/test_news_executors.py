@@ -278,19 +278,28 @@ class TestProvenance:
         assert out2["selected_provenance"]["factor"]["decision_id"] == "d2"
         assert out1["execution_id"] != out2["execution_id"]
 
-    def test_retry_binds_own_attempt(self, tmp_path):
-        # crash/retry ambiguity: two runs of the SAME decision leave multiple
-        # valid rows in the file, but each bundle binds its own execution_id rows
-        out1, _ = _execute(tmp_path, decision_id="d1")
-        out2, _ = _execute(tmp_path, decision_id="d1")   # idempotent ledger, rerun
-        rows = read_execution_provenance(tmp_path / "prov")
-        valid_factor_rows = [e for e in rows
-                             if e["leg"] == "factor" and e["verdict"] == "valid"]
-        assert len(valid_factor_rows) == 2               # ambiguity exists in file
+    def test_retry_after_hard_fail_binds_own_attempt(self, tmp_path):
+        # crash/retry: a hard-failed run leaves its rows + hard_failed ledger
+        # commitment; the SUCCESS retry runs under a fresh execution_id, binds
+        # its own rows, and commits the decision's unique success commitment
+        # (re-review#3 P0: a second SUCCESS run would be refused — pinned in
+        # test_news_archive; hard-fail -> success recovery must keep working)
+        def boom(msgs):
+            raise ConnectionError("down")
+        art = _artifact_full("d1")
+        record_decision(tmp_path / "ledger", "d1", art)
+        out1 = execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=_contract(), call_fn=boom)
+        assert out1["outcome"].news_status == "hard_failed"
+        out2, _ = _execute(tmp_path, art=art, decision_id="d1")  # success retry
+        assert out2["outcome"].news_status == "success"
         assert out2["selected_provenance"]["factor"]["execution_id"] \
             == out2["execution_id"]                      # binding resolves it
-        assert out1["selected_provenance"]["factor"]["entry_hash"] \
-            != out2["selected_provenance"]["factor"]["entry_hash"]
+        rows = read_execution_provenance(tmp_path / "prov")
+        factor_terminals = [e for e in rows if e["leg"] == "factor"
+                            and e["verdict"] in ("valid", "call_error")]
+        assert len(factor_terminals) == 2                # both runs' rows persist
 
     def test_invalid_output_persists_before_raise(self, tmp_path):
         bad = _valid_factor_record()

@@ -62,12 +62,15 @@ _DECISION_KEYS = frozenset({"kind", "decision_id", "bundle_hash", "artifact_hash
                             "seq", "prev_hash", "entry_hash"})
 _COMMITMENT_KEYS = frozenset({"kind", "decision_id", "execution_id",
                               "factor_entry_hash", "penalty_entry_hash",
-                              "outcome_hash", "seq", "prev_hash", "entry_hash"})
+                              "outcome_hash", "news_status",
+                              "seq", "prev_hash", "entry_hash"})
+_COMMITMENT_STATUSES = frozenset({"success", "hard_failed"})
 #: 工件派生字段(require_recorded 全字段比对的范围)
 _ARTIFACT_FIELDS = ("bundle_hash", "artifact_hash", "final_registry_hash",
                     "source_card_hash", "cutoff_iso")
-#: 承诺行身份外字段(record_execution_commitment 幂等比对的范围)
-_COMMITMENT_FIELDS = ("factor_entry_hash", "penalty_entry_hash", "outcome_hash")
+#: 承诺行身份外字段(_append_commitment_row 幂等比对的范围)
+_COMMITMENT_FIELDS = ("factor_entry_hash", "penalty_entry_hash", "outcome_hash",
+                      "news_status")
 
 
 # --------------------------------------------------- 账本(原子首写胜出+哈希链)
@@ -108,6 +111,7 @@ def _read_chain(path: Path) -> list:
     entries: list = []
     seen: set = set()
     seen_commit: set = set()
+    seen_success: set = set()
     prev = _GENESIS
     with open(path, encoding="utf-8") as f:
         for i, line in enumerate(x for x in (ln.strip() for ln in f) if x):
@@ -121,6 +125,10 @@ def _read_chain(path: Path) -> list:
                 if set(entry) != _COMMITMENT_KEYS:
                     raise RegistryError(
                         f"账本行 {i} 承诺行键集不符 {sorted(entry)}——严格 schema 拒")
+                if entry["news_status"] not in _COMMITMENT_STATUSES:
+                    raise RegistryError(
+                        f"账本行 {i} 承诺 news_status {entry['news_status']!r} "
+                        f"未注册——拒")
             else:
                 raise RegistryError(f"账本行 {i} 未注册 kind {kind!r}——拒")
             if entry["seq"] != i:
@@ -144,6 +152,13 @@ def _read_chain(path: Path) -> list:
                 if did not in seen:
                     raise RegistryError(
                         f"账本行 {i} 执行承诺先于决策注册({did!r})——状态机违规,拒")
+                if entry["news_status"] == "success":
+                    # re-review#3 P0:每决策至多一条 success 承诺(链级不变量)
+                    if did in seen_success:
+                        raise RegistryError(
+                            f"账本含 {did!r} 的第二条 success 执行承诺——决策的"
+                            f"成功执行唯一,链非法,拒(re-review#3 P0)")
+                    seen_success.add(did)
                 seen_commit.add(key)
             entries.append(entry)
             prev = entry["entry_hash"]
@@ -211,15 +226,20 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
     return dict(entry)
 
 
-def record_execution_commitment(ledger_dir, *, decision_id: str, execution_id: str,
-                                factor_entry_hash: str,
-                                penalty_entry_hash: "str | None",
-                                outcome_hash: str) -> dict:
-    """执行承诺入链(archive-re-review#2 Blocker):受控执行器把一次执行的**选定
-    终态出处 entry_hash**(+ outcome_hash)提交进决策账本哈希链。首写胜出 per
-    (decision_id, execution_id):幂等 = 三承诺字段逐一相等,任一不同 = 拒——
-    同一执行的第二套"终态"无法成为承诺;出处文件里事后追加/替换的伪造行因不在
-    承诺内而被归档验证拒绝。决策必须已注册。"""
+def _append_commitment_row(ledger_dir, *, decision_id: str, execution_id: str,
+                           factor_entry_hash: str,
+                           penalty_entry_hash: "str | None",
+                           outcome_hash: str, news_status: str) -> dict:
+    """执行承诺入链的**模块私有低层写入**(archive-re-review#2 Blocker +
+    re-review#3 P0)。⚠ 公开承诺 API 已撤除——唯一受认可调用方是
+    [news_executors.commit_execution](news_executors.py) 承诺权威(它只提交
+    **自行从盘上解析并全链验证过的**终态,绝不透传调用方哈希);本函数不做该
+    验证,故必须保持模块私有。规则:
+    - 首写胜出 per (decision_id, execution_id):幂等 = 承诺字段逐一相等;
+    - **success 承诺每决策唯一**(re-review#3 P0):真实执行承诺 success 后,
+      伪造的"全新执行"无法再为同一决策提交第二条 success——归档只认账本里
+      那唯一的 success 执行;hard_failed 承诺可多条(崩溃/重试的审计痕迹);
+    - 决策必须已注册。"""
     if type(decision_id) is not str or not decision_id.strip():
         raise RegistryError(f"decision_id 须恰 str 非空(得 {decision_id!r})")
     if type(execution_id) is not str or not execution_id.strip():
@@ -232,9 +252,11 @@ def record_execution_commitment(ledger_dir, *, decision_id: str, execution_id: s
         raise RegistryError(f"penalty_entry_hash 须 None/64-hex(得 {penalty_entry_hash!r})")
     if not (type(outcome_hash) is str and _HEX64_RE.fullmatch(outcome_hash)):
         raise RegistryError(f"outcome_hash 须 64-hex(得 {outcome_hash!r})")
+    if news_status not in _COMMITMENT_STATUSES:
+        raise RegistryError(f"news_status {news_status!r} 未注册")
     expected = {"factor_entry_hash": factor_entry_hash,
                 "penalty_entry_hash": penalty_entry_hash,
-                "outcome_hash": outcome_hash}
+                "outcome_hash": outcome_hash, "news_status": news_status}
     path = _ledger_path(ledger_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _ledger_lock(path):
@@ -252,6 +274,13 @@ def record_execution_commitment(ledger_dir, *, decision_id: str, execution_id: s
             raise RegistryError(
                 f"执行 ({decision_id!r}, {execution_id!r}) 已承诺终态——首写胜出,"
                 f"同一执行的第二套终态拒(archive-re-review#2 Blocker)")
+        if news_status == "success" and any(
+                e["kind"] == "execution_commitment"
+                and e["decision_id"] == decision_id
+                and e["news_status"] == "success" for e in entries):
+            raise RegistryError(
+                f"决策 {decision_id!r} 已有 success 执行承诺——决策的成功执行"
+                f"唯一,第二条 success(含伪造的全新执行)拒(re-review#3 P0)")
         prev = entries[-1]["entry_hash"] if entries else _GENESIS
         body = {"kind": "execution_commitment", "decision_id": decision_id,
                 "execution_id": execution_id, **expected,
@@ -267,6 +296,14 @@ def find_execution_commitment(ledger_dir, decision_id: str,
                  if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
                  and e["execution_id"] == execution_id), None)
+
+
+def find_success_commitment(ledger_dir, decision_id: str) -> "dict | None":
+    """该决策的**唯一** success 执行承诺(链级不变量保证至多一条)。"""
+    return next((e for e in _read_chain(_ledger_path(ledger_dir))
+                 if e["kind"] == "execution_commitment"
+                 and e["decision_id"] == decision_id
+                 and e["news_status"] == "success"), None)
 
 
 def lookup_decision(ledger_dir, decision_id: str) -> "dict | None":

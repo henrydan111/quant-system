@@ -50,17 +50,21 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from workspace.research.ai_research_dept.engine.news_cards import D7DecisionArtifact
+from workspace.research.ai_research_dept.engine.news_cards import (
+    D7DecisionArtifact, verify_d7_artifact,
+)
 from workspace.research.ai_research_dept.engine.news_decision import (
-    ExecutionView, build_leg_payload_ast, leg_expected_ids,
-    record_execution_commitment,
+    ExecutionView, _append_commitment_row, build_leg_payload_ast,
+    build_sealed_payload, leg_expected_ids,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
 from workspace.research.ai_research_dept.engine.news_horizon import (
     HORIZONS, OUTPUT_MODES, SCHEMA_ID, deterministic_zero_factor_record,
     evaluate_news_horizon, validate_factor_leg_output, validate_penalty_leg_output,
 )
-from workspace.research.ai_research_dept.engine.news_legs import run_news_two_legs
+from workspace.research.ai_research_dept.engine.news_legs import (
+    NewsLegOutcome, run_news_two_legs, verify_outcome_for_binding,
+)
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
 _PROV_NAME = "execution_provenance.jsonl"
@@ -271,6 +275,170 @@ def read_execution_provenance(prov_dir) -> list:
     return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln]
 
 
+# ------------------------------------- 终态解析/校验(承诺权威与档案共用)
+
+_EMPTY_PENALTY_SENTINEL = "0" * 64
+#: 腿终态 ↔ 选定出处 verdict 的语义一致表(BINDING #1)
+_LEG_VERDICTS = {
+    ("factor", "success"): {"valid", "deterministic_zero"},
+    ("factor", "failed"): {"invalid", "call_error"},
+    ("penalty", "success"): {"valid"},
+    ("penalty", "failed"): {"invalid", "call_error"},
+    ("penalty", "empty_success"): {"empty_penalty"},
+}
+
+
+def _resolve_terminal(all_rows: list, *, execution_id: str, decision_id: str,
+                      leg: str) -> dict:
+    """从盘上出处文件按 (decision_id, execution_id, leg) 解析**唯一、状态机相连**
+    的终态行(archive-re-review#2 Blocker:验证不信调用方带入的行——盘上多于
+    一条终态 = 有人事后追加伪造行 → 整个键失去可验证性,fail-closed 拒)。"""
+    key_rows = [r for r in all_rows if isinstance(r, dict)
+                and r.get("execution_id") == execution_id
+                and r.get("decision_id") == decision_id
+                and r.get("leg") == leg]
+    terminals = [r for r in key_rows if r.get("verdict") in _TERMINAL_VERDICTS]
+    if len(terminals) != 1:
+        raise RegistryError(
+            f"({execution_id!r}, {leg}) 盘上终态行数 = {len(terminals)},须恰一"
+            f"——0 = 未持久化;>1 = 出处被事后追加伪造终态,键失去可验证性,拒"
+            f"(archive-re-review#2 Blocker)")
+    row = terminals[0]
+    attempts = [r for r in key_rows if r.get("verdict") == "attempt_started"]
+    if row.get("verdict") in _LLM_TERMINALS:
+        if len(attempts) != 1 \
+                or attempts[0].get("payload_hash") != row.get("payload_hash"):
+            raise RegistryError(
+                f"({execution_id!r}, {leg}) LLM 终态未连着同 payload 的恰一 "
+                f"attempt_started 行——状态机断裂,拒(archive-re-review#2)")
+    elif attempts:
+        raise RegistryError(
+            f"({execution_id!r}, {leg}) 确定性终态却存在 attempt_started 行"
+            f"——免 LLM 路径无尝试行,状态机断裂,拒(archive-re-review#2)")
+    return row
+
+
+def _check_terminal_row(row: dict, *, leg: str, outcome, execution_id: str,
+                        contract: "NewsScoringContract", leg_payload_hash: str,
+                        artifact) -> None:
+    """单条终态行对 (outcome, 契约, 重建 payload, 工件) 的全量校验——承诺权威与
+    档案联合验证**共用同一实现**(避免两套语义分叉)。含 factor 的
+    deterministic_zero 合法性双向重导出(archive-review B2)。"""
+    if set(row) != PROV_ROW_KEYS:
+        raise RegistryError(
+            f"{leg} 腿终态行键集不符出处行 schema(archive-review B2;"
+            f"多/少键 {sorted(set(row) ^ PROV_ROW_KEYS)})")
+    body = {k: v for k, v in row.items() if k != "entry_hash"}
+    if seal_hash(body) != row.get("entry_hash"):
+        raise RegistryError(f"{leg} 腿终态行 entry_hash 重算不符——行被改,拒")
+    if row["leg"] != leg:
+        raise RegistryError(
+            f"{leg} 腿终态槽装的是 {row['leg']!r} 腿的出处行——终态行↔腿绑定违规"
+            f"(archive-review B2)")
+    if row["execution_id"] != execution_id \
+            or row["decision_id"] != outcome.decision_id:
+        raise RegistryError(f"{leg} 腿终态行 execution/decision 身份不符")
+    if row["schema_id"] != contract.schema_id:
+        raise RegistryError(f"{leg} 腿终态行 schema_id 与冻结契约不符")
+    status = getattr(outcome, f"{leg}_leg_status")
+    allowed = _LEG_VERDICTS.get((leg, status))
+    if allowed is None or row["verdict"] not in allowed:
+        raise RegistryError(
+            f"{leg} 腿终态 {status!r} 与 verdict {row['verdict']!r} 语义不符"
+            f"(允许 {sorted(allowed) if allowed else '无'})")
+    if row["payload_hash"] != leg_payload_hash:
+        raise RegistryError(f"{leg} 腿终态行 payload_hash 与重建 payload 不符")
+    if leg == "factor" and status == "success":
+        # archive-review B2:deterministic_zero 合法性从工件**重新导出**——
+        # 正向期望总体为空 ⟺ 确定性零(伪造零终态压掉真实证据在此死)
+        factor_expected = leg_expected_ids(artifact.final_registry,
+                                           use="factor_positive",
+                                           consumer_seat="news")
+        if factor_expected and row["verdict"] != "valid":
+            raise RegistryError(
+                "factor 正向期望总体非空,终态却是 "
+                f"{row['verdict']!r}——deterministic_zero 只在总体为空时合法"
+                "(archive-review B2)")
+        if not factor_expected and row["verdict"] != "deterministic_zero":
+            raise RegistryError(
+                "factor 正向期望总体为空,终态必须是 deterministic_zero"
+                f"(得 {row['verdict']!r},archive-review B2)")
+
+
+def _rebuild_leg_payloads(artifact, outcome, *, ledger_dir):
+    """canonical payload 确定性重建(同 AST + 同工件 → 同哈希)。penalty 只在
+    实际执行过(success/failed)时存在。"""
+    factor_payload = build_sealed_payload(
+        build_leg_payload_ast(artifact, use="factor_positive", consumer_seat="news"),
+        artifact, ledger_dir=ledger_dir, decision_id=outcome.decision_id,
+        consumer_seat="news", use="factor_positive")
+    penalty_payload = None
+    if outcome.penalty_leg_status in ("success", "failed"):
+        penalty_payload = build_sealed_payload(
+            build_leg_payload_ast(artifact, use="penalty", consumer_seat="news"),
+            artifact, ledger_dir=ledger_dir, decision_id=outcome.decision_id,
+            consumer_seat="news", use="penalty")
+    return factor_payload, penalty_payload
+
+
+def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: str,
+                     outcome, artifact: D7DecisionArtifact,
+                     contract: "NewsScoringContract") -> dict:
+    """**承诺权威**(re-review#3 P0):公开面**不接受任何哈希**。它自行——
+    工件过门 → canonical payload 重建(内含账本门)→ outcome 绑定验证 →
+    从盘上解析唯一状态机终态并全量校验(共享 `_check_terminal_row`)——然后把
+    **自行解析出的** entry_hash + outcome_hash 经模块私有
+    `_append_commitment_row` 提交进决策账本链(success 每决策唯一)。
+    调用方能影响的只有"哪个执行被验证",不能影响"承诺什么哈希";伪造承诺
+    要么在此验证死,要么(真实 success 已承诺后)死于 success-唯一。幂等重试
+    安全(逐字节相同 → 返回已有承诺行)。"""
+    if not isinstance(contract, NewsScoringContract):
+        raise RegistryError("承诺权威必须提供冻结 NewsScoringContract")
+    if not isinstance(outcome, NewsLegOutcome):
+        raise RegistryError("承诺权威只收密封 NewsLegOutcome")
+    if type(execution_id) is not str or not execution_id.strip():
+        raise RegistryError("execution_id 须恰 str 非空")
+    if outcome.decision_id != decision_id:
+        raise RegistryError(
+            f"outcome.decision_id {outcome.decision_id!r} ≠ {decision_id!r}")
+    verify_d7_artifact(artifact)
+    factor_payload, penalty_payload = _rebuild_leg_payloads(
+        artifact, outcome, ledger_dir=ledger_dir)
+    verify_outcome_for_binding(outcome, artifact, factor_payload, penalty_payload,
+                               ledger_dir=ledger_dir,
+                               expected_output_mode=contract.output_mode)
+    all_rows = read_execution_provenance(prov_dir)
+    f_row = _resolve_terminal(all_rows, execution_id=execution_id,
+                              decision_id=decision_id, leg="factor")
+    _check_terminal_row(f_row, leg="factor", outcome=outcome,
+                        execution_id=execution_id, contract=contract,
+                        leg_payload_hash=factor_payload.payload_hash,
+                        artifact=artifact)
+    p_status = outcome.penalty_leg_status
+    if p_status == "not_run":
+        stray = [r for r in all_rows if isinstance(r, dict)
+                 and r.get("execution_id") == execution_id
+                 and r.get("decision_id") == decision_id
+                 and r.get("leg") == "penalty"
+                 and r.get("verdict") in _TERMINAL_VERDICTS]
+        if stray:
+            raise RegistryError("penalty not_run 却存在盘上终态行——拒")
+        p_row = None
+    else:
+        p_row = _resolve_terminal(all_rows, execution_id=execution_id,
+                                  decision_id=decision_id, leg="penalty")
+        expected_hash = (_EMPTY_PENALTY_SENTINEL if p_status == "empty_success"
+                         else penalty_payload.payload_hash)
+        _check_terminal_row(p_row, leg="penalty", outcome=outcome,
+                            execution_id=execution_id, contract=contract,
+                            leg_payload_hash=expected_hash, artifact=artifact)
+    return _append_commitment_row(
+        ledger_dir, decision_id=decision_id, execution_id=execution_id,
+        factor_entry_hash=f_row["entry_hash"],
+        penalty_entry_hash=(p_row["entry_hash"] if p_row else None),
+        outcome_hash=outcome.outcome_hash, news_status=outcome.news_status)
+
+
 # --------------------------------------------------- 真实腿执行体
 
 def _require_view(view) -> ExecutionView:
@@ -419,15 +587,12 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
                 f"{leg} 腿尝试 {execution_id} 已开始却无选定终态出处(终态写入失败等)"
                 f"——完整性违规,拒绝返回执行束(executor-review#2 Major-2)")
     selected = {leg: results.get(f"{leg}_prov") for leg in ("factor", "penalty")}
-    # archive-re-review#2 Blocker:选定终态 entry_hash + outcome_hash **承诺进
-    # 决策账本哈希链**(首写胜出 per (decision, execution))——出处文件里事后
-    # 追加/替换的伪造终态不在承诺内,归档验证一律拒
-    record_execution_commitment(
-        ledger_dir, decision_id=decision_id, execution_id=execution_id,
-        factor_entry_hash=selected["factor"]["entry_hash"],
-        penalty_entry_hash=(selected["penalty"]["entry_hash"]
-                            if selected["penalty"] else None),
-        outcome_hash=outcome.outcome_hash)
+    # archive-re-review#2 Blocker + re-review#3 P0:经**承诺权威**把本执行的
+    # 选定终态承诺进决策账本链——权威自行从盘上解析并全链验证,不透传哈希;
+    # success 承诺每决策唯一(伪造的"全新执行"无法顶替已承诺的真实执行)
+    commit_execution(ledger_dir, prov_dir, decision_id=decision_id,
+                     execution_id=execution_id, outcome=outcome,
+                     artifact=artifact, contract=contract)
     return {"execution_id": execution_id, "outcome": outcome,
             "evaluation": evaluation, "selected_provenance": selected,
             "selected_entry_hashes": {leg: (e["entry_hash"] if e else None)

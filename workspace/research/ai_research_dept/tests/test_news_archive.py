@@ -425,19 +425,45 @@ class TestTerminalRecordBinding:
         with pytest.raises(RegistryError, match="承诺不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
-    def test_forged_commitment_first_write_wins(self, tmp_path):
-        # the public commitment API cannot re-commit a different terminal set
-        # for an already-committed execution
-        from workspace.research.ai_research_dept.engine.news_decision import (
-            record_execution_commitment,
+    def test_naked_hash_commitment_api_is_gone(self):
+        # re-review#3 P0: the public API that accepted caller-supplied hashes
+        # no longer exists — the only door is the deriving commit authority
+        import workspace.research.ai_research_dept.engine.news_decision as nd
+        assert not hasattr(nd, "record_execution_commitment")
+
+    def test_gpt_probe_forged_fresh_execution_cannot_commit(self, tmp_path):
+        # the reviewer's re-review#3 probe, replayed against the fix: fresh
+        # execution_id "d1:api_forged_0001", state-machine-valid fake terminals
+        # written through the callable writer, then the commitment authority.
+        # The authority derives (it cannot be handed hashes), and the ledger's
+        # unique-success rule refuses: the REAL execution already committed
+        # this decision's one success
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            _persist_execution_provenance, commit_execution,
         )
-        art, bundle = _setup(tmp_path)
-        with pytest.raises(RegistryError, match="首写胜出"):
-            record_execution_commitment(
-                tmp_path / "ledger", decision_id="d1",
-                execution_id=bundle["execution_id"],
-                factor_entry_hash="a" * 64, penalty_entry_hash=None,
-                outcome_hash="b" * 64)
+        art, bundle = _setup(tmp_path)          # real success committed
+        forged_exec = "d1:api_forged_0001"
+        forged_record = _valid_factor_record()
+        forged_record["factor_scores"][0]["score_0_5"] = 1
+        real_f = bundle["selected_provenance"]["factor"]
+        real_p = bundle["selected_provenance"]["penalty"]
+        for leg, payload_hash, rec in (
+                ("factor", real_f["payload_hash"], forged_record),
+                ("penalty", real_p["payload_hash"], _valid_penalty_record())):
+            _persist_execution_provenance(
+                tmp_path / "prov", execution_id=forged_exec, decision_id="d1",
+                leg=leg, payload_hash=payload_hash, verdict="attempt_started",
+                schema_id="c16_news_horizon_v1")
+            _persist_execution_provenance(
+                tmp_path / "prov", execution_id=forged_exec, decision_id="d1",
+                leg=leg, payload_hash=payload_hash, verdict="valid",
+                schema_id="c16_news_horizon_v1",
+                raw=json.dumps(rec, ensure_ascii=False), parsed_record=rec)
+        with pytest.raises(RegistryError, match="成功执行唯一|success 执行承诺"):
+            commit_execution(
+                tmp_path / "ledger", tmp_path / "prov", decision_id="d1",
+                execution_id=forged_exec, outcome=bundle["outcome"],
+                artifact=art, contract=_contract())
 
 
 # --------------------------------------------------- archive integrity + anchor
@@ -510,24 +536,52 @@ class TestArchiveIntegrity:
 # --------------------------------------------------- write-once (review B1)
 
 class TestWriteOnce:
-    def test_second_valid_execution_cannot_overwrite(self, tmp_path):
-        # the reviewer's probe: two VALID executions of the same decision — the
-        # second seal must be refused, and the on-disk archive must still carry
-        # the FIRST execution's identity (first-write-wins)
+    def test_second_success_execution_refused_at_commitment(self, tmp_path):
+        # re-review#3 P0: a second SUCCESS execution of the same decision is
+        # now refused at the LEDGER (unique success per decision) — it never
+        # even reaches the archive; the sealed archive stays intact
         art, bundle1 = _setup(tmp_path)
         first = seal_decision_archive(bundle1, art, **_dirs(tmp_path),
                                       archive_dir=tmp_path / "arch")
-        bundle2 = execute_news_decision(
-            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
-            decision_id="d1", contract=_contract(), call_fn=_call_fn())
-        assert bundle2["execution_id"] != bundle1["execution_id"]
-        with pytest.raises(RegistryError, match="拒绝覆盖"):
-            seal_decision_archive(bundle2, art, **_dirs(tmp_path),
-                                  archive_dir=tmp_path / "arch")
+        with pytest.raises(RegistryError, match="成功执行唯一"):
+            execute_news_decision(
+                art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+                decision_id="d1", contract=_contract(), call_fn=_call_fn())
         on_disk = json.loads(next(
             (tmp_path / "arch").glob("news_decision_*.json")).read_text(
                 encoding="utf-8"))
         assert on_disk["execution_id"] == first["execution_id"]
+
+    def test_hard_fail_then_success_retry_recovers(self, tmp_path):
+        # recoverability pin: hard_failed commitments do NOT claim the decision
+        # — the success retry commits, seals, and loads
+        def boom(msgs):
+            raise ConnectionError("down")
+        art, fail_bundle = _setup(tmp_path, call_fn=boom)
+        assert fail_bundle["outcome"].news_status == "hard_failed"
+        good = execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=_contract(), call_fn=_call_fn())
+        seal_decision_archive(good, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["outcome"]["news_status"] == "success"
+
+    def test_sealed_hard_fail_archive_superseded_by_success(self, tmp_path):
+        # a hard-fail archive sealed early is SUPERSEDED once the decision's
+        # unique success commitment lands — loading it now fails closed
+        def boom(msgs):
+            raise ConnectionError("down")
+        art, fail_bundle = _setup(tmp_path, call_fn=boom)
+        seal_decision_archive(fail_bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=_contract(), call_fn=_call_fn())
+        with pytest.raises(RegistryError, match="被取代"):
+            load_and_verify_decision_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
 
     def test_identical_reseal_is_idempotent(self, tmp_path):
         # same bundle, unchanged ledger — the fully re-derived archive is
@@ -620,6 +674,27 @@ class TestLoadIdentity:
         doc["selected_provenance"]["unverified_alias"] = {"x": 1}
         self._reseal(p, doc)
         with pytest.raises(RegistryError, match="两键 dict"):
+            load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
+                                             archive_dir=tmp_path / "arch")
+
+    def test_anchor_downgrade_to_earlier_chain_member_refused(self, tmp_path):
+        # re-review#3 P1 (the reviewer's probe): move the anchor from the
+        # execution-commitment row to the EARLIER decision row — a valid chain
+        # member, but the commitment is no longer on the ancestry path ending
+        # at the anchored head; membership alone must not accept it
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            lookup_decision,
+        )
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        dec_row = lookup_decision(tmp_path / "ledger", "d1")
+        p = next((tmp_path / "arch").glob("news_decision_*.json"))
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        assert doc["ledger_head_at_seal"] != dec_row["entry_hash"]
+        doc["ledger_head_at_seal"] = dec_row["entry_hash"]
+        self._reseal(p, doc)
+        with pytest.raises(RegistryError, match="祖先路径"):
             load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
                                              archive_dir=tmp_path / "arch")
 

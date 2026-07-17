@@ -52,6 +52,20 @@ archive-re-review#2(1B/2M)全数折叠:
 - **M genesis 降级**:链头锚验改**无条件**成员检验——封印必然晚于决策入账+
   执行承诺,genesis 永不合法。
 
+archive-re-review#3(1B/1M)全数折叠:
+
+- **P0 承诺权威**:公开裸哈希承诺 API 撤除——唯一门是
+  [news_executors.commit_execution](news_executors.py)(不收任何哈希:自行
+  重建 payload、验 outcome、从盘上解析唯一状态机终态并全量校验[共享
+  `_check_terminal_row`],再把**自行解析出的**哈希经模块私有
+  `_append_commitment_row` 入链);链级新不变量 **success 承诺每决策唯一**
+  ——真实执行承诺 success 后,伪造的"全新执行"(评审的 `d1:api_forged_0001`
+  探针)无法再提交第二条 success;归档要求承诺 news_status 与 outcome 相符,
+  且硬失败束在 success 承诺存在时被**取代**(不可封/不可读)。
+- **P1 祖先锚**:读档不再只验链头**成员性**——本执行的承诺行必须在以
+  `ledger_head_at_seal` 为终点的祖先路径上(线性链 seq ≤);锚降级到承诺前
+  的更早合法链成员(如决策注册行)= 拒。
+
 四席装配/scorecard 薄分发/链 bump 在下一单元;本单元零活链触碰。
 """
 from __future__ import annotations
@@ -66,13 +80,14 @@ from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
-    _ledger_path, _read_chain, build_leg_payload_ast, build_sealed_payload,
-    find_execution_commitment, ledger_head, leg_expected_ids,
+    _ledger_path, _read_chain, find_execution_commitment,
+    find_success_commitment, ledger_head,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
 from workspace.research.ai_research_dept.engine.news_executors import (
-    _EMPTY_PENALTY_RECORD, _LLM_TERMINALS, _TERMINAL_VERDICTS,
-    NewsScoringContract, PROV_ROW_KEYS, _prov_lock, read_execution_provenance,
+    _EMPTY_PENALTY_RECORD, _EMPTY_PENALTY_SENTINEL, _TERMINAL_VERDICTS,
+    NewsScoringContract, _check_terminal_row, _prov_lock, _rebuild_leg_payloads,
+    _resolve_terminal, read_execution_provenance,
 )
 from workspace.research.ai_research_dept.engine.news_horizon import (
     deterministic_zero_factor_record, evaluate_news_horizon,
@@ -82,98 +97,23 @@ from workspace.research.ai_research_dept.engine.news_legs import (
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
-_EMPTY_PENALTY_SENTINEL = "0" * 64
-#: 腿终态 ↔ 选定出处 verdict 的语义一致表(BINDING #1)
-_LEG_VERDICTS = {
-    ("factor", "success"): {"valid", "deterministic_zero"},
-    ("factor", "failed"): {"invalid", "call_error"},
-    ("penalty", "success"): {"valid"},
-    ("penalty", "failed"): {"invalid", "call_error"},
-    ("penalty", "empty_success"): {"empty_penalty"},
-}
-
-
-def _rebuild_leg_payloads(artifact, outcome, *, ledger_dir):
-    """canonical payload 确定性重建(同 AST + 同工件 → 同哈希)。penalty 只在
-    实际执行过(success/failed)时存在。"""
-    factor_payload = build_sealed_payload(
-        build_leg_payload_ast(artifact, use="factor_positive", consumer_seat="news"),
-        artifact, ledger_dir=ledger_dir, decision_id=outcome.decision_id,
-        consumer_seat="news", use="factor_positive")
-    penalty_payload = None
-    if outcome.penalty_leg_status in ("success", "failed"):
-        penalty_payload = build_sealed_payload(
-            build_leg_payload_ast(artifact, use="penalty", consumer_seat="news"),
-            artifact, ledger_dir=ledger_dir, decision_id=outcome.decision_id,
-            consumer_seat="news", use="penalty")
-    return factor_payload, penalty_payload
-
-
-def _resolve_terminal(all_rows: list, *, execution_id: str, decision_id: str,
-                      leg: str) -> dict:
-    """从盘上出处文件按 (decision_id, execution_id, leg) 解析**唯一、状态机相连**
-    的终态行(archive-re-review#2 Blocker:归档不信 bundle 带入的行——盘上多于
-    一条终态 = 有人事后追加伪造行 → 整个键失去可验证性,fail-closed 拒)。"""
-    key_rows = [r for r in all_rows if isinstance(r, dict)
-                and r.get("execution_id") == execution_id
-                and r.get("decision_id") == decision_id
-                and r.get("leg") == leg]
-    terminals = [r for r in key_rows if r.get("verdict") in _TERMINAL_VERDICTS]
-    if len(terminals) != 1:
-        raise RegistryError(
-            f"({execution_id!r}, {leg}) 盘上终态行数 = {len(terminals)},须恰一"
-            f"——0 = 未持久化;>1 = 出处被事后追加伪造终态,键失去可验证性,拒"
-            f"(archive-re-review#2 Blocker)")
-    row = terminals[0]
-    attempts = [r for r in key_rows if r.get("verdict") == "attempt_started"]
-    if row.get("verdict") in _LLM_TERMINALS:
-        if len(attempts) != 1 \
-                or attempts[0].get("payload_hash") != row.get("payload_hash"):
-            raise RegistryError(
-                f"({execution_id!r}, {leg}) LLM 终态未连着同 payload 的恰一 "
-                f"attempt_started 行——状态机断裂,拒(archive-re-review#2)")
-    elif attempts:
-        raise RegistryError(
-            f"({execution_id!r}, {leg}) 确定性终态却存在 attempt_started 行"
-            f"——免 LLM 路径无尝试行,状态机断裂,拒(archive-re-review#2)")
-    return row
-
-
 def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
                          execution_id: str, contract: NewsScoringContract,
-                         leg_payload_hash: str, resolved: dict) -> None:
+                         leg_payload_hash: str, resolved: dict,
+                         artifact: D7DecisionArtifact) -> None:
     """单条选定终态行的联合验证(BINDING #1 + archive-review B2 + re-review#2:
     bundle 行必须**逐字节等于**盘上解析出的唯一状态机终态——bundle 不再是行的
-    权威来源,只是对盘上事实的引用)。"""
+    权威来源,只是对盘上事实的引用;全量行校验走与承诺权威**共享**的
+    `_check_terminal_row`,两处语义永不分叉)。"""
     if not isinstance(row, dict):
         raise RegistryError(f"{leg} 腿选定终态行缺失/非法——尝试过的腿必须恰一终态")
     if row != resolved:
         raise RegistryError(
             f"{leg} 腿选定终态行与盘上唯一状态机终态不符——bundle 携入的行不是"
             f"该执行的持久化事实,拒(archive-re-review#2 Blocker)")
-    if set(row) != PROV_ROW_KEYS:
-        raise RegistryError(
-            f"{leg} 腿选定终态行键集不符出处行 schema(archive-review B2;"
-            f"多/少键 {sorted(set(row) ^ PROV_ROW_KEYS)})")
-    body = {k: v for k, v in row.items() if k != "entry_hash"}
-    if seal_hash(body) != row.get("entry_hash"):
-        raise RegistryError(f"{leg} 腿选定终态行 entry_hash 重算不符——行被改,拒")
-    if row["leg"] != leg:
-        raise RegistryError(
-            f"{leg} 腿终态槽装的是 {row['leg']!r} 腿的出处行——终态行↔腿绑定违规"
-            f"(archive-review B2)")
-    if row["execution_id"] != execution_id or row["decision_id"] != outcome.decision_id:
-        raise RegistryError(f"{leg} 腿选定终态行 execution/decision 身份不符")
-    if row["schema_id"] != contract.schema_id:
-        raise RegistryError(f"{leg} 腿选定终态行 schema_id 与冻结契约不符")
-    status = getattr(outcome, f"{leg}_leg_status")
-    allowed = _LEG_VERDICTS.get((leg, status))
-    if allowed is None or row["verdict"] not in allowed:
-        raise RegistryError(
-            f"{leg} 腿终态 {status!r} 与选定 verdict {row['verdict']!r} 语义不符"
-            f"(允许 {sorted(allowed) if allowed else '无'})")
-    if row["payload_hash"] != leg_payload_hash:
-        raise RegistryError(f"{leg} 腿选定终态行 payload_hash 与重建 payload 不符")
+    _check_terminal_row(row, leg=leg, outcome=outcome, execution_id=execution_id,
+                        contract=contract, leg_payload_hash=leg_payload_hash,
+                        artifact=artifact)
 
 
 def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
@@ -228,27 +168,15 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     _verify_selected_row(f_row, leg="factor", outcome=outcome,
                          execution_id=execution_id, contract=contract,
                          leg_payload_hash=factor_payload.payload_hash,
-                         resolved=f_resolved)
+                         resolved=f_resolved, artifact=artifact)
     if outcome.factor_leg_status == "success":
-        # archive-review B2:deterministic_zero 合法性从工件**重新导出**——
-        # 正向期望总体为空 ⟺ 确定性零(伪造零终态压掉真实证据在此死)
-        factor_expected = leg_expected_ids(artifact.final_registry,
-                                           use="factor_positive",
-                                           consumer_seat="news")
-        if factor_expected:
-            if f_row["verdict"] != "valid":
-                raise RegistryError(
-                    "factor 正向期望总体非空,选定终态却是 "
-                    f"{f_row['verdict']!r}——deterministic_zero 只在总体为空时合法"
-                    "(archive-review B2)")
-            _require_record_bound(records["factor"], f_row, leg="factor")
-        else:
-            if f_row["verdict"] != "deterministic_zero":
-                raise RegistryError(
-                    "factor 正向期望总体为空,选定终态必须是 deterministic_zero"
-                    f"(得 {f_row['verdict']!r},archive-review B2)")
+        # deterministic_zero ⟺ 总体为空已由共享 _check_terminal_row 双向重导出;
+        # 此处按(已验证的)verdict 分派记录绑定的确定性期望
+        if f_row["verdict"] == "deterministic_zero":
             _require_record_bound(records["factor"], f_row, leg="factor",
                                   expect=deterministic_zero_factor_record())
+        else:
+            _require_record_bound(records["factor"], f_row, leg="factor")
     else:
         if records["factor"] is not None:
             raise RegistryError("factor 腿硬失败不得携带封存记录(archive-review B2)")
@@ -259,6 +187,13 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             raise RegistryError("penalty not_run 不得有选定终态行")
         if records["penalty"] is not None:
             raise RegistryError("penalty not_run 不得携带封存记录(archive-review B2)")
+        stray = [r for r in all_rows if isinstance(r, dict)
+                 and r.get("execution_id") == execution_id
+                 and r.get("decision_id") == outcome.decision_id
+                 and r.get("leg") == "penalty"
+                 and r.get("verdict") in _TERMINAL_VERDICTS]
+        if stray:
+            raise RegistryError("penalty not_run 却存在盘上终态行——拒")
     elif p_status == "empty_success":
         row = sel.get("penalty")
         p_resolved = _resolve_terminal(all_rows, execution_id=execution_id,
@@ -267,7 +202,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         _verify_selected_row(row, leg="penalty", outcome=outcome,
                              execution_id=execution_id, contract=contract,
                              leg_payload_hash=_EMPTY_PENALTY_SENTINEL,
-                             resolved=p_resolved)
+                             resolved=p_resolved, artifact=artifact)
         # BINDING #1:哨兵只**联合**接受——绝不凭 "0"*64 单独放行
         if not (outcome.penalty_eligible_count == 0
                 and outcome.penalty_payload_hash is None
@@ -287,7 +222,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         _verify_selected_row(p_row, leg="penalty", outcome=outcome,
                              execution_id=execution_id, contract=contract,
                              leg_payload_hash=penalty_payload.payload_hash,
-                             resolved=p_resolved)
+                             resolved=p_resolved, artifact=artifact)
         if p_status == "success":
             _require_record_bound(records["penalty"], p_row, leg="penalty")
         elif records["penalty"] is not None:
@@ -306,25 +241,34 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         if bundle.get("evaluation") is not None:
             raise RegistryError("硬失败决策不得携带 evaluation")
     # archive-re-review#2 Blocker:选定终态必须与**账本承诺**(不可重写哈希链)
-    # 逐哈希相符——受控执行器在返回束前把终态 entry_hash 承诺进决策账本;
+    # 逐哈希相符——承诺权威在返回束前把终态 entry_hash 承诺进决策账本;
     # 直接改写出处文件(绕过写入器)替换的行不在承诺内,在此死
     commitment = find_execution_commitment(ledger_dir, outcome.decision_id,
                                            execution_id)
     if commitment is None:
         raise RegistryError(
             f"执行 ({outcome.decision_id!r}, {execution_id!r}) 无账本承诺——"
-            f"受控执行器未提交/账本被换,拒(archive-re-review#2 Blocker)")
+            f"承诺权威未提交/账本被换,拒(archive-re-review#2 Blocker)")
     p_sel = sel.get("penalty")
     if commitment["factor_entry_hash"] != f_row["entry_hash"] \
             or commitment["penalty_entry_hash"] != (p_sel["entry_hash"]
                                                     if p_sel else None) \
-            or commitment["outcome_hash"] != outcome.outcome_hash:
+            or commitment["outcome_hash"] != outcome.outcome_hash \
+            or commitment["news_status"] != outcome.news_status:
         raise RegistryError(
             "选定终态/outcome 与账本承诺不符——出处文件被绕过写入器改写,拒"
             "(archive-re-review#2 Blocker)")
+    if outcome.news_status != "success" \
+            and find_success_commitment(ledger_dir, outcome.decision_id) is not None:
+        # re-review#3 P0 配套:账本已有该决策的唯一 success 执行——硬失败
+        # 束/档案已被真实成功执行取代,不再可封印/可读(fail-closed)
+        raise RegistryError(
+            f"决策 {outcome.decision_id!r} 已有 success 执行承诺——硬失败执行"
+            f"被取代,拒(re-review#3 P0)")
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
-                                     if penalty_payload else None)}
+                                     if penalty_payload else None),
+            "commitment": commitment}
 
 
 _ARCHIVE_SCHEMA = "news_decision_archive_v1"
@@ -465,15 +409,24 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
     bundle = {"execution_id": archive["execution_id"], "outcome": outcome,
               "evaluation": archive["evaluation"], "records": archive["records"],
               "selected_provenance": archive["selected_provenance"]}
-    verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
-                            prov_dir=prov_dir, contract=contract)
+    verified = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
+                                       prov_dir=prov_dir, contract=contract)
     # 链头锚验(BINDING #6 + re-review#2 Major:**无条件**成员检验——封印必然
     # 晚于决策入账+执行承诺,账本非空,genesis 在此永不合法;把锚改写为
     # "0"*64 再重封 = 降级攻击,在此死)
     anchored = archive["ledger_head_at_seal"]
-    current_hashes = {e["entry_hash"] for e in _read_chain(_ledger_path(ledger_dir))}
-    if anchored not in current_hashes:
+    entries = _read_chain(_ledger_path(ledger_dir))
+    anchored_row = next((e for e in entries if e["entry_hash"] == anchored), None)
+    if anchored_row is None:
         raise RegistryError(
             f"档案锚定链头 {str(anchored)[:12]!r} 不在当前账本链内——账本被整本"
             f"重算/替换或锚被降级为 genesis,拒(BINDING #6 外锚,re-review#2)")
+    # re-review#3 P1:成员性不够——本执行的承诺行必须在**以锚为终点的祖先路径**
+    # 上(线性链上祖先 ⟺ seq ≤ 锚 seq)。把锚降级到承诺之前的更早合法链成员
+    # (如该决策自己的注册行)= 档案声称"封印时链头"早于其自身承诺,矛盾,拒
+    if verified["commitment"]["seq"] > anchored_row["seq"]:
+        raise RegistryError(
+            f"档案锚定链头 seq={anchored_row['seq']} 早于本执行的承诺行 "
+            f"seq={verified['commitment']['seq']}——承诺不在锚的祖先路径上,"
+            f"锚被降级到更早链成员,拒(re-review#3 P1)")
     return archive
