@@ -617,8 +617,9 @@ def _population_spec_errors(endpoint: str, spec) -> list:
                     f"(e.g. {{start, end}} / {{codes: [...]}} / {{list_status}})")
     sha = str(spec.get("expected_set_sha256") or "")
     if len(sha) != 64:
-        errs.append(f"{endpoint}: request_population.expected_set_sha256 must pin the population the "
-                    f"reviewer actually signed (sha256 of the sorted resolved set)")
+        errs.append(f"{endpoint}: request_population.expected_set_sha256 must pin the COMPLETE REQUEST "
+                    f"SET the reviewer signed (sha256 over every parameter of every request, not a "
+                    f"member list)")
     if errs:
         return errs
     try:
@@ -627,10 +628,11 @@ def _population_spec_errors(endpoint: str, spec) -> list:
         return [f"{endpoint}: request_population does not resolve: {exc}"]
     if not resolved:
         return [f"{endpoint}: request_population resolves to an EMPTY set — nothing would be fetched"]
-    got = population_set_sha256(resolved)
+    got = request_set_sha256(resolved)
     if got != sha:
-        errs.append(f"{endpoint}: request_population resolves to {len(resolved)} items hashing "
-                    f"{got[:12]}, but the contract signs {sha[:12]} — sign the set that resolves")
+        errs.append(f"{endpoint}: request_population resolves to {len(resolved)} COMPLETE REQUESTS "
+                    f"hashing {got[:12]}, but the contract signs {sha[:12]} — sign the request set that "
+                    f"resolves")
     return errs
 
 
@@ -644,45 +646,96 @@ def canonical_contract_sha256(c: dict) -> str:
     ).hexdigest()
 
 
-# ── EXECUTABLE population resolvers (GPT re-review #10 BLOCKER-1) ────────────────────────────────
-# The old `_UNIT_PARAM` mapped each unit to ONE request parameter and compared the legs to EACH OTHER.
-# That proves AGREEMENT, never CORRECTNESS — reproduced: every A01 leg requesting a SUNDAY passed while
-# the contract claimed "trade_cal open sessions", `period_report_type` ignored `report_type`, and
-# `index_range` ignored its bounds. `request_population.source` was unenforced prose.
+# ── EXECUTABLE population resolvers — COMPLETE REQUESTS, not member scalars ──────────────────────
+# GPT sign-off HOLD: "complete request tuples are constructed, then discarded". The tuple was built and
+# then projected to `k[0]`, so the "exact" comparison verified only the PRIMARY AXIS. Reproduced through
+# the fully signed gate: income_vip(period=20260331, report_type=999) accepted (the real recipe uses 2/3);
+# signed index code 000300.SH accepted an unsigned 2099 range; 5,861 signed stocks accepted arbitrary
+# 2099 cyq_perf ranges. I computed the fact and threw it away on the next line.
 #
-# A signed contract now declares a RESOLVER the code can EXECUTE against the real reference data, the
-# COMPLETE tuple of population-determining parameters, the BOUNDS, and the sha256 of the resolved set —
-# so the human signs a specific, reproducible population and the plan is compared to it EXACTLY.
+# A resolver now yields the FULL canonical request — every varying AND constant parameter — and the plan
+# is compared to that set whole. Reference-derived axes are PINNED by `reference_sha256`: reading live
+# reference data would force re-signing on every calendar/listing refresh (GPT's answer 2), so the
+# contract binds the exact reference bytes it was signed against.
+
+
+def _canon_request(params: dict) -> tuple:
+    """A complete, canonical, hashable request identity: EVERY parameter, sorted. Never a projection."""
+    return tuple(sorted((str(k), str(v)) for k, v in dict(params).items()))
+
+
+def request_set_sha256(requests) -> str:
+    """Identity of a resolved request SET — what the human actually signed."""
+    payload = "\n".join(sorted("&".join(f"{k}={v}" for k, v in r) for r in requests))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# back-compat alias: the population IS the request set now
+population_set_sha256 = request_set_sha256
+
+
+def _pinned_reference(rel: str, bounds: dict, label: str):
+    """Load a reference table ONLY at the exact bytes the contract was signed against. GPT: resolving
+    from live reference data 'will otherwise force re-signing whenever listings/statuses change' — so a
+    contract pins the sha256 it saw, and a refreshed reference refuses until re-signed deliberately."""
+    import pandas as pd
+    path = E_DATA / rel
+    want = str(bounds.get("reference_sha256") or "")
+    if len(want) != 64:
+        raise RuntimeError(f"{label}: bounds.reference_sha256 must pin the reference file this "
+                           f"population is derived from ({rel})")
+    if not path.is_file():
+        raise RuntimeError(f"{label}: reference {rel} is missing")
+    got = sha256_file(path)
+    if got != want:
+        raise RuntimeError(f"{label}: {rel} is now {got[:12]} but the contract pins {want[:12]} — the "
+                           f"reference data changed since signing; re-sign against the new bytes")
+    return pd.read_parquet(path)
 
 
 def _resolve_open_sessions(bounds: dict) -> set:
-    """The REAL open trading sessions from data/reference/trade_cal.parquet (which survived the
-    incident) — the fact a 'trade_cal open sessions' claim refers to. A weekend or a holiday is simply
-    not in it."""
-    import pandas as pd
-    cal = pd.read_parquet(E_DATA / "reference" / "trade_cal.parquet")
+    """The REAL open trading sessions from the pinned trade_cal — one request per session."""
+    cal = _pinned_reference("reference/trade_cal.parquet", bounds, "trade_cal_open_sessions")
     exch = str(bounds.get("exchange") or "SSE")
     sel = cal[(cal["exchange"] == exch) & (cal["is_open"] == 1)]
     lo, hi = str(bounds["start"]), str(bounds["end"])
-    return {str(d) for d in sel["cal_date"] if lo <= str(d) <= hi}
+    return {_canon_request({"trade_date": str(d)}) for d in sel["cal_date"] if lo <= str(d) <= hi}
 
 
-def _resolve_listed_stocks(bounds: dict) -> set:
-    """Every ts_code in stock_basic within the declared list_status set (delisted names INCLUDED by
-    default — survivorship bias is a research defect, and recovery must restore what existed)."""
-    import pandas as pd
-    sb = pd.read_parquet(E_DATA / "reference" / "stock_basic.parquet")
+def _listed_codes(bounds: dict, label: str) -> set:
+    sb = _pinned_reference("reference/stock_basic.parquet", bounds, label)
     want = set(str(bounds.get("list_status") or "L,D,P").split(","))
     if "list_status" in sb.columns:
         sb = sb[sb["list_status"].astype(str).isin(want)]
     return {str(c) for c in sb["ts_code"]}
 
 
-def _resolve_calendar_months(bounds: dict) -> set:
-    """YYYYMM strings inclusive of both bounds."""
+def _resolve_stock_codes(bounds: dict) -> set:
+    """Per-stock legs whose request is the code alone (statements, forecast, dividends, holders)."""
+    return {_canon_request({"ts_code": c}) for c in _listed_codes(bounds, "stock_basic_codes")}
+
+
+def _resolve_stock_ranges(bounds: dict) -> set:
+    """Per-stock legs whose request ALSO carries a date range (cyq_perf takes ts_code + start_date +
+    end_date — GPT: the range was unbound, so 5,861 signed stocks accepted arbitrary 2099 dates)."""
+    lo, hi = str(bounds["start_date"]), str(bounds["end_date"])
+    return {_canon_request({"ts_code": c, "start_date": lo, "end_date": hi})
+            for c in _listed_codes(bounds, "stock_basic_ranges")}
+
+
+def _resolve_index_ranges(bounds: dict) -> set:
+    """Index legs are per-code RANGES: the signed request includes its bounds (GPT: signed 000300.SH
+    accepted an unsigned 20990101..20990102 range)."""
+    codes = bounds.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise RuntimeError("index_code_ranges requires an explicit signed `codes` list")
+    lo, hi = str(bounds["start_date"]), str(bounds["end_date"])
+    return {_canon_request({"ts_code": str(c), "start_date": lo, "end_date": hi}) for c in codes}
+
+
+def _month_strings(bounds: dict) -> set:
     lo, hi = str(bounds["start"]), str(bounds["end"])
-    y, mth = int(lo[:4]), int(lo[4:6])
-    out = set()
+    y, mth, out = int(lo[:4]), int(lo[4:6]), set()
     while f"{y:04d}{mth:02d}" <= hi:
         out.add(f"{y:04d}{mth:02d}")
         mth += 1
@@ -691,58 +744,77 @@ def _resolve_calendar_months(bounds: dict) -> set:
     return out
 
 
-def _resolve_report_periods(bounds: dict) -> set:
-    """Quarter-end period stamps (YYYYMMDD) inclusive of both bounds."""
+def _resolve_calendar_months(bounds: dict) -> set:
+    return {_canon_request({"month": m}) for m in _month_strings(bounds)}
+
+
+def _resolve_report_date_months(bounds: dict) -> set:
+    return {_canon_request({"report_date": m}) for m in _month_strings(bounds)}
+
+
+def _period_strings(bounds: dict) -> set:
+    """Quarter-ends between the bounds, OR an EXPLICIT signed list. GPT: `report_periods` generated only
+    standard quarter ends (73 for 20080331..20260331) while the baseline holds 98 indicator partitions —
+    data_tracker records that legacy Tushare indicator history contains NON-QUARTER periods. A generated
+    calendar cannot describe vendor-reported reality, so the contract may sign the period list itself."""
+    explicit = bounds.get("periods")
+    if explicit is not None:
+        if not isinstance(explicit, list) or not explicit:
+            raise RuntimeError("request_population.bounds.periods must be a non-empty signed list")
+        return {str(p) for p in explicit}
     lo, hi = str(bounds["start"]), str(bounds["end"])
-    out = set()
-    for y in range(int(lo[:4]), int(hi[:4]) + 1):
-        for md in ("0331", "0630", "0930", "1231"):
-            p = f"{y}{md}"
-            if lo <= p <= hi:
-                out.add(p)
-    return out
+    return {f"{y}{md}" for y in range(int(lo[:4]), int(hi[:4]) + 1)
+            for md in ("0331", "0630", "0930", "1231") if lo <= f"{y}{md}" <= hi}
 
 
-def _resolve_index_codes(bounds: dict) -> set:
-    """The explicitly signed index codes — an index leg is a per-code RANGE, so the population is the
-    code set and the range bounds are part of every request (see _POPULATION_PARAMS)."""
-    codes = bounds.get("codes")
-    if not isinstance(codes, list) or not codes:
-        raise RuntimeError("index_codes resolver requires an explicit `codes` list in bounds")
-    return {str(c) for c in codes}
+def _resolve_report_periods(bounds: dict) -> set:
+    return {_canon_request({"period": p}) for p in _period_strings(bounds)}
+
+
+def _resolve_report_periods_x_types(bounds: dict) -> set:
+    """periods x report_types — the Cartesian product GPT specified: report_type was unbound, so
+    income_vip(period=20260331, report_type=999) was accepted though the real recipe uses ("2","3")
+    (scripts/fetch_quarterly_statements.py)."""
+    types = bounds.get("report_types")
+    if not isinstance(types, list) or not types:
+        raise RuntimeError("period_report_type populations must sign an explicit `report_types` list "
+                           "(the direct-quarter recipe uses ['2', '3'])")
+    return {_canon_request({"period": p, "report_type": str(t)})
+            for p in _period_strings(bounds) for t in types}
 
 
 _POPULATION_RESOLVERS = {
     "trade_cal_open_sessions": _resolve_open_sessions,
-    "stock_basic_codes": _resolve_listed_stocks,
+    "stock_basic_codes": _resolve_stock_codes,
+    "stock_basic_ranges": _resolve_stock_ranges,
+    "index_code_ranges": _resolve_index_ranges,
     "calendar_months": _resolve_calendar_months,
+    "report_date_months": _resolve_report_date_months,
     "report_periods": _resolve_report_periods,
-    "index_codes": _resolve_index_codes,
+    "report_periods_x_types": _resolve_report_periods_x_types,
 }
 
-# EVERY population-determining parameter per unit — not one (GPT re-review #10: `period_report_type`
-# ignored `report_type`; `index_range` ignored its range bounds). The plan's request key is the TUPLE.
-_POPULATION_PARAMS = {
-    "open_trade_date": ("trade_date",),
-    "month": ("month",),
-    "report_date_month": ("report_date",),
-    "period": ("period",),
-    "period_report_type": ("period", "report_type"),
-    "stock": ("ts_code",),
-    "stock_repartition": ("ts_code",),
-    "index_range": ("ts_code", "start_date", "end_date"),
-}
-# which resolver legitimately produces each unit's population
+# which resolver legitimately produces each unit's COMPLETE request set
 _UNIT_RESOLVERS = {
-    "open_trade_date": "trade_cal_open_sessions", "stock": "stock_basic_codes",
-    "stock_repartition": "stock_basic_codes", "month": "calendar_months",
-    "report_date_month": "calendar_months", "period": "report_periods",
-    "period_report_type": "report_periods", "index_range": "index_codes",
+    "open_trade_date": "trade_cal_open_sessions",
+    "stock": "stock_basic_codes",
+    "stock_repartition": "stock_basic_ranges",
+    "index_range": "index_code_ranges",
+    "month": "calendar_months",
+    "report_date_month": "report_date_months",
+    "period": "report_periods",
+    "period_report_type": "report_periods_x_types",
+}
+# the axis a `partition` label names (label honesty only — NEVER the comparison key)
+_UNIT_LABEL_PARAM = {
+    "open_trade_date": "trade_date", "stock": "ts_code", "stock_repartition": "ts_code",
+    "index_range": "ts_code", "month": "month", "report_date_month": "report_date",
+    "period": "period", "period_report_type": "period",
 }
 
 
 def resolve_population(spec: dict) -> set:
-    """Execute the signed resolver and return the EXACT expected population."""
+    """Execute the signed resolver and return the EXACT expected set of COMPLETE requests."""
     fn = _POPULATION_RESOLVERS.get(spec.get("resolver"))
     if fn is None:
         raise RuntimeError(f"unknown population resolver {spec.get('resolver')!r}; known: "
@@ -750,43 +822,36 @@ def resolve_population(spec: dict) -> set:
     return fn(spec.get("bounds") or {})
 
 
-def population_set_sha256(values) -> str:
-    """Identity of a resolved population — what the human actually signed."""
-    payload = "\n".join(sorted(str(v) for v in values))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def _request_population_key(pr: dict, row) -> tuple:
-    """The population value this request ACTUALLY asks for: the TUPLE of EVERY determining parameter,
-    read from its own params — never from the `partition` label. The first element is compared to the
-    label so a label that misdescribes its request refuses."""
+    """The COMPLETE canonical request this plan row actually makes — every parameter, from its own
+    params. The `partition` label is checked for honesty against the unit's naming axis but is NEVER
+    the comparison key (GPT: the label is not evidence about the request)."""
     unit = _QUERY_MODE_TO_UNIT.get(row.query_mode)
-    names = _POPULATION_PARAMS.get(unit)
     params = pr.get("params") or {}
     if not isinstance(params, dict) or not params:
         raise RuntimeError(f"plan row {pr.get('request_id')}: no params — a request with no parameters "
                            f"cannot be proven to cover anything")
-    if names is None:
-        raise RuntimeError(f"plan row {pr.get('request_id')}: population unit {unit!r} declares no "
-                           f"determining parameters; add it to _POPULATION_PARAMS before planning it")
-    missing = [n for n in names if n not in params]
-    if missing:
+    label_param = _UNIT_LABEL_PARAM.get(unit)
+    if label_param is None:
+        raise RuntimeError(f"plan row {pr.get('request_id')}: unit {unit!r} declares no label axis; add "
+                           f"it to _UNIT_LABEL_PARAM before planning this endpoint")
+    if label_param not in params:
         raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): params {params} "
-                           f"carry no {missing} — {unit!r} is determined by {list(names)}")
-    key = tuple(str(params[n]) for n in names)
-    label = str(pr.get("partition"))
-    if label != key[0]:
+                           f"carry no {label_param!r} — {unit!r} is named by it")
+    if str(pr.get("partition")) != str(params[label_param]):
         raise RuntimeError(f"plan row {pr.get('request_id')} ({pr.get('endpoint')}): partition label "
-                           f"{label!r} but the request actually asks for {names[0]}={key[0]!r} — the "
-                           f"label is not evidence about the request")
-    return key
+                           f"{pr.get('partition')!r} but the request asks for "
+                           f"{label_param}={params[label_param]!r} — the label is not evidence about "
+                           f"the request")
+    return _canon_request(params)
 
 
 def assert_population_is_correct(plan_rows: list, contracts: dict) -> None:
-    """The plan's requests must equal the RESOLVED population EXACTLY (GPT re-review #10 BLOCKER-1:
-    the legs agreeing with each other proved nothing — a Sunday passed while the contract claimed
-    trade-calendar open sessions). Missing = incomplete recovery; extra = a request the signed
-    population does not contain."""
+    """The plan's COMPLETE requests must equal the RESOLVED request set EXACTLY.
+
+    GPT sign-off HOLD: the previous version reduced each request tuple to `k[0]`, so the comparison
+    established only the primary axis — an unsigned report_type/range/filter rode along free. There is
+    no projection here: `asked == expected`, whole requests both sides."""
     by_family = {r.output_family: r for r in ENDPOINT_MATRIX}
     seen = {}
     for pr in plan_rows:
@@ -804,19 +869,21 @@ def assert_population_is_correct(plan_rows: list, contracts: dict) -> None:
             raise RuntimeError(f"{ep}/{fam}: enumerates {unit!r} which resolves via {want_resolver!r}, "
                                f"but the signed contract declares resolver {spec.get('resolver')!r}")
         expected = resolve_population(spec)
-        got_sha = population_set_sha256(expected)
+        got_sha = request_set_sha256(expected)
         if spec.get("expected_set_sha256") != got_sha:
-            raise RuntimeError(f"{ep}: the resolved population ({len(expected)} items, {got_sha[:12]}) is "
-                               f"not the one signed ({str(spec.get('expected_set_sha256'))[:12]}) — the "
-                               f"reference data changed since signing, or the bounds do not describe it")
-        asked_primary = {k[0] for k in asked}
-        missing, extra = expected - asked_primary, asked_primary - expected
+            raise RuntimeError(f"{ep}: the resolved request set ({len(expected)} requests, "
+                               f"{got_sha[:12]}) is not the one signed "
+                               f"({str(spec.get('expected_set_sha256'))[:12]}) — the bounds or the "
+                               f"pinned reference no longer describe it")
+        missing, extra = expected - asked, asked - expected
         if missing or extra:
+            def _fmt(rs):
+                return [dict(r) for r in sorted(rs)[:2]]
             raise RuntimeError(
-                f"{ep}/{fam}: the plan does not cover the signed population — {len(missing)} missing "
-                f"(e.g. {sorted(missing)[:3]}), {len(extra)} NOT in it (e.g. {sorted(extra)[:3]}). An "
-                f"extra request is one the signed population does not contain (a weekend, a delisted "
-                f"code); a missing one is an incomplete recovery.")
+                f"{ep}/{fam}: the plan does not make the signed REQUESTS — {len(missing)} missing "
+                f"(e.g. {_fmt(missing)}), {len(extra)} NOT signed (e.g. {_fmt(extra)}). Comparison is on "
+                f"COMPLETE requests: an unsigned report_type, range bound or filter is an unsigned "
+                f"request even when its primary axis matches.")
 
 
 def assert_multi_source_merge_coverage(plan_rows: list, contracts: dict) -> None:

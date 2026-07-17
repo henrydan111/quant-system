@@ -641,7 +641,7 @@ def test_pagination_must_be_a_typed_spec_not_prose(tmp_path, monkeypatch):
     errs = rrc.contract_errors("top_inst", _signed(doc, fake_root,
                                                    request_population={"resolver": "trade_cal_open_sessions"}))
     assert any("bounds must state the selection rule" in e for e in errs), errs
-    assert any("expected_set_sha256 must pin the population" in e for e in errs), errs
+    assert any("expected_set_sha256 must pin the COMPLETE REQUEST SET" in e for e in errs), errs
 
 
 def test_frozen_plan_pagination_must_match_the_signature(signed):
@@ -667,7 +667,7 @@ def test_plan_population_resolver_must_match_the_matrix_query_mode(signed):
     """A contract resolving MONTHS while the matrix enumerates trading days is a coverage lie."""
     fake_root, mirror, cs, hashes = signed
     months = {"resolver": "calendar_months", "bounds": {"start": "202607", "end": "202607"}}
-    months["expected_set_sha256"] = rrc.population_set_sha256(rrc.resolve_population(months))
+    months["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(months))
     wrong = {ep: (dict(c, request_population=months) if ep == "daily" else c) for ep, c in cs.items()}
     h = {ep: rrc.canonical_contract_sha256(c) for ep, c in wrong.items()}
     with pytest.raises(RuntimeError, match="resolves via|DIFFERENT request_population"):
@@ -683,13 +683,18 @@ def test_every_matrix_query_mode_has_a_population_unit():
 
 
 # ── GPT re-review #8 BLOCKER-1: the plan must be bound to a VALID, SIGNED contract ─────────────────
+def _cal_sha() -> str:
+    """The reference bytes a population is PINNED to (GPT: resolving against LIVE reference data would
+    force re-signing on every calendar refresh)."""
+    return rrc.sha256_file(rrc.E_DATA / "reference" / "trade_cal.parquet")
+
+
 def _open_sessions_pop(start: str, end: str) -> dict:
-    """A SIGNED population: an executable resolver + bounds + the sha256 of the set that resolves.
-    The hash is computed from the REAL trade calendar, so the fixture signs the same set production
-    would (GPT re-review #10 BLOCKER-1)."""
+    """A SIGNED population: an executable resolver + bounds (incl. the pinned reference sha) + the
+    sha256 of the COMPLETE REQUESTS that resolve — not a member list (GPT sign-off HOLD)."""
     spec = {"resolver": "trade_cal_open_sessions",
-            "bounds": {"start": start, "end": end, "exchange": "SSE"}}
-    spec["expected_set_sha256"] = rrc.population_set_sha256(rrc.resolve_population(spec))
+            "bounds": {"start": start, "end": end, "exchange": "SSE", "reference_sha256": _cal_sha()}}
+    spec["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(spec))
     return spec
 
 
@@ -783,12 +788,12 @@ def test_a01_legs_on_different_trade_dates_refused(signed):
     skewed = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702", "20260703"),
                                        "daily_basic": ("20260702",),           # missing a session
                                        "adj_factor": ("20260702", "20260703")})
-    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
+    with pytest.raises(RuntimeError, match="signed REQUESTS|missing"):
         rrc.assert_plan_matches_contracts(skewed, cs)
     # a leg on an entirely different session
     disjoint = _a01_plan(hashes, cs_map=cs, per_ep={"daily": ("20260702",), "daily_basic": ("20260703",),
                                          "adj_factor": ("20260702",)})
-    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
+    with pytest.raises(RuntimeError, match="signed REQUESTS|missing"):
         rrc.assert_plan_matches_contracts(disjoint, cs)
 
 
@@ -806,7 +811,7 @@ def test_a01_legs_must_share_one_population_snapshot(signed):
     cs2 = dict(cs, adj_factor=_valid_contract(mirror, fake_root, api="adj_factor", doc_id="29",
                                               pop=_open_sessions_pop("20260702", "20260706")))
     h2 = {ep: rrc.canonical_contract_sha256(c) for ep, c in cs2.items()}
-    with pytest.raises(RuntimeError, match="DIFFERENT request_population|signed population"):
+    with pytest.raises(RuntimeError, match="DIFFERENT request_population|signed REQUESTS"):
         rrc.assert_plan_matches_contracts(_a01_plan(h2, cs_map=cs2), cs2)
 
 
@@ -869,7 +874,7 @@ def test_a01_coverage_reads_request_params_not_the_partition_label(signed):
     for i, r in enumerate(rows):
         if r["endpoint"] == "daily_basic":
             rows[i] = dict(r, params={"trade_date": "20260703"})
-    with pytest.raises(RuntimeError, match="partition label .* but the request actually asks for"):
+    with pytest.raises(RuntimeError, match="partition label .* but the request asks for"):
         rrc.assert_plan_matches_contracts(rows, cs)
 
 
@@ -878,7 +883,7 @@ def test_legs_requesting_different_sessions_refused_even_with_honest_labels(sign
     rows = [r for r in _a01_plan(hashes, cs_map=cs, parts=("20260702",)) if r["endpoint"] != "daily_basic"]
     rows.append(_prow("daily_basic:20260703", "daily_basic", "20260703", hashes["daily_basic"],
                       c=cs["daily_basic"]))
-    with pytest.raises(RuntimeError, match="REQUEST different populations|signed population"):
+    with pytest.raises(RuntimeError, match="signed REQUESTS|missing"):
         rrc.assert_plan_matches_contracts(rows, cs)
 
 
@@ -911,10 +916,10 @@ def test_a_sunday_is_refused_against_the_real_trade_calendar(signed):
     covered the correct set. `source` was unenforced prose; no calendar check existed."""
     fake_root, mirror, cs, hashes = signed
     # 20260704/05 are a real weekend and are genuinely absent from the resolved population
-    sessions = rrc.resolve_population(cs["daily"]["request_population"])
+    sessions = {dict(r)["trade_date"] for r in rrc.resolve_population(cs["daily"]["request_population"])}
     assert "20260705" not in sessions and {"20260702", "20260703"} <= sessions
     sunday = _a01_plan(hashes, cs_map=cs, parts=("20260702", "20260705"))   # every leg agrees...
-    with pytest.raises(RuntimeError, match="NOT in it|does not cover the signed population"):
+    with pytest.raises(RuntimeError, match="NOT signed|signed REQUESTS"):
         rrc.assert_plan_matches_contracts(sunday, cs)                       # ...and is still wrong
 
 
@@ -933,12 +938,13 @@ def test_population_must_resolve_to_the_signed_hash(signed):
     drifted = dict(cs["daily"])
     drifted["request_population"] = dict(drifted["request_population"], expected_set_sha256="0" * 64)
     errs = rrc.contract_errors("daily", drifted)
-    assert any("sign the set that resolves" in e for e in errs), errs
+    assert any("sign the request set that resolves" in e for e in errs), errs
     # widening the bounds without re-signing also refuses
     wider = dict(cs["daily"])
     wider["request_population"] = dict(wider["request_population"],
-                                       bounds={"start": "20260701", "end": "20260710", "exchange": "SSE"})
-    assert any("sign the set that resolves" in e for e in rrc.contract_errors("daily", wider))
+                                       bounds={"start": "20260701", "end": "20260710", "exchange": "SSE",
+                                               "reference_sha256": _cal_sha()})
+    assert any("sign the request set that resolves" in e for e in rrc.contract_errors("daily", wider))
 
 
 def test_population_spec_must_be_executable_not_prose(signed):
@@ -954,36 +960,48 @@ def test_population_spec_must_be_executable_not_prose(signed):
 def test_empty_population_refused(signed):
     fake_root, mirror, cs, hashes = signed
     empty = {"resolver": "trade_cal_open_sessions",
-             "bounds": {"start": "20260704", "end": "20260705", "exchange": "SSE"}}   # a weekend only
-    empty["expected_set_sha256"] = rrc.population_set_sha256(set())
+             "bounds": {"start": "20260704", "end": "20260705", "exchange": "SSE",
+                        "reference_sha256": _cal_sha()}}                              # a weekend only
+    empty["expected_set_sha256"] = rrc.request_set_sha256(set())
     assert any("EMPTY set" in e for e in rrc.contract_errors("daily", dict(cs["daily"],
                                                                           request_population=empty)))
 
 
-def test_every_determining_parameter_is_required_not_just_one():
-    """GPT re-review #10: `_UNIT_PARAM` carried ONE param per unit — period_report_type ignored
-    report_type and index_range ignored its range bounds. The key is the TUPLE of all of them."""
-    assert rrc._POPULATION_PARAMS["period_report_type"] == ("period", "report_type")
-    assert rrc._POPULATION_PARAMS["index_range"] == ("ts_code", "start_date", "end_date")
-    assert rrc._POPULATION_PARAMS["open_trade_date"] == ("trade_date",)
-    # every matrix query_mode still resolves to a unit, and every unit to params AND a resolver
+def test_every_unit_resolves_to_complete_requests():
+    """GPT sign-off HOLD: the fix is not "declare more params" — it is that the RESOLVER emits the
+    complete request and the comparison never projects. Every matrix query_mode must reach a resolver,
+    and every resolver's output must be a full canonical request."""
     for r in rrc.ENDPOINT_MATRIX:
         if r.query_mode == "UNBOUND":
             continue
         unit = rrc._QUERY_MODE_TO_UNIT[r.query_mode]
-        assert unit in rrc._POPULATION_PARAMS, f"{unit} has no determining parameters"
-        assert rrc._UNIT_RESOLVERS[unit] in rrc._POPULATION_RESOLVERS, f"{unit} has no resolver"
+        assert unit in rrc._UNIT_RESOLVERS, f"{unit} reaches no resolver"
+        assert rrc._UNIT_RESOLVERS[unit] in rrc._POPULATION_RESOLVERS
+        assert unit in rrc._UNIT_LABEL_PARAM, f"{unit} declares no label axis"
+    # the multi-parameter units carry their full request shape
+    rt = rrc.resolve_population({"resolver": "report_periods_x_types",
+                                 "bounds": {"periods": ["20260331"], "report_types": ["2"]}})
+    assert set(dict(next(iter(rt)))) == {"period", "report_type"}
+    ix = rrc.resolve_population({"resolver": "index_code_ranges",
+                                 "bounds": {"codes": ["000300.SH"], "start_date": "20260101",
+                                            "end_date": "20260702"}})
+    assert set(dict(next(iter(ix)))) == {"ts_code", "start_date", "end_date"}
 
 
-def test_period_report_type_request_key_carries_both_params():
+def test_request_key_is_the_complete_canonical_request():
+    """`_request_population_key` returns EVERY parameter — the identity, not an axis. The partition
+    label is checked for honesty but is never the key."""
     row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_period_report_type"][0]
     pr = {"request_id": "r", "endpoint": "income_vip", "dataset": row.output_family,
-          "partition": "20260630", "params": {"period": "20260630", "report_type": "1"}}
-    assert rrc._request_population_key(pr, row) == ("20260630", "1")
-    # dropping report_type is now a refusal, not a silently-narrower key
-    pr_missing = dict(pr, params={"period": "20260630"})
-    with pytest.raises(RuntimeError, match="report_type"):
-        rrc._request_population_key(pr_missing, row)
+          "partition": "20260630", "params": {"period": "20260630", "report_type": "2"}}
+    assert rrc._request_population_key(pr, row) == rrc._canon_request({"period": "20260630",
+                                                                       "report_type": "2"})
+    # an extra parameter CHANGES the request identity — it cannot ride along unseen
+    pr_extra = dict(pr, params={"period": "20260630", "report_type": "2", "fields": "all"})
+    assert rrc._request_population_key(pr_extra, row) != rrc._request_population_key(pr, row)
+    # a label that misdescribes its own request refuses
+    with pytest.raises(RuntimeError, match="label is not evidence"):
+        rrc._request_population_key(dict(pr, partition="20260331"), row)
 
 
 def test_index_range_request_key_carries_its_bounds():
@@ -991,19 +1009,105 @@ def test_index_range_request_key_carries_its_bounds():
     pr = {"request_id": "r", "endpoint": "index_daily", "dataset": row.output_family,
           "partition": "000300.SH",
           "params": {"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260702"}}
-    assert rrc._request_population_key(pr, row) == ("000300.SH", "20260101", "20260702")
-    with pytest.raises(RuntimeError, match="start_date|end_date"):
-        rrc._request_population_key(dict(pr, params={"ts_code": "000300.SH"}), row)
+    key = rrc._request_population_key(pr, row)
+    assert dict(key) == {"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260702"}
+    # the SAME code over a different range is a DIFFERENT request (GPT: a 2099 range rode in free)
+    other = rrc._request_population_key(
+        dict(pr, params={"ts_code": "000300.SH", "start_date": "20990101", "end_date": "20990102"}), row)
+    assert other != key
 
 
 def test_resolvers_read_the_real_reference_data():
     """The resolver is the FACT: it reads the surviving trade_cal, so a weekend is simply not in it."""
-    sessions = rrc.resolve_population({"resolver": "trade_cal_open_sessions",
-                                       "bounds": {"start": "20260701", "end": "20260710",
-                                                  "exchange": "SSE"}})
+    reqs = rrc.resolve_population({"resolver": "trade_cal_open_sessions",
+                                   "bounds": {"start": "20260701", "end": "20260710",
+                                              "exchange": "SSE", "reference_sha256": _cal_sha()}})
+    sessions = {dict(r)["trade_date"] for r in reqs}
     assert "20260705" not in sessions          # Sunday
     assert "20260704" not in sessions          # Saturday
     assert {"20260701", "20260702", "20260703", "20260706"} <= sessions
-    assert rrc.population_set_sha256(sessions) == rrc.population_set_sha256(sorted(sessions))
+    assert all(set(dict(r)) == {"trade_date"} for r in reqs)   # COMPLETE requests, not bare members
     with pytest.raises(RuntimeError, match="unknown population resolver"):
         rrc.resolve_population({"resolver": "vibes", "bounds": {}})
+
+
+# ── GPT sign-off HOLD: the COMPLETE request is the identity — no first-axis projection ────────────
+def test_unsigned_report_type_is_an_unsigned_request(signed):
+    """GPT (reproduced through the fully signed gate): income_vip(period=20260331, report_type=999) was
+    ACCEPTED because the tuple was projected to k[0]. The real direct-quarter recipe uses ('2','3')
+    (scripts/fetch_quarterly_statements.py)."""
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_period_report_type"][0]
+    spec = {"resolver": "report_periods_x_types",
+            "bounds": {"start": "20260331", "end": "20260331", "report_types": ["2", "3"]}}
+    spec["expected_set_sha256"] = rrc.request_set_sha256(rrc.resolve_population(spec))
+    signed_reqs = rrc.resolve_population(spec)
+    assert rrc._canon_request({"period": "20260331", "report_type": "2"}) in signed_reqs
+    assert rrc._canon_request({"period": "20260331", "report_type": "999"}) not in signed_reqs, \
+        "report_type=999 is inside the signed request set"
+
+
+def test_unsigned_index_range_is_an_unsigned_request():
+    """GPT (reproduced): signed index code 000300.SH accepted an UNSIGNED 20990101..20990102 range."""
+    spec = {"resolver": "index_code_ranges",
+            "bounds": {"codes": ["000300.SH"], "start_date": "20260101", "end_date": "20260702"}}
+    reqs = rrc.resolve_population(spec)
+    assert rrc._canon_request({"ts_code": "000300.SH", "start_date": "20260101",
+                               "end_date": "20260702"}) in reqs
+    assert rrc._canon_request({"ts_code": "000300.SH", "start_date": "20990101",
+                               "end_date": "20990102"}) not in reqs, "a 2099 range rode in free"
+
+
+def test_stock_repartition_binds_its_range():
+    """GPT (reproduced): all 5,861 signed stocks accepted arbitrary 2099 cyq_perf ranges because
+    stock_repartition bound only ts_code — the real call takes ts_code + start_date + end_date."""
+    row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_stock_repartition"][0]
+    assert rrc._UNIT_RESOLVERS[rrc._QUERY_MODE_TO_UNIT[row.query_mode]] == "stock_basic_ranges"
+    sb_sha = rrc.sha256_file(rrc.E_DATA / "reference" / "stock_basic.parquet")
+    reqs = rrc.resolve_population({"resolver": "stock_basic_ranges",
+                                   "bounds": {"list_status": "L,D,P", "start_date": "20180101",
+                                              "end_date": "20260702", "reference_sha256": sb_sha}})
+    one = dict(sorted(reqs)[0])
+    assert set(one) == {"ts_code", "start_date", "end_date"}
+    assert one["start_date"] == "20180101" and one["end_date"] == "20260702"
+
+
+def test_non_quarter_periods_can_be_signed_explicitly():
+    """GPT: report_periods generated only standard quarter ends (73 for 20080331..20260331) while the
+    baseline holds 98 indicator partitions — data_tracker records NON-quarter periods in legacy Tushare
+    indicator history. A generated calendar cannot describe vendor-reported reality."""
+    gen = rrc.resolve_population({"resolver": "report_periods",
+                                  "bounds": {"start": "20080331", "end": "20260331"}})
+    assert len(gen) == 73                       # exactly the generated quarter-ends GPT counted
+    odd = rrc.resolve_population({"resolver": "report_periods",
+                                  "bounds": {"periods": ["20260331", "20260415", "20260630"]}})
+    assert rrc._canon_request({"period": "20260415"}) in odd     # a NON-quarter period, signed
+    with pytest.raises(RuntimeError, match="non-empty signed list"):
+        rrc.resolve_population({"resolver": "report_periods", "bounds": {"periods": []}})
+
+
+def test_report_types_must_be_signed_explicitly():
+    with pytest.raises(RuntimeError, match="explicit `report_types` list"):
+        rrc.resolve_population({"resolver": "report_periods_x_types",
+                                "bounds": {"start": "20260331", "end": "20260331"}})
+
+
+def test_reference_derived_populations_are_pinned():
+    """GPT answer 2: resolving from LIVE reference data forces re-signing whenever listings/statuses
+    change. The contract pins the exact reference bytes instead, so a refresh is a deliberate re-sign."""
+    with pytest.raises(RuntimeError, match="reference_sha256 must pin"):
+        rrc.resolve_population({"resolver": "trade_cal_open_sessions",
+                                "bounds": {"start": "20260701", "end": "20260702"}})
+    with pytest.raises(RuntimeError, match="the contract pins"):
+        rrc.resolve_population({"resolver": "trade_cal_open_sessions",
+                                "bounds": {"start": "20260701", "end": "20260702",
+                                           "reference_sha256": "0" * 64}})
+
+
+def test_plan_with_an_unsigned_parameter_refused(signed):
+    """The whole point: a request whose PRIMARY axis matches but which carries an unsigned parameter is
+    an unsigned request. No projection can see this."""
+    fake_root, mirror, cs, hashes = signed
+    rows = _a01_plan(hashes, cs_map=cs)
+    rows[0] = dict(rows[0], params=dict(rows[0]["params"], adj="qfq"))   # an extra, unsigned param
+    with pytest.raises(RuntimeError, match="does not make the signed REQUESTS|NOT signed"):
+        rrc.assert_plan_matches_contracts(rows, cs)

@@ -18,24 +18,40 @@
 #                     {mode: single_page|offset_paged, page_limit: int,
 #                      offset_param: <name>   # required when offset_paged}
 #                     single_page => page_limit 0; offset_paged => page_limit > 0 (the doc's cap)
-#   request_population : TYPED + EXECUTABLE + SET-PINNED. `source: "trade_cal open sessions"` used to
-#                     be PROSE nobody could check — a plan of SUNDAYS passed it. You now sign a
-#                     resolver the code RUNS against the real reference data, its bounds, and the
-#                     sha256 of the population that resolves:
-#                       {resolver: trade_cal_open_sessions | stock_basic_codes | calendar_months |
-#                                  report_periods | years | index_codes,
-#                        bounds:   {start: YYYYMMDD, end: YYYYMMDD, exchange: SSE}      # sessions
-#                                | {list_status: "L,D,P"}                                # stocks
-#                                | {codes: ["000300.SH", ...]}                           # index legs
-#                        expected_set_sha256: <sha256 of the sorted resolved set>}
-#                     The resolver must match the matrix row's query_mode, the set must resolve
-#                     NON-EMPTY, and its hash must equal what you signed — so re-signing is required
-#                     whenever the bounds or the reference data move. The frozen plan is then compared
-#                     to that set EXACTLY: a missing item is an incomplete recovery, an extra item is a
-#                     request the signed population does not contain (a weekend, a delisted code).
-#                     Every population-determining parameter must appear in each request's params
-#                     (period_report_type needs period AND report_type; index_range needs ts_code AND
-#                     start_date AND end_date) — one param per unit was not enough.
+#   request_population : TYPED + EXECUTABLE + REQUEST-SET-PINNED. You sign a resolver the code RUNS,
+#                     its bounds, and the sha256 of the COMPLETE REQUESTS that resolve. Not a member
+#                     list: an unsigned report_type / range bound / filter is an UNSIGNED REQUEST even
+#                     when its primary axis matches (a plan of Sundays passed the prose version; a
+#                     report_type=999 passed the member-set version).
+#                       {resolver: trade_cal_open_sessions   # -> {trade_date}          per session
+#                               | stock_basic_codes          # -> {ts_code}             per stock
+#                               | stock_basic_ranges         # -> {ts_code,start_date,end_date}
+#                               | index_code_ranges          # -> {ts_code,start_date,end_date}
+#                               | calendar_months            # -> {month}
+#                               | report_date_months         # -> {report_date}
+#                               | report_periods             # -> {period}
+#                               | report_periods_x_types,    # -> {period,report_type}  (Cartesian)
+#                        bounds: {start, end, exchange, reference_sha256}      # sessions
+#                              | {list_status, reference_sha256}               # per-stock
+#                              | {list_status, start_date, end_date, reference_sha256}   # stock ranges
+#                              | {codes: [...], start_date, end_date}          # index legs
+#                              | {start, end, report_types: ["2","3"]}         # direct-quarter
+#                              | {periods: [...], report_types: [...]}         # EXPLICIT signed periods
+#                        expected_set_sha256: <sha256 over every param of every resolved request>}
+#                     * reference_sha256 PINS the reference bytes the population derives from
+#                       (trade_cal / stock_basic). Resolving against LIVE reference data would force
+#                       re-signing on every calendar or listing refresh; pinning makes the re-sign an
+#                       explicit, visible decision instead.
+#                     * bounds.periods is an EXPLICIT signed list — legacy Tushare indicator history
+#                       contains NON-quarter-end periods (see data/data_tracker.md), which a generated
+#                       quarter calendar cannot describe.
+#                     * report_types must be signed explicitly (the direct-quarter recipe uses 2 and 3).
+#                     * The resolver must match the matrix row's query_mode; an empty resolution refuses.
+#                     * The frozen plan is compared to the resolved requests EXACTLY (asked == expected,
+#                       whole requests both sides): a MISSING request is an incomplete recovery, an
+#                       EXTRA one is a request nobody signed. A resumed run keeps the ORIGINAL full
+#                       frozen plan and lets the ledger pick what is still pending — a smaller plan must
+#                       never masquerade as a resume.
 #   rate_limit      : from the doc (积分/每分钟限次)
 #   cadence         : from the doc
 #   pit_anchors     : nominal-vs-visible date anchoring (★ create_time/ann_date/f_ann_date/report_date)
