@@ -73,15 +73,18 @@ def _artifact(*, with_penalty: bool, decision_id="d1"):
 
 
 def _factor_ast(art):
-    reg = art.final_registry
-    return {"facts": [EvidenceRef(rid) for rid, r in sorted(reg.records.items())
-                      if "factor_positive" in r.allowed_uses
-                      and "news" in r.allowed_consumers]}
+    # executor-review Blocker: legs enforce the canonical content-bearing render
+    from workspace.research.ai_research_dept.engine.news_decision import (
+        build_leg_payload_ast,
+    )
+    return build_leg_payload_ast(art, use="factor_positive", consumer_seat="news")
 
 
 def _penalty_ast(art):
-    return {"risks": [EvidenceRef(r.record_id)
-                      for r in penalty_eligible_records(art)]}
+    from workspace.research.ai_research_dept.engine.news_decision import (
+        build_leg_payload_ast,
+    )
+    return build_leg_payload_ast(art, use="penalty", consumer_seat="news")
 
 
 _OK = lambda sp: None                                  # noqa: E731

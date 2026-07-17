@@ -42,8 +42,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
-    SealedPayload, build_sealed_payload, make_execution_view,
-    verify_payload_for_execution,
+    SealedPayload, build_leg_payload_ast, build_sealed_payload,
+    make_execution_view, serialize_payload_ast, verify_payload_for_execution,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
@@ -60,6 +60,19 @@ _PENALTY_STATUSES = frozenset({"success", "empty_success", "failed", "not_run"})
 
 class LegIntegrityError(Exception):
     """M3⁴ 第 5 行:penalty 在零适格下竟被执行 = 完整性违规(或矩阵非法组合)。"""
+
+
+def _require_canonical(sp: SealedPayload, artifact: D7DecisionArtifact, *,
+                       use: str) -> None:
+    """executor-review Blocker:腿 payload 必须**逐字节等于** canonical 内容承载
+    渲染(`build_leg_payload_ast` 从已验工件确定性重推导)——裸 ID 列表/手搭
+    payload 在执行体前拒。"""
+    canonical = serialize_payload_ast(
+        build_leg_payload_ast(artifact, use=use, consumer_seat="news"))
+    if sp.payload_text != canonical:
+        raise RegistryError(
+            f"{use} 腿 payload 非 canonical 内容承载渲染——LLM 必须看到证据正文,"
+            f"裸 ID/手搭 payload 拒(executor-review Blocker)")
 
 
 def penalty_eligible_records(artifact: D7DecisionArtifact) -> list:
@@ -239,6 +252,9 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
         factor_payload, artifact, ledger_dir=ledger_dir,
         expected_decision_id=decision_id, expected_consumer_seat="news",
         expected_use="factor_positive", expected_target_dimension=None)
+    # executor-review Blocker:边界**重渲染** canonical 内容承载 AST 并逐字节比对
+    # ——非 canonical 渲染器产物(裸 ID 列表等)到不了执行体
+    _require_canonical(factor_payload, artifact, use="factor_positive")
     try:
         # 链单元 BINDING #1:执行体唯一输入 = 校验后**新铸**的不可变视图
         factor_leg_fn(make_execution_view(factor_payload))
@@ -256,6 +272,7 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
             penalty_payload, artifact, ledger_dir=ledger_dir,
             expected_decision_id=decision_id, expected_consumer_seat="news",
             expected_use="penalty", expected_target_dimension=None)
+        _require_canonical(penalty_payload, artifact, use="penalty")
         try:
             penalty_leg_fn(make_execution_view(penalty_payload))
             penalty_status = "success"

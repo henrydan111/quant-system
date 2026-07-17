@@ -361,7 +361,6 @@ class TestExecutionView:
         from workspace.research.ai_research_dept.engine.news_decision import (
             ExecutionView, record_decision,
         )
-        from workspace.research.ai_research_dept.engine.news_evidence import EvidenceRef
         from workspace.research.ai_research_dept.engine.news_ingest import (
             build_cluster_snapshots,
         )
@@ -396,9 +395,11 @@ class TestExecutionView:
             cutoff="2025-01-27 18:00:00")
         record_decision(tmp_path, "d1", art)
         got = []
-        f_ast = {"facts": [EvidenceRef(rid) for rid, r in
-                           sorted(art.final_registry.records.items())
-                           if "factor_positive" in r.allowed_uses]}
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            build_leg_payload_ast,
+        )
+        f_ast = build_leg_payload_ast(art, use="factor_positive",
+                                      consumer_seat="news")
         run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
                           output_mode="primary_horizon",
                           factor_payload_ast=f_ast, penalty_payload_ast=None,

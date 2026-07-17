@@ -270,6 +270,53 @@ def leg_refs(artifact: D7DecisionArtifact, *, use: str, consumer_seat: str) -> l
         artifact.final_registry, use=use, consumer_seat=consumer_seat)]
 
 
+_CARD_LINE_RE = re.compile(r"- \[([A-Z][A-Z0-9]{1,15}"
+                           r"(?:\.(?:fact|economic_linkage|timing|source_status))?)\]")
+
+
+def _card_line_map(card) -> dict:
+    """从密封卡两切片解析 {record_id: 去掉引用前缀的行内容}(内容含元数据括号
+    `[龄|星|类]`——带管道,非引用语法,不会被当候选)。"""
+    out: dict = {}
+    for text in (card.factor_payload_text, card.restricted_text):
+        for ln in text.splitlines():
+            m = _CARD_LINE_RE.match(ln)
+            if m:
+                out[m.group(1)] = ln[m.end():]
+    return out
+
+
+def build_leg_payload_ast(artifact: D7DecisionArtifact, *, use: str,
+                          consumer_seat: str) -> dict:
+    """**规范内容承载 payload 渲染器**(executor-review Blocker:LLM 必须看到证据
+    正文,不是裸 ID 列表)。从**已验工件**确定性推导:期望总体(use×seat)内每条
+    记录 = {"ref": EvidenceRef(id), "content": 密封正文}——
+    - D7 子行:content = `AttributeRow.text`(拆分属性正文);
+    - 其余记录:content = 卡切片中该 id 行的正文(去引用前缀,保元数据括号);
+    - 被降级 broad 父行/错腿/上下文行天然被期望总体排除;
+    - 期望内记录若无内容来源 = 拒(渲染不完整绝不静默)。
+    输出按 id 排序(确定性)——`run_news_two_legs` 对每腿重渲染并**逐字节比对**
+    (canonical 强制:非本渲染器产物到不了执行体)。"""
+    if not isinstance(artifact, D7DecisionArtifact):
+        raise RegistryError("canonical 渲染只收 D7DecisionArtifact")
+    expected = leg_expected_ids(artifact.final_registry, use=use,
+                                consumer_seat=consumer_seat)
+    rows_by_id = {r.row_id: r for r in artifact.rows}
+    line_map = _card_line_map(artifact.card)
+    items = []
+    for rid in expected:
+        if rid in rows_by_id:
+            content = rows_by_id[rid].text
+        elif rid in line_map:
+            content = line_map[rid]
+        else:
+            raise RegistryError(
+                f"{rid} 在期望总体内却无内容来源(卡行/属性行均无)——canonical "
+                f"渲染拒(executor-review Blocker:证据正文必须可见)")
+        items.append({"ref": EvidenceRef(rid), "content": content})
+    return {"evidence": items}
+
+
 # --------------------------------------------------- 密封 payload(咽喉点)
 
 @dataclass(frozen=True)
