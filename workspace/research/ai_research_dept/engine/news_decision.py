@@ -313,6 +313,10 @@ def build_leg_payload_ast(artifact: D7DecisionArtifact, *, use: str,
             raise RegistryError(
                 f"{rid} 在期望总体内却无内容来源(卡行/属性行均无)——canonical "
                 f"渲染拒(executor-review Blocker:证据正文必须可见)")
+        # executor-review#2 Major-1:防御性收尾——选中内容必须恰 str 且非空白
+        if type(content) is not str or not content.strip():
+            raise RegistryError(f"{rid} 内容非法({content!r})——空/非 str 证据正文"
+                                f"不得进 payload(executor-review#2 Major-1)")
         items.append({"ref": EvidenceRef(rid), "content": content})
     return {"evidence": items}
 

@@ -407,6 +407,12 @@ class AttributeRow:
     row_hash: str = field(default="")
 
     def __post_init__(self):
+        # executor-review#2 Major-1:空/空白正文不得封印——"content":"" 曾能接
+        # event_materiality=5(no silent gaps)
+        if type(self.text) is not str or not self.text.strip():
+            raise RegistryError(
+                f"AttributeRow.text 须为恰 str 且非空白(得 {self.text!r})——"
+                f"空证据正文不得封印(executor-review#2 Major-1)")
         if self.row_hash:
             verify_sealed(self._payload(), self.row_hash, field_name="attribute row_hash")
         else:
@@ -446,6 +452,13 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
     for attr, text in attributes.items():   # dict 键唯一 = 本调用内每属性恰一
         if attr not in ATTRIBUTE_TYPES:
             raise RegistryError(f"未注册 attribute_type {attr!r}(须 ∈ {ATTRIBUTE_TYPES})")
+        # executor-review#2 Major-1:非 str 先拒;净化后空白(控制符-only 输入)拒
+        if type(text) is not str:
+            raise RegistryError(f"属性 {attr!r} 正文须为恰 str(得 {type(text).__name__})")
+        clean = sanitize_text(text)
+        if not clean.strip():
+            raise RegistryError(f"属性 {attr!r} 正文净化后为空白({text!r})——"
+                                f"空证据不得拆行(executor-review#2 Major-1)")
         rid = f"{base_record_id}.{attr}"
         # 规范键序(_SCHEMA_DERIVATION_KEYS['d7_child_v2']):source, registry, attribute_type
         deriv = (("source_parent_content_hash", source_parent_content_hash),
@@ -465,7 +478,7 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
                                     record_schema_id="d7_child_v2", derivation=deriv)
         row = AttributeRow(row_id=rid, claim_id=claim_id,
                            fact_cluster_id=fact_cluster_id, evidence_group_id=group,
-                           attribute_type=attr, text=sanitize_text(text))
+                           attribute_type=attr, text=clean)
         out.append((row, rec))
     return out
 

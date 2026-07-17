@@ -306,6 +306,95 @@ class TestProvenance:
         assert len(rows[1]["raw_sha256"]) == 64          # raw bytes preserved
 
 
+# --------------------------------------------------- empty-content lock (rr#2 M1)
+
+class TestEmptyContentLock:
+    def _try_split(self, fact_text):
+        card, records, facts = render_news_flash_section(
+            [_assessed("重大订单甲", importance=5)], CUT)
+        split = {"base_record_id": "NFD01", "attributes": {"fact": fact_text}}
+        return build_attribute_bundle([split], facts, records, card=card,
+                                      decision_id="d1", cutoff=CUT)
+
+    def test_control_chars_only_refused(self):
+        # the round-2 probe: "\0\t " sanitizes to "" and could ground a 5
+        with pytest.raises(RegistryError, match="空白"):
+            self._try_split("\0\t ")
+
+    def test_whitespace_only_refused(self):
+        with pytest.raises(RegistryError, match="空白"):
+            self._try_split("   ")
+
+    def test_none_refused(self):
+        with pytest.raises(RegistryError, match="恰 str"):
+            self._try_split(None)
+
+    def test_direct_attribute_row_empty_refused(self):
+        from workspace.research.ai_research_dept.engine.news_cards import AttributeRow
+        with pytest.raises(RegistryError, match="空白"):
+            AttributeRow(row_id="NFD01.fact", claim_id="c", fact_cluster_id="f",
+                         evidence_group_id="c:attrs", attribute_type="fact",
+                         text="  ")
+
+
+# --------------------------------------------------- malformed envelope (rr#2 M2)
+
+class TestMalformedEnvelope:
+    def _run_with_reply(self, tmp_path, reply_obj):
+        art = _artifact_full()
+        record_decision(tmp_path / "ledger", "d1", art)
+        return execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=_contract(), call_fn=lambda m: reply_obj)
+
+    def test_none_text_gets_call_error_terminal(self, tmp_path):
+        # the round-2 probe: .text=None must yield a typed terminal, not a
+        # terminal-less attempt
+        out = self._run_with_reply(tmp_path, _Reply(None))
+        assert out["outcome"].news_status == "hard_failed"
+        assert out["selected_provenance"]["factor"]["verdict"] == "call_error"
+        rows = read_execution_provenance(tmp_path / "prov")
+        assert [(e["leg"], e["verdict"]) for e in rows] == [
+            ("factor", "attempt_started"), ("factor", "call_error")]
+
+    def test_bytes_text_gets_call_error(self, tmp_path):
+        out = self._run_with_reply(tmp_path, _Reply(b"{}"))
+        assert out["selected_provenance"]["factor"]["verdict"] == "call_error"
+
+    def test_unencodable_text_gets_call_error(self, tmp_path):
+        out = self._run_with_reply(tmp_path, _Reply("\ud800"))   # lone surrogate
+        assert out["selected_provenance"]["factor"]["verdict"] == "call_error"
+
+    def test_terminal_write_failure_refuses_bundle(self, tmp_path, monkeypatch):
+        # attempt began, terminal write fails -> execute must RAISE, never return
+        import workspace.research.ai_research_dept.engine.news_executors as mod
+        art = _artifact_full()
+        record_decision(tmp_path / "ledger", "d1", art)
+        real = mod.persist_execution_provenance
+
+        def flaky(*a, **kw):
+            if kw.get("verdict") == "call_error":
+                raise OSError("disk full")
+            return real(*a, **kw)
+        monkeypatch.setattr(mod, "persist_execution_provenance", flaky)
+        with pytest.raises(RegistryError, match="完整性违规"):
+            mod.execute_news_decision(
+                art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+                decision_id="d1", contract=_contract(),
+                call_fn=lambda m: _Reply(None))
+
+    def test_nonhex_raw_sha_refused(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            persist_execution_provenance,
+        )
+        for bad in ("z" * 64, "A" * 64, "ab", None):
+            with pytest.raises(RegistryError):
+                persist_execution_provenance(
+                    tmp_path, execution_id="e", decision_id="d", leg="factor",
+                    payload_hash="0" * 64, raw_sha256=bad, verdict="valid",
+                    schema_id="c16_news_horizon_v1")
+
+
 # --------------------------------------------------- zero path + input contract
 
 class TestZeroAndInput:

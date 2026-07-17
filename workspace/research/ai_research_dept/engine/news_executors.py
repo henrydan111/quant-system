@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -54,6 +55,7 @@ from workspace.research.ai_research_dept.engine.news_legs import run_news_two_le
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
 _PROV_NAME = "execution_provenance.jsonl"
+_HEX64_RE = re.compile(r"[0-9a-f]{64}")
 #: 出处行 verdict 全集(review Major:attempt_started 先占位;call_error = 无 raw
 #  字节的类型化终态;deterministic_zero/empty_penalty = 免 LLM 确定性路径)
 PROV_VERDICTS = frozenset({"attempt_started", "valid", "invalid", "call_error",
@@ -162,8 +164,10 @@ def persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: st
     if verdict in ("attempt_started", "call_error"):
         if raw_sha256 is not None:
             raise RegistryError(f"{verdict} 行不得携带 raw_sha256(无 raw 字节)")
-    elif not (type(raw_sha256) is str and len(raw_sha256) == 64):
-        raise RegistryError(f"{verdict} 行须携带 64-hex raw_sha256")
+    elif not (type(raw_sha256) is str and _HEX64_RE.fullmatch(raw_sha256)):
+        # executor-review#2 Minor:真 64 位小写 hex("z"*64 拒),非仅长度
+        raise RegistryError(f"{verdict} 行须携带 64 位小写 hex raw_sha256"
+                            f"(得 {raw_sha256!r})")
     path = Path(prov_dir) / _PROV_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prov_lock(path):
@@ -221,20 +225,26 @@ def _make_leg_executor(call_fn, contract: NewsScoringContract, registry, *,
 
     def executor(view):
         view = _require_view(view)
-        persist_execution_provenance(
+        results[f"{leg}_attempt"] = persist_execution_provenance(
             prov_dir, execution_id=execution_id, decision_id=view.decision_id,
             leg=leg, payload_hash=view.payload_hash, raw_sha256=None,
             verdict="attempt_started", schema_id=contract.schema_id)
         try:
-            raw = call_fn([{"role": "system", "content": prompt},
-                           {"role": "user", "content": view.payload_text}]).text
+            # executor-review#2 Major-2:响应提取 + 恰 str 校验 + 精确字节哈希
+            # 全部在守卫路径内——.text=None/bytes/不可编码文本一律落 call_error
+            # 类型化终态,绝不留下无终态的已开始尝试
+            reply = call_fn([{"role": "system", "content": prompt},
+                             {"role": "user", "content": view.payload_text}])
+            raw = reply.text
+            if type(raw) is not str:
+                raise RegistryError(f"LLM raw text 须为恰 str(得 {type(raw).__name__})")
+            raw_hash = _raw_sha256(raw)
         except Exception:
             results[f"{leg}_prov"] = persist_execution_provenance(
                 prov_dir, execution_id=execution_id, decision_id=view.decision_id,
                 leg=leg, payload_hash=view.payload_hash, raw_sha256=None,
                 verdict="call_error", schema_id=contract.schema_id)
             raise
-        raw_hash = _raw_sha256(raw)
         try:
             record = parse_json_reply(raw)
             validator(record, registry)
@@ -332,6 +342,15 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
             results["factor"], results["penalty"], registry,
             output_mode=contract.output_mode,
             primary_decision_horizon=contract.primary_decision_horizon)
+    # executor-review#2 Major-2 后置条件:任一腿尝试已开始(attempt_started 已落)
+    # 却无选定终态行 → **拒绝返回束**(进程内完成的尝试绝不许缺终态;真正的进程
+    # 崩溃不会走到这里,悬空 attempt 行是可接受的未完成痕迹)
+    for leg in ("factor", "penalty"):
+        if results.get(f"{leg}_attempt") is not None \
+                and results.get(f"{leg}_prov") is None:
+            raise RegistryError(
+                f"{leg} 腿尝试 {execution_id} 已开始却无选定终态出处(终态写入失败等)"
+                f"——完整性违规,拒绝返回执行束(executor-review#2 Major-2)")
     selected = {leg: results.get(f"{leg}_prov") for leg in ("factor", "penalty")}
     return {"execution_id": execution_id, "outcome": outcome,
             "evaluation": evaluation, "selected_provenance": selected,
