@@ -165,10 +165,13 @@ def _raw_sha256(raw: str) -> str:
 
 
 _PROV_LEGS = frozenset({"factor", "penalty"})
-#: 出处行严格键集(archive-review B2:行 schema 精确,多/少键=拒)
+#: 出处行严格键集(archive-review B2:行 schema 精确,多/少键=拒;re-review#4:
+#  行携**完整 parsed_record 本体**——success 承诺后崩溃的可恢复封存路径需要从
+#  盘上重建 records,哈希绑定(parsed_record_hash)与本体同封在 entry_hash 内)
 PROV_ROW_KEYS = frozenset({"execution_id", "decision_id", "leg", "payload_hash",
                            "raw_sha256", "verdict", "schema_id",
-                           "parsed_record_hash", "seq", "entry_hash"})
+                           "parsed_record", "parsed_record_hash",
+                           "seq", "entry_hash"})
 #: 需要真实 LLM raw 字节的终态(状态机:必须连着同 payload 的 attempt_started 行)
 _LLM_TERMINALS = frozenset({"valid", "invalid", "call_error"})
 #: 免 LLM 确定性终态(状态机:该键不得有 attempt_started 行)
@@ -210,6 +213,14 @@ def _persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: s
         if type(parsed_record) is not dict:
             raise RegistryError(f"{verdict} 行须携带恰 dict 解析记录"
                                 f"(终态行↔解析记录绑定,archive-review B2)")
+        # re-review#4:行携带记录**独立深快照**(JSON 往返)——与调用方对象解除
+        # 别名(事后改调用方记录不改行),同时把 NaN/不可序列化在此拒
+        try:
+            parsed_record = json.loads(json.dumps(parsed_record,
+                                                  ensure_ascii=False,
+                                                  allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise RegistryError(f"{verdict} 解析记录非纯 JSON:{exc}") from exc
         parsed_record_hash = seal_hash(parsed_record)
     else:
         if parsed_record is not None:
@@ -247,6 +258,7 @@ def _persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: s
         body = {"execution_id": execution_id, "decision_id": decision_id, "leg": leg,
                 "payload_hash": payload_hash, "raw_sha256": raw_sha256,
                 "verdict": verdict, "schema_id": schema_id,
+                "parsed_record": parsed_record,
                 "parsed_record_hash": parsed_record_hash, "seq": len(lines)}
         entry = {**body, "entry_hash": seal_hash(body)}
         fd, tmp = tempfile.mkstemp(suffix=".jsonl.tmp", dir=path.parent)

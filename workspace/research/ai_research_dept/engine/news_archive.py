@@ -66,6 +66,27 @@ archive-re-review#3(1B/1M)全数折叠:
   `ledger_head_at_seal` 为终点的祖先路径上(线性链 seq ≤);锚降级到承诺前
   的更早合法链成员(如决策注册行)= 拒。
 
+archive-re-review#4(2×P1 + 崩溃变体)全数折叠:
+
+- **P1-a 档案按执行独立不可变 + canonical-success 选择**:档案路径键 =
+  (decision_id, execution_id)——失败档案永不堵死成功档案(不同文件,组合探针
+  `hard_failed→seal→success→seal` 两份共存);哪份是**决策的** canonical 档案
+  由账本**唯一 success 承诺**选定(`load_and_verify_decision_archive`),
+  与文件封印先后无关;硬失败执行档案是该执行的不可变审计记录,走
+  `load_and_verify_execution_archive` 按执行读取,不参与 canonical 选择
+  (verify_execution_bundle 里的取代拒绝随之撤除——取代语义整体上移到
+  决策级选择)。
+- **P1-b 单快照读档**:决策级读取在**同一份** `_read_chain` 快照上完成
+  canonical 选择 + 承诺相符 + 锚点成员/祖先校验(快照经 `chain` 参数贯穿
+  `verify_execution_bundle`);canonical 规则使决策级读取在**任何交错**下都
+  不可能返回 hard_failed 档案——TOCTOU 面结构性消除(payload 重建内部的
+  账本门只触碰不可变的首写决策注册行,无竞争面)。
+- **崩溃变体:success 承诺后可恢复封存**:出处行携完整 `parsed_record` 本体
+  (与哈希同封在行 entry_hash 内);`recover_and_seal_success_archive` 从纯
+  盘上状态重建执行束——终态解析对承诺逐哈希、记录取自行本体、outcome 经
+  M3⁴ 矩阵重推导并对承诺 outcome_hash 验真、evaluation 重算——再走正常
+  write-once 封印(已在且相同 = 幂等)。
+
 四席装配/scorecard 薄分发/链 bump 在下一单元;本单元零活链触碰。
 """
 from __future__ import annotations
@@ -80,8 +101,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (
     D7DecisionArtifact, verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
-    _ledger_path, _read_chain, find_execution_commitment,
-    find_success_commitment, ledger_head,
+    _ledger_path, _read_chain, build_leg_payload_ast, build_sealed_payload,
+    ledger_head,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
 from workspace.research.ai_research_dept.engine.news_executors import (
@@ -93,9 +114,23 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
     deterministic_zero_factor_record, evaluate_news_horizon,
 )
 from workspace.research.ai_research_dept.engine.news_legs import (
-    NewsLegOutcome, verify_outcome_for_binding,
+    NewsLegOutcome, _derive_terminal, _eligible_set_hash,
+    penalty_eligible_records, verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+
+
+def _find_commitment(chain: list, decision_id: str,
+                     execution_id: str) -> "dict | None":
+    return next((e for e in chain if e["kind"] == "execution_commitment"
+                 and e["decision_id"] == decision_id
+                 and e["execution_id"] == execution_id), None)
+
+
+def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
+    return next((e for e in chain if e["kind"] == "execution_commitment"
+                 and e["decision_id"] == decision_id
+                 and e["news_status"] == "success"), None)
 
 def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
                          execution_id: str, contract: NewsScoringContract,
@@ -117,13 +152,18 @@ def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
 
 
 def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
-    """封存解析记录 ↔ 选定终态行的 parsed_record_hash 绑定(archive-review B2:
-    records 与 evaluation 联改在此死)。expect 非 None 时记录还须逐字段等于该
-    确定性记录(deterministic_zero / empty_penalty 的记录不是自由文本)。"""
+    """封存解析记录 ↔ 选定终态行的绑定(archive-review B2 + re-review#4:
+    records 与 evaluation 联改在此死)。行携完整 parsed_record 本体后,记录须
+    **逐字节等于行本体**(canon 哈希折叠空白,单靠哈希不排除空白变体)+
+    canonical 哈希绑定;expect 非 None 时还须逐字段等于该确定性记录。"""
     if not isinstance(record, dict):
         raise RegistryError(f"{leg} 腿封存记录须为 dict(得 {type(record).__name__})")
     if expect is not None and record != expect:
         raise RegistryError(f"{leg} 腿封存记录须逐字段等于确定性记录(archive-review B2)")
+    if record != row["parsed_record"]:
+        raise RegistryError(
+            f"{leg} 腿封存记录与终态行封存的解析记录本体不符——记录被换,拒"
+            f"(archive-review B2 + re-review#4)")
     if seal_hash(record) != row["parsed_record_hash"]:
         raise RegistryError(
             f"{leg} 腿封存记录 canonical 哈希与选定终态行 parsed_record_hash 不符"
@@ -131,11 +171,16 @@ def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
 
 
 def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
-                            ledger_dir, prov_dir,
-                            contract: NewsScoringContract) -> dict:
+                            ledger_dir, prov_dir, contract: NewsScoringContract,
+                            chain: "list | None" = None) -> dict:
     """**封印前的联合验证**(BINDING #1)。全量重推导:工件过门 → canonical
     payload 重建 → outcome 绑定验证 → 每条选定终态行五向一致 + 盘上存在 +
-    verdict 语义 → 空罚分哨兵**联合**接受 → evaluation 从封存记录重算。"""
+    verdict 语义 → 空罚分哨兵**联合**接受 → evaluation 从封存记录重算 →
+    账本承诺逐哈希相符。`chain` 非 None = 调用方提供的**单次账本快照**
+    (re-review#4 P1-b:读档的承诺/取代/锚点判定必须同一快照;payload 重建内部
+    的账本门只触碰不可变的决策注册行,首写胜出使其无 TOCTOU 面)。canonical
+    取代规则(success 承诺唯一 ⇒ 决策档案 = success 执行的档案)在
+    `load_and_verify_decision_archive`,不在此。"""
     if not isinstance(contract, NewsScoringContract):
         raise RegistryError("联合验证必须提供冻结 NewsScoringContract")
     outcome = bundle["outcome"]
@@ -243,8 +288,9 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     # archive-re-review#2 Blocker:选定终态必须与**账本承诺**(不可重写哈希链)
     # 逐哈希相符——承诺权威在返回束前把终态 entry_hash 承诺进决策账本;
     # 直接改写出处文件(绕过写入器)替换的行不在承诺内,在此死
-    commitment = find_execution_commitment(ledger_dir, outcome.decision_id,
-                                           execution_id)
+    entries = chain if chain is not None \
+        else _read_chain(_ledger_path(ledger_dir))
+    commitment = _find_commitment(entries, outcome.decision_id, execution_id)
     if commitment is None:
         raise RegistryError(
             f"执行 ({outcome.decision_id!r}, {execution_id!r}) 无账本承诺——"
@@ -258,13 +304,6 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         raise RegistryError(
             "选定终态/outcome 与账本承诺不符——出处文件被绕过写入器改写,拒"
             "(archive-re-review#2 Blocker)")
-    if outcome.news_status != "success" \
-            and find_success_commitment(ledger_dir, outcome.decision_id) is not None:
-        # re-review#3 P0 配套:账本已有该决策的唯一 success 执行——硬失败
-        # 束/档案已被真实成功执行取代,不再可封印/可读(fail-closed)
-        raise RegistryError(
-            f"决策 {outcome.decision_id!r} 已有 success 执行承诺——硬失败执行"
-            f"被取代,拒(re-review#3 P0)")
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
@@ -281,25 +320,31 @@ _ARCHIVE_KEYS = frozenset({
 })
 
 
-def _archive_path(archive_dir, decision_id: str) -> Path:
-    """档案路径。文件名 = decision_id 的**完整逐字节** sha256(archive-review
-    Major:seal_hash 的 canon 会折叠字符串空白——`"d A"` 与 `"d\\tA"` 是不同
-    决策,必须落不同文件)。"""
+def _archive_path(archive_dir, decision_id: str, execution_id: str) -> Path:
+    """档案路径——**每执行一份、各自不可变**(re-review#4 P1-a:失败档案不再
+    堵死后续成功档案;哪份是决策的 canonical 档案由账本的唯一 success 承诺
+    选定,不由文件先来后到)。文件名 = (decision_id, execution_id) JSON 对的
+    **完整逐字节** sha256(JSON 编码定界无歧义;canon 折叠空白不可入路径)。"""
     if type(decision_id) is not str or not decision_id:
         raise RegistryError(f"decision_id 须为非空 str(得 {decision_id!r})")
-    digest = hashlib.sha256(decision_id.encode("utf-8")).hexdigest()
+    if type(execution_id) is not str or not execution_id:
+        raise RegistryError(f"execution_id 须为非空 str(得 {execution_id!r})")
+    digest = hashlib.sha256(json.dumps(
+        [decision_id, execution_id],
+        ensure_ascii=False).encode("utf-8")).hexdigest()
     return Path(archive_dir) / f"news_decision_{digest}.json"
 
 
 def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
                           ledger_dir, prov_dir, contract: NewsScoringContract,
                           archive_dir) -> dict:
-    """联合验证 → 密封决策档案(news 席切片)+ **账本链头外锚**(BINDING #6)。
-    archive_sha256 = 全 SHA-256 over {契约/工件/outcome/评估/记录/选定出处行/
-    封印时账本链头};原子 fsync 写盘。**write-once + first-write-wins**
-    (archive-review B1):按 decision 加锁,已有档案仅在重推导档案**逐字节完全
-    相同**的幂等重试时返回,任何不同(哪怕是第二次同样有效的执行)一律拒——
-    "sealed" 绝不可被覆盖。"""
+    """联合验证 → 密封**本执行**的档案(news 席切片)+ **账本链头外锚**
+    (BINDING #6)。archive_sha256 = 全 SHA-256 over {契约/工件/outcome/评估/
+    记录/选定出处行/封印时账本链头};原子 fsync 写盘。**write-once +
+    first-write-wins per (decision, execution)**(archive-review B1 +
+    re-review#4 P1-a):档案按执行独立不可变——已有档案仅在重推导档案**逐字节
+    完全相同**的幂等重试时返回,任何不同一律拒;成功执行的封存永不被失败执行
+    的档案堵死(不同文件)。"""
     verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
                             prov_dir=prov_dir, contract=contract)
     outcome: NewsLegOutcome = bundle["outcome"]
@@ -320,18 +365,17 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
         "ledger_head_at_seal": ledger_head(ledger_dir),
     }
     archive = {**payload, "archive_sha256": seal_hash(payload)}
-    path = _archive_path(archive_dir, outcome.decision_id)
+    path = _archive_path(archive_dir, outcome.decision_id, bundle["execution_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _prov_lock(path):                     # 按 decision 的档案锁(B1)
+    with _prov_lock(path):                     # 按 (decision, execution) 的档案锁
         if path.exists():
             existing = json.loads(path.read_text(encoding="utf-8"))
             if existing == archive:
                 return existing                # 幂等重试:完全相同才放行
             raise RegistryError(
-                f"决策 {outcome.decision_id!r} 已有密封档案且内容不同——档案 "
-                f"write-once,first-write-wins,拒绝覆盖(archive-review B1;"
-                f"已有 execution_id={existing.get('execution_id')!r} vs 新 "
-                f"{bundle['execution_id']!r})")
+                f"执行 ({outcome.decision_id!r}, {bundle['execution_id']!r}) "
+                f"已有密封档案且内容不同——档案 write-once,first-write-wins,"
+                f"拒绝覆盖(archive-review B1)")
         fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -348,14 +392,16 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
     return archive
 
 
-def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtifact,
-                                     *, ledger_dir, prov_dir,
-                                     contract: NewsScoringContract,
-                                     archive_dir) -> dict:
-    """档案读取 + **全量重验**:档案封印重算 → outcome 从封存字段重建(矩阵自验)
-    → 联合验证重跑(canonical 重建/选定行/哨兵/evaluation 重算)→ **链头锚验**:
-    档案锚定的链头必须仍在当前账本链内(整本重算=旧链头消失=拒,BINDING #6)。"""
-    path = _archive_path(archive_dir, decision_id)
+def _load_and_verify_archive_file(decision_id: str, execution_id: str,
+                                  artifact: D7DecisionArtifact, *, ledger_dir,
+                                  prov_dir, contract: NewsScoringContract,
+                                  archive_dir, chain: list) -> dict:
+    """单份执行档案的读取 + **全量重验**(共享核;`chain` = 调用方的单次账本
+    快照,承诺/锚点判定全部基于它——re-review#4 P1-b):档案封印重算 → 身份
+    (决策三向 + 执行)→ outcome 从封存字段重建(矩阵自验)→ 联合验证重跑
+    (canonical 重建/选定行/哨兵/evaluation 重算/账本承诺)→ **链头锚验**
+    (成员 + 祖先)。"""
+    path = _archive_path(archive_dir, decision_id, execution_id)
     if not path.exists():
         raise RegistryError(f"决策档案缺失:{path}")
     archive = json.loads(path.read_text(encoding="utf-8"))
@@ -369,13 +415,17 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
         raise RegistryError(f"档案 archive_schema 须为 {_ARCHIVE_SCHEMA!r}"
                             f"(得 {archive['archive_schema']!r})")
     # archive-review Major:三向决策身份——档案 == 请求 == 工件束(d1 档案拷到
-    # d2 文件名、或用错工件读档,均在此死)
+    # d2 文件名、或用错工件读档,均在此死);re-review#4:执行身份同验
     if not (archive["decision_id"] == decision_id
             == artifact.bundle.decision_id):
         raise RegistryError(
             f"决策身份三向不符:档案 {archive['decision_id']!r} / 请求 "
             f"{decision_id!r} / 工件束 {artifact.bundle.decision_id!r}"
             f"(archive-review Major)")
+    if archive["execution_id"] != execution_id:
+        raise RegistryError(
+            f"档案 execution_id {archive['execution_id']!r} ≠ 请求 "
+            f"{execution_id!r}——执行身份不符(re-review#4)")
     if archive["contract_hash"] != contract.contract_hash \
             or archive["contract"] != contract._payload():
         raise RegistryError("档案契约与提供的冻结契约不符")
@@ -410,13 +460,13 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
               "evaluation": archive["evaluation"], "records": archive["records"],
               "selected_provenance": archive["selected_provenance"]}
     verified = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
-                                       prov_dir=prov_dir, contract=contract)
+                                       prov_dir=prov_dir, contract=contract,
+                                       chain=chain)
     # 链头锚验(BINDING #6 + re-review#2 Major:**无条件**成员检验——封印必然
     # 晚于决策入账+执行承诺,账本非空,genesis 在此永不合法;把锚改写为
     # "0"*64 再重封 = 降级攻击,在此死)
     anchored = archive["ledger_head_at_seal"]
-    entries = _read_chain(_ledger_path(ledger_dir))
-    anchored_row = next((e for e in entries if e["entry_hash"] == anchored), None)
+    anchored_row = next((e for e in chain if e["entry_hash"] == anchored), None)
     if anchored_row is None:
         raise RegistryError(
             f"档案锚定链头 {str(anchored)[:12]!r} 不在当前账本链内——账本被整本"
@@ -430,3 +480,133 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
             f"seq={verified['commitment']['seq']}——承诺不在锚的祖先路径上,"
             f"锚被降级到更早链成员,拒(re-review#3 P1)")
     return archive
+
+
+def load_and_verify_execution_archive(decision_id: str, execution_id: str,
+                                      artifact: D7DecisionArtifact, *,
+                                      ledger_dir, prov_dir,
+                                      contract: NewsScoringContract,
+                                      archive_dir) -> dict:
+    """**按执行**审计读取(re-review#4 P1-a):一份执行档案是该执行的不可变
+    记录,永久可验证——包括被后续 success 取代的硬失败执行(取代只作用于
+    决策级 canonical 选择,不作用于执行级审计)。单次账本快照。"""
+    chain = _read_chain(_ledger_path(ledger_dir))
+    return _load_and_verify_archive_file(
+        decision_id, execution_id, artifact, ledger_dir=ledger_dir,
+        prov_dir=prov_dir, contract=contract, archive_dir=archive_dir,
+        chain=chain)
+
+
+def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtifact,
+                                     *, ledger_dir, prov_dir,
+                                     contract: NewsScoringContract,
+                                     archive_dir) -> dict:
+    """**决策级 canonical 读取**(re-review#4 P1-a/b):在**同一份账本快照**上
+    完成 canonical 选择 + 承诺/取代判定 + 锚点校验——决策的 canonical 档案 =
+    账本**唯一 success 承诺**指定的那个执行的档案,与文件封印先后无关。
+    快照无 success 承诺(纯硬失败/未执行)= 决策无 canonical 档案,拒
+    (硬失败执行档案走 `load_and_verify_execution_archive` 按执行审计读);
+    success 承诺在而档案缺 = 承诺后崩溃,走
+    `recover_and_seal_success_archive` 从盘上重建。任何交错下本函数都不可能
+    返回 hard_failed 档案(P1-b 的 TOCTOU 面结构性消除)。"""
+    chain = _read_chain(_ledger_path(ledger_dir))
+    success = _find_success_commitment(chain, decision_id)
+    if success is None:
+        raise RegistryError(
+            f"决策 {decision_id!r} 无 success 执行承诺——无 canonical 决策档案"
+            f"(硬失败执行档案请经 load_and_verify_execution_archive 按执行"
+            f"审计读取,re-review#4 P1-a)")
+    return _load_and_verify_archive_file(
+        decision_id, success["execution_id"], artifact, ledger_dir=ledger_dir,
+        prov_dir=prov_dir, contract=contract, archive_dir=archive_dir,
+        chain=chain)
+
+
+def recover_and_seal_success_archive(decision_id: str,
+                                     artifact: D7DecisionArtifact, *,
+                                     ledger_dir, prov_dir,
+                                     contract: NewsScoringContract,
+                                     archive_dir) -> dict:
+    """**success 承诺后的可恢复封存**(re-review#4 崩溃变体):承诺已入链、
+    进程在封档前崩溃 → 从**纯盘上状态**重建执行束并走正常封印。重建全程
+    verify-not-trust:终态从出处解析(唯一+状态机)且 entry_hash 必须等于
+    账本承诺;解析记录取自终态行封存本体(哈希绑定在行封印内);outcome 从
+    (工件+契约+终态 verdict)经 M3⁴ 矩阵**重推导**,其 outcome_hash 必须等于
+    承诺的 outcome_hash(权威锚);evaluation 确定性重算。随后
+    `seal_decision_archive` 重跑全量联合验证 + write-once(档案已在且逐字节
+    相同 = 幂等返回)。"""
+    if not isinstance(contract, NewsScoringContract):
+        raise RegistryError("恢复封存必须提供冻结 NewsScoringContract")
+    chain = _read_chain(_ledger_path(ledger_dir))
+    success = _find_success_commitment(chain, decision_id)
+    if success is None:
+        raise RegistryError(
+            f"决策 {decision_id!r} 无 success 执行承诺——无可恢复的封存"
+            f"(re-review#4)")
+    execution_id = success["execution_id"]
+    all_rows = read_execution_provenance(prov_dir)
+    f_row = _resolve_terminal(all_rows, execution_id=execution_id,
+                              decision_id=decision_id, leg="factor")
+    if f_row["entry_hash"] != success["factor_entry_hash"]:
+        raise RegistryError("恢复:factor 终态与账本承诺不符——拒")
+    if f_row["verdict"] not in ("valid", "deterministic_zero"):
+        raise RegistryError(
+            f"恢复:success 承诺的 factor 终态 verdict {f_row['verdict']!r} 非法")
+    if success["penalty_entry_hash"] is None:
+        raise RegistryError("恢复:success 承诺缺 penalty 终态——非法承诺,拒")
+    p_row = _resolve_terminal(all_rows, execution_id=execution_id,
+                              decision_id=decision_id, leg="penalty")
+    if p_row["entry_hash"] != success["penalty_entry_hash"]:
+        raise RegistryError("恢复:penalty 终态与账本承诺不符——拒")
+    if p_row["verdict"] == "empty_penalty":
+        p_status = "empty_success"
+    elif p_row["verdict"] == "valid":
+        p_status = "success"
+    else:
+        raise RegistryError(
+            f"恢复:success 承诺的 penalty 终态 verdict {p_row['verdict']!r} 非法")
+    records = {}
+    for leg, row in (("factor", f_row), ("penalty", p_row)):
+        rec = row["parsed_record"]
+        if type(rec) is not dict or seal_hash(rec) != row["parsed_record_hash"]:
+            raise RegistryError(f"恢复:{leg} 终态行封存记录哈希绑定不符——拒")
+        records[leg] = rec
+    factor_payload = build_sealed_payload(
+        build_leg_payload_ast(artifact, use="factor_positive",
+                              consumer_seat="news"),
+        artifact, ledger_dir=ledger_dir, decision_id=decision_id,
+        consumer_seat="news", use="factor_positive")
+    penalty_payload = None
+    if p_status == "success":
+        penalty_payload = build_sealed_payload(
+            build_leg_payload_ast(artifact, use="penalty", consumer_seat="news"),
+            artifact, ledger_dir=ledger_dir, decision_id=decision_id,
+            consumer_seat="news", use="penalty")
+    eligible = penalty_eligible_records(artifact)
+    derived = _derive_terminal("success", len(eligible), p_status,
+                               contract.output_mode)
+    outcome = NewsLegOutcome(
+        decision_id=decision_id, output_mode=contract.output_mode,
+        factor_leg_status="success", penalty_eligible_count=len(eligible),
+        penalty_eligible_set_hash=_eligible_set_hash(eligible),
+        penalty_leg_status=p_status, news_status=derived["news_status"],
+        shadow_complete=derived["shadow_complete"],
+        decision_complete=derived["decision_complete"],
+        binding_eligible=derived["binding_eligible"],
+        factor_payload_hash=factor_payload.payload_hash,
+        penalty_payload_hash=(penalty_payload.payload_hash
+                              if penalty_payload else None))
+    if outcome.outcome_hash != success["outcome_hash"]:
+        raise RegistryError(
+            "恢复:重建 outcome 与账本承诺的 outcome_hash 不符——工件/契约与"
+            "承诺时不一致,拒(re-review#4)")
+    evaluation = evaluate_news_horizon(
+        records["factor"], records["penalty"], artifact.final_registry,
+        output_mode=contract.output_mode,
+        primary_decision_horizon=contract.primary_decision_horizon)
+    bundle = {"execution_id": execution_id, "outcome": outcome,
+              "evaluation": evaluation, "records": records,
+              "selected_provenance": {"factor": f_row, "penalty": p_row}}
+    return seal_decision_archive(bundle, artifact, ledger_dir=ledger_dir,
+                                 prov_dir=prov_dir, contract=contract,
+                                 archive_dir=archive_dir)

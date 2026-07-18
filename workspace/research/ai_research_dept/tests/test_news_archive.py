@@ -214,16 +214,27 @@ class TestSealAndVerify:
         assert loaded["selected_provenance"]["penalty"]["verdict"] == "empty_penalty"
 
     def test_hard_fail_archive_round_trip(self, tmp_path):
+        # re-review#4: a hard-fail archive is a per-EXECUTION audit record —
+        # it loads via the execution loader; the DECISION loader refuses
+        # (no success commitment = no canonical decision archive)
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            load_and_verify_execution_archive,
+        )
+
         def boom(msgs):
             raise ConnectionError("down")
         art, bundle = _setup(tmp_path, call_fn=boom)
         assert bundle["outcome"].news_status == "hard_failed"
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
                               archive_dir=tmp_path / "arch")
-        loaded = load_and_verify_decision_archive(
-            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        loaded = load_and_verify_execution_archive(
+            "d1", bundle["execution_id"], art, **_dirs(tmp_path),
+            archive_dir=tmp_path / "arch")
         assert loaded["evaluation"] is None
         assert loaded["selected_provenance"]["factor"]["verdict"] == "call_error"
+        with pytest.raises(RegistryError, match="无 success 执行承诺"):
+            load_and_verify_decision_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
 
 
 # --------------------------------------------------- joint verification refusals
@@ -237,10 +248,11 @@ class TestJointRefusals:
 
     def test_records_tamper_refused(self, tmp_path):
         # dies at the record<->terminal-row binding (BEFORE the evaluation
-        # recompute — archive-review B2 moved the kill earlier)
+        # recompute; re-review#4 rows carry the record verbatim, so the
+        # byte-level equality kills even canon-hash-equal variants)
         art, bundle = _setup(tmp_path)
         bundle["records"]["factor"]["factor_scores"][0]["score_0_5"] = 1
-        with pytest.raises(RegistryError, match="parsed_record_hash 不符"):
+        with pytest.raises(RegistryError, match="解析记录本体不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_selected_row_field_tamper_refused(self, tmp_path):
@@ -351,7 +363,7 @@ class TestTerminalRecordBinding:
         art, bundle = _setup(tmp_path)
         bundle["records"]["factor"]["factor_scores"][0]["score_0_5"] = 1
         bundle["evaluation"] = _reeval(bundle, art, bundle["records"]["factor"])
-        with pytest.raises(RegistryError, match="parsed_record_hash 不符"):
+        with pytest.raises(RegistryError, match="解析记录本体不符"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_hard_fail_arbitrary_records_refused(self, tmp_path):
@@ -418,6 +430,7 @@ class TestTerminalRecordBinding:
         forged_record = _valid_factor_record()
         forged_record["factor_scores"][0]["score_0_5"] = 1
         forged = _replace_terminal(tmp_path, bundle["execution_id"], "factor",
+                                   parsed_record=forged_record,
                                    parsed_record_hash=seal_hash(forged_record))
         bundle["selected_provenance"]["factor"] = forged
         bundle["records"]["factor"] = forged_record
@@ -568,9 +581,41 @@ class TestWriteOnce:
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["outcome"]["news_status"] == "success"
 
-    def test_sealed_hard_fail_archive_superseded_by_success(self, tmp_path):
-        # a hard-fail archive sealed early is SUPERSEDED once the decision's
-        # unique success commitment lands — loading it now fails closed
+    def test_hard_fail_seal_then_success_seal_coexist(self, tmp_path):
+        # re-review#4 P1-a (the reviewer's COMBINED probe): hard_failed ->
+        # seal -> success retry -> seal success. Per-execution immutable
+        # archives: the success seal SUCCEEDS (own file); the DECISION loader
+        # returns the success archive (canonical-success rule); the hard-fail
+        # execution archive stays audit-loadable. No bricked decision.
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            load_and_verify_execution_archive,
+        )
+
+        def boom(msgs):
+            raise ConnectionError("down")
+        art, fail_bundle = _setup(tmp_path, call_fn=boom)
+        seal_decision_archive(fail_bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        good = execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=_contract(), call_fn=_call_fn())
+        seal_decision_archive(good, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")   # NOT blocked
+        canonical = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert canonical["outcome"]["news_status"] == "success"
+        assert canonical["execution_id"] == good["execution_id"]
+        audit = load_and_verify_execution_archive(
+            "d1", fail_bundle["execution_id"], art, **_dirs(tmp_path),
+            archive_dir=tmp_path / "arch")
+        assert audit["outcome"]["news_status"] == "hard_failed"
+
+    def test_decision_load_after_success_commit_never_returns_hard_fail(
+            self, tmp_path):
+        # re-review#4 P1-b (the reviewer's TOCTOU end-state): hard-fail archive
+        # sealed, success committed but its archive NOT yet sealed — the
+        # decision loader must NEVER hand back the hard-fail doc; it points at
+        # the missing canonical success archive (recoverable) instead
         def boom(msgs):
             raise ConnectionError("down")
         art, fail_bundle = _setup(tmp_path, call_fn=boom)
@@ -579,8 +624,61 @@ class TestWriteOnce:
         execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=_call_fn())
-        with pytest.raises(RegistryError, match="被取代"):
+        with pytest.raises(RegistryError, match="档案缺失"):
             load_and_verify_decision_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+
+
+class TestCrashRecovery:
+    def test_recover_after_commitment_crash(self, tmp_path):
+        # re-review#4 crash variant: success committed, process died before
+        # sealing — rebuild the bundle from PURE on-disk state and seal
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)      # committed; pretend we crashed here
+        recovered = recover_and_seal_success_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert recovered["evaluation"] == bundle["evaluation"]
+        assert recovered["execution_id"] == bundle["execution_id"]
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["archive_sha256"] == recovered["archive_sha256"]
+
+    def test_recover_zero_population_decision(self, tmp_path):
+        # deterministic paths (zero factor + empty penalty) recover too
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path, art_fn=_artifact_context_only)
+        recovered = recover_and_seal_success_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert recovered["outcome"]["penalty_leg_status"] == "empty_success"
+        assert recovered["evaluation"] == bundle["evaluation"]
+
+    def test_recovery_is_idempotent_with_existing_archive(self, tmp_path):
+        # archive already sealed and ledger unchanged -> recovery re-derives
+        # the identical archive and returns it (write-once idempotency)
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)
+        sealed = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                       archive_dir=tmp_path / "arch")
+        recovered = recover_and_seal_success_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert recovered == sealed
+
+    def test_recovery_requires_success_commitment(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+
+        def boom(msgs):
+            raise ConnectionError("down")
+        art, _ = _setup(tmp_path, call_fn=boom)     # hard_failed only
+        with pytest.raises(RegistryError, match="无可恢复"):
+            recover_and_seal_success_archive(
                 "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
 
     def test_identical_reseal_is_idempotent(self, tmp_path):
@@ -599,8 +697,8 @@ class TestWriteOnce:
 
 class TestLoadIdentity:
     def test_archive_copy_to_other_decision_refused(self, tmp_path):
-        # the reviewer's d1 -> d2 replay: copy d1's sealed archive to d2's
-        # filename — the three-way decision-identity check must kill it
+        # the reviewer's d1 -> d2 replay: overwrite d2's sealed archive file
+        # with d1's bytes — the three-way decision-identity check must kill it
         from workspace.research.ai_research_dept.engine.news_archive import (
             _archive_path,
         )
@@ -609,8 +707,14 @@ class TestLoadIdentity:
                               archive_dir=tmp_path / "arch")
         art2 = _artifact_full("d2")
         record_decision(tmp_path / "ledger", "d2", art2)
-        src = _archive_path(tmp_path / "arch", "d1")
-        _archive_path(tmp_path / "arch", "d2").write_bytes(src.read_bytes())
+        bundle2 = execute_news_decision(
+            art2, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d2", contract=_contract(), call_fn=_call_fn())
+        seal_decision_archive(bundle2, art2, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        src = _archive_path(tmp_path / "arch", "d1", bundle["execution_id"])
+        _archive_path(tmp_path / "arch", "d2",
+                      bundle2["execution_id"]).write_bytes(src.read_bytes())
         with pytest.raises(RegistryError, match="三向不符"):
             load_and_verify_decision_archive("d2", art2, **_dirs(tmp_path),
                                              archive_dir=tmp_path / "arch")
@@ -713,13 +817,16 @@ class TestLoadIdentity:
             load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
                                              archive_dir=tmp_path / "arch")
 
-    def test_whitespace_variant_decision_ids_get_distinct_paths(self, tmp_path):
+    def test_whitespace_variant_ids_get_distinct_paths(self, tmp_path):
         # the canon-based name folded "d A" and "d\tA" onto one file; the
-        # byte-exact sha256 name must keep them distinct
+        # byte-exact JSON-pair sha256 name keeps decision AND execution
+        # variants distinct, with unambiguous delimiting between the two
         from workspace.research.ai_research_dept.engine.news_archive import (
             _archive_path,
         )
-        a = _archive_path(tmp_path, "d A")
-        b = _archive_path(tmp_path, "d\tA")
-        assert a != b
+        a = _archive_path(tmp_path, "d A", "e")
+        assert a != _archive_path(tmp_path, "d\tA", "e")
+        assert a != _archive_path(tmp_path, "d A", "e2")
+        assert _archive_path(tmp_path, "d", "x:e") \
+            != _archive_path(tmp_path, "d:x", "e")            # no concat ambiguity
         assert len(a.stem.split("news_decision_")[1]) == 64   # full digest
