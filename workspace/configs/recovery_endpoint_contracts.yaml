@@ -103,7 +103,7 @@ adj_factor:
   - adj_factor
   - ts_code
   - trade_date
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 balancesheet:
   cadence: quarterly report season
@@ -135,7 +135,7 @@ balancesheet:
   - total_assets
   - total_liab
   - total_hldr_eqy_inc_min_int
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 block_trade:
   cadence: daily 大宗交易, after close
@@ -170,7 +170,7 @@ block_trade:
   - amount
   - buyer
   - seller
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 broker_recommend:
   cadence: monthly broker 金股
@@ -198,7 +198,7 @@ broker_recommend:
   required_fields:
   - broker
   - ts_code
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 cashflow:
   cadence: quarterly report season
@@ -230,7 +230,7 @@ cashflow:
   - n_cashflow_act
   - c_fr_sale_sg
   - n_cashflow_inv_act
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 cashflow_vip:
   cadence: quarterly; direct single-quarter report_type 2/3
@@ -264,7 +264,7 @@ cashflow_vip:
   required_fields:
   - n_cashflow_act
   - c_fr_sale_sg
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 cyq_perf:
   cadence: daily chip distribution 2018+, ~18:00–19:00 CST
@@ -296,7 +296,7 @@ cyq_perf:
   - cost_50pct
   - winner_rate
   - weight_avg
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 daily:
   cadence: daily, ~15:00–16:00 CST after close
@@ -329,7 +329,7 @@ daily:
   - vol
   - amount
   - pre_close
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 daily_basic:
   cadence: daily, ~15:00–17:00 CST after close
@@ -361,7 +361,7 @@ daily_basic:
   - pb
   - total_mv
   - circ_mv
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 disclosure_date:
   cadence: disclosure schedule; ann_date visibility
@@ -390,7 +390,7 @@ disclosure_date:
   - pre_date
   - actual_date
   - modify_date
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 dividend:
   cadence: dividend season; ann_date/ex_date
@@ -424,7 +424,7 @@ dividend:
   - cash_div
   - record_date
   - ex_date
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 express:
   cadence: 业绩快报 windows; ann_date visibility
@@ -453,7 +453,7 @@ express:
   - n_income
   - total_profit
   - total_assets
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 fina_audit:
   cadence: annual audit; ann_date visibility
@@ -481,7 +481,7 @@ fina_audit:
   - audit_result
   - audit_agency
   - audit_sign
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 fina_indicator_vip: {}
 fina_mainbz:
@@ -496,7 +496,7 @@ fina_mainbz:
   - bz_item
   - bz_code
   pagination: pro.fina_mainbz_VIP per-period; doc-81's 100-row cap is the SINGLE-STOCK base endpoint,
-    NOT _vip. page_limit=10000 = probe-observed VIP page — offset_paged
+    NOT _vip. page_limit=10000 = probe default response — offset_paged
   pagination_spec:
     mode: offset_paged
     offset_param: offset
@@ -506,8 +506,9 @@ fina_mainbz:
     a later segment revision can be backdated → RAW-RECOVERY ONLY, formal PIT promotion QUARANTINED pending
     a revision-timing probe. raw_fetch_ts is the first-seen floor'
   rate_limit: 'pro.fina_mainbz_VIP per-period; doc-81''s 100-row cap is the SINGLE-STOCK base endpoint,
-    NOT _vip. page_limit=10000 = probe-observed VIP page (bucket_a_pretest 2026-06-07: fina_mainbz_vip
-    10000 rows, cap_hit=false), offset-paged'
+    NOT _vip. page_limit=10000 = probe default response (bucket_a_pretest 2026-06-07: fina_mainbz_vip
+    10000 rows; cap_hit NOT evaluated — the probe passed limit_for_cap=None). A deliberate client chunk,
+    offset-paged'
   request_population:
     bounds:
       end: '20260331'
@@ -519,7 +520,7 @@ fina_mainbz:
   - bz_sales
   - bz_profit
   - bz_cost
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 forecast:
   cadence: forecast windows; ann_date visibility
@@ -549,7 +550,7 @@ forecast:
   - p_change_min
   - p_change_max
   - net_profit_min
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 hk_hold:
   cadence: daily 沪深港通持股 2017+, after close
@@ -577,7 +578,7 @@ hk_hold:
   required_fields:
   - vol
   - ratio
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 income:
   cadence: quarterly report season; ann_date/f_ann_date visibility
@@ -611,7 +612,7 @@ income:
   - operate_profit
   - total_profit
   - n_income
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 income_vip:
   cadence: quarterly; direct single-quarter report_type 2/3
@@ -646,7 +647,7 @@ income_vip:
   - total_revenue
   - operate_profit
   - n_income
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 index_daily:
   cadence: daily, after close
@@ -683,7 +684,7 @@ index_daily:
   - close
   - vol
   - amount
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 margin_detail:
   cadence: daily 融资融券, after close
@@ -712,7 +713,7 @@ margin_detail:
   - rzye
   - rqye
   - rzmre
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 moneyflow:
   cadence: daily, after close
@@ -741,7 +742,7 @@ moneyflow:
   - buy_lg_amount
   - sell_lg_amount
   - net_mf_amount
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 pledge_stat:
   cadence: weekly pledge stats
@@ -770,7 +771,7 @@ pledge_stat:
   - pledge_count
   - pledge_ratio
   - total_share
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 report_rc:
   cadence: analyst reports; report_date/create_time visibility
@@ -805,7 +806,7 @@ report_rc:
   - pe
   - rd
   - op_rt
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 repurchase:
   cadence: buyback events; ann_date visibility
@@ -838,7 +839,7 @@ repurchase:
   - vol
   - amount
   - high_limit
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 stk_holdernumber:
   cadence: periodic; ann_date visibility
@@ -867,7 +868,7 @@ stk_holdernumber:
   - ts_code
   - ann_date
   - end_date
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 stk_holdertrade:
   cadence: event-driven; ann_date visibility
@@ -900,7 +901,7 @@ stk_holdertrade:
   - in_de
   - change_vol
   - avg_price
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 stk_limit:
   cadence: daily, limit prices published pre-open
@@ -931,7 +932,7 @@ stk_limit:
   - up_limit
   - down_limit
   - pre_close
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 suspend_d:
   cadence: daily 停复牌
@@ -961,7 +962,7 @@ suspend_d:
   required_fields:
   - suspend_type
   - suspend_timing
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 top10_floatholders:
   cadence: quarterly; ann_date visibility
@@ -974,14 +975,15 @@ top10_floatholders:
   - end_date
   - holder_name
   pagination: pro.top10_floatholders per-period; doc-62's 5000 is a 积分 tier, not a row cap. page_limit=6000
-    = probe-observed page — offset_paged
+    = probe default response — offset_paged
   pagination_spec:
     mode: offset_paged
     offset_param: offset
     page_limit: 6000
   pit_anchors: anchor ann_date; shift(1)
   rate_limit: 'pro.top10_floatholders per-period; doc-62''s 5000 is a 积分 tier, not a row cap. page_limit=6000
-    = probe-observed page (bucket_a_pretest: top10 byperiod 6000 rows, cap_hit=false), offset-paged'
+    = probe default response (bucket_a_pretest: top10 byperiod 6000 rows; cap_hit NOT evaluated — limit_for_cap=None).
+    A deliberate client chunk, offset-paged'
   request_population:
     bounds:
       end: '20260331'
@@ -992,7 +994,7 @@ top10_floatholders:
   - holder_name
   - hold_amount
   - hold_ratio
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 top_inst:
   cadence: daily 龙虎榜机构 2012+, after close
@@ -1025,7 +1027,7 @@ top_inst:
   - buy
   - sell
   - net_buy
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
 top_list:
   cadence: daily 龙虎榜, after close
@@ -1057,5 +1059,5 @@ top_list:
   - turnover_rate
   - amount
   - net_amount
-  reviewed_at: '2026-07-18T09:37:11.669434+00:00'
+  reviewed_at: '2026-07-18T09:56:51.524580+00:00'
   reviewed_by: henry
