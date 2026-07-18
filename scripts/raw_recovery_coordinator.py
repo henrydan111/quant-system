@@ -198,7 +198,9 @@ ENDPOINT_MATRIX = [
        note="per-stock (2018+) repartitioned per-date, row-conserving. REQUEST-level empty_policy is "
             "sparse_canary: a lifetime-non-overlapping stock (delisted pre-2018 / listed after the "
             "window) returns an empty per-stock response, which is a valid outcome — NOT dense_refuse "
-            "(GPT sign-off HOLD BLOCKER-2). Per-DATE output density is enforced after repartition."),
+            "(GPT sign-off HOLD BLOCKER-2). Per-DATE output density (every required open session 2018+ "
+            "non-empty in the consolidated output) MUST BE enforced after repartition — NOT yet "
+            "implemented; a promotion precondition, not a current gate (GPT re-review #2)."),
     # fundamentals (statements: pit_version_key = ann_date/f_ann_date/update_flag)
     _r(owner="A03a", output_family="fundamentals/income", source_endpoints=("income",), query_mode="per_stock",
        vendor_record_key=("ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "update_flag"),
@@ -230,8 +232,9 @@ ENDPOINT_MATRIX = [
        note="fetch_quarterly_statements. REQUEST unit is (period, report_type) and the original wrapper "
             "(_fetch_statement_report_types) SKIPS an empty report_type leg — so an empty (period, "
             "report_type=3 调整单季) response is a valid outcome, NOT dense_refuse (GPT sign-off HOLD "
-            "MAJOR). Per-PERIOD output density (>=1 report_type non-empty per period) is enforced after "
-            "consolidation, not per request."),
+            "MAJOR). Per-PERIOD output density (>=1 report_type non-empty per period) MUST BE enforced "
+            "after consolidation — NOT yet implemented; a promotion precondition, not per request "
+            "and not a current gate (GPT re-review #2)."),
     _r(owner="A04b", output_family="fundamentals/cashflow_quarterly", source_endpoints=("cashflow_vip",),
        query_mode="per_period_report_type",
        vendor_record_key=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
@@ -240,8 +243,9 @@ ENDPOINT_MATRIX = [
        profile_key=("ts_code", "end_date", "report_type"), empty_policy="sparse_canary", profile_key_dups_expected=True,
        consolidation_group="cashflow_q_period", tail_rule="ann_date window",
        note="fetch_quarterly_statements. REQUEST-level sparse_canary for the same reason as "
-            "income_quarterly (empty report_type=3 leg is valid); per-period output density enforced "
-            "after consolidation (GPT sign-off HOLD MAJOR)."),
+            "income_quarterly (empty report_type=3 leg is valid); per-period output density MUST BE "
+            "enforced after consolidation — NOT yet implemented; a promotion precondition (GPT "
+            "sign-off HOLD MAJOR; re-review #2)."),
     _r(owner="A06", output_family="fundamentals/forecast", source_endpoints=("forecast",), query_mode="per_stock",
        vendor_record_key=("ts_code", "ann_date", "end_date", "type"), pit_version_key=("ann_date",),
        content_dedup_key=("ts_code", "ann_date", "end_date", "type"), profile_key=("ts_code", "end_date"),
