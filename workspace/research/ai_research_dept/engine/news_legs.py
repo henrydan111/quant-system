@@ -200,6 +200,23 @@ class NewsLegOutcome:
                 "penalty_payload_hash": self.penalty_payload_hash}
 
 
+def outcome_canonical_payload(outcome: NewsLegOutcome) -> dict:
+    """终态的 **canonical 载荷**——模块级、不可覆写、只读实际字段
+    (archive-re-review#6 P0 同类面:安全边界上绝不调用可被子类覆写的虚方法
+    `_payload()`;配合各门的恰类型检查)。"""
+    return {"decision_id": outcome.decision_id, "output_mode": outcome.output_mode,
+            "factor_leg_status": outcome.factor_leg_status,
+            "penalty_eligible_count": outcome.penalty_eligible_count,
+            "penalty_eligible_set_hash": outcome.penalty_eligible_set_hash,
+            "penalty_leg_status": outcome.penalty_leg_status,
+            "news_status": outcome.news_status,
+            "shadow_complete": outcome.shadow_complete,
+            "decision_complete": outcome.decision_complete,
+            "binding_eligible": outcome.binding_eligible,
+            "factor_payload_hash": outcome.factor_payload_hash,
+            "penalty_payload_hash": outcome.penalty_payload_hash}
+
+
 def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: str,
                       output_mode: str, factor_payload_ast, penalty_payload_ast,
                       factor_leg_fn, penalty_leg_fn) -> NewsLegOutcome:
@@ -303,12 +320,15 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
     primary 终态不符,契约说 primary 则那才是合法模式);从已验工件**重算** penalty
     适格计数+集合哈希;两腿 payload 经执行体边界校验器(**带期望槽位**——penalty
     payload 冒充 factor 槽拒)重验且哈希与终态逐字节相等。"""
-    if not isinstance(outcome, NewsLegOutcome):
-        raise RegistryError("绑定边界只收 NewsLegOutcome")
+    if type(outcome) is not NewsLegOutcome:
+        raise RegistryError(
+            f"绑定边界只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
+            f"子类可覆写 _payload 脱钩,拒(archive-re-review#6 P0 同类面)")
     if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
         raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"
                             f"(来自冻结评分契约;得 {expected_output_mode!r})")
-    verify_sealed(outcome._payload(), outcome.outcome_hash, field_name="outcome_hash")
+    verify_sealed(outcome_canonical_payload(outcome), outcome.outcome_hash,
+                  field_name="outcome_hash")
     if outcome.output_mode != expected_output_mode:
         raise LegIntegrityError(
             f"终态自封 output_mode {outcome.output_mode!r} ≠ 冻结契约期望 "

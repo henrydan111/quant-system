@@ -101,6 +101,21 @@ archive-re-review#5(1×P0 + 1×P2)全数折叠:
   `load_and_verify_decision_archive`;`load_and_verify_execution_archive`
   仅审计展示(scope=execution_audit)。
 
+archive-re-review#6(1×P0 + 1×P2)全数折叠:
+
+- **P0 虚方法脱钩**:`isinstance` 收子类 + 跨边界调用可覆写的 `_payload()`
+  ——恶意但合法的 NewsScoringContract 子类可使承诺/档案载荷(覆写值)与
+  evaluator 实际读取的字段脱钩,封出自相矛盾档案。现在:**所有门恰类型**
+  (`require_exact_contract` / `type(outcome) is NewsLegOutcome`——runner、
+  `commit_execution`、`verify_execution_bundle`、恢复、`verify_outcome_for_binding`),
+  且安全边界上的载荷一律经**模块级不可覆写 canonical helper**
+  (`contract_canonical_payload` / `outcome_canonical_payload`)从实际字段
+  构造,绝不经虚方法。子类在任何 provenance/承诺/档案写入之前被拒。
+- **P2 恢复并发竞争**:write-once 冲突类型化为
+  `ArchiveWriteOnceConflictError`;恢复输掉竞争(入口查无档案 → 对手封存 →
+  账本合法增长 → 本次重建锚更晚 → 冲突)时**转为读验既有档案返回**,
+  不再报错——所有合法顺序下恢复幂等。
+
 四席装配/scorecard 薄分发/链 bump 在下一单元;本单元零活链触碰。
 """
 from __future__ import annotations
@@ -122,14 +137,16 @@ from workspace.research.ai_research_dept.engine.news_evidence import RegistryErr
 from workspace.research.ai_research_dept.engine.news_executors import (
     _EMPTY_PENALTY_RECORD, _EMPTY_PENALTY_SENTINEL, _TERMINAL_VERDICTS,
     NewsScoringContract, _check_terminal_row, _prov_lock, _rebuild_leg_payloads,
-    _resolve_terminal, read_execution_provenance,
+    _resolve_terminal, contract_canonical_payload, read_execution_provenance,
+    require_exact_contract,
 )
 from workspace.research.ai_research_dept.engine.news_horizon import (
     deterministic_zero_factor_record, evaluate_news_horizon,
 )
 from workspace.research.ai_research_dept.engine.news_legs import (
     NewsLegOutcome, _derive_terminal, _eligible_set_hash,
-    penalty_eligible_records, verify_outcome_for_binding,
+    outcome_canonical_payload, penalty_eligible_records,
+    verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -195,11 +212,12 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     的账本门只触碰不可变的决策注册行,首写胜出使其无 TOCTOU 面)。canonical
     取代规则(success 承诺唯一 ⇒ 决策档案 = success 执行的档案)在
     `load_and_verify_decision_archive`,不在此。"""
-    if not isinstance(contract, NewsScoringContract):
-        raise RegistryError("联合验证必须提供冻结 NewsScoringContract")
+    require_exact_contract(contract)                   # re-review#6 P0
     outcome = bundle["outcome"]
-    if not isinstance(outcome, NewsLegOutcome):
-        raise RegistryError("bundle.outcome 须为密封 NewsLegOutcome")
+    if type(outcome) is not NewsLegOutcome:
+        raise RegistryError(
+            f"bundle.outcome 须为恰 NewsLegOutcome(得 {type(outcome).__name__})"
+            f"——子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
     execution_id = bundle["execution_id"]
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("bundle.execution_id 须为非空 str")
@@ -319,18 +337,24 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             "选定终态/outcome 与账本承诺不符——出处文件被绕过写入器改写,拒"
             "(archive-re-review#2 Blocker)")
     if commitment["contract_hash"] != contract.contract_hash \
-            or commitment["contract"] != contract._payload():
+            or commitment["contract"] != contract_canonical_payload(contract):
         # re-review#5 P0:outcome_hash 不含 primary_decision_horizon——契约不
         # 绑进承诺,同 schema/同 mode/不同主评分周期的契约就能在封存/恢复时
         # 合法替换主评分结果。封存与读取一律要求契约与承诺**逐字节**相符
+        # (载荷经 canonical helper 构造,不经虚方法——re-review#6 P0)
         raise RegistryError(
             f"契约与账本承诺不符(承诺 {commitment['contract']} vs 提供 "
-            f"{contract._payload()})——主评分周期等契约字段不可替换,拒"
-            f"(re-review#5 P0)")
+            f"{contract_canonical_payload(contract)})——主评分周期等契约字段"
+            f"不可替换,拒(re-review#5 P0)")
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
             "commitment": commitment}
+
+
+class ArchiveWriteOnceConflictError(RegistryError):
+    """write-once 档案位已被**内容不同**的密封档案占用(re-review#6 P2:恢复
+    据此与"验证性失败"区分——并发竞争的输家转为读验既有档案返回)。"""
 
 
 _ARCHIVE_SCHEMA = "news_decision_archive_v1"
@@ -375,12 +399,12 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
         "archive_schema": _ARCHIVE_SCHEMA,
         "decision_id": outcome.decision_id,
         "execution_id": bundle["execution_id"],
-        "contract": contract._payload(),
+        "contract": contract_canonical_payload(contract),
         "contract_hash": contract.contract_hash,
         "artifact_hash": artifact.artifact_hash,
         "bundle_hash": artifact.bundle.bundle_hash,
         "final_registry_hash": artifact.final_registry.registry_hash,
-        "outcome": outcome._payload(),
+        "outcome": outcome_canonical_payload(outcome),
         "outcome_hash": outcome.outcome_hash,
         "evaluation": bundle["evaluation"],
         "records": bundle["records"],
@@ -395,7 +419,7 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
             existing = json.loads(path.read_text(encoding="utf-8"))
             if existing == archive:
                 return existing                # 幂等重试:完全相同才放行
-            raise RegistryError(
+            raise ArchiveWriteOnceConflictError(
                 f"执行 ({outcome.decision_id!r}, {bundle['execution_id']!r}) "
                 f"已有密封档案且内容不同——档案 write-once,first-write-wins,"
                 f"拒绝覆盖(archive-review B1)")
@@ -450,7 +474,7 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
             f"档案 execution_id {archive['execution_id']!r} ≠ 请求 "
             f"{execution_id!r}——执行身份不符(re-review#4)")
     if archive["contract_hash"] != contract.contract_hash \
-            or archive["contract"] != contract._payload():
+            or archive["contract"] != contract_canonical_payload(contract):
         raise RegistryError("档案契约与提供的冻结契约不符")
     if archive["artifact_hash"] != artifact.artifact_hash:
         raise RegistryError("档案工件哈希与提供的工件不符")
@@ -475,7 +499,7 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
         outcome_hash=archive["outcome_hash"])
     # re-review#2 Major:嵌套严格——重建 outcome 的规范载荷必须逐字段等于封存
     # dict(别名/多余键在此死;NewsLegOutcome 构造只取具名字段,等式补上封闭性)
-    if o != outcome._payload():
+    if o != outcome_canonical_payload(outcome):
         raise RegistryError(
             "档案 outcome 载荷含未验证字段/与规范载荷不符——嵌套对象严格键集,拒"
             "(archive-re-review#2 Major)")
@@ -560,8 +584,7 @@ def recover_and_seal_success_archive(decision_id: str,
     (工件+契约+终态 verdict)经 M3⁴ 矩阵**重推导**,其 outcome_hash 必须等于
     承诺的 outcome_hash(权威锚);evaluation 确定性重算。随后
     `seal_decision_archive` 重跑全量联合验证 + write-once。"""
-    if not isinstance(contract, NewsScoringContract):
-        raise RegistryError("恢复封存必须提供冻结 NewsScoringContract")
+    require_exact_contract(contract)                   # re-review#6 P0
     chain = _read_chain(_ledger_path(ledger_dir))
     success = _find_success_commitment(chain, decision_id)
     if success is None:
@@ -572,11 +595,11 @@ def recover_and_seal_success_archive(decision_id: str,
     # re-review#5 P0:恢复所用契约必须与承诺哈希绑定的契约**逐字节**相符——
     # 同 schema/同 mode/不同 primary_decision_horizon 的替换在写任何文件前拒
     if contract.contract_hash != success["contract_hash"] \
-            or contract._payload() != success["contract"]:
+            or contract_canonical_payload(contract) != success["contract"]:
         raise RegistryError(
             f"恢复契约与账本承诺不符(承诺 {success['contract']} vs 提供 "
-            f"{contract._payload()})——主评分周期等契约字段不可替换,拒"
-            f"(re-review#5 P0)")
+            f"{contract_canonical_payload(contract)})——主评分周期等契约字段"
+            f"不可替换,拒(re-review#5 P0)")
     # re-review#5 P2:档案已在 → 读验并返回(与账本此后合法增长无关的真幂等);
     # 只有档案缺失才从盘上重建封存
     if _archive_path(archive_dir, decision_id, execution_id).exists():
@@ -647,6 +670,14 @@ def recover_and_seal_success_archive(decision_id: str,
     bundle = {"execution_id": execution_id, "outcome": outcome,
               "evaluation": evaluation, "records": records,
               "selected_provenance": {"factor": f_row, "penalty": p_row}}
-    return seal_decision_archive(bundle, artifact, ledger_dir=ledger_dir,
-                                 prov_dir=prov_dir, contract=contract,
-                                 archive_dir=archive_dir)
+    try:
+        return seal_decision_archive(bundle, artifact, ledger_dir=ledger_dir,
+                                     prov_dir=prov_dir, contract=contract,
+                                     archive_dir=archive_dir)
+    except ArchiveWriteOnceConflictError:
+        # re-review#6 P2:入口存在检查与封存不在同一锁内——并发的恢复/封存
+        # 赢了竞争后账本又合法增长,本次重建的锚更晚 → write-once 冲突。输家
+        # 不报错,**重新读验既有档案并返回**(先写者的档案就是该执行的档案)
+        return load_and_verify_execution_archive(
+            decision_id, execution_id, artifact, ledger_dir=ledger_dir,
+            prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)

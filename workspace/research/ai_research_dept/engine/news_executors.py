@@ -136,6 +136,25 @@ class NewsScoringContract:
                 "primary_decision_horizon": self.primary_decision_horizon}
 
 
+def contract_canonical_payload(contract: NewsScoringContract) -> dict:
+    """契约的 **canonical 载荷**——模块级、不可覆写、只读实际字段
+    (re-review#6 P0:安全边界上绝不调用可被子类覆写的虚方法 `_payload()`;
+    配合各门的 `type(contract) is NewsScoringContract` 恰类型检查,哈希/承诺
+    绑定的载荷与 evaluator 实际读取的字段不可能脱钩)。"""
+    return {"schema_id": contract.schema_id, "output_mode": contract.output_mode,
+            "primary_decision_horizon": contract.primary_decision_horizon}
+
+
+def require_exact_contract(contract) -> NewsScoringContract:
+    """安全边界的契约恰类型门(re-review#6 P0):子类一律拒——frozen dataclass
+    不封虚方法,`isinstance` 收子类等于把哈希构造交给调用方。"""
+    if type(contract) is not NewsScoringContract:
+        raise RegistryError(
+            f"须恰 NewsScoringContract(得 {type(contract).__name__})——子类可"
+            f"覆写 _payload 使承诺哈希与实际评分字段脱钩,拒(re-review#6 P0)")
+    return contract
+
+
 # --------------------------------------------------- 尝试绑定出处(先于绑定)
 
 @contextmanager
@@ -404,10 +423,11 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
     调用方能影响的只有"哪个执行被验证",不能影响"承诺什么哈希";伪造承诺
     要么在此验证死,要么(真实 success 已承诺后)死于 success-唯一。幂等重试
     安全(逐字节相同 → 返回已有承诺行)。"""
-    if not isinstance(contract, NewsScoringContract):
-        raise RegistryError("承诺权威必须提供冻结 NewsScoringContract")
-    if not isinstance(outcome, NewsLegOutcome):
-        raise RegistryError("承诺权威只收密封 NewsLegOutcome")
+    require_exact_contract(contract)
+    if type(outcome) is not NewsLegOutcome:
+        raise RegistryError(
+            f"承诺权威只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
+            f"子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("execution_id 须恰 str 非空")
     if outcome.decision_id != decision_id:
@@ -450,7 +470,9 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
         penalty_entry_hash=(p_row["entry_hash"] if p_row else None),
         outcome_hash=outcome.outcome_hash, news_status=outcome.news_status,
         # re-review#5 P0:冻结契约(含 primary_decision_horizon)哈希绑定进承诺
-        contract_payload=contract._payload(), contract_hash=contract.contract_hash)
+        # (re-review#6 P0:canonical helper,不经虚方法)
+        contract_payload=contract_canonical_payload(contract),
+        contract_hash=contract.contract_hash)
 
 
 # --------------------------------------------------- 真实腿执行体
@@ -529,8 +551,7 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
     5. news 成功 → `evaluate_news_horizon`(独占+钉死公式+契约模式别名);
     6. 返回执行束:{execution_id, outcome, evaluation, selected_provenance
        (每腿**选定终态行本体**——不重读目录), selected_entry_hashes}。"""
-    if not isinstance(contract, NewsScoringContract):
-        raise RegistryError("必须提供冻结 NewsScoringContract(BINDING #2)")
+    require_exact_contract(contract)                   # re-review#6 P0
     registry = artifact.final_registry
     execution_id = f"{decision_id}:{uuid.uuid4().hex[:16]}"   # 尝试身份(review Major)
     factor_expected = leg_expected_ids(registry, use="factor_positive",

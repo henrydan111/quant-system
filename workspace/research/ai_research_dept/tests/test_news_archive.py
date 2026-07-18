@@ -758,6 +758,122 @@ class TestContractCommitmentBinding:
                 prov_dir=tmp_path / "prov", contract=self._alt_contract(),
                 archive_dir=tmp_path / "arch")
 
+
+class _EvilContract(NewsScoringContract):
+    # archive-re-review#6 P0 (the reviewer's probe): a legal frozen-dataclass
+    # SUBCLASS whose fields say 1-3d but whose overridden _payload() claims
+    # next_open — the self-seal and any virtual-call site would hash the
+    # overridden claim while the evaluator reads the real fields
+    def _payload(self):
+        return {"schema_id": self.schema_id, "output_mode": self.output_mode,
+                "primary_decision_horizon": "next_open"}
+
+
+class TestExactTypeBoundaries:
+    def _evil(self):
+        return _EvilContract(schema_id="c16_news_horizon_v1",
+                             output_mode="primary_horizon",
+                             primary_decision_horizon="1-3d")
+
+    def test_evil_contract_refused_at_runner_before_any_write(self, tmp_path):
+        # the reviewer's flow: record_decision -> execute with the evil
+        # contract — refused at entry; NOTHING reaches provenance or ledger
+        art = _artifact_full("d1")
+        record_decision(tmp_path / "ledger", "d1", art)
+        with pytest.raises(RegistryError, match="子类"):
+            execute_news_decision(
+                art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+                decision_id="d1", contract=self._evil(), call_fn=_call_fn())
+        assert not (tmp_path / "prov" / "execution_provenance.jsonl").exists()
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            _ledger_path, _read_chain,
+        )
+        assert all(e["kind"] == "decision"
+                   for e in _read_chain(_ledger_path(tmp_path / "ledger")))
+
+    def test_evil_contract_refused_at_seal_and_recovery(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)              # good execution committed
+        with pytest.raises(RegistryError, match="子类"):
+            seal_decision_archive(
+                bundle, art, ledger_dir=tmp_path / "ledger",
+                prov_dir=tmp_path / "prov", contract=self._evil(),
+                archive_dir=tmp_path / "arch")
+        with pytest.raises(RegistryError, match="子类"):
+            recover_and_seal_success_archive(
+                "d1", art, ledger_dir=tmp_path / "ledger",
+                prov_dir=tmp_path / "prov", contract=self._evil(),
+                archive_dir=tmp_path / "arch")
+        assert not list((tmp_path / "arch").glob("news_decision_*.json"))
+
+    def test_evil_contract_refused_at_commit_authority(self, tmp_path):
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            commit_execution,
+        )
+        art, bundle = _setup(tmp_path)
+        with pytest.raises(RegistryError, match="子类"):
+            commit_execution(
+                tmp_path / "ledger", tmp_path / "prov", decision_id="d1",
+                execution_id=bundle["execution_id"], outcome=bundle["outcome"],
+                artifact=art, contract=self._evil())
+
+    def test_evil_outcome_subclass_refused(self, tmp_path):
+        # same invariant class, outcome side: a NewsLegOutcome subclass with an
+        # overridden _payload cannot enter the joint verification
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            NewsLegOutcome,
+        )
+
+        class _EvilOutcome(NewsLegOutcome):
+            def _payload(self):
+                return {**NewsLegOutcome._payload(self),
+                        "news_status": "hard_failed"}
+        art, bundle = _setup(tmp_path)
+        o = bundle["outcome"]
+        bundle["outcome"] = _EvilOutcome(
+            decision_id=o.decision_id, output_mode=o.output_mode,
+            factor_leg_status=o.factor_leg_status,
+            penalty_eligible_count=o.penalty_eligible_count,
+            penalty_eligible_set_hash=o.penalty_eligible_set_hash,
+            penalty_leg_status=o.penalty_leg_status, news_status=o.news_status,
+            shadow_complete=o.shadow_complete,
+            decision_complete=o.decision_complete,
+            binding_eligible=o.binding_eligible,
+            factor_payload_hash=o.factor_payload_hash,
+            penalty_payload_hash=o.penalty_payload_hash)
+        with pytest.raises(RegistryError, match="恰 NewsLegOutcome"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    def test_recovery_race_loser_returns_existing_archive(self, tmp_path):
+        # archive-re-review#6 P2 (the reviewer's interleaving, deterministic):
+        # recovery A passes the entry exists-check; concurrent seal B lands the
+        # archive; the ledger then grows legitimately; A's rebuilt seal hits
+        # the write-once conflict — A must RETURN the existing archive, not err
+        import workspace.research.ai_research_dept.engine.news_archive as na
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)              # committed, unsealed
+        state = {}
+        real_read = na.read_execution_provenance
+
+        def racing_read(prov_dir):
+            if not state.get("raced"):
+                state["raced"] = True               # B wins the race here:
+                state["sealed"] = seal_decision_archive(
+                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+                record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+            return real_read(prov_dir)
+        try:
+            na.read_execution_provenance = racing_read
+            out = recover_and_seal_success_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        finally:
+            na.read_execution_provenance = real_read
+        assert out == state["sealed"]               # loser returns B's archive
+
     def test_identical_reseal_is_idempotent(self, tmp_path):
         # same bundle, unchanged ledger — the fully re-derived archive is
         # byte-identical, so the retry returns the existing archive
