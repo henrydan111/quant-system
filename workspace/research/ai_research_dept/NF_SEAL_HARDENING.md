@@ -238,6 +238,13 @@ binding requirements for the FINAL integration sub-block:
    Broader confusables/linguistic rules stay under H1.
 6. Ledger head anchoring + archive sealing of exact bytes with selected-attempt
    semantics (carried forward from the seat-wiring list).
+7. **Decision consumers use ONLY `load_and_verify_decision_archive`**
+   (archive re-review#5 answer-4 convention, binding on the four-seat
+   assembly): the canonical decision result comes exclusively from the
+   ledger's unique-success-commitment selection;
+   `load_and_verify_execution_archive` is audit-display only (treat as
+   scope=execution_audit — never feed it into the four-seat session archive
+   as the decision's outcome).
 
 ## Closure checklist (all must be ✅ before the first forward run)
 - [ ] H1 tagged canonical AST + injectivity matrix

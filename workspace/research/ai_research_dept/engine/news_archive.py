@@ -87,6 +87,20 @@ archive-re-review#4(2×P1 + 崩溃变体)全数折叠:
   M3⁴ 矩阵重推导并对承诺 outcome_hash 验真、evaluation 重算——再走正常
   write-once 封印(已在且相同 = 幂等)。
 
+archive-re-review#5(1×P0 + 1×P2)全数折叠:
+
+- **P0 契约绑定进承诺**:`outcome_hash` 不含 `primary_decision_horizon`——
+  承诺此前不绑契约,同 schema/同 mode/不同主评分周期的契约可在封存或恢复时
+  合法替换主评分结果并永久占用该执行的档案位。现在承诺行内嵌**完整不可变
+  契约载荷 + contract_hash**(链读验对自洽),`verify_execution_bundle`
+  (=封存与两个读取共用)与恢复预检一律要求提供契约与承诺**逐字节**相符,
+  在写任何文件前拒。
+- **P2 恢复真幂等**:档案已在 → 恢复直接读验返回既有档案(账本此后合法
+  增长不再触发 write-once 拒);仅档案缺失才重建封存。
+- 四席集成约定(评审建议,记入 NF_SEAL_HARDENING):决策级消费者只准调
+  `load_and_verify_decision_archive`;`load_and_verify_execution_archive`
+  仅审计展示(scope=execution_audit)。
+
 四席装配/scorecard 薄分发/链 bump 在下一单元;本单元零活链触碰。
 """
 from __future__ import annotations
@@ -304,6 +318,15 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         raise RegistryError(
             "选定终态/outcome 与账本承诺不符——出处文件被绕过写入器改写,拒"
             "(archive-re-review#2 Blocker)")
+    if commitment["contract_hash"] != contract.contract_hash \
+            or commitment["contract"] != contract._payload():
+        # re-review#5 P0:outcome_hash 不含 primary_decision_horizon——契约不
+        # 绑进承诺,同 schema/同 mode/不同主评分周期的契约就能在封存/恢复时
+        # 合法替换主评分结果。封存与读取一律要求契约与承诺**逐字节**相符
+        raise RegistryError(
+            f"契约与账本承诺不符(承诺 {commitment['contract']} vs 提供 "
+            f"{contract._payload()})——主评分周期等契约字段不可替换,拒"
+            f"(re-review#5 P0)")
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
@@ -527,14 +550,16 @@ def recover_and_seal_success_archive(decision_id: str,
                                      ledger_dir, prov_dir,
                                      contract: NewsScoringContract,
                                      archive_dir) -> dict:
-    """**success 承诺后的可恢复封存**(re-review#4 崩溃变体):承诺已入链、
-    进程在封档前崩溃 → 从**纯盘上状态**重建执行束并走正常封印。重建全程
+    """**success 承诺后的可恢复封存**(re-review#4 崩溃变体 + re-review#5
+    P0/P2):承诺已入链、进程在封档前崩溃 → 从**纯盘上状态**重建执行束并走
+    正常封印。恢复契约必须与**承诺哈希绑定的契约**逐字节相符(P0——换主评分
+    周期在写任何文件前拒;承诺内嵌完整契约载荷,纯磁盘状态可自证);档案已在
+    → 读验返回(P2——账本此后合法增长不破坏幂等),缺失才重建。重建全程
     verify-not-trust:终态从出处解析(唯一+状态机)且 entry_hash 必须等于
     账本承诺;解析记录取自终态行封存本体(哈希绑定在行封印内);outcome 从
     (工件+契约+终态 verdict)经 M3⁴ 矩阵**重推导**,其 outcome_hash 必须等于
     承诺的 outcome_hash(权威锚);evaluation 确定性重算。随后
-    `seal_decision_archive` 重跑全量联合验证 + write-once(档案已在且逐字节
-    相同 = 幂等返回)。"""
+    `seal_decision_archive` 重跑全量联合验证 + write-once。"""
     if not isinstance(contract, NewsScoringContract):
         raise RegistryError("恢复封存必须提供冻结 NewsScoringContract")
     chain = _read_chain(_ledger_path(ledger_dir))
@@ -544,6 +569,21 @@ def recover_and_seal_success_archive(decision_id: str,
             f"决策 {decision_id!r} 无 success 执行承诺——无可恢复的封存"
             f"(re-review#4)")
     execution_id = success["execution_id"]
+    # re-review#5 P0:恢复所用契约必须与承诺哈希绑定的契约**逐字节**相符——
+    # 同 schema/同 mode/不同 primary_decision_horizon 的替换在写任何文件前拒
+    if contract.contract_hash != success["contract_hash"] \
+            or contract._payload() != success["contract"]:
+        raise RegistryError(
+            f"恢复契约与账本承诺不符(承诺 {success['contract']} vs 提供 "
+            f"{contract._payload()})——主评分周期等契约字段不可替换,拒"
+            f"(re-review#5 P0)")
+    # re-review#5 P2:档案已在 → 读验并返回(与账本此后合法增长无关的真幂等);
+    # 只有档案缺失才从盘上重建封存
+    if _archive_path(archive_dir, decision_id, execution_id).exists():
+        return _load_and_verify_archive_file(
+            decision_id, execution_id, artifact, ledger_dir=ledger_dir,
+            prov_dir=prov_dir, contract=contract, archive_dir=archive_dir,
+            chain=chain)
     all_rows = read_execution_provenance(prov_dir)
     f_row = _resolve_terminal(all_rows, execution_id=execution_id,
                               decision_id=decision_id, leg="factor")

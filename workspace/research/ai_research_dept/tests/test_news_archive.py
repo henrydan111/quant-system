@@ -681,6 +681,83 @@ class TestCrashRecovery:
             recover_and_seal_success_archive(
                 "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
 
+    def test_recovery_idempotent_after_chain_growth(self, tmp_path):
+        # re-review#5 P2 (the reviewer's probe): archive sealed, then an
+        # UNRELATED decision appended to the ledger — recovery must return the
+        # existing archive, not refuse on a differing ledger_head_at_seal
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)
+        sealed = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                       archive_dir=tmp_path / "arch")
+        record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+        recovered = recover_and_seal_success_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert recovered == sealed
+
+
+class TestContractCommitmentBinding:
+    # re-review#5 P0: the frozen contract (incl. primary_decision_horizon,
+    # which outcome_hash does NOT cover) is hash-bound into the commitment;
+    # same-schema/same-mode/different-primary substitution must be refused
+    # BEFORE any file is written — on seal AND on recovery
+
+    def _alt_contract(self):
+        return NewsScoringContract(schema_id="c16_news_horizon_v1",
+                                   output_mode="primary_horizon",
+                                   primary_decision_horizon="next_open")
+
+    def test_seal_with_different_primary_horizon_refused(self, tmp_path):
+        # the reviewer's probe, direct-seal form: evaluation consistently
+        # recomputed under the substitute contract, so the contract<->commitment
+        # binding must be the kill — and nothing may reach disk
+        from workspace.research.ai_research_dept.engine.news_horizon import (
+            evaluate_news_horizon,
+        )
+        art, bundle = _setup(tmp_path)
+        alt = self._alt_contract()
+        bundle["evaluation"] = evaluate_news_horizon(
+            bundle["records"]["factor"], bundle["records"]["penalty"],
+            art.final_registry, output_mode="primary_horizon",
+            primary_decision_horizon="next_open")
+        with pytest.raises(RegistryError, match="契约字段不可替换"):
+            seal_decision_archive(
+                bundle, art, ledger_dir=tmp_path / "ledger",
+                prov_dir=tmp_path / "prov", contract=alt,
+                archive_dir=tmp_path / "arch")
+        assert not list((tmp_path / "arch").glob("news_decision_*.json"))
+
+    def test_recovery_with_different_primary_horizon_refused(self, tmp_path):
+        # the reviewer's probe, recovery form: crash after commitment, then
+        # recover under the substitute contract — refused before writing;
+        # recovery under the COMMITTED contract still succeeds afterwards
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)          # committed; pretend crash
+        with pytest.raises(RegistryError, match="契约字段不可替换"):
+            recover_and_seal_success_archive(
+                "d1", art, ledger_dir=tmp_path / "ledger",
+                prov_dir=tmp_path / "prov", contract=self._alt_contract(),
+                archive_dir=tmp_path / "arch")
+        assert not list((tmp_path / "arch").glob("news_decision_*.json"))
+        recovered = recover_and_seal_success_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert recovered["evaluation"] == bundle["evaluation"]
+
+    def test_load_requires_committed_contract(self, tmp_path):
+        # the loaders run the same commitment binding: a substitute contract
+        # cannot read the canonical archive either
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        with pytest.raises(RegistryError, match="契约"):
+            load_and_verify_decision_archive(
+                "d1", art, ledger_dir=tmp_path / "ledger",
+                prov_dir=tmp_path / "prov", contract=self._alt_contract(),
+                archive_dir=tmp_path / "arch")
+
     def test_identical_reseal_is_idempotent(self, tmp_path):
         # same bundle, unchanged ledger — the fully re-derived archive is
         # byte-identical, so the retry returns the existing archive

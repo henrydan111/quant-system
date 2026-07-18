@@ -63,6 +63,7 @@ _DECISION_KEYS = frozenset({"kind", "decision_id", "bundle_hash", "artifact_hash
 _COMMITMENT_KEYS = frozenset({"kind", "decision_id", "execution_id",
                               "factor_entry_hash", "penalty_entry_hash",
                               "outcome_hash", "news_status",
+                              "contract", "contract_hash",
                               "seq", "prev_hash", "entry_hash"})
 _COMMITMENT_STATUSES = frozenset({"success", "hard_failed"})
 #: 工件派生字段(require_recorded 全字段比对的范围)
@@ -70,7 +71,7 @@ _ARTIFACT_FIELDS = ("bundle_hash", "artifact_hash", "final_registry_hash",
                     "source_card_hash", "cutoff_iso")
 #: 承诺行身份外字段(_append_commitment_row 幂等比对的范围)
 _COMMITMENT_FIELDS = ("factor_entry_hash", "penalty_entry_hash", "outcome_hash",
-                      "news_status")
+                      "news_status", "contract", "contract_hash")
 
 
 # --------------------------------------------------- 账本(原子首写胜出+哈希链)
@@ -129,6 +130,10 @@ def _read_chain(path: Path) -> list:
                     raise RegistryError(
                         f"账本行 {i} 承诺 news_status {entry['news_status']!r} "
                         f"未注册——拒")
+                # re-review#5 P0:承诺内嵌完整契约载荷,其哈希对必须自洽
+                if seal_hash(entry["contract"]) != entry["contract_hash"]:
+                    raise RegistryError(
+                        f"账本行 {i} 承诺 contract/contract_hash 对不自洽——拒")
             else:
                 raise RegistryError(f"账本行 {i} 未注册 kind {kind!r}——拒")
             if entry["seq"] != i:
@@ -229,7 +234,8 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
 def _append_commitment_row(ledger_dir, *, decision_id: str, execution_id: str,
                            factor_entry_hash: str,
                            penalty_entry_hash: "str | None",
-                           outcome_hash: str, news_status: str) -> dict:
+                           outcome_hash: str, news_status: str,
+                           contract_payload: dict, contract_hash: str) -> dict:
     """执行承诺入链的**模块私有低层写入**(archive-re-review#2 Blocker +
     re-review#3 P0)。⚠ 公开承诺 API 已撤除——唯一受认可调用方是
     [news_executors.commit_execution](news_executors.py) 承诺权威(它只提交
@@ -254,9 +260,19 @@ def _append_commitment_row(ledger_dir, *, decision_id: str, execution_id: str,
         raise RegistryError(f"outcome_hash 须 64-hex(得 {outcome_hash!r})")
     if news_status not in _COMMITMENT_STATUSES:
         raise RegistryError(f"news_status {news_status!r} 未注册")
+    # re-review#5 P0:承诺**哈希绑定完整冻结契约**(含 primary_decision_horizon
+    # ——outcome_hash 不含主评分周期,契约不绑进承诺则封存/恢复可合法换周期改分)
+    # 并内嵌不可变契约载荷本体(纯磁盘恢复可自证,而非只能校验调用方供给)
+    if type(contract_payload) is not dict:
+        raise RegistryError(f"contract_payload 须 dict(得 {type(contract_payload).__name__})")
+    if not (type(contract_hash) is str and _HEX64_RE.fullmatch(contract_hash)):
+        raise RegistryError(f"contract_hash 须 64-hex(得 {contract_hash!r})")
+    if seal_hash(contract_payload) != contract_hash:
+        raise RegistryError("contract_payload/contract_hash 对不自洽——拒")
     expected = {"factor_entry_hash": factor_entry_hash,
                 "penalty_entry_hash": penalty_entry_hash,
-                "outcome_hash": outcome_hash, "news_status": news_status}
+                "outcome_hash": outcome_hash, "news_status": news_status,
+                "contract": contract_payload, "contract_hash": contract_hash}
     path = _ledger_path(ledger_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _ledger_lock(path):

@@ -448,7 +448,9 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
         ledger_dir, decision_id=decision_id, execution_id=execution_id,
         factor_entry_hash=f_row["entry_hash"],
         penalty_entry_hash=(p_row["entry_hash"] if p_row else None),
-        outcome_hash=outcome.outcome_hash, news_status=outcome.news_status)
+        outcome_hash=outcome.outcome_hash, news_status=outcome.news_status,
+        # re-review#5 P0:冻结契约(含 primary_decision_horizon)哈希绑定进承诺
+        contract_payload=contract._payload(), contract_hash=contract.contract_hash)
 
 
 # --------------------------------------------------- 真实腿执行体
