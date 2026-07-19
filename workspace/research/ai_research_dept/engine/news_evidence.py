@@ -465,12 +465,19 @@ class SealedCardRegistry:
         verify_sealed(self._payload(), self.registry_hash, field_name="registry_hash")
 
     def _payload(self) -> dict:
-        # 记录序无关:按 record_id 排序其 content_hash
-        return {"cutoff": self.cutoff_iso,
-                "record_hashes": sorted(r.content_hash for r in self.records.values())}
+        return registry_canonical_payload(self)
 
     def get(self, record_id: str) -> "CardRecord | None":
         return self.records.get(record_id)
+
+
+def registry_canonical_payload(registry) -> dict:
+    """注册表的 **canonical 载荷**——模块级、不可覆写、只读实际字段
+    (archive-re-review#7 P0:D7 消费边界绝不调用可被子类覆写的虚方法
+    `_payload()`;记录序无关,按 content_hash 排序)。"""
+    return {"cutoff": registry.cutoff_iso,
+            "record_hashes": sorted(r.content_hash
+                                    for r in registry.records.values())}
 
 
 def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCardRegistry:
@@ -525,10 +532,14 @@ def _verify_d7_relationships(records) -> None:
 def require_sealed_registry(registry) -> SealedCardRegistry:
     """消费边界强制(re-review#3 B2 + re-review#4 B1):只收真 SealedCardRegistry、重验
     其封印、**并重跑 D7 关系语义校验**——duck-typed 冒牌对象与错父 D7 子行在每个消费点拒。"""
-    if not isinstance(registry, SealedCardRegistry):
-        raise RegistryError("registry 必须是密封 SealedCardRegistry"
-                            f"(得 {type(registry).__name__};duck-typed 拒,B2)")
-    verify_sealed(registry._payload(), registry.registry_hash, field_name="registry_hash")
+    # archive-re-review#7 P0:恰类型(子类可覆写 _payload 使 registry_hash 与实际
+    # records 脱钩,自封假身份过全链)+ canonical helper 重算,不经虚方法
+    if type(registry) is not SealedCardRegistry:
+        raise RegistryError("registry 必须是恰 SealedCardRegistry"
+                            f"(得 {type(registry).__name__};子类/duck-typed 拒,"
+                            f"re-review#7 P0)")
+    verify_sealed(registry_canonical_payload(registry), registry.registry_hash,
+                  field_name="registry_hash")
     _verify_d7_relationships(registry.records)         # re-review#4 B1:每次消费重验
     return registry
 

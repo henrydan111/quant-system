@@ -141,11 +141,16 @@ class RenderedCard:
             object.__setattr__(self, "card_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"card": self.card_name, "cutoff": self.cutoff_iso,
-                "factor_text": self.factor_payload_text,
-                "restricted_text": self.restricted_text,
-                "record_ids": list(self.record_ids), "records_hash": self.records_hash,
-                "base_fact_hashes": list(self.base_fact_hashes)}
+        return card_canonical_payload(self)
+
+
+def card_canonical_payload(card) -> dict:
+    """卡的 **canonical 载荷**——模块级、不可覆写(archive-re-review#7 P0)。"""
+    return {"card": card.card_name, "cutoff": card.cutoff_iso,
+            "factor_text": card.factor_payload_text,
+            "restricted_text": card.restricted_text,
+            "record_ids": list(card.record_ids), "records_hash": card.records_hash,
+            "base_fact_hashes": list(card.base_fact_hashes)}
 
 
 def _records_hash(records: list) -> str:
@@ -173,10 +178,15 @@ class D7BaseFact:
             object.__setattr__(self, "fact_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"base_record_id": self.base_record_id,
-                "base_content_hash": self.base_content_hash,
-                "claim_id": self.claim_id, "fact_cluster_id": self.fact_cluster_id,
-                "evidence_class": self.evidence_class, "importance": self.importance}
+        return base_fact_canonical_payload(self)
+
+
+def base_fact_canonical_payload(bf) -> dict:
+    """D7BaseFact 的 **canonical 载荷**——模块级、不可覆写(re-review#7 P0)。"""
+    return {"base_record_id": bf.base_record_id,
+            "base_content_hash": bf.base_content_hash,
+            "claim_id": bf.claim_id, "fact_cluster_id": bf.fact_cluster_id,
+            "evidence_class": bf.evidence_class, "importance": bf.importance}
 
 
 def _age_str(cutoff, first_visible_iso: str) -> str:
@@ -442,10 +452,7 @@ class AttributeRow:
             object.__setattr__(self, "row_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"row_id": self.row_id, "claim_id": self.claim_id,
-                "fact_cluster_id": self.fact_cluster_id,
-                "evidence_group_id": self.evidence_group_id,
-                "attribute_type": self.attribute_type, "text": self.text}
+        return attribute_row_canonical_payload(self)
 
 
 def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster_id: str,
@@ -507,6 +514,14 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
     return out
 
 
+def attribute_row_canonical_payload(row) -> dict:
+    """AttributeRow 的 **canonical 载荷**——模块级、不可覆写(re-review#7 P0)。"""
+    return {"row_id": row.row_id, "claim_id": row.claim_id,
+            "fact_cluster_id": row.fact_cluster_id,
+            "evidence_group_id": row.evidence_group_id,
+            "attribute_type": row.attribute_type, "text": row.text}
+
+
 @dataclass(frozen=True)
 class AttributeBundle:
     """D7 **决策级**密封束(re-review#2 B1/M1)。一个决策的**完整**拆分总体经恰一束:
@@ -534,14 +549,19 @@ class AttributeBundle:
             object.__setattr__(self, "bundle_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"decision_id": self.decision_id, "cutoff": self.cutoff_iso,
-                "source_card_hash": self.source_card_hash,
-                "base_fact_hashes": list(self.base_fact_hashes),
-                "source_registry_hash": self.source_registry_hash,
-                "claim_ids": list(self.claim_ids), "row_hashes": list(self.row_hashes),
-                "child_record_hashes": list(self.child_record_hashes),
-                "demoted_record_hashes": list(self.demoted_record_hashes),
-                "final_registry_hash": self.final_registry_hash}
+        return bundle_canonical_payload(self)
+
+
+def bundle_canonical_payload(bundle) -> dict:
+    """AttributeBundle 的 **canonical 载荷**——模块级、不可覆写(re-review#7 P0)。"""
+    return {"decision_id": bundle.decision_id, "cutoff": bundle.cutoff_iso,
+            "source_card_hash": bundle.source_card_hash,
+            "base_fact_hashes": list(bundle.base_fact_hashes),
+            "source_registry_hash": bundle.source_registry_hash,
+            "claim_ids": list(bundle.claim_ids), "row_hashes": list(bundle.row_hashes),
+            "child_record_hashes": list(bundle.child_record_hashes),
+            "demoted_record_hashes": list(bundle.demoted_record_hashes),
+            "final_registry_hash": bundle.final_registry_hash}
 
 
 def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: list,
@@ -566,9 +586,9 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
     # re-review#3 M1:decision_id 严格非空字符串,绝不 str() 强转(1 与 "1" 不同一)
     if not isinstance(decision_id, str) or not decision_id.strip():
         raise RegistryError(f"decision_id 须非空 str(得 {decision_id!r},不强转)")
-    if not isinstance(card, RenderedCard):
-        raise RegistryError("card 必须是密封 RenderedCard(B1:束绑定其铸出卡)")
-    verify_sealed(card._payload(), card.card_hash, field_name="card_hash")
+    if type(card) is not RenderedCard:
+        raise RegistryError("card 必须是恰 RenderedCard(子类拒,re-review#7 P0)")
+    verify_sealed(card_canonical_payload(card), card.card_hash, field_name="card_hash")
     if cutoff_iso != card.cutoff_iso:
         raise RegistryError(f"cutoff {cutoff_iso} 与卡 cutoff {card.cutoff_iso} 不符")
     if _records_hash(base_records) != card.records_hash:
@@ -667,8 +687,8 @@ def verify_bundle_registry(bundle: AttributeBundle, registry) -> None:
     ⚠ 这**不是**完整血缘边界——一个自封的假血缘束可以自洽地匹配自己的注册表
     (re-review#5 B1)。完整消费边界 = `verify_d7_artifact`;未来的 decision_id →
     bundle_hash 首写账本**只许**收经其验证的 D7DecisionArtifact。"""
-    if not isinstance(bundle, AttributeBundle):
-        raise RegistryError("bundle 必须是密封 AttributeBundle")
+    if type(bundle) is not AttributeBundle:
+        raise RegistryError("bundle 必须是恰 AttributeBundle(子类拒,re-review#7 P0)")
     registry = require_sealed_registry(registry)
     if registry.registry_hash != bundle.final_registry_hash:
         raise RegistryError(
@@ -697,12 +717,18 @@ class D7DecisionArtifact:
             object.__setattr__(self, "artifact_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"card_hash": self.card.card_hash,
-                "base_fact_hashes": sorted(bf.fact_hash for bf in self.base_facts),
-                "source_registry_hash": self.source_registry.registry_hash,
-                "row_hashes": sorted(r.row_hash for r in self.rows),
-                "bundle_hash": self.bundle.bundle_hash,
-                "final_registry_hash": self.final_registry.registry_hash}
+        return artifact_canonical_payload(self)
+
+
+def artifact_canonical_payload(artifact) -> dict:
+    """D7DecisionArtifact 的 **canonical 载荷**——模块级、不可覆写(re-review#7
+    P0:根工件身份不再由调用方子类的虚方法控制)。"""
+    return {"card_hash": artifact.card.card_hash,
+            "base_fact_hashes": sorted(bf.fact_hash for bf in artifact.base_facts),
+            "source_registry_hash": artifact.source_registry.registry_hash,
+            "row_hashes": sorted(r.row_hash for r in artifact.rows),
+            "bundle_hash": artifact.bundle.bundle_hash,
+            "final_registry_hash": artifact.final_registry.registry_hash}
 
 
 def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
@@ -716,21 +742,30 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
       且 `registry_parent_content_hash == 最终注册表[前缀父].content_hash`;
     - 总体精确相等:子行/降级行/属性行/claim 集合逐一对上束封;被拆父在源注册表正向、
       在最终注册表 context_only;未拆记录源↔终逐字节不变;终 ID 集 = 源 ID 集 ∪ 子行。"""
-    if not isinstance(artifact, D7DecisionArtifact):
-        raise RegistryError("只收 D7DecisionArtifact(re-review#5 B1)")
-    verify_sealed(artifact._payload(), artifact.artifact_hash, field_name="artifact_hash")
+    # archive-re-review#7 P0:**恰类型**全部组件(子类可覆写 _payload 使自封哈希与
+    # 实际字段脱钩,带伪造 artifact_hash 过全链;根工件与源注册表尤甚)+ 边界哈希
+    # 一律经**模块级 canonical helper**从真实字段重算,绝不调用虚方法 `._payload()`
+    if type(artifact) is not D7DecisionArtifact:
+        raise RegistryError(
+            f"只收恰 D7DecisionArtifact(得 {type(artifact).__name__};子类拒,"
+            f"re-review#7 P0)")
+    verify_sealed(artifact_canonical_payload(artifact), artifact.artifact_hash,
+                  field_name="artifact_hash")
     card, bundle = artifact.card, artifact.bundle
-    if not isinstance(card, RenderedCard) or not isinstance(bundle, AttributeBundle):
-        raise RegistryError("工件组件类型不符")
-    verify_sealed(card._payload(), card.card_hash, field_name="card_hash")
-    verify_sealed(bundle._payload(), bundle.bundle_hash, field_name="bundle_hash")
+    if type(card) is not RenderedCard or type(bundle) is not AttributeBundle:
+        raise RegistryError("工件组件须恰 RenderedCard/AttributeBundle(子类拒,re-review#7)")
+    verify_sealed(card_canonical_payload(card), card.card_hash, field_name="card_hash")
+    verify_sealed(bundle_canonical_payload(bundle), bundle.bundle_hash,
+                  field_name="bundle_hash")
     src = require_sealed_registry(artifact.source_registry)
     fin = require_sealed_registry(artifact.final_registry)
-    # 基事实总体精确相等 + 类型
+    # 基事实总体精确相等 + 恰类型 + 每条自封经 canonical 重验
     facts_by_id = {}
     for bf in artifact.base_facts:
-        if not isinstance(bf, D7BaseFact):
-            raise RegistryError("base_facts 只收密封 D7BaseFact")
+        if type(bf) is not D7BaseFact:
+            raise RegistryError("base_facts 只收恰 D7BaseFact(子类拒,re-review#7)")
+        verify_sealed(base_fact_canonical_payload(bf), bf.fact_hash,
+                      field_name="D7BaseFact fact_hash")
         facts_by_id[bf.base_record_id] = bf
     if len(facts_by_id) != len(artifact.base_facts):
         raise RegistryError("base_facts 含重复 base_record_id(re-review#6 B1)")
@@ -773,8 +808,10 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
     # 卡绑基事实重新推导,束/终注册表**自报的总体绝非权威**。 ----
     rows = artifact.rows
     for r in rows:
-        if not isinstance(r, AttributeRow):
-            raise RegistryError("rows 只收密封 AttributeRow")
+        if type(r) is not AttributeRow:
+            raise RegistryError("rows 只收恰 AttributeRow(子类拒,re-review#7 P0)")
+        verify_sealed(attribute_row_canonical_payload(r), r.row_hash,
+                      field_name="attribute row_hash")
     row_ids = [r.row_id for r in rows]
     if len(set(row_ids)) != len(rows) \
             or len({r.row_hash for r in rows}) != len(rows):

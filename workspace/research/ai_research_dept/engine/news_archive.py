@@ -116,6 +116,20 @@ archive-re-review#6(1×P0 + 1×P2)全数折叠:
   账本合法增长 → 本次重建锚更晚 → 冲突)时**转为读验既有档案返回**,
   不再报错——所有合法顺序下恢复幂等。
 
+archive-re-review#7(1×P0 + 1×P2)全数折叠:
+
+- **P0 工件族同类脱钩**:虚方法脱钩(#6 已修 contract/outcome)的同类面上移
+  到 **D7 工件族**——`D7DecisionArtifact`/`RenderedCard`/`AttributeBundle`/
+  `SealedCardRegistry`/`D7BaseFact`/`AttributeRow` 的子类可覆写 `_payload()`
+  带伪造哈希过 `verify_d7_artifact`,封出伪造 `artifact_hash`/`registry_hash`。
+  修复在 [news_cards.py](news_cards.py) `verify_d7_artifact` + [news_evidence.py](news_evidence.py)
+  `require_sealed_registry`:全部组件**恰类型**(子类拒),边界哈希一律经
+  **模块级 canonical helper**(`*_canonical_payload`)从真实字段重算,绝不
+  调用虚方法。
+- **P2 恢复"档案已存在"分支用新快照**:该分支改调
+  `load_and_verify_execution_archive`(自取新账本快照)——恢复入口的旧快照
+  遇竞争者合法增长后的新锚会误拒有效档案(re-review#6 未覆盖的顺序)。
+
 四席装配/scorecard 薄分发/链 bump 在下一单元;本单元零活链触碰。
 """
 from __future__ import annotations
@@ -600,13 +614,14 @@ def recover_and_seal_success_archive(decision_id: str,
             f"恢复契约与账本承诺不符(承诺 {success['contract']} vs 提供 "
             f"{contract_canonical_payload(contract)})——主评分周期等契约字段"
             f"不可替换,拒(re-review#5 P0)")
-    # re-review#5 P2:档案已在 → 读验并返回(与账本此后合法增长无关的真幂等);
-    # 只有档案缺失才从盘上重建封存
+    # re-review#5 P2 + re-review#6 P2:档案已在 → 读验并返回(真幂等)。**用
+    # 新账本快照**(`load_and_verify_execution_archive` 自取)——恢复入口的
+    # `chain` 可能是旧快照,竞争者此后合法增长账本+封存,拿旧快照验新锚会
+    # 误拒有效档案(re-review#6 P2)
     if _archive_path(archive_dir, decision_id, execution_id).exists():
-        return _load_and_verify_archive_file(
+        return load_and_verify_execution_archive(
             decision_id, execution_id, artifact, ledger_dir=ledger_dir,
-            prov_dir=prov_dir, contract=contract, archive_dir=archive_dir,
-            chain=chain)
+            prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)
     all_rows = read_execution_provenance(prov_dir)
     f_row = _resolve_terminal(all_rows, execution_id=execution_id,
                               decision_id=decision_id, leg="factor")

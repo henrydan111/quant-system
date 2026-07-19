@@ -509,16 +509,22 @@ class SealedPayload:
         verify_sealed(self._payload(), self.payload_hash, field_name="payload_hash")
 
     def _payload(self) -> dict:
-        return {"decision_id": self.decision_id, "seat": self.consumer_seat,
-                "use": self.use, "dimension": self.target_dimension,
-                "payload_text": self.payload_text,
-                "registry_hash": self.registry_hash,
-                "artifact_hash": self.artifact_hash,
-                "bundle_hash": self.bundle_hash,
-                "ledger_entry_hash": self.ledger_entry_hash,
-                "expected_ids": list(self.expected_ids),
-                "ref_occurrences": list(self.ref_occurrences),
-                "authorized_ids": list(self.authorized_ids)}
+        return sealed_payload_canonical_payload(self)
+
+
+def sealed_payload_canonical_payload(sp) -> dict:
+    """SealedPayload 的 **canonical 载荷**——模块级、不可覆写(archive-re-review#7
+    P0 同类面:执行体边界绝不调用可被子类覆写的虚方法)。"""
+    return {"decision_id": sp.decision_id, "seat": sp.consumer_seat,
+            "use": sp.use, "dimension": sp.target_dimension,
+            "payload_text": sp.payload_text,
+            "registry_hash": sp.registry_hash,
+            "artifact_hash": sp.artifact_hash,
+            "bundle_hash": sp.bundle_hash,
+            "ledger_entry_hash": sp.ledger_entry_hash,
+            "expected_ids": list(sp.expected_ids),
+            "ref_occurrences": list(sp.ref_occurrences),
+            "authorized_ids": list(sp.authorized_ids)}
 
 
 def _derive_payload_facts(payload_ast, artifact, *, use: str, consumer_seat: str,
@@ -621,8 +627,8 @@ class ExecutionView:
 def make_execution_view(sp: SealedPayload) -> ExecutionView:
     """从**已过边界校验**的 SealedPayload 新铸执行视图(调用方契约:必须紧跟
     verify_payload_for_execution 之后;视图不携带任何可变结构)。"""
-    if not isinstance(sp, SealedPayload):
-        raise RegistryError("执行视图只能铸自 SealedPayload")
+    if type(sp) is not SealedPayload:
+        raise RegistryError("执行视图只能铸自恰 SealedPayload(子类拒,re-review#7 P0)")
     return ExecutionView(decision_id=sp.decision_id, consumer_seat=sp.consumer_seat,
                          use=sp.use, payload_text=sp.payload_text,
                          payload_hash=sp.payload_hash)
@@ -638,8 +644,9 @@ def verify_payload_for_execution(sp: SealedPayload, artifact: D7DecisionArtifact
     期望四元组(decision_id, seat, use, dimension)先做**精确类型+精确值**比对,
     再做语义重推导:重跑账本门(全字段)、比对账本行/工件/束/注册表哈希、
     **重序列化保留 AST** 并逐字节比对、终字节重门、期望总体/出现序列/授权集重比。"""
-    if not isinstance(sp, SealedPayload):
-        raise RegistryError("执行体只收 SealedPayload(经边界校验器)")
+    if type(sp) is not SealedPayload:
+        raise RegistryError(
+            "执行体只收恰 SealedPayload(子类可覆写 _payload 脱钩,拒;re-review#7 P0)")
     # re-review#2 B1:期望上下文精确类型 + 精确值,先于一切语义重推导
     if type(expected_decision_id) is not str or type(expected_consumer_seat) is not str \
             or type(expected_use) is not str \
@@ -656,7 +663,8 @@ def verify_payload_for_execution(sp: SealedPayload, artifact: D7DecisionArtifact
             f"期望 ({expected_decision_id!r}, {expected_consumer_seat!r}, "
             f"{expected_use!r}, {expected_target_dimension!r})——重放进错槽拒"
             f"(re-review#2 B1)")
-    verify_sealed(sp._payload(), sp.payload_hash, field_name="payload_hash")
+    verify_sealed(sealed_payload_canonical_payload(sp), sp.payload_hash,
+                  field_name="payload_hash")
     entry = require_recorded(ledger_dir, sp.decision_id, artifact)
     if seal_hash(entry) != sp.ledger_entry_hash:
         raise RegistryError("SealedPayload 账本行哈希与权威账本不符——非入账世界线拒(B2)")

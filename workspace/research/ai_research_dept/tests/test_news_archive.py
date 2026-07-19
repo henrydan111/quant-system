@@ -846,6 +846,88 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="恰 NewsLegOutcome"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
+    def test_evil_artifact_subclass_refused_before_recording(self, tmp_path):
+        # archive-re-review#7 P0 (the reviewer's probe): a D7DecisionArtifact
+        # subclass built from the REAL components but overriding _payload() to
+        # mint a forged artifact_hash — verify_d7_artifact must refuse it on
+        # exact-type, so it never records / executes / seals
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            D7DecisionArtifact, verify_d7_artifact,
+        )
+        art = _artifact_full("d1")
+
+        class _EvilArtifact(D7DecisionArtifact):
+            def _payload(self):
+                return {**D7DecisionArtifact._payload(self),
+                        "final_registry_hash": "f" * 64}
+        evil = _EvilArtifact(
+            card=art.card, base_facts=art.base_facts,
+            source_registry=art.source_registry, rows=art.rows,
+            bundle=art.bundle, final_registry=art.final_registry)
+        assert evil.artifact_hash != art.artifact_hash     # forged identity
+        with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
+            verify_d7_artifact(evil)
+        with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
+            record_decision(tmp_path / "ledger", "d1", evil)
+
+    def test_evil_source_registry_subclass_refused(self, tmp_path):
+        # same class, source-registry side: a SealedCardRegistry subclass with
+        # an overridden _payload() forging registry_hash — refused at the
+        # D7 consume boundary (require_sealed_registry exact-type)
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            D7DecisionArtifact, verify_d7_artifact,
+        )
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            SealedCardRegistry,
+        )
+        art = _artifact_full("d1")
+
+        class _EvilRegistry(SealedCardRegistry):
+            def _payload(self):
+                return {"cutoff": self.cutoff_iso, "record_hashes": ["z" * 64]}
+        # self-consistent forged identity: registry_hash seals the evil payload
+        forged = seal_hash({"cutoff": art.source_registry.cutoff_iso,
+                            "record_hashes": ["z" * 64]})
+        evil_src = _EvilRegistry(cutoff_iso=art.source_registry.cutoff_iso,
+                                 records=art.source_registry.records,
+                                 registry_hash=forged)
+        assert evil_src.registry_hash != art.source_registry.registry_hash
+        evil_art = D7DecisionArtifact(
+            card=art.card, base_facts=art.base_facts, source_registry=evil_src,
+            rows=art.rows, bundle=art.bundle, final_registry=art.final_registry)
+        with pytest.raises(RegistryError, match="恰 SealedCardRegistry"):
+            verify_d7_artifact(evil_art)
+
+    def test_recovery_stale_snapshot_grows_then_seals_converges(self, tmp_path):
+        # archive-re-review#7 P2 (the reviewer's ordering): recovery A takes a
+        # stale chain snapshot at entry; competitor B grows the ledger AND
+        # seals the archive; A reaches its exists-branch and must re-verify
+        # against a FRESH snapshot (not A's stale one), returning B's archive
+        # instead of falsely rejecting the anchor
+        import workspace.research.ai_research_dept.engine.news_archive as na
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)              # committed, unsealed
+        state = {}
+        real = na._find_success_commitment
+
+        def racing_find(chain, decision_id):
+            out = real(chain, decision_id)          # A's snapshot resolved here
+            if not state.get("raced"):
+                state["raced"] = True               # B: grow ledger THEN seal
+                record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+                state["sealed"] = seal_decision_archive(
+                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+            return out
+        try:
+            na._find_success_commitment = racing_find
+            got = recover_and_seal_success_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        finally:
+            na._find_success_commitment = real
+        assert got["archive_sha256"] == state["sealed"]["archive_sha256"]
+
     def test_recovery_race_loser_returns_existing_archive(self, tmp_path):
         # archive-re-review#6 P2 (the reviewer's interleaving, deterministic):
         # recovery A passes the entry exists-check; concurrent seal B lands the
