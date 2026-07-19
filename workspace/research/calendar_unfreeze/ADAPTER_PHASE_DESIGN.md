@@ -8,7 +8,10 @@ with no self-mint path + OS-SID-as-evidence; deterministic lowest-verified-nonem
 Per GPT: "Once F1 gains constants/non-paged binding and F7 gains content-level conservation, I see no
 remaining design blocker to freezing the quartet interface."
 
-Status: DESIGN v4 (pre-implementation). Interface-freeze unit = the mocked **vertical quartet**
+Status: DESIGN v4 — **interface PROVISIONALLY FROZEN 2026-07-19 by self-review** (GPT temporarily
+unavailable; per §10 the independent GPT confirmation of re-review #4 is OWED and must run — bundled
+with the implementation review at latest — before the quartet is treated as final). Self-review ran
+three adversarial code probes; verdict + the three implementation pins it surfaced are in §8 below. Interface-freeze unit = the mocked **vertical quartet**
 (A01 `market/daily` + per-stock `income` + event `top_list` + monthly `broker_recommend`) — which must
 also exercise the four PHYSICAL consolidation layouts (F7). A01 is the first *implemented* adapter; the
 interface freezes only after the quartet passes. No Tushare call; `--fetch` stays exit 3 until §13.
@@ -225,11 +228,36 @@ function that production (update_daily_data) is refactored to call too (F9).
 ## 7. Tracked promotion preconditions (unchanged; NOT this unit): output-density gate; fina_mainbz
 revision-timing probe; fina_indicator_vip §13 period-discovery probe (sign A07).
 
-## Open questions for the reviewer
-1. Is `parameter_map` (request-key → vendor-kwarg) expressive enough for all 30 endpoints, or does any
-   need a value transform (e.g. period→start/end derivation) that would reintroduce code?
-2. For income's per-stock→per-`end_date` repartition, is `row_conservation = sum(inputs)==sum(outputs)
-   after declared dedup` the right invariant given a restatement can legitimately change row counts
-   across a re-run?
-3. Does the `fetch_authorized` ledger event + in-lease validation fully close F2, or must the authorize
-   action ALSO be a distinct OS-user/credential step outside this process?
+## 8. Self-review of the v4 fold (2026-07-19; GPT unavailable — provisional, §10 confirmation owed)
+
+Method: adversarial code probes against the live repo, not a desk-check. (v3's open questions were
+answered by design re-review #3 and are folded above.)
+
+**Probe 1 — CallRecipe expressibility across the quartet (+report_rc).** Resolved each signed population
+and inspected the actual request shapes: `daily`/`daily_basic`/`adj_factor`/`top_list` = `{trade_date}`,
+`income` = `{ts_code}`, `broker_recommend` = `{month}`, `report_rc` = `{start_date, end_date}` — every
+one a flat dict of vendor-ready scalars. Rename/copy + `constant_kwargs` (report_rc `fields`) suffices;
+no transform language needed. Disjointness holds trivially (no request key collides with `fields` or
+`limit`/`offset`). **PASS.**
+
+**Probe 2 — where the §6.1 throttle lives.** Verified: the machine-global lock + rate spacing/cooldown
+live at the PROXY (`tushare_lock.spaced_call`; `MIN_BASE_SLEEP=1.5` floored centrally), NOT in
+`_safe_api_call` — the latter only adds the retry loop. So `fetch_page_once` sheds retries WITHOUT
+shedding the throttle, provided it calls the vendor through the same proxy. **PIN (impl-binding):
+`fetch_page_once` MUST route via `tushare_lock.spaced_call` and contain NO retry/loop — retries are new
+leases; the lint enforces both.**
+
+**Probe 3 — canonical row hash for `multiset_identity`.** The ledger already owns the canonical
+row-digest producer (`add_row_payload_digest` / `_canon_scalar` semantic canonicalization). **PIN
+(impl-binding): the conservation check REUSES that exact producer, computed over the IDENTICAL column
+set on both sides (including `raw_fetch_ts` consistently — repartition regroups already-stamped rows, so
+input and output hashes are equal iff no row was dropped/duplicated/mutated).**
+
+**PIN 3 (schema):** the plan-row schema (`_PLAN_REQUIRED`) grows by the newly frozen fields
+(`recipe_id`, the response-scope rule+values) at implementation; freeze-time validation covers them.
+
+**Verdict: F1 and F7 DISCHARGED as specified by re-review #3's concrete changes; no new blocker found;
+interface PROVISIONALLY FROZEN.** The three pins are implementation obligations (enforced by lint/tests
+in the quartet build), not design gaps. Per §10 this self-review does not substitute for the independent
+gate: GPT must confirm re-review #4 — at latest bundled with the quartet IMPLEMENTATION review — before
+the interface is treated as final.
