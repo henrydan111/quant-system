@@ -595,7 +595,7 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
         raise RegistryError("base_records 与卡封记录总体不符(B1:束只认卡的记录集)")
     # re-review#3 M1:基事实总体须与卡封**精确相等**(子集/超集皆拒,非成员检查)
     supplied_hashes = sorted(bf.fact_hash for bf in base_facts
-                             if isinstance(bf, D7BaseFact))
+                             if type(bf) is D7BaseFact)   # re-review#9:恰类型
     if len(supplied_hashes) != len(base_facts) or \
             supplied_hashes != sorted(card.base_fact_hashes):
         raise RegistryError(

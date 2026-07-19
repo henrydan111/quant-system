@@ -410,8 +410,8 @@ def leg_expected_ids(registry, *, use: str, consumer_seat: str) -> tuple:
 def factor_refs(artifact: D7DecisionArtifact, *, consumer_seat: str,
                 target_dimension: str) -> list:
     """逐维正向引用白名单方向(BINDING #4)。"""
-    if not isinstance(artifact, D7DecisionArtifact):
-        raise RegistryError("factor_refs 只收 D7DecisionArtifact")
+    if type(artifact) is not D7DecisionArtifact:
+        raise RegistryError("factor_refs 只收恰 D7DecisionArtifact(子类拒,re-review#9)")
     return [EvidenceRef(rid) for rid in build_factor_payload_ids(
         artifact.final_registry, consumer_seat=consumer_seat,
         target_dimension=target_dimension)]
@@ -419,8 +419,8 @@ def factor_refs(artifact: D7DecisionArtifact, *, consumer_seat: str,
 
 def leg_refs(artifact: D7DecisionArtifact, *, use: str, consumer_seat: str) -> list:
     """腿级引用白名单方向(= 期望总体的 EvidenceRef 形态,恰一次序)。"""
-    if not isinstance(artifact, D7DecisionArtifact):
-        raise RegistryError("leg_refs 只收 D7DecisionArtifact")
+    if type(artifact) is not D7DecisionArtifact:
+        raise RegistryError("leg_refs 只收恰 D7DecisionArtifact(子类拒,re-review#9)")
     return [EvidenceRef(rid) for rid in leg_expected_ids(
         artifact.final_registry, use=use, consumer_seat=consumer_seat)]
 
@@ -452,8 +452,8 @@ def build_leg_payload_ast(artifact: D7DecisionArtifact, *, use: str,
     - 期望内记录若无内容来源 = 拒(渲染不完整绝不静默)。
     输出按 id 排序(确定性)——`run_news_two_legs` 对每腿重渲染并**逐字节比对**
     (canonical 强制:非本渲染器产物到不了执行体)。"""
-    if not isinstance(artifact, D7DecisionArtifact):
-        raise RegistryError("canonical 渲染只收 D7DecisionArtifact")
+    if type(artifact) is not D7DecisionArtifact:
+        raise RegistryError("canonical 渲染只收恰 D7DecisionArtifact(子类拒,re-review#9)")
     expected = leg_expected_ids(artifact.final_registry, use=use,
                                 consumer_seat=consumer_seat)
     rows_by_id = {r.row_id: r for r in artifact.rows}

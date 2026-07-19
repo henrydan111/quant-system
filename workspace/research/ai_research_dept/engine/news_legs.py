@@ -187,17 +187,10 @@ class NewsLegOutcome:
             object.__setattr__(self, "outcome_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"decision_id": self.decision_id, "output_mode": self.output_mode,
-                "factor_leg_status": self.factor_leg_status,
-                "penalty_eligible_count": self.penalty_eligible_count,
-                "penalty_eligible_set_hash": self.penalty_eligible_set_hash,
-                "penalty_leg_status": self.penalty_leg_status,
-                "news_status": self.news_status,
-                "shadow_complete": self.shadow_complete,
-                "decision_complete": self.decision_complete,
-                "binding_eligible": self.binding_eligible,
-                "factor_payload_hash": self.factor_payload_hash,
-                "penalty_payload_hash": self.penalty_payload_hash}
+        # re-review#9 self-review:委托到模块级 canonical helper——自封与边界
+        # 重算共用**唯一**一份载荷定义,构造上杜绝两份漂移(否则真实 outcome
+        # 自封哈希会与边界 canonical 重算不一致 → 合法 outcome 被 fail-closed)
+        return outcome_canonical_payload(self)
 
 
 def outcome_canonical_payload(outcome: NewsLegOutcome) -> dict:

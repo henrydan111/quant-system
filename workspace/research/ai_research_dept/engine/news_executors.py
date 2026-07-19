@@ -132,8 +132,9 @@ class NewsScoringContract:
             object.__setattr__(self, "contract_hash", seal_hash(self._payload()))
 
     def _payload(self) -> dict:
-        return {"schema_id": self.schema_id, "output_mode": self.output_mode,
-                "primary_decision_horizon": self.primary_decision_horizon}
+        # re-review#9 self-review:委托到模块级 canonical helper(单一载荷定义,
+        # 自封与边界重算不可能漂移)
+        return contract_canonical_payload(self)
 
 
 def contract_canonical_payload(contract: NewsScoringContract) -> dict:

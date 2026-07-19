@@ -846,6 +846,43 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="恰 NewsLegOutcome"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
+    def test_canonical_helpers_match_class_payload_no_drift(self, tmp_path):
+        # re-review#9 self-review: every sealed class's _payload() must be the
+        # SAME single definition the boundary hashes through — a re-introduced
+        # dict literal (the drift the self-review caught for contract/outcome)
+        # would silently make a genuine object's self-seal disagree with the
+        # boundary canonical recompute. Pin equality for a genuine instance of
+        # every class that has a module-level canonical helper.
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            artifact_canonical_payload, attribute_row_canonical_payload,
+            base_fact_canonical_payload, bundle_canonical_payload,
+            card_canonical_payload,
+        )
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            card_record_canonical_payload, registry_canonical_payload,
+        )
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            contract_canonical_payload,
+        )
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            outcome_canonical_payload,
+        )
+        art, bundle = _setup(tmp_path)
+        contract, outcome = _contract(), bundle["outcome"]
+        assert contract._payload() == contract_canonical_payload(contract)
+        assert outcome._payload() == outcome_canonical_payload(outcome)
+        assert art._payload() == artifact_canonical_payload(art)
+        assert art.card._payload() == card_canonical_payload(art.card)
+        assert art.bundle._payload() == bundle_canonical_payload(art.bundle)
+        assert art.final_registry._payload() \
+            == registry_canonical_payload(art.final_registry)
+        assert art.base_facts[0]._payload() \
+            == base_fact_canonical_payload(art.base_facts[0])
+        assert art.rows[0]._payload() \
+            == attribute_row_canonical_payload(art.rows[0])
+        rec = next(iter(art.final_registry.records.values()))
+        assert rec._payload() == card_record_canonical_payload(rec)
+
     def test_evil_artifact_subclass_refused_before_recording(self, tmp_path):
         # archive-re-review#7 P0 (the reviewer's probe): a D7DecisionArtifact
         # subclass built from the REAL components but overriding _payload() to
