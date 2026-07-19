@@ -106,6 +106,9 @@ def _plan_row(endpoint, part, out, *, empty="dense_refuse", limit=2, dedup=None,
             "params": params, "partition": part, "empty_policy": empty, "receipt_output": out,
             "natural_key": list(nk), "content_dedup_key": list(dedup or nk), "page_limit": limit,
             "pagination_mode": mode or ("offset_paged" if limit else "single_page"),
+            # design v4 pin 3: recipe_id + response_scope are frozen plan facts. This battery sits
+            # below the recipe/scope layer, so the defaults are inert (no scope checks fire).
+            "recipe_id": f"test_recipe_{endpoint}", "response_scope": {"rule_id": "none", "checks": []},
             "max_content_dups": max_dups,
             "contract_sha256": rrc.canonical_contract_sha256(_fake_contract(endpoint)),
             "doc_sha256": "d" * 64}

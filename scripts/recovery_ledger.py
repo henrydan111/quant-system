@@ -162,10 +162,18 @@ def _df_sha256(df) -> tuple[str, int]:
 
 # request states; failed is never terminal-valid
 _TERMINAL = {"verified", "confirmed_empty"}
+# Design v4 pin 3: `recipe_id` (the frozen declarative CallRecipe) and `response_scope` (the concrete,
+# request-bound scope rule+values) are FROZEN plan facts — grown here so freeze-time validation covers
+# them and a fetch cannot run an unfrozen recipe or an unscoped request.
 _PLAN_REQUIRED = {"request_id", "endpoint", "dataset", "params", "partition", "empty_policy",
                   "receipt_output", "natural_key", "content_dedup_key", "page_limit",
-                  "pagination_mode", "max_content_dups", "contract_sha256", "doc_sha256"}
+                  "pagination_mode", "max_content_dups", "contract_sha256", "doc_sha256",
+                  "recipe_id", "response_scope"}
 _PAGINATION_MODES = {"single_page", "offset_paged"}
+# Immutable run modes (design v4 F2): fixed at declaration, gate every claim BEFORE any lease. A
+# synthetic run can never execute a live call (executor-mode mismatch refuses pre-lease) and can never
+# be promoted (assert_run_promotable).
+_RUN_MODES = {"synthetic_nonpromotable", "live_authorized"}
 # columns the COORDINATOR injects — never part of a vendor payload digest
 _COORDINATOR_DERIVED_COLS = frozenset({"raw_fetch_ts", "row_payload_digest",
                                        "report_rc_payload_digest", "_src_file", "_src_ordinal"})
@@ -209,6 +217,40 @@ def _assert_terminal_proof(rid: str, row: dict, pages: dict, nums: list) -> None
                               f"(empty_terminal); a full final page never proves termination")
         if tc == "empty_terminal" and last["row_count"] != 0:
             raise LedgerError(f"{rid}: empty_terminal claimed but last page has {last['row_count']} rows")
+
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Claim:
+    """The atomic claim_next_fetch result (design v4 F3). FETCH / RETRY_PAGE / RETRY_EMPTY_CONFIRM carry
+    an ALREADY-OPEN lease (cursor derivation + lease reservation are one lock acquisition — no TOCTOU
+    between deciding and reserving); the other kinds carry no lease."""
+    kind: str                       # FETCH|RETRY_PAGE|RETRY_EMPTY_CONFIRM|IN_FLIGHT|VERIFY|
+    #                                 CONFIRM_EMPTY|WAIT_FOR_CANARY|SKIP_TERMINAL
+    page: int = 0
+    offset: int = 0
+    lease_id: str = ""
+    opened_at: str = ""
+    canary_request_id: str = ""
+
+
+@dataclass(frozen=True)
+class PageResult:
+    """fetch_claimed_page's LEDGER-DERIVED outcome (design v4 F3): the terminal is computed from the
+    recorded row_count vs the frozen pagination facts, never claimed by a caller."""
+    row_count: int
+    terminal_kind: str              # ""(nonterminal) | last_partial | empty_terminal | single_page_contract
+    next_offset: int
+
+
+# Endpoint-scoped raw-page preparation (design v4 F8): trusted producers that may add ONLY the
+# coordinator-DERIVED columns declared for that endpoint, run INSIDE the ledger boundary before receipt
+# hashing. report_rc's producer is deliberately NOT registered yet — its digest production lives
+# downstream in pit_backend and moves here at fan-out; until then a report_rc fetch through the claimed
+# path refuses (fail closed) rather than silently omitting its natural-key column.
+_PREPARE_REGISTRY: dict = {}       # endpoint -> callable(df) -> df  (populated below the class)
 
 
 class PageReceiptLedger:
@@ -446,6 +488,14 @@ class PageReceiptLedger:
             raise LedgerError(f"{rid} page {page}: the fetch callable returned {type(df).__name__}, "
                               f"not a DataFrame")
         # ---- 3. record bound to the lease + CLOSE it exactly once --------------------------------
+        return self._close_lease_record(rid, page, lease_id, opened_at, df, terminal_claim)
+
+    def _close_lease_record(self, rid: str, page: int, lease_id: str, opened_at: str, df,
+                            terminal_claim: str, *, vendor_page_sha: str = "") -> int:
+        """The shared record core: bind the response to its OPEN lease, persist the receipt, close the
+        lease exactly once. Called by fetch_page (legacy/below-contract path, caller-supplied terminal)
+        and fetch_claimed_page (production path — the terminal is LEDGER-DERIVED before this call)."""
+        import io
         with self.rp._lock():
             rows = self._load()
             if any(r.get("kind") == "attempt" and r.get("lease_id") == lease_id for r in rows):
@@ -466,15 +516,343 @@ class PageReceiptLedger:
             payload = buf.getvalue()
             with self.rp.broker().open_for_write(receipt, "wb") as fh:  # broker-mediated, no raw path write
                 fh.write(payload)
-            self._append({"kind": "attempt", "request_id": rid, "endpoint": self._plan()[rid]["endpoint"],
-                          "params": self._plan()[rid]["params"], "page": int(page), "row_count": n,
-                          "lease_id": lease_id, "attempt_uid": lease_id,
-                          "opened_at": opened_at, "closed_at": closed_at, "recorded_at": closed_at,
-                          "page_sha256": page_sha,
-                          "receipt_bytes_sha256": hashlib.sha256(payload).hexdigest(),
-                          "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
-                          "terminal_claim": terminal_claim})
+            rec = {"kind": "attempt", "request_id": rid, "endpoint": self._plan()[rid]["endpoint"],
+                   "params": self._plan()[rid]["params"], "page": int(page), "row_count": n,
+                   "lease_id": lease_id, "attempt_uid": lease_id,
+                   "opened_at": opened_at, "closed_at": closed_at, "recorded_at": closed_at,
+                   "page_sha256": page_sha,
+                   "receipt_bytes_sha256": hashlib.sha256(payload).hexdigest(),
+                   "receipt": str(receipt.relative_to(self.rp.root)).replace("\\", "/"),
+                   "terminal_claim": terminal_claim}
+            if vendor_page_sha:
+                # the UNTOUCHED vendor payload hash, computed BEFORE prepare_raw_page and BEFORE the
+                # raw_fetch_ts stamp (design v4 F8): receipts carry both identities.
+                rec["vendor_page_sha256"] = vendor_page_sha
+            self._append(rec)
         return n
+
+    # ── run mode + §13 authorization (design v4 F2) ──────────────────────────────────────────────
+    def declare_run_mode(self, mode: str) -> None:
+        """Fix the IMMUTABLE run mode. Idempotent for the same mode; a differing re-declaration
+        refuses — a run can never drift between synthetic and live."""
+        if mode not in _RUN_MODES:
+            raise LedgerError(f"unknown run mode {mode!r}; known: {sorted(_RUN_MODES)}")
+        with self.rp._lock():
+            rows = self._load()
+            ex = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "run_mode"]
+            if ex:
+                if len(ex) != 1 or ex[0].get("mode") != mode:
+                    raise LedgerError(f"run mode already declared as {ex[0].get('mode')!r} — it is "
+                                      f"immutable; a {mode!r} re-declaration is refused")
+                return
+            self._append({"kind": "lifecycle", "event": "run_mode", "mode": mode})
+
+    def run_mode(self, rows=None) -> str:
+        rows = self._load() if rows is None else rows
+        ex = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "run_mode"]
+        if not ex:
+            raise LedgerError("run mode undeclared — declare_run_mode() must run before any claim; an "
+                              "undeclared mode is neither synthetic nor live and may do NOTHING")
+        if len(ex) != 1 or ex[0].get("mode") not in _RUN_MODES:
+            raise LedgerError(f"run mode events malformed ({len(ex)} events)")
+        return ex[0]["mode"]
+
+    def record_fetch_authorization(self, *, actor: str, expires_at: str, endpoint_scope) -> str:
+        """Write the hash-chained `fetch_authorized` event — the SOLE §13 authority for a live wire
+        call (design v4 F2). Called ONLY by the explicit user-triggered authorize-fetch CLI; the fetch
+        command has no path that mints this. Binds the FROZEN plan + the adapter bundle: authorizing an
+        unfrozen run is meaningless and refuses."""
+        import getpass
+        import uuid as _uuid
+        if not str(actor).strip():
+            raise LedgerError("fetch authorization requires a named human actor")
+        try:
+            exp = datetime.fromisoformat(str(expires_at))
+            if exp.tzinfo is None:
+                raise ValueError("naive")
+        except ValueError:
+            raise LedgerError("expires_at must be a timezone-AWARE ISO timestamp")
+        scope = sorted({str(e) for e in (endpoint_scope or [])})
+        if not scope:
+            raise LedgerError("fetch authorization requires an explicit endpoint_scope")
+        with self.rp._lock():
+            rows = self._load()
+            frozen = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "plan_frozen"]
+            if len(frozen) != 1:
+                raise LedgerError("authorize-fetch requires exactly one FROZEN plan to bind to")
+            auth_id = _uuid.uuid4().hex
+            try:
+                os_identity = getpass.getuser()
+            except Exception:
+                os_identity = "(unavailable)"
+            self._append({"kind": "lifecycle", "event": "fetch_authorized", "auth_id": auth_id,
+                          "actor": str(actor), "os_identity": os_identity,   # EVIDENCE, not the boundary
+                          "issued_at": datetime.now(timezone.utc).isoformat(),
+                          "expires_at": str(expires_at),
+                          "plan_sha256": frozen[0].get("plan_sha256"),
+                          "bundle_sha256": self.adapter_bundle_hash,
+                          "endpoint_scope": scope})
+            return auth_id
+
+    def _assert_live_authorized(self, rows, endpoint: str) -> None:
+        """Validate the `fetch_authorized` EVENT (never a passed object) for THIS endpoint, THIS frozen
+        plan, THIS adapter bundle, unexpired. Checked pre-lease at claim AND again in-lease before the
+        wire call."""
+        evs = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "fetch_authorized"]
+        if not evs:
+            raise LedgerError("live run without a fetch_authorized event — §13 authorization missing "
+                              "(run authorize-fetch; the fetch path cannot mint it)")
+        ev = evs[-1]
+        try:
+            exp = datetime.fromisoformat(str(ev.get("expires_at")))
+        except ValueError:
+            raise LedgerError("fetch_authorized carries an unparseable expires_at")
+        if exp <= datetime.now(timezone.utc):
+            raise LedgerError(f"fetch authorization {ev.get('auth_id', '?')[:8]} EXPIRED at "
+                              f"{ev.get('expires_at')}")
+        scope = set(ev.get("endpoint_scope") or [])
+        if endpoint not in scope and "*" not in scope:
+            raise LedgerError(f"fetch authorization does not cover endpoint {endpoint!r} "
+                              f"(scope: {sorted(scope)})")
+        frozen = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "plan_frozen"]
+        if len(frozen) != 1 or ev.get("plan_sha256") != frozen[0].get("plan_sha256"):
+            raise LedgerError("fetch authorization binds a DIFFERENT plan than the one frozen here")
+        if ev.get("bundle_sha256") != self.adapter_bundle_hash:
+            raise LedgerError("fetch authorization binds a DIFFERENT adapter bundle — the adapter code "
+                              "changed since authorization; re-authorize deliberately")
+
+    def assert_run_promotable(self) -> None:
+        """Promotion firewall (design v4 F2): only a live_authorized run may ever promote."""
+        mode = self.run_mode()
+        if mode != "live_authorized":
+            raise LedgerError(f"run mode {mode!r} is NOT promotable — synthetic/mixed runs never reach "
+                              f"the live store")
+
+    # ── the claimed-fetch path (design v4 F1/F3/F4/F5/F8) ────────────────────────────────────────
+    def claim_next_fetch(self, rid: str, executor_mode: str) -> "Claim":
+        """THE atomic mutation authority (design v4 F3): derives the next action from the ledger AND
+        reserves/opens the lease in the SAME lock acquisition — a concurrent caller sees IN_FLIGHT,
+        never a duplicate cursor. Run-mode and (live) §13 authorization are checked BEFORE any lease
+        opens, so a mismatched executor can never leave even an open-lease trace."""
+        import uuid as _uuid
+        with self.rp._lock():
+            rows = self._load()
+            plan = self._plan()
+            if rid not in plan:
+                raise LedgerError(f"request {rid} not in the frozen plan")
+            row = plan[rid]
+            mode = self.run_mode(rows)
+            if executor_mode != mode:
+                raise LedgerError(f"executor mode {executor_mode!r} != run mode {mode!r} — refused "
+                                  f"BEFORE opening any lease (mixed mode is unreachable)")
+            if mode == "live_authorized":
+                self._assert_live_authorized(rows, row["endpoint"])
+            if self._state_of(rows, rid) in _TERMINAL:
+                return Claim("SKIP_TERMINAL")
+            closed_ids = {r.get("lease_id") for r in rows
+                          if r.get("kind") in ("attempt", "lease_failed") and r.get("request_id") == rid}
+            open_ls = [r for r in rows if r.get("kind") == "lease_open" and r.get("request_id") == rid
+                       and r.get("lease_id") not in closed_ids]
+            if open_ls:
+                return Claim("IN_FLIGHT")
+            pages = self._latest_pages(rows, rid)
+            nums = sorted(pages)
+            if nums and nums != list(range(1, len(nums) + 1)):
+                raise LedgerError(f"{rid}: recorded pages not contiguous 1..N: {nums} — corrupt state")
+            failed_pages = {r.get("page") for r in rows
+                            if r.get("kind") == "lease_failed" and r.get("request_id") == rid}
+
+            def _open(kind, page, offset):
+                lease_id = _uuid.uuid4().hex
+                opened_at = datetime.now(timezone.utc).isoformat()
+                self._append({"kind": "lease_open", "request_id": rid, "page": int(page),
+                              "lease_id": lease_id, "opened_at": opened_at})
+                return Claim(kind, page=int(page), offset=int(offset),
+                             lease_id=lease_id, opened_at=opened_at)
+
+            limit = int(row["page_limit"]) if row["page_limit"] else 0
+            if row["pagination_mode"] == "single_page":
+                if not pages:
+                    return _open("RETRY_PAGE" if 1 in failed_pages else "FETCH", 1, 0)
+                if pages[1]["row_count"] > 0:
+                    return Claim("VERIFY")
+                if row["empty_policy"] == "dense_refuse":
+                    return Claim("VERIFY")          # verify_request refuses a dense-empty LOUDLY
+                return self._empty_lifecycle(rows, plan, rid, row, _open)
+            # offset_paged
+            if not pages:
+                return _open("RETRY_PAGE" if 1 in failed_pages else "FETCH", 1, 0)
+            total = sum(pages[p]["row_count"] for p in nums)
+            last_n = pages[nums[-1]]["row_count"]
+            if limit and last_n > limit:
+                raise LedgerError(f"{rid}: recorded page {nums[-1]} has {last_n} rows > the signed "
+                                  f"page_limit {limit} — the cap fact is wrong; refuse")
+            if limit and last_n == limit:
+                nxt = nums[-1] + 1
+                return _open("RETRY_PAGE" if nxt in failed_pages else "FETCH", nxt, total)
+            # terminal reached (last page short or empty)
+            if total > 0:
+                return Claim("VERIFY")
+            if row["empty_policy"] == "dense_refuse":
+                return Claim("VERIFY")              # dense-empty refusal surfaces at verify
+            return self._empty_lifecycle(rows, plan, rid, row, _open)
+
+    def _empty_lifecycle(self, rows, plan, rid, row, _open) -> "Claim":
+        """Sparse-empty confirmation lifecycle (design v4 F4): a second INDEPENDENT empty lease, then a
+        deferred verdict until a same-endpoint nonempty canary verifies. VERIFY is never returned for an
+        entirely-empty sparse request."""
+        empt = [a for a in self._closed_leases(rows, rid) if a["row_count"] == 0]
+        if len({a["lease_id"] for a in empt}) < 2:
+            return _open("RETRY_EMPTY_CONFIRM", 1, 0)
+        # deterministic canary: the LOWEST verified-nonempty same-endpoint request id
+        cands = sorted(r2 for r2, rr in plan.items()
+                       if rr["endpoint"] == row["endpoint"] and r2 != rid
+                       and self._state_of(rows, r2) == "verified"
+                       and any(a["row_count"] > 0 for a in self._attempts(rows, r2)))
+        if cands:
+            return Claim("CONFIRM_EMPTY", canary_request_id=cands[0])
+        return Claim("WAIT_FOR_CANARY")
+
+    def fetch_claimed_page(self, rid: str, claim: "Claim", executor) -> "PageResult":
+        """The production fetch door (design v4). The ledger BUILDS the page-call spec ITSELF from the
+        frozen plan row + the atomically-claimed cursor (strictly stronger than validating a passed
+        spec — nothing exists for a caller to get wrong), invokes the executor's ONE wire call outside
+        the lock, prepares derived columns, enforces the frozen response scope, and derives the
+        terminal from the recorded row count. Retries are NEW leases via claim_next_fetch."""
+        if claim.kind not in ("FETCH", "RETRY_PAGE", "RETRY_EMPTY_CONFIRM"):
+            raise LedgerError(f"fetch_claimed_page needs a fetch-bearing claim, got {claim.kind}")
+        if not claim.lease_id:
+            raise LedgerError("claim carries no lease — it was not produced by claim_next_fetch")
+
+        def _fail(reason: str):
+            with self.rp._lock():
+                self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
+                              "lease_id": claim.lease_id, "error": reason[:300]})
+
+        with self.rp._lock():
+            rows = self._load()
+            plan = self._plan()
+            if rid not in plan:
+                raise LedgerError(f"request {rid} not in the frozen plan")
+            row = plan[rid]
+            # IN-LEASE re-validation (design v4 F2): run-mode + live authorization checked AGAIN here,
+            # bound to the moment of the wire call, not only at claim time.
+            mode = self.run_mode(rows)
+            ex_mode = getattr(executor, "mode", None)
+            if ex_mode != mode:
+                self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
+                              "lease_id": claim.lease_id,
+                              "error": f"executor mode {ex_mode!r} != run mode {mode!r}"})
+                raise LedgerError(f"executor mode {ex_mode!r} != run mode {mode!r} at execution")
+            if mode == "live_authorized":
+                self._assert_live_authorized(rows, row["endpoint"])
+        self._revalidate_contract(row)              # live contract re-bind, every page
+        limit = int(row["page_limit"]) if row["page_limit"] else 0
+        spec = {"endpoint": row["endpoint"], "base_params": dict(row["params"]),
+                "limit": limit, "offset": int(claim.offset), "page": int(claim.page),
+                "recipe_id": row["recipe_id"], "pagination_mode": row["pagination_mode"]}
+        # ---- the ONE wire call (outside the lock; the §6.1 throttle lives in the proxy) ----------
+        try:
+            df = executor.run_page(spec)
+        except Exception as exc:
+            _fail(f"executor: {exc!r}")
+            raise
+        if df is None or not hasattr(df, "columns"):
+            _fail("executor returned no DataFrame")
+            raise LedgerError(f"{rid} page {claim.page}: executor returned "
+                              f"{type(df).__name__}, not a DataFrame")
+        n = int(len(df))
+        if row["pagination_mode"] == "offset_paged" and limit and n > limit:
+            _fail(f"vendor returned {n} rows > signed page_limit {limit}")
+            raise LedgerError(f"{rid} page {claim.page}: {n} rows EXCEEDS the signed page_limit "
+                              f"{limit} — the signed cap fact is wrong; refusing the page")
+        vendor_sha, _ = _df_sha256(df)              # BEFORE prep and BEFORE the raw_fetch_ts stamp
+        try:
+            prepared = self._prepare_raw_page(row, df)
+            self._assert_response_scope(row, prepared)
+        except LedgerError as exc:
+            _fail(str(exc))
+            raise
+        if row["pagination_mode"] == "single_page":
+            terminal = "single_page_contract"
+        elif n == 0:
+            terminal = "empty_terminal"
+        elif limit and n < limit:
+            terminal = "last_partial"
+        else:
+            terminal = ""                            # full page: nonterminal, fetch the next offset
+        self._close_lease_record(rid, claim.page, claim.lease_id, claim.opened_at, prepared,
+                                 terminal, vendor_page_sha=vendor_sha)
+        return PageResult(row_count=n, terminal_kind=terminal, next_offset=int(claim.offset) + n)
+
+    def _prepare_raw_page(self, row: dict, df):
+        """Endpoint-scoped page preparation INSIDE the ledger boundary (design v4 F8): may only ADD the
+        coordinator-derived columns declared for this endpoint; never drops/mutates/reorders vendor
+        rows. Fail-closed: a natural key demanding a derived column with NO registered producer refuses
+        (silently omitting it would fail verification later with a misleading error)."""
+        ep = row["endpoint"]
+        fn = _PREPARE_REGISTRY.get(ep)
+        derived_nk = [c for c in (row.get("natural_key") or [])
+                      if c in _COORDINATOR_DERIVED_COLS and c != "raw_fetch_ts"]
+        if fn is None:
+            if derived_nk:
+                raise LedgerError(f"{ep}: natural key needs derived column(s) {derived_nk} but no "
+                                  f"prepare_raw_page producer is registered — refusing (fail closed)")
+            return df
+        if not len(df):
+            return df                                # nothing to derive on an empty page
+        before_cols = set(df.columns)
+        before_n = len(df)
+        out = fn(df)
+        if len(out) != before_n:
+            raise LedgerError(f"{ep}: prepare_raw_page changed the row count "
+                              f"({before_n} -> {len(out)}) — preparation may only ADD columns")
+        removed = before_cols - set(out.columns)
+        if removed:
+            raise LedgerError(f"{ep}: prepare_raw_page REMOVED columns {sorted(removed)}")
+        added = set(out.columns) - before_cols
+        allowed = self._derived_allowed(ep)
+        if not added <= allowed:
+            raise LedgerError(f"{ep}: prepare_raw_page added undeclared column(s) "
+                              f"{sorted(added - allowed)} — only {sorted(allowed)} are declared")
+        return out
+
+    def _derived_allowed(self, endpoint: str) -> set:
+        """The endpoint's declared derived columns (coordinator authority; a private per-instance seam
+        for the below-contract battery, like _revalidate_contract)."""
+        import raw_recovery_coordinator as _rrc  # local: avoid an import cycle
+        return set(_rrc.derived_fields_for(endpoint))
+
+    def _assert_response_scope(self, row: dict, df) -> None:
+        """Enforce the FROZEN response scope (design v4 F5): every returned row must belong to the
+        request that asked for it — a wrong-date/wrong-stock page (vendor or cache error, or a wrong
+        closure) REFUSES before receipt certification. Typed date parsing for ranges."""
+        import pandas as pd
+        scope = row.get("response_scope") or {}
+        checks = scope.get("checks") or []
+        if df is None or not len(df) or not checks:
+            return                                   # scope constrains RETURNED rows; empty is fine
+        for chk in checks:
+            col, cmode, val = chk[0], chk[1], chk[2]
+            if col not in df.columns:
+                raise LedgerError(f"{row['request_id']}: response lacks scope column {col!r}")
+            s = df[col].astype(str)
+            if cmode == "eq":
+                bad = int((s != str(val)).sum())
+                if bad:
+                    raise LedgerError(f"{row['request_id']}: {bad} rows outside the requested scope "
+                                      f"({col} != {val!r}) — the response does not belong to this request")
+            elif cmode == "date_in_range":
+                lo, hi = str(val[0]), str(val[1])
+                dv = pd.to_datetime(s, format="%Y%m%d", errors="coerce")
+                lo_d = pd.to_datetime(lo, format="%Y%m%d")
+                hi_d = pd.to_datetime(hi, format="%Y%m%d")
+                bad = int((dv.isna() | (dv < lo_d) | (dv > hi_d)).sum())
+                if bad:
+                    raise LedgerError(f"{row['request_id']}: {bad} rows outside the requested "
+                                      f"{col} range [{lo}, {hi}] (or unparseable as dates)")
+            else:
+                raise LedgerError(f"{row['request_id']}: unknown scope mode {cmode!r} — fail closed")
 
     def _assert_response_fields(self, endpoint: str, columns) -> None:
         """FETCH/verify-time check that the response carries the contract's signed required_fields
@@ -583,6 +961,9 @@ class PageReceiptLedger:
             # GPT re-review #10 BLOCKER: the signed required_fields were never checked against the
             # FETCHED response. A vendor schema change dropping a signed column would pass verification.
             self._assert_response_fields(row["endpoint"], df.columns)
+            # design v4 F5: the frozen response scope re-checked POST-CONCATENATION (defense in depth
+            # over the per-page check — a legacy-path receipt is scoped here too).
+            self._assert_response_scope(row, df)
             nk = list(row["natural_key"])
             miss = [k for k in nk if k not in df.columns]
             if miss:
@@ -739,3 +1120,16 @@ class PageReceiptLedger:
                 return (False, pend)
             self.assert_staged_outputs_intact(dataset)   # bytes, not just state
             return (True, [])
+
+
+# ── prepare_raw_page producer registry (design v4 F8) ────────────────────────────────────────────
+# Endpoint-scoped, ledger-boundary producers for the coordinator-derived natural-key columns. The
+# row_payload_digest producer is the ledger's own canonical lossless encoder; the three event families
+# whose vendor rows carry no transaction id key on it. report_rc's digest producer is DELIBERATELY not
+# registered yet (it lives downstream in pit_backend and moves here at fan-out); until then a report_rc
+# claimed fetch refuses fail-closed in _prepare_raw_page.
+_PREPARE_REGISTRY.update({
+    "top_list": PageReceiptLedger.add_row_payload_digest,
+    "top_inst": PageReceiptLedger.add_row_payload_digest,
+    "block_trade": PageReceiptLedger.add_row_payload_digest,
+})

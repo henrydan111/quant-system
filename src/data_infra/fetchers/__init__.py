@@ -64,7 +64,8 @@ VIP_ALL_STOCK_LIMIT = 10000
 FINE_INDICATOR_LIMIT = 100
 
 class TushareFetcher:
-    def __init__(self, config_path="config.yaml", max_retries=3, base_sleep=1.5):
+    def __init__(self, config_path="config.yaml", max_retries=3, base_sleep=1.5,
+                 avoid_token_cache: bool = False):
         # Load .env file if python-dotenv is available
         try:
             from dotenv import load_dotenv
@@ -92,15 +93,20 @@ class TushareFetcher:
             logging.warning("base_sleep %r invalid/below the §6.1 floor — raised to %.2f", base_sleep, MIN_BASE_SLEEP)
             base_sleep = MIN_BASE_SLEEP
         self.base_sleep = base_sleep
-        try:
-            ts.set_token(token)
-            raw = ts.pro_api()
-        except PermissionError:
-            logging.warning(
-                "tushare.set_token() could not write the local token cache; "
-                "falling back to ts.pro_api(token)"
-            )
+        if avoid_token_cache:
+            # Recovery/adapter path (design v4 F10): NEVER touch the user-profile token cache —
+            # ts.set_token() writes outside the run root, which the write-surface monitor forbids.
             raw = ts.pro_api(token)
+        else:
+            try:
+                ts.set_token(token)
+                raw = ts.pro_api()
+            except PermissionError:
+                logging.warning(
+                    "tushare.set_token() could not write the local token cache; "
+                    "falling back to ts.pro_api(token)"
+                )
+                raw = ts.pro_api(token)
         # LOCKED proxy: every self.pro.xxx call (internal via _safe_api_call OR external direct) is
         # serialized + globally rate-spaced across processes (§6.1). No unlocked handle exists.
         self.pro = _LockedPro(raw, base_sleep)
@@ -125,7 +131,20 @@ class TushareFetcher:
                 logging.warning(f"API Error: {e}. Retrying in {sleep_time}s (attempt {attempt+1}/{self.max_retries})...")
                 time.sleep(sleep_time)
         return pd.DataFrame()
-        
+
+    def fetch_page_once(self, vendor_method: str, **kwargs):
+        """EXACTLY ONE wire call for the recovery CallRecipe/executor path (adapter design v4 F1).
+
+        The call routes through the LOCKED proxy (`self.pro.<method>` -> tushare_lock.spaced_call), so
+        the §6.1 machine-global lock + rate spacing + cooldown apply — this method sheds ONLY the
+        `_safe_api_call` retry loop, never the throttle (design v4 §8 probe 2). It contains NO retry and
+        NO pagination: a retry is a NEW ledger lease; paging kwargs (limit/offset) come from the
+        ledger-claimed cursor via the recipe's pagination_binding. The pre-fetch lint pins this shape
+        (no loop, no _safe_api_call). A None response becomes an empty DataFrame (the ledger records
+        row_count=0 with a typed terminal, never a null)."""
+        df = getattr(self.pro, vendor_method)(**kwargs)
+        return df if df is not None else pd.DataFrame()
+
     def _fetch_paginated(self, api_func, limit=100, **kwargs):
         """Fetch all pages for an endpoint, falling back to offset pagination only when needed."""
         all_data = []

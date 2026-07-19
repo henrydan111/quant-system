@@ -736,7 +736,9 @@ def _prow(rid, ep, part, chash, dataset="market/daily", c=None, params=None):
             "doc_sha256": (c or {}).get("doc_sha256", ""),
             "natural_key": list((c or {}).get("natural_key", [])),
             "content_dedup_key": list(row.content_dedup_key),
-            "max_content_dups": row.max_content_dups}
+            "max_content_dups": row.max_content_dups,
+            # design v4 pin 3: recipe_id + response_scope are frozen plan facts (inert defaults here)
+            "recipe_id": f"test_recipe_{ep}", "response_scope": {"rule_id": "none", "checks": []}}
 
 
 @pytest.fixture()
