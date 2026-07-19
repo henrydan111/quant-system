@@ -898,6 +898,55 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="恰 SealedCardRegistry"):
             verify_d7_artifact(evil_art)
 
+    def test_evil_card_record_subclass_refused_before_recording(self, tmp_path):
+        # archive-re-review#9 P0 (the reviewer's probe): CardRecord is the LEAF
+        # of the identity chain — registry_hash is composed of member
+        # content_hashes. A CardRecord subclass with REAL fields but an
+        # overridden _payload() forging content_hash must be refused at the
+        # registry boundary, so no genuine-typed archive chain can form around
+        # a forged record hash — and nothing records.
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            CardRecord, SealedCardRegistry, build_card_registry,
+        )
+        art = _artifact_full("d1")
+        genuine = next(iter(art.source_registry.records.values()))
+
+        class _EvilCardRecord(CardRecord):
+            def _payload(self):
+                # real metadata, but a payload that seals to a DIFFERENT hash
+                return {**CardRecord._payload(self), "record_schema_id": "evilX"}
+        evil_payload = {
+            "record_id": genuine.record_id, "domain": genuine.domain,
+            "evidence_class": genuine.evidence_class,
+            "allowed_uses": sorted(genuine.allowed_uses),
+            "allowed_consumers": sorted(genuine.allowed_consumers),
+            "allowed_dimensions": sorted(genuine.allowed_dimensions),
+            "record_schema_id": "evilX",
+            "derivation": [list(kv) for kv in genuine.derivation]}
+        evil = _EvilCardRecord(
+            record_id=genuine.record_id, domain=genuine.domain,
+            evidence_class=genuine.evidence_class,
+            allowed_uses=genuine.allowed_uses,
+            allowed_consumers=genuine.allowed_consumers,
+            allowed_dimensions=genuine.allowed_dimensions,
+            record_schema_id=genuine.record_schema_id,
+            derivation=genuine.derivation,
+            content_hash=seal_hash(evil_payload))       # self-consistent forgery
+        assert evil.content_hash != genuine.content_hash
+        others = [r for r in art.source_registry.records.values()
+                  if r.record_id != genuine.record_id]
+        # rebuild the source registry via the public factory with the evil leaf
+        with pytest.raises(RegistryError, match="恰 CardRecord"):
+            build_card_registry(art.source_registry.cutoff_iso, [evil, *others])
+        # even a direct SealedCardRegistry construction re-verifies members
+        with pytest.raises(RegistryError, match="恰 CardRecord"):
+            SealedCardRegistry(
+                cutoff_iso=art.source_registry.cutoff_iso,
+                records={genuine.record_id: evil},
+                registry_hash=seal_hash({"cutoff": art.source_registry.cutoff_iso,
+                                        "record_hashes": [evil.content_hash]}))
+        assert not (tmp_path / "ledger").exists()       # nothing recorded
+
     def test_recovery_stale_snapshot_grows_then_seals_converges(self, tmp_path):
         # archive-re-review#7 P2 (the reviewer's ordering): recovery A takes a
         # stale chain snapshot at entry; competitor B grows the ledger AND

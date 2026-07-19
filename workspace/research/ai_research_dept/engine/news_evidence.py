@@ -375,18 +375,39 @@ class CardRecord:
         verify_sealed(self._payload(), self.content_hash, field_name="card record content_hash")
 
     def _payload(self) -> dict:
-        return {"record_id": self.record_id, "domain": self.domain,
-                "evidence_class": self.evidence_class,
-                "allowed_uses": sorted(self.allowed_uses),
-                "allowed_consumers": sorted(self.allowed_consumers),
-                "allowed_dimensions": sorted(self.allowed_dimensions),
-                "record_schema_id": self.record_schema_id,
-                "derivation": [list(kv) for kv in self.derivation]}
+        return card_record_canonical_payload(self)
 
     @property
     def positive_ceiling(self) -> int:
         """本记录可对某维贡献的最高分(非正向类 = 0)。"""
         return EVIDENCE_CEILING.get(self.evidence_class, 0)
+
+
+def card_record_canonical_payload(record) -> dict:
+    """CardRecord 的 **canonical 载荷**——模块级、不可覆写(archive-re-review#9
+    P0:CardRecord 是身份链的叶子——registry_hash 由成员 content_hash 组成,
+    子类覆写 `_payload()` 伪造 content_hash 即可让整条"全真类型"档案链脱钩。
+    注册边界一律恰类型 + 经本 helper 重算 content_hash,绝不信成员自封哈希)。"""
+    return {"record_id": record.record_id, "domain": record.domain,
+            "evidence_class": record.evidence_class,
+            "allowed_uses": sorted(record.allowed_uses),
+            "allowed_consumers": sorted(record.allowed_consumers),
+            "allowed_dimensions": sorted(record.allowed_dimensions),
+            "record_schema_id": record.record_schema_id,
+            "derivation": [list(kv) for kv in record.derivation]}
+
+
+def verified_record_content_hash(record) -> str:
+    """恰类型 CardRecord + 经 canonical helper **重算并校验** content_hash,返回
+    该已验证哈希(archive-re-review#9 P0:registry_hash 与所有身份链重算都基于
+    此,绝不直接信任 `record.content_hash`)。"""
+    if type(record) is not CardRecord:
+        raise RegistryError(
+            f"注册表只收恰 CardRecord(得 {type(record).__name__};子类可覆写 "
+            f"_payload 伪造 content_hash 脱钩,拒,re-review#9 P0)")
+    verify_sealed(card_record_canonical_payload(record), record.content_hash,
+                  field_name="card record content_hash")
+    return record.content_hash
 
 
 def build_card_record(record_id: str, *, domain: str, evidence_class: str,
@@ -474,9 +495,11 @@ class SealedCardRegistry:
 def registry_canonical_payload(registry) -> dict:
     """注册表的 **canonical 载荷**——模块级、不可覆写、只读实际字段
     (archive-re-review#7 P0:D7 消费边界绝不调用可被子类覆写的虚方法
-    `_payload()`;记录序无关,按 content_hash 排序)。"""
+    `_payload()`;记录序无关,按 content_hash 排序)。archive-re-review#9 P0:
+    每条成员经 `verified_record_content_hash`(恰类型 + canonical 重算),
+    registry_hash 基于**已验证**记录哈希,绝不直接信任成员自封 `content_hash`。"""
     return {"cutoff": registry.cutoff_iso,
-            "record_hashes": sorted(r.content_hash
+            "record_hashes": sorted(verified_record_content_hash(r)
                                     for r in registry.records.values())}
 
 
@@ -486,9 +509,11 @@ def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCar
     **D7 子行注册表级校验**:父行必须同表存在、子行类与父行类逐字一致(kernel 结构
     锁绑父哈希但解析不了父,类等式在此闭合——`NFI01.fact` 挂 NFD 类在此拒)。"""
     by_id: dict[str, CardRecord] = {}
+    verified_hashes = []
     for r in records:
-        if not isinstance(r, CardRecord):
-            raise RegistryError("注册表只收封印 CardRecord")
+        # archive-re-review#9 P0:恰类型 + canonical 重算 content_hash(子类覆写
+        # _payload 伪造哈希在此死),registry_hash 基于已验证哈希
+        vh = verified_record_content_hash(r)
         if r.record_id in by_id:
             raise RegistryError(f"重复 record_id {r.record_id!r}")
         _enforce_protected_namespaces(
@@ -496,9 +521,9 @@ def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCar
             frozenset(r.allowed_consumers), frozenset(r.allowed_dimensions),
             r.record_schema_id, tuple(r.derivation))
         by_id[r.record_id] = r
+        verified_hashes.append(vh)
     _verify_d7_relationships(by_id)                    # re-review#4 B1
-    payload = {"cutoff": cutoff_iso,
-               "record_hashes": sorted(r.content_hash for r in by_id.values())}
+    payload = {"cutoff": cutoff_iso, "record_hashes": sorted(verified_hashes)}
     return SealedCardRegistry(cutoff_iso=cutoff_iso, records=deep_ro(by_id),
                               registry_hash=seal_hash(payload))
 
@@ -551,8 +576,8 @@ def authorize(record: CardRecord, *, use: str, consumer_seat: str,
     """三元授权(M1‴ line 350):`use ∈ allowed_uses ∧ consumer_seat ∈ allowed_consumers
     ∧ (target_dimension 未给 或 ∈ allowed_dimensions)`。**只读元数据,绝不看 ID 前缀**。
     factor_positive 用途必须给 target_dimension(否则拒——正向必须指向一个注册维)。"""
-    if not isinstance(record, CardRecord):
-        raise RegistryError("authorize 只接受封印 CardRecord")
+    if type(record) is not CardRecord:
+        raise RegistryError("authorize 只接受恰 CardRecord(子类拒,re-review#9 P0)")
     if use not in record.allowed_uses:
         return False
     if consumer_seat not in record.allowed_consumers:
