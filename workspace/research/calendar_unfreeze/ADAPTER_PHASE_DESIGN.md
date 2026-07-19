@@ -1,6 +1,14 @@
-# Adapter phase — design + threat model **v3** (folds GPT design re-review #2: 6 remaining findings)
+# Adapter phase — design + threat model **v4** (folds design re-review #3: final F1 + F7)
 
-Status: DESIGN v3 (pre-implementation). Interface-freeze unit = the mocked **vertical quartet**
+Design re-review #3 discharged F2/F3/F4/F5 and held only F1 (recipe needs constant_kwargs + explicit
+pagination binding; report_rc create_time machine-required) and F7 (count-equality is not row
+conservation → typed `conservation_mode`). Both are folded here (§2a, §2e); report_rc `required_fields`
+now includes `create_time` (re-signed, 31 clean). F2/F4 reviewer riders (separate `authorize-fetch` CLI
+with no self-mint path + OS-SID-as-evidence; deterministic lowest-verified-nonempty canary) also folded.
+Per GPT: "Once F1 gains constants/non-paged binding and F7 gains content-level conservation, I see no
+remaining design blocker to freezing the quartet interface."
+
+Status: DESIGN v4 (pre-implementation). Interface-freeze unit = the mocked **vertical quartet**
 (A01 `market/daily` + per-stock `income` + event `top_list` + monthly `broker_recommend`) — which must
 also exercise the four PHYSICAL consolidation layouts (F7). A01 is the first *implemented* adapter; the
 interface freezes only after the quartet passes. No Tushare call; `--fetch` stays exit 3 until §13.
@@ -57,16 +65,30 @@ construction) is covered by the F10 live-construction test.
 
 ## 2. Types (the frozen, content-hashed interface)
 
-### 2a. `CallRecipe` — declarative data (F1)
+### 2a. `CallRecipe` — declarative data (F1, refined by design re-review #3)
 ```
-CallRecipe(recipe_id, vendor_method, parameter_map: dict[str,str], pagination_mode)
+CallRecipe(recipe_id, vendor_method, request_parameter_map: dict[str,str],
+           constant_kwargs: dict[str, scalar], pagination_binding)
 ```
-`parameter_map` maps request keys → vendor kwargs (e.g. {"trade_date":"trade_date"}); no code. The plan
-row freezes `recipe_id`. Execution: the ledger builds kwargs from `parameter_map(request) + {limit,
-offset}` for the claimed cursor and calls the ONE generic `fetcher.fetch_page_once(vendor_method,
-**kwargs)` exactly once. Validation before the call: `recipe_id` is the endpoint's frozen recipe;
-`limit` == the signed contract `page_limit` (or the single-page sentinel); `offset`/`page` == the
-atomically claimed cursor; single_page ⇒ page 1/offset 0.
+- `request_parameter_map` renames/copies request keys → vendor kwargs (e.g. {"trade_date":"trade_date"});
+  NO transformation language. If a future endpoint needs a value transform (e.g. period→start/end), its
+  population RESOLVER emits the vendor-ready params and re-signs the request-set hash — never the recipe.
+- `constant_kwargs` are content-hashed JSON scalars the vendor call needs but that are NOT request keys —
+  e.g. `report_rc.fields = REPORT_RC_FIELDS` (the fixed projection that yields `create_time`, verified at
+  fetch_bucket_a.py:103). Frozen + hashed into the bundle manifest.
+- `pagination_binding` ∈ { **`none`** (single_page — sends NO paging kwargs; the zero limit is an
+  INTERNAL ledger sentinel, never a vendor arg — passing `limit=0` to `daily`/`top_list` could change
+  API behavior), **`limit_offset(limit_kw, offset_kw)`** (offset-paged — injects the claimed cursor as
+  those two kwargs only) }.
+- **Disjointness + totality (validated at freeze):** request-map keys, constant keys and paging keys are
+  pairwise DISJOINT; every frozen request parameter is mapped exactly once.
+Execution: kwargs = `request_parameter_map(request) ∪ constant_kwargs ∪ (paging kwargs iff limit_offset)`;
+the ledger calls `fetcher.fetch_page_once(vendor_method, **kwargs)` exactly once. Validation before the
+call: `recipe_id` is the endpoint's frozen recipe; `limit` (when paged) == the signed contract
+`page_limit`; `offset`/`page` == the atomically claimed cursor; single_page ⇒ page 1/offset 0 and no
+paging kwargs. **report_rc `create_time` is now machine-required** (added to the signed contract
+`required_fields`) — its PIT anchor `max(report_date, create_time)` depended on a field the old list did
+not enforce.
 
 ### 2b. §13 authorization = a ledger EVENT (F2)
 An explicit user action (`research_orchestrator_cli`-style `authorize-fetch`) writes a hash-chained
@@ -76,7 +98,11 @@ endpoint, and its `plan_sha256`/`bundle_sha256` match the frozen run — before 
 (`synthetic_nonpromotable` | `live_authorized`) is written at `run_created`; the executor's mode must
 equal the run-mode or the ledger refuses BEFORE opening a lease. Promotion independently refuses every
 non-`live_authorized` run. The Tushare credential is read from secure env/config after authorization;
-never a CLI arg or ledger field.
+never a CLI arg or ledger field. **The event is written ONLY by a separate, explicit user-triggered CLI
+command (`authorize-fetch`); the fetch command has NO path that mints its own event** (design re-review
+#3). The OS identity/SID is recorded on the event as EVIDENCE, not the security boundary (single-user,
+non-adversarial threat model; OS-user separation would only matter under a stronger malicious-local-actor
+model, out of scope).
 
 ### 2c. `AdapterSpec` (declarative, no I/O)
 ```
@@ -102,9 +128,21 @@ ConsolidationSpec(
   family_output_of,               # output partition -> relative family output path
   recipe_id,                      # merge/repartition recipe (canonical, hashed)
   empty_contribution,             # confirmed-empty request -> {zero_rows | omit_output | empty_file}
-  row_conservation)               # e.g. income: sum(input rows) == sum(output rows) after declared dedup
+  conservation_mode)              # TYPED (F7, design re-review #3): multiset_identity | base_key_preserving_merge
 ```
 Consolidation records EVERY input verdict exactly once and binds each output's path+bytes+row_count.
+**`conservation_mode` (count equality is necessary but NOT sufficient — a bug could drop one row and
+duplicate another at the same total):**
+- **`multiset_identity`** (pure concat/repartition: income, top_list, broker_recommend) — inputs are the
+  immutable, already-verified POST-DEDUP request outputs; confirmed empties contribute zero; NO new
+  consolidation-time dedup normally. Require BOTH `sum(input post_dedup_rows) == sum(output rows)` AND
+  `multiset(canonical input row hashes) == multiset(canonical output row hashes)`. Any explicitly
+  permitted extra dedup is recorded separately with its key + dropped count + bounded allowance.
+  Conservation compares inputs↔outputs WITHIN ONE FROZEN RUN only — a restatement changing counts in a
+  later run does not weaken it (restated versions stay distinct via the signed income version key).
+- **`base_key_preserving_merge`** (A01) — output natural-key SET and row_count equal the `daily` base,
+  plus the signed auxiliary rules (drop `daily_basic.close`, 100% positive adj_factor coverage, ≥90%
+  daily_basic coverage, `validate="one_to_one"`, no dup keys, all rows trade_date == partition).
 A01 = 3-leg merge per trade_date; income = per-stock inputs REPARTITIONED to per-`end_date` files
 (request axis ≠ output axis); top_list = one file per event date, empties `omit_output`; broker_recommend
 = one file per month.
@@ -114,7 +152,10 @@ A01 = 3-leg merge per trade_date; income = per-stock inputs REPARTITIONED to per
   cursor (single_page ⇒ page1/offset0; offset ⇒ next uncovered offset), and OPENS/RESERVES the lease
   atomically. Returns `FETCH(page, offset, lease_id)` | `IN_FLIGHT` | `VERIFY` | `RETRY_EMPTY_CONFIRM` |
   `WAIT_FOR_CANARY` | `CONFIRM_EMPTY(canary_request_id)` | `SKIP_TERMINAL` | `RETRY_PAGE`(only after a
-  recorded failure/crash-abandon). `next_fetch_action(rid)` remains a READ-ONLY status view.
+  recorded failure/crash-abandon). `RETRY_EMPTY_CONFIRM` carries a lease_id. `next_fetch_action(rid)`
+  remains a READ-ONLY status view. **Canary policy (F4, deterministic):** the canary is the LOWEST
+  verified-nonempty request_id for the SAME endpoint; `CONFIRM_EMPTY` is offered only once such a canary
+  exists (else `WAIT_FOR_CANARY`, never `VERIFY`d empty).
 - **`fetch_page(rid, lease_id, executor, spec)`** validates `spec` vs the frozen request + the claimed
   lease, invokes `executor.run_page(spec)` (one wire call), runs `prepare_raw_page` (F8), applies
   `response_scope` (F5), records the receipt (vendor-payload hash BEFORE prep + prepared-receipt hash),
