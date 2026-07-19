@@ -1,184 +1,194 @@
-# Adapter phase — design + threat model **v2** (folds GPT design re-review #1: 11 findings)
+# Adapter phase — design + threat model **v3** (folds GPT design re-review #2: 6 remaining findings)
 
-Status: DESIGN v2 (pre-implementation). Interface-freeze unit = a mocked **vertical quartet**
-(A01 `market/daily` + per-stock `income` + event `top_list` + monthly `broker_recommend`); A01 is the
-first *implemented* adapter but the interface freezes only after the quartet passes the same machinery
-(F11). No Tushare call; `--fetch` stays exit 3 until §13.
+Status: DESIGN v3 (pre-implementation). Interface-freeze unit = the mocked **vertical quartet**
+(A01 `market/daily` + per-stock `income` + event `top_list` + monthly `broker_recommend`) — which must
+also exercise the four PHYSICAL consolidation layouts (F7). A01 is the first *implemented* adapter; the
+interface freezes only after the quartet passes. No Tushare call; `--fetch` stays exit 3 until §13.
 
-v1 verdict was REWORK: the opaque-lambda `call`, caller-computed terminals, constructor-only §13, and
-population-parity-as-merge-correctness were all unsound. v2 moves the fetch mechanics INTO the
-ledger-owned boundary and makes every call declarative + validated. GPT confirmed the two v1 keepers:
-(a) pure adapter / ledger-owned persistence — no family needs adapter-side disk; (b) separate leg
-receipts + consolidation merge preserves provenance (population parity alone is NOT merge correctness).
+re-review #2 discharged F6/F8/F9/F10/F11 and held F1–F5, F7. v3's theme: **every fetch-affecting fact is
+declarative DATA, frozen into the plan, content-hashed, and enforced by the LEDGER at an atomic
+boundary** — no arbitrary function, no caller-derived cursor, no constructible-only authorization.
 
-## 0. What changed from v1 (finding → resolution)
-- **F1** opaque callable → **`PageCallSpec`** (declarative, serializable), validated by the ledger vs
-  the frozen request; a **typed executor** does EXACTLY ONE wire call via new `fetch_*_page_once`
-  methods (not `_safe_api_call`, which retries — verified: `for attempt in range(max_retries)`). Retries
-  become NEW ledger leases. Recipes/page-preps/merge-rules are hashed into the real `adapter_bundle_hash`.
-- **F2** constructor-only §13 → **`FetchAuthorization`** validated INSIDE the ledger lease at every live
-  page; immutable run-mode (`synthetic_nonpromotable` | `live_authorized`); promotion refuses
-  synthetic/mixed. Credential from secure env/config, never a CLI arg or ledger field.
-- **F3** caller-computed `terminal_claim` → **`fetch_page` returns `PageResult(row_count, terminal_kind,
-  next_offset)`**; ledger derives the terminal; **`next_fetch_action(rid)`** owns resume.
-- **F4** `confirm_empty` missing its canary → **deterministic empty-scheduler** (2nd empty lease, verdict
-  DEFERRED until a same-endpoint nonempty canary verifies).
-- **F5** response never scoped to the request → **`response_scope_spec`** (equality / range bounds),
-  applied page-by-page pre-cert AND post-concat.
-- **F6** family-level freeze on a one-plan ledger → **`freeze_run_plan(specs, declared_families)`** once
-  per run; `run_family` executes only its already-frozen subset.
-- **F7** `receipt_output_of(...page)` contradiction → **`request_output_of(endpoint, request)`** (no page
-  arg; page receipts are ledger-owned) + a SEPARATE **`consolidate_family`** step (not in `run_family`).
-- **F8** derived digests never produced at fetch → **`prepare_raw_page(endpoint, df)`** registry inside
-  the ledger boundary (adds ONLY `derived_fields_for(endpoint)` cols; records vendor-payload hash +
-  prepared-receipt hash).
-- **F9** population parity ≠ merge correctness → **reuse the production canonical merger**
-  (update_daily_data.py: drop aux `close`, 100% positive adj_factor coverage, ≥90% daily_basic coverage,
-  one_to_one, no dup keys, target-date equality).
-- **F10** synthetic monitor can't prove live construction → add a **fresh-subprocess, network-denied
-  live-construction test** (stub tushare; monitor installed BEFORE import; `ts.pro_api(token)`, never
-  `ts.set_token()`).
-- **F11** A01 alone under-covers the shapes → freeze the interface only after the **quartet**.
+## 0. Changed from v2 (finding → v3 resolution)
+- **F1** recipes were still arbitrary thunks → **`CallRecipe(recipe_id, vendor_method, parameter_map,
+  pagination_mode)`** is DECLARATIVE DATA; ONE generic **`fetcher.fetch_page_once(vendor_method,
+  **kwargs)`** does exactly one wire call; `recipe_id` is FROZEN in every plan row; the ledger validates
+  `recipe_id`/`limit`==contract/`offset`+`page`==claimed-cursor/single-page-sentinel; a lint forbids
+  `_safe_api_call` or any loop inside `fetch_page_once`.
+- **F2** `FetchAuthorization` was constructible-only → §13 is a hash-chained **`fetch_authorized` LEDGER
+  EVENT** written by an explicit user action (auth id, actor, issued/expiry, plan_sha256, bundle_sha256,
+  endpoint scope); `fetch_page` validates the EVENT, never a passed dataclass. Run-mode is fixed at
+  `run_created`; an executor-mode/run-mode mismatch REFUSES before opening any lease (mixed mode
+  unreachable, not merely non-promotable).
+- **F3** single_page vs `n>limit`, and a `next_fetch_action→fetch_page` TOCTOU → single_page terminal is
+  defined SEPARATELY (page 1, offset 0 → `single_page_contract`, never compared to an offset limit);
+  the authoritative op is **`claim_next_fetch(rid)`** which derives the cursor AND opens/reserves the
+  lease ATOMICALLY under one lock (concurrent caller sees `IN_FLIGHT`); retry only after a recorded
+  failure or an explicit crash-abandon transition.
+- **F4** the action enum couldn't express the empty lifecycle → added **`RETRY_EMPTY_CONFIRM`**,
+  **`WAIT_FOR_CANARY`**, **`CONFIRM_EMPTY(canary_request_id)`**; `VERIFY` is NEVER returned for an
+  entirely-empty sparse request; canary selection is deterministic.
+- **F5** `response_scope_spec(endpoint)` lacked the request's values and wasn't frozen →
+  **`response_scope_of(endpoint, request) -> ResponseScope`** with the concrete rule-id + values FROZEN
+  in each plan row; validated at plan-freeze, page-receipt, and post-concatenation; TYPED date parsing
+  for ranges (never string compare).
+- **F7** consolidation modeled one `family_output`, but the quartet has 4 physical layouts → a frozen
+  **`ConsolidationSpec`** (input grouping, `output_partition_of_row`, `family_output_of`, merge/repartition
+  recipe id, confirmed-empty contribution policy, row-conservation/dedup invariants); handles the
+  per-stock→per-`end_date` repartition (income, verified at storage/__init__.py) and event/monthly
+  layouts.
+- **Q1** → one canonical **`adapter_bundle_manifest`** (relative path + sha256 of every call-recipe /
+  `fetch_page_once` / response-scope / prepare / merge / consolidation module + the declarative registry
+  entries), hash-chained at plan freeze, RECOMPUTED on resume and before live execution/consolidation.
+  Git HEAD is insufficient (a dirty relevant file is undetected).
 
-## 1. Core boundary (GPT-confirmed): the adapter never touches disk
-The adapter is declarative + pure: it emits `PageCallSpec`s and pure transform/merge rules. ALL
-persistence (page receipts, per-request outputs, consolidated family outputs, promotion) is owned by the
-ledger + no-follow broker under `staging_data`. This structurally avoids the verified E: leak points
-(import-time handlers, `StorageManager`, `main()` reference downloads). The one residual surface —
-fetcher CONSTRUCTION (config.yaml → E:, import-time logging, credential cache) — is exercised by a
-dedicated live-construction write test (F10), not the synthetic run.
+Discharged, retained with the noted riders: **F6** run-level freeze; **F8** `prepare_raw_page` (its
+producer ids/source go in the bundle manifest; vendor hash computed BEFORE prep; prep adds only declared
+cols); **F9** extract the inline update_daily_data merge (which does NOT currently use
+`validate="one_to_one"` — verified) into a shared PURE canonical merger called by BOTH production and
+recovery; **F10** the live-construction test imports the REAL installed tushare under monitor+socket
+guard and stubs ONLY `pro_api`/client (never the whole module); **F11** quartet.
 
-## 2. Types (the frozen interface)
+## 1. Core boundary (GPT-confirmed): the adapter is declarative; the ledger owns everything mutating
+The adapter contributes DATA only: `CallRecipe`s, `ResponseScope` rules, a `ConsolidationSpec`, pure
+merge functions. The ledger owns leases, the executor invocation, prep, scope enforcement, receipts,
+per-request outputs, consolidation, and resume. No adapter-side disk. The one residual surface (fetcher
+construction) is covered by the F10 live-construction test.
 
-### 2a. `PageCallSpec` (serializable — replaces the lambda; F1)
+## 2. Types (the frozen, content-hashed interface)
+
+### 2a. `CallRecipe` — declarative data (F1)
 ```
-PageCallSpec(endpoint: str, base_params: dict, limit: int, offset: int, recipe_id: str)
+CallRecipe(recipe_id, vendor_method, parameter_map: dict[str,str], pagination_mode)
 ```
-- `base_params` are the request's vendor params (e.g. {"trade_date":"20260102"}); `limit/offset` are the
-  page cursor (limit == the signed `pagination_spec.page_limit`; single_page ⇒ limit sentinel, one page).
-- `recipe_id` names a registered call recipe (`ADAPTER_RECIPES[recipe_id]`) — a pure function
-  `(fetcher, base_params, limit, offset) -> zero-arg one-call thunk`. Recipes are hashed into
-  `adapter_bundle_hash`. **The ledger validates `spec.endpoint == frozen.endpoint` and
-  `spec.base_params == frozen.params` BEFORE execution** — a spec that names the wrong endpoint/date is
-  refused (closes the "wrong closure" hole from the request side; F5 closes it from the response side).
+`parameter_map` maps request keys → vendor kwargs (e.g. {"trade_date":"trade_date"}); no code. The plan
+row freezes `recipe_id`. Execution: the ledger builds kwargs from `parameter_map(request) + {limit,
+offset}` for the claimed cursor and calls the ONE generic `fetcher.fetch_page_once(vendor_method,
+**kwargs)` exactly once. Validation before the call: `recipe_id` is the endpoint's frozen recipe;
+`limit` == the signed contract `page_limit` (or the single-page sentinel); `offset`/`page` == the
+atomically claimed cursor; single_page ⇒ page 1/offset 0.
 
-### 2b. `Executor` (the §13 chokepoint lives here; F2)
-```
-class Executor(Protocol): def run_page(spec: PageCallSpec) -> DataFrame   # EXACTLY ONE wire call
-SyntheticExecutor(fixtures)   # no tushare import; used by the pre-fetch test matrix
-LiveExecutor(fetcher, authorization: FetchAuthorization)   # constructed only under a valid authorization
-```
-The ledger invokes `executor.run_page(spec)` INSIDE the open lease. For `LiveExecutor`, the ledger
-re-validates the `FetchAuthorization` (scope covers this endpoint, `plan_sha256`/`adapter_bundle_hash`
-match the frozen run, not expired) at EVERY page — so even a mis-wired orchestrator cannot reach the
-vendor without a live authorization bound to THIS plan.
+### 2b. §13 authorization = a ledger EVENT (F2)
+An explicit user action (`research_orchestrator_cli`-style `authorize-fetch`) writes a hash-chained
+`fetch_authorized` event: `{auth_id, actor, issued_at, expires_at, plan_sha256, bundle_sha256,
+endpoint_scope}`. `fetch_page` (live mode) validates THAT event is present, unexpired, scope-covers the
+endpoint, and its `plan_sha256`/`bundle_sha256` match the frozen run — before every wire call. Run-mode
+(`synthetic_nonpromotable` | `live_authorized`) is written at `run_created`; the executor's mode must
+equal the run-mode or the ledger refuses BEFORE opening a lease. Promotion independently refuses every
+non-`live_authorized` run. The Tushare credential is read from secure env/config after authorization;
+never a CLI arg or ledger field.
 
-### 2c. `FetchAuthorization` (non-secret; F2)
+### 2c. `AdapterSpec` (declarative, no I/O)
 ```
-FetchAuthorization(run_id, plan_sha256, adapter_bundle_hash, endpoint_scope: set, expires_at)
+partition_of(request) -> str
+request_output_of(endpoint, request) -> str            # per-REQUEST output (no page arg)
+call_recipe(endpoint) -> recipe_id                     # the frozen recipe for this endpoint
+response_scope_of(endpoint, request) -> ResponseScope  # concrete rule-id + values (F5)
+consolidation_spec(family) -> ConsolidationSpec        # F7
 ```
-Records ONE immutable run mode on the ledger: `synthetic_nonpromotable` (any synthetic page) or
-`live_authorized`. **Promotion refuses a run that is synthetic or mixed-mode.** The Tushare credential is
-read from secure env/config only after authorization; it is NEVER a CLI argument or a ledger field.
+`natural_key`/`content_dedup_key`/`max_content_dups`/`empty_policy` come from the matrix + contract.
 
-### 2d. `AdapterSpec` (declarative, no I/O)
-```
-partition_of(request) -> str                     # per-date: request["trade_date"]; per-period: ["period"];
-                                                 # per-stock: ["ts_code"]; per-(period,type): f"{period}_{rt}"
-request_output_of(endpoint, request) -> str      # RELATIVE per-REQUEST output path under staging_data
-                                                 # (NO page arg — page receipts are ledger-owned; F7)
-page_call_spec(endpoint, request, limit, offset) -> PageCallSpec
-response_scope_spec(endpoint) -> ResponseScope   # how a page's rows must match the request (F5)
-merge(endpoint_frames) -> DataFrame              # multi-source only; MUST reuse the canonical merger (F9)
-```
-`natural_key` / `content_dedup_key` / `max_content_dups` / `empty_policy` come from the MATRIX + signed
-contract, never the adapter.
+### 2d. `ResponseScope` (F5) — frozen per plan row
+`{rule_id, checks: [(column, mode, value)]}` where mode ∈ {`eq`, `date_in_range[lo,hi]`}. Values are
+CONCRETE (from the request). Validated at plan-freeze (well-formed), at each page receipt, and after
+concatenation. Range checks parse dates typed (`YYYYMMDD` → date), never string `<=`.
 
-### 2e. `ResponseScope` (F5)
-Per-endpoint, matrix/contract-derived: a set of `(column, mode, value)` where mode ∈ {`eq`,
-`in_range[lo,hi]`}. E.g. per-date daily ⇒ `trade_date eq request["trade_date"]`; per-stock income ⇒
-`ts_code eq request["ts_code"]`; report_rc month range ⇒ `report_date in_range[start,end]`. The ledger
-applies it page-by-page BEFORE receipt certification and again after concatenation; a row outside scope
-(wrong date/stock — vendor or cache error) REFUSES.
+### 2e. `ConsolidationSpec` (F7) — frozen per family
+```
+ConsolidationSpec(
+  input_grouping,                 # how request outputs group into one consolidation unit
+  output_partition_of_row,        # row -> output partition key  (A01: trade_date; income: end_date;
+                                  #   top_list: trade_date; broker_recommend: month)
+  family_output_of,               # output partition -> relative family output path
+  recipe_id,                      # merge/repartition recipe (canonical, hashed)
+  empty_contribution,             # confirmed-empty request -> {zero_rows | omit_output | empty_file}
+  row_conservation)               # e.g. income: sum(input rows) == sum(output rows) after declared dedup
+```
+Consolidation records EVERY input verdict exactly once and binds each output's path+bytes+row_count.
+A01 = 3-leg merge per trade_date; income = per-stock inputs REPARTITIONED to per-`end_date` files
+(request axis ≠ output axis); top_list = one file per event date, empties `omit_output`; broker_recommend
+= one file per month.
 
-## 3. Ledger-side changes (this phase edits the ledger, not just adds adapters)
-- `fetch_page(rid, page, executor, spec)` — validates `spec` vs the frozen request, opens the lease,
-  calls `executor.run_page(spec)` (one wire call), runs `prepare_raw_page(endpoint, df)` (F8), applies
-  `response_scope_spec` (F5), records the receipt (vendor-payload hash + prepared-receipt hash), derives
-  and returns `PageResult(row_count, terminal_kind, next_offset)` (F3).
-- `next_fetch_action(rid) -> SKIP_TERMINAL | FETCH(page, offset) | VERIFY | RETRY_PAGE` — lock-protected,
-  ledger-owned resume cursor (F3); safe re-entry after a crash / for a second family.
-- `prepare_raw_page(endpoint, df)` — trusted registry; adds ONLY `derived_fields_for(endpoint)` columns
-  (`row_payload_digest` for top_list/top_inst/block_trade; `report_rc_payload_digest` for report_rc)
-  before hashing and before any non-injective normalization (F8).
-- terminal derivation (F3): `n > limit` ⇒ REFUSE; `n == limit` ⇒ nonterminal (fetch next offset);
-  `0 < n < limit` ⇒ `last_partial`; `n == 0` ⇒ `empty_terminal`. An exact-limit true final page ⇒ one
-  trailing-empty call, as today's typed terminal proofs require.
+## 3. Ledger-side changes (this phase edits the ledger)
+- **`claim_next_fetch(rid) -> ClaimResult`** (F3, the mutation authority): under ONE lock, derives the
+  cursor (single_page ⇒ page1/offset0; offset ⇒ next uncovered offset), and OPENS/RESERVES the lease
+  atomically. Returns `FETCH(page, offset, lease_id)` | `IN_FLIGHT` | `VERIFY` | `RETRY_EMPTY_CONFIRM` |
+  `WAIT_FOR_CANARY` | `CONFIRM_EMPTY(canary_request_id)` | `SKIP_TERMINAL` | `RETRY_PAGE`(only after a
+  recorded failure/crash-abandon). `next_fetch_action(rid)` remains a READ-ONLY status view.
+- **`fetch_page(rid, lease_id, executor, spec)`** validates `spec` vs the frozen request + the claimed
+  lease, invokes `executor.run_page(spec)` (one wire call), runs `prepare_raw_page` (F8), applies
+  `response_scope` (F5), records the receipt (vendor-payload hash BEFORE prep + prepared-receipt hash),
+  and returns `PageResult(row_count, terminal_kind, next_offset)`. Terminal: single_page ⇒
+  `single_page_contract`; offset ⇒ `n>limit` REFUSE / `n==limit` nonterminal / `0<n<limit` last_partial /
+  `n==0` empty_terminal.
+- **crash-abandon**: an orphaned OPEN lease is converted to `abandoned` ONLY via an explicit crash-resume
+  rule, after acquiring a process-lifetime run-execution lock (Q2).
+- **bundle manifest**: recomputed and matched at freeze, resume, and before every live page/consolidation
+  (Q1).
 
 ## 4. Orchestration
 ```
-freeze_run_plan(specs, contracts, declared_families)     # ONCE per run (F6): all families' plan rows
-run_family(spec, ledger, executor):                      # executes only spec's already-frozen subset
+freeze_run_plan(specs, contracts, declared_families, bundle_manifest)   # ONCE per run (F6)
+run_family(spec, ledger, executor):                                     # executes its frozen subset
     for rid in spec's requests:
         while True:
-            act = ledger.next_fetch_action(rid)           # ledger owns resume + terminal (F3)
-            if act.kind == FETCH:
-                ledger.fetch_page(rid, act.page, executor, spec.page_call_spec(ep, req, limit, act.offset))
-            elif act.kind == RETRY_PAGE: ... (new lease)
-            elif act.kind == VERIFY: ledger.verify_request(rid); break
-            elif act.kind == SKIP_TERMINAL: break         # already verified (resume)
-        # sparse empties (F4): if the request resolved empty, the empty-scheduler opens a 2nd empty lease
-        # and DEFERS the verdict until a same-endpoint nonempty canary verifies, then
-        # confirm_empty(rid, canary_request_id=<verified canary>); no canary ever ⇒ stays unverified.
-consolidate_family(spec, ledger):                        # SEPARATE step (F7), NOT in run_family
-    assert consolidation_allowed(family)                 # every constituent request verified
-    inputs = load hash-bound request outputs
-    merged = spec.merge(inputs)                          # canonical merger (F9)
-    broker.write(family_output, merged); ledger.record_consolidation_verdict(inputs->output)
+            act = ledger.claim_next_fetch(rid)          # atomic: derives cursor + reserves lease (F3)
+            if   act.kind == FETCH:  ledger.fetch_page(rid, act.lease_id, executor, spec_for(rid, act))
+            elif act.kind == RETRY_EMPTY_CONFIRM: ledger.fetch_page(...)      # 2nd empty lease (F4)
+            elif act.kind == WAIT_FOR_CANARY:     defer(rid); break          # revisit after canary
+            elif act.kind == CONFIRM_EMPTY:       ledger.confirm_empty(rid, act.canary_request_id); break
+            elif act.kind == VERIFY:              ledger.verify_request(rid); break
+            elif act.kind in (SKIP_TERMINAL, IN_FLIGHT): break
+consolidate_family(spec, ledger):                       # SEPARATE step (F7)
+    assert consolidation_allowed(family)                # every constituent request verified/confirmed
+    per ConsolidationSpec: group inputs -> merge/repartition (canonical recipe) -> broker.write ->
+        record consolidation verdict (inputs -> each output path+bytes+rowcount; row_conservation)
 ```
+Deferred (`WAIT_FOR_CANARY`) requests are re-driven after a same-endpoint canary verifies; if none ever
+verifies, they stay unverified (never `VERIFY`d empty).
 
-## 5. A01 (first implemented adapter; merge reuses production invariants — F9)
-- 3 legs: `daily` (single_page), `daily_basic` (single_page), `adj_factor` (offset_paged 5000, via
-  `fetch_adj_factor_page_once(trade_date, limit, offset)` — NEW; the current `fetch_adj_factor` takes no
-  limit/offset, verified).
-- `partition_of = request["trade_date"]`; `response_scope = trade_date eq request`.
-- `merge` = the extracted canonical merger from update_daily_data.py: drop `daily_basic.close`, left-join
-  daily_basic + adj_factor on `(ts_code, trade_date)`, require output rows == daily, 100% positive
-  adj_factor coverage of priced codes, ≥90% daily_basic coverage, one_to_one, no duplicate output keys,
-  all rows `trade_date == request`. Runs in `consolidate_family`, NOT `run_family` (F7 acceptance fix).
+## 5. A01 (first implemented adapter)
+3 legs (daily/daily_basic single_page; adj_factor offset_paged 5000 via `fetch_page_once("adj_factor",
+trade_date=…, limit=…, offset=…)`); `response_scope = trade_date eq request`; `ConsolidationSpec` =
+per-trade_date 3-leg merge via the extracted canonical merger (drop `daily_basic.close`, left-join on
+(ts_code,trade_date), `validate="one_to_one"`, output rows == daily, 100% positive adj_factor coverage,
+≥90% daily_basic coverage, no dup keys, all rows trade_date == partition). The merger is a SHARED pure
+function that production (update_daily_data) is refactored to call too (F9).
 
-## 6. Threat model (FROZEN; updated for v2)
-- **Trusted:** the ledger (owns lease/executor-invoke/prepare/scope/record/hash/terminal/resume), the
-  no-follow broker, signed contracts + `RecoveryPaths` + the matrix, the promotion SM, the recipe
-  registry (hashed into `adapter_bundle_hash`).
-- **Untrusted:** (a) the executor RESULT — a DataFrame the ledger hashes+counts+scopes ITSELF; (b) the
-  `PageCallSpec` — validated vs the frozen request before execution; (c) the fetcher class as a DRIVER
-  (paths injected; construction is the one residual surface, tested by F10); (d) the vendor RESPONSE
-  schema + scope (`required_fields`, `response_scope_spec`).
-- **§13 authorization** validated INSIDE the ledger lease at every live page is the SOLE authority; the
-  synthetic path cannot reach tushare (no fetcher constructed) and its run-mode is non-promotable.
-- **In scope:** E: write leaks, path defaults, wrong-endpoint/date closures (both request-spec + response
-  scope), truncation via pagination, crash-resume mid-run, dense/sparse empties + canary, schema drift,
-  mid-flight contract edit (re-bind per page), receipt containment, synthetic-vs-live promotability.
-- **Out of scope (user directive 2026-07-16):** mid-operation adversarial races; promotion is
-  HUMAN-DRIVEN per family.
-- **Acceptance (interface-freeze QUARTET — A01 + income + top_list + broker_recommend):** each runs the
-  FULL machinery (freeze_run_plan → run_family → verify/confirm_empty → consolidate_family) under a
-  `SyntheticExecutor`, with (i) ZERO writes outside run-root (allowlist monitor) + the fresh-subprocess
-  live-construction test (F10) green; (ii) real Tushare calls impossible without a §13 authorization
-  bound to the frozen plan; (iii) the pre-fetch test matrix green: single / exact-limit multipage +
-  trailing-empty / n>limit refusal / retry-as-new-lease / partial-crash + `next_fetch_action` resume /
-  dense-empty refusal / sparse-canary defer + confirm / null+dup key / schema-drift / **response-scope
-  wrong-date+wrong-stock refusal** / **prepare_raw_page digest** / merge one_to_one + coverage /
-  containment; (iv) promotion refuses the synthetic run-mode.
+## 6. Threat model (FROZEN; v3)
+- **Trusted:** the ledger (leases/claim/executor-invoke/prep/scope/record/hash/terminal/resume/
+  consolidation), the no-follow broker, signed contracts + `RecoveryPaths` + matrix, the promotion SM,
+  the content-hashed `adapter_bundle_manifest`.
+- **Untrusted:** the executor RESULT (hashed+counted+scoped by the ledger); the `PageCallSpec`/cursor
+  (validated vs frozen request + claimed lease); the fetcher class as DRIVER (construction tested by
+  F10); the vendor RESPONSE (schema `required_fields` + `response_scope`); a passed `FetchAuthorization`
+  object (only the ledger EVENT is trusted).
+- **§13** = the hash-chained `fetch_authorized` event validated in-lease is the SOLE vendor authority;
+  synthetic run-mode is unreachable-for-live and non-promotable.
+- **In scope:** E: leaks, path defaults, wrong-endpoint/date (request cursor + response scope), one-call
+  enforcement, truncation, crash-resume + concurrent-claim TOCTOU, dense/sparse empties + canary, schema
+  drift, mid-flight contract/recipe edit (manifest recompute + per-page re-bind), containment,
+  synthetic/live firewall, consolidation row-conservation.
+- **Out of scope (user 2026-07-16):** mid-operation adversarial races; promotion is HUMAN-DRIVEN.
+- **Acceptance (interface-freeze QUARTET):** each of A01/income/top_list/broker_recommend runs the full
+  machinery (freeze_run_plan → run_family via `claim_next_fetch` → verify/confirm_empty →
+  consolidate_family) under a `SyntheticExecutor` in a synthetic-mode run, exercising its PHYSICAL
+  consolidation layout (F7), with the pre-fetch test matrix green: single-page / exact-limit multipage +
+  trailing-empty / n>limit refuse / retry-as-new-lease / concurrent-claim → IN_FLIGHT / crash +
+  claim-resume / dense-empty refuse / sparse WAIT_FOR_CANARY→CONFIRM_EMPTY / null+dup key / schema drift /
+  response-scope wrong-date+wrong-stock refuse / prepare_raw_page digest / merge one_to_one + coverage /
+  income row-conservation repartition / containment / bundle-manifest tamper (dirty file) refuse /
+  executor-mode≠run-mode refuse pre-lease / live-construction write test (F10); promotion refuses the
+  synthetic run.
 
-## 7. Tracked promotion preconditions (unchanged; NOT this unit): per-date/period output-density gate;
-fina_mainbz revision-timing probe; fina_indicator_vip §13 period-discovery probe (sign A07).
+## 7. Tracked promotion preconditions (unchanged; NOT this unit): output-density gate; fina_mainbz
+revision-timing probe; fina_indicator_vip §13 period-discovery probe (sign A07).
 
 ## Open questions for the reviewer
-1. Is the recipe-registry-hashed-into-`adapter_bundle_hash` sufficient to make the `PageCallSpec` path
-   tamper-evident, or must the ledger also pin the recipe source?
-2. `next_fetch_action` as the SOLE resume/terminal authority — does it fully subsume the old
-   caller-driven loop, or is there a page-ordering race between `FETCH` and a concurrent `RETRY_PAGE`?
-3. Is the `synthetic_nonpromotable` run-mode + promotion refusal the right synthetic/live firewall, or
-   should synthetic and live use physically separate run roots?
+1. Is `parameter_map` (request-key → vendor-kwarg) expressive enough for all 30 endpoints, or does any
+   need a value transform (e.g. period→start/end derivation) that would reintroduce code?
+2. For income's per-stock→per-`end_date` repartition, is `row_conservation = sum(inputs)==sum(outputs)
+   after declared dedup` the right invariant given a restatement can legitimately change row counts
+   across a re-run?
+3. Does the `fetch_authorized` ledger event + in-lease validation fully close F2, or must the authorize
+   action ALSO be a distinct OS-user/credential step outside this process?
