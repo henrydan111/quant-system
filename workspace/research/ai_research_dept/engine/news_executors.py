@@ -116,17 +116,22 @@ class NewsScoringContract:
     contract_hash: str = field(default="")
 
     def __post_init__(self):
-        # re-review#11 P0 同类面:str 字段归一为普通 str(schema_id/output_mode
-        # 参与 contract_hash 与承诺相等比对——str 子类脱钩;horizon 可为 None)
-        object.__setattr__(self, "schema_id", plain_str(self.schema_id))
-        if type(self.output_mode) is str:
+        # re-review#11 P0 + #12 P1 同类面:str 字段归一为普通 str**无条件**——
+        # `type(x) is str` 守卫恰好漏掉 str 子类(#12 P1),故一律经 plain_str
+        # (isinstance str 的子类也被拉平为普通 str;非 str 由下方类型门另拒),
+        # 使 schema_id/output_mode/contract_hash 参与哈希/承诺相等比对时不可脱钩。
+        if isinstance(self.schema_id, str):
+            object.__setattr__(self, "schema_id", plain_str(self.schema_id))
+        if isinstance(self.output_mode, str):
             object.__setattr__(self, "output_mode", plain_str(self.output_mode))
-        if self.primary_decision_horizon is not None \
-                and isinstance(self.primary_decision_horizon, str):
+        if isinstance(self.primary_decision_horizon, str):
             object.__setattr__(self, "primary_decision_horizon",
                                plain_str(self.primary_decision_horizon))
-        if type(self.contract_hash) is str:
+        if isinstance(self.contract_hash, str):
             object.__setattr__(self, "contract_hash", plain_str(self.contract_hash))
+        if type(self.schema_id) is not str:
+            raise RegistryError(f"契约 schema_id 须恰 str(得 "
+                                f"{type(self.schema_id).__name__},re-review#12 P1)")
         if self.schema_id != SCHEMA_ID:
             raise RegistryError(f"契约 schema_id 须为 {SCHEMA_ID}(得 {self.schema_id!r})")
         if type(self.output_mode) is not str or self.output_mode not in OUTPUT_MODES:

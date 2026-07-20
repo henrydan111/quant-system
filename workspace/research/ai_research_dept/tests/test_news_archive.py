@@ -943,6 +943,110 @@ class TestExactTypeBoundaries:
         assert authorize(rec, use="factor_positive", consumer_seat="news",
                          target_dimension="event_materiality") is False
 
+    def test_dict_injected_record_field_refused_at_construction(self, tmp_path):
+        # archive-re-review#12 P0 (the reviewer's probe): a stateful mapping
+        # injects an evil frozenset into a record's __dict__ during the single
+        # items() iteration (NO object.__setattr__). The registry must rebuild
+        # each value as an independent base-immutable and assert base field
+        # types — the injected subclass is refused, nothing seals.
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            SealedCardRegistry, build_card_record, build_card_registry,
+        )
+
+        class _EvilFS(frozenset):
+            def __iter__(self):
+                return iter(["context_only"])        # hash sees context_only
+            def __contains__(self, x):
+                return x in ("context_only", "factor_positive")  # authz differs
+
+        class _Injector(dict):
+            def items(self):
+                out = []
+                for k, v in list(super().items()):
+                    v.__dict__["allowed_uses"] = _EvilFS(["context_only"])
+                    out.append((k, v))
+                return iter(out)
+        rec = build_card_record("NFD01", domain="news", evidence_class="NFD",
+                                allowed_uses={"context_only"},
+                                allowed_consumers={"news"})
+        good = build_card_registry("2025-01-27T18:00:00", [rec])
+        rec2 = build_card_record("NFD01", domain="news", evidence_class="NFD",
+                                 allowed_uses={"context_only"},
+                                 allowed_consumers={"news"})
+        with pytest.raises(RegistryError, match="frozenset"):
+            SealedCardRegistry(cutoff_iso="2025-01-27T18:00:00",
+                               records=_Injector({"NFD01": rec2}),
+                               registry_hash=good.registry_hash)
+
+    def test_dict_injection_after_construction_refused_at_consume(self, tmp_path):
+        # even post-construction, injecting an evil subclass into a stored
+        # record's __dict__ is caught the next time the registry is consumed
+        # (require_sealed_registry re-asserts base field types)
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            require_sealed_registry,
+        )
+        art = _artifact_full("d1")
+        reg = art.source_registry
+        victim = next(iter(reg.records.values()))
+
+        class _EvilFS(frozenset):
+            def __contains__(self, x): return True
+        victim.__dict__["allowed_uses"] = _EvilFS(victim.allowed_uses)
+        with pytest.raises(RegistryError, match="frozenset"):
+            require_sealed_registry(reg)
+
+    def test_fake_outcome_hash_subclass_refused(self, tmp_path):
+        # archive-re-review#12 P1: a str-subclass outcome_hash must be refused
+        # before verify/equality, so it cannot serialize a fake hash into an
+        # archive that then fails to reload
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            NewsLegOutcome,
+        )
+        _, bundle = _setup(tmp_path)
+        o = bundle["outcome"]
+
+        class _EvilHash(str):
+            def __eq__(self, x): return True
+            def __ne__(self, x): return False
+            def __hash__(self): return hash(str(self))
+        with pytest.raises(RegistryError, match="outcome_hash 须恰 str"):
+            NewsLegOutcome(
+                decision_id=o.decision_id, output_mode=o.output_mode,
+                factor_leg_status=o.factor_leg_status,
+                penalty_eligible_count=o.penalty_eligible_count,
+                penalty_eligible_set_hash=o.penalty_eligible_set_hash,
+                penalty_leg_status=o.penalty_leg_status, news_status=o.news_status,
+                shadow_complete=o.shadow_complete,
+                decision_complete=o.decision_complete,
+                binding_eligible=o.binding_eligible,
+                factor_payload_hash=o.factor_payload_hash,
+                penalty_payload_hash=o.penalty_payload_hash,
+                outcome_hash=_EvilHash(o.outcome_hash))
+
+    def test_fake_contract_hash_subclass_neutralized(self, tmp_path):
+        # archive-re-review#12 P1: the `type(x) is str` guard skipped str
+        # subclasses; contract_hash is now coerced unconditionally, so a
+        # str-subclass hash is flattened to a plain str (no decoupling) — and
+        # a wrong value is rejected by verify_sealed
+        c = _contract()
+
+        class _EvilHash(str):
+            def __eq__(self, x): return True
+            def __ne__(self, x): return False
+            def __hash__(self): return hash(str(self))
+        # right value, evil subclass -> neutralized to plain str
+        c2 = NewsScoringContract(schema_id="c16_news_horizon_v1",
+                                 output_mode="primary_horizon",
+                                 primary_decision_horizon="1-3d",
+                                 contract_hash=_EvilHash(c.contract_hash))
+        assert type(c2.contract_hash) is str
+        # wrong value -> verify_sealed rejects (cannot occupy with a fake hash)
+        with pytest.raises(SealError):
+            NewsScoringContract(schema_id="c16_news_horizon_v1",
+                                output_mode="primary_horizon",
+                                primary_decision_horizon="1-3d",
+                                contract_hash=_EvilHash("0" * 64))
+
     def test_stateful_registry_mapping_snapshotted(self, tmp_path):
         # archive-re-review#11 P0: SealedCardRegistry must snapshot a live
         # mapping at construction, so verify (values()) and consume (items()/

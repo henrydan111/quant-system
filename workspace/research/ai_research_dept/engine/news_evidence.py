@@ -445,17 +445,70 @@ def card_record_canonical_payload(record) -> dict:
             "derivation": [list(kv) for kv in record.derivation]}
 
 
+def assert_base_record_fields(record) -> None:
+    """**每次消费**都断言 CardRecord 的语义字段确为**基础不可变类型**
+    (archive-re-review#12 P0:frozen dataclass 的 `__dict__` 可被直接改写[无需
+    object.__setattr__],构造时的归一可被事后 `record.__dict__[...] = evil` 注入
+    撤销——状态化 mapping 在唯一一次 items() 里就能把已归一的普通 frozenset 换成
+    "迭代 sorted()=context_only、成员 in=factor_positive"的子类;故消费门须逐字段
+    恰类型:allowed_* 恰 frozenset[恰 str]、str 标量恰 str、derivation 恰嵌套
+    tuple[基础标量]。任何子类/别名注入在此死,先于哈希重算与授权)。"""
+    for _f in ("record_id", "domain", "evidence_class", "record_schema_id",
+               "content_hash"):
+        if type(getattr(record, _f)) is not str:
+            raise RegistryError(
+                f"CardRecord.{_f} 非恰 str(得 {type(getattr(record, _f)).__name__}"
+                f";__dict__ 注入子类拒,re-review#12 P0)")
+    for _f in ("allowed_uses", "allowed_consumers", "allowed_dimensions"):
+        s = getattr(record, _f)
+        if type(s) is not frozenset or any(type(u) is not str for u in s):
+            raise RegistryError(
+                f"CardRecord.{_f} 须恰 frozenset[恰 str](得 {type(s).__name__}"
+                f";迭代≠成员的子类/别名注入拒,re-review#12 P0)")
+    d = record.derivation
+    if type(d) is not tuple:
+        raise RegistryError(f"CardRecord.derivation 须恰 tuple(re-review#12 P0)")
+    for kv in d:
+        if type(kv) is not tuple \
+                or any(not (x is None or type(x) in (str, bool, int, float))
+                       for x in kv):
+            raise RegistryError(
+                "CardRecord.derivation 项须恰 tuple[str/None/bool/int/float]"
+                "(re-review#12 P0)")
+
+
 def verified_record_content_hash(record) -> str:
-    """恰类型 CardRecord + 经 canonical helper **重算并校验** content_hash,返回
-    该已验证哈希(archive-re-review#9 P0:registry_hash 与所有身份链重算都基于
-    此,绝不直接信任 `record.content_hash`)。"""
+    """恰类型 CardRecord + **字段基础类型断言** + 经 canonical helper **重算并校验**
+    content_hash,返回该已验证哈希(archive-re-review#9 P0 + #12 P0:registry_hash
+    与所有身份链重算都基于此,绝不直接信任 `record.content_hash`,也绝不容许字段
+    被 __dict__ 注入为迭代≠成员的多态对象)。"""
     if type(record) is not CardRecord:
         raise RegistryError(
             f"注册表只收恰 CardRecord(得 {type(record).__name__};子类可覆写 "
             f"_payload 伪造 content_hash 脱钩,拒,re-review#9 P0)")
+    assert_base_record_fields(record)                  # re-review#12 P0
     verify_sealed(card_record_canonical_payload(record), record.content_hash,
                   field_name="card record content_hash")
     return record.content_hash
+
+
+def normalize_card_record(v) -> "CardRecord":
+    """把一条 CardRecord **重建为独立的基础不可变记录**(archive-re-review#12 P0:
+    registry 不再持有调用方仍能改写 __dict__ 的记录对象——重建出的新记录调用方
+    无引用;CardRecord.__post_init__ 再次归一全部字段,新记录字段皆基础类型)。
+    重建**前**先断言外层恰 CardRecord + 字段基础类型(捕获 items() 迭代期注入),
+    使重建读到的字段本身已是干净基础值。"""
+    if type(v) is not CardRecord:
+        raise RegistryError(
+            f"注册表值须恰 CardRecord(得 {type(v).__name__};子类/duck-typed 拒,"
+            f"re-review#12 P0)")
+    assert_base_record_fields(v)
+    return CardRecord(
+        record_id=v.record_id, domain=v.domain, evidence_class=v.evidence_class,
+        allowed_uses=v.allowed_uses, allowed_consumers=v.allowed_consumers,
+        allowed_dimensions=v.allowed_dimensions,
+        record_schema_id=v.record_schema_id, derivation=v.derivation,
+        content_hash=v.content_hash)
 
 
 def build_card_record(record_id: str, *, domain: str, evidence_class: str,
@@ -534,13 +587,13 @@ class SealedCardRegistry:
         # archive-re-review#11 P0:records **深不可变快照 + 每值恰 CardRecord**,先于
         # 校验——调用方可传状态化 mapping,在 values()(哈希重算)与 items()/get()
         # (关系检查/消费)两次读取间变更记录;一次性快照后所有读取见同一冻结视图。
+        # archive-re-review#12 P0:每个值**重建为独立的基础不可变记录**(不只冻结
+        # 外层 mapping)——状态化 mapping 在这唯一一次 items() 迭代里经 __dict__
+        # 注入 evil 集合也被 normalize_card_record 的基础类型断言 + 重建捕获;
+        # 消费门(verified_record_content_hash)每次再验字段确为基础类型
         snap = {}
         for k, v in list(self.records.items()):
-            if type(v) is not CardRecord:
-                raise RegistryError(
-                    f"注册表值须恰 CardRecord(得 {type(v).__name__};子类/duck-typed "
-                    f"拒,archive-re-review#11 P0)")
-            snap[_plain_str(k)] = v
+            snap[_plain_str(k)] = normalize_card_record(v)
         object.__setattr__(self, "records", deep_ro(snap))
         object.__setattr__(self, "cutoff_iso", _plain_str(self.cutoff_iso))
         object.__setattr__(self, "registry_hash", _plain_str(self.registry_hash))
@@ -639,6 +692,10 @@ def authorize(record: CardRecord, *, use: str, consumer_seat: str,
     factor_positive 用途必须给 target_dimension(否则拒——正向必须指向一个注册维)。"""
     if type(record) is not CardRecord:
         raise RegistryError("authorize 只接受恰 CardRecord(子类拒,re-review#9 P0)")
+    # re-review#12 P0:authorize 是**直接成员消费点**——先断言字段确为基础类型,
+    # 使其自守(不依赖上游 require_sealed_registry;__dict__ 注入的迭代≠成员子类
+    # 在成员判断前即死),迭代(哈希)与成员(此处)读的是同一份普通 frozenset。
+    assert_base_record_fields(record)
     if use not in record.allowed_uses:
         return False
     if consumer_seat not in record.allowed_consumers:

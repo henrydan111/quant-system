@@ -182,6 +182,13 @@ class NewsLegOutcome:
                     f"penalty {self.penalty_leg_status} 不该有 payload 哈希——"
                     f"零适格/短路下不存在 penalty payload")
         if self.outcome_hash:
+            # archive-re-review#12 P1:outcome_hash **恰 str + 64-hex**先于 verify/
+            # 相等比对——str 子类可让 verify_sealed 与承诺比对错误通过,序列化伪哈希
+            if type(self.outcome_hash) is not str \
+                    or not _HEX64_RE.fullmatch(self.outcome_hash):
+                raise RegistryError(
+                    f"outcome_hash 须恰 str 64-hex(得 {self.outcome_hash!r};"
+                    f"str 子类脱钩拒,re-review#12 P1)")
             verify_sealed(self._payload(), self.outcome_hash, field_name="outcome_hash")
         else:
             object.__setattr__(self, "outcome_hash", seal_hash(self._payload()))
