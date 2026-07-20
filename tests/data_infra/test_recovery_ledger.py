@@ -62,6 +62,9 @@ def led(monkeypatch):
     rp = rrc.RecoveryPaths("led")
     rp.create_root()
     ledger = rl.PageReceiptLedger(rp, coordinator_commit="deadbeef", adapter_bundle_hash="abc123")
+    # GPT impl re-review #2: the legacy fetch_page door is DEFAULT-OFF; this battery is exactly the
+    # sanctioned below-contract user of it (a declared run mode still refuses regardless).
+    ledger._legacy_fetch_enabled = True
     _LIVE_CONTRACTS.clear()
     for ep in ("daily", "moneyflow", "top_inst", "income", "stock_basic"):
         _LIVE_CONTRACTS[ep] = _fake_contract(ep)

@@ -631,21 +631,27 @@ def test_altered_claim_offset_refused_without_killing_the_lease(rig):
     assert res.row_count == 2
 
 
-def test_legacy_fetch_page_refused_once_a_run_mode_is_declared(rig):
-    """B2 (reproduced by GPT): the legacy door checked no run mode and no §13 event, so a declared
-    LIVE run could certify a response without authorization. Refused BEFORE the callable runs."""
+def test_legacy_fetch_page_is_default_off_and_mode_refused(rig):
+    """B2 + re-review #2 (reproduced by GPT): 'refuse after mode declaration' alone was bypassable by
+    fetching FIRST and declaring live_authorized after. The door is now DEFAULT-OFF (pre-mode fetching
+    impossible in production), and a declared mode refuses even WITH the battery capability."""
     rp, L = rig
     row = _prow("daily", "20260702", "req/daily/20260702.parquet")
     L._freeze_plan_unvalidated([row])
-    L.declare_run_mode("live_authorized")
     invoked = []
 
     def _cb():
         invoked.append(1)
         return _df(["A.SZ"])
+    # 1) BEFORE any mode declaration: the door is off by default (closes the fetch-then-declare hole)
+    with pytest.raises(rl.LedgerError, match="legacy fetch_page is DISABLED"):
+        L.fetch_page(row["request_id"], 1, _cb)
+    # 2) even with the battery capability, a DECLARED run mode refuses
+    L._legacy_fetch_enabled = True
+    L.declare_run_mode("live_authorized")
     with pytest.raises(rl.LedgerError, match="legacy fetch_page is REFUSED"):
         L.fetch_page(row["request_id"], 1, _cb)
-    assert not invoked                             # the callback NEVER ran
+    assert not invoked                             # the callback NEVER ran, either way
     assert not [r for r in L._load() if r.get("kind") == "lease_open"]   # and no lease opened
 
 
@@ -709,3 +715,141 @@ def test_orphaned_lease_abandon_and_resume(rig):
     ex = _syn([(("daily", {"trade_date": "20260702"}, 0), _df(["A.SZ"]))])
     L.fetch_claimed_page(row["request_id"], nxt, ex)
     assert L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable").kind == "VERIFY"
+
+
+# ── GPT impl re-review #2 fold: concurrency/atomicity regressions ────────────────────────────────
+def test_valid_claim_replay_cannot_reach_the_vendor_twice(rig):
+    """re-review #2 (reproduced by GPT): two presenters of the SAME valid Claim both passed validation
+    before the executor call — two real wire calls. The dispatch marker + the run-execution lock make
+    a claim one-shot: a concurrent presenter refuses at the lock; a later presenter refuses on the
+    dispatch/consumed state. Executor invocations == 1, always."""
+    rp, L = rig
+    L._exec_lock_timeout = 0.3                       # a concurrent presenter fails FAST in the test
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    calls = []
+
+    class _ReentrantExecutor:
+        mode = "synthetic_nonpromotable"
+
+        def run_page(self, spec):
+            calls.append(1)
+            # a CONCURRENT presenter of the SAME claim, while the first call is mid-flight:
+            with pytest.raises(rl.LedgerError, match="run-execution lock BUSY"):
+                L.fetch_claimed_page(row["request_id"], claim, self)
+            return _df(["A.SZ"])
+    res = L.fetch_claimed_page(row["request_id"], claim, _ReentrantExecutor())
+    assert res.row_count == 1 and len(calls) == 1    # exactly ONE wire call ever happened
+    # a SEQUENTIAL replay of the same claim (lease now consumed) also refuses
+    with pytest.raises(rl.LedgerError, match="already consumed"):
+        L.fetch_claimed_page(row["request_id"], claim, _ReentrantExecutor())
+    assert len(calls) == 1
+
+
+def test_abandon_refused_while_a_worker_holds_the_execution_lock(rig):
+    """re-review #2: the reason string is audit, the LOCK is the mutual exclusion — abandoning while
+    any worker is inside its dispatch->close span refuses at the lock."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    with L.execution_guard():                        # a live worker's span
+        with pytest.raises(rl.LedgerError, match="run-execution lock BUSY"):
+            L.abandon_orphan_leases(row["request_id"], reason="operator mid-flight — must refuse")
+
+
+def test_abandoned_lease_can_never_close(rig):
+    """re-review #2 (reproduced by GPT): after abandon + a successful retry, the ZOMBIE worker's close
+    of the old lease still succeeded — two page-1 attempts. An abandoned lease now refuses at close
+    AND at claim-binding."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    stale = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")   # worker A's claim
+    assert L.abandon_orphan_leases(row["request_id"], reason="crash-resume") == 1
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 0), _df(["A.SZ"]))])
+    # worker B retries and succeeds
+    nxt = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    assert nxt.kind == "RETRY_PAGE"
+    L.fetch_claimed_page(row["request_id"], nxt, ex)
+    # zombie A returns: its claim refuses at binding (consumed), and a DIRECT close of the abandoned
+    # lease refuses at the second guard
+    with pytest.raises(rl.LedgerError, match="already consumed"):
+        L.fetch_claimed_page(row["request_id"], stale, ex)
+    with pytest.raises(rl.LedgerError, match="ABANDONED/FAILED"):
+        L._close_lease_record(row["request_id"], stale.page, stale.lease_id, stale.opened_at,
+                              _df(["Z.SZ"]), "single_page_contract")
+    # exactly ONE page-1 attempt exists
+    assert len([r for r in L._load() if r.get("kind") == "attempt"]) == 1
+
+
+def test_direct_live_executor_call_is_not_a_thing(rig):
+    """re-review #2 (reproduced by GPT): LiveExecutor.run_page was directly callable, reaching
+    fetch_page_once with no ledger, run mode, or authorization. It now demands the one-shot
+    dispatch token the ledger mints inside fetch_claimed_page."""
+    rp, L = rig
+
+    class _FetcherSpy:
+        def __init__(self):
+            self.calls = []
+
+        def fetch_page_once(self, method, **kw):
+            self.calls.append((method, kw))
+            return _df(["A.SZ"])
+    spy = _FetcherSpy()
+    ex = ra.LiveExecutor(spy, L)
+    spec = {"endpoint": "daily", "base_params": {"trade_date": "20260702"}, "limit": 0, "offset": 0,
+            "page": 1, "recipe_id": "daily_by_trade_date", "pagination_mode": "single_page"}
+    with pytest.raises(RuntimeError, match="no valid one-shot dispatch token"):
+        ex.run_page(spec)                            # no token
+    with pytest.raises(RuntimeError, match="no valid one-shot dispatch token"):
+        ex.run_page(dict(spec, dispatch_token="guessed"))   # a guessed token
+    assert not spy.calls                             # the vendor door NEVER opened
+
+
+def test_any_post_claim_exception_closes_the_lease(rig):
+    """re-review #2 (reproduced by GPT): a NON-LedgerError failure inside the close (e.g. Arrow
+    serialization) escaped the per-site handlers and left the lease IN_FLIGHT forever. The total
+    safety net closes it; the next claim is a RETRY."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    # a response pyarrow cannot serialize (a function object in a column) — passes scope, dies at
+    # the serialization step inside the ledger, NOT in a per-site LedgerError handler
+    bad = pd.DataFrame({"ts_code": ["A.SZ"], "trade_date": ["20260702"], "poison": [len]})
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 0), bad)])
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    with pytest.raises(Exception):
+        L.fetch_claimed_page(row["request_id"], claim, ex)
+    nxt = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    assert nxt.kind == "RETRY_PAGE"                  # closed as lease_failed, NOT IN_FLIGHT forever
+
+
+def test_consolidation_serializes_on_the_execution_lock(rig):
+    """re-review #2: the singleton check and the final event are now inside the SAME execution-lock
+    span — a second consolidator serializes at the lock and then refuses on the event it sees."""
+    rp, L = rig
+    L._exec_lock_timeout = 0.3
+    m = "202601"
+    rows = [_prow("broker_recommend", m, f"requests/A16/broker_recommend/{m}.parquet",
+                  params={"month": m}, empty="sparse_canary",
+                  nk=("month", "broker", "ts_code"), dataset="analyst/broker_recommend")]
+    fixtures = [(("broker_recommend", {"month": m}, 0), pd.DataFrame(
+        {"month": [m], "broker": ["ZX"], "ts_code": ["000001.SZ"]}))]
+    L._freeze_plan_unvalidated(rows)
+    L.declare_run_mode("synthetic_nonpromotable")
+    spec = ra.FamilySpec("A16", "analyst/broker_recommend", ("broker_recommend",), "month",
+                         ra.QUARTET["A16"].consolidation)
+    assert len(ra.run_family(spec, L, _syn(fixtures))["verified"]) == 1
+    # while another worker holds the execution lock, consolidation refuses (no TOCTOU window)
+    with L.execution_guard():
+        with pytest.raises(rl.LedgerError, match="run-execution lock BUSY"):
+            ra.consolidate_family(spec, L)
+    ra.consolidate_family(spec, L)                   # the lock free -> consolidates exactly once
+    with pytest.raises(RuntimeError, match="exactly once per run"):
+        ra.consolidate_family(spec, L)

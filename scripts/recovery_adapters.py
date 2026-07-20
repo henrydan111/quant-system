@@ -344,14 +344,24 @@ class SyntheticExecutor:
 class LiveExecutor:
     """The ONLY path to a real vendor call. Builds kwargs purely from the frozen recipe + the
     ledger-claimed cursor and makes EXACTLY ONE wire call via fetcher.fetch_page_once (the §6.1
-    throttle lives in the fetcher's locked proxy). The ledger separately enforces run-mode +
-    fetch_authorized before/inside every lease — constructing this object grants nothing by itself."""
+    throttle lives in the fetcher's locked proxy).
+
+    GPT impl re-review #2: run_page is NOT directly usable — it demands a ONE-SHOT dispatch token the
+    LEDGER minted inside fetch_claimed_page's dispatch critical section. A direct call (no token, a
+    guessed token, or a replayed token) refuses before touching the fetcher. Like _LockedPro this is
+    DISCIPLINE against casual/accidental misuse, not an in-process security boundary — the scoped
+    threat model excludes adversarial in-process races; deliberate bypasses are the lint's job."""
     mode = "live_authorized"
 
-    def __init__(self, fetcher):
+    def __init__(self, fetcher, ledger):
         self._fetcher = fetcher
+        self._ledger = ledger
 
     def run_page(self, spec: dict):
+        if not self._ledger.consume_dispatch_token(spec.get("dispatch_token", "")):
+            raise RuntimeError("LiveExecutor.run_page REFUSED: no valid one-shot dispatch token — the "
+                               "raw vendor door only opens for a ledger-dispatched call "
+                               "(fetch_claimed_page); direct invocation is not a thing")
         recipe = RECIPES.get(spec["recipe_id"])
         if recipe is None:
             raise RuntimeError(f"unknown recipe {spec['recipe_id']!r} — the frozen plan names a recipe "
@@ -447,10 +457,19 @@ def consolidate_family(spec: FamilySpec, ledger) -> dict:
     frozen ConsolidationSpec; every output is written through the broker and bound into a hash-chained
     consolidation verdict."""
     import pandas as pd
-    # GPT impl-review B3 BLOCKER: consolidation is as fetch-affecting as fetching. (a) recompute the
-    # content-hashed bundle — a drifted merge/repartition recipe must refuse HERE, not only at
-    # run_family; (b) consolidation is a SINGLETON per family — a repeat would overwrite outputs whose
-    # verdict is already chained.
+    # GPT impl-review B3 + re-review #2: consolidation is as fetch-affecting as fetching, and its
+    # singleton check must be ATOMIC with the work + the final event. The WHOLE body runs under the
+    # cross-process run-execution lock (mutual exclusion with fetch workers AND other consolidators):
+    # two processes serialize at the lock, and the second one re-reads the ledger INSIDE it and sees
+    # the first's family_consolidated event -> "exactly once" cannot race. A crash mid-consolidation
+    # leaves NO event -> a re-run redoes the deterministic outputs (idempotent), never a half-claim.
+    with ledger.execution_guard():
+        return _consolidate_family_locked(spec, ledger, pd)
+
+
+def _consolidate_family_locked(spec: FamilySpec, ledger, pd) -> dict:
+    # (a) recompute the content-hashed bundle — a drifted merge/repartition recipe must refuse HERE,
+    # not only at run_family; (b) SINGLETON per family — checked inside the execution lock.
     live_hash = compute_bundle_hash()
     if live_hash != ledger.adapter_bundle_hash:
         raise RuntimeError(f"{spec.output_family}: adapter bundle drifted since freeze "

@@ -263,6 +263,44 @@ class PageReceiptLedger:
         self.receipts_dir = rp.root / "ledger" / "page_receipts"
         self.coordinator_commit = coordinator_commit
         self.adapter_bundle_hash = adapter_bundle_hash
+        # GPT impl re-review #2: the legacy fetch_page door is DISABLED by default — a battery-only
+        # capability the fixture flips per instance; production never sets it (and a declared run mode
+        # refuses it regardless, so the flag cannot leak into a production run).
+        self._legacy_fetch_enabled = False
+        # the cross-process RUN-EXECUTION lock (GPT impl re-review #2): held by the executing worker
+        # for the whole dispatch->call->close span; abandon/consolidate must acquire it too.
+        self._exec_lock_path = rp.root / "ledger" / "run_execution.lock"
+        self._exec_lock_timeout = 600.0
+        self._abandon_lock_timeout = 0.5
+        # process-local one-shot dispatch tokens (LiveExecutor refuses a call the ledger didn't mint)
+        self._dispatch_tokens: dict = {}
+
+    def execution_guard(self, timeout: float = None):
+        """The cross-process run-execution lock as a context manager. A FRESH FileLock instance per
+        call — deliberately NON-reentrant even in-process, so an operator abandon in another thread
+        cannot slip inside a worker's dispatch->close span."""
+        from filelock import FileLock, Timeout as _FLTimeout
+        lock = FileLock(str(self._exec_lock_path))
+        t = self._exec_lock_timeout if timeout is None else timeout
+
+        class _Guard:
+            def __enter__(_g):
+                try:
+                    lock.acquire(timeout=t)
+                except _FLTimeout:
+                    raise LedgerError("run-execution lock BUSY — another worker holds the "
+                                      "dispatch->close span; refusing")
+                return _g
+
+            def __exit__(_g, *exc):
+                lock.release()
+                return False
+        return _Guard()
+
+    def consume_dispatch_token(self, token: str) -> bool:
+        """One-shot: True exactly once for a token this ledger minted at dispatch (the LiveExecutor's
+        proof that its invocation came through fetch_claimed_page, not a direct call)."""
+        return bool(token) and self._dispatch_tokens.pop(token, None) is not None
 
     # ── hash chain (head anchored OUTSIDE the editable jsonl) ────────────────────────────────────
     def _genesis(self) -> str:
@@ -454,12 +492,19 @@ class PageReceiptLedger:
         throttle); lease-open and lease-close each take it."""
         import io
         import uuid as _uuid
-        # ---- -1. the LEGACY door is battery-only (GPT impl-review B2 BLOCKER) --------------------
+        # ---- -1. the LEGACY door is battery-only (GPT impl-review B2; re-review #2) --------------
         # This method takes a caller-supplied callable + terminal and predates the claimed-fetch path;
-        # it checks NO run mode and NO §13 authorization. Once a run declares its mode it is a
-        # PRODUCTION run — every fetch must go through claim_next_fetch/fetch_claimed_page. Refused
-        # BEFORE opening any lease and BEFORE the callable could run. The below-contract batteries
-        # never declare a run mode, which is exactly what scopes them out of production.
+        # it checks NO run mode and NO §13 authorization. Two independent refusals, both BEFORE any
+        # lease opens and BEFORE the callable could run:
+        #   (a) DEFAULT-OFF: the door is disabled unless the battery flips the per-instance test
+        #       capability — re-review #2 showed "refuse after mode declaration" alone was bypassable
+        #       by fetching FIRST and declaring live_authorized after;
+        #   (b) a DECLARED run mode refuses regardless of the flag — a battery capability that leaks
+        #       into a production run still cannot fetch.
+        if not getattr(self, "_legacy_fetch_enabled", False):
+            raise LedgerError("legacy fetch_page is DISABLED — a battery-only door (set "
+                              "_legacy_fetch_enabled on the test instance); production fetching goes "
+                              "through claim_next_fetch/fetch_claimed_page")
         with self.rp._lock():
             if any(r.get("kind") == "lifecycle" and r.get("event") == "run_mode"
                    for r in self._load()):
@@ -519,6 +564,13 @@ class PageReceiptLedger:
                                   f"response may only close the lease that fetched it")
             if any(r.get("kind") == "attempt" and r.get("lease_id") == lease_id for r in rows):
                 raise LedgerError(f"lease {lease_id} already consumed — a lease closes exactly once")
+            # GPT impl re-review #2 (second guard): an ABANDONED or already-FAILED lease can never
+            # close — a zombie worker returning after an operator crash-resume cannot record a second
+            # attempt for a page another lease has since re-fetched.
+            if any(r.get("kind") in ("lease_abandoned", "lease_failed")
+                   and r.get("lease_id") == lease_id for r in rows):
+                raise LedgerError(f"{rid} page {page}: lease {lease_id[:8]} was ABANDONED/FAILED — a "
+                                  f"stale worker's response is refused at close")
             closed_at = datetime.now(timezone.utc).isoformat()
             body = df.reset_index(drop=True).copy()
             # the coordinator OWNS first-seen: an adapter may never supply or pre-stamp it
@@ -749,16 +801,19 @@ class PageReceiptLedger:
         return Claim("WAIT_FOR_CANARY")
 
     def abandon_orphan_leases(self, rid: str, *, reason: str) -> int:
-        """The EXPLICIT crash-resume transition (design v4 §3; GPT impl-review MAJOR): convert
+        """The EXPLICIT crash-resume transition (design v4 §3; GPT impl re-review #2): convert
         genuinely orphaned OPEN leases (a crash between lease-open and close) to `lease_abandoned` so
-        claim_next_fetch can re-issue the cursor as RETRY_PAGE. Deliberately NOT automatic: within the
-        attended single-operator recovery model, the OPERATOR asserts the crash-resume context (no
-        other process is mid-flight on this run) via an explicit, auditable reason; run_family itself
-        never calls this. An in-flight healthy fetch in the same process cannot be hit — its lease
-        closes under the same lock this holds."""
+        claim_next_fetch can re-issue the cursor as RETRY_PAGE.
+
+        The reason is AUDIT evidence; the MUTUAL EXCLUSION is the run-execution lock: a live worker
+        holds it for its whole dispatch->call->close span, so abandoning while any worker is mid-call
+        REFUSES at the lock (re-review #2 reproduced the race: operator abandoned mid-request, a retry
+        succeeded, then the zombie ALSO closed the old lease -> two page-1 attempts). Second guard:
+        _close_lease_record refuses an abandoned lease outright, so even a worker that crashed between
+        the guard and its close can never record a stale attempt. run_family never calls this."""
         if not str(reason).strip():
             raise LedgerError("abandoning a lease requires an explicit auditable reason")
-        with self.rp._lock():
+        with self.execution_guard(timeout=self._abandon_lock_timeout), self.rp._lock():
             rows = self._load()
             closed = {r.get("lease_id") for r in rows
                       if r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")}
@@ -770,96 +825,112 @@ class PageReceiptLedger:
             return len(orphans)
 
     def fetch_claimed_page(self, rid: str, claim: "Claim", executor) -> "PageResult":
-        """The production fetch door (design v4). The ledger BUILDS the page-call spec ITSELF from the
-        frozen plan row + the atomically-claimed cursor (strictly stronger than validating a passed
-        spec — nothing exists for a caller to get wrong), invokes the executor's ONE wire call outside
-        the lock, prepares derived columns, enforces the frozen response scope, and derives the
-        terminal from the recorded row count. Retries are NEW leases via claim_next_fetch."""
+        """The production fetch door (design v4; hardened per GPT impl re-review #2). The ledger BUILDS
+        the page-call spec ITSELF from the frozen plan row + the atomically-claimed cursor, invokes the
+        executor's ONE wire call, and derives the terminal. Concurrency contract:
+          * the whole dispatch->call->close span holds the CROSS-PROCESS run-execution lock (a
+            concurrent presenter blocks/refuses at the lock; abandon cannot interleave);
+          * the claim is CONSUMED before the vendor call: a `lease_dispatch_started` marker is written
+            in the same critical section as the validation, so the SAME valid Claim presented again is
+            refused BEFORE any second wire call (re-review #2: replay executed twice);
+          * a one-shot dispatch token is minted for the executor — LiveExecutor refuses a call the
+            ledger did not dispatch;
+          * ANY post-claim failure — LedgerError or not (e.g. Arrow serialization inside the close) —
+            closes the lease as lease_failed (never IN_FLIGHT forever)."""
         if claim.kind not in ("FETCH", "RETRY_PAGE", "RETRY_EMPTY_CONFIRM"):
             raise LedgerError(f"fetch_claimed_page needs a fetch-bearing claim, got {claim.kind}")
         if not claim.lease_id:
             raise LedgerError("claim carries no lease — it was not produced by claim_next_fetch")
-
-        def _fail(reason: str):
+        import uuid as _uuid
+        with self.execution_guard():                 # covers dispatch -> wire call -> close
             with self.rp._lock():
-                self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
-                              "lease_id": claim.lease_id, "error": reason[:300]})
-
-        with self.rp._lock():
-            rows = self._load()
-            plan = self._plan()
-            if rid not in plan:
-                raise LedgerError(f"request {rid} not in the frozen plan")
-            row = plan[rid]
-            # ---- BIND the presented Claim to its DURABLE OPEN LEASE (GPT impl-review B1 BLOCKER) ---
-            # A Claim is a caller-held token; only the ledger's own lease_open row is the fact. A claim
-            # whose lease does not exist, whose page/offset/opened_at differ from the durable row, or
-            # whose lease is already consumed is FORGED/STALE and never reaches the executor. A forged
-            # presentation does NOT close the real lease (that would let it kill an in-flight fetch).
-            lo = [r for r in rows if r.get("kind") == "lease_open"
-                  and r.get("lease_id") == claim.lease_id and r.get("request_id") == rid]
-            if not lo:
-                raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} does not exist in the "
-                                  f"ledger — forged/stale claim refused")
-            lease = lo[-1]
-            if (int(lease.get("page", -1)) != int(claim.page)
-                    or int(lease.get("offset", -1)) != int(claim.offset)
-                    or lease.get("opened_at") != claim.opened_at):
-                raise LedgerError(f"{rid}: claim (page {claim.page}, offset {claim.offset}) does not "
-                                  f"match its durable lease (page {lease.get('page')}, offset "
-                                  f"{lease.get('offset')}) — altered claim refused")
-            if any(r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")
-                   and r.get("lease_id") == claim.lease_id for r in rows):
-                raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} is already consumed")
-            # IN-LEASE re-validation (design v4 F2): run-mode + live authorization checked AGAIN here,
-            # bound to the moment of the wire call, not only at claim time.
-            mode = self.run_mode(rows)
-            ex_mode = getattr(executor, "mode", None)
-            if ex_mode != mode:
-                self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
-                              "lease_id": claim.lease_id,
-                              "error": f"executor mode {ex_mode!r} != run mode {mode!r}"})
-                raise LedgerError(f"executor mode {ex_mode!r} != run mode {mode!r} at execution")
-            if mode == "live_authorized":
-                try:
-                    self._assert_live_authorized(rows, row["endpoint"])
-                except LedgerError as exc:
-                    # GPT impl-review MAJOR: a post-claim refusal must CLOSE the lease, else every
-                    # later claim is IN_FLIGHT forever.
+                rows = self._load()
+                plan = self._plan()
+                if rid not in plan:
+                    raise LedgerError(f"request {rid} not in the frozen plan")
+                row = plan[rid]
+                # ---- BIND the presented Claim to its DURABLE OPEN LEASE (B1) --------------------
+                # A Claim is a caller-held token; only the ledger's own lease_open row is the fact.
+                # A forged presentation does NOT close the real lease.
+                lo = [r for r in rows if r.get("kind") == "lease_open"
+                      and r.get("lease_id") == claim.lease_id and r.get("request_id") == rid]
+                if not lo:
+                    raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} does not exist in "
+                                      f"the ledger — forged/stale claim refused")
+                lease = lo[-1]
+                if (int(lease.get("page", -1)) != int(claim.page)
+                        or int(lease.get("offset", -1)) != int(claim.offset)
+                        or lease.get("opened_at") != claim.opened_at):
+                    raise LedgerError(f"{rid}: claim (page {claim.page}, offset {claim.offset}) does "
+                                      f"not match its durable lease (page {lease.get('page')}, offset "
+                                      f"{lease.get('offset')}) — altered claim refused")
+                if any(r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")
+                       and r.get("lease_id") == claim.lease_id for r in rows):
+                    raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} is already consumed")
+                # ---- CONSUME the claim (re-review #2): one dispatch per lease, ever -------------
+                if any(r.get("kind") == "lease_dispatch_started"
+                       and r.get("lease_id") == claim.lease_id for r in rows):
+                    raise LedgerError(f"{rid}: lease {claim.lease_id[:8]} already DISPATCHED — a "
+                                      f"claim is one-shot; a replay never reaches the vendor")
+                # IN-LEASE re-validation (design v4 F2): run-mode + live authorization at the moment
+                # of the wire call, not only at claim time.
+                mode = self.run_mode(rows)
+                ex_mode = getattr(executor, "mode", None)
+                if ex_mode != mode:
                     self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
-                                  "lease_id": claim.lease_id, "error": str(exc)[:300]})
-                    raise
-        try:
-            self._revalidate_contract(row)          # live contract re-bind, every page
-        except LedgerError as exc:
-            _fail(str(exc))                          # post-claim refusal closes the lease (MAJOR)
-            raise
+                                  "lease_id": claim.lease_id,
+                                  "error": f"executor mode {ex_mode!r} != run mode {mode!r}"})
+                    raise LedgerError(f"executor mode {ex_mode!r} != run mode {mode!r} at execution")
+                if mode == "live_authorized":
+                    try:
+                        self._assert_live_authorized(rows, row["endpoint"])
+                    except LedgerError as exc:
+                        self._append({"kind": "lease_failed", "request_id": rid,
+                                      "page": int(claim.page), "lease_id": claim.lease_id,
+                                      "error": str(exc)[:300]})
+                        raise
+                self._append({"kind": "lease_dispatch_started", "request_id": rid,
+                              "page": int(claim.page), "lease_id": claim.lease_id})
+            dispatch_token = _uuid.uuid4().hex
+            self._dispatch_tokens[dispatch_token] = (rid, claim.lease_id)
+            try:
+                return self._execute_dispatched(rid, claim, executor, row, dispatch_token)
+            except BaseException as exc:
+                # TOTAL safety net (re-review #2): any failure after dispatch — refusal, executor
+                # error, serialization/broker error inside the close — must leave the lease CLOSED.
+                # Idempotent: skip when a site (or the close itself) already consumed the lease.
+                with self.rp._lock():
+                    rows2 = self._load()
+                    if not any(r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")
+                               and r.get("lease_id") == claim.lease_id for r in rows2):
+                        self._append({"kind": "lease_failed", "request_id": rid,
+                                      "page": int(claim.page), "lease_id": claim.lease_id,
+                                      "error": f"{type(exc).__name__}: {exc}"[:300]})
+                raise
+            finally:
+                self._dispatch_tokens.pop(dispatch_token, None)
+
+    def _execute_dispatched(self, rid: str, claim: "Claim", executor, row: dict,
+                            dispatch_token: str) -> "PageResult":
+        """The post-dispatch body (called under the execution guard + total safety net)."""
+        self._revalidate_contract(row)               # live contract re-bind, every page
         limit = int(row["page_limit"]) if row["page_limit"] else 0
         spec = {"endpoint": row["endpoint"], "base_params": dict(row["params"]),
                 "limit": limit, "offset": int(claim.offset), "page": int(claim.page),
-                "recipe_id": row["recipe_id"], "pagination_mode": row["pagination_mode"]}
-        # ---- the ONE wire call (outside the lock; the §6.1 throttle lives in the proxy) ----------
-        try:
-            df = executor.run_page(spec)
-        except Exception as exc:
-            _fail(f"executor: {exc!r}")
-            raise
+                "recipe_id": row["recipe_id"], "pagination_mode": row["pagination_mode"],
+                "dispatch_token": dispatch_token}
+        # ---- the ONE wire call (the §6.1 throttle lives in the proxy) ---------------------------
+        df = executor.run_page(spec)
         if df is None or not hasattr(df, "columns"):
-            _fail("executor returned no DataFrame")
             raise LedgerError(f"{rid} page {claim.page}: executor returned "
                               f"{type(df).__name__}, not a DataFrame")
         n = int(len(df))
         if row["pagination_mode"] == "offset_paged" and limit and n > limit:
-            _fail(f"vendor returned {n} rows > signed page_limit {limit}")
             raise LedgerError(f"{rid} page {claim.page}: {n} rows EXCEEDS the signed page_limit "
                               f"{limit} — the signed cap fact is wrong; refusing the page")
-        vendor_sha, _ = _df_sha256(df)              # BEFORE prep and BEFORE the raw_fetch_ts stamp
-        try:
-            prepared = self._prepare_raw_page(row, df)
-            self._assert_response_scope(row, prepared)
-        except LedgerError as exc:
-            _fail(str(exc))
-            raise
+        vendor_sha, _ = _df_sha256(df)               # BEFORE prep and BEFORE the raw_fetch_ts stamp
+        prepared = self._prepare_raw_page(row, df)
+        self._assert_response_scope(row, prepared)
         if row["pagination_mode"] == "single_page":
             terminal = "single_page_contract"
         elif n == 0:
@@ -867,7 +938,7 @@ class PageReceiptLedger:
         elif limit and n < limit:
             terminal = "last_partial"
         else:
-            terminal = ""                            # full page: nonterminal, fetch the next offset
+            terminal = ""                             # full page: nonterminal, fetch the next offset
         self._close_lease_record(rid, claim.page, claim.lease_id, claim.opened_at, prepared,
                                  terminal, vendor_page_sha=vendor_sha)
         return PageResult(row_count=n, terminal_kind=terminal, next_offset=int(claim.offset) + n)
