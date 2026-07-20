@@ -39,7 +39,9 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     ATTRIBUTE_DIMENSIONS, RegistryError, assert_factor_payload, build_card_record,
     build_card_registry, require_sealed_registry,
 )
-from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+from workspace.research.ai_research_dept.engine.news_seal import (
+    plain_object_tuple, plain_str, plain_str_tuple, seal_hash, verify_sealed,
+)
 
 # --------------------------------------------------- 证据类围栏(§2 step 5+7)
 
@@ -135,7 +137,17 @@ class RenderedCard:
     card_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str/tuple 字段归一为普通不可变(容器子类/状态化
+        # 迭代可在"card_hash 哈希"与"verify_d7_artifact 绑定检查"两次读取间脱钩)
+        object.__setattr__(self, "card_name", plain_str(self.card_name))
+        object.__setattr__(self, "cutoff_iso", plain_str(self.cutoff_iso))
+        object.__setattr__(self, "factor_payload_text", plain_str(self.factor_payload_text))
+        object.__setattr__(self, "restricted_text", plain_str(self.restricted_text))
+        object.__setattr__(self, "records_hash", plain_str(self.records_hash))
+        object.__setattr__(self, "record_ids", plain_str_tuple(self.record_ids))
+        object.__setattr__(self, "base_fact_hashes", plain_str_tuple(self.base_fact_hashes))
         if self.card_hash:
+            object.__setattr__(self, "card_hash", plain_str(self.card_hash))
             verify_sealed(self._payload(), self.card_hash, field_name="card_hash")
         else:
             object.__setattr__(self, "card_hash", seal_hash(self._payload()))
@@ -172,7 +184,17 @@ class D7BaseFact:
     fact_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str 字段归一为普通 str;importance 归一为普通 int
+        # (verify_d7_artifact 用 `importance >= FLOOR` 决定拆分覆盖,int 子类可在
+        # 该比较与哈希间脱钩)
+        for _f in ("base_record_id", "base_content_hash", "claim_id",
+                   "fact_cluster_id", "evidence_class"):
+            object.__setattr__(self, _f, plain_str(getattr(self, _f)))
+        if type(self.importance) is not int or isinstance(self.importance, bool):
+            raise RegistryError(f"D7BaseFact.importance 须恰 int(得 "
+                                f"{type(self.importance).__name__},re-review#11 P0)")
         if self.fact_hash:
+            object.__setattr__(self, "fact_hash", plain_str(self.fact_hash))
             verify_sealed(self._payload(), self.fact_hash, field_name="D7BaseFact fact_hash")
         else:
             object.__setattr__(self, "fact_hash", seal_hash(self._payload()))
@@ -440,6 +462,10 @@ class AttributeRow:
     row_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str 字段归一为普通 str
+        for _f in ("row_id", "claim_id", "fact_cluster_id", "evidence_group_id",
+                   "attribute_type", "text"):
+            object.__setattr__(self, _f, plain_str(getattr(self, _f)))
         # executor-review#2 Major-1 + #3 Major:非实质性正文不得封印——""/"\\0\\t "/
         # "\\ufe0f"(默认可忽略-only)都曾能接 event_materiality=5(no silent gaps)
         if not has_substantive_text(self.text):
@@ -447,6 +473,7 @@ class AttributeRow:
                 f"AttributeRow.text 须为恰 str 且含实质性字符(得 {self.text!r})——"
                 f"空/语义空证据正文不得封印(executor-review#2/#3)")
         if self.row_hash:
+            object.__setattr__(self, "row_hash", plain_str(self.row_hash))
             verify_sealed(self._payload(), self.row_hash, field_name="attribute row_hash")
         else:
             object.__setattr__(self, "row_hash", seal_hash(self._payload()))
@@ -543,7 +570,16 @@ class AttributeBundle:
     bundle_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str/tuple 字段归一为普通不可变(束的每个 tuple
+        # 既入 bundle_hash 又在 verify_d7_artifact 绑定检查里再读——容器子类脱钩)
+        for _f in ("decision_id", "cutoff_iso", "source_card_hash",
+                   "source_registry_hash", "final_registry_hash"):
+            object.__setattr__(self, _f, plain_str(getattr(self, _f)))
+        for _f in ("base_fact_hashes", "claim_ids", "row_hashes",
+                   "child_record_hashes", "demoted_record_hashes"):
+            object.__setattr__(self, _f, plain_str_tuple(getattr(self, _f)))
         if self.bundle_hash:
+            object.__setattr__(self, "bundle_hash", plain_str(self.bundle_hash))
             verify_sealed(self._payload(), self.bundle_hash, field_name="bundle_hash")
         else:
             object.__setattr__(self, "bundle_hash", seal_hash(self._payload()))
@@ -711,7 +747,13 @@ class D7DecisionArtifact:
     artifact_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:base_facts/rows 归一为普通 tuple(元素是恰类型+
+        # 自验的密封对象,只拆容器子类/状态化迭代——artifact_hash 与 verify_d7
+        # 的 facts_by_id/rows 检查是两次独立迭代)
+        object.__setattr__(self, "base_facts", plain_object_tuple(self.base_facts))
+        object.__setattr__(self, "rows", plain_object_tuple(self.rows))
         if self.artifact_hash:
+            object.__setattr__(self, "artifact_hash", plain_str(self.artifact_hash))
             verify_sealed(self._payload(), self.artifact_hash, field_name="artifact_hash")
         else:
             object.__setattr__(self, "artifact_hash", seal_hash(self._payload()))

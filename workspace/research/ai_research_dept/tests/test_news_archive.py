@@ -907,6 +907,72 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
             record_decision(tmp_path / "ledger", "d1", evil)
 
+    def test_polymorphic_frozenset_field_neutralized(self, tmp_path):
+        # archive-re-review#11 P0 (the reviewer's probe): a frozenset SUBCLASS
+        # that iterates (sorted -> hash) as context_only but membership (in ->
+        # authorize) as factor_positive. CardRecord.__post_init__ must coerce
+        # allowed_uses to a PLAIN frozenset snapshotted from one iteration, so
+        # "what got hashed" == "what authorize reads" — the decoupling is gone.
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            CardRecord, authorize, card_record_canonical_payload,
+        )
+        from workspace.research.ai_research_dept.engine.news_seal import seal_hash
+
+        class _EvilUses(frozenset):
+            def __iter__(self):                 # hashing sees context_only
+                return iter(["context_only"])
+            def __contains__(self, x):          # authorize sees factor_positive
+                return x in ("factor_positive", "context_only")
+        evil = _EvilUses(["context_only"])
+        # content_hash self-consistent for a context_only record
+        payload = {"record_id": "NFX01", "domain": "news",
+                   "evidence_class": "attention_only",
+                   "allowed_uses": ["context_only"], "allowed_consumers": ["news"],
+                   "allowed_dimensions": [], "record_schema_id": "generic_v1",
+                   "derivation": []}
+        rec = CardRecord(record_id="NFX01", domain="news",
+                         evidence_class="attention_only", allowed_uses=evil,
+                         allowed_consumers=frozenset({"news"}),
+                         allowed_dimensions=frozenset(), record_schema_id="generic_v1",
+                         derivation=(), content_hash=seal_hash(payload))
+        # the stored field is a PLAIN frozenset, not the evil subclass
+        assert type(rec.allowed_uses) is frozenset
+        assert rec.allowed_uses == frozenset({"context_only"})
+        # hashing and authorization now agree: NOT factor_positive
+        assert card_record_canonical_payload(rec)["allowed_uses"] == ["context_only"]
+        assert authorize(rec, use="factor_positive", consumer_seat="news",
+                         target_dimension="event_materiality") is False
+
+    def test_stateful_registry_mapping_snapshotted(self, tmp_path):
+        # archive-re-review#11 P0: SealedCardRegistry must snapshot a live
+        # mapping at construction, so verify (values()) and consume (items()/
+        # get()) can never see a mutated record set. Also: non-CardRecord
+        # values are refused.
+        from types import MappingProxyType
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            SealedCardRegistry,
+        )
+        art = _artifact_full("d1")
+        genuine = dict(art.source_registry.records)
+        # a mapping whose .items() flips after the first (snapshot) read
+        class _Stateful(dict):
+            calls = 0
+            def items(self):
+                _Stateful.calls += 1
+                if _Stateful.calls == 1:
+                    return super().items()
+                return iter([("HACKED", object())])   # would break a 2nd read
+        reg = SealedCardRegistry(cutoff_iso=art.source_registry.cutoff_iso,
+                                 records=_Stateful(genuine),
+                                 registry_hash=art.source_registry.registry_hash)
+        # stored records are a frozen snapshot (MappingProxyType), not the live map
+        assert type(reg.records) is MappingProxyType
+        assert set(reg.records) == set(genuine)          # snapshot of first read
+        # a non-CardRecord value is refused at construction
+        with pytest.raises(RegistryError, match="恰 CardRecord"):
+            SealedCardRegistry(cutoff_iso=art.source_registry.cutoff_iso,
+                               records={"X": object()}, registry_hash="0" * 64)
+
     def test_evil_source_registry_subclass_refused(self, tmp_path):
         # same class, source-registry side: a SealedCardRegistry subclass with
         # an overridden _payload() forging registry_hash — refused at the

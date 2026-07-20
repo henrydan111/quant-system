@@ -83,6 +83,31 @@ def deep_ro(obj):
     return obj
 
 
+def plain_str(x) -> str:
+    """归一为**普通 str**(archive-re-review#11 P0 同类面:str 子类可覆写
+    `__eq__`/`__hash__`/`__str__` 使"封存哈希"与"语义==/成员"两次读取脱钩;
+    `str.__str__` 取真实字符内容,绕过可覆写的 `__str__`)。非 str 原样返回
+    (由调用点的类型契约另行保证)。"""
+    if type(x) is str:
+        return x
+    if isinstance(x, str):
+        return str.__str__(x)
+    return x
+
+
+def plain_str_tuple(x) -> tuple:
+    """归一为**普通 tuple[普通 str]**(archive-re-review#11 P0 同类面:哈希/ID
+    元组的容器子类或状态化 `__iter__` 可在"哈希迭代"与"绑定检查迭代"间给出不同
+    序列;一次性快照 + 每元素归一 → 两次读取永远一致的普通不可变元组)。"""
+    return tuple(plain_str(u) for u in list(x))
+
+
+def plain_object_tuple(x) -> tuple:
+    """归一为**普通 tuple**(元素原样——已恰类型/自验的密封对象),只拆掉容器
+    子类/状态化迭代(archive-re-review#11 P0 同类面)。"""
+    return tuple(list(x))
+
+
 def verify_sealed(payload: dict, claimed_hash: str, *, field_name: str = "hash") -> None:
     """verify-not-trust:重算 payload 的 seal_hash 与自称哈希比对,不符硬失败。
     直接构造伪造对象(真 payload + 任意哈希 / 篡改 payload 留旧哈希)均被识破。"""

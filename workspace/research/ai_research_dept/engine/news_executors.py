@@ -65,7 +65,9 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
 from workspace.research.ai_research_dept.engine.news_legs import (
     NewsLegOutcome, run_news_two_legs, verify_outcome_for_binding,
 )
-from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+from workspace.research.ai_research_dept.engine.news_seal import (
+    plain_str, seal_hash, verify_sealed,
+)
 
 _PROV_NAME = "execution_provenance.jsonl"
 _HEX64_RE = re.compile(r"[0-9a-f]{64}")
@@ -114,6 +116,17 @@ class NewsScoringContract:
     contract_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str 字段归一为普通 str(schema_id/output_mode
+        # 参与 contract_hash 与承诺相等比对——str 子类脱钩;horizon 可为 None)
+        object.__setattr__(self, "schema_id", plain_str(self.schema_id))
+        if type(self.output_mode) is str:
+            object.__setattr__(self, "output_mode", plain_str(self.output_mode))
+        if self.primary_decision_horizon is not None \
+                and isinstance(self.primary_decision_horizon, str):
+            object.__setattr__(self, "primary_decision_horizon",
+                               plain_str(self.primary_decision_horizon))
+        if type(self.contract_hash) is str:
+            object.__setattr__(self, "contract_hash", plain_str(self.contract_hash))
         if self.schema_id != SCHEMA_ID:
             raise RegistryError(f"契约 schema_id 须为 {SCHEMA_ID}(得 {self.schema_id!r})")
         if type(self.output_mode) is not str or self.output_mode not in OUTPUT_MODES:

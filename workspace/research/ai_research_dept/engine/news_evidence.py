@@ -348,6 +348,39 @@ class PayloadGateError(Exception):
     """正向 payload 含未授权/attention_only/未注册 ID —— 硬失败(§6b B1)。"""
 
 
+def _plain_str(x) -> str:
+    """归一为**普通 str**(archive-re-review#11 P0:str 子类可覆写 __eq__/__hash__
+    使"哈希"与"成员/比较"两次读取脱钩;`str.__str__(x)` 取真实字符内容,不经可
+    覆写的 `__str__`)。"""
+    return x if type(x) is str else str.__str__(x) if isinstance(x, str) else str(x)
+
+
+def _plain_str_frozenset(x) -> frozenset:
+    """归一为**普通 frozenset[普通 str]**(archive-re-review#11 P0:frozenset 子类
+    的迭代[sorted 哈希]与成员[in 授权]可给出不同答案;一次性快照迭代 + 每元素归一
+    → 迭代与成员永远一致,存回后是不可覆写的普通容器)。"""
+    return frozenset(_plain_str(u) for u in list(x))
+
+
+def _plain_scalar(x):
+    """derivation 值归一(archive-re-review#11 P0:str/str 子类 → 普通 str[防
+    覆写 __eq__/__hash__ 在"封存哈希"与"关系检查 =="间脱钩];None/bool/int/float
+    等**内建不可变标量**原样保留[genuine derivation 含 None];其它类型拒——
+    derivation 只该承载 JSON 标量血缘)。"""
+    if x is None or type(x) in (bool, int, float):
+        return x
+    if isinstance(x, str):
+        return _plain_str(x)
+    raise RegistryError(f"derivation 标量类型非法:{type(x).__name__}"
+                        f"(只许 str/None/bool/int/float,re-review#11 P0)")
+
+
+def _plain_derivation(derivation) -> tuple:
+    """归一为**普通嵌套 tuple**(容器子类防御)+ 逐值 `_plain_scalar`。"""
+    return tuple(tuple(_plain_scalar(x) for x in list(kv))
+                for kv in list(derivation))
+
+
 @dataclass(frozen=True)
 class CardRecord:
     """一条**封印**逐卡元数据记录。只能经 build_card_record / 类型化工厂构造;
@@ -366,12 +399,27 @@ class CardRecord:
     content_hash: str = field(default="")
 
     def __post_init__(self):
-        # re-review#3 B1:锁在构造点(工厂与直接构造同一路径)
+        # archive-re-review#11 P0:**语义字段先归一为普通不可变值并写回**,再校验
+        # 封印——恰类型只保护外层,内部 frozenset/str 子类或状态化容器可在"哈希
+        # 迭代 sorted()"与"授权成员 in"两次读取间脱钩(封存身份不变、授权语义变)。
+        # 归一后所有读取都见同一份普通容器,迭代==成员,不可覆写。
+        object.__setattr__(self, "record_id", _plain_str(self.record_id))
+        object.__setattr__(self, "domain", _plain_str(self.domain))
+        object.__setattr__(self, "evidence_class", _plain_str(self.evidence_class))
+        object.__setattr__(self, "record_schema_id", _plain_str(self.record_schema_id))
+        object.__setattr__(self, "content_hash", _plain_str(self.content_hash))
+        object.__setattr__(self, "allowed_uses", _plain_str_frozenset(self.allowed_uses))
+        object.__setattr__(self, "allowed_consumers",
+                           _plain_str_frozenset(self.allowed_consumers))
+        object.__setattr__(self, "allowed_dimensions",
+                           _plain_str_frozenset(self.allowed_dimensions))
+        object.__setattr__(self, "derivation", _plain_derivation(self.derivation))
+        # re-review#3 B1:锁在构造点(工厂与直接构造同一路径)——现读已归一普通值
         _enforce_protected_namespaces(
             self.record_id, self.domain, self.evidence_class,
-            frozenset(self.allowed_uses), frozenset(self.allowed_consumers),
-            frozenset(self.allowed_dimensions), self.record_schema_id,
-            tuple(self.derivation))
+            self.allowed_uses, self.allowed_consumers,
+            self.allowed_dimensions, self.record_schema_id,
+            self.derivation)
         verify_sealed(self._payload(), self.content_hash, field_name="card record content_hash")
 
     def _payload(self) -> dict:
@@ -483,6 +531,19 @@ class SealedCardRegistry:
     registry_hash: str = field(default="")
 
     def __post_init__(self):
+        # archive-re-review#11 P0:records **深不可变快照 + 每值恰 CardRecord**,先于
+        # 校验——调用方可传状态化 mapping,在 values()(哈希重算)与 items()/get()
+        # (关系检查/消费)两次读取间变更记录;一次性快照后所有读取见同一冻结视图。
+        snap = {}
+        for k, v in list(self.records.items()):
+            if type(v) is not CardRecord:
+                raise RegistryError(
+                    f"注册表值须恰 CardRecord(得 {type(v).__name__};子类/duck-typed "
+                    f"拒,archive-re-review#11 P0)")
+            snap[_plain_str(k)] = v
+        object.__setattr__(self, "records", deep_ro(snap))
+        object.__setattr__(self, "cutoff_iso", _plain_str(self.cutoff_iso))
+        object.__setattr__(self, "registry_hash", _plain_str(self.registry_hash))
         verify_sealed(self._payload(), self.registry_hash, field_name="registry_hash")
 
     def _payload(self) -> dict:

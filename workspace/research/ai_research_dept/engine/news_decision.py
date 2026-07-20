@@ -47,7 +47,9 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     build_factor_payload_ids, extract_candidate_id_occurrences,
     require_sealed_registry,
 )
-from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+from workspace.research.ai_research_dept.engine.news_seal import (
+    plain_str, plain_str_tuple, seal_hash, verify_sealed,
+)
 
 _LEDGER_NAME = "decision_ledger.jsonl"
 _GENESIS = "0" * 64
@@ -502,10 +504,21 @@ class SealedPayload:
     payload_hash: str = field(default="")
 
     def __post_init__(self):
+        # re-review#11 P0 同类面:str/tuple 字段归一为普通不可变(payload_ast 不动
+        # ——由边界校验器重推导独立验证;target_dimension 可为 None 原样保留)
+        for _f in ("decision_id", "consumer_seat", "use", "payload_text",
+                   "registry_hash", "artifact_hash", "bundle_hash",
+                   "ledger_entry_hash"):
+            object.__setattr__(self, _f, plain_str(getattr(self, _f)))
+        if self.target_dimension is not None:
+            object.__setattr__(self, "target_dimension", plain_str(self.target_dimension))
+        for _f in ("expected_ids", "ref_occurrences", "authorized_ids"):
+            object.__setattr__(self, _f, plain_str_tuple(getattr(self, _f)))
         if not self.payload_hash:
             raise RegistryError(
                 "SealedPayload.payload_hash 不得为空——本对象只能经内部工厂铸造"
                 f"(实现审 B2:无公开自动铸印)")
+        object.__setattr__(self, "payload_hash", plain_str(self.payload_hash))
         verify_sealed(self._payload(), self.payload_hash, field_name="payload_hash")
 
     def _payload(self) -> dict:
