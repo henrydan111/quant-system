@@ -447,6 +447,19 @@ def consolidate_family(spec: FamilySpec, ledger) -> dict:
     frozen ConsolidationSpec; every output is written through the broker and bound into a hash-chained
     consolidation verdict."""
     import pandas as pd
+    # GPT impl-review B3 BLOCKER: consolidation is as fetch-affecting as fetching. (a) recompute the
+    # content-hashed bundle — a drifted merge/repartition recipe must refuse HERE, not only at
+    # run_family; (b) consolidation is a SINGLETON per family — a repeat would overwrite outputs whose
+    # verdict is already chained.
+    live_hash = compute_bundle_hash()
+    if live_hash != ledger.adapter_bundle_hash:
+        raise RuntimeError(f"{spec.output_family}: adapter bundle drifted since freeze "
+                           f"({live_hash[:12]} != {ledger.adapter_bundle_hash[:12]}) — refusing "
+                           f"consolidation")
+    if any(r.get("kind") == "lifecycle" and r.get("event") == "family_consolidated"
+           and r.get("family") == spec.output_family for r in ledger._load()):
+        raise RuntimeError(f"{spec.output_family}: already consolidated — a family consolidates "
+                           f"exactly once per run (repeat writes refused)")
     ok, pending = ledger.consolidation_allowed(spec.output_family)
     if not ok:
         raise RuntimeError(f"{spec.output_family}: consolidation refused — {len(pending)} requests not "
@@ -513,13 +526,22 @@ def consolidate_family(spec: FamilySpec, ledger) -> dict:
         out = ledger.rp.assert_write(ledger.rp.staging_data / rel)
         ledger.rp.broker().mkdirs(out.parent)
         import io as _io
+        import os as _os
         buf = _io.BytesIO()
         df.reset_index(drop=True).to_parquet(buf, index=False)
         payload = buf.getvalue()
+        want = hashlib.sha256(payload).hexdigest()
         with ledger.rp.broker().open_for_write(out, "wb") as fh:
             fh.write(payload)
+            fh.flush()
+            _os.fsync(fh.fileno())                # durable BEFORE binding it into the verdict
+        # GPT impl-review B3: bind the RE-READ bytes, never the buffer we hoped we wrote
+        got = hashlib.sha256(out.read_bytes()).hexdigest()
+        if got != want:
+            raise RuntimeError(f"{spec.output_family} {part}: consolidated output on disk "
+                               f"({got[:12]}) != what was written ({want[:12]}) — refusing to record")
         written.append({"partition": part, "path": rel, "rows": int(len(df)),
-                        "bytes_sha256": hashlib.sha256(payload).hexdigest()})
+                        "bytes_sha256": want})
     ledger.event("family_consolidated", family=spec.output_family,
                  conservation_mode=cons.conservation_mode, inputs=input_bind, outputs=written)
     return {"outputs": written, "inputs": input_bind}

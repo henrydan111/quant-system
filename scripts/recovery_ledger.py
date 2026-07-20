@@ -454,6 +454,18 @@ class PageReceiptLedger:
         throttle); lease-open and lease-close each take it."""
         import io
         import uuid as _uuid
+        # ---- -1. the LEGACY door is battery-only (GPT impl-review B2 BLOCKER) --------------------
+        # This method takes a caller-supplied callable + terminal and predates the claimed-fetch path;
+        # it checks NO run mode and NO §13 authorization. Once a run declares its mode it is a
+        # PRODUCTION run — every fetch must go through claim_next_fetch/fetch_claimed_page. Refused
+        # BEFORE opening any lease and BEFORE the callable could run. The below-contract batteries
+        # never declare a run mode, which is exactly what scopes them out of production.
+        with self.rp._lock():
+            if any(r.get("kind") == "lifecycle" and r.get("event") == "run_mode"
+                   for r in self._load()):
+                raise LedgerError("legacy fetch_page is REFUSED once a run mode is declared — "
+                                  "production fetching goes through claim_next_fetch/"
+                                  "fetch_claimed_page (GPT impl-review B2)")
         # ---- 0. RE-VERIFY the contract binding (GPT re-review #9 BLOCKER-1) ---------------------
         # The contract hash was checked once, at freeze. Editing the signed contract afterwards left
         # fetching enabled — a frozen hash proves what WAS signed, never what is signed NOW. Re-verify
@@ -498,6 +510,13 @@ class PageReceiptLedger:
         import io
         with self.rp._lock():
             rows = self._load()
+            # GPT impl-review B1 (re-check at CLOSE): a response may only close the lease that fetched
+            # it — a matching OPEN lease row must exist for this request+page.
+            if not any(r.get("kind") == "lease_open" and r.get("lease_id") == lease_id
+                       and r.get("request_id") == rid and int(r.get("page", -1)) == int(page)
+                       for r in rows):
+                raise LedgerError(f"{rid} page {page}: no matching OPEN lease {lease_id[:8]} — a "
+                                  f"response may only close the lease that fetched it")
             if any(r.get("kind") == "attempt" and r.get("lease_id") == lease_id for r in rows):
                 raise LedgerError(f"lease {lease_id} already consumed — a lease closes exactly once")
             closed_at = datetime.now(timezone.utc).isoformat()
@@ -581,12 +600,23 @@ class PageReceiptLedger:
             if len(frozen) != 1:
                 raise LedgerError("authorize-fetch requires exactly one FROZEN plan to bind to")
             auth_id = _uuid.uuid4().hex
+            # EVIDENCE, not the boundary: record BOTH the username and the actual Windows SID
+            # (GPT impl-review minor: a username alone is not an OS identity).
             try:
-                os_identity = getpass.getuser()
+                os_username = getpass.getuser()
             except Exception:
-                os_identity = "(unavailable)"
+                os_username = "(unavailable)"
+            os_sid = "(unavailable)"
+            try:
+                import subprocess
+                out = subprocess.run(["whoami", "/user", "/fo", "csv"],
+                                     capture_output=True, text=True, timeout=5)
+                line = out.stdout.strip().splitlines()[-1]
+                os_sid = [p.strip('"') for p in line.split('","')][-1]
+            except Exception:
+                pass
             self._append({"kind": "lifecycle", "event": "fetch_authorized", "auth_id": auth_id,
-                          "actor": str(actor), "os_identity": os_identity,   # EVIDENCE, not the boundary
+                          "actor": str(actor), "os_username": os_username, "os_sid": os_sid,
                           "issued_at": datetime.now(timezone.utc).isoformat(),
                           "expires_at": str(expires_at),
                           "plan_sha256": frozen[0].get("plan_sha256"),
@@ -650,7 +680,8 @@ class PageReceiptLedger:
             if self._state_of(rows, rid) in _TERMINAL:
                 return Claim("SKIP_TERMINAL")
             closed_ids = {r.get("lease_id") for r in rows
-                          if r.get("kind") in ("attempt", "lease_failed") and r.get("request_id") == rid}
+                          if r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")
+                          and r.get("request_id") == rid}
             open_ls = [r for r in rows if r.get("kind") == "lease_open" and r.get("request_id") == rid
                        and r.get("lease_id") not in closed_ids]
             if open_ls:
@@ -660,13 +691,17 @@ class PageReceiptLedger:
             if nums and nums != list(range(1, len(nums) + 1)):
                 raise LedgerError(f"{rid}: recorded pages not contiguous 1..N: {nums} — corrupt state")
             failed_pages = {r.get("page") for r in rows
-                            if r.get("kind") == "lease_failed" and r.get("request_id") == rid}
+                            if r.get("kind") in ("lease_failed", "lease_abandoned")
+                            and r.get("request_id") == rid}
 
             def _open(kind, page, offset):
                 lease_id = _uuid.uuid4().hex
                 opened_at = datetime.now(timezone.utc).isoformat()
+                # the offset is PERSISTED in the lease (GPT impl-review B1): fetch_claimed_page
+                # validates the presented Claim against this durable row, so a forged/altered claim
+                # (any offset, any lease id) can never reach the executor.
                 self._append({"kind": "lease_open", "request_id": rid, "page": int(page),
-                              "lease_id": lease_id, "opened_at": opened_at})
+                              "offset": int(offset), "lease_id": lease_id, "opened_at": opened_at})
                 return Claim(kind, page=int(page), offset=int(offset),
                              lease_id=lease_id, opened_at=opened_at)
 
@@ -713,6 +748,27 @@ class PageReceiptLedger:
             return Claim("CONFIRM_EMPTY", canary_request_id=cands[0])
         return Claim("WAIT_FOR_CANARY")
 
+    def abandon_orphan_leases(self, rid: str, *, reason: str) -> int:
+        """The EXPLICIT crash-resume transition (design v4 §3; GPT impl-review MAJOR): convert
+        genuinely orphaned OPEN leases (a crash between lease-open and close) to `lease_abandoned` so
+        claim_next_fetch can re-issue the cursor as RETRY_PAGE. Deliberately NOT automatic: within the
+        attended single-operator recovery model, the OPERATOR asserts the crash-resume context (no
+        other process is mid-flight on this run) via an explicit, auditable reason; run_family itself
+        never calls this. An in-flight healthy fetch in the same process cannot be hit — its lease
+        closes under the same lock this holds."""
+        if not str(reason).strip():
+            raise LedgerError("abandoning a lease requires an explicit auditable reason")
+        with self.rp._lock():
+            rows = self._load()
+            closed = {r.get("lease_id") for r in rows
+                      if r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")}
+            orphans = [r for r in rows if r.get("kind") == "lease_open"
+                       and r.get("request_id") == rid and r.get("lease_id") not in closed]
+            for o in orphans:
+                self._append({"kind": "lease_abandoned", "request_id": rid, "page": o.get("page"),
+                              "lease_id": o["lease_id"], "reason": str(reason)[:200]})
+            return len(orphans)
+
     def fetch_claimed_page(self, rid: str, claim: "Claim", executor) -> "PageResult":
         """The production fetch door (design v4). The ledger BUILDS the page-call spec ITSELF from the
         frozen plan row + the atomically-claimed cursor (strictly stronger than validating a passed
@@ -735,6 +791,26 @@ class PageReceiptLedger:
             if rid not in plan:
                 raise LedgerError(f"request {rid} not in the frozen plan")
             row = plan[rid]
+            # ---- BIND the presented Claim to its DURABLE OPEN LEASE (GPT impl-review B1 BLOCKER) ---
+            # A Claim is a caller-held token; only the ledger's own lease_open row is the fact. A claim
+            # whose lease does not exist, whose page/offset/opened_at differ from the durable row, or
+            # whose lease is already consumed is FORGED/STALE and never reaches the executor. A forged
+            # presentation does NOT close the real lease (that would let it kill an in-flight fetch).
+            lo = [r for r in rows if r.get("kind") == "lease_open"
+                  and r.get("lease_id") == claim.lease_id and r.get("request_id") == rid]
+            if not lo:
+                raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} does not exist in the "
+                                  f"ledger — forged/stale claim refused")
+            lease = lo[-1]
+            if (int(lease.get("page", -1)) != int(claim.page)
+                    or int(lease.get("offset", -1)) != int(claim.offset)
+                    or lease.get("opened_at") != claim.opened_at):
+                raise LedgerError(f"{rid}: claim (page {claim.page}, offset {claim.offset}) does not "
+                                  f"match its durable lease (page {lease.get('page')}, offset "
+                                  f"{lease.get('offset')}) — altered claim refused")
+            if any(r.get("kind") in ("attempt", "lease_failed", "lease_abandoned")
+                   and r.get("lease_id") == claim.lease_id for r in rows):
+                raise LedgerError(f"{rid}: claim's lease {claim.lease_id[:8]} is already consumed")
             # IN-LEASE re-validation (design v4 F2): run-mode + live authorization checked AGAIN here,
             # bound to the moment of the wire call, not only at claim time.
             mode = self.run_mode(rows)
@@ -745,8 +821,19 @@ class PageReceiptLedger:
                               "error": f"executor mode {ex_mode!r} != run mode {mode!r}"})
                 raise LedgerError(f"executor mode {ex_mode!r} != run mode {mode!r} at execution")
             if mode == "live_authorized":
-                self._assert_live_authorized(rows, row["endpoint"])
-        self._revalidate_contract(row)              # live contract re-bind, every page
+                try:
+                    self._assert_live_authorized(rows, row["endpoint"])
+                except LedgerError as exc:
+                    # GPT impl-review MAJOR: a post-claim refusal must CLOSE the lease, else every
+                    # later claim is IN_FLIGHT forever.
+                    self._append({"kind": "lease_failed", "request_id": rid, "page": int(claim.page),
+                                  "lease_id": claim.lease_id, "error": str(exc)[:300]})
+                    raise
+        try:
+            self._revalidate_contract(row)          # live contract re-bind, every page
+        except LedgerError as exc:
+            _fail(str(exc))                          # post-claim refusal closes the lease (MAJOR)
+            raise
         limit = int(row["page_limit"]) if row["page_limit"] else 0
         spec = {"endpoint": row["endpoint"], "base_params": dict(row["params"]),
                 "limit": limit, "offset": int(claim.offset), "page": int(claim.page),

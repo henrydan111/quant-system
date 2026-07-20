@@ -558,12 +558,13 @@ def test_live_run_refuses_a_drifted_bundle(rig, monkeypatch):
 
 
 def test_fetch_page_once_shape_lint():
-    """Design v4 F1 lint: EXACTLY ONE wire call — no retry loop, no _safe_api_call, no pagination."""
-    import inspect
-    sys.path.insert(0, str(ROOT / "src"))
-    import data_infra.fetchers as F
-    src = inspect.getsource(F.TushareFetcher.fetch_page_once)
-    body = src.split('"""')[-1]                        # strip the docstring
+    """Design v4 F1 lint: EXACTLY ONE wire call — no retry loop, no _safe_api_call, no pagination.
+    Reads the SOURCE FILE (GPT impl-review minor: importing the fetcher module imports tushare, which
+    made 'no Tushare import' false for the battery; the text is the fact being linted anyway)."""
+    src = (ROOT / "src" / "data_infra" / "fetchers" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("def fetch_page_once")
+    j = src.index("\n    def ", i)                     # up to the next method
+    body = src[i:j].split('"""')[-1]                   # strip the docstring
     for banned in ("for ", "while ", "_safe_api_call", "_fetch_paginated"):
         assert banned not in body, f"fetch_page_once must not contain {banned!r}"
 
@@ -593,3 +594,118 @@ def test_real_a01_plan_scale_freeze(monkeypatch):
     plan = ledger._plan()
     assert len(plan) == 13479
     shutil.rmtree(base, ignore_errors=True)
+
+
+# ── GPT implementation-review fold: regression per finding ───────────────────────────────────────
+def test_forged_claim_with_nonexistent_lease_refused(rig):
+    """B1 (reproduced by GPT): a hand-built Claim with any lease id/offset was accepted and could
+    verify a skipped page. The claim must bind to its DURABLE open lease."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet", limit=2)
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 999999), _df(["Z.SZ"]))])
+    forged = rl.Claim("FETCH", page=1, offset=999999, lease_id="f" * 32,
+                      opened_at="2026-07-19T00:00:00+00:00")
+    with pytest.raises(rl.LedgerError, match="does not exist in the ledger"):
+        L.fetch_claimed_page(row["request_id"], forged, ex)
+    assert not ex.calls                                # the executor was NEVER invoked
+
+
+def test_altered_claim_offset_refused_without_killing_the_lease(rig):
+    """B1: a claim whose page/offset differ from the durable lease is refused — and the refusal does
+    NOT close the real lease (a forger cannot kill an in-flight fetch)."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet", limit=2)
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    real = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    assert real.kind == "FETCH"
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 0), _df(["A.SZ", "B.SZ"]))])
+    import dataclasses
+    altered = dataclasses.replace(real, offset=999999)
+    with pytest.raises(rl.LedgerError, match="altered claim refused"):
+        L.fetch_claimed_page(row["request_id"], altered, ex)
+    # the REAL lease is intact: presenting the true claim still works
+    res = L.fetch_claimed_page(row["request_id"], real, ex)
+    assert res.row_count == 2
+
+
+def test_legacy_fetch_page_refused_once_a_run_mode_is_declared(rig):
+    """B2 (reproduced by GPT): the legacy door checked no run mode and no §13 event, so a declared
+    LIVE run could certify a response without authorization. Refused BEFORE the callable runs."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("live_authorized")
+    invoked = []
+
+    def _cb():
+        invoked.append(1)
+        return _df(["A.SZ"])
+    with pytest.raises(rl.LedgerError, match="legacy fetch_page is REFUSED"):
+        L.fetch_page(row["request_id"], 1, _cb)
+    assert not invoked                             # the callback NEVER ran
+    assert not [r for r in L._load() if r.get("kind") == "lease_open"]   # and no lease opened
+
+
+def test_consolidation_refuses_a_drifted_bundle_and_repeats(rig, monkeypatch):
+    """B3 (reproduced by GPT): the bundle was checked at run_family only, and consolidation could
+    overwrite outputs on a second call. Both refuse now."""
+    rp, L = rig
+    m = "202601"
+    rows = [_prow("broker_recommend", m, f"requests/A16/broker_recommend/{m}.parquet",
+                  params={"month": m}, empty="sparse_canary",
+                  nk=("month", "broker", "ts_code"), dataset="analyst/broker_recommend")]
+    fixtures = [(("broker_recommend", {"month": m}, 0), pd.DataFrame(
+        {"month": [m], "broker": ["ZX"], "ts_code": ["000001.SZ"]}))]
+    L._freeze_plan_unvalidated(rows)
+    L.declare_run_mode("synthetic_nonpromotable")
+    spec = ra.FamilySpec("A16", "analyst/broker_recommend", ("broker_recommend",), "month",
+                         ra.QUARTET["A16"].consolidation)
+    assert len(ra.run_family(spec, L, _syn(fixtures))["verified"]) == 1
+    # a drifted bundle refuses consolidation
+    monkeypatch.setattr(ra, "compute_bundle_hash", lambda: "f" * 64)
+    with pytest.raises(RuntimeError, match="bundle drifted"):
+        ra.consolidate_family(spec, L)
+    monkeypatch.undo()
+    # the honest bundle consolidates ONCE; a repeat refuses (no overwrite of chained outputs)
+    ra.consolidate_family(spec, L)
+    with pytest.raises(RuntimeError, match="exactly once per run"):
+        ra.consolidate_family(spec, L)
+
+
+def test_post_claim_contract_refusal_closes_the_lease(rig):
+    """MAJOR (reproduced by GPT): a contract-revalidation failure AFTER the claim escaped without
+    closing the lease — every later claim was IN_FLIGHT forever. The refusal now records
+    lease_failed, and the next claim is a RETRY."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    _LIVE_CONTRACTS["daily"]["natural_key"] = ["ts_code", "trade_date", "EDITED"]   # contract drifts
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 0), _df(["A.SZ"]))])
+    with pytest.raises(rl.LedgerError, match="CHANGED since the plan froze"):
+        L.fetch_claimed_page(row["request_id"], claim, ex)
+    nxt = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    assert nxt.kind == "RETRY_PAGE"                    # NOT IN_FLIGHT forever
+
+
+def test_orphaned_lease_abandon_and_resume(rig):
+    """MAJOR: a crash between lease-open and close left IN_FLIGHT forever. The EXPLICIT operator
+    crash-resume transition converts the orphan and the claim re-issues the cursor."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")       # lease opened, then "crash"
+    assert L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable").kind == "IN_FLIGHT"
+    with pytest.raises(rl.LedgerError, match="auditable reason"):
+        L.abandon_orphan_leases(row["request_id"], reason="  ")
+    assert L.abandon_orphan_leases(row["request_id"], reason="crash-resume test") == 1
+    nxt = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    assert (nxt.kind, nxt.page) == ("RETRY_PAGE", 1)
+    ex = _syn([(("daily", {"trade_date": "20260702"}, 0), _df(["A.SZ"]))])
+    L.fetch_claimed_page(row["request_id"], nxt, ex)
+    assert L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable").kind == "VERIFY"
