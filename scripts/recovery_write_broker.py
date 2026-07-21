@@ -280,9 +280,14 @@ class NoFollowWriteBroker:
             raise WriteBrokerError(f"REFUSED: {label} is a hard link (nNumberOfLinks="
                                    f"{info.nNumberOfLinks}) — may alias a file outside the root")
 
-    def _root_handle(self):
+    def _root_handle(self, share: int = None):
+        """`share` overrides the sharing mask (GPT impl re-review #6 P0): a LOCK's ancestor chain must
+        omit FILE_SHARE_DELETE, else the root/intermediate dirs can be RENAMED between parent-open and
+        leaf-open, so one holder locks under the moved tree while another locks a fresh dir at the
+        original pathname."""
         h = _k32.CreateFileW(str(self.root), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, None, OPEN_EXISTING,
+                             (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) if share is None else share,
+                             None, OPEN_EXISTING,
                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
         if h == INVALID_HANDLE_VALUE:
             raise WriteBrokerError(f"cannot open broker root {self.root}: WinError {ctypes.get_last_error()}")
@@ -293,16 +298,19 @@ class NoFollowWriteBroker:
             raise
         return h
 
-    def _dir_handle_chain(self, rel_parts, *, create: bool):
+    def _dir_handle_chain(self, rel_parts, *, create: bool, share: int = None):
         """Walk root->...->rel_parts[-1] opening EACH component relative to its parent handle. Returns
-        the final directory handle (caller closes). `create=True` creates missing components in place."""
-        cur = self._root_handle()
+        the final directory handle (caller closes). `create=True` creates missing components in place.
+        `share` (GPT impl re-review #6 P0) propagates to the root AND every intermediate component: a
+        lock chain opened without FILE_SHARE_DELETE cannot have an ancestor renamed out from under it."""
+        cur = self._root_handle(share)
         try:
             for part in rel_parts:
                 nxt = self._nt_open_relative(
                     cur, part, directory=True,
                     disposition=FILE_OPEN_IF if create else FILE_OPEN,
-                    access=FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                    access=FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                    share=share)
                 try:
                     self._check_handle(nxt, part)
                 except WriteBrokerError:
@@ -379,9 +387,12 @@ class NoFollowWriteBroker:
         target = self.validate_ancestry(target)
         rel = target.relative_to(self.root)
 
+        # the ENTIRE lock chain (root + every intermediate dir + the leaf) forbids delete-sharing
+        _LOCK_SHARE = FILE_SHARE_READ | FILE_SHARE_WRITE
+
         class _HandleLock:
             def __enter__(_self):
-                parent_h = broker._dir_handle_chain(rel.parent.parts, create=True)
+                parent_h = broker._dir_handle_chain(rel.parent.parts, create=True, share=_LOCK_SHARE)
                 try:
                     # NO FILE_SHARE_DELETE on a lock leaf (GPT impl re-review #5 P0): with it, another
                     # process could unlink run_execution.lock while we hold it, after which a NEW file
@@ -390,7 +401,7 @@ class NoFollowWriteBroker:
                     fh = broker._nt_open_relative(
                         parent_h, rel.name, directory=False, disposition=FILE_OPEN_IF,
                         access=GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                        share=FILE_SHARE_READ | FILE_SHARE_WRITE)
+                        share=_LOCK_SHARE)
                 finally:
                     _k32.CloseHandle(parent_h)
                 try:

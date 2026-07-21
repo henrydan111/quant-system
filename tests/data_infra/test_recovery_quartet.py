@@ -1090,6 +1090,83 @@ def test_write_path_still_allows_delete_sharing(rig):
     rp.broker().mkdirs(target.parent)
     with rp.broker().open_for_write(target, "wb") as fh:
         fh.write(b"payload")
-    assert target.read_bytes() == b"payload"
-    target.unlink()                                  # deletable when NOT held open
-    assert not target.exists()
+        fh.flush()
+        # GPT impl re-review #6 (test gap): prove delete-sharing WHILE the write handle is OPEN —
+        # unlinking after close would prove nothing about the share mask.
+        assert _child_unlink(target).startswith("SUCCEEDED"), \
+            "the write path lost delete-sharing (only the LOCK leaf may be restricted)"
+
+# ── GPT impl re-review #6 fold: the lock's ANCESTOR chain must also forbid delete-sharing ─────────
+def _child_parent_swap(ledger_dir) -> str:
+    """From a SEPARATE PROCESS: rename <run>/ledger aside and recreate a fresh dir at that pathname —
+    the identity-switch GPT exploited in the parent-open -> leaf-open window."""
+    import subprocess
+    code = ("import os,sys\n"
+            "d = sys.argv[1]\n"
+            "try:\n"
+            "    os.rename(d, d + '_moved')\n"
+            "    os.mkdir(d)\n"
+            "    print('SWAP_SUCCEEDED')\n"
+            "except OSError as e:\n"
+            "    print('SWAP_FAILED:' + type(e).__name__)\n")
+    r = subprocess.run([sys.executable, "-c", code, str(ledger_dir)], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def test_parent_dir_cannot_be_swapped_in_the_parent_open_to_leaf_open_window(rig):
+    """P0 (reproduced by GPT): _root_handle/_dir_handle_chain opened directories WITH
+    FILE_SHARE_DELETE, so in the instant between the `ledger` handle opening and the lock leaf being
+    created, another process could rename `ledger` aside and mkdir a fresh one — holder A then locked
+    under `ledger_moved` while holder B locked the NEW `<run>/ledger/run_execution.lock`. The whole
+    lock chain (root + intermediates + leaf) now forbids delete-sharing. Here the swap is ARMED to
+    fire in exactly that window."""
+    rp, L = rig
+    ledger_dir = rp.root / "ledger"
+    rp.broker().mkdirs(ledger_dir)                 # the dir exists before the guard runs
+    broker = rp.broker()
+    orig_chain = broker._dir_handle_chain
+    seen = {}
+
+    def _chain_then_swap(rel_parts, *, create, share=None):
+        h = orig_chain(rel_parts, create=create, share=share)
+        if "swap" not in seen:                     # fire ONCE, in the parent-open -> leaf-open window
+            seen["swap"] = _child_parent_swap(ledger_dir)
+        return h
+    broker._dir_handle_chain = _chain_then_swap
+    try:
+        with L.execution_guard():
+            assert seen["swap"].startswith("SWAP_FAILED"), \
+                f"the ledger dir was RENAMED while its handle was held: {seen['swap']}"
+            # the lock lives at the real pathname (not under a moved tree) and excludes a 2nd holder
+            assert (ledger_dir / "run_execution.lock").is_file()
+            assert not (rp.root / "ledger_moved").exists()
+            with pytest.raises(rl.LedgerError, match="BUSY"):
+                with L.execution_guard(timeout=0.2):
+                    pass
+    finally:
+        broker._dir_handle_chain = orig_chain
+
+
+def test_run_root_cannot_be_renamed_while_a_lock_is_held(rig):
+    """The same protection one level up: the RUN ROOT is opened without delete-sharing for a lock, so
+    it cannot be renamed out from under a held guard."""
+    import subprocess
+    rp, L = rig
+    with L.execution_guard():
+        code = ("import os,sys\n"
+                "try:\n"
+                "    os.rename(sys.argv[1], sys.argv[1] + '_moved')\n"
+                "    print('SWAP_SUCCEEDED')\n"
+                "except OSError as e:\n"
+                "    print('SWAP_FAILED:' + type(e).__name__)\n")
+        r = subprocess.run([sys.executable, "-c", code, str(rp.root)], capture_output=True, text=True)
+        assert r.stdout.strip().startswith("SWAP_FAILED"), "run root was renamed while a lock was held"
+
+
+def test_ledger_lock_parent_chain_is_also_delete_protected(rig):
+    """The unified RecoveryPaths._lock leaf shares the hardened chain."""
+    rp, L = rig
+    ledger_dir = rp.root / "ledger"
+    rp.broker().mkdirs(ledger_dir)
+    with rp._lock():
+        assert _child_parent_swap(ledger_dir).startswith("SWAP_FAILED")
