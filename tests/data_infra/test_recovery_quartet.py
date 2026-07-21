@@ -1722,3 +1722,126 @@ def test_fetch_command_cannot_mint_its_own_authorization():
     assert "cmd_authorize_fetch" not in body
     # and it still refuses outright
     assert rrc.cmd_fetch(None, None) == 3
+
+
+# ── GPT fan-out review P0-1: the payload digest must be a CONTRACT constraint ─────────────────────
+def _real_plan_row(owner):
+    """Take a REAL plan row straight from the production builder over the REAL signed contracts —
+    the regression GPT asked for. Returns (row, request, contracts). The row is the plan's own first
+    partition, so the test can never drift onto a request the real population does not contain."""
+    contracts = rrc.load_signed_contracts()
+    rows = ra.build_plan_rows(ra.ALL_FAMILIES[owner], contracts)
+    row = sorted(rows, key=lambda r: r["partition"])[0]
+    return row, dict(row["params"]), contracts
+
+
+def _install_real_contract(L, endpoint, contracts):
+    """Point the below-contract seams at the REAL signed contract for this endpoint."""
+    _LIVE_CONTRACTS[endpoint] = contracts[endpoint]
+    L._revalidate_contract = lambda row: None
+    L._assert_response_fields = lambda ep, cols: None
+
+
+def test_signed_natural_key_must_cover_the_derived_identity_columns():
+    """The exemption GPT found: assert_plan_matches_contracts subtracted derived_fields_for(ep) from
+    the vendor key, so a signed natural_key WITHOUT the payload digest passed and the digest was never
+    a contract constraint. Stripping it from a REAL plan row must now refuse."""
+    contracts = rrc.load_signed_contracts()
+    rows = ra.build_plan_rows(ra.ALL_FAMILIES["A11a"], contracts)[:1]
+    stripped_c = dict(contracts)
+    stripped_c["top_list"] = dict(contracts["top_list"],
+                                  natural_key=["ts_code", "trade_date", "reason"])  # digest removed
+    rows[0] = dict(rows[0], natural_key=["ts_code", "trade_date", "reason"],
+                   contract_sha256=rrc.canonical_contract_sha256(stripped_c["top_list"]))
+    with pytest.raises(RuntimeError, match="does NOT cover the matrix vendor key"):
+        rrc.assert_plan_matches_contracts(rows, stripped_c)
+
+def test_report_rc_same_core_different_payload_are_both_kept(rig):
+    """Two analyst revisions sharing (ts_code, report_date, org, author, quarter) but with DIFFERENT
+    payloads are distinct records. Before the fix the signed key lacked the digest, so they collided
+    under the natural key and verify_request REFUSED — halting a real recovery."""
+    rp, L = rig
+    row, req, contracts = _real_plan_row("A14")
+    _install_real_contract(L, "report_rc", contracts)
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    page = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "report_date": [req["start_date"], req["start_date"]],
+        "org_name": ["ZX", "ZX"], "author_name": ["A", "A"],
+        "quarter": ["2023Q1", "2023Q1"],
+        "eps": [1.0, 1.5],                      # DIFFERENT payload -> different digest
+        "np": [2.0, 2.0], "op_rt": [3.0, 3.0], "rating": ["buy", "buy"]})
+    ex = _syn([(("report_rc", req, 0), page)])
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    L.fetch_claimed_page(row["request_id"], claim, ex)
+    ev = L.verify_request(row["request_id"])
+    assert ev["pre_dedup_rows"] == 2 and ev["post_dedup_rows"] == 2, ev
+
+
+def test_report_rc_same_payload_different_quarter_are_both_kept(rig):
+    """`quarter` was missing from the CONTENT-DEDUP key while present in the vendor key: two rows with
+    an identical payload for DIFFERENT quarters (FY1 vs FY2) collapsed, exceeded max_content_dups=0
+    and REFUSED. Both must survive."""
+    rp, L = rig
+    row, req, contracts = _real_plan_row("A14")
+    _install_real_contract(L, "report_rc", contracts)
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    page = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "report_date": [req["start_date"], req["start_date"]],
+        "org_name": ["ZX", "ZX"], "author_name": ["A", "A"],
+        "quarter": ["2023Q1", "2023Q2"],        # SAME payload, DIFFERENT quarter
+        "eps": [1.0, 1.0], "np": [2.0, 2.0], "op_rt": [3.0, 3.0], "rating": ["buy", "buy"]})
+    ex = _syn([(("report_rc", req, 0), page)])
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    L.fetch_claimed_page(row["request_id"], claim, ex)
+    ev = L.verify_request(row["request_id"])
+    assert ev["pre_dedup_rows"] == 2 and ev["post_dedup_rows"] == 2, ev
+    assert ev["excess_dup_rows"] == 0, ev
+
+
+def test_event_family_same_core_different_payload_are_both_kept(rig):
+    """The same invariant for the event families: two top_list rows sharing
+    (ts_code, trade_date, reason) but differing elsewhere are distinct vendor records, separated ONLY
+    by row_payload_digest — which the signed key now carries."""
+    rp, L = rig
+    row, req, contracts = _real_plan_row("A11a")
+    _install_real_contract(L, "top_list", contracts)
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    page = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "trade_date": [req["trade_date"], req["trade_date"]],
+        "reason": ["日涨幅偏离值达7%", "日涨幅偏离值达7%"],
+        "net_amount": [1.0, 2.0]})              # distinct rows -> distinct digest
+    ex = _syn([(("top_list", req, 0), page)])
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    L.fetch_claimed_page(row["request_id"], claim, ex)
+    ev = L.verify_request(row["request_id"])
+    assert ev["pre_dedup_rows"] == 2 and ev["post_dedup_rows"] == 2, ev
+
+
+def test_every_matrix_identity_column_is_in_its_signed_natural_key():
+    """Sweep the WHOLE surface, not just the four GPT named: no family may rely on the removed
+    exemption."""
+    cs = rrc.load_signed_contracts()
+    for r in rrc.ENDPOINT_MATRIX:
+        for ep in r.source_endpoints:
+            c = cs.get(ep)
+            if not c:
+                continue                        # unsigned (A07) — held at BLOCKED(contract)
+            gap = set(r.vendor_record_key) - set(c["natural_key"])
+            assert not gap, f"{ep}: signed natural_key misses identity column(s) {sorted(gap)}"
+
+
+def test_content_dedup_key_is_never_coarser_than_the_vendor_key():
+    """report_rc's dedup key dropped `quarter` while the vendor key kept it. A dedup key coarser than
+    the vendor key collapses genuinely distinct records."""
+    for r in rrc.ENDPOINT_MATRIX:
+        if not r.content_dedup_key:
+            continue
+        dropped = set(r.vendor_record_key) - set(r.content_dedup_key)
+        assert not dropped, (f"{r.owner}: content_dedup_key drops vendor-key column(s) "
+                             f"{sorted(dropped)} — distinct records would collapse")

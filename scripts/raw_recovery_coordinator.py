@@ -285,7 +285,13 @@ ENDPOINT_MATRIX = [
        query_mode="per_report_date_month",
        vendor_record_key=("ts_code", "report_date", "org_name", "author_name", "quarter", "report_rc_payload_digest"),
        pit_version_key=("create_time", "raw_fetch_ts"),
-       content_dedup_key=("ts_code", "report_date", "org_name", "author_name", "report_rc_payload_digest"),
+       # GPT fan-out review P0-1: `quarter` was MISSING here while present in the vendor key. Two
+       # forecasts from the same analyst on the same report_date with an identical payload but for
+       # DIFFERENT quarters (e.g. FY1 vs FY2) are distinct records; collapsing them under
+       # content-dedup exceeded max_content_dups=0 and would HALT the recovery. The dedup key must
+       # never be coarser than the vendor key in a dimension that is genuinely part of the record.
+       content_dedup_key=("ts_code", "report_date", "org_name", "author_name", "quarter",
+                          "report_rc_payload_digest"),
        profile_key=("ts_code", "report_date"), empty_policy="dense_refuse", profile_key_dups_expected=True,
        consolidation_group="report_rc_yearly", tail_rule="TTL halo replay per Phase 5-A",
        note="doc cap 3000/page; identity = normalized analyst (org+author) + report_rc_payload_digest "
@@ -1182,7 +1188,15 @@ def assert_plan_matches_contracts(plan_rows: list, contracts: dict) -> None:
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): signed empty_policy "
                                    f"{c.get('empty_policy')!r} != the matrix's {row.empty_policy!r} "
                                    f"(a sparse contract for a dense row, or vice versa)")
-            miss_vk = set(row.vendor_record_key) - derived_fields_for(ep) - set(c.get("natural_key") or [])
+            # GPT fan-out review P0-1: this used to subtract derived_fields_for(ep), which EXEMPTED
+            # the payload-digest identity columns from the contract. The digest is precisely what
+            # distinguishes two vendor rows sharing every core field (top_list/top_inst/block_trade)
+            # or two analyst revisions sharing (ts_code, report_date, org, author, quarter) — so
+            # exempting it meant the SIGNED key did not actually carry the row identity, and a real
+            # recovery would HALT on "duplicate rows under the NATURAL key". contract_errors already
+            # permits a derived column in natural_key (allowed = doc vocab | endpoint-derived), so
+            # there is no reason for the exemption: the signed key must COVER the matrix key exactly.
+            miss_vk = set(row.vendor_record_key) - set(c.get("natural_key") or [])
             if miss_vk:
                 raise RuntimeError(f"plan row {pr['request_id']} ({ep}): signed natural_key "
                                    f"{list(c.get('natural_key') or [])} does NOT cover the matrix vendor "
