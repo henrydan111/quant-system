@@ -143,6 +143,19 @@ if sys.platform == "win32":
     _ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
     _ntdll.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
 
+    # HANDLE-RELATIVE RENAME (GPT impl re-review #7 P0-2): os.replace(tmp, final) re-walks BOTH
+    # pathnames after the safe write, so a parent swapped in that window lands the file outside the
+    # root. NtSetInformationFile(FileRenameInformation) renames RELATIVE to a held parent handle
+    # (RootDirectory), so no pathname is re-resolved.
+    DELETE = 0x00010000
+    FileRenameInformation = 10
+    _ntdll.NtSetInformationFile.restype = wintypes.LONG
+    _ntdll.NtSetInformationFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(_IO_STATUS_BLOCK),
+                                            wintypes.LPVOID, wintypes.ULONG, wintypes.ULONG]
+    _k32.SetFileTime.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                 ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+    _k32.SetFileTime.restype = wintypes.BOOL
+
 
 class WriteBrokerError(RuntimeError):
     pass
@@ -158,8 +171,59 @@ class NoFollowWriteBroker:
         self.root = Path(root)
         if not self.root.exists():
             raise WriteBrokerError(f"broker root does not exist: {self.root}")
-        self._root_id = self._identity(self.root)  # (vol, idx); raises if root itself is a reparse point
-        self._root_final = self._final_path(self.root)
+        # GPT impl re-review #7 P0-1: the root BOOTSTRAP itself must not resolve by pathname.
+        # CreateFileW(str(self.root)) walks the WHOLE name, so an ANCESTOR of the run root (e.g.
+        # RECOVERY_ROOT) swapped for a junction redirected every "validated" write outside — and if the
+        # swap happened BEFORE construction, the broker cached the EXTERNAL directory's identity as
+        # legitimate, so comparing cached ids could never detect it. The run root is now opened by
+        # walking from the VOLUME ANCHOR (C:\ — the trusted anchor of this threat model; re-mounting the
+        # system volume is out of scope) with every component opened HANDLE-RELATIVE and no-follow.
+        h = self._open_root_from_volume_anchor()
+        try:
+            info = _BY_HANDLE_FILE_INFORMATION()
+            if not _k32.GetFileInformationByHandle(h, ctypes.byref(info)):
+                raise WriteBrokerError(f"GetFileInformationByHandle failed for {self.root}")
+            self._root_id = (info.dwVolumeSerialNumber,
+                             (info.nFileIndexHigh << 32) | info.nFileIndexLow)
+            buf = ctypes.create_unicode_buffer(32768)
+            n = _k32.GetFinalPathNameByHandleW(h, buf, len(buf), VOLUME_NAME_DOS)
+            if n == 0 or n >= len(buf):
+                raise WriteBrokerError(f"GetFinalPathNameByHandleW failed for {self.root}")
+            self._root_final = buf.value
+        finally:
+            _k32.CloseHandle(h)
+
+    def _open_root_from_volume_anchor(self, share: int = None):
+        """Open the RUN ROOT by walking from the volume anchor, every component handle-relative and
+        no-follow (GPT impl re-review #7 P0-1). Returns a directory handle the caller closes."""
+        anchor = Path(self.root.anchor)                      # e.g. 'C:\\'
+        if not str(anchor).strip() or not self.root.is_absolute():
+            raise WriteBrokerError(f"broker root {self.root} has no volume anchor — refusing")
+        share_mask = (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) if share is None else share
+        cur = _k32.CreateFileW(str(anchor),
+                               FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                               share_mask, None, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
+        if cur == INVALID_HANDLE_VALUE:
+            raise WriteBrokerError(f"cannot open volume anchor {anchor}: "
+                                   f"WinError {ctypes.get_last_error()}")
+        try:
+            for part in self.root.relative_to(anchor).parts:
+                nxt = self._nt_open_relative(
+                    cur, part, directory=True, disposition=FILE_OPEN,
+                    access=FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                    share=share)
+                try:
+                    self._check_handle(nxt, part)            # a junctioned ANCESTOR refuses here
+                except WriteBrokerError:
+                    _k32.CloseHandle(nxt)
+                    raise
+                _k32.CloseHandle(cur)
+                cur = nxt
+            return cur
+        except Exception:
+            _k32.CloseHandle(cur)
+            raise
 
     # ── low-level handle ops ──────────────────────────────────────────────────────────────────────
     def _open_nofollow(self, path: Path):
@@ -281,18 +345,24 @@ class NoFollowWriteBroker:
                                    f"{info.nNumberOfLinks}) — may alias a file outside the root")
 
     def _root_handle(self, share: int = None):
-        """`share` overrides the sharing mask (GPT impl re-review #6 P0): a LOCK's ancestor chain must
-        omit FILE_SHARE_DELETE, else the root/intermediate dirs can be RENAMED between parent-open and
-        leaf-open, so one holder locks under the moved tree while another locks a fresh dir at the
-        original pathname."""
-        h = _k32.CreateFileW(str(self.root), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                             (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) if share is None else share,
-                             None, OPEN_EXISTING,
-                             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
-        if h == INVALID_HANDLE_VALUE:
-            raise WriteBrokerError(f"cannot open broker root {self.root}: WinError {ctypes.get_last_error()}")
+        """The authoritative run-root handle: walked from the VOLUME ANCHOR, every component
+        handle-relative and no-follow (GPT impl re-review #7 P0-1 — CreateFileW(str(self.root)) let a
+        junctioned ANCESTOR redirect every write). `share` omits FILE_SHARE_DELETE for lock chains
+        (#6 P0), so an ancestor cannot be renamed between parent-open and leaf-open.
+
+        The object identity is re-checked against the one bound at construction: even if the whole
+        pathname now resolves elsewhere, a DIFFERENT directory object refuses."""
+        h = self._open_root_from_volume_anchor(share)
         try:
             self._check_handle(h, str(self.root))
+            info = _BY_HANDLE_FILE_INFORMATION()
+            if not _k32.GetFileInformationByHandle(h, ctypes.byref(info)):
+                raise WriteBrokerError(f"GetFileInformationByHandle failed for {self.root}")
+            got = (info.dwVolumeSerialNumber, (info.nFileIndexHigh << 32) | info.nFileIndexLow)
+            if got != self._root_id:
+                raise WriteBrokerError(f"REFUSED: {self.root} now resolves to a DIFFERENT directory "
+                                       f"object than the one bound at construction — the run root was "
+                                       f"swapped underneath us")
         except WriteBrokerError:
             _k32.CloseHandle(h)
             raise
@@ -363,15 +433,58 @@ class NoFollowWriteBroker:
         fd = msvcrt.open_osfhandle(fh, 0)  # fd now OWNS the handle; closing the file closes it
         return os.fdopen(fd, mode, encoding=encoding)
 
+    def replace_into(self, tmp: Path, final: Path) -> None:
+        """Atomically rename `tmp` onto `final` RELATIVE to a held parent directory handle (GPT impl
+        re-review #7 P0-2). os.replace(tmp, final) re-walks BOTH pathnames after the safe write, so a
+        parent swapped in that window landed the file OUTSIDE the root. Here the parent chain is opened
+        handle-relative/no-follow, the temp file is opened relative to it with DELETE access, and
+        NtSetInformationFile(FileRenameInformation) renames it using that handle as RootDirectory — no
+        pathname is re-resolved. Both paths must share the same broker-validated parent."""
+        import struct
+        tmp = self.validate_ancestry(tmp)
+        final = self.validate_ancestry(final)
+        if tmp.parent != final.parent:
+            raise WriteBrokerError(f"REFUSED: handle-relative replace requires one parent "
+                                   f"({tmp.parent} != {final.parent})")
+        parent_h = self._dir_handle_chain(tmp.parent.relative_to(self.root).parts, create=False)
+        try:
+            # FILE_READ_ATTRIBUTES is required for the _check_handle reparse/hard-link inspection
+            fh = self._nt_open_relative(parent_h, tmp.name, directory=False, disposition=FILE_OPEN,
+                                        access=DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+            try:
+                self._check_handle(fh, str(tmp))
+                name = final.name.encode("utf-16-le")
+                # x64 FILE_RENAME_INFORMATION: BOOLEAN + pad(7) + HANDLE + ULONG + WCHAR[]
+                head = struct.pack("<B7xQI", 1, parent_h, len(name))
+                buf = ctypes.create_string_buffer(head + name, len(head) + len(name))
+                iosb = _IO_STATUS_BLOCK()
+                st = _ntdll.NtSetInformationFile(fh, ctypes.byref(iosb), buf, len(buf),
+                                                 FileRenameInformation)
+                self._nt_check(st, f"NtSetInformationFile(rename {tmp.name} -> {final.name})")
+            finally:
+                _k32.CloseHandle(fh)
+        finally:
+            _k32.CloseHandle(parent_h)
+
     def copy_into(self, src: Path, dst: Path) -> None:
         """Copy a validated no-follow SOURCE into a broker-validated dest (preserving mtime)."""
+        import msvcrt
         assert_no_reparse_source(src)
+        st = os.stat(src)
         with open(src, "rb") as s, self.open_for_write(dst, "wb") as d:
             shutil.copyfileobj(s, d)
-        try:
-            os.utime(dst, (os.path.getatime(src), os.path.getmtime(src)))
-        except OSError:
-            pass
+            d.flush()
+            # GPT impl re-review #7: set the times on the HELD HANDLE, not by pathname — os.utime(dst)
+            # after the write is one more re-walk of a name the ancestor swap could have redirected.
+            try:
+                def _ft(epoch):
+                    v = int(epoch * 10_000_000) + 116_444_736_000_000_000
+                    return wintypes.FILETIME(v & 0xFFFFFFFF, v >> 32)
+                at, mt = _ft(st.st_atime), _ft(st.st_mtime)
+                _k32.SetFileTime(msvcrt.get_osfhandle(d.fileno()), None,
+                                 ctypes.byref(at), ctypes.byref(mt))
+            except OSError:
+                pass
 
     def file_lock(self, target: Path, *, timeout: float = 600.0, poll: float = 0.02):
         """A cross-process OS lock taken on a HANDLE opened through the no-follow handle chain — NOT a

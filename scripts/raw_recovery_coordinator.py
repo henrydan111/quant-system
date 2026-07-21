@@ -479,7 +479,10 @@ class RecoveryPaths:
             json.dump(obj, fh, ensure_ascii=False, indent=1)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        # GPT impl re-review #7 P0-2: os.replace(tmp, path) RE-WALKED both pathnames after the safe
+        # write — a parent swapped in that window atomically placed the JSON OUTSIDE the run root. The
+        # rename now happens RELATIVE to a held parent handle (no pathname is re-resolved).
+        b.replace_into(tmp, path)
 
     def _lock(self):
         # GPT impl re-review #4 (P0): the OS lock is taken on a HANDLE opened through the no-follow

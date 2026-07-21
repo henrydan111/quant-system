@@ -1170,3 +1170,124 @@ def test_ledger_lock_parent_chain_is_also_delete_protected(rig):
     rp.broker().mkdirs(ledger_dir)
     with rp._lock():
         assert _child_parent_swap(ledger_dir).startswith("SWAP_FAILED")
+
+
+# ── GPT impl re-review #7 fold: ancestor-of-root bootstrap + post-write path re-walk ──────────────
+def _mk_junction(link: Path, target: Path) -> bool:
+    import subprocess
+    r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def _ancestor_swap_rig(tag: str):
+    """Build <base>/<parent>/run with an EXTERNAL twin, so <parent> can be swapped for a junction.
+    Returns (parent_dir, run_root, external_parent, external_run)."""
+    base = _recovery_test_root(tag)
+    parent = base / "recovery_root"
+    run = parent / "run1"
+    run.mkdir(parents=True)
+    external_parent = base / "external_root"
+    external_run = external_parent / "run1"
+    external_run.mkdir(parents=True)
+    return parent, run, external_parent, external_run
+
+
+def test_ancestor_of_root_swapped_after_construction_is_refused(rig):
+    """P0-1 (reproduced by GPT): the broker opened the run root with CreateFileW(str(root)), which
+    resolves the WHOLE pathname — so an ANCESTOR of the run root (RECOVERY_ROOT) swapped for a junction
+    redirected every 'validated' write outside. The root is now walked from the VOLUME ANCHOR,
+    component-by-component, handle-relative + no-follow, and its object identity is re-checked."""
+    import subprocess
+    parent, run, external_parent, external_run = _ancestor_swap_rig("anc_post")
+    broker = rrc.NoFollowWriteBroker(run)                  # constructed on the HONEST tree
+    sentinel = external_run / "escaped.bin"
+    # swap the ANCESTOR: rename <parent> aside, junction it to the external twin
+    subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(parent) + "_moved"],
+                   capture_output=True, text=True)
+    os.rename(parent, str(parent) + "_moved")
+    if not _mk_junction(parent, external_parent):
+        os.rename(str(parent) + "_moved", parent)
+        pytest.skip("mklink unavailable")
+    try:
+        # every write surface must refuse: the pathname now resolves to a DIFFERENT directory object
+        with pytest.raises(Exception):
+            with broker.open_for_write(run / "escaped.bin", "wb") as fh:
+                fh.write(b"escaped-through-root-bootstrap")
+        with pytest.raises(Exception):
+            with broker.file_lock(run / "x.lock"):
+                pass
+        assert not sentinel.exists(), "a write escaped to the external tree through the swapped ancestor"
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(parent)], capture_output=True, text=True)
+        os.rename(str(parent) + "_moved", parent)
+
+
+def test_ancestor_junction_present_before_broker_construction_is_refused():
+    """P0-1, the harder half (GPT): if the ancestor swap happens BEFORE the broker is constructed, it
+    would cache the EXTERNAL directory's identity as legitimate — so an id comparison alone can never
+    catch it. The volume-anchored walk refuses the junctioned ancestor at CONSTRUCTION time."""
+    import subprocess
+    parent, run, external_parent, external_run = _ancestor_swap_rig("anc_pre")
+    os.rename(parent, str(parent) + "_moved")
+    if not _mk_junction(parent, external_parent):
+        os.rename(str(parent) + "_moved", parent)
+        pytest.skip("mklink unavailable")
+    try:
+        # the run pathname "exists" (via the junction) but its ancestry contains a reparse point
+        with pytest.raises(Exception, match="reparse|REFUSED"):
+            rrc.NoFollowWriteBroker(run)
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(parent)], capture_output=True, text=True)
+        os.rename(str(parent) + "_moved", parent)
+
+
+def test_write_json_rename_cannot_escape_via_a_post_write_parent_swap(rig):
+    """P0-2 (reproduced by GPT): write_json wrote the temp file safely, then os.replace(tmp, path)
+    RE-WALKED both pathnames — a parent swapped in that window atomically placed the JSON OUTSIDE the
+    run root (`crossproc_post_write_parent_swap=SWAP_SUCCEEDED` / `external_json_created=True`). The
+    rename is now handle-relative (NtSetInformationFile with a held RootDirectory), so the swap still
+    SUCCEEDS but the rename REFUSES and nothing lands outside."""
+    import subprocess
+    rp, L = rig
+    external = _recovery_test_root("json_escape_target")
+    external.mkdir(parents=True, exist_ok=True)
+    reports = rp.reports
+    rp.broker().mkdirs(reports)
+    tmp, final = reports / "p.json.tmp", reports / "p.json"
+    with rp.broker().open_for_write(tmp, "w") as fh:      # temp written safely
+        fh.write("{}")
+    # the EXACT window: temp on disk, rename not yet issued -> swap the parent for a junction
+    os.rename(reports, str(reports) + "_moved")
+    if not _mk_junction(reports, external):
+        os.rename(str(reports) + "_moved", reports)
+        pytest.skip("mklink unavailable")
+    try:
+        with pytest.raises(Exception, match="reparse|REFUSED"):
+            rp.broker().replace_into(tmp, final)
+        assert not (external / "p.json").exists(), "the JSON escaped the run root via the rename"
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(reports)], capture_output=True, text=True)
+        os.rename(str(reports) + "_moved", reports)
+
+
+def test_replace_into_refuses_cross_parent_rename(rig):
+    """replace_into is single-parent by construction (both names resolve under ONE held handle)."""
+    rp, L = rig
+    rp.broker().mkdirs(rp.staging_data / "a")
+    rp.broker().mkdirs(rp.staging_data / "b")
+    src = rp.staging_data / "a" / "x.tmp"
+    with rp.broker().open_for_write(src, "wb") as fh:
+        fh.write(b"x")
+    with pytest.raises(Exception, match="one parent"):
+        rp.broker().replace_into(src, rp.staging_data / "b" / "x.bin")
+
+
+def test_write_json_still_works_and_is_atomic(rig):
+    """Positive control: the handle-relative rename preserves write_json's normal behaviour."""
+    rp, L = rig
+    target = rp.reports / "ok.json"
+    rp.write_json(target, {"hello": "world"})
+    import json as _json
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"hello": "world"}
+    assert not list(target.parent.glob("*.tmp"))       # the temp file was renamed away, not left behind
