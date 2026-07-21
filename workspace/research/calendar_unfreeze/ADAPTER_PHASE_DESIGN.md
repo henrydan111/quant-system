@@ -213,7 +213,8 @@ function that production (update_daily_data) is refactored to call too (F9).
   enforcement, truncation, crash-resume + concurrent-claim TOCTOU, dense/sparse empties + canary, schema
   drift, mid-flight contract/recipe edit (manifest recompute + per-page re-bind), containment,
   synthetic/live firewall, consolidation row-conservation.
-- **Out of scope (user 2026-07-16):** mid-operation adversarial races; promotion is HUMAN-DRIVEN.
+- **Out of scope (user 2026-07-16, RE-AFFIRMED 2026-07-20):** mid-operation adversarial races;
+  promotion is HUMAN-DRIVEN. See §6a for the re-affirmation and the accepted residual.
 - **Acceptance (interface-freeze QUARTET):** each of A01/income/top_list/broker_recommend runs the full
   machinery (freeze_run_plan → run_family via `claim_next_fetch` → verify/confirm_empty →
   consolidate_family) under a `SyntheticExecutor` in a synthetic-mode run, exercising its PHYSICAL
@@ -224,6 +225,32 @@ function that production (update_daily_data) is refactored to call too (F9).
   income row-conservation repartition / containment / bundle-manifest tamper (dirty file) refuse /
   executor-mode≠run-mode refuse pre-lease / live-construction write test (F10); promotion refuses the
   synthetic run.
+
+## 6a. Threat-model RE-AFFIRMATION (user decision, 2026-07-20) — the boundary of Gate B
+GPT implementation re-reviews #4–#8 each reproduced a cross-process attack executed *during* one of our
+operations (junction swapped into an ancestor mid-window, lock file unlinked while held, parent renamed
+between parent-open and leaf-open, root swapped before broker construction, hard link created against a
+live write handle). Every one was real and every one was folded. But they are all instances of the
+**mid-operation active local adversary** — which the 2026-07-16 directive placed OUT of scope.
+
+At round #8 GPT stated the choice explicitly: the hard-link vector **cannot** be closed by sharing
+masks (it succeeds even at `share=0`); it needs a separate OS identity or a private ACL, or the
+boundary must be narrowed and documented. **The user re-affirmed the original scope on 2026-07-20.**
+
+Consequences, recorded deliberately:
+- **Gate B is judged against the FROZEN model**: pre-existing junctions (the incident's actual cause),
+  broken junctions, crashes, staged-byte corruption, concurrent recovery processes, mis-certified
+  fetches. The current code closes these.
+- **Accepted residual:** a cooperating local process can hard-link a file while our write handle is
+  open; `nNumberOfLinks > 1` only detects links that pre-exist the open. Not closable within scope.
+- **Rationale:** on a single-user workstation an attacker with local write access can destroy the store
+  outright without racing anything — which is precisely what happened on 2026-07-13, with no adversary
+  at all. Hardening past this point buys no real protection while the review arc has no terminator.
+- **Everything already built stays.** The no-follow handle chain, volume-anchored bootstrap, no-delete
+  share masks, handle-relative rename and lock all EXCEED the frozen model; they are retained as free
+  defence-in-depth, not as evidence the adversarial model is in scope.
+- **Re-scoping is a user decision, never round-N legislation** — this section is the user's decision,
+  recorded, not mine or the reviewer's.
 
 ## 7. Tracked promotion preconditions (unchanged; NOT this unit): output-density gate; fina_mainbz
 revision-timing probe; fina_indicator_vip §13 period-discovery probe (sign A07).

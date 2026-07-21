@@ -23,6 +23,26 @@ junction pointing outside the run root. This broker closes that window (GPT re-r
 
 Pure-ctypes (no pywin32 dependency). Windows-only by construction; the coordinator refuses write modes
 on any other platform.
+
+THREAT MODEL — FROZEN (user directive 2026-07-16, RE-AFFIRMED 2026-07-20 after GPT impl re-review #8)
+-----------------------------------------------------------------------------------------------------
+IN scope, and closed by this module: pre-existing junctions/symlinks anywhere in the ancestry (the
+incident's actual cause), broken junctions, crashes mid-operation, corrupted staged bytes, concurrent
+recovery processes, and mis-certified fetches.
+
+OUT of scope: an ACTIVE LOCAL ADVERSARY racing us mid-operation. This is a single-user workstation;
+anyone with local write access can destroy or replace the store outright without racing anything, so
+hardening against them buys no real protection while costing unbounded review rounds.
+
+ACCEPTED, DOCUMENTED RESIDUAL (GPT impl re-review #8): a cooperating local process can create a HARD
+LINK to a file while our write handle is open. This succeeds even with share=0 and therefore CANNOT be
+closed by sharing masks — only by a separate OS identity or a private ACL on the run root, which the
+scope above deliberately excludes. `_check_handle`'s `nNumberOfLinks > 1` check detects hard links that
+exist when we open a file (the in-scope case: a pre-planted alias), NOT ones created afterwards.
+
+The no-follow handle chain, the volume-anchored root bootstrap, the no-delete share masks and the
+handle-relative rename all EXCEED the frozen model — they were built while probing this boundary and
+are retained as free defence-in-depth. They are not evidence that the adversarial model is in scope.
 """
 from __future__ import annotations
 
