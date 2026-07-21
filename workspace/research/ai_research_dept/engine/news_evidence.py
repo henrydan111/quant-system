@@ -679,17 +679,23 @@ def _verify_d7_relationships(records) -> None:
 
 def require_sealed_registry(registry) -> SealedCardRegistry:
     """消费边界强制(re-review#3 B2 + re-review#4 B1):只收真 SealedCardRegistry、重验
-    其封印、**并重跑 D7 关系语义校验**——duck-typed 冒牌对象与错父 D7 子行在每个消费点拒。"""
+    其封印、**并重跑 D7 关系语义校验**——duck-typed 冒牌对象与错父 D7 子行在每个消费点拒。
+    archive-re-review#14 P0:**返回独立冻结快照,不返回调用方活对象**——旧实现验证
+    活的 `records` 却把同一对象交给下游消费,`__dict__` 注入一个按调用阶段变脸的
+    mapping 即可让"验证读合法内容、消费读 NFR01 风险内容"。重建一个新
+    SealedCardRegistry(其 `__post_init__` 把不可信活 mapping **恰读一次**→重建每值→
+    冻结→验封),下游只见冻结快照,阶段变脸无处施展。"""
     # archive-re-review#7 P0:恰类型(子类可覆写 _payload 使 registry_hash 与实际
-    # records 脱钩,自封假身份过全链)+ canonical helper 重算,不经虚方法
+    # records 脱钩,自封假身份过全链)
     if type(registry) is not SealedCardRegistry:
         raise RegistryError("registry 必须是恰 SealedCardRegistry"
                             f"(得 {type(registry).__name__};子类/duck-typed 拒,"
                             f"re-review#7 P0)")
-    verify_sealed(registry_canonical_payload(registry), registry.registry_hash,
-                  field_name="registry_hash")
-    _verify_d7_relationships(registry.records)         # re-review#4 B1:每次消费重验
-    return registry
+    fresh = SealedCardRegistry(cutoff_iso=registry.cutoff_iso,
+                               records=registry.records,
+                               registry_hash=registry.registry_hash)
+    _verify_d7_relationships(fresh.records)            # 冻结快照上重验(re-review#4 B1)
+    return fresh
 
 
 # --------------------------------------------------- 三元授权 + 上限算术

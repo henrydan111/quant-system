@@ -1044,6 +1044,53 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="键|record_id"):
             require_sealed_registry(reg)
 
+    def test_phase_shifting_registry_mapping_refused(self, tmp_path):
+        # archive-re-review#14 P0: require_sealed_registry validated the LIVE
+        # records mapping and returned the same object. A mapping whose items()
+        # returns legit content on the verify read but restricted content on a
+        # later consume read must be defeated by returning an independent frozen
+        # snapshot (verify and consume read the SAME frozen content).
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            require_sealed_registry,
+        )
+        art = _artifact_full("d1")
+        reg = art.final_registry
+        genuine = dict(reg.records)
+
+        class _PhaseShift(dict):
+            reads = 0
+            def items(self):
+                _PhaseShift.reads += 1
+                # after the first (snapshot) read, hand back a mutated set
+                if _PhaseShift.reads == 1:
+                    return super().items()
+                return iter([("HACKED", object())])
+        reg.__dict__["records"] = _PhaseShift(genuine)
+        fresh = require_sealed_registry(reg)
+        # the returned registry is a frozen snapshot — later reads are stable
+        from types import MappingProxyType
+        assert type(fresh.records) is MappingProxyType
+        assert set(fresh.records) == set(genuine)
+        # and it is NOT the caller's live object
+        assert fresh.records is not reg.records
+        assert dict(fresh.records.items()) == dict(fresh.records.items())
+
+    def test_injected_outcome_output_mode_subclass_refused(self, tmp_path):
+        # archive-re-review#14 P1: a str-subclass output_mode injected into
+        # outcome.__dict__ after construction must be refused at the consume
+        # boundary (verify_outcome_for_binding), so the archive never seals a
+        # divergent output_mode that then fails to reload.
+        art, bundle = _setup(tmp_path)
+
+        class _EvilMode(str):
+            def __eq__(self, x): return True
+            def __ne__(self, x): return False
+            def __hash__(self): return hash(str(self))
+        bundle["outcome"].__dict__["output_mode"] = _EvilMode(
+            bundle["outcome"].output_mode)
+        with pytest.raises(RegistryError, match="output_mode 须恰 str"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
     def test_card_text_splitlines_injection_refused(self, tmp_path):
         # archive-re-review#13 P0: a str subclass whose str() returns the sealed
         # text (so card_hash still verifies) but whose .splitlines() is forged.
@@ -1073,7 +1120,8 @@ class TestExactTypeBoundaries:
             def __ne__(self, x): return False
             def __hash__(self): return 0
         bundle["outcome"].__dict__["outcome_hash"] = _EvilInt(0)
-        with pytest.raises(SealError):
+        # caught by the consume-time base-type assert (re-review#14) before verify
+        with pytest.raises((SealError, RegistryError)):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
 
     def test_injected_contract_hash_int_refused_at_consume(self, tmp_path):

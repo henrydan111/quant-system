@@ -220,6 +220,28 @@ def outcome_canonical_payload(outcome: NewsLegOutcome) -> dict:
             "penalty_payload_hash": outcome.penalty_payload_hash}
 
 
+def assert_base_outcome_fields(outcome) -> None:
+    """**消费时**精确基础类型断言(archive-re-review#14 P1:构造期恰类型可被
+    事后 `outcome.__dict__` 注入撤销——注入 output_mode 的 str 子类使
+    verify/归档写入通过,但磁盘写 `vector_only` 后无法重载;消费门每次重验)。"""
+    for _f in ("decision_id", "output_mode", "factor_leg_status",
+               "penalty_eligible_set_hash", "penalty_leg_status", "news_status",
+               "factor_payload_hash", "outcome_hash"):
+        if type(getattr(outcome, _f)) is not str:
+            raise RegistryError(
+                f"NewsLegOutcome.{_f} 须恰 str(得 {type(getattr(outcome, _f)).__name__}"
+                f";__dict__ 注入子类拒,re-review#14 P1)")
+    for _f in ("shadow_complete", "decision_complete", "binding_eligible"):
+        if type(getattr(outcome, _f)) is not bool:
+            raise RegistryError(f"NewsLegOutcome.{_f} 须恰 bool(re-review#14 P1)")
+    if type(outcome.penalty_eligible_count) is not int \
+            or isinstance(outcome.penalty_eligible_count, bool):
+        raise RegistryError("NewsLegOutcome.penalty_eligible_count 须恰 int(re-review#14 P1)")
+    if not (outcome.penalty_payload_hash is None
+            or type(outcome.penalty_payload_hash) is str):
+        raise RegistryError("NewsLegOutcome.penalty_payload_hash 须恰 str/None(re-review#14 P1)")
+
+
 def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: str,
                       output_mode: str, factor_payload_ast, penalty_payload_ast,
                       factor_leg_fn, penalty_leg_fn) -> NewsLegOutcome:
@@ -327,6 +349,7 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
         raise RegistryError(
             f"绑定边界只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
             f"子类可覆写 _payload 脱钩,拒(archive-re-review#6 P0 同类面)")
+    assert_base_outcome_fields(outcome)                # re-review#14 P1:消费时复验
     if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
         raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"
                             f"(来自冻结评分契约;得 {expected_output_mode!r})")
