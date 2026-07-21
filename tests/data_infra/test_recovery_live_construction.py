@@ -15,7 +15,11 @@ Three things the first version got wrong (all found by GPT, all reproduced befor
   2. it stubbed `ts.pro_api`, so the REAL client construction was never exercised. The real
      `ts.pro_api(token)` now runs (construction needs no network); only the DataApi's `query` — the
      one method that would reach the wire — is replaced;
-  3. it entered the machine-global §6.1 API lock, whose wait cap is 1800s, so on a busy machine the
+  3. (found in my own self-review, not by GPT) the monitor was armed only AFTER the imports, which
+     forfeits half of what F10 claims to prove — import-time writes (logging handlers, `.env`). It is
+     now armed from the first line; the interpreter's own bytecode cache is the one legitimate outside
+     write, so it is allowlisted BY SHAPE and counted separately rather than left unseen;
+  4. it entered the machine-global §6.1 API lock, whose wait cap is 1800s, so on a busy machine the
      child blocked past the subprocess timeout and the test FAILED depending on unrelated system
      state. The child now isolates that lock into its own run-local directory via the sanctioned test
      seam (monkeypatching `tushare_lock._api_lock_dir`), so this test never contends with a real
@@ -62,7 +66,12 @@ SRC = Path(sys.argv[3])
 MODE = sys.argv[4] if len(sys.argv) > 4 else "live"
 
 violations = []
-_armed = [False]
+bytecode_writes = []
+
+# Armed from the FIRST line, not after the imports: F10 exists partly to catch IMPORT-time writes
+# (logging handlers, .env loading), so skipping the import phase would forfeit the thing being proven.
+# The only import-time writes that are legitimately outside the run root are the interpreter's own
+# bytecode cache, so those are allowlisted BY SHAPE and recorded separately instead of being blind.
 
 
 def _allowed(path) -> bool:
@@ -73,14 +82,17 @@ def _allowed(path) -> bool:
     return str(RUN_ROOT).lower() in str(p).lower()
 
 
+def _is_bytecode(path) -> bool:
+    s = str(path).lower()
+    return "__pycache__" in s or s.endswith((".pyc", ".pyo"))
+
+
 _WRITE_MODES = ("w", "a", "x", "+")
 
 
 def _audit(event, args):
     # sys.addaudithook fires for C-level opens too, so Path.write_text / io.open / os.open are all
     # covered — a builtins.open shim is not (verified: it misses Path.write_text).
-    if not _armed[0]:
-        return
     try:
         if event == "open":
             path, mode = args[0], args[1]
@@ -91,11 +103,12 @@ def _audit(event, args):
             writing = any(c in m for c in _WRITE_MODES) or bool(
                 isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND))
             if writing and not _allowed(path):
-                violations.append(f"open({path!r}, mode={m!r}, flags={flags})")
+                (bytecode_writes if _is_bytecode(path) else violations).append(
+                    f"open({path!r}, mode={m!r}, flags={flags})")
         elif event in ("os.mkdir", "os.rmdir", "os.remove", "os.unlink", "os.rename", "os.replace"):
             for a in args[:2]:
                 if isinstance(a, (str, bytes, os.PathLike)) and not _allowed(a):
-                    violations.append(f"{event}({a!r})")
+                    (bytecode_writes if _is_bytecode(a) else violations).append(f"{event}({a!r})")
         elif event in ("socket.connect", "socket.getaddrinfo"):
             violations.append(f"{event} — NETWORK attempted")
     except Exception:
@@ -134,7 +147,6 @@ try:
     from data_infra.fetchers import TushareFetcher
     import recovery_adapters as ra
 
-    _armed[0] = True                          # arm AFTER imports: we audit construction + the call
     if MODE == "redteam":
         # red-team control: an external write MUST be caught by the monitor
         Path(os.environ["F10_EXTERNAL_PROBE"]).write_text("escaped", encoding="utf-8")
@@ -169,8 +181,8 @@ try:
 except BaseException as exc:
     result["error"] = f"{type(exc).__name__}: {exc}"
 
-_armed[0] = False
 result["violations"] = violations
+result["bytecode_writes"] = len(bytecode_writes)
 REPORT.write_text(json.dumps(result), encoding="utf-8")
 '''
 

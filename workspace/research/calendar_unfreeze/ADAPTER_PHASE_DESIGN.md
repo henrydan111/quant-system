@@ -255,6 +255,28 @@ Consequences, recorded deliberately:
 ## 7. Tracked promotion preconditions (unchanged; NOT this unit): output-density gate; fina_mainbz
 revision-timing probe; fina_indicator_vip §13 period-discovery probe (sign A07).
 
+## 7a. Operator runbook — the recovery CANNOT fit in one §13 authorization (fan-out review finding)
+
+Arithmetic verified locally, not taken on faith: **104,176** planned requests against the §6.1
+`MIN_BASE_SLEEP=1.5s` floor is a **43.4h theoretical minimum** — and that is the floor, before any
+retry, cooldown, or 429 backoff. `cmd_authorize_fetch` refuses `--hours` outside `(0, 24]`
+([raw_recovery_coordinator.py:1590](../../../scripts/raw_recovery_coordinator.py#L1590)), so one 24h
+authorization covers at most 57,600 requests. **A real recovery therefore needs at least two
+authorization segments** (2 at the 24h cap; more at the 4h default).
+
+Two consequences the operator must plan for, both of which fall out of how authorization is scoped:
+
+1. **Every renewal must scope ALL still-outstanding endpoints.** The authorization event binds an
+   endpoint set; a renewal that names only "what's next" silently strands the rest, and the ledger
+   will refuse them mid-run rather than at the gate.
+2. **A lapsed authorization is not a failure state.** Leases claimed under an expired authorization are
+   abandoned, not corrupted — the run resumes from the cursor under the next segment. The operator
+   should expect to re-authorize mid-recovery and should not treat the boundary as a restart.
+
+This is a §13 *operational* planning item, not a code gate: nothing in the fetch path assumes a single
+authorization. Recorded here because the single-segment assumption is the natural (wrong) reading of
+"authorize, then fetch".
+
 ## 8. Self-review of the v4 fold (2026-07-19; GPT unavailable — provisional, §10 confirmation owed)
 
 Method: adversarial code probes against the live repo, not a desk-check. (v3's open questions were
