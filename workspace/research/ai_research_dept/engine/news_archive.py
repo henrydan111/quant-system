@@ -179,11 +179,36 @@ def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
                  and e["decision_id"] == decision_id
                  and e["news_status"] == "success"), None)
 
+def _deep_plain_json(x, *, path: str = "bundle"):
+    """递归验证**精确基础 JSON 类型**并重建为普通结构(archive-re-review#20:
+    `json.dumps` 会调 dict/list **子类**的 `.items()`/迭代——不是"不运行调用方
+    代码"的纯化手段;状态化 `.items()` 在连续两次序列化间可改写可信磁盘行。故
+    在**读磁盘/解析 resolved 之前**就把调用方 bundle/selected_provenance/records/
+    evaluation 递归拍成普通快照:每层**恰类型门先于任何容器访问**(`type(x) is
+    dict/list`,子类拒),只用内建 `dict.items` 迭代,之后只用快照——调用方容器
+    代码再无触发点)。"""
+    if x is None or type(x) in (bool, int, float, str):
+        return x
+    if type(x) is list:
+        return [_deep_plain_json(v, path=f"{path}[{i}]") for i, v in enumerate(x)]
+    if type(x) is dict:
+        out = {}
+        for k, v in x.items():                 # 恰 dict → 内建 items,无覆写
+            if type(k) is not str:
+                raise RegistryError(
+                    f"{path} 键须恰 str(得 {type(k).__name__};re-review#20)")
+            out[k] = _deep_plain_json(v, path=f"{path}.{k}")
+        return out
+    raise RegistryError(
+        f"{path} 含非纯 JSON 类型 {type(x).__name__}——bundle 须为精确基础 JSON"
+        f"(dict/list/str/int/float/bool/None;子类/自定义对象拒,re-review#20)")
+
+
 def _canon_json(x) -> str:
-    """canonical JSON 串(archive-re-review#19:比较调用方对象**绝不用 `!=`/`==`**
-    ——那会把左/右侧的可信对象本体传进对方的 `__ne__`/`__eq__`,dict 子类可原地
-    改写并返回 False。json.dumps 只序列化内容、不触发用户比较魔术方法;非纯 JSON
-    (含带魔术方法的自定义值)在此 raise → 拒)。"""
+    """canonical JSON 串(archive-re-review#19/#20:比较调用方对象**绝不用
+    `!=`/`==`**——那会把可信对象本体传进对方 `__ne__`/`__eq__`;且 `json.dumps`
+    对**子类**会调其 `.items()`。故 `_canon_json` 只作用于已 `_deep_plain_json`
+    拍平的**普通** dict/资料 —— 此时序列化确定性、无调用方代码)。"""
     return json.dumps(x, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
@@ -249,24 +274,34 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     的账本门只触碰不可变的决策注册行,首写胜出使其无 TOCTOU 面)。canonical
     取代规则(success 承诺唯一 ⇒ 决策档案 = success 执行的档案)在
     `load_and_verify_decision_archive`,不在此。"""
+    # re-review#20 P1:**入口即把 bundle 的 JSON 部分递归拍成普通快照**——`bundle`
+    # 须恰 dict;outcome 是密封对象另处;其余(execution_id/selected_provenance/
+    # records/evaluation)经 `_deep_plain_json` 恰类型深拷成普通结构,之后调用方
+    # 容器代码(`.get`/`.items`/`__getitem__`/状态化迭代)再无触发点,`_canon_json`
+    # 与 `seal_hash` 的连续序列化只作用于普通 dict。
+    if type(bundle) is not dict:
+        raise RegistryError(f"bundle 须恰 dict(得 {type(bundle).__name__};re-review#20)")
     require_exact_contract(contract)                   # re-review#6 P0
     # re-review#16 P1:契约 canonical 载荷 + hash **验证后立即捕获**进本地(冻进
     # verified 快照)——seal 此后绝不回读 live contract/artifact,污染无处施展
     v_contract_payload = contract_canonical_payload(contract)
     v_contract_hash = contract.contract_hash
-    outcome = bundle["outcome"]
-    # re-review#15 P1:恰类型 + **字段基础类型断言先于任何字段读取**——旧序在
-    # `_rebuild_leg_payloads` 读 outcome.penalty_leg_status 之后才 assert,带副作用
-    # 的 evil 字段可趁那次读取把自己恢复成普通 str 并把 bundle["outcome"] 换掉,
-    # 使随后的 assert 通过而 seal 写另一份 outcome。断言前移把 evil 字段在触发前拒。
+    outcome = bundle["outcome"]                         # 密封对象,恰类型 + 断言
     if type(outcome) is not NewsLegOutcome:
         raise RegistryError(
             f"bundle.outcome 须为恰 NewsLegOutcome(得 {type(outcome).__name__})"
             f"——子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
     assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
-    execution_id = bundle["execution_id"]
+    # 调用方 JSON 部分一次性深拍普通快照(下游只用它,绝不再碰 live bundle)
+    execution_id = _deep_plain_json(bundle.get("execution_id"),
+                                    path="bundle.execution_id")
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("bundle.execution_id 须为非空 str")
+    sel = _deep_plain_json(bundle.get("selected_provenance"),
+                           path="bundle.selected_provenance")
+    records = _deep_plain_json(bundle.get("records"), path="bundle.records")
+    bundle_eval = _deep_plain_json(bundle.get("evaluation"),
+                                   path="bundle.evaluation")
     verify_d7_artifact(artifact)
     v_artifact_hash = artifact.artifact_hash           # re-review#16:验证后即捕获
     v_bundle_hash = artifact.bundle.bundle_hash
@@ -282,20 +317,17 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                                ledger_dir=ledger_dir,
                                expected_output_mode=contract.output_mode)
     all_rows = read_execution_provenance(prov_dir)
-    sel = bundle["selected_provenance"]
-    # re-review#2 Major:嵌套对象严格键集——selected_provenance 恰两键
-    if not isinstance(sel, dict) or set(sel) != {"factor", "penalty"}:
+    # re-review#2/#20:sel/records 已是**普通快照**(入口深拍);严格键集
+    if set(sel) != {"factor", "penalty"}:              # 普通 dict,内建 set
         raise RegistryError("selected_provenance 须为恰 {factor, penalty} 两键 dict"
                             "(archive-re-review#2 Major)")
-    # records 严格形状(archive-review B2:硬失败携任意 JSON records 在此死)
-    records = bundle.get("records")
-    if not isinstance(records, dict) or set(records) != {"factor", "penalty"}:
+    if set(records) != {"factor", "penalty"}:
         raise RegistryError("bundle.records 须为恰 {factor, penalty} 两键 dict"
                             "(archive-review B2)")
     # factor 腿:总被尝试(真实执行或确定性零路径)→ 盘上解析恰一状态机终态
     f_resolved = _resolve_terminal(all_rows, execution_id=execution_id,
                                    decision_id=outcome.decision_id, leg="factor")
-    f_row = sel.get("factor")
+    f_row = sel["factor"]                               # 普通快照,内建取值
     _verify_selected_row(f_row, leg="factor", outcome=outcome,
                          execution_id=execution_id, contract=contract,
                          leg_payload_hash=factor_payload.payload_hash,
@@ -384,20 +416,16 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         # 可被原地改成错分再入档。冻结后档案用的是这份不可被回调触及的拷贝。
         trusted_eval = json.loads(json.dumps(trusted_eval, ensure_ascii=False,
                                              allow_nan=False))
-        # 调用方 evaluation 仅作 sanity 比对:**恰 dict 门 + canonical JSON 串比**
-        # ——绝不用 `!=`/`==` 触发用户自定义 __ne__/__eq__(bundle 值永不入档)
-        be = bundle.get("evaluation")
-        if type(be) is not dict:
+        # 调用方 evaluation(已是普通快照 bundle_eval)仅作 sanity 比对:**恰 dict
+        # 门 + canonical JSON 串比**(bundle 值永不入档;快照后无回调面)
+        if type(bundle_eval) is not dict:
             raise RegistryError("bundle.evaluation 须恰 dict(re-review#18 P1)")
-        if json.dumps(trusted_eval, sort_keys=True, ensure_ascii=False,
-                      allow_nan=False) != json.dumps(be, sort_keys=True,
-                                                     ensure_ascii=False,
-                                                     allow_nan=False):
+        if _canon_json(trusted_eval) != _canon_json(bundle_eval):
             raise RegistryError(
-                f"evaluation 重算不符:封存 {be} vs 重算 {trusted_eval}"
+                f"evaluation 重算不符:封存 {bundle_eval} vs 重算 {trusted_eval}"
                 f"——不信封存计算值(M2⁴)")
     else:
-        if bundle.get("evaluation") is not None:
+        if bundle_eval is not None:
             raise RegistryError("硬失败决策不得携带 evaluation")
     # archive-re-review#2 Blocker:选定终态必须与**账本承诺**(不可重写哈希链)
     # 逐哈希相符——承诺权威在返回束前把终态 entry_hash 承诺进决策账本;

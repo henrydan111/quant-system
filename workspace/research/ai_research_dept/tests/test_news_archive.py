@@ -1098,47 +1098,35 @@ class TestExactTypeBoundaries:
         assert archive["selected_provenance"]["factor"]["entry_hash"] \
             == f_term["entry_hash"]
 
-    def test_post_verify_live_mutation_never_reaches_archive(self, tmp_path):
-        # archive-re-review#16 P1 (the reviewer's family): a callback fired via
-        # selected_provenance.get() during verification tampers live inputs
-        # (artifact_hash, contract_hash, bundle["records"]) AFTER they were
-        # captured/resolved. The archive must reflect the captured/disk values,
-        # never the tampered live ones — seal reads only the frozen `verified`
-        # payload + ledger_head.
+    def test_container_subclass_selected_provenance_refused_at_snapshot(self, tmp_path):
+        # archive-re-review#20 P1: selected_provenance as a dict SUBCLASS (whose
+        # get()/items() could run caller code, e.g. tamper live inputs) is
+        # refused at the deep-plain-json entry gate — its container methods are
+        # NEVER invoked (the exact-type check precedes any access).
         art, bundle = _setup(tmp_path)
-        genuine_ah = art.artifact_hash
-        c = _contract()
-        genuine_ch = c.contract_hash
-        real_sel = dict(bundle["selected_provenance"])
+        fired = {"n": 0}
 
         class _EvilSel(dict):
             def get(self, k, default=None):
-                # tamper live objects AFTER they were captured into `verified`
-                # (artifact_hash captured post-verify_d7_artifact; contract_hash
-                # captured post-require_exact_contract) — the archive must use
-                # the captured values, not these
+                fired["n"] += 1
                 art.__dict__["artifact_hash"] = "0" * 64
-                c.__dict__["contract_hash"] = "0" * 64
                 return super().get(k, default)
-        bundle["selected_provenance"] = _EvilSel(real_sel)
-        archive = seal_decision_archive(
-            bundle, art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
-            contract=c, archive_dir=tmp_path / "arch")
-        assert archive["artifact_hash"] == genuine_ah        # captured, not "0"*64
-        assert archive["contract_hash"] == genuine_ch        # captured, not "0"*64
-        # reloads cleanly (restore live inputs for the load)
-        art.__dict__["artifact_hash"] = genuine_ah
-        loaded = load_and_verify_decision_archive(
-            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
-        assert loaded["artifact_hash"] == genuine_ah
+            def items(self):
+                fired["n"] += 1
+                return super().items()
+        bundle["selected_provenance"] = _EvilSel(dict(bundle["selected_provenance"]))
+        with pytest.raises(RegistryError, match="非纯 JSON"):
+            seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                  archive_dir=tmp_path / "arch")
+        assert fired["n"] == 0                          # get/items never called
+        assert not list((tmp_path / "arch").glob("*.json"))
 
-    def test_selected_row_ne_callback_never_fires(self, tmp_path):
-        # archive-re-review#19 P1 (the reviewer's attack): a selected_provenance
-        # row that is a dict subclass whose __ne__ would mutate the trusted
-        # disk-resolved row's parsed_record in place. The canonical-JSON compare
-        # never invokes the row's __ne__, and everything downstream uses the
-        # disk-resolved row — so the forge cannot fire and the archive keeps the
-        # genuine disk record. Covers factor AND penalty (the shared helper).
+    def test_selected_row_subclass_refused_at_snapshot(self, tmp_path):
+        # archive-re-review#19/#20 P1 (the reviewer's attack): a selected row
+        # that is a dict subclass whose stateful items()/__ne__ would mutate the
+        # trusted disk row on a second serialization. The deep-plain-json entry
+        # gate refuses the subclass container BEFORE any items()/__ne__ can run;
+        # covers factor AND penalty.
         fired = {"n": 0}
 
         class _EvilRow(dict):
@@ -1147,20 +1135,42 @@ class TestExactTypeBoundaries:
                 if isinstance(other, dict):
                     other["parsed_record"] = {"FORGED": True}
                 return False
-            def __eq__(self, other): return True
-            def __hash__(self): return 0
+            def items(self):
+                fired["n"] += 1
+                return super().items()
         for leg in ("factor", "penalty"):
             art, bundle = _setup(tmp_path / leg)
             genuine = dict(bundle["selected_provenance"][leg])
             bundle["selected_provenance"][leg] = _EvilRow(genuine)
-            archive = seal_decision_archive(
-                bundle, art, ledger_dir=tmp_path / leg / "ledger",
-                prov_dir=tmp_path / leg / "prov", contract=_contract(),
-                archive_dir=tmp_path / leg / "arch")
-            assert archive["records"][leg] != {"FORGED": True}
-            assert archive["selected_provenance"][leg]["parsed_record"] \
-                != {"FORGED": True}
-        assert fired["n"] == 0                          # __ne__ never called
+            with pytest.raises(RegistryError, match="非纯 JSON"):
+                seal_decision_archive(
+                    bundle, art, ledger_dir=tmp_path / leg / "ledger",
+                    prov_dir=tmp_path / leg / "prov", contract=_contract(),
+                    archive_dir=tmp_path / leg / "arch")
+        assert fired["n"] == 0                          # items()/__ne__ never called
+
+    def test_records_stateful_items_refused_at_snapshot(self, tmp_path):
+        # archive-re-review#20 P1 (the reviewer's exact attack): a records[leg]
+        # dict subclass with a STATEFUL items() that would mutate the trusted
+        # disk row on _require_record_bound's SECOND serialization (compare then
+        # seal_hash). The deep-plain-json entry gate refuses the subclass before
+        # items() is ever called. Covers factor and penalty.
+        fired = {"n": 0}
+
+        class _StatefulRec(dict):
+            def items(self):
+                fired["n"] += 1
+                return super().items()
+        for leg in ("factor", "penalty"):
+            art, bundle = _setup(tmp_path / leg)
+            genuine = dict(bundle["records"][leg]) if bundle["records"][leg] else {}
+            bundle["records"][leg] = _StatefulRec(genuine)
+            with pytest.raises(RegistryError, match="非纯 JSON"):
+                seal_decision_archive(
+                    bundle, art, ledger_dir=tmp_path / leg / "ledger",
+                    prov_dir=tmp_path / leg / "prov", contract=_contract(),
+                    archive_dir=tmp_path / leg / "arch")
+        assert fired["n"] == 0                          # items() never called
 
     def test_selected_row_nonjson_value_refused(self, tmp_path):
         # a selected row carrying a non-JSON value (an object with magic
@@ -1190,7 +1200,9 @@ class TestExactTypeBoundaries:
             def __eq__(self, other): return True
             def __hash__(self): return 0
         bundle["evaluation"] = _EvilEval()
-        with pytest.raises(RegistryError, match="须恰 dict"):
+        # refused at the deep-plain-json entry gate (non-JSON evaluation), before
+        # the exact-dict gate or any compare — __ne__ never fires
+        with pytest.raises(RegistryError, match="非纯 JSON|须恰 dict"):
             verify_execution_bundle(bundle, art, **_dirs(tmp_path))
         assert fired["ne"] is False                     # __ne__ never called
         assert not list((tmp_path / "arch").glob("*.json"))
