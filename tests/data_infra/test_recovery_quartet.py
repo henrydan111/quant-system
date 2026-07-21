@@ -1670,3 +1670,55 @@ def test_every_matrix_family_is_bound_deferred_or_a_second_layout():
     accounted |= {"A10a", "A10b"}
     missing = owners - accounted
     assert not missing, f"matrix families unaccounted for: {sorted(missing)}"
+
+
+# ── §13 authorize-fetch CLI (design v4 F2 + GPT impl re-review #2) ────────────────────────────────
+def test_authorize_fetch_writes_the_event_and_binds_plan_and_bundle(rig):
+    """The CLI-level authorization is a SEPARATE, explicit action that writes the hash-chained
+    fetch_authorized event; it binds the FROZEN plan + adapter bundle so re-authorization is required
+    if either changes."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("live_authorized")
+    rc = rrc.cmd_authorize_fetch(rp, L, actor="henry", hours=1.0, endpoints=["daily"])
+    assert rc == 0
+    evs = [r for r in L._load()
+           if r.get("kind") == "lifecycle" and r.get("event") == "fetch_authorized"]
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["actor"] == "henry" and ev["endpoint_scope"] == ["daily"]
+    assert ev["bundle_sha256"] == L.adapter_bundle_hash
+    frozen = [r for r in L._load() if r.get("event") == "plan_frozen"][0]
+    assert ev["plan_sha256"] == frozen["plan_sha256"]
+    assert ev["os_sid"] and ev["os_username"]            # EVIDENCE, not the boundary
+    # ...and the authorization now actually admits a claim
+    assert L.claim_next_fetch(row["request_id"], "live_authorized").kind == "FETCH"
+
+
+def test_authorize_fetch_refuses_bad_inputs(rig):
+    rp, L = rig
+    L._freeze_plan_unvalidated([_prow("daily", "20260702", "req/daily/20260702.parquet")])
+    assert rrc.cmd_authorize_fetch(rp, L, actor="henry", hours=1.0, endpoints=[""]) == 2
+    assert rrc.cmd_authorize_fetch(rp, L, actor="henry", hours=0, endpoints=["daily"]) == 2
+    assert rrc.cmd_authorize_fetch(rp, L, actor="henry", hours=48, endpoints=["daily"]) == 2
+    assert not [r for r in L._load() if r.get("event") == "fetch_authorized"]
+
+
+def test_authorize_fetch_requires_a_frozen_plan(rig):
+    """Authorizing a run with no frozen plan is meaningless — there is nothing to bind to."""
+    rp, L = rig
+    assert rrc.cmd_authorize_fetch(rp, L, actor="henry", hours=1.0, endpoints=["*"]) == 3
+    assert not [r for r in L._load() if r.get("event") == "fetch_authorized"]
+
+
+def test_fetch_command_cannot_mint_its_own_authorization():
+    """The fetch command must have NO path that writes the authorization event (GPT impl re-review
+    #2: authorization must be a separate user-triggered action)."""
+    import inspect
+    src = inspect.getsource(rrc.cmd_fetch)
+    body = src.split('"""')[-1]          # strip the docstring: it NAMES the thing it must not call
+    assert "record_fetch_authorization" not in body
+    assert "cmd_authorize_fetch" not in body
+    # and it still refuses outright
+    assert rrc.cmd_fetch(None, None) == 3

@@ -1558,10 +1558,45 @@ def cmd_plan(rp: RecoveryPaths, led: "PageReceiptLedger") -> int:
     return 1 if problems else 0  # nonzero while any row is blocked (GPT re-review #3 M2)
 
 
+def cmd_authorize_fetch(rp, led, *, actor: str, hours: float, endpoints) -> int:
+    """The SEPARATE, explicitly user-triggered §13 authorization (design v4 F2 + GPT impl re-review
+    #2). It writes the hash-chained `fetch_authorized` ledger event that fetch_claimed_page validates
+    before EVERY live wire call.
+
+    This is the ONLY code path that mints that event: `--fetch` has no branch that reaches it, by
+    construction, so a fetch can never authorize itself. The event binds the actor, an expiry, the
+    endpoint scope, the FROZEN plan hash and the adapter bundle hash — re-authorization is required if
+    the plan or the adapter code changes. The OS identity/SID is recorded as EVIDENCE only, never as
+    the security boundary (the §6a threat model excludes a local adversary)."""
+    from datetime import datetime, timedelta, timezone
+    scope = sorted({e.strip() for e in endpoints if e.strip()})
+    if not scope:
+        print("REFUSED: --endpoints must name at least one endpoint (or '*')", file=sys.stderr)
+        return 2
+    if hours <= 0 or hours > 24:
+        print("REFUSED: --hours must be in (0, 24] — a §13 authorization is short-lived by design",
+              file=sys.stderr)
+        return 2
+    expires = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+    try:
+        auth_id = led.record_fetch_authorization(actor=actor, expires_at=expires, endpoint_scope=scope)
+    except Exception as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 3
+    print(f"fetch AUTHORIZED  auth_id={auth_id[:12]}  actor={actor}  expires={expires}")
+    print(f"  scope: {', '.join(scope)}")
+    print("  bound to this run's FROZEN plan + adapter bundle; re-authorize if either changes.")
+    return 0
+
+
 def cmd_fetch(_rp, _led) -> int:
-    print("REFUSED: no fetch adapter exists. Order (GPT answer 7): containment/ledger fixes -> contract "
-          "review+sign per endpoint -> adapters from the unique-owner matrix -> pre-fetch test matrix -> "
-          "explicit user fetch authorization.", file=sys.stderr)
+    """STILL REFUSED. The remaining §13 preconditions are the operator's, not the code's: this command
+    will only be wired to the live executor once the user gives the explicit go-ahead. Note that
+    `cmd_authorize_fetch` is deliberately NOT reachable from here — a fetch cannot mint its own
+    authorization (GPT impl re-review #2)."""
+    print("REFUSED: live fetching is not wired. Remaining order: F10 write-surface proof -> GPT review "
+          "of the fan-out -> explicit user §13 go-ahead -> wire the LiveExecutor. Authorization alone "
+          "(authorize-fetch) does NOT enable fetching.", file=sys.stderr)
     return 3
 
 
@@ -1574,6 +1609,13 @@ def main() -> int:
     ap.add_argument("--preflight", action="store_true")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--fetch", action="store_true")
+    ap.add_argument("--authorize-fetch", action="store_true",
+                    help="§13: write the hash-chained fetch_authorized event (separate, explicit, "
+                         "user-triggered; --fetch can never mint it)")
+    ap.add_argument("--actor", default="", help="the human granting the authorization")
+    ap.add_argument("--hours", type=float, default=4.0, help="authorization lifetime (0, 24]")
+    ap.add_argument("--endpoints", default="",
+                    help="comma-separated endpoint scope, or '*' for every signed endpoint")
     a = ap.parse_args()
     rp, led = open_run(a.new_run or a.run, new=bool(a.new_run))
     if a.inventory:
@@ -1582,6 +1624,13 @@ def main() -> int:
         return cmd_preflight(rp, led)
     if a.plan:
         return cmd_plan(rp, led)
+    if a.authorize_fetch:
+        if not a.actor.strip():
+            print("REFUSED: --actor is required (a §13 authorization must name a real human)",
+                  file=sys.stderr)
+            return 2
+        return cmd_authorize_fetch(rp, led, actor=a.actor.strip(), hours=a.hours,
+                                   endpoints=a.endpoints.split(","))
     if a.fetch:
         return cmd_fetch(rp, led)
     ap.print_help()
