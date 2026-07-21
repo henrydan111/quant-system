@@ -179,36 +179,56 @@ def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
                  and e["decision_id"] == decision_id
                  and e["news_status"] == "success"), None)
 
+def _canon_json(x) -> str:
+    """canonical JSON 串(archive-re-review#19:比较调用方对象**绝不用 `!=`/`==`**
+    ——那会把左/右侧的可信对象本体传进对方的 `__ne__`/`__eq__`,dict 子类可原地
+    改写并返回 False。json.dumps 只序列化内容、不触发用户比较魔术方法;非纯 JSON
+    (含带魔术方法的自定义值)在此 raise → 拒)。"""
+    return json.dumps(x, sort_keys=True, ensure_ascii=False, allow_nan=False)
+
+
 def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
                          execution_id: str, contract: NewsScoringContract,
                          leg_payload_hash: str, resolved: dict,
                          artifact: D7DecisionArtifact, final_registry=None) -> None:
-    """单条选定终态行的联合验证(BINDING #1 + archive-review B2 + re-review#2:
-    bundle 行必须**逐字节等于**盘上解析出的唯一状态机终态——bundle 不再是行的
-    权威来源,只是对盘上事实的引用;全量行校验走与承诺权威**共享**的
-    `_check_terminal_row`,两处语义永不分叉)。re-review#18 点4:`final_registry`
-    冻结快照透传给 deterministic_zero 期望重导出。"""
+    """单条选定终态行的联合验证(BINDING #1 + archive-review B2 + re-review#2/#19)。
+    调用方 `row` 只作**对盘上事实的引用**——经 canonical JSON 串**逐字节**比对
+    (re-review#19:**绝不 `row != resolved`**——那会把可信 `resolved` 传进
+    调用方 row 的 `__ne__`,dict 子类可原地改写 `resolved["parsed_record"]` 毒化
+    档案);比对通过后,全量行校验对 **`resolved`(盘上权威)** 跑,绝不再碰
+    调用方 `row`。re-review#18 点4:`final_registry` 冻结快照透传。"""
     if not isinstance(row, dict):
         raise RegistryError(f"{leg} 腿选定终态行缺失/非法——尝试过的腿必须恰一终态")
-    if row != resolved:
+    try:
+        row_json = _canon_json(row)
+    except (TypeError, ValueError):
+        raise RegistryError(
+            f"{leg} 腿选定终态行含非纯 JSON 值(带魔术方法的对象)——拒(re-review#19)")
+    if row_json != _canon_json(resolved):
         raise RegistryError(
             f"{leg} 腿选定终态行与盘上唯一状态机终态不符——bundle 携入的行不是"
             f"该执行的持久化事实,拒(archive-re-review#2 Blocker)")
-    _check_terminal_row(row, leg=leg, outcome=outcome, execution_id=execution_id,
+    # 全量校验对**盘上 resolved**跑(不碰调用方 row)——re-review#19
+    _check_terminal_row(resolved, leg=leg, outcome=outcome, execution_id=execution_id,
                         contract=contract, leg_payload_hash=leg_payload_hash,
                         artifact=artifact, final_registry=final_registry)
 
 
 def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
-    """封存解析记录 ↔ 选定终态行的绑定(archive-review B2 + re-review#4:
-    records 与 evaluation 联改在此死)。行携完整 parsed_record 本体后,记录须
-    **逐字节等于行本体**(canon 哈希折叠空白,单靠哈希不排除空白变体)+
-    canonical 哈希绑定;expect 非 None 时还须逐字段等于该确定性记录。"""
+    """封存解析记录 ↔ 选定终态行的绑定(archive-review B2 + re-review#4/#19)。
+    `record` 是调用方 records(sanity 校验用)、`row` 是**盘上 resolved 行**。
+    re-review#19:一律用 **canonical JSON 串**比对——`record != ...` 会把可信对象
+    传进调用方 record 的 `__ne__`;非纯 JSON record 在此拒。档案实际用的是
+    `row["parsed_record"]`(盘上),本函数只确保调用方 records 与之相符。"""
     if not isinstance(record, dict):
         raise RegistryError(f"{leg} 腿封存记录须为 dict(得 {type(record).__name__})")
-    if expect is not None and record != expect:
+    try:
+        rec_json = _canon_json(record)
+    except (TypeError, ValueError):
+        raise RegistryError(f"{leg} 腿封存记录含非纯 JSON 值——拒(re-review#19)")
+    if expect is not None and rec_json != _canon_json(expect):
         raise RegistryError(f"{leg} 腿封存记录须逐字段等于确定性记录(archive-review B2)")
-    if record != row["parsed_record"]:
+    if rec_json != _canon_json(row["parsed_record"]):
         raise RegistryError(
             f"{leg} 腿封存记录与终态行封存的解析记录本体不符——记录被换,拒"
             f"(archive-review B2 + re-review#4)")
@@ -282,13 +302,13 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                          resolved=f_resolved, artifact=artifact,
                          final_registry=v_final_registry)   # re-review#18 点4
     if outcome.factor_leg_status == "success":
-        # deterministic_zero ⟺ 总体为空已由共享 _check_terminal_row 双向重导出;
-        # 此处按(已验证的)verdict 分派记录绑定的确定性期望
-        if f_row["verdict"] == "deterministic_zero":
-            _require_record_bound(records["factor"], f_row, leg="factor",
+        # re-review#19:一律用**盘上 f_resolved**,绝不读调用方 f_row(dict 子类
+        # 的 __getitem__ 可每次返回不同值)
+        if f_resolved["verdict"] == "deterministic_zero":
+            _require_record_bound(records["factor"], f_resolved, leg="factor",
                                   expect=deterministic_zero_factor_record())
         else:
-            _require_record_bound(records["factor"], f_row, leg="factor")
+            _require_record_bound(records["factor"], f_resolved, leg="factor")
     else:
         if records["factor"] is not None:
             raise RegistryError("factor 腿硬失败不得携带封存记录(archive-review B2)")
@@ -317,16 +337,17 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                              leg_payload_hash=_EMPTY_PENALTY_SENTINEL,
                              resolved=p_resolved, artifact=artifact)
         p_selected = p_resolved                        # re-review#15
-        # BINDING #1:哨兵只**联合**接受——绝不凭 "0"*64 单独放行
+        # BINDING #1:哨兵只**联合**接受——绝不凭 "0"*64 单独放行(re-review#19:
+        # 读盘上 p_resolved,不读调用方 row)
         if not (outcome.penalty_eligible_count == 0
                 and outcome.penalty_payload_hash is None
-                and row["verdict"] == "empty_penalty"
-                and row["payload_hash"] == _EMPTY_PENALTY_SENTINEL):
+                and p_resolved["verdict"] == "empty_penalty"
+                and p_resolved["payload_hash"] == _EMPTY_PENALTY_SENTINEL):
             raise RegistryError(
                 "空罚分哨兵联合验证失败:须 eligible==0 ∧ empty_success ∧ outcome 无 "
                 "penalty payload 哈希 ∧ verdict==empty_penalty 同时成立(BINDING #1)")
         # archive-review B2:确定性空罚分记录逐字段 + 哈希绑定
-        _require_record_bound(records["penalty"], row, leg="penalty",
+        _require_record_bound(records["penalty"], p_resolved, leg="penalty",
                               expect=dict(_EMPTY_PENALTY_RECORD))
     else:                                          # success / failed:真实执行过
         p_row = sel.get("penalty")
@@ -339,7 +360,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                              resolved=p_resolved, artifact=artifact)
         p_selected = p_resolved                        # re-review#15
         if p_status == "success":
-            _require_record_bound(records["penalty"], p_row, leg="penalty")
+            _require_record_bound(records["penalty"], p_resolved, leg="penalty")
         elif records["penalty"] is not None:
             raise RegistryError("penalty 腿硬失败不得携带封存记录(archive-review B2)")
     # re-review#17 P1:先从**磁盘解析行**建可信 records + **冻结 registry 快照**算出

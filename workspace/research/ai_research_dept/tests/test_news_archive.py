@@ -1132,6 +1132,46 @@ class TestExactTypeBoundaries:
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["artifact_hash"] == genuine_ah
 
+    def test_selected_row_ne_callback_never_fires(self, tmp_path):
+        # archive-re-review#19 P1 (the reviewer's attack): a selected_provenance
+        # row that is a dict subclass whose __ne__ would mutate the trusted
+        # disk-resolved row's parsed_record in place. The canonical-JSON compare
+        # never invokes the row's __ne__, and everything downstream uses the
+        # disk-resolved row — so the forge cannot fire and the archive keeps the
+        # genuine disk record. Covers factor AND penalty (the shared helper).
+        fired = {"n": 0}
+
+        class _EvilRow(dict):
+            def __ne__(self, other):
+                fired["n"] += 1
+                if isinstance(other, dict):
+                    other["parsed_record"] = {"FORGED": True}
+                return False
+            def __eq__(self, other): return True
+            def __hash__(self): return 0
+        for leg in ("factor", "penalty"):
+            art, bundle = _setup(tmp_path / leg)
+            genuine = dict(bundle["selected_provenance"][leg])
+            bundle["selected_provenance"][leg] = _EvilRow(genuine)
+            archive = seal_decision_archive(
+                bundle, art, ledger_dir=tmp_path / leg / "ledger",
+                prov_dir=tmp_path / leg / "prov", contract=_contract(),
+                archive_dir=tmp_path / leg / "arch")
+            assert archive["records"][leg] != {"FORGED": True}
+            assert archive["selected_provenance"][leg]["parsed_record"] \
+                != {"FORGED": True}
+        assert fired["n"] == 0                          # __ne__ never called
+
+    def test_selected_row_nonjson_value_refused(self, tmp_path):
+        # a selected row carrying a non-JSON value (an object with magic
+        # methods) is refused at the canonical-JSON gate, before any compare.
+        art, bundle = _setup(tmp_path)
+        row = dict(bundle["selected_provenance"]["factor"])
+        row["parsed_record"] = object()                 # non-JSON
+        bundle["selected_provenance"]["factor"] = row
+        with pytest.raises(RegistryError, match="非纯 JSON|不符"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
     def test_nondict_evaluation_refused_before_ne_fires(self, tmp_path):
         # archive-re-review#17/#18 P1 (the reviewer's attack, both variants):
         # a non-dict bundle["evaluation"] whose __ne__ would either swap
