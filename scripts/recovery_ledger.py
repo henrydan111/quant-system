@@ -1317,8 +1317,28 @@ class PageReceiptLedger:
 # whose vendor rows carry no transaction id key on it. report_rc's digest producer is DELIBERATELY not
 # registered yet (it lives downstream in pit_backend and moves here at fan-out); until then a report_rc
 # claimed fetch refuses fail-closed in _prepare_raw_page.
+def _add_report_rc_payload_digest(df):
+    """report_rc's revision-identity digest, produced INSIDE the ledger boundary at fetch time.
+
+    REUSES the production definition (`pit_backend.report_rc_payload_digest`) rather than restating
+    it: that function is the one guarded by
+    test_report_rc_payload_digest_covers_materialized_fields, so a future report_rc__* feature that
+    widens the digest widens it HERE too. Restating the field list here would let the recovery digest
+    silently drift from the serving digest and collapse a genuine revision."""
+    import sys as _sys
+    from pathlib import Path as _Path
+    _src = str(_Path(__file__).resolve().parents[1] / "src")
+    if _src not in _sys.path:
+        _sys.path.insert(0, _src)
+    from data_infra.pit_backend import report_rc_payload_digest as _prod_digest
+    out = df.reset_index(drop=True).copy()
+    out["report_rc_payload_digest"] = _prod_digest(out).astype(str)
+    return out
+
+
 _PREPARE_REGISTRY.update({
     "top_list": PageReceiptLedger.add_row_payload_digest,
     "top_inst": PageReceiptLedger.add_row_payload_digest,
     "block_trade": PageReceiptLedger.add_row_payload_digest,
+    "report_rc": _add_report_rc_payload_digest,
 })

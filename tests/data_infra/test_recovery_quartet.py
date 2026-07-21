@@ -387,24 +387,22 @@ def test_top_list_pages_gain_the_row_payload_digest(rig):
 
 
 def test_unregistered_derived_key_refuses_fail_closed(rig):
+    """A natural key demanding a coordinator-derived column with NO registered producer must REFUSE
+    (silently omitting it would fail verification later with a misleading error). report_rc used to
+    be this case; its producer is registered as of fan-out batch 2, so the invariant is pinned here
+    with an endpoint that legitimately has no digest producer."""
     rp, L = rig
-    # report_rc's digest producer is deliberately unregistered until fan-out: refusing beats omitting
-    row = _prow("report_rc", "202601", "req/rc/202601.parquet", empty="sparse_canary",
-                params={"start_date": "20260101", "end_date": "20260131"},
-                nk=("ts_code", "report_date", "report_rc_payload_digest"),
-                scope={"rule_id": "report_date_in_range",
-                       "checks": [["report_date", "date_in_range", ["20260101", "20260131"]]]},
-                limit=3000)
+    req = {"trade_date": "20260702"}
+    row = _prow("moneyflow", "20260702", "req/mf/20260702.parquet", params=req,
+                empty="sparse_canary",
+                nk=("ts_code", "trade_date", "row_payload_digest"))   # no producer for moneyflow
     L._freeze_plan_unvalidated([row])
     L.declare_run_mode("synthetic_nonpromotable")
-    page = pd.DataFrame({"ts_code": ["A.SZ"], "report_date": ["20260115"], "v": [1]})
-    ex = _syn([(("report_rc", {"start_date": "20260101", "end_date": "20260131"}, 0), page)])
-    claim = L.claim_next_fetch(row["request_id"], ex.mode)
+    ex = _syn([(("moneyflow", req, 0), _df(["A.SZ"]))])
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
     with pytest.raises(rl.LedgerError, match="no .* producer is registered"):
         L.fetch_claimed_page(row["request_id"], claim, ex)
 
-
-# ── the canonical A01 merger (F9) ────────────────────────────────────────────────────────────────
 def _legs(date="20260702"):
     daily = pd.DataFrame({"ts_code": ["A.SZ", "B.SZ"], "trade_date": [date] * 2,
                           "close": [10.0, 20.0], "vol": [1.0, 2.0], "raw_fetch_ts": ["t"] * 2})
@@ -1389,7 +1387,7 @@ def test_every_fanned_out_family_builds_a_valid_plan_from_signed_contracts():
             assert r["recipe_id"] == ra.ENDPOINT_RECIPE[r["endpoint"]]
             assert r["response_scope"]["checks"], f"{owner}: an unscoped request was planned"
         total += len(rows)
-    assert len(ra.ALL_FAMILIES) == 26
+    assert len(ra.ALL_FAMILIES) == 29      # quartet + batch 1 + batch 2
     assert total > 90_000, f"expected the full recovery scale, got {total}"
 
 
@@ -1445,10 +1443,14 @@ def test_scope_rules_map_request_keys_to_the_right_response_columns():
 
 def test_deferred_families_are_declared_with_reasons():
     """The families NOT bound in this batch are declared explicitly with why — never silently absent."""
-    assert set(ra.DEFERRED_FAMILIES) == {"A12", "A15e", "A14", "A10a", "A07"}
+    # after batch 2 only the UNSIGNED family remains deferred
+    assert set(ra.DEFERRED_FAMILIES) == {"A07"}
     for owner, reason in ra.DEFERRED_FAMILIES.items():
         assert owner not in ra.ALL_FAMILIES
         assert len(reason) > 40
+    # A10a is not "missing": it is produced as a SECOND LAYOUT of the A10 fetch, declared as such
+    assert set(ra.CONSOLIDATED_AS_SECOND_LAYOUT) == {"A10a"}
+    assert "market/suspension" in [c.label for c in ra.ALL_FAMILIES["A10"].consolidations]
 
 
 # ── E2E under the synthetic executor: one representative per NEWLY-COVERED shape ──────────────────
@@ -1568,3 +1570,103 @@ def test_scope_refuses_a_wrong_period_response(rig):
     claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
     with pytest.raises(rl.LedgerError, match="outside the requested scope"):
         L.fetch_claimed_page(row["request_id"], claim, ex)
+
+
+# ── fan-out batch 2: year transform, multi-consolidation, report_rc digest ───────────────────────
+def test_year_partition_transform_is_declarative_and_validated():
+    c = ra.ConsolidationSpec("r", "ann_date", "x/{partition}.parquet", "multiset_identity",
+                             "omit_output", partition_transform="year")
+    assert c.partition_of_value("20231231") == "2023"
+    with pytest.raises(RuntimeError, match="YYYY-prefixed"):
+        c.partition_of_value("")
+    bad = ra.ConsolidationSpec("r", "ann_date", "x", "multiset_identity", "omit_output",
+                               partition_transform="decade")
+    with pytest.raises(RuntimeError, match="unknown partition_transform"):
+        bad.partition_of_value("20231231")
+
+
+def test_e2e_monthly_requests_fold_into_yearly_files(rig):
+    """A14 report_rc: 12 MONTHLY range requests -> ONE file per YEAR (grp=report_rc_yearly) — a
+    genuine many-to-one repartition, and the first family to exercise the year transform E2E. Also
+    exercises the newly-registered report_rc_payload_digest producer."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A14"]
+    rows, fixtures = [], []
+    for m, last in (("202301", "31"), ("202302", "28")):
+        req = {"start_date": f"{m}01", "end_date": f"{m}{last}"}
+        rows.append(_prow("report_rc", m, f"requests/A14/report_rc/{m}.parquet", params=req,
+                          empty="dense_refuse", limit=3000,
+                          nk=("ts_code", "report_date", "org_name", "author_name", "quarter"),
+                          dataset="analyst/report_rc",
+                          scope=ra.response_scope_of("report_rc", req)))
+        fixtures.append((("report_rc", req, 0), pd.DataFrame(
+            {"ts_code": ["000001.SZ"], "report_date": [f"{m}15"], "org_name": ["ZX"],
+             "author_name": ["A"], "quarter": ["2023Q1"], "eps": [1.0], "np": [2.0],
+             "op_rt": [3.0], "rating": ["buy"]})))
+    L._freeze_plan_unvalidated(rows)
+    L.declare_run_mode("synthetic_nonpromotable")
+    summary = ra.run_family(spec, L, _syn(fixtures))
+    assert not summary["failed"] and len(summary["verified"]) == 2
+    res = ra.consolidate_family(spec, L)
+    # both months folded into ONE 2023 file
+    assert [o["partition"] for o in res["outputs"]] == ["2023"]
+    assert res["outputs"][0]["rows"] == 2
+    out = pd.read_parquet(rp.staging_data / res["outputs"][0]["path"])
+    assert "report_rc_payload_digest" in out.columns and out["report_rc_payload_digest"].notna().all()
+
+
+def test_report_rc_digest_reuses_the_production_definition(rig):
+    """The recovery digest MUST be the production one (pit_backend), else the recovery identity could
+    drift from the serving identity and collapse a genuine revision."""
+    import importlib
+    sys.path.insert(0, str(ROOT / "src"))
+    prod = importlib.import_module("data_infra.pit_backend").report_rc_payload_digest
+    df = pd.DataFrame({"ts_code": ["A.SZ", "A.SZ"], "eps": [1.0, 1.5], "np": [2.0, 2.0],
+                       "op_rt": [3.0, 3.0], "rating": ["buy", "buy"]})
+    prepared = rl._PREPARE_REGISTRY["report_rc"](df)
+    assert list(prepared["report_rc_payload_digest"]) == list(prod(df).astype(str))
+    # a payload change IS a distinct revision identity
+    assert prepared["report_rc_payload_digest"].nunique() == 2
+
+
+def test_e2e_one_fetch_two_layouts(rig):
+    """A10: suspend_d is fetched ONCE and consolidated TWICE (per-date store + yearly suspension
+    files). Planning them as two families would mint an IDENTICAL request_id per session."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A10"]
+    assert len(spec.consolidations) == 2
+    rows, fixtures = [], []
+    for d in ("20230105", "20240110"):
+        req = {"trade_date": d}
+        rows.append(_prow("suspend_d", d, f"requests/A10/suspend_d/{d}.parquet", params=req,
+                          empty="sparse_canary",
+                          nk=("ts_code", "trade_date", "suspend_type"),
+                          dataset="market/suspend_d",
+                          scope=ra.response_scope_of("suspend_d", req)))
+        fixtures.append((("suspend_d", req, 0), pd.DataFrame(
+            {"ts_code": ["000001.SZ"], "trade_date": [d], "suspend_type": ["S"]})))
+    L._freeze_plan_unvalidated(rows)
+    L.declare_run_mode("synthetic_nonpromotable")
+    summary = ra.run_family(spec, L, _syn(fixtures))
+    assert not summary["failed"] and len(summary["verified"]) == 2
+    res = ra.consolidate_family(spec, L)
+    by_label = {r["label"]: r for r in res["layouts"]}
+    assert set(by_label) == {"market/suspend_d", "market/suspension"}
+    # per-date layout: one file per session; yearly layout: one file per YEAR
+    assert sorted(o["partition"] for o in by_label["market/suspend_d"]["outputs"]) == \
+        ["20230105", "20240110"]
+    assert sorted(o["partition"] for o in by_label["market/suspension"]["outputs"]) == ["2023", "2024"]
+    # BOTH layouts conserve the same input rows
+    assert sum(o["rows"] for o in by_label["market/suspend_d"]["outputs"]) == 2
+    assert sum(o["rows"] for o in by_label["market/suspension"]["outputs"]) == 2
+
+
+def test_every_matrix_family_is_bound_deferred_or_a_second_layout():
+    """No matrix family may be silently unaccounted for: each is either executable, explicitly
+    deferred with a reason, or declared as another family's second consolidation layout."""
+    owners = {r.owner for r in rrc.ENDPOINT_MATRIX}
+    accounted = set(ra.ALL_FAMILIES) | set(ra.DEFERRED_FAMILIES) | set(ra.CONSOLIDATED_AS_SECOND_LAYOUT)
+    # A10 is the merged fetch owner for the matrix's A10a/A10b rows
+    accounted |= {"A10a", "A10b"}
+    missing = owners - accounted
+    assert not missing, f"matrix families unaccounted for: {sorted(missing)}"

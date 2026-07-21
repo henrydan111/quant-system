@@ -125,6 +125,10 @@ RECIPES: dict = {r.recipe_id: r for r in [
                (("end_date", "end_date"),), (), ("limit", "offset")),
     CallRecipe("pledge_stat_by_week_paged", "pledge_stat",
                (("end_date", "end_date"),), (), ("limit", "offset")),
+    # ── fan-out batch 2 ───────────────────────────────────────────────────────────────────────────
+    CallRecipe("stk_holdertrade_by_stock", "stk_holdertrade", (("ts_code", "ts_code"),), (), "none"),
+    CallRecipe("repurchase_by_year_range_paged", "repurchase",
+               (("start_date", "start_date"), ("end_date", "end_date")), (), ("limit", "offset")),
 ]}
 
 #: endpoint -> its ONE frozen recipe (the plan builder refuses an endpoint without one)
@@ -159,6 +163,9 @@ ENDPOINT_RECIPE: dict = {
     "top10_floatholders": "top10_floatholders_by_period_paged",
     "disclosure_date": "disclosure_date_by_quarter_paged",
     "pledge_stat": "pledge_stat_by_week_paged",
+    # fan-out batch 2
+    "stk_holdertrade": "stk_holdertrade_by_stock",
+    "repurchase": "repurchase_by_year_range_paged",
 }
 
 
@@ -247,6 +254,22 @@ class ConsolidationSpec:
     output_path_fmt: str                        # format(partition=...) -> relative consolidated path
     conservation_mode: str                      # multiset_identity | base_key_preserving_merge
     empty_contribution: str                     # zero_rows | omit_output
+    partition_transform: str = "identity"       # identity | year  (fan-out batch 2)
+    label: str = ""                             # output-family label when a fetch feeds >1 layout
+
+    def partition_of_value(self, value: str) -> str:
+        """Map a row's partition-column VALUE to its output partition. `year` implements the
+        matrix's *_yearly consolidation groups (report_rc_yearly, repurchase_yearly,
+        stk_holdertrade_yearly, suspension_yearly), where many rows/requests fold into one file per
+        YEAR of a date column — expressed as DECLARATIVE data, not code in the adapter."""
+        v = str(value)
+        if self.partition_transform == "year":
+            if len(v) < 4 or not v[:4].isdigit():
+                raise RuntimeError(f"partition_transform=year needs a YYYY-prefixed date, got {v!r}")
+            return v[:4]
+        if self.partition_transform != "identity":
+            raise RuntimeError(f"unknown partition_transform {self.partition_transform!r}")
+        return v
 
     def family_output_of(self, partition: str) -> str:
         return self.output_path_fmt.format(partition=partition, yyyy=str(partition)[:4])
@@ -257,8 +280,18 @@ class FamilySpec:
     owner: str
     output_family: str
     endpoints: tuple
-    partition_key: str                          # the request key that names the partition
-    consolidation: ConsolidationSpec
+    partition_key: object                       # a request key, or a TUPLE of keys (composite)
+    consolidation: object                       # ConsolidationSpec | tuple[ConsolidationSpec, ...]
+
+    @property
+    def consolidations(self) -> tuple:
+        """One FETCH family may feed SEVERAL physical layouts (fan-out batch 2). suspend_d is the
+        case: the matrix declares both `market/suspend_d` (per-date store) and `market/suspension`
+        (yearly files) over the SAME population, so planning them as two families would mint an
+        IDENTICAL request_id for every session. The population is fetched ONCE and consolidated
+        TWICE, each layout labelled."""
+        c = self.consolidation
+        return tuple(c) if isinstance(c, (tuple, list)) else (c,)
 
     def partition_of(self, request: dict) -> str:
         """`partition_key` may name ONE request key or a tuple of keys. The composite form is required
@@ -332,8 +365,6 @@ FANOUT_BATCH1: dict = {s.owner: s for s in [
               "consolidated/market/margin/{yyyy}/margin_{partition}.parquet", "zero_rows"),
     _per_date("A08d", "market/northbound", "hk_hold",
               "consolidated/market/northbound/{yyyy}/northbound_{partition}.parquet", "omit_output"),
-    _per_date("A10b", "market/suspend_d", "suspend_d",
-              "consolidated/market/suspend_d/{yyyy}/suspend_d_{partition}.parquet", "omit_output"),
     _per_date("A11b", "market/top_inst", "top_inst",
               "consolidated/market/top_inst/{yyyy}/top_inst_{partition}.parquet", "omit_output"),
     _per_date("A11c", "market/block_trade", "block_trade",
@@ -392,20 +423,54 @@ FANOUT_BATCH1: dict = {s.owner: s for s in [
                                  "multiset_identity", "omit_output")),
 ]}
 
-#: every family the adapter layer can currently execute (quartet + batch 1)
-ALL_FAMILIES: dict = {**QUARTET, **FANOUT_BATCH1}
+# ── fan-out batch 2: the families needing the year transform / multi-consolidation ───────────────
+FANOUT_BATCH2: dict = {s.owner: s for s in [
+    # per-stock REQUEST -> YEARLY output on ann_date (grp=stk_holdertrade_yearly)
+    FamilySpec("A12", "corporate/stk_holdertrade", ("stk_holdertrade",), "ts_code",
+               ConsolidationSpec("repartition_by_year_A12", "ann_date",
+                                 "consolidated/corporate/stk_holdertrade/stk_holdertrade_{partition}.parquet",
+                                 "multiset_identity", "omit_output", partition_transform="year")),
+    # per-YEAR-range REQUEST -> yearly output on ann_date (grp=repurchase_yearly)
+    FamilySpec("A15e", "corporate/repurchase", ("repurchase",), "start_date",
+               ConsolidationSpec("repartition_by_year_A15e", "ann_date",
+                                 "consolidated/corporate/repurchase/repurchase_{partition}.parquet",
+                                 "multiset_identity", "omit_output", partition_transform="year")),
+    # MONTHLY range requests -> YEARLY files on report_date (grp=report_rc_yearly): a genuine
+    # many-to-one repartition (12 monthly requests fold into one year file). Its
+    # report_rc_payload_digest producer is now registered in the ledger's prepare registry.
+    FamilySpec("A14", "analyst/report_rc", ("report_rc",), "start_date",
+               ConsolidationSpec("repartition_by_year_A14", "report_date",
+                                 "consolidated/analyst/report_rc/report_rc_{partition}.parquet",
+                                 "multiset_identity", "zero_rows", partition_transform="year")),
+    # ── ONE fetch, TWO layouts (A10b + A10a) ─────────────────────────────────────────────────────
+    # The matrix declares market/suspend_d (per-date store) and market/suspension (yearly files) over
+    # the SAME suspend_d population. Planning both as families would mint an IDENTICAL request_id per
+    # session (the freeze refuses it), so the population is fetched ONCE under market/suspend_d and
+    # consolidated TWICE — each layout labelled so the verdict attributes its outputs correctly.
+    FamilySpec("A10", "market/suspend_d", ("suspend_d",), "trade_date",
+               (ConsolidationSpec("repartition_by_trade_date_A10b", "trade_date",
+                                  "consolidated/market/suspend_d/{yyyy}/suspend_d_{partition}.parquet",
+                                  "multiset_identity", "omit_output", label="market/suspend_d"),
+                ConsolidationSpec("repartition_by_year_A10a", "trade_date",
+                                  "consolidated/market/suspension/suspension_{partition}.parquet",
+                                  "multiset_identity", "omit_output", partition_transform="year",
+                                  label="market/suspension"))),
+]}
 
-#: DEFERRED to fan-out batch 2, with the reason each needs an interface addition (never a silent one)
+#: every family the adapter layer can currently execute (quartet + batch 1 + batch 2)
+ALL_FAMILIES: dict = {**QUARTET, **FANOUT_BATCH1, **FANOUT_BATCH2}
+
+#: STILL deferred after batch 2, with the reason (never silently absent)
 DEFERRED_FAMILIES: dict = {
-    "A12": "stk_holdertrade — grp=stk_holdertrade_yearly: needs a declarative partition transform "
-           "(year-of-ann_date); ConsolidationSpec currently partitions on a COLUMN VALUE",
-    "A15e": "repurchase — grp=repurchase_yearly: same year-of-ann_date transform",
-    "A14": "report_rc — grp=report_rc_yearly (same transform) AND its report_rc_payload_digest "
-           "producer is unregistered (GPT ruled the producer is a precondition for this family)",
-    "A10a": "suspension — draws the SAME suspend_d population as A10b, so both would mint an "
-            "IDENTICAL request_id; the correct model is fetch-once/consolidate-twice, which needs "
-            "multi-consolidation support on FamilySpec",
-    "A07": "indicators — fina_indicator_vip is UNSIGNED (held for the §13 period-discovery probe)",
+    "A07": "indicators — fina_indicator_vip is UNSIGNED: the surviving manifest records 98 partitions "
+           "but only 73 standard quarter-ends are reconstructible, so the contract is held at "
+           "BLOCKED(contract) pending a §13 period-discovery probe that enumerates the served periods",
+}
+
+#: families the matrix declares that are produced as a SECOND layout of another family's fetch,
+#: rather than as their own plan rows (documented so a reader does not read absence as an omission)
+CONSOLIDATED_AS_SECOND_LAYOUT: dict = {
+    "A10a": "market/suspension — the yearly layout of the A10 (suspend_d) fetch; see FANOUT_BATCH2",
 }
 
 
@@ -724,7 +789,18 @@ def _consolidate_family_locked(spec: FamilySpec, ledger, pd) -> dict:
         inputs.setdefault(row["endpoint"], []).append((rid, row, df))
         input_bind.append({"request_id": rid, "state": st, "rows": int(len(df)),
                            "output_bytes_sha256": ev.get("output_bytes_sha256")})
-    cons = spec.consolidation
+    results = []
+    for cons in spec.consolidations:
+        results.append(_consolidate_one_layout(spec, ledger, pd, cons, inputs))
+    ledger.event("family_consolidated", family=spec.output_family, inputs=input_bind,
+                 layouts=[{"label": r["label"], "conservation_mode": r["conservation_mode"],
+                           "outputs": r["outputs"]} for r in results])
+    return {"inputs": input_bind, "layouts": results,
+            "outputs": [o for r in results for o in r["outputs"]]}
+
+
+def _consolidate_one_layout(spec: FamilySpec, ledger, pd, cons: ConsolidationSpec, inputs: dict) -> dict:
+    """Produce ONE physical layout from the family's verified request outputs."""
     outputs = []
     if cons.conservation_mode == "base_key_preserving_merge":
         # A01: per-partition 3-leg merge via the canonical merger
@@ -750,7 +826,8 @@ def _consolidate_family_locked(spec: FamilySpec, ledger, pd) -> dict:
             if col not in whole.columns:
                 raise RuntimeError(f"{spec.output_family}: rows lack the output partition column "
                                    f"{col!r} — cannot repartition")
-            for part, grp in whole.groupby(whole[col].astype(str), sort=True):
+            keys = whole[col].astype(str).map(cons.partition_of_value)
+            for part, grp in whole.groupby(keys, sort=True):
                 outputs.append((str(part), grp.reset_index(drop=True)))
         out_rows = sum(len(df) for _, df in outputs)
         from collections import Counter as _C
@@ -787,6 +864,5 @@ def _consolidate_family_locked(spec: FamilySpec, ledger, pd) -> dict:
                                f"({got[:12]}) != what was written ({want[:12]}) — refusing to record")
         written.append({"partition": part, "path": rel, "rows": int(len(df)),
                         "bytes_sha256": want})
-    ledger.event("family_consolidated", family=spec.output_family,
-                 conservation_mode=cons.conservation_mode, inputs=input_bind, outputs=written)
-    return {"outputs": written, "inputs": input_bind}
+    return {"label": cons.label or spec.output_family,
+            "conservation_mode": cons.conservation_mode, "outputs": written}
