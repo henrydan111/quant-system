@@ -1369,3 +1369,202 @@ def test_replace_into_completes_inside_the_root_and_parent_is_free_between_ops(r
         fh.write(b"payload")
     rp.broker().replace_into(tmp, final)
     assert final.read_bytes() == b"payload" and not tmp.exists()
+
+
+# ── fan-out batch 1: the 22 newly-bound families ─────────────────────────────────────────────────
+def test_every_fanned_out_family_builds_a_valid_plan_from_signed_contracts():
+    """Every bound family must build a plan from the SIGNED contracts with unique request_ids AND
+    unique receipt_outputs (the freeze refuses either collision), and its recipe must agree with the
+    signed pagination mode."""
+    contracts = rrc.load_signed_contracts()
+    total = 0
+    for owner, spec in sorted(ra.ALL_FAMILIES.items()):
+        rows = ra.build_plan_rows(spec, contracts)
+        assert rows, f"{owner}: empty plan"
+        ids = {r["request_id"] for r in rows}
+        outs = {r["receipt_output"] for r in rows}
+        assert len(ids) == len(rows), f"{owner}: duplicate request_id"
+        assert len(outs) == len(rows), f"{owner}: two requests share a receipt_output"
+        for r in rows:
+            assert r["recipe_id"] == ra.ENDPOINT_RECIPE[r["endpoint"]]
+            assert r["response_scope"]["checks"], f"{owner}: an unscoped request was planned"
+        total += len(rows)
+    assert len(ra.ALL_FAMILIES) == 26
+    assert total > 90_000, f"expected the full recovery scale, got {total}"
+
+
+def test_period_report_type_uses_a_composite_partition(rig):
+    """The direct-quarter VIP families send (period, report_type). Under a single partition key both
+    requests would collapse to the same partition -> the same receipt_output -> freeze refusal."""
+    contracts = rrc.load_signed_contracts()
+    rows = ra.build_plan_rows(ra.ALL_FAMILIES["A04a"], contracts)
+    parts = {r["partition"] for r in rows}
+    assert len(parts) == len(rows)                     # every (period, type) is its own partition
+    assert any(p.endswith("_2") for p in parts) and any(p.endswith("_3") for p in parts)
+
+
+def test_multi_family_run_level_freeze(monkeypatch):
+    """freeze_run_plan is ONCE per run across MANY families (design v4 F6). Freeze several small
+    families together through the coordinator's full validation door — no fetching."""
+    base = _recovery_test_root("multifam")
+    monkeypatch.setattr(rrc, "RECOVERY_ROOT", base)
+    rp = rrc.RecoveryPaths("mf")
+    rp.create_root()
+    ledger = rl.PageReceiptLedger(rp, coordinator_commit="deadbeef",
+                                  adapter_bundle_hash=ra.compute_bundle_hash())
+    contracts = rrc.load_signed_contracts()
+    specs = [ra.ALL_FAMILIES[o] for o in ("A02", "A15a", "A15c", "A15g", "A16")]
+    sha = ra.freeze_run_plan(ledger, specs, contracts)
+    assert len(sha) == 64
+    plan = ledger._plan()
+    assert len(plan) == sum(len(ra.build_plan_rows(s, contracts)) for s in specs)
+    assert {r["dataset"] for r in plan.values()} == {s.output_family for s in specs}
+    shutil.rmtree(base, ignore_errors=True)
+
+
+def test_every_bound_endpoint_has_a_response_scope_rule():
+    """A bound endpoint with no declared scope rule would plan UNSCOPED requests."""
+    for ep in ra.ENDPOINT_RECIPE:
+        assert ep in ra._SCOPE_RULES, f"{ep}: bound to a recipe but has no response-scope rule"
+    with pytest.raises(RuntimeError, match="no declared response-scope rule"):
+        ra.response_scope_of("not_an_endpoint", {"trade_date": "20260702"})
+
+
+def test_scope_rules_map_request_keys_to_the_right_response_columns():
+    """The rule table is the fix for the old heuristic: a `period` request scopes the response's
+    `end_date`, a year range scopes `ann_date`, a month range scopes `report_date`."""
+    assert ra.response_scope_of("fina_mainbz", {"period": "20231231"})["checks"] == \
+        [["end_date", "eq", "20231231"]]
+    assert ra.response_scope_of("income_vip", {"period": "20231231", "report_type": "2"})["checks"] == \
+        [["end_date", "eq", "20231231"], ["report_type", "eq", "2"]]
+    assert ra.response_scope_of("repurchase", {"start_date": "20230101", "end_date": "20231231"})["checks"] == \
+        [["ann_date", "date_in_range", ["20230101", "20231231"]]]
+    assert ra.response_scope_of("report_rc", {"start_date": "20230101", "end_date": "20230131"})["checks"] == \
+        [["report_date", "date_in_range", ["20230101", "20230131"]]]
+
+
+def test_deferred_families_are_declared_with_reasons():
+    """The families NOT bound in this batch are declared explicitly with why — never silently absent."""
+    assert set(ra.DEFERRED_FAMILIES) == {"A12", "A15e", "A14", "A10a", "A07"}
+    for owner, reason in ra.DEFERRED_FAMILIES.items():
+        assert owner not in ra.ALL_FAMILIES
+        assert len(reason) > 40
+
+
+# ── E2E under the synthetic executor: one representative per NEWLY-COVERED shape ──────────────────
+def _run_family_e2e(rp, L, spec, rows, fixtures):
+    L._freeze_plan_unvalidated(rows)
+    L.declare_run_mode("synthetic_nonpromotable")
+    summary = ra.run_family(spec, L, _syn(fixtures))
+    assert not summary["failed"], summary["failed"]
+    return summary, ra.consolidate_family(spec, L)
+
+
+def test_e2e_per_period_family(rig):
+    """NEW shape: a `period` request whose ROWS carry end_date (fina_mainbz)."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A15c"]
+    rows, fixtures = [], []
+    for period in ("20230630", "20231231"):
+        req = {"period": period}
+        rows.append(_prow("fina_mainbz", period, f"requests/A15c/fina_mainbz/{period}.parquet",
+                          params=req, empty="sparse_canary", limit=10000,
+                          nk=("ts_code", "end_date", "bz_item", "bz_code"),
+                          dataset="fundamentals/fina_mainbz",
+                          scope=ra.response_scope_of("fina_mainbz", req)))
+        fixtures.append((("fina_mainbz", req, 0), pd.DataFrame(
+            {"ts_code": ["000001.SZ"], "end_date": [period], "bz_item": ["主营"],
+             "bz_code": ["P"], "bz_sales": [1.0]})))
+    _, res = _run_family_e2e(rp, L, spec, rows, fixtures)
+    assert sorted(o["partition"] for o in res["outputs"]) == ["20230630", "20231231"]
+
+
+def test_e2e_period_report_type_family(rig):
+    """NEW shape: (period, report_type) requests merging into ONE per-period output."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A04a"]
+    rows, fixtures = [], []
+    for rt in ("2", "3"):
+        req = {"period": "20231231", "report_type": rt}
+        part = f"20231231_{rt}"
+        rows.append(_prow("income_vip", part, f"requests/A04a/income_vip/{part}.parquet",
+                          params=req, empty="sparse_canary", limit=10000,
+                          nk=("ts_code", "end_date", "report_type", "f_ann_date", "update_flag"),
+                          dataset="fundamentals/income_quarterly",
+                          scope=ra.response_scope_of("income_vip", req)))
+        fixtures.append((("income_vip", req, 0), pd.DataFrame(
+            {"ts_code": ["000001.SZ"], "end_date": ["20231231"], "report_type": [rt],
+             "f_ann_date": ["20240101"], "update_flag": ["0"], "revenue": [float(rt)]})))
+    _, res = _run_family_e2e(rp, L, spec, rows, fixtures)
+    # both report_types land in ONE per-period file (grp=income_q_period)
+    assert [o["partition"] for o in res["outputs"]] == ["20231231"]
+    assert res["outputs"][0]["rows"] == 2
+
+
+def test_e2e_per_code_range_family(rig):
+    """NEW shape: per-index-code RANGE request, output partitioned per CODE (grp=index_per_code)."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A02"]
+    req = {"ts_code": "000300.SH", "start_date": "20260101", "end_date": "20260131"}
+    rows = [_prow("index_daily", "000300.SH", "requests/A02/index_daily/000300SH.parquet",
+                  params=req, empty="dense_refuse",
+                  nk=("ts_code", "trade_date"), dataset="market/index",
+                  scope=ra.response_scope_of("index_daily", req))]
+    fixtures = [(("index_daily", req, 0), pd.DataFrame(
+        {"ts_code": ["000300.SH"] * 2, "trade_date": ["20260105", "20260106"], "close": [1.0, 2.0]}))]
+    _, res = _run_family_e2e(rp, L, spec, rows, fixtures)
+    assert [o["partition"] for o in res["outputs"]] == ["000300.SH"]
+
+
+def test_e2e_per_stock_to_per_date_repartition(rig):
+    """NEW shape: per-stock RANGE requests repartitioned to per-DATE outputs (cyq_perf)."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A13"]
+    rows, fixtures = [], []
+    for ts in ("000001.SZ", "600000.SH"):
+        req = {"ts_code": ts, "start_date": "20260101", "end_date": "20260131"}
+        rows.append(_prow("cyq_perf", ts, f"requests/A13/cyq_perf/{ts}.parquet",
+                          params=req, empty="sparse_canary",
+                          nk=("ts_code", "trade_date"), dataset="market/cyq_perf",
+                          scope=ra.response_scope_of("cyq_perf", req)))
+        fixtures.append((("cyq_perf", req, 0), pd.DataFrame(
+            {"ts_code": [ts] * 2, "trade_date": ["20260105", "20260106"],
+             "winner_rate": [0.5, 0.6]})))
+    _, res = _run_family_e2e(rp, L, spec, rows, fixtures)
+    parts = {o["partition"]: o["rows"] for o in res["outputs"]}
+    assert parts == {"20260105": 2, "20260106": 2}      # 2 stocks x 2 dates -> per-date files
+
+
+def test_e2e_quarter_stamp_family(rig):
+    """NEW shape: the quarter stamp is sent AS end_date and IS the output partition."""
+    rp, L = rig
+    spec = ra.ALL_FAMILIES["A15b"]
+    req = {"end_date": "20231231"}
+    rows = [_prow("disclosure_date", "20231231", "requests/A15b/disclosure_date/20231231.parquet",
+                  params=req, empty="sparse_canary", limit=3000,
+                  nk=("ts_code", "end_date", "ann_date"), dataset="fundamentals/disclosure_date",
+                  scope=ra.response_scope_of("disclosure_date", req))]
+    fixtures = [(("disclosure_date", req, 0), pd.DataFrame(
+        {"ts_code": ["000001.SZ"], "end_date": ["20231231"], "ann_date": ["20240315"],
+         "actual_date": ["20240315"]}))]
+    _, res = _run_family_e2e(rp, L, spec, rows, fixtures)
+    assert [o["partition"] for o in res["outputs"]] == ["20231231"]
+
+
+def test_scope_refuses_a_wrong_period_response(rig):
+    """The per-period scope is enforced like every other: a response for ANOTHER period refuses."""
+    rp, L = rig
+    req = {"period": "20231231"}
+    row = _prow("fina_mainbz", "20231231", "requests/A15c/fina_mainbz/20231231.parquet",
+                params=req, empty="sparse_canary", limit=10000,
+                nk=("ts_code", "end_date", "bz_item", "bz_code"),
+                dataset="fundamentals/fina_mainbz",
+                scope=ra.response_scope_of("fina_mainbz", req))
+    L._freeze_plan_unvalidated([row])
+    L.declare_run_mode("synthetic_nonpromotable")
+    ex = _syn([(("fina_mainbz", req, 0), pd.DataFrame(
+        {"ts_code": ["000001.SZ"], "end_date": ["20230630"], "bz_item": ["主营"],
+         "bz_code": ["P"], "bz_sales": [1.0]}))])       # WRONG period
+    claim = L.claim_next_fetch(row["request_id"], "synthetic_nonpromotable")
+    with pytest.raises(rl.LedgerError, match="outside the requested scope"):
+        L.fetch_claimed_page(row["request_id"], claim, ex)

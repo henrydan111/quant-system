@@ -81,6 +81,50 @@ RECIPES: dict = {r.recipe_id: r for r in [
     CallRecipe("report_rc_month_range_paged", "report_rc",
                (("start_date", "start_date"), ("end_date", "end_date")),
                (("fields", ",".join(REPORT_RC_FIELDS.split(","))),), ("limit", "offset")),
+    # ── fan-out batch 1 ───────────────────────────────────────────────────────────────────────────
+    # per-open-session market legs (single call per session; see each signed pagination_spec)
+    CallRecipe("moneyflow_by_trade_date", "moneyflow", (("trade_date", "trade_date"),), (), "none"),
+    CallRecipe("stk_limit_by_trade_date_paged", "stk_limit",
+               (("trade_date", "trade_date"),), (), ("limit", "offset")),
+    CallRecipe("margin_detail_by_trade_date", "margin_detail",
+               (("trade_date", "trade_date"),), (), "none"),
+    CallRecipe("hk_hold_by_trade_date", "hk_hold", (("trade_date", "trade_date"),), (), "none"),
+    CallRecipe("suspend_d_by_trade_date", "suspend_d", (("trade_date", "trade_date"),), (), "none"),
+    CallRecipe("top_inst_by_trade_date", "top_inst", (("trade_date", "trade_date"),), (), "none"),
+    CallRecipe("block_trade_by_trade_date_paged", "block_trade",
+               (("trade_date", "trade_date"),), (), ("limit", "offset")),
+    # per-index range
+    CallRecipe("index_daily_by_code_range", "index_daily",
+               (("ts_code", "ts_code"), ("start_date", "start_date"), ("end_date", "end_date")),
+               (), "none"),
+    # per-stock legs
+    CallRecipe("balancesheet_by_stock_paged", "balancesheet",
+               (("ts_code", "ts_code"),), (), ("limit", "offset")),
+    CallRecipe("cashflow_by_stock_paged", "cashflow", (("ts_code", "ts_code"),), (), ("limit", "offset")),
+    CallRecipe("forecast_by_stock", "forecast", (("ts_code", "ts_code"),), (), "none"),
+    CallRecipe("dividend_by_stock", "dividend", (("ts_code", "ts_code"),), (), "none"),
+    CallRecipe("stk_holdernumber_by_stock", "stk_holdernumber", (("ts_code", "ts_code"),), (), "none"),
+    CallRecipe("fina_audit_by_stock", "fina_audit", (("ts_code", "ts_code"),), (), "none"),
+    # per-stock + range (chip distribution)
+    CallRecipe("cyq_perf_by_stock_range", "cyq_perf",
+               (("ts_code", "ts_code"), ("start_date", "start_date"), ("end_date", "end_date")),
+               (), "none"),
+    # direct-quarter VIP (period x report_type)
+    CallRecipe("income_vip_by_period_type_paged", "income_vip",
+               (("period", "period"), ("report_type", "report_type")), (), ("limit", "offset")),
+    CallRecipe("cashflow_vip_by_period_type_paged", "cashflow_vip",
+               (("period", "period"), ("report_type", "report_type")), (), ("limit", "offset")),
+    # per-period fundamentals (VIP full-market where the caller used the _vip method)
+    CallRecipe("express_by_period", "express_vip", (("period", "period"),), (), "none"),
+    CallRecipe("fina_mainbz_by_period_paged", "fina_mainbz_vip",
+               (("period", "period"),), (), ("limit", "offset")),
+    CallRecipe("top10_floatholders_by_period_paged", "top10_floatholders",
+               (("period", "period"),), (), ("limit", "offset")),
+    # quarter-stamp / weekly legs (the stamp is sent AS end_date)
+    CallRecipe("disclosure_date_by_quarter_paged", "disclosure_date",
+               (("end_date", "end_date"),), (), ("limit", "offset")),
+    CallRecipe("pledge_stat_by_week_paged", "pledge_stat",
+               (("end_date", "end_date"),), (), ("limit", "offset")),
 ]}
 
 #: endpoint -> its ONE frozen recipe (the plan builder refuses an endpoint without one)
@@ -92,6 +136,29 @@ ENDPOINT_RECIPE: dict = {
     "top_list": "top_list_by_trade_date",
     "broker_recommend": "broker_recommend_by_month",
     "report_rc": "report_rc_month_range_paged",
+    # fan-out batch 1
+    "moneyflow": "moneyflow_by_trade_date",
+    "stk_limit": "stk_limit_by_trade_date_paged",
+    "margin_detail": "margin_detail_by_trade_date",
+    "hk_hold": "hk_hold_by_trade_date",
+    "suspend_d": "suspend_d_by_trade_date",
+    "top_inst": "top_inst_by_trade_date",
+    "block_trade": "block_trade_by_trade_date_paged",
+    "index_daily": "index_daily_by_code_range",
+    "balancesheet": "balancesheet_by_stock_paged",
+    "cashflow": "cashflow_by_stock_paged",
+    "forecast": "forecast_by_stock",
+    "dividend": "dividend_by_stock",
+    "stk_holdernumber": "stk_holdernumber_by_stock",
+    "fina_audit": "fina_audit_by_stock",
+    "cyq_perf": "cyq_perf_by_stock_range",
+    "income_vip": "income_vip_by_period_type_paged",
+    "cashflow_vip": "cashflow_vip_by_period_type_paged",
+    "express": "express_by_period",
+    "fina_mainbz": "fina_mainbz_by_period_paged",
+    "top10_floatholders": "top10_floatholders_by_period_paged",
+    "disclosure_date": "disclosure_date_by_quarter_paged",
+    "pledge_stat": "pledge_stat_by_week_paged",
 }
 
 
@@ -108,25 +175,68 @@ def validate_recipe(recipe: CallRecipe) -> None:
 
 
 # ── response scopes (design v4 §2d — frozen per plan row, concrete values) ───────────────────────
+#: EXPLICIT per-endpoint response-scope rules (fan-out): which RESPONSE column must match which
+#: REQUEST key, and how. Declared per endpoint rather than guessed from the request's shape — the
+#: heuristic version silently mis-scoped families whose response column differs from the request key
+#: (e.g. a `period` request whose rows carry `end_date`, or a year range matched on `ann_date` vs
+#: `report_date`). Unknown endpoint => fail closed.
+#:   ("eq", response_col, request_key)                    -> every row's col == the requested value
+#:   ("date_in_range", response_col, lo_key, hi_key)      -> typed date containment
+_SCOPE_RULES: dict = {
+    # per-open-session market: the response's trade_date IS the requested session
+    **{ep: [("eq", "trade_date", "trade_date")] for ep in (
+        "daily", "daily_basic", "adj_factor", "moneyflow", "stk_limit", "margin_detail",
+        "hk_hold", "suspend_d", "top_list", "top_inst", "block_trade")},
+    # per-stock legs: the response's ts_code IS the requested stock
+    **{ep: [("eq", "ts_code", "ts_code")] for ep in (
+        "income", "balancesheet", "cashflow", "forecast", "dividend", "stk_holdernumber",
+        "stk_holdertrade", "fina_audit")},
+    # per-stock + range: the stock must match AND every row's date must fall inside the window
+    "cyq_perf": [("eq", "ts_code", "ts_code"),
+                 ("date_in_range", "trade_date", "start_date", "end_date")],
+    "index_daily": [("eq", "ts_code", "ts_code"),
+                    ("date_in_range", "trade_date", "start_date", "end_date")],
+    # per-period fundamentals: the request sends `period`, the ROWS carry `end_date`
+    **{ep: [("eq", "end_date", "period")] for ep in ("express", "fina_mainbz", "top10_floatholders")},
+    # direct-quarter VIP: period AND the requested report_type must both match
+    **{ep: [("eq", "end_date", "period"), ("eq", "report_type", "report_type")]
+       for ep in ("income_vip", "cashflow_vip")},
+    # quarter-stamp / weekly legs send the stamp AS end_date
+    "disclosure_date": [("eq", "end_date", "end_date")],
+    "pledge_stat": [("eq", "end_date", "end_date")],
+    # month/range legs
+    "broker_recommend": [("eq", "month", "month")],
+    "report_rc": [("date_in_range", "report_date", "start_date", "end_date")],
+    "repurchase": [("date_in_range", "ann_date", "start_date", "end_date")],
+}
+
+
 def response_scope_of(endpoint: str, request: dict) -> dict:
-    """The request-bound row-membership rule frozen into the plan row. eq for point requests;
-    date_in_range (typed parsing in the ledger) for range requests."""
-    if "trade_date" in request:
-        return {"rule_id": "eq_trade_date", "checks": [["trade_date", "eq", str(request["trade_date"])]]}
-    if "ts_code" in request and "start_date" not in request:
-        return {"rule_id": "eq_ts_code", "checks": [["ts_code", "eq", str(request["ts_code"])]]}
-    if "month" in request:
-        return {"rule_id": "eq_month", "checks": [["month", "eq", str(request["month"])]]}
-    if "start_date" in request and "end_date" in request and "ts_code" not in request:
-        # report_rc month range: every row's report_date must fall inside the requested month
-        return {"rule_id": "report_date_in_range",
-                "checks": [["report_date", "date_in_range",
-                            [str(request["start_date"]), str(request["end_date"])]]]}
-    if "ts_code" in request:            # per-stock range (cyq_perf shape, fan-out)
-        return {"rule_id": "eq_ts_code_ranged",
-                "checks": [["ts_code", "eq", str(request["ts_code"])]]}
-    raise RuntimeError(f"{endpoint}: no response-scope rule for request shape {sorted(request)} — an "
-                       f"unscoped request must never be frozen (fail closed)")
+    """The request-bound row-membership rule frozen into the plan row, built from the endpoint's
+    DECLARED rule with the request's CONCRETE values substituted. Fail-closed: an endpoint with no
+    declared rule, or a rule naming a request key this request lacks, refuses — an unscoped request
+    must never be frozen."""
+    rules = _SCOPE_RULES.get(endpoint)
+    if not rules:
+        raise RuntimeError(f"{endpoint}: no declared response-scope rule — an unscoped request must "
+                           f"never be frozen (fail closed); declare one in _SCOPE_RULES")
+    checks = []
+    for rule in rules:
+        if rule[0] == "eq":
+            _, col, key = rule
+            if key not in request:
+                raise RuntimeError(f"{endpoint}: scope rule needs request key {key!r}, absent from "
+                                   f"{sorted(request)}")
+            checks.append([col, "eq", str(request[key])])
+        elif rule[0] == "date_in_range":
+            _, col, lo_key, hi_key = rule
+            if lo_key not in request or hi_key not in request:
+                raise RuntimeError(f"{endpoint}: scope rule needs {lo_key!r}/{hi_key!r}, absent from "
+                                   f"{sorted(request)}")
+            checks.append([col, "date_in_range", [str(request[lo_key]), str(request[hi_key])]])
+        else:
+            raise RuntimeError(f"{endpoint}: unknown scope rule mode {rule[0]!r}")
+    return {"rule_id": f"{endpoint}_scope", "checks": checks}
 
 
 # ── family + consolidation specs (design v4 §2c/§2e) ─────────────────────────────────────────────
@@ -151,6 +261,12 @@ class FamilySpec:
     consolidation: ConsolidationSpec
 
     def partition_of(self, request: dict) -> str:
+        """`partition_key` may name ONE request key or a tuple of keys. The composite form is required
+        by the direct-quarter VIP families: (period, report_type) requests differ in params (so their
+        request_ids differ) but would collapse to the SAME partition — and therefore the same
+        receipt_output — under a single key, which the freeze refuses as a shared output."""
+        if isinstance(self.partition_key, (tuple, list)):
+            return "_".join(str(request[k]) for k in self.partition_key)
         return str(request[self.partition_key])
 
     def request_output_of(self, endpoint: str, request: dict) -> str:
@@ -185,6 +301,112 @@ QUARTET: dict = {s.owner: s for s in [
                                  "consolidated/analyst/broker_recommend/broker_recommend_{partition}.parquet",
                                  "multiset_identity", "omit_output")),
 ]}
+
+# ── fan-out batch 1: the 22 families whose declared layout maps onto the frozen interface ─────────
+# Layouts are NOT guessed: each ConsolidationSpec follows the matrix row's own `consolidation_group`
+# (*_per_date -> trade_date, *_period -> end_date, *_per_code -> ts_code, *_weekly -> the Friday
+# end_date). The 4 families whose group is *_yearly (A12 stk_holdertrade, A15e repurchase, A14
+# report_rc) or which share an endpoint (A10a suspension, same suspend_d population as A10b) are
+# DEFERRED to batch 2 — they need a declarative partition transform / multi-consolidation support,
+# and adding either silently mid-fan-out would be exactly the interface drift the freeze exists to
+# prevent. A07 indicators stays BLOCKED(contract) pending its §13 period-discovery probe.
+def _per_date(owner, family, endpoint, path_fmt, empty):
+    return FamilySpec(owner, family, (endpoint,), "trade_date",
+                      ConsolidationSpec(f"repartition_by_trade_date_{owner}", "trade_date",
+                                        path_fmt, "multiset_identity", empty))
+
+
+def _per_period(owner, family, endpoint, path_fmt, partition_key="ts_code"):
+    return FamilySpec(owner, family, (endpoint,), partition_key,
+                      ConsolidationSpec(f"repartition_by_end_date_{owner}", "end_date",
+                                        path_fmt, "multiset_identity", "omit_output"))
+
+
+FANOUT_BATCH1: dict = {s.owner: s for s in [
+    # ── per-open-session market (request partition == output partition == trade_date) ────────────
+    _per_date("A08a", "market/moneyflow", "moneyflow",
+              "consolidated/market/moneyflow/{yyyy}/moneyflow_{partition}.parquet", "omit_output"),
+    _per_date("A08b", "market/stk_limit", "stk_limit",
+              "consolidated/market/stk_limit/{yyyy}/stk_limit_{partition}.parquet", "zero_rows"),
+    _per_date("A08c", "market/margin", "margin_detail",
+              "consolidated/market/margin/{yyyy}/margin_{partition}.parquet", "zero_rows"),
+    _per_date("A08d", "market/northbound", "hk_hold",
+              "consolidated/market/northbound/{yyyy}/northbound_{partition}.parquet", "omit_output"),
+    _per_date("A10b", "market/suspend_d", "suspend_d",
+              "consolidated/market/suspend_d/{yyyy}/suspend_d_{partition}.parquet", "omit_output"),
+    _per_date("A11b", "market/top_inst", "top_inst",
+              "consolidated/market/top_inst/{yyyy}/top_inst_{partition}.parquet", "omit_output"),
+    _per_date("A11c", "market/block_trade", "block_trade",
+              "consolidated/market/block_trade/{yyyy}/block_trade_{partition}.parquet", "omit_output"),
+    # ── per-stock REQUEST -> per-date OUTPUT (the cyq repartition; grp=cyq_per_date) ─────────────
+    FamilySpec("A13", "market/cyq_perf", ("cyq_perf",), "ts_code",
+               ConsolidationSpec("repartition_by_trade_date_A13", "trade_date",
+                                 "consolidated/market/cyq_perf/{yyyy}/cyq_perf_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    # ── per-index-code range (grp=index_per_code -> one output per CODE) ─────────────────────────
+    FamilySpec("A02", "market/index", ("index_daily",), "ts_code",
+               ConsolidationSpec("repartition_by_code_A02", "ts_code",
+                                 "consolidated/market/index/index_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    # ── per-stock REQUEST -> per-period OUTPUT (grp=*_period) ────────────────────────────────────
+    _per_period("A03b", "fundamentals/balancesheet", "balancesheet",
+                "consolidated/fundamentals/balancesheet/balancesheet_{partition}.parquet"),
+    _per_period("A05", "fundamentals/cashflow", "cashflow",
+                "consolidated/fundamentals/cashflow/cashflow_{partition}.parquet"),
+    _per_period("A06", "fundamentals/forecast", "forecast",
+                "consolidated/fundamentals/forecast/forecast_{partition}.parquet"),
+    _per_period("A03c", "corporate/dividends", "dividend",
+                "consolidated/corporate/dividends/dividends_{partition}.parquet"),
+    _per_period("A09", "corporate/holder_number", "stk_holdernumber",
+                "consolidated/corporate/holder_number/holder_number_{partition}.parquet"),
+    # grp=fina_audit_stock -> one output per STOCK
+    FamilySpec("A15d", "fundamentals/fina_audit", ("fina_audit",), "ts_code",
+               ConsolidationSpec("repartition_by_stock_A15d", "ts_code",
+                                 "consolidated/fundamentals/fina_audit/fina_audit_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    # ── per-period REQUEST -> per-period OUTPUT ──────────────────────────────────────────────────
+    _per_period("A15a", "fundamentals/express", "express",
+                "consolidated/fundamentals/express/express_{partition}.parquet", "period"),
+    _per_period("A15c", "fundamentals/fina_mainbz", "fina_mainbz",
+                "consolidated/fundamentals/fina_mainbz/fina_mainbz_{partition}.parquet", "period"),
+    _per_period("A15g", "corporate/top10_floatholders", "top10_floatholders",
+                "consolidated/corporate/top10_floatholders/top10_floatholders_{partition}.parquet",
+                "period"),
+    # ── direct-quarter VIP: (period, report_type) requests -> ONE per-period output ──────────────
+    FamilySpec("A04a", "fundamentals/income_quarterly", ("income_vip",), ("period", "report_type"),
+               ConsolidationSpec("repartition_by_end_date_A04a", "end_date",
+                                 "consolidated/fundamentals/income_quarterly/income_quarterly_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    FamilySpec("A04b", "fundamentals/cashflow_quarterly", ("cashflow_vip",), ("period", "report_type"),
+               ConsolidationSpec("repartition_by_end_date_A04b", "end_date",
+                                 "consolidated/fundamentals/cashflow_quarterly/cashflow_quarterly_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    # ── quarter-stamp / weekly legs (the stamp IS the request key AND the output partition) ──────
+    FamilySpec("A15b", "fundamentals/disclosure_date", ("disclosure_date",), "end_date",
+               ConsolidationSpec("repartition_by_end_date_A15b", "end_date",
+                                 "consolidated/fundamentals/disclosure_date/disclosure_date_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+    FamilySpec("A15f", "corporate/pledge_stat", ("pledge_stat",), "end_date",
+               ConsolidationSpec("repartition_by_end_date_A15f", "end_date",
+                                 "consolidated/corporate/pledge_stat/pledge_stat_{partition}.parquet",
+                                 "multiset_identity", "omit_output")),
+]}
+
+#: every family the adapter layer can currently execute (quartet + batch 1)
+ALL_FAMILIES: dict = {**QUARTET, **FANOUT_BATCH1}
+
+#: DEFERRED to fan-out batch 2, with the reason each needs an interface addition (never a silent one)
+DEFERRED_FAMILIES: dict = {
+    "A12": "stk_holdertrade — grp=stk_holdertrade_yearly: needs a declarative partition transform "
+           "(year-of-ann_date); ConsolidationSpec currently partitions on a COLUMN VALUE",
+    "A15e": "repurchase — grp=repurchase_yearly: same year-of-ann_date transform",
+    "A14": "report_rc — grp=report_rc_yearly (same transform) AND its report_rc_payload_digest "
+           "producer is unregistered (GPT ruled the producer is a precondition for this family)",
+    "A10a": "suspension — draws the SAME suspend_d population as A10b, so both would mint an "
+            "IDENTICAL request_id; the correct model is fetch-once/consolidate-twice, which needs "
+            "multi-consolidation support on FamilySpec",
+    "A07": "indicators — fina_indicator_vip is UNSIGNED (held for the §13 period-discovery probe)",
+}
 
 
 # ── the canonical A01 merger (design v4 F9 — shared pure function) ───────────────────────────────
