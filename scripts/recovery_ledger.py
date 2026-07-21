@@ -278,9 +278,16 @@ class PageReceiptLedger:
     def execution_guard(self, timeout: float = None):
         """The cross-process run-execution lock as a context manager. A FRESH FileLock instance per
         call — deliberately NON-reentrant even in-process, so an operator abandon in another thread
-        cannot slip inside a worker's dispatch->close span."""
+        cannot slip inside a worker's dispatch->close span.
+
+        GPT impl re-review #3 (P0): the lock path is validated through the SAME no-follow, handle-based
+        path authority as every other write (rp.assert_write -> broker.validate_ancestry), computed
+        FRESH per acquisition. A junction swapped in at <run>/ledger is refused BEFORE FileLock ever
+        touches the path — the raw-path FileLock previously created (and on release deleted) a lock
+        file OUTSIDE the run root. Mirrors RecoveryPaths._lock exactly."""
         from filelock import FileLock, Timeout as _FLTimeout
-        lock = FileLock(str(self._exec_lock_path))
+        lock_path = self.rp.assert_write(self._exec_lock_path)   # no-follow ancestry authority
+        lock = FileLock(str(lock_path))
         t = self._exec_lock_timeout if timeout is None else timeout
 
         class _Guard:
@@ -297,10 +304,29 @@ class PageReceiptLedger:
                 return False
         return _Guard()
 
-    def consume_dispatch_token(self, token: str) -> bool:
-        """One-shot: True exactly once for a token this ledger minted at dispatch (the LiveExecutor's
-        proof that its invocation came through fetch_claimed_page, not a direct call)."""
-        return bool(token) and self._dispatch_tokens.pop(token, None) is not None
+    @staticmethod
+    def _canon_dispatch_spec(spec: dict) -> str:
+        """Canonicalize ONLY the load-bearing request fields the executor must not alter."""
+        return _canon({k: spec.get(k) for k in
+                       ("endpoint", "recipe_id", "base_params", "limit", "offset", "page",
+                        "pagination_mode")})
+
+    def consume_dispatch_token(self, token: str, spec: dict) -> bool:
+        """One-shot dispatch check (GPT impl re-review #3 P0): the token proves the call came through
+        fetch_claimed_page, AND the presented `spec` must match — byte-for-byte on the load-bearing
+        fields — the FROZEN spec the ledger dispatched. Returns False for a missing/replayed token
+        (LiveExecutor raises 'no valid token'); RAISES on a spec MISMATCH — a wrapping executor that
+        kept a valid `daily` token but swapped in `broker_recommend`/other params/offset is refused
+        (it previously escaped the §13 endpoint scope). The token is popped either way (one-shot)."""
+        frozen = self._dispatch_tokens.pop(token, None) if token else None
+        if frozen is None:
+            return False
+        got = self._canon_dispatch_spec(spec)
+        if got != frozen:
+            raise LedgerError("dispatch token spec MISMATCH — the executor was handed a request that "
+                              "DIFFERS from the ledger-dispatched one (endpoint/recipe/params/cursor); "
+                              "a swapped, scope-escaping request is refused")
+        return True
 
     # ── hash chain (head anchored OUTSIDE the editable jsonl) ────────────────────────────────────
     def _genesis(self) -> str:
@@ -892,9 +918,15 @@ class PageReceiptLedger:
                 self._append({"kind": "lease_dispatch_started", "request_id": rid,
                               "page": int(claim.page), "lease_id": claim.lease_id})
             dispatch_token = _uuid.uuid4().hex
-            self._dispatch_tokens[dispatch_token] = (rid, claim.lease_id)
+            limit0 = int(row["page_limit"]) if row["page_limit"] else 0
+            frozen_spec = {"endpoint": row["endpoint"], "base_params": dict(row["params"]),
+                           "limit": limit0, "offset": int(claim.offset), "page": int(claim.page),
+                           "recipe_id": row["recipe_id"], "pagination_mode": row["pagination_mode"]}
+            # the token is bound to the FROZEN spec (P0): the executor may not alter the request
+            self._dispatch_tokens[dispatch_token] = self._canon_dispatch_spec(frozen_spec)
             try:
-                return self._execute_dispatched(rid, claim, executor, row, dispatch_token)
+                return self._execute_dispatched(rid, claim, executor, row, dispatch_token,
+                                                frozen_spec)
             except BaseException as exc:
                 # TOTAL safety net (re-review #2): any failure after dispatch — refusal, executor
                 # error, serialization/broker error inside the close — must leave the lease CLOSED.
@@ -911,14 +943,11 @@ class PageReceiptLedger:
                 self._dispatch_tokens.pop(dispatch_token, None)
 
     def _execute_dispatched(self, rid: str, claim: "Claim", executor, row: dict,
-                            dispatch_token: str) -> "PageResult":
+                            dispatch_token: str, frozen_spec: dict) -> "PageResult":
         """The post-dispatch body (called under the execution guard + total safety net)."""
         self._revalidate_contract(row)               # live contract re-bind, every page
-        limit = int(row["page_limit"]) if row["page_limit"] else 0
-        spec = {"endpoint": row["endpoint"], "base_params": dict(row["params"]),
-                "limit": limit, "offset": int(claim.offset), "page": int(claim.page),
-                "recipe_id": row["recipe_id"], "pagination_mode": row["pagination_mode"],
-                "dispatch_token": dispatch_token}
+        limit = frozen_spec["limit"]
+        spec = dict(frozen_spec, dispatch_token=dispatch_token)
         # ---- the ONE wire call (the §6.1 throttle lives in the proxy) ---------------------------
         df = executor.run_page(spec)
         if df is None or not hasattr(df, "columns"):

@@ -853,3 +853,100 @@ def test_consolidation_serializes_on_the_execution_lock(rig):
     ra.consolidate_family(spec, L)                   # the lock free -> consolidates exactly once
     with pytest.raises(RuntimeError, match="exactly once per run"):
         ra.consolidate_family(spec, L)
+
+
+# ── GPT impl re-review #3 fold: token-binds-spec + lock-through-no-follow ─────────────────────────
+class _FetcherSpy:
+    def __init__(self):
+        self.calls = []
+
+    def fetch_page_once(self, method, **kw):
+        self.calls.append((method, kw))
+        return _df(["A.SZ"])
+
+
+def _authorize_live(L, row, scope):
+    from datetime import datetime, timedelta, timezone
+    L.declare_run_mode("live_authorized")
+    fut = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    L.record_fetch_authorization(actor="henry", expires_at=fut, endpoint_scope=scope)
+
+
+def test_honest_live_executor_reaches_the_vendor_once(rig):
+    """Positive control: the token-binds-spec check does not break the normal LiveExecutor path."""
+    rp, L = rig
+    # a real signed daily contract so the live contract re-bind passes
+    _LIVE_CONTRACTS["daily"] = rrc.load_signed_contracts()["daily"]
+    c = _LIVE_CONTRACTS["daily"]
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet",
+                nk=tuple(c["natural_key"]))
+    row["contract_sha256"] = rrc.canonical_contract_sha256(c)
+    row["recipe_id"] = "daily_by_trade_date"
+    L._revalidate_contract = lambda r: None            # below-contract: skip the doc revalidation
+    L._assert_response_fields = lambda ep, cols: None
+    L._freeze_plan_unvalidated([row])
+    _authorize_live(L, row, ["daily"])
+    spy = _FetcherSpy()
+    ex = ra.LiveExecutor(spy, L)
+    claim = L.claim_next_fetch(row["request_id"], "live_authorized")
+    L.fetch_claimed_page(row["request_id"], claim, ex)
+    assert spy.calls == [("daily", {"trade_date": "20260702"})]   # exactly the dispatched request
+
+
+def test_valid_token_cannot_swap_the_request_out_of_scope(rig):
+    """P0 (reproduced by GPT): a wrapping executor kept a valid `daily` dispatch token but swapped the
+    spec to broker_recommend — the ledger recorded `daily` while the vendor got broker_recommend,
+    escaping the §13 endpoint scope. The token is now BOUND to the frozen spec."""
+    rp, L = rig
+    _LIVE_CONTRACTS["daily"] = rrc.load_signed_contracts()["daily"]
+    c = _LIVE_CONTRACTS["daily"]
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet", nk=tuple(c["natural_key"]))
+    row["contract_sha256"] = rrc.canonical_contract_sha256(c)
+    row["recipe_id"] = "daily_by_trade_date"
+    L._revalidate_contract = lambda r: None
+    L._assert_response_fields = lambda ep, cols: None
+    L._freeze_plan_unvalidated([row])
+    _authorize_live(L, row, ["daily"])                 # ONLY daily is authorized
+    spy = _FetcherSpy()
+    inner = ra.LiveExecutor(spy, L)
+
+    class _SwapExecutor:
+        mode = "live_authorized"
+
+        def run_page(self, spec):
+            swapped = dict(spec, endpoint="broker_recommend",
+                           recipe_id="broker_recommend_by_month",
+                           base_params={"month": "202601"}, pagination_mode="single_page", limit=0)
+            return inner.run_page(swapped)             # keeps the VALID dispatch_token
+    claim = L.claim_next_fetch(row["request_id"], "live_authorized")
+    with pytest.raises(rl.LedgerError, match="dispatch token spec MISMATCH"):
+        L.fetch_claimed_page(row["request_id"], claim, _SwapExecutor())
+    assert spy.calls == []                             # broker_recommend NEVER reached the vendor
+    # and the lease closed as failed, not IN_FLIGHT
+    assert L.claim_next_fetch(row["request_id"], "live_authorized").kind == "RETRY_PAGE"
+
+
+def test_execution_guard_refuses_a_junctioned_ledger_dir_without_touching_external(rig, tmp_path):
+    """P0 (reproduced by GPT): execution_guard built a FileLock on the RAW path before any no-follow
+    check, so a junction at <run>/ledger created (and on release DELETED) a lock file OUTSIDE the run
+    root. The lock path now goes through rp.assert_write -> broker.validate_ancestry."""
+    import subprocess
+    rp, L = rig
+    external = _recovery_test_root("external_target")
+    external.mkdir(parents=True, exist_ok=True)
+    sentinel = external / "run_execution.lock"
+    sentinel.write_bytes(b"pre-existing external file")
+    ledger_dir = rp.root / "ledger"
+    assert not ledger_dir.exists()                     # rig has not written the ledger yet
+    r = subprocess.run(["cmd", "/c", "mklink", "/J", str(ledger_dir), str(external)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip(f"mklink unavailable: {r.stderr}")
+    try:
+        with pytest.raises(RuntimeError, match="REFUSED|reparse|junction"):
+            with L.execution_guard():
+                pass
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(ledger_dir)], capture_output=True, text=True)
+    # the external file was NEITHER created-then-deleted NOR modified by the guard
+    assert sentinel.exists() and sentinel.read_bytes() == b"pre-existing external file"

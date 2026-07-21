@@ -358,7 +358,11 @@ class LiveExecutor:
         self._ledger = ledger
 
     def run_page(self, spec: dict):
-        if not self._ledger.consume_dispatch_token(spec.get("dispatch_token", "")):
+        # the ledger checks BOTH the one-shot token AND that this exact request was the one dispatched
+        # (endpoint/recipe/params/cursor) — a wrapping executor cannot keep a valid token and swap the
+        # request to escape the §13 endpoint scope (GPT impl re-review #3 P0). A spec mismatch RAISES
+        # LedgerError inside consume; a missing/replayed token returns False.
+        if not self._ledger.consume_dispatch_token(spec.get("dispatch_token", ""), spec):
             raise RuntimeError("LiveExecutor.run_page REFUSED: no valid one-shot dispatch token — the "
                                "raw vendor door only opens for a ledger-dispatched call "
                                "(fetch_claimed_page); direct invocation is not a thing")
