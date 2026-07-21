@@ -108,9 +108,20 @@ def plain_object_tuple(x) -> tuple:
     return tuple(list(x))
 
 
+_HEX64 = __import__("re").compile(r"[0-9a-f]{64}")
+
+
 def verify_sealed(payload: dict, claimed_hash: str, *, field_name: str = "hash") -> None:
     """verify-not-trust:重算 payload 的 seal_hash 与自称哈希比对,不符硬失败。
-    直接构造伪造对象(真 payload + 任意哈希 / 篡改 payload 留旧哈希)均被识破。"""
+    直接构造伪造对象(真 payload + 任意哈希 / 篡改 payload 留旧哈希)均被识破。
+    archive-re-review#13:**先拒非精确 str / 非 64-hex 的 claimed_hash**——所有
+    自封哈希都是 seal_hash 输出(64 位小写 hex),故 str 子类/int 子类等可覆写
+    `__eq__`/`__ne__` 的对象在此死,先于 `!=` 比对(否则 `real != evil` 被
+    evil 的 __ne__ 骗过,伪哈希序列化进档案)。这是所有哈希注入的单点闸门。"""
+    if type(claimed_hash) is not str or not _HEX64.fullmatch(claimed_hash):
+        raise SealError(
+            f"{field_name} 须恰 str 且 64 位小写 hex(得 {type(claimed_hash).__name__} "
+            f"{claimed_hash!r};str/int 子类脱钩拒,re-review#13)")
     recomputed = seal_hash(payload)
     if recomputed != claimed_hash:
         raise SealError(f"{field_name} 不符:自称 {claimed_hash[:12]} 重算 {recomputed[:12]}")

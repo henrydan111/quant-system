@@ -166,11 +166,20 @@ def contract_canonical_payload(contract: NewsScoringContract) -> dict:
 
 def require_exact_contract(contract) -> NewsScoringContract:
     """安全边界的契约恰类型门(re-review#6 P0):子类一律拒——frozen dataclass
-    不封虚方法,`isinstance` 收子类等于把哈希构造交给调用方。"""
+    不封虚方法,`isinstance` 收子类等于把哈希构造交给调用方。archive-re-review#13
+    P1:**消费时重验字段精确基础类型 + 自封哈希**——构造期归一可被事后
+    `contract.__dict__` 注入撤销(int 子类使承诺比对错误通过、写伪 contract_hash),
+    故每次消费重跑硬化 verify_sealed(拒非 str/非 64-hex)与字段类型门。"""
     if type(contract) is not NewsScoringContract:
         raise RegistryError(
             f"须恰 NewsScoringContract(得 {type(contract).__name__})——子类可"
             f"覆写 _payload 使承诺哈希与实际评分字段脱钩,拒(re-review#6 P0)")
+    if type(contract.schema_id) is not str or type(contract.output_mode) is not str \
+            or not (contract.primary_decision_horizon is None
+                    or type(contract.primary_decision_horizon) is str):
+        raise RegistryError("契约字段须恰 str(/None)——__dict__ 注入拒,re-review#13 P1")
+    verify_sealed(contract_canonical_payload(contract), contract.contract_hash,
+                  field_name="contract_hash")
     return contract
 
 

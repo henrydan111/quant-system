@@ -773,6 +773,63 @@ def artifact_canonical_payload(artifact) -> dict:
             "final_registry_hash": artifact.final_registry.registry_hash}
 
 
+# ---- archive-re-review#13 P0:**消费时**精确基础类型断言(不只构造期归一——
+#      frozen dataclass 的 __dict__ 可事后注入"str()真/splitlines()伪"的对象,
+#      card_hash 仍验过但伪正文进 factor LLM;每个消费边界重验字段确为基础类型)
+
+def _assert_str_fields(obj, names, what) -> None:
+    for _f in names:
+        if type(getattr(obj, _f)) is not str:
+            raise RegistryError(
+                f"{what}.{_f} 须恰 str(得 {type(getattr(obj, _f)).__name__}"
+                f";__dict__ 注入非 str 对象拒,re-review#13 P0)")
+
+
+def _assert_str_tuple_fields(obj, names, what) -> None:
+    for _f in names:
+        t = getattr(obj, _f)
+        if type(t) is not tuple or any(type(x) is not str for x in t):
+            raise RegistryError(
+                f"{what}.{_f} 须恰 tuple[恰 str](re-review#13 P0)")
+
+
+def assert_base_card_fields(card) -> None:
+    _assert_str_fields(card, ("card_name", "cutoff_iso", "factor_payload_text",
+                              "restricted_text", "records_hash", "card_hash"),
+                       "RenderedCard")
+    _assert_str_tuple_fields(card, ("record_ids", "base_fact_hashes"), "RenderedCard")
+
+
+def assert_base_fact_fields(bf) -> None:
+    _assert_str_fields(bf, ("base_record_id", "base_content_hash", "claim_id",
+                            "fact_cluster_id", "evidence_class", "fact_hash"),
+                       "D7BaseFact")
+    if type(bf.importance) is not int or isinstance(bf.importance, bool):
+        raise RegistryError("D7BaseFact.importance 须恰 int(re-review#13 P0)")
+
+
+def assert_base_row_fields(row) -> None:
+    _assert_str_fields(row, ("row_id", "claim_id", "fact_cluster_id",
+                             "evidence_group_id", "attribute_type", "text",
+                             "row_hash"), "AttributeRow")
+
+
+def assert_base_bundle_fields(bundle) -> None:
+    _assert_str_fields(bundle, ("decision_id", "cutoff_iso", "source_card_hash",
+                                "source_registry_hash", "final_registry_hash",
+                                "bundle_hash"), "AttributeBundle")
+    _assert_str_tuple_fields(bundle, ("base_fact_hashes", "claim_ids", "row_hashes",
+                                      "child_record_hashes", "demoted_record_hashes"),
+                             "AttributeBundle")
+
+
+def assert_base_artifact_fields(artifact) -> None:
+    if type(artifact.artifact_hash) is not str:
+        raise RegistryError("D7DecisionArtifact.artifact_hash 须恰 str(re-review#13 P0)")
+    if type(artifact.base_facts) is not tuple or type(artifact.rows) is not tuple:
+        raise RegistryError("D7DecisionArtifact.base_facts/rows 须恰 tuple(re-review#13 P0)")
+
+
 def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
     """**完整血缘再推导**(re-review#5 B1:唯一 D7 消费边界;账本只收过此门的工件)。
     对每个组件重验封印,并全量重算:
@@ -791,11 +848,16 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
         raise RegistryError(
             f"只收恰 D7DecisionArtifact(得 {type(artifact).__name__};子类拒,"
             f"re-review#7 P0)")
-    verify_sealed(artifact_canonical_payload(artifact), artifact.artifact_hash,
-                  field_name="artifact_hash")
+    # re-review#13 P0:**消费时**精确基础类型断言(先于哈希信任)——__dict__ 注入
+    # 的"str()真/splitlines()伪"对象、非 str 字段在此死,不只靠构造期归一
+    assert_base_artifact_fields(artifact)
     card, bundle = artifact.card, artifact.bundle
     if type(card) is not RenderedCard or type(bundle) is not AttributeBundle:
         raise RegistryError("工件组件须恰 RenderedCard/AttributeBundle(子类拒,re-review#7)")
+    assert_base_card_fields(card)
+    assert_base_bundle_fields(bundle)
+    verify_sealed(artifact_canonical_payload(artifact), artifact.artifact_hash,
+                  field_name="artifact_hash")
     verify_sealed(card_canonical_payload(card), card.card_hash, field_name="card_hash")
     verify_sealed(bundle_canonical_payload(bundle), bundle.bundle_hash,
                   field_name="bundle_hash")
@@ -806,6 +868,7 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
     for bf in artifact.base_facts:
         if type(bf) is not D7BaseFact:
             raise RegistryError("base_facts 只收恰 D7BaseFact(子类拒,re-review#7)")
+        assert_base_fact_fields(bf)                     # re-review#13 P0
         verify_sealed(base_fact_canonical_payload(bf), bf.fact_hash,
                       field_name="D7BaseFact fact_hash")
         facts_by_id[bf.base_record_id] = bf
@@ -852,6 +915,7 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
     for r in rows:
         if type(r) is not AttributeRow:
             raise RegistryError("rows 只收恰 AttributeRow(子类拒,re-review#7 P0)")
+        assert_base_row_fields(r)                       # re-review#13 P0
         verify_sealed(attribute_row_canonical_payload(r), r.row_hash,
                       field_name="attribute row_hash")
     row_ids = [r.row_id for r in rows]

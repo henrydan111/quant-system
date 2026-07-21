@@ -1023,6 +1023,76 @@ class TestExactTypeBoundaries:
                 penalty_payload_hash=o.penalty_payload_hash,
                 outcome_hash=_EvilHash(o.outcome_hash))
 
+    def test_registry_key_record_id_swap_refused(self, tmp_path):
+        # archive-re-review#13 P0: the registry sealed only the VALUE hash set,
+        # not the key->record_id binding. Swapping two keys in
+        # final_registry.__dict__["records"] leaves registry_hash unchanged but
+        # get(NFD01) returns NFR01's risk content. The (key, hash)-pair seal +
+        # key==record_id enforcement must refuse it (no object.__setattr__).
+        from types import MappingProxyType
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            require_sealed_registry,
+        )
+        art = _artifact_full("d1")
+        reg = art.final_registry
+        recs = dict(reg.records)
+        ids = [rid for rid in recs if "." not in rid]   # top-level records
+        a, b = ids[0], ids[1]
+        swapped = dict(recs)
+        swapped[a], swapped[b] = recs[b], recs[a]        # key<->record_id broken
+        reg.__dict__["records"] = MappingProxyType(swapped)
+        with pytest.raises(RegistryError, match="键|record_id"):
+            require_sealed_registry(reg)
+
+    def test_card_text_splitlines_injection_refused(self, tmp_path):
+        # archive-re-review#13 P0: a str subclass whose str() returns the sealed
+        # text (so card_hash still verifies) but whose .splitlines() is forged.
+        # verify_d7_artifact's consume-time exact-base-type assert catches the
+        # non-exact-str field before the forged text can reach the factor LLM.
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            verify_d7_artifact,
+        )
+
+        class _EvilText(str):
+            def splitlines(self, *a, **k):
+                return ["FORGED factor line"]
+        art = _artifact_full("d1")
+        art.card.__dict__["factor_payload_text"] = _EvilText(
+            art.card.factor_payload_text)
+        with pytest.raises(RegistryError, match="factor_payload_text 须恰 str"):
+            verify_d7_artifact(art)
+
+    def test_injected_outcome_hash_int_refused_at_verify(self, tmp_path):
+        # archive-re-review#13 P1: post-construction inject an int subclass into
+        # outcome.__dict__["outcome_hash"]; the hardened verify_sealed (exact
+        # str + 64-hex) refuses it at the binding boundary, so it never seals.
+        art, bundle = _setup(tmp_path)
+
+        class _EvilInt(int):
+            def __eq__(self, x): return True
+            def __ne__(self, x): return False
+            def __hash__(self): return 0
+        bundle["outcome"].__dict__["outcome_hash"] = _EvilInt(0)
+        with pytest.raises(SealError):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+
+    def test_injected_contract_hash_int_refused_at_consume(self, tmp_path):
+        # archive-re-review#13 P1: post-construction inject an int subclass into
+        # contract.__dict__["contract_hash"]; require_exact_contract re-verifies
+        # the self-hash via the hardened verify_sealed and refuses it.
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            require_exact_contract,
+        )
+
+        class _EvilInt(int):
+            def __eq__(self, x): return True
+            def __ne__(self, x): return False
+            def __hash__(self): return 0
+        c = _contract()
+        c.__dict__["contract_hash"] = _EvilInt(0)
+        with pytest.raises(SealError):
+            require_exact_contract(c)
+
     def test_fake_contract_hash_subclass_neutralized(self, tmp_path):
         # archive-re-review#12 P1: the `type(x) is str` guard skipped str
         # subclasses; contract_hash is now coerced unconditionally, so a

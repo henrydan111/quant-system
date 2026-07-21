@@ -181,14 +181,17 @@ class NewsLegOutcome:
                 raise LegIntegrityError(
                     f"penalty {self.penalty_leg_status} 不该有 payload 哈希——"
                     f"零适格/短路下不存在 penalty payload")
+        # archive-re-review#12/#13 P1:outcome_hash 恰类型门**先于真值判断**——
+        # 注入的 int 0(falsy)会跳过 `if self.outcome_hash` 分支静默重算,故先
+        # 拒非恰 str;`""` 是"未封印"合法哨兵(计算),非空须 64-hex 再 verify
+        if type(self.outcome_hash) is not str:
+            raise RegistryError(
+                f"outcome_hash 须恰 str(得 {type(self.outcome_hash).__name__};"
+                f"__dict__ 注入非 str 拒,re-review#13 P1)")
         if self.outcome_hash:
-            # archive-re-review#12 P1:outcome_hash **恰 str + 64-hex**先于 verify/
-            # 相等比对——str 子类可让 verify_sealed 与承诺比对错误通过,序列化伪哈希
-            if type(self.outcome_hash) is not str \
-                    or not _HEX64_RE.fullmatch(self.outcome_hash):
+            if not _HEX64_RE.fullmatch(self.outcome_hash):
                 raise RegistryError(
-                    f"outcome_hash 须恰 str 64-hex(得 {self.outcome_hash!r};"
-                    f"str 子类脱钩拒,re-review#12 P1)")
+                    f"outcome_hash 须 64-hex(得 {self.outcome_hash!r},re-review#12 P1)")
             verify_sealed(self._payload(), self.outcome_hash, field_name="outcome_hash")
         else:
             object.__setattr__(self, "outcome_hash", seal_hash(self._payload()))

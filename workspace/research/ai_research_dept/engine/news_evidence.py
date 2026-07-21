@@ -609,12 +609,21 @@ class SealedCardRegistry:
 def registry_canonical_payload(registry) -> dict:
     """注册表的 **canonical 载荷**——模块级、不可覆写、只读实际字段
     (archive-re-review#7 P0:D7 消费边界绝不调用可被子类覆写的虚方法
-    `_payload()`;记录序无关,按 content_hash 排序)。archive-re-review#9 P0:
-    每条成员经 `verified_record_content_hash`(恰类型 + canonical 重算),
-    registry_hash 基于**已验证**记录哈希,绝不直接信任成员自封 `content_hash`。"""
-    return {"cutoff": registry.cutoff_iso,
-            "record_hashes": sorted(verified_record_content_hash(r)
-                                    for r in registry.records.values())}
+    `_payload()`)。archive-re-review#9 P0:每条成员经 `verified_record_content_hash`
+    (恰类型 + canonical 重算),registry_hash 基于**已验证**记录哈希,绝不信成员
+    自封 `content_hash`。archive-re-review#13 P0:封 **(映射键, 已验哈希)** 对并
+    强制 `键 == record.record_id`——只封值哈希集合会漏掉"键↔记录"绑定,交换
+    `__dict__["records"]` 的两键(NFD01↔NFR01)时值集合不变、registry_hash 不变,
+    但 `get(NFD01)` 返回 NFR01 的风险正文进 factor payload。"""
+    pairs = []
+    for k, r in registry.records.items():
+        h = verified_record_content_hash(r)
+        if type(k) is not str or k != r.record_id:
+            raise RegistryError(
+                f"registry 映射键 {k!r} ≠ 记录 record_id {r.record_id!r}——"
+                f"键↔记录绑定被换,拒(re-review#13 P0)")
+        pairs.append([k, h])
+    return {"cutoff": registry.cutoff_iso, "record_pairs": sorted(pairs)}
 
 
 def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCardRegistry:
@@ -635,9 +644,9 @@ def build_card_registry(cutoff_iso: str, records: list[CardRecord]) -> SealedCar
             frozenset(r.allowed_consumers), frozenset(r.allowed_dimensions),
             r.record_schema_id, tuple(r.derivation))
         by_id[r.record_id] = r
-        verified_hashes.append(vh)
+        verified_hashes.append([r.record_id, vh])      # re-review#13 P0:键绑定
     _verify_d7_relationships(by_id)                    # re-review#4 B1
-    payload = {"cutoff": cutoff_iso, "record_hashes": sorted(verified_hashes)}
+    payload = {"cutoff": cutoff_iso, "record_pairs": sorted(verified_hashes)}
     return SealedCardRegistry(cutoff_iso=cutoff_iso, records=deep_ro(by_id),
                               registry_hash=seal_hash(payload))
 

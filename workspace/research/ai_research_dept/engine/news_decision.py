@@ -660,6 +660,19 @@ def verify_payload_for_execution(sp: SealedPayload, artifact: D7DecisionArtifact
     if type(sp) is not SealedPayload:
         raise RegistryError(
             "执行体只收恰 SealedPayload(子类可覆写 _payload 脱钩,拒;re-review#7 P0)")
+    # re-review#13 P0:**消费时**精确基础类型断言(__dict__ 注入的"str()真/
+    # 其它方法伪"对象、非 str 字段在此死,不只靠构造期归一)
+    for _f in ("decision_id", "consumer_seat", "use", "payload_text",
+               "registry_hash", "artifact_hash", "bundle_hash",
+               "ledger_entry_hash", "payload_hash"):
+        if type(getattr(sp, _f)) is not str:
+            raise RegistryError(f"SealedPayload.{_f} 须恰 str(re-review#13 P0)")
+    if sp.target_dimension is not None and type(sp.target_dimension) is not str:
+        raise RegistryError("SealedPayload.target_dimension 须恰 str/None(re-review#13 P0)")
+    for _f in ("expected_ids", "ref_occurrences", "authorized_ids"):
+        t = getattr(sp, _f)
+        if type(t) is not tuple or any(type(x) is not str for x in t):
+            raise RegistryError(f"SealedPayload.{_f} 须恰 tuple[恰 str](re-review#13 P0)")
     # re-review#2 B1:期望上下文精确类型 + 精确值,先于一切语义重推导
     if type(expected_decision_id) is not str or type(expected_consumer_seat) is not str \
             or type(expected_use) is not str \
