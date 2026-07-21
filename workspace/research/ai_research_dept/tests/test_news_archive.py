@@ -1132,29 +1132,39 @@ class TestExactTypeBoundaries:
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["artifact_hash"] == genuine_ah
 
-    def test_registry_swap_via_evaluation_callback_ineffective(self, tmp_path):
-        # archive-re-review#17 P1 (the reviewer's attack): bundle["evaluation"]
-        # has no type gate; its __ne__ (fired by the sanity comparison) swaps
-        # artifact.final_registry to a different registry so trusted_eval would
-        # score differently. The fix computes trusted_eval from a FROZEN
-        # registry snapshot BEFORE the comparison, so the archive keeps the
-        # genuine score.
+    def test_nondict_evaluation_refused_before_ne_fires(self, tmp_path):
+        # archive-re-review#17/#18 P1 (the reviewer's attack, both variants):
+        # a non-dict bundle["evaluation"] whose __ne__ would either swap
+        # artifact.final_registry OR mutate trusted_eval in place. The exact-
+        # dict gate refuses it and NEVER invokes __ne__, so neither side effect
+        # can fire and nothing is sealed.
         art, bundle = _setup(tmp_path)
-        genuine_reg = art.final_registry
-        genuine_final = bundle["evaluation"]["news_final"]
+        fired = {"ne": False}
 
         class _EvilEval:
             def __ne__(self, other):
-                art.__dict__["final_registry"] = None   # swap live registry
-                return False                             # comparison "passes"
+                fired["ne"] = True
+                other["news_final"] = 52.0              # in-place mutate (re#18)
+                art.__dict__["final_registry"] = None   # registry swap (re#17)
+                return False
             def __eq__(self, other): return True
             def __hash__(self): return 0
         bundle["evaluation"] = _EvilEval()
+        with pytest.raises(RegistryError, match="须恰 dict"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+        assert fired["ne"] is False                     # __ne__ never called
+        assert not list((tmp_path / "arch").glob("*.json"))
+
+    def test_trusted_eval_frozen_independent_of_bundle_eval(self, tmp_path):
+        # archive-re-review#18 P1: the archived evaluation is a frozen JSON copy,
+        # computed from the frozen registry; a genuine (equal) bundle evaluation
+        # that is a distinct object does not alias the archived one.
+        art, bundle = _setup(tmp_path)
+        genuine_final = bundle["evaluation"]["news_final"]
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
                                         archive_dir=tmp_path / "arch")
-        assert archive["evaluation"]["news_final"] == genuine_final   # frozen-registry score
-        # reloads cleanly once the live registry is restored
-        art.__dict__["final_registry"] = genuine_reg
+        assert archive["evaluation"]["news_final"] == genuine_final
+        assert archive["evaluation"] is not bundle["evaluation"]
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["evaluation"]["news_final"] == genuine_final

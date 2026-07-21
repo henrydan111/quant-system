@@ -182,11 +182,12 @@ def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
 def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
                          execution_id: str, contract: NewsScoringContract,
                          leg_payload_hash: str, resolved: dict,
-                         artifact: D7DecisionArtifact) -> None:
+                         artifact: D7DecisionArtifact, final_registry=None) -> None:
     """单条选定终态行的联合验证(BINDING #1 + archive-review B2 + re-review#2:
     bundle 行必须**逐字节等于**盘上解析出的唯一状态机终态——bundle 不再是行的
     权威来源,只是对盘上事实的引用;全量行校验走与承诺权威**共享**的
-    `_check_terminal_row`,两处语义永不分叉)。"""
+    `_check_terminal_row`,两处语义永不分叉)。re-review#18 点4:`final_registry`
+    冻结快照透传给 deterministic_zero 期望重导出。"""
     if not isinstance(row, dict):
         raise RegistryError(f"{leg} 腿选定终态行缺失/非法——尝试过的腿必须恰一终态")
     if row != resolved:
@@ -195,7 +196,7 @@ def _verify_selected_row(row, *, leg: str, outcome: NewsLegOutcome,
             f"该执行的持久化事实,拒(archive-re-review#2 Blocker)")
     _check_terminal_row(row, leg=leg, outcome=outcome, execution_id=execution_id,
                         contract=contract, leg_payload_hash=leg_payload_hash,
-                        artifact=artifact)
+                        artifact=artifact, final_registry=final_registry)
 
 
 def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
@@ -278,7 +279,8 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     _verify_selected_row(f_row, leg="factor", outcome=outcome,
                          execution_id=execution_id, contract=contract,
                          leg_payload_hash=factor_payload.payload_hash,
-                         resolved=f_resolved, artifact=artifact)
+                         resolved=f_resolved, artifact=artifact,
+                         final_registry=v_final_registry)   # re-review#18 点4
     if outcome.factor_leg_status == "success":
         # deterministic_zero ⟺ 总体为空已由共享 _check_terminal_row 双向重导出;
         # 此处按(已验证的)verdict 分派记录绑定的确定性期望
@@ -355,12 +357,24 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             trusted_records["factor"], trusted_records["penalty"],
             v_final_registry, output_mode=v_contract_payload["output_mode"],
             primary_decision_horizon=v_contract_payload["primary_decision_horizon"])
-        # 调用方 evaluation 只作 sanity 比对(bundle 值不入档;比对在 trusted_eval
-        # 定稿之后,其 __ne__ 回调改不了已算好的 trusted_eval)
-        if trusted_eval != bundle["evaluation"]:
+        # re-review#18 P1:**算完立即冻结成独立 JSON 拷贝**——否则下面的 sanity
+        # 比对 `trusted_eval != bundle["evaluation"]` 会把 trusted_eval **本体**
+        # 传进调用方对象的 `__ne__`(当其令 dict.__ne__ 返回 NotImplemented 时),
+        # 可被原地改成错分再入档。冻结后档案用的是这份不可被回调触及的拷贝。
+        trusted_eval = json.loads(json.dumps(trusted_eval, ensure_ascii=False,
+                                             allow_nan=False))
+        # 调用方 evaluation 仅作 sanity 比对:**恰 dict 门 + canonical JSON 串比**
+        # ——绝不用 `!=`/`==` 触发用户自定义 __ne__/__eq__(bundle 值永不入档)
+        be = bundle.get("evaluation")
+        if type(be) is not dict:
+            raise RegistryError("bundle.evaluation 须恰 dict(re-review#18 P1)")
+        if json.dumps(trusted_eval, sort_keys=True, ensure_ascii=False,
+                      allow_nan=False) != json.dumps(be, sort_keys=True,
+                                                     ensure_ascii=False,
+                                                     allow_nan=False):
             raise RegistryError(
-                f"evaluation 重算不符:封存 {bundle['evaluation']} vs 重算 "
-                f"{trusted_eval}——不信封存计算值(M2⁴)")
+                f"evaluation 重算不符:封存 {be} vs 重算 {trusted_eval}"
+                f"——不信封存计算值(M2⁴)")
     else:
         if bundle.get("evaluation") is not None:
             raise RegistryError("硬失败决策不得携带 evaluation")

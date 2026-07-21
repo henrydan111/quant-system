@@ -380,10 +380,12 @@ def _resolve_terminal(all_rows: list, *, execution_id: str, decision_id: str,
 
 def _check_terminal_row(row: dict, *, leg: str, outcome, execution_id: str,
                         contract: "NewsScoringContract", leg_payload_hash: str,
-                        artifact) -> None:
+                        artifact, final_registry=None) -> None:
     """单条终态行对 (outcome, 契约, 重建 payload, 工件) 的全量校验——承诺权威与
     档案联合验证**共用同一实现**(避免两套语义分叉)。含 factor 的
-    deterministic_zero 合法性双向重导出(archive-review B2)。"""
+    deterministic_zero 合法性双向重导出(archive-review B2)。archive-re-review#18
+    点4:`final_registry` 非 None 时用它(冻结快照)做 deterministic_zero 期望
+    重导出,不读 live `artifact.final_registry`。"""
     if set(row) != PROV_ROW_KEYS:
         raise RegistryError(
             f"{leg} 腿终态行键集不符出处行 schema(archive-review B2;"
@@ -410,9 +412,10 @@ def _check_terminal_row(row: dict, *, leg: str, outcome, execution_id: str,
         raise RegistryError(f"{leg} 腿终态行 payload_hash 与重建 payload 不符")
     if leg == "factor" and status == "success":
         # archive-review B2:deterministic_zero 合法性从工件**重新导出**——
-        # 正向期望总体为空 ⟺ 确定性零(伪造零终态压掉真实证据在此死)
-        factor_expected = leg_expected_ids(artifact.final_registry,
-                                           use="factor_positive",
+        # 正向期望总体为空 ⟺ 确定性零(伪造零终态压掉真实证据在此死);
+        # re-review#18 点4:优先用冻结 registry 快照(non-None)不读 live
+        _reg = final_registry if final_registry is not None else artifact.final_registry
+        factor_expected = leg_expected_ids(_reg, use="factor_positive",
                                            consumer_seat="news")
         if factor_expected and row["verdict"] != "valid":
             raise RegistryError(
