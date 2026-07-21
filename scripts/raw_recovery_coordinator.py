@@ -50,7 +50,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from recovery_write_broker import (NoFollowWriteBroker, WriteBrokerError,  # noqa: E402
-                                   assert_no_reparse_source, walk_no_follow)
+                                   assert_no_reparse_source, create_dir_tree_no_follow,
+                                   walk_no_follow)
 
 E_ROOT = Path(r"E:\量化系统")
 E_DATA = E_ROOT / "data"
@@ -444,8 +445,12 @@ class RecoveryPaths:
         self.evidence = self.root / "evidence"
 
     def create_root(self) -> None:
-        _reject_reparse_lexical(self.root.parent)
-        self.root.mkdir(parents=True, exist_ok=False)
+        # GPT impl re-review #8 P0: Path.mkdir(parents=True) resolves the WHOLE pathname, so an
+        # ancestor swapped for a junction after the lexical pre-check created the run root INSIDE the
+        # external target (reproduced cross-process). Creation now walks from the volume anchor with
+        # every component opened/created RELATIVE to its held parent handle, no-follow.
+        _reject_reparse_lexical(self.root.parent)      # cheap lexical pre-filter (not the boundary)
+        create_dir_tree_no_follow(self.root)
 
     def broker(self) -> NoFollowWriteBroker:
         """The handle-based no-follow write broker (GPT B3) — the ONLY sanctioned write surface. Every

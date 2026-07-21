@@ -161,6 +161,14 @@ class WriteBrokerError(RuntimeError):
     pass
 
 
+#: sharing mask used for the DURATION of a write/create/rename chain (GPT impl re-review #8 P0).
+#: Handle-relative opening stops the NAME being re-resolved; forbidding delete-sharing additionally
+#: stops the held OBJECT (root, an intermediate dir, or the leaf) being renamed out of the root
+#: mid-operation. Restored as soon as the handles close, so ordinary replace/delete of staged outputs
+#: keeps working between operations.
+_WRITE_SHARE = (FILE_SHARE_READ | FILE_SHARE_WRITE) if sys.platform == "win32" else 0
+
+
 class NoFollowWriteBroker:
     """Validates that a path is safely inside `root` with NO reparse point in its realized ancestry,
     using real OS handles (not just lexical checks). Construction fails closed off-Windows."""
@@ -397,7 +405,12 @@ class NoFollowWriteBroker:
     def mkdirs(self, target_dir: Path) -> None:
         """Create target_dir (and parents) component-by-component through HELD parent handles."""
         target_dir = self.validate_ancestry(target_dir)
-        h = self._dir_handle_chain(target_dir.relative_to(self.root).parts, create=True)
+        # GPT impl re-review #8 P0: the chain forbids delete-sharing FOR THE DURATION — a
+        # handle-relative open stops the NAME being re-walked, but the held directory OBJECT could
+        # still be renamed out of the root mid-walk, so later components landed outside. Sharing is
+        # restored the moment the handles close, so staged outputs stay replaceable/removable.
+        h = self._dir_handle_chain(target_dir.relative_to(self.root).parts, create=True,
+                                   share=_WRITE_SHARE)
         _k32.CloseHandle(h)
 
     def open_for_write(self, target: Path, mode: str = "wb", encoding: str | None = None):
@@ -410,12 +423,16 @@ class NoFollowWriteBroker:
         target = self.validate_ancestry(target)
         if "b" not in mode and encoding is None:
             encoding = "utf-8"
-        parent_h = self._dir_handle_chain(target.parent.relative_to(self.root).parts, create=True)
+        # the chain AND the leaf forbid delete-sharing while the write is in flight (#8 P0): a child
+        # process could otherwise rename the leaf, or move the root, and the bytes landed outside.
+        parent_h = self._dir_handle_chain(target.parent.relative_to(self.root).parts, create=True,
+                                          share=_WRITE_SHARE)
         try:
             # FILE_OPEN_IF = open-or-create WITHOUT truncating: we must inspect before destroying bytes
             fh = self._nt_open_relative(parent_h, target.name, directory=False,
                                         disposition=FILE_OPEN_IF,
-                                        access=GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                                        access=GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                                        share=_WRITE_SHARE)
         finally:
             _k32.CloseHandle(parent_h)
         try:
@@ -446,11 +463,16 @@ class NoFollowWriteBroker:
         if tmp.parent != final.parent:
             raise WriteBrokerError(f"REFUSED: handle-relative replace requires one parent "
                                    f"({tmp.parent} != {final.parent})")
-        parent_h = self._dir_handle_chain(tmp.parent.relative_to(self.root).parts, create=False)
+        # #8 P0: a relative rename does not re-walk the NAME, but parent_h itself could be moved out
+        # of the root after we hold it — the rename then "succeeded" into the moved external tree.
+        # Forbid delete-sharing on the chain for the duration.
+        parent_h = self._dir_handle_chain(tmp.parent.relative_to(self.root).parts, create=False,
+                                          share=_WRITE_SHARE)
         try:
             # FILE_READ_ATTRIBUTES is required for the _check_handle reparse/hard-link inspection
             fh = self._nt_open_relative(parent_h, tmp.name, directory=False, disposition=FILE_OPEN,
-                                        access=DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                                        access=DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                                        share=_WRITE_SHARE)
             try:
                 self._check_handle(fh, str(tmp))
                 name = final.name.encode("utf-16-le")
@@ -545,6 +567,52 @@ class NoFollowWriteBroker:
                     _k32.CloseHandle(_self._fh)   # release the lock; NEVER delete the file
                 return False
         return _HandleLock()
+
+
+def create_dir_tree_no_follow(target: Path) -> None:
+    """Create `target` (and missing parents) walking from the VOLUME ANCHOR,每 component opened or
+    created RELATIVE to its already-held parent handle (GPT impl re-review #8 P0).
+
+    `Path.mkdir(parents=True)` resolves the whole pathname, so an ancestor swapped for a junction after
+    the lexical pre-check created the run root INSIDE the external target (`external_run_created=True`,
+    reproduced). This is the bootstrap twin of NoFollowWriteBroker._open_root_from_volume_anchor: the
+    broker cannot be used here because it REQUIRES an existing root, so the creation path needs its own
+    anchored walk. Every component is opened with FILE_OPEN_REPARSE_POINT and refused if it is a reparse
+    point/hard link; the directory chain forbids delete-sharing for the duration so a component cannot be
+    moved out from under the walk."""
+    if sys.platform != "win32":
+        raise WriteBrokerError("create_dir_tree_no_follow requires Windows")
+    target = Path(target)
+    if not target.is_absolute():
+        raise WriteBrokerError(f"REFUSED: {target} is not absolute")
+    anchor = Path(target.anchor)
+    share = FILE_SHARE_READ | FILE_SHARE_WRITE          # no delete-sharing while we hold the chain
+    probe = NoFollowWriteBroker.__new__(NoFollowWriteBroker)   # primitives only; no root binding
+    cur = _k32.CreateFileW(str(anchor),
+                           FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                           share, None, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
+    if cur == INVALID_HANDLE_VALUE:
+        raise WriteBrokerError(f"cannot open volume anchor {anchor}: WinError {ctypes.get_last_error()}")
+    try:
+        parts = target.relative_to(anchor).parts
+        for i, part in enumerate(parts):
+            last = (i == len(parts) - 1)
+            nxt = probe._nt_open_relative(
+                cur, part, directory=True,
+                # the LEAF must not already exist (mirrors mkdir(exist_ok=False)); parents may
+                disposition=FILE_CREATE if last else FILE_OPEN_IF,
+                access=FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                share=share)
+            try:
+                probe._check_handle(nxt, part)
+            except WriteBrokerError:
+                _k32.CloseHandle(nxt)
+                raise
+            _k32.CloseHandle(cur)
+            cur = nxt
+    finally:
+        _k32.CloseHandle(cur)
 
 
 def assert_no_reparse_source(path: Path) -> Path:

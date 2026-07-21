@@ -1082,21 +1082,29 @@ def test_held_ledger_lock_file_cannot_be_unlinked_crossprocess(rig):
     assert lock_path.is_file()
 
 
-def test_write_path_still_allows_delete_sharing(rig):
-    """Control: only the LOCK leaf drops FILE_SHARE_DELETE. Ordinary broker writes keep the default
-    sharing mask, so staged outputs remain replaceable/removable by the recovery machinery."""
+def test_write_leaf_is_immovable_while_open_and_free_after_close(rig):
+    """GPT impl re-review #8: the previous version of this test asserted that a child process COULD
+    delete the file while the write handle was open, and called that a 'delete-sharing control' — it
+    was in fact a direct demonstration of the escape window (the held object could be renamed out of
+    the root mid-write). The correct invariant: while the write is IN FLIGHT the leaf cannot be
+    deleted or renamed; once the handles close, ordinary replace/delete works again, so staged-output
+    cleanup is not permanently sacrificed."""
     rp, L = rig
     target = rp.staging_data / "share_probe" / "x.bin"
     rp.broker().mkdirs(target.parent)
     with rp.broker().open_for_write(target, "wb") as fh:
         fh.write(b"payload")
         fh.flush()
-        # GPT impl re-review #6 (test gap): prove delete-sharing WHILE the write handle is OPEN —
-        # unlinking after close would prove nothing about the share mask.
-        assert _child_unlink(target).startswith("SUCCEEDED"), \
-            "the write path lost delete-sharing (only the LOCK leaf may be restricted)"
+        assert _child_unlink(target).startswith("FAILED"), \
+            "the in-flight write leaf was DELETED cross-process"
+        assert _child_replace(target).startswith("FAILED"), \
+            "the in-flight write leaf was RENAMED/REPLACED cross-process"
+    # after close: normal filesystem semantics return
+    assert target.read_bytes() == b"payload"
+    assert _child_unlink(target).startswith("SUCCEEDED"), \
+        "staged outputs must remain deletable once no handle is held"
+    assert not target.exists()
 
-# ── GPT impl re-review #6 fold: the lock's ANCESTOR chain must also forbid delete-sharing ─────────
 def _child_parent_swap(ledger_dir) -> str:
     """From a SEPARATE PROCESS: rename <run>/ledger aside and recreate a fresh dir at that pathname —
     the identity-switch GPT exploited in the parent-open -> leaf-open window."""
@@ -1291,3 +1299,73 @@ def test_write_json_still_works_and_is_atomic(rig):
     import json as _json
     assert _json.loads(target.read_text(encoding="utf-8")) == {"hello": "world"}
     assert not list(target.parent.glob("*.tmp"))       # the temp file was renamed away, not left behind
+
+
+# ── GPT impl re-review #8 fold: create_root + write-chain object-move windows ─────────────────────
+def test_create_root_cannot_escape_through_a_swapped_ancestor():
+    """P0 (reproduced by GPT: `external_run_created=True`): create_root did
+    Path.mkdir(parents=True) AFTER the lexical ancestor check, so a junction swapped into an ancestor
+    in that window created the run root INSIDE the external target. Creation now walks from the volume
+    anchor, handle-relative."""
+    import subprocess
+    base = _recovery_test_root("create_escape")
+    parent = base / "recovery_root"
+    parent.mkdir(parents=True)
+    external = base / "external_root"
+    external.mkdir(parents=True)
+    os.rename(parent, str(parent) + "_moved")
+    if not _mk_junction(parent, external):
+        os.rename(str(parent) + "_moved", parent)
+        pytest.skip("mklink unavailable")
+    try:
+        with pytest.raises(Exception, match="reparse|REFUSED"):
+            rrc.create_dir_tree_no_follow(parent / "run1")
+        assert not (external / "run1").exists(), "the run root was created in the EXTERNAL tree"
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(parent)], capture_output=True, text=True)
+        os.rename(str(parent) + "_moved", parent)
+
+
+def test_anchored_create_builds_parents_and_refuses_an_existing_leaf():
+    """Positive control: the anchored creator behaves like mkdir(parents=True, exist_ok=False)."""
+    base = _recovery_test_root("create_ok")
+    target = base / "a" / "b" / "run1"
+    rrc.create_dir_tree_no_follow(target)
+    assert target.is_dir() and (base / "a" / "b").is_dir()
+    with pytest.raises(Exception):
+        rrc.create_dir_tree_no_follow(target)
+
+
+def test_run_root_cannot_be_moved_during_an_active_write(rig):
+    """P0 (reproduced by GPT): the non-lock write chain used default delete-sharing, so the held ROOT
+    (or an intermediate dir) could be RENAMED out of the run root mid-operation and the bytes landed in
+    the moved external tree. The write chain now forbids delete-sharing for the DURATION."""
+    import subprocess
+    rp, L = rig
+    target = rp.staging_data / "movetest" / "x.bin"
+    rp.broker().mkdirs(target.parent)
+    with rp.broker().open_for_write(target, "wb") as fh:
+        fh.write(b"a")
+        fh.flush()
+        assert _child_parent_swap(target.parent).startswith("SWAP_FAILED")
+        code = ("import os,sys\n"
+                "try:\n"
+                "    os.rename(sys.argv[1], sys.argv[1] + '_moved'); print('SWAP_SUCCEEDED')\n"
+                "except OSError as e:\n"
+                "    print('SWAP_FAILED:' + type(e).__name__)\n")
+        r = subprocess.run([sys.executable, "-c", code, str(rp.root)], capture_output=True, text=True)
+        assert r.stdout.strip().startswith("SWAP_FAILED"), "the run root moved during an active write"
+    assert target.read_bytes() == b"a"
+
+
+def test_replace_into_completes_inside_the_root_and_parent_is_free_between_ops(rig):
+    """The rename chain forbids delete-sharing DURING the operation; between operations the tree is
+    ordinary (movable/removable), which is the intended trade-off."""
+    rp, L = rig
+    d = rp.staging_data / "renametest"
+    rp.broker().mkdirs(d)
+    tmp, final = d / "x.tmp", d / "x.bin"
+    with rp.broker().open_for_write(tmp, "wb") as fh:
+        fh.write(b"payload")
+    rp.broker().replace_into(tmp, final)
+    assert final.read_bytes() == b"payload" and not tmp.exists()
