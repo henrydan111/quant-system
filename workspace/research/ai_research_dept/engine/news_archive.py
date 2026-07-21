@@ -159,8 +159,8 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
 )
 from workspace.research.ai_research_dept.engine.news_legs import (
     NewsLegOutcome, _derive_terminal, _eligible_set_hash,
-    outcome_canonical_payload, penalty_eligible_records,
-    verify_outcome_for_binding,
+    assert_base_outcome_fields, outcome_canonical_payload,
+    penalty_eligible_records, verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -228,10 +228,15 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     `load_and_verify_decision_archive`,不在此。"""
     require_exact_contract(contract)                   # re-review#6 P0
     outcome = bundle["outcome"]
+    # re-review#15 P1:恰类型 + **字段基础类型断言先于任何字段读取**——旧序在
+    # `_rebuild_leg_payloads` 读 outcome.penalty_leg_status 之后才 assert,带副作用
+    # 的 evil 字段可趁那次读取把自己恢复成普通 str 并把 bundle["outcome"] 换掉,
+    # 使随后的 assert 通过而 seal 写另一份 outcome。断言前移把 evil 字段在触发前拒。
     if type(outcome) is not NewsLegOutcome:
         raise RegistryError(
             f"bundle.outcome 须为恰 NewsLegOutcome(得 {type(outcome).__name__})"
             f"——子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
+    assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
     execution_id = bundle["execution_id"]
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("bundle.execution_id 须为非空 str")
@@ -273,6 +278,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             raise RegistryError("factor 腿硬失败不得携带封存记录(archive-review B2)")
     # penalty 腿:按终态分派
     p_status = outcome.penalty_leg_status
+    p_selected = None                                  # re-review#15:快照选定 penalty 行
     if p_status == "not_run":
         if sel.get("penalty") is not None:
             raise RegistryError("penalty not_run 不得有选定终态行")
@@ -294,6 +300,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                              execution_id=execution_id, contract=contract,
                              leg_payload_hash=_EMPTY_PENALTY_SENTINEL,
                              resolved=p_resolved, artifact=artifact)
+        p_selected = p_resolved                        # re-review#15
         # BINDING #1:哨兵只**联合**接受——绝不凭 "0"*64 单独放行
         if not (outcome.penalty_eligible_count == 0
                 and outcome.penalty_payload_hash is None
@@ -314,11 +321,13 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
                              execution_id=execution_id, contract=contract,
                              leg_payload_hash=penalty_payload.payload_hash,
                              resolved=p_resolved, artifact=artifact)
+        p_selected = p_resolved                        # re-review#15
         if p_status == "success":
             _require_record_bound(records["penalty"], p_row, leg="penalty")
         elif records["penalty"] is not None:
             raise RegistryError("penalty 腿硬失败不得携带封存记录(archive-review B2)")
     # evaluation 从封存记录重算(M2⁴ 不信封存计算值)
+    verified_evaluation = None                         # re-review#15:快照 evaluation
     if outcome.news_status == "success":
         recomputed = evaluate_news_horizon(
             records["factor"], records["penalty"], artifact.final_registry,
@@ -328,6 +337,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             raise RegistryError(
                 f"evaluation 重算不符:封存 {bundle['evaluation']} vs 重算 "
                 f"{recomputed}——不信封存计算值(M2⁴)")
+        verified_evaluation = recomputed               # 用**重算值**,不用 bundle 值
     else:
         if bundle.get("evaluation") is not None:
             raise RegistryError("硬失败决策不得携带 evaluation")
@@ -360,10 +370,35 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             f"契约与账本承诺不符(承诺 {commitment['contract']} vs 提供 "
             f"{contract_canonical_payload(contract)})——主评分周期等契约字段"
             f"不可替换,拒(re-review#5 P0)")
+    # re-review#15 P1:产出**独立、类型闭合的 verified 快照**——归档序列化只消费
+    # 它,绝不回读 live `bundle`。outcome 重建为一个全新独立 NewsLegOutcome(字段
+    # 已断言为普通值;__post_init__ 重跑 M3⁴ 矩阵 + 验 outcome_hash),故与
+    # bundle["outcome"] 解除别名;records 经 JSON 深快照解除别名。
+    verified_outcome = NewsLegOutcome(
+        decision_id=outcome.decision_id, output_mode=outcome.output_mode,
+        factor_leg_status=outcome.factor_leg_status,
+        penalty_eligible_count=outcome.penalty_eligible_count,
+        penalty_eligible_set_hash=outcome.penalty_eligible_set_hash,
+        penalty_leg_status=outcome.penalty_leg_status,
+        news_status=outcome.news_status, shadow_complete=outcome.shadow_complete,
+        decision_complete=outcome.decision_complete,
+        binding_eligible=outcome.binding_eligible,
+        factor_payload_hash=outcome.factor_payload_hash,
+        penalty_payload_hash=outcome.penalty_payload_hash,
+        outcome_hash=outcome.outcome_hash)
+    verified_snapshot = {
+        "outcome": verified_outcome,
+        "execution_id": execution_id,
+        "evaluation": json.loads(json.dumps(verified_evaluation, allow_nan=False)),
+        "records": json.loads(json.dumps(records, ensure_ascii=False,
+                                         allow_nan=False)),
+        "selected_provenance": {"factor": dict(f_row),
+                                "penalty": dict(p_selected) if p_selected else None},
+    }
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
-            "commitment": commitment}
+            "commitment": commitment, "verified": verified_snapshot}
 
 
 class ArchiveWriteOnceConflictError(RegistryError):
@@ -406,13 +441,16 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
     re-review#4 P1-a):档案按执行独立不可变——已有档案仅在重推导档案**逐字节
     完全相同**的幂等重试时返回,任何不同一律拒;成功执行的封存永不被失败执行
     的档案堵死(不同文件)。"""
-    verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
-                            prov_dir=prov_dir, contract=contract)
-    outcome: NewsLegOutcome = bundle["outcome"]
+    # re-review#15 P1:seal 只消费 verify 产出的**独立 verified 快照**,绝不回读
+    # live `bundle`(旧序"验证 live、再从 live 写盘"——early 字段回调可在 verify
+    # 内把 bundle["outcome"] 换成 vector_only,seal 写盘时又取到被换的那份)
+    verified = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
+                                       prov_dir=prov_dir, contract=contract)["verified"]
+    outcome: NewsLegOutcome = verified["outcome"]
     payload = {
         "archive_schema": _ARCHIVE_SCHEMA,
         "decision_id": outcome.decision_id,
-        "execution_id": bundle["execution_id"],
+        "execution_id": verified["execution_id"],
         "contract": contract_canonical_payload(contract),
         "contract_hash": contract.contract_hash,
         "artifact_hash": artifact.artifact_hash,
@@ -420,13 +458,13 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
         "final_registry_hash": artifact.final_registry.registry_hash,
         "outcome": outcome_canonical_payload(outcome),
         "outcome_hash": outcome.outcome_hash,
-        "evaluation": bundle["evaluation"],
-        "records": bundle["records"],
-        "selected_provenance": bundle["selected_provenance"],
+        "evaluation": verified["evaluation"],
+        "records": verified["records"],
+        "selected_provenance": verified["selected_provenance"],
         "ledger_head_at_seal": ledger_head(ledger_dir),
     }
     archive = {**payload, "archive_sha256": seal_hash(payload)}
-    path = _archive_path(archive_dir, outcome.decision_id, bundle["execution_id"])
+    path = _archive_path(archive_dir, outcome.decision_id, verified["execution_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prov_lock(path):                     # 按 (decision, execution) 的档案锁
         if path.exists():
@@ -434,7 +472,7 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
             if existing == archive:
                 return existing                # 幂等重试:完全相同才放行
             raise ArchiveWriteOnceConflictError(
-                f"执行 ({outcome.decision_id!r}, {bundle['execution_id']!r}) "
+                f"执行 ({outcome.decision_id!r}, {verified['execution_id']!r}) "
                 f"已有密封档案且内容不同——档案 write-once,first-write-wins,"
                 f"拒绝覆盖(archive-review B1)")
         fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)

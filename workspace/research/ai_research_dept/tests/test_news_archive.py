@@ -1044,6 +1044,45 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="键|record_id"):
             require_sealed_registry(reg)
 
+    def test_evil_outcome_field_refused_before_any_field_read(self, tmp_path):
+        # archive-re-review#15 P1 (the reviewer's attack): an evil penalty_leg_
+        # status whose comparison has a side effect that would swap
+        # bundle["outcome"] during _rebuild_leg_payloads. The consume-time
+        # assert moved to the TOP of verify_execution_bundle catches the field
+        # (type() is not str) BEFORE any comparison/read fires the side effect.
+        art, bundle = _setup(tmp_path)
+        fired = {"cmp": False}
+
+        class _EvilStatus(str):
+            def __eq__(self, x):
+                fired["cmp"] = True
+                return str.__eq__(self, x)
+            def __hash__(self): return hash(str(self))
+        bundle["outcome"].__dict__["penalty_leg_status"] = _EvilStatus(
+            bundle["outcome"].penalty_leg_status)
+        with pytest.raises(RegistryError, match="penalty_leg_status 须恰 str"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+        assert fired["cmp"] is False        # caught before the field was compared
+
+    def test_seal_consumes_independent_verified_snapshot(self, tmp_path):
+        # archive-re-review#15 P1: verify produces an INDEPENDENT type-closed
+        # outcome snapshot; seal writes THAT, never re-reads live bundle. So a
+        # post-verify swap of bundle["outcome"] cannot change what seals.
+        art, bundle = _setup(tmp_path)
+        result = verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+        v = result["verified"]
+        assert v["outcome"] is not bundle["outcome"]      # reconstruction
+        assert v["outcome"].outcome_hash == bundle["outcome"].outcome_hash
+        assert v["execution_id"] == bundle["execution_id"]
+        archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                        archive_dir=tmp_path / "arch")
+        # the sealed archive reflects the verified snapshot's output_mode, and
+        # reloads cleanly under the same contract
+        assert archive["outcome"]["output_mode"] == v["outcome"].output_mode
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["outcome"]["output_mode"] == "primary_horizon"
+
     def test_phase_shifting_registry_mapping_refused(self, tmp_path):
         # archive-re-review#14 P0: require_sealed_registry validated the LIVE
         # records mapping and returned the same object. A mapping whose items()

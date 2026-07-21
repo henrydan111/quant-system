@@ -63,7 +63,8 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
     evaluate_news_horizon, validate_factor_leg_output, validate_penalty_leg_output,
 )
 from workspace.research.ai_research_dept.engine.news_legs import (
-    NewsLegOutcome, run_news_two_legs, verify_outcome_for_binding,
+    NewsLegOutcome, assert_base_outcome_fields, run_news_two_legs,
+    verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
     plain_str, seal_hash, verify_sealed,
@@ -456,6 +457,7 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
         raise RegistryError(
             f"承诺权威只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
             f"子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
+    assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("execution_id 须恰 str 非空")
     if outcome.decision_id != decision_id:
