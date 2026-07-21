@@ -1149,6 +1149,50 @@ class TestExactTypeBoundaries:
                     archive_dir=tmp_path / leg / "arch")
         assert fired["n"] == 0                          # items()/__ne__ never called
 
+    def test_liar_metaclass_container_refused_by_identity_check(self, tmp_path):
+        # archive-re-review#21 P1: a container whose metaclass makes
+        # `type(x) == str` return True (fooling an `in (bool,int,float,str)`
+        # equality check) is still refused by the all-`is` identity gate; its
+        # metaclass __eq__ and its container .get()/.items() are never invoked.
+        art, bundle = _setup(tmp_path)
+        fired = {"meta_eq": False, "get": False}
+
+        class _LiarMeta(type):
+            def __eq__(cls, other):
+                fired["meta_eq"] = True
+                return True
+            def __hash__(cls): return 0
+
+        class _Liar(dict, metaclass=_LiarMeta):
+            def get(self, *a, **k):
+                fired["get"] = True
+                return super().get(*a, **k)
+        bundle["selected_provenance"] = _Liar(dict(bundle["selected_provenance"]))
+        with pytest.raises(RegistryError, match="非纯 JSON"):
+            seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                  archive_dir=tmp_path / "arch")
+        assert fired["meta_eq"] is False and fired["get"] is False
+
+    def test_injected_chain_list_subclass_refused(self, tmp_path):
+        # archive-re-review#21 P1: the optional `chain` param is also a caller
+        # structure; a list subclass whose __iter__ would mutate verified
+        # records is refused at the entry snapshot, __iter__ never called.
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            _ledger_path, _read_chain,
+        )
+        art, bundle = _setup(tmp_path)
+        genuine_chain = _read_chain(_ledger_path(tmp_path / "ledger"))
+        fired = {"iter": False}
+
+        class _EvilChain(list):
+            def __iter__(self):
+                fired["iter"] = True
+                return super().__iter__()
+        with pytest.raises(RegistryError, match="非纯 JSON"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path),
+                                    chain=_EvilChain(genuine_chain))
+        assert fired["iter"] is False
+
     def test_records_stateful_items_refused_at_snapshot(self, tmp_path):
         # archive-re-review#20 P1 (the reviewer's exact attack): a records[leg]
         # dict subclass with a STATEFUL items() that would mutate the trusted

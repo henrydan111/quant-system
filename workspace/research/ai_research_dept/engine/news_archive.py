@@ -187,21 +187,26 @@ def _deep_plain_json(x, *, path: str = "bundle"):
     evaluation 递归拍成普通快照:每层**恰类型门先于任何容器访问**(`type(x) is
     dict/list`,子类拒),只用内建 `dict.items` 迭代,之后只用快照——调用方容器
     代码再无触发点)。"""
-    if x is None or type(x) in (bool, int, float, str):
+    # re-review#21 P1:**全 `is` 身份判断**——`type(x) in (...)` 用 `==`,说谎的
+    # 元类可令 `type(x) == str` 返真把任意容器当标量放行;`is` 比对类型对象身份,
+    # 元类 __eq__ 无从干预。错误信息也**不读不可信类型的 `.__name__`**(同触发
+    # 元类 __getattr__ 回调)。
+    t = type(x)
+    if x is None or t is bool or t is int or t is float or t is str:
         return x
-    if type(x) is list:
+    if t is list:
         return [_deep_plain_json(v, path=f"{path}[{i}]") for i, v in enumerate(x)]
-    if type(x) is dict:
+    if t is dict:
         out = {}
         for k, v in x.items():                 # 恰 dict → 内建 items,无覆写
             if type(k) is not str:
-                raise RegistryError(
-                    f"{path} 键须恰 str(得 {type(k).__name__};re-review#20)")
+                raise RegistryError(f"{path} 键须恰 str——拒(re-review#21)")
             out[k] = _deep_plain_json(v, path=f"{path}.{k}")
         return out
     raise RegistryError(
-        f"{path} 含非纯 JSON 类型 {type(x).__name__}——bundle 须为精确基础 JSON"
-        f"(dict/list/str/int/float/bool/None;子类/自定义对象拒,re-review#20)")
+        f"{path} 含非纯 JSON 类型——bundle 须为精确基础 JSON(dict/list/str/int/"
+        f"float/bool/None;子类/自定义对象/说谎元类拒,re-review#20/#21;不读不可信"
+        f" __name__)")
 
 
 def _canon_json(x) -> str:
@@ -302,6 +307,11 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     records = _deep_plain_json(bundle.get("records"), path="bundle.records")
     bundle_eval = _deep_plain_json(bundle.get("evaluation"),
                                    path="bundle.evaluation")
+    # re-review#21 P1:可选 `chain` 也是调用方可注入结构——恶意 list 子类的
+    # `__iter__` 在迭代查承诺时可改写已验证记录。入口即递归精确类型深拍成普通
+    # list;None 时下面自 `_read_chain`(其输出即普通 dict)。
+    if chain is not None:
+        chain = _deep_plain_json(chain, path="chain")
     verify_d7_artifact(artifact)
     v_artifact_hash = artifact.artifact_hash           # re-review#16:验证后即捕获
     v_bundle_hash = artifact.bundle.bundle_hash
