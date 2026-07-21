@@ -234,10 +234,16 @@ class NoFollowWriteBroker:
             raise WriteBrokerError(f"{what}: NTSTATUS 0x{status & 0xFFFFFFFF:08X} "
                                    f"(WinError {_ntdll.RtlNtStatusToDosError(status)})")
 
-    def _nt_open_relative(self, parent_h, name: str, *, directory: bool, disposition: int, access: int):
+    def _nt_open_relative(self, parent_h, name: str, *, directory: bool, disposition: int, access: int,
+                          share: int = None):
         """Open/create `name` STRICTLY relative to the already-held `parent_h` directory object. Because
         RootDirectory pins resolution to that handle, no ancestor swap can redirect us; FILE_OPEN_REPARSE
-        _POINT makes a swapped-in child open as the reparse point itself, which _check_handle refuses."""
+        _POINT makes a swapped-in child open as the reparse point itself, which _check_handle refuses.
+
+        `share` overrides the sharing mask (GPT impl re-review #5 P0). The default keeps
+        READ|WRITE|DELETE for the write path; a LOCK leaf must omit FILE_SHARE_DELETE, else the file can
+        be unlinked while held and a second holder locks a NEW file at the same pathname — the lock
+        would no longer mutually exclude."""
         if "\\" in name or "/" in name or name in ("", ".", ".."):
             raise WriteBrokerError(f"REFUSED: non-leaf relative name {name!r}")
         us = _UNICODE_STRING()
@@ -256,9 +262,9 @@ class NoFollowWriteBroker:
         iosb = _IO_STATUS_BLOCK()
         opts = FILE_OPEN_REPARSE_POINT | (FILE_DIRECTORY_FILE if directory else
                                           (FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT))
+        share_mask = (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) if share is None else share
         st = _ntdll.NtCreateFile(ctypes.byref(h), access, ctypes.byref(oa), ctypes.byref(iosb), None,
-                                 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                 disposition, opts, None, 0)
+                                 0, share_mask, disposition, opts, None, 0)
         self._nt_check(st, f"NtCreateFile({name})")
         return h.value
 
@@ -377,9 +383,14 @@ class NoFollowWriteBroker:
             def __enter__(_self):
                 parent_h = broker._dir_handle_chain(rel.parent.parts, create=True)
                 try:
+                    # NO FILE_SHARE_DELETE on a lock leaf (GPT impl re-review #5 P0): with it, another
+                    # process could unlink run_execution.lock while we hold it, after which a NEW file
+                    # at the same pathname granted a SECOND lock — the dispatch->call->close span (and
+                    # abandon/consolidation, which share this guard) stopped mutually excluding.
                     fh = broker._nt_open_relative(
                         parent_h, rel.name, directory=False, disposition=FILE_OPEN_IF,
-                        access=GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                        access=GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                        share=FILE_SHARE_READ | FILE_SHARE_WRITE)
                 finally:
                     _k32.CloseHandle(parent_h)
                 try:

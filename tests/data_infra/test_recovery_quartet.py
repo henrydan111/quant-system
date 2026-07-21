@@ -1017,3 +1017,79 @@ def test_handle_lock_file_is_not_deleted_on_release(rig):
         pass
     lock_file = rp.root / "ledger" / "run_execution.lock"
     assert lock_file.is_file()                     # persists; a later acquire reuses it
+
+
+# ── GPT impl re-review #5 fold: the lock leaf must not be deletable while held ────────────────────
+def _child_unlink(path) -> str:
+    """Try to delete `path` from a SEPARATE PROCESS; return SUCCEEDED / FAILED:<err>."""
+    import subprocess
+    code = ("import os,sys\n"
+            "try:\n"
+            "    os.unlink(sys.argv[1])\n"
+            "    print('SUCCEEDED')\n"
+            "except OSError as e:\n"
+            "    print('FAILED:' + type(e).__name__)\n")
+    r = subprocess.run([sys.executable, "-c", code, str(path)], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _child_replace(path) -> str:
+    """Try to os.replace() another file OVER `path` from a separate process."""
+    import subprocess
+    code = ("import os,sys\n"
+            "tmp = sys.argv[1] + '.usurper'\n"
+            "open(tmp,'wb').write(b'x')\n"
+            "try:\n"
+            "    os.replace(tmp, sys.argv[1])\n"
+            "    print('SUCCEEDED')\n"
+            "except OSError as e:\n"
+            "    print('FAILED:' + type(e).__name__)\n"
+            "finally:\n"
+            "    os.path.exists(tmp) and os.unlink(tmp)\n")
+    r = subprocess.run([sys.executable, "-c", code, str(path)], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def test_held_lock_file_cannot_be_unlinked_or_replaced_crossprocess(rig):
+    """P0 (reproduced by GPT): the lock leaf was opened with FILE_SHARE_DELETE, so another process
+    could unlink run_execution.lock while it was HELD — a new file then appeared at the same pathname
+    and a SECOND execution_guard acquired, destroying mutual exclusion for the dispatch->call->close
+    span (and for abandon/consolidation, which share the guard). The leaf now omits FILE_SHARE_DELETE."""
+    rp, L = rig
+    lock_path = rp.root / "ledger" / "run_execution.lock"
+    with L.execution_guard():
+        assert lock_path.is_file()
+        # a SEPARATE PROCESS must not be able to delete or usurp the held lock file
+        assert _child_unlink(lock_path).startswith("FAILED"), "held lock file was DELETED cross-process"
+        assert _child_replace(lock_path).startswith("FAILED"), "held lock file was REPLACED cross-process"
+        # and the identity cannot be switched out from under us: a second holder stays BUSY
+        with pytest.raises(rl.LedgerError, match="BUSY"):
+            with L.execution_guard(timeout=0.2):
+                pass
+    # after release the file still exists (never deleted) and is re-acquirable
+    assert lock_path.is_file()
+    with L.execution_guard(timeout=5.0):
+        pass
+
+
+def test_held_ledger_lock_file_cannot_be_unlinked_crossprocess(rig):
+    """The same protection on the unified RecoveryPaths._lock leaf (the hot per-append lock)."""
+    rp, L = rig
+    lock_path = Path(str(rp.ledger_path) + ".lock")
+    with rp._lock():
+        assert lock_path.is_file()
+        assert _child_unlink(lock_path).startswith("FAILED"), "held ledger lock was DELETED cross-process"
+    assert lock_path.is_file()
+
+
+def test_write_path_still_allows_delete_sharing(rig):
+    """Control: only the LOCK leaf drops FILE_SHARE_DELETE. Ordinary broker writes keep the default
+    sharing mask, so staged outputs remain replaceable/removable by the recovery machinery."""
+    rp, L = rig
+    target = rp.staging_data / "share_probe" / "x.bin"
+    rp.broker().mkdirs(target.parent)
+    with rp.broker().open_for_write(target, "wb") as fh:
+        fh.write(b"payload")
+    assert target.read_bytes() == b"payload"
+    target.unlink()                                  # deletable when NOT held open
+    assert not target.exists()
