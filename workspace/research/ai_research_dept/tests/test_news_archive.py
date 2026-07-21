@@ -1070,18 +1070,67 @@ class TestExactTypeBoundaries:
         # post-verify swap of bundle["outcome"] cannot change what seals.
         art, bundle = _setup(tmp_path)
         result = verify_execution_bundle(bundle, art, **_dirs(tmp_path))
-        v = result["verified"]
-        assert v["outcome"] is not bundle["outcome"]      # reconstruction
-        assert v["outcome"].outcome_hash == bundle["outcome"].outcome_hash
+        v = result["verified"]                            # full archive payload (dicts)
+        # the reconstructed outcome object is independent of bundle["outcome"]
+        assert result["verified_outcome"] is not bundle["outcome"]
+        assert result["verified_outcome"].outcome_hash == bundle["outcome"].outcome_hash
         assert v["execution_id"] == bundle["execution_id"]
+        # the verified payload is a pure-JSON deep snapshot (no live aliases)
+        assert v["records"] is not bundle["records"]
+        assert v["selected_provenance"]["factor"] is not bundle["selected_provenance"]["factor"]
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
                                         archive_dir=tmp_path / "arch")
-        # the sealed archive reflects the verified snapshot's output_mode, and
-        # reloads cleanly under the same contract
-        assert archive["outcome"]["output_mode"] == v["outcome"].output_mode
+        assert archive["outcome"]["output_mode"] == v["outcome"]["output_mode"]
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["outcome"]["output_mode"] == "primary_horizon"
+
+    def test_archive_records_provenance_from_disk_resolved(self, tmp_path):
+        # archive-re-review#16 P1: the archive's records and selected_provenance
+        # come from the DISK-resolved terminal rows, not the caller's bundle.
+        art, bundle = _setup(tmp_path)
+        archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                        archive_dir=tmp_path / "arch")
+        rows = _prov_rows(tmp_path)
+        f_term = next(r for r in rows if r["leg"] == "factor"
+                      and r["verdict"] in _TERMINALS)
+        assert archive["records"]["factor"] == f_term["parsed_record"]
+        assert archive["selected_provenance"]["factor"]["entry_hash"] \
+            == f_term["entry_hash"]
+
+    def test_post_verify_live_mutation_never_reaches_archive(self, tmp_path):
+        # archive-re-review#16 P1 (the reviewer's family): a callback fired via
+        # selected_provenance.get() during verification tampers live inputs
+        # (artifact_hash, contract_hash, bundle["records"]) AFTER they were
+        # captured/resolved. The archive must reflect the captured/disk values,
+        # never the tampered live ones — seal reads only the frozen `verified`
+        # payload + ledger_head.
+        art, bundle = _setup(tmp_path)
+        genuine_ah = art.artifact_hash
+        c = _contract()
+        genuine_ch = c.contract_hash
+        real_sel = dict(bundle["selected_provenance"])
+
+        class _EvilSel(dict):
+            def get(self, k, default=None):
+                # tamper live objects AFTER they were captured into `verified`
+                # (artifact_hash captured post-verify_d7_artifact; contract_hash
+                # captured post-require_exact_contract) — the archive must use
+                # the captured values, not these
+                art.__dict__["artifact_hash"] = "0" * 64
+                c.__dict__["contract_hash"] = "0" * 64
+                return super().get(k, default)
+        bundle["selected_provenance"] = _EvilSel(real_sel)
+        archive = seal_decision_archive(
+            bundle, art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            contract=c, archive_dir=tmp_path / "arch")
+        assert archive["artifact_hash"] == genuine_ah        # captured, not "0"*64
+        assert archive["contract_hash"] == genuine_ch        # captured, not "0"*64
+        # reloads cleanly (restore live inputs for the load)
+        art.__dict__["artifact_hash"] = genuine_ah
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["artifact_hash"] == genuine_ah
 
     def test_phase_shifting_registry_mapping_refused(self, tmp_path):
         # archive-re-review#14 P0: require_sealed_registry validated the LIVE

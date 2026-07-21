@@ -227,6 +227,10 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     取代规则(success 承诺唯一 ⇒ 决策档案 = success 执行的档案)在
     `load_and_verify_decision_archive`,不在此。"""
     require_exact_contract(contract)                   # re-review#6 P0
+    # re-review#16 P1:契约 canonical 载荷 + hash **验证后立即捕获**进本地(冻进
+    # verified 快照)——seal 此后绝不回读 live contract/artifact,污染无处施展
+    v_contract_payload = contract_canonical_payload(contract)
+    v_contract_hash = contract.contract_hash
     outcome = bundle["outcome"]
     # re-review#15 P1:恰类型 + **字段基础类型断言先于任何字段读取**——旧序在
     # `_rebuild_leg_payloads` 读 outcome.penalty_leg_status 之后才 assert,带副作用
@@ -241,6 +245,9 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("bundle.execution_id 须为非空 str")
     verify_d7_artifact(artifact)
+    v_artifact_hash = artifact.artifact_hash           # re-review#16:验证后即捕获
+    v_bundle_hash = artifact.bundle.bundle_hash
+    v_final_registry_hash = artifact.final_registry.registry_hash
     factor_payload, penalty_payload = _rebuild_leg_payloads(
         artifact, outcome, ledger_dir=ledger_dir)
     verify_outcome_for_binding(outcome, artifact, factor_payload, penalty_payload,
@@ -351,29 +358,32 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         raise RegistryError(
             f"执行 ({outcome.decision_id!r}, {execution_id!r}) 无账本承诺——"
             f"承诺权威未提交/账本被换,拒(archive-re-review#2 Blocker)")
-    p_sel = sel.get("penalty")
-    if commitment["factor_entry_hash"] != f_row["entry_hash"] \
-            or commitment["penalty_entry_hash"] != (p_sel["entry_hash"]
-                                                    if p_sel else None) \
+    # re-review#16:全部用**磁盘解析行** f_resolved/p_selected(非调用方 f_row/
+    # sel)+ **已捕获**的 v_contract_*,不再回读 live 输入
+    if commitment["factor_entry_hash"] != f_resolved["entry_hash"] \
+            or commitment["penalty_entry_hash"] != (p_selected["entry_hash"]
+                                                    if p_selected else None) \
             or commitment["outcome_hash"] != outcome.outcome_hash \
             or commitment["news_status"] != outcome.news_status:
         raise RegistryError(
             "选定终态/outcome 与账本承诺不符——出处文件被绕过写入器改写,拒"
             "(archive-re-review#2 Blocker)")
-    if commitment["contract_hash"] != contract.contract_hash \
-            or commitment["contract"] != contract_canonical_payload(contract):
+    if commitment["contract_hash"] != v_contract_hash \
+            or commitment["contract"] != v_contract_payload:
         # re-review#5 P0:outcome_hash 不含 primary_decision_horizon——契约不
         # 绑进承诺,同 schema/同 mode/不同主评分周期的契约就能在封存/恢复时
         # 合法替换主评分结果。封存与读取一律要求契约与承诺**逐字节**相符
-        # (载荷经 canonical helper 构造,不经虚方法——re-review#6 P0)
         raise RegistryError(
             f"契约与账本承诺不符(承诺 {commitment['contract']} vs 提供 "
-            f"{contract_canonical_payload(contract)})——主评分周期等契约字段"
-            f"不可替换,拒(re-review#5 P0)")
-    # re-review#15 P1:产出**独立、类型闭合的 verified 快照**——归档序列化只消费
-    # 它,绝不回读 live `bundle`。outcome 重建为一个全新独立 NewsLegOutcome(字段
-    # 已断言为普通值;__post_init__ 重跑 M3⁴ 矩阵 + 验 outcome_hash),故与
-    # bundle["outcome"] 解除别名;records 经 JSON 深快照解除别名。
+            f"{v_contract_payload})——主评分周期等契约字段不可替换,拒(re-review#5 P0)")
+    # re-review#16 P1:产出**完全独立、类型闭合的 verified 归档载荷**——归档
+    # 序列化只消费它,seal 此后绝不回读 live bundle/contract/artifact。
+    # - outcome 重建为全新 NewsLegOutcome(字段已断言普通值;__post_init__ 重跑
+    #   M3⁴ + 验 outcome_hash),与 bundle["outcome"] 解除别名;
+    # - records / selected_provenance 只由**磁盘解析终态行**(f_resolved/
+    #   p_selected)构造,不取调用方 f_row/sel/bundle["records"];
+    # - evaluation 基于该可信 records 重算;contract/artifact hash 用已捕获值;
+    # - 整体经 JSON 深拷贝彻底解除别名(回调篡改的 live 输入到不了盘)。
     verified_outcome = NewsLegOutcome(
         decision_id=outcome.decision_id, output_mode=outcome.output_mode,
         factor_leg_status=outcome.factor_leg_status,
@@ -386,19 +396,43 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         factor_payload_hash=outcome.factor_payload_hash,
         penalty_payload_hash=outcome.penalty_payload_hash,
         outcome_hash=outcome.outcome_hash)
-    verified_snapshot = {
-        "outcome": verified_outcome,
-        "execution_id": execution_id,
-        "evaluation": json.loads(json.dumps(verified_evaluation, allow_nan=False)),
-        "records": json.loads(json.dumps(records, ensure_ascii=False,
-                                         allow_nan=False)),
-        "selected_provenance": {"factor": dict(f_row),
-                                "penalty": dict(p_selected) if p_selected else None},
+    # 可信 records 只从磁盘解析行的封存 parsed_record 取(承载终态才有)
+    trusted_records = {
+        "factor": (f_resolved["parsed_record"]
+                   if verified_outcome.factor_leg_status == "success" else None),
+        "penalty": (p_selected["parsed_record"]
+                    if p_status in ("success", "empty_success") else None),
     }
+    trusted_eval = None
+    if verified_outcome.news_status == "success":
+        trusted_eval = evaluate_news_horizon(
+            trusted_records["factor"], trusted_records["penalty"],
+            artifact.final_registry, output_mode=v_contract_payload["output_mode"],
+            primary_decision_horizon=v_contract_payload["primary_decision_horizon"])
+    verified_payload = {
+        "archive_schema": _ARCHIVE_SCHEMA,
+        "decision_id": verified_outcome.decision_id,
+        "execution_id": execution_id,
+        "contract": v_contract_payload,
+        "contract_hash": v_contract_hash,
+        "artifact_hash": v_artifact_hash,
+        "bundle_hash": v_bundle_hash,
+        "final_registry_hash": v_final_registry_hash,
+        "outcome": outcome_canonical_payload(verified_outcome),
+        "outcome_hash": verified_outcome.outcome_hash,
+        "evaluation": trusted_eval,
+        "records": trusted_records,
+        "selected_provenance": {"factor": f_resolved,
+                                "penalty": p_selected if p_selected else None},
+    }
+    # 深拷贝彻底解除别名 + 校验纯 JSON(NaN/不可序列化在此拒)
+    verified_payload = json.loads(json.dumps(verified_payload, ensure_ascii=False,
+                                             allow_nan=False))
     return {"factor_payload_hash": factor_payload.payload_hash,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
-            "commitment": commitment, "verified": verified_snapshot}
+            "commitment": commitment, "verified": verified_payload,
+            "verified_outcome": verified_outcome}
 
 
 class ArchiveWriteOnceConflictError(RegistryError):
@@ -441,30 +475,14 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
     re-review#4 P1-a):档案按执行独立不可变——已有档案仅在重推导档案**逐字节
     完全相同**的幂等重试时返回,任何不同一律拒;成功执行的封存永不被失败执行
     的档案堵死(不同文件)。"""
-    # re-review#15 P1:seal 只消费 verify 产出的**独立 verified 快照**,绝不回读
-    # live `bundle`(旧序"验证 live、再从 live 写盘"——early 字段回调可在 verify
-    # 内把 bundle["outcome"] 换成 vector_only,seal 写盘时又取到被换的那份)
+    # re-review#16 P1:seal 只消费 verify 产出的**完整独立 verified 归档载荷**,
+    # 除追加 `ledger_head_at_seal` 外**绝不回读任何 live 输入**(bundle/contract/
+    # artifact 都不读)——验证后回调污染 live 输入到不了盘。
     verified = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
                                        prov_dir=prov_dir, contract=contract)["verified"]
-    outcome: NewsLegOutcome = verified["outcome"]
-    payload = {
-        "archive_schema": _ARCHIVE_SCHEMA,
-        "decision_id": outcome.decision_id,
-        "execution_id": verified["execution_id"],
-        "contract": contract_canonical_payload(contract),
-        "contract_hash": contract.contract_hash,
-        "artifact_hash": artifact.artifact_hash,
-        "bundle_hash": artifact.bundle.bundle_hash,
-        "final_registry_hash": artifact.final_registry.registry_hash,
-        "outcome": outcome_canonical_payload(outcome),
-        "outcome_hash": outcome.outcome_hash,
-        "evaluation": verified["evaluation"],
-        "records": verified["records"],
-        "selected_provenance": verified["selected_provenance"],
-        "ledger_head_at_seal": ledger_head(ledger_dir),
-    }
+    payload = {**verified, "ledger_head_at_seal": ledger_head(ledger_dir)}
     archive = {**payload, "archive_sha256": seal_hash(payload)}
-    path = _archive_path(archive_dir, outcome.decision_id, verified["execution_id"])
+    path = _archive_path(archive_dir, verified["decision_id"], verified["execution_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prov_lock(path):                     # 按 (decision, execution) 的档案锁
         if path.exists():
@@ -472,7 +490,7 @@ def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
             if existing == archive:
                 return existing                # 幂等重试:完全相同才放行
             raise ArchiveWriteOnceConflictError(
-                f"执行 ({outcome.decision_id!r}, {verified['execution_id']!r}) "
+                f"执行 ({verified['decision_id']!r}, {verified['execution_id']!r}) "
                 f"已有密封档案且内容不同——档案 write-once,first-write-wins,"
                 f"拒绝覆盖(archive-review B1)")
         fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)
