@@ -950,3 +950,70 @@ def test_execution_guard_refuses_a_junctioned_ledger_dir_without_touching_extern
         subprocess.run(["cmd", "/c", "rmdir", str(ledger_dir)], capture_output=True, text=True)
     # the external file was NEITHER created-then-deleted NOR modified by the guard
     assert sentinel.exists() and sentinel.read_bytes() == b"pre-existing external file"
+
+
+# ── GPT impl re-review #4 fold: the validate-then-swap TOCTOU is closed by handle-relative locking ─
+def test_lock_closes_the_validate_then_swap_toctou(rig):
+    """P0 (reproduced by GPT): assert_write validated the honest path, THEN FileLock(str(path))
+    re-opened it by pathname — a junction swapped into <run>/ledger in that window was followed. The
+    handle-bound broker lock is immune: the parent chain is opened RELATIVE to held handles, so a
+    junction swapped in AFTER validation opens as the reparse point and is refused. Here we ARM the
+    swap in the instant after validate_ancestry returns and prove the lock still refuses without
+    touching the external target."""
+    import subprocess
+    rp, L = rig
+    external = _recovery_test_root("toctou_target")
+    external.mkdir(parents=True, exist_ok=True)
+    sentinel = external / "run_execution.lock"
+    sentinel.write_bytes(b"external pre-existing lock")
+    ledger_dir = rp.root / "ledger"
+    assert not ledger_dir.exists()                 # rig has not written the ledger yet
+
+    broker = rp.broker()
+    orig_validate = broker.validate_ancestry
+    armed = {"done": False}
+
+    def _validate_then_swap(target):
+        result = orig_validate(target)             # validation SUCCEEDS on the honest path
+        if not armed["done"]:                      # ...then the attacker wins the race, ONCE
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", str(ledger_dir), str(external)],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                pytest.skip(f"mklink unavailable: {r.stderr}")
+            armed["done"] = True
+        return result
+    broker.validate_ancestry = _validate_then_swap
+    try:
+        # execution_guard validates (swap fires), then opens the handle chain -> the junctioned
+        # `ledger` component opens as a reparse point and is REFUSED
+        with pytest.raises(rl.LedgerError, match="reparse|BUSY|refus"):
+            with L.execution_guard():
+                pass
+    finally:
+        broker.validate_ancestry = orig_validate
+        subprocess.run(["cmd", "/c", "rmdir", str(ledger_dir)], capture_output=True, text=True)
+    # the external target was NEVER opened, created, or deleted through the swap
+    assert sentinel.exists() and sentinel.read_bytes() == b"external pre-existing lock"
+
+
+def test_handle_lock_provides_real_cross_object_mutual_exclusion(rig):
+    """The handle-bound lock still mutually excludes (a second holder of the same run lock refuses),
+    proving the swap fix did not weaken the lock itself."""
+    rp, L = rig
+    with L.execution_guard():
+        with pytest.raises(rl.LedgerError, match="BUSY"):
+            with L.execution_guard(timeout=0.2):
+                pass
+    # released -> re-acquirable
+    with L.execution_guard():
+        pass
+
+
+def test_handle_lock_file_is_not_deleted_on_release(rig):
+    """The old FileLock deleted its lock file on release (which is how it removed an external file
+    under a junction). The handle lock leaves a persistent zero-byte lock file in the run root."""
+    rp, L = rig
+    with L.execution_guard():
+        pass
+    lock_file = rp.root / "ledger" / "run_execution.lock"
+    assert lock_file.is_file()                     # persists; a later acquire reuses it

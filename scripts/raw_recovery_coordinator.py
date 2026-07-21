@@ -482,10 +482,13 @@ class RecoveryPaths:
         os.replace(tmp, path)
 
     def _lock(self):
-        from filelock import FileLock
-        lock_path = self.assert_write(Path(str(self.ledger_path) + ".lock"))
-        self.broker().mkdirs(lock_path.parent)
-        return FileLock(str(lock_path))
+        # GPT impl re-review #4 (P0): the OS lock is taken on a HANDLE opened through the no-follow
+        # broker chain, not a pathname handed to FileLock — this closes the same validate-then-reopen
+        # TOCTOU that execution_guard had (a junction swapped in at <run>/ledger after assert_write
+        # would otherwise be followed by FileLock). One lock primitive, no second "validate then open
+        # by path" implementation.
+        lock_path = Path(str(self.ledger_path) + ".lock")
+        return self.broker().file_lock(lock_path, timeout=120.0)
 
 
 # ── B2/B3 ledger: the page-receipt ledger (coordinator-owned receipts + external hash chain) lives in

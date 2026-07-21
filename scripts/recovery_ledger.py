@@ -276,33 +276,35 @@ class PageReceiptLedger:
         self._dispatch_tokens: dict = {}
 
     def execution_guard(self, timeout: float = None):
-        """The cross-process run-execution lock as a context manager. A FRESH FileLock instance per
-        call — deliberately NON-reentrant even in-process, so an operator abandon in another thread
-        cannot slip inside a worker's dispatch->close span.
+        """The cross-process run-execution lock as a context manager, held for a worker's whole
+        dispatch->call->close span (and by abandon/consolidate).
 
-        GPT impl re-review #3 (P0): the lock path is validated through the SAME no-follow, handle-based
-        path authority as every other write (rp.assert_write -> broker.validate_ancestry), computed
-        FRESH per acquisition. A junction swapped in at <run>/ledger is refused BEFORE FileLock ever
-        touches the path — the raw-path FileLock previously created (and on release deleted) a lock
-        file OUTSIDE the run root. Mirrors RecoveryPaths._lock exactly."""
-        from filelock import FileLock, Timeout as _FLTimeout
-        lock_path = self.rp.assert_write(self._exec_lock_path)   # no-follow ancestry authority
-        lock = FileLock(str(lock_path))
+        GPT impl re-review #4 (P0): the lock is now taken on a HANDLE opened through the no-follow
+        broker chain (broker.file_lock), NOT a pathname handed to FileLock. The old code validated the
+        path then re-opened it by string — a junction swapped in at <run>/ledger between the two
+        followed the reparse point and let the lock file be created/deleted OUTSIDE the run root
+        (validate-then-reopen TOCTOU). broker.file_lock walks the parent chain relative to held
+        handles, opens the leaf relative to the validated parent, refuses a reparse/hard-link leaf, and
+        LockFileEx's THAT handle — no pathname is ever re-walked. Fresh per call (non-reentrant)."""
         t = self._exec_lock_timeout if timeout is None else timeout
 
         class _Guard:
+            def __init__(_g, ledger):
+                _g._ledger = ledger
+
             def __enter__(_g):
                 try:
-                    lock.acquire(timeout=t)
-                except _FLTimeout:
-                    raise LedgerError("run-execution lock BUSY — another worker holds the "
-                                      "dispatch->close span; refusing")
+                    _g._inner = _g._ledger.rp.broker().file_lock(_g._ledger._exec_lock_path, timeout=t)
+                    _g._inner.__enter__()
+                except Exception as exc:
+                    raise LedgerError(f"run-execution lock BUSY — another worker holds the "
+                                      f"dispatch->close span; refusing ({exc})")
                 return _g
 
             def __exit__(_g, *exc):
-                lock.release()
+                _g._inner.__exit__(*exc)
                 return False
-        return _Guard()
+        return _Guard(self)
 
     @staticmethod
     def _canon_dispatch_spec(spec: dict) -> str:

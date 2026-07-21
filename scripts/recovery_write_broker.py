@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -76,6 +77,26 @@ if sys.platform == "win32":
     _k32.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong,
                                       ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD]
     _k32.SetFilePointerEx.restype = wintypes.BOOL
+
+    # LockFileEx/UnlockFileEx: a byte-range OS lock taken on a HELD HANDLE (GPT impl re-review #4 P0).
+    # This is what closes the validate-then-reopen-by-pathname TOCTOU that FileLock(str(path)) has —
+    # the lock lives on the handle-relative-opened file object, no pathname is ever re-walked.
+    LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
+    LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
+
+    class _OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                    ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                    ("hEvent", wintypes.HANDLE)]
+
+    _k32.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.DWORD, ctypes.POINTER(_OVERLAPPED)]
+    _k32.LockFileEx.restype = wintypes.BOOL
+    _k32.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.POINTER(_OVERLAPPED)]
+    _k32.UnlockFileEx.restype = wintypes.BOOL
+    ERROR_LOCK_VIOLATION = 33
+    ERROR_IO_PENDING = 997
 
     # ── ntdll: HANDLE-RELATIVE open/create (GPT re-review #5 F1 BLOCKER) ──────────────────────────
     # CreateFileW resolves the WHOLE pathname, so FILE_FLAG_OPEN_REPARSE_POINT only protects the FINAL
@@ -337,6 +358,58 @@ class NoFollowWriteBroker:
             os.utime(dst, (os.path.getatime(src), os.path.getmtime(src)))
         except OSError:
             pass
+
+    def file_lock(self, target: Path, *, timeout: float = 600.0, poll: float = 0.02):
+        """A cross-process OS lock taken on a HANDLE opened through the no-follow handle chain — NOT a
+        pathname (GPT impl re-review #4 P0). Closes the FileLock(str(path)) TOCTOU: the lock file's
+        parent chain is walked relative to held handles, the leaf is opened RELATIVE to the validated
+        parent and refused if it is a reparse point/hard link, and the byte-range lock (LockFileEx) is
+        taken on THAT handle — a junction swapped in after validation opens as the reparse point and
+        refuses, never redirects. The lock file is NEVER deleted on release (deleting a pathname is what
+        let the old code remove an external file); a persistent zero-byte lock file is standard.
+
+        Returns a context manager; __enter__ raises WriteBrokerError('lock BUSY') on timeout."""
+        broker = self
+        target = self.validate_ancestry(target)
+        rel = target.relative_to(self.root)
+
+        class _HandleLock:
+            def __enter__(_self):
+                parent_h = broker._dir_handle_chain(rel.parent.parts, create=True)
+                try:
+                    fh = broker._nt_open_relative(
+                        parent_h, rel.name, directory=False, disposition=FILE_OPEN_IF,
+                        access=GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                finally:
+                    _k32.CloseHandle(parent_h)
+                try:
+                    broker._check_handle(fh, str(target))     # reparse/hard-link refusal on the leaf
+                except Exception:
+                    _k32.CloseHandle(fh)
+                    raise
+                _self._fh = fh
+                ov = _OVERLAPPED()
+                deadline = time.monotonic() + max(0.0, timeout)
+                while True:
+                    ok = _k32.LockFileEx(fh, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                                         0, 1, 0, ctypes.byref(ov))
+                    if ok:
+                        return _self
+                    err = ctypes.get_last_error()
+                    if err not in (ERROR_LOCK_VIOLATION, ERROR_IO_PENDING) or time.monotonic() >= deadline:
+                        _k32.CloseHandle(fh)
+                        raise WriteBrokerError(f"run-execution lock BUSY on {target} "
+                                               f"(WinError {err}) — another holder owns it; refusing")
+                    time.sleep(poll)
+
+            def __exit__(_self, *exc):
+                ov = _OVERLAPPED()
+                try:
+                    _k32.UnlockFileEx(_self._fh, 0, 1, 0, ctypes.byref(ov))
+                finally:
+                    _k32.CloseHandle(_self._fh)   # release the lock; NEVER delete the file
+                return False
+        return _HandleLock()
 
 
 def assert_no_reparse_source(path: Path) -> Path:
