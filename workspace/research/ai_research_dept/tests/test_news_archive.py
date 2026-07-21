@@ -1132,6 +1132,33 @@ class TestExactTypeBoundaries:
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["artifact_hash"] == genuine_ah
 
+    def test_registry_swap_via_evaluation_callback_ineffective(self, tmp_path):
+        # archive-re-review#17 P1 (the reviewer's attack): bundle["evaluation"]
+        # has no type gate; its __ne__ (fired by the sanity comparison) swaps
+        # artifact.final_registry to a different registry so trusted_eval would
+        # score differently. The fix computes trusted_eval from a FROZEN
+        # registry snapshot BEFORE the comparison, so the archive keeps the
+        # genuine score.
+        art, bundle = _setup(tmp_path)
+        genuine_reg = art.final_registry
+        genuine_final = bundle["evaluation"]["news_final"]
+
+        class _EvilEval:
+            def __ne__(self, other):
+                art.__dict__["final_registry"] = None   # swap live registry
+                return False                             # comparison "passes"
+            def __eq__(self, other): return True
+            def __hash__(self): return 0
+        bundle["evaluation"] = _EvilEval()
+        archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                        archive_dir=tmp_path / "arch")
+        assert archive["evaluation"]["news_final"] == genuine_final   # frozen-registry score
+        # reloads cleanly once the live registry is restored
+        art.__dict__["final_registry"] = genuine_reg
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["evaluation"]["news_final"] == genuine_final
+
     def test_phase_shifting_registry_mapping_refused(self, tmp_path):
         # archive-re-review#14 P0: require_sealed_registry validated the LIVE
         # records mapping and returned the same object. A mapping whose items()

@@ -147,7 +147,9 @@ from workspace.research.ai_research_dept.engine.news_decision import (
     _ledger_path, _read_chain, build_leg_payload_ast, build_sealed_payload,
     ledger_head,
 )
-from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
+from workspace.research.ai_research_dept.engine.news_evidence import (
+    RegistryError, require_sealed_registry,
+)
 from workspace.research.ai_research_dept.engine.news_executors import (
     _EMPTY_PENALTY_RECORD, _EMPTY_PENALTY_SENTINEL, _TERMINAL_VERDICTS,
     NewsScoringContract, _check_terminal_row, _prov_lock, _rebuild_leg_payloads,
@@ -248,6 +250,11 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     v_artifact_hash = artifact.artifact_hash           # re-review#16:验证后即捕获
     v_bundle_hash = artifact.bundle.bundle_hash
     v_final_registry_hash = artifact.final_registry.registry_hash
+    # re-review#17 P1:立即冻结**实际算分用的 registry 快照**(不只 hash)——
+    # 否则调用方 evaluation 比较处(bundle["evaluation"].__ne__)可回调把
+    # artifact.final_registry 换成另一份自洽但算分不同的 registry,trusted_eval
+    # 用 live registry 算出错分却写进带原 hash 的档案。此后 evaluation 只用它。
+    v_final_registry = require_sealed_registry(artifact.final_registry)
     factor_payload, penalty_payload = _rebuild_leg_payloads(
         artifact, outcome, ledger_dir=ledger_dir)
     verify_outcome_for_binding(outcome, artifact, factor_payload, penalty_payload,
@@ -333,18 +340,27 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             _require_record_bound(records["penalty"], p_row, leg="penalty")
         elif records["penalty"] is not None:
             raise RegistryError("penalty 腿硬失败不得携带封存记录(archive-review B2)")
-    # evaluation 从封存记录重算(M2⁴ 不信封存计算值)
-    verified_evaluation = None                         # re-review#15:快照 evaluation
+    # re-review#17 P1:先从**磁盘解析行**建可信 records + **冻结 registry 快照**算出
+    # trusted_eval,再去比对调用方 evaluation——可信值在任何 bundle 回调之前算完,
+    # 后续无论 artifact.final_registry 被怎样调包都不影响已定稿的 trusted_eval。
+    trusted_records = {
+        "factor": (f_resolved["parsed_record"]
+                   if outcome.factor_leg_status == "success" else None),
+        "penalty": (p_selected["parsed_record"]
+                    if p_status in ("success", "empty_success") else None),
+    }
+    trusted_eval = None
     if outcome.news_status == "success":
-        recomputed = evaluate_news_horizon(
-            records["factor"], records["penalty"], artifact.final_registry,
-            output_mode=contract.output_mode,
-            primary_decision_horizon=contract.primary_decision_horizon)
-        if recomputed != bundle["evaluation"]:
+        trusted_eval = evaluate_news_horizon(
+            trusted_records["factor"], trusted_records["penalty"],
+            v_final_registry, output_mode=v_contract_payload["output_mode"],
+            primary_decision_horizon=v_contract_payload["primary_decision_horizon"])
+        # 调用方 evaluation 只作 sanity 比对(bundle 值不入档;比对在 trusted_eval
+        # 定稿之后,其 __ne__ 回调改不了已算好的 trusted_eval)
+        if trusted_eval != bundle["evaluation"]:
             raise RegistryError(
                 f"evaluation 重算不符:封存 {bundle['evaluation']} vs 重算 "
-                f"{recomputed}——不信封存计算值(M2⁴)")
-        verified_evaluation = recomputed               # 用**重算值**,不用 bundle 值
+                f"{trusted_eval}——不信封存计算值(M2⁴)")
     else:
         if bundle.get("evaluation") is not None:
             raise RegistryError("硬失败决策不得携带 evaluation")
@@ -396,19 +412,8 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         factor_payload_hash=outcome.factor_payload_hash,
         penalty_payload_hash=outcome.penalty_payload_hash,
         outcome_hash=outcome.outcome_hash)
-    # 可信 records 只从磁盘解析行的封存 parsed_record 取(承载终态才有)
-    trusted_records = {
-        "factor": (f_resolved["parsed_record"]
-                   if verified_outcome.factor_leg_status == "success" else None),
-        "penalty": (p_selected["parsed_record"]
-                    if p_status in ("success", "empty_success") else None),
-    }
-    trusted_eval = None
-    if verified_outcome.news_status == "success":
-        trusted_eval = evaluate_news_horizon(
-            trusted_records["factor"], trusted_records["penalty"],
-            artifact.final_registry, output_mode=v_contract_payload["output_mode"],
-            primary_decision_horizon=v_contract_payload["primary_decision_horizon"])
+    # re-review#17:trusted_records / trusted_eval 已在 evaluation 段用**冻结
+    # registry 快照**在任何回调之前算好——此处直接复用,不再触碰 live artifact
     verified_payload = {
         "archive_schema": _ARCHIVE_SCHEMA,
         "decision_id": verified_outcome.decision_id,
