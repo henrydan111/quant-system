@@ -1149,6 +1149,50 @@ class TestExactTypeBoundaries:
                     archive_dir=tmp_path / leg / "arch")
         assert fired["n"] == 0                          # items()/__ne__ never called
 
+    def test_boundary_rejection_reads_no_untrusted_type_name(self, tmp_path):
+        # archive-re-review#21 P1: a boundary rejection must not read the
+        # untrusted object's type().__name__ (which runs the metaclass
+        # __getattribute__). A wrong-type outcome is refused with a STATIC
+        # message; the metaclass __name__ accessor is never invoked.
+        art, bundle = _setup(tmp_path)
+        fired = {"name": False}
+
+        class _LiarMeta(type):
+            def __getattribute__(cls, name):
+                if name == "__name__":
+                    fired["name"] = True
+                return super().__getattribute__(name)
+
+        class _Liar(metaclass=_LiarMeta):
+            pass
+        bundle["outcome"] = _Liar()
+        with pytest.raises(RegistryError, match="NewsLegOutcome"):
+            verify_execution_bundle(bundle, art, **_dirs(tmp_path))
+        assert fired["name"] is False
+
+    def test_artifact_subobject_accessor_not_run_before_typecheck(self, tmp_path):
+        # archive-re-review#21 P1 (#2): artifact sub-components are exact-type-
+        # checked and registries snapshotted BEFORE artifact_canonical_payload
+        # reads bf.fact_hash / r.row_hash / registry_hash. An injected base_fact
+        # whose fact_hash accessor has a side effect is refused at the exact-type
+        # check, before its accessor can run.
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            verify_d7_artifact,
+        )
+        art = _artifact_full("d1")
+        fired = {"acc": False}
+
+        class _EvilFact:
+            @property
+            def fact_hash(self):
+                fired["acc"] = True
+                return "0" * 64
+        object.__setattr__(art, "base_facts",
+                           (_EvilFact(),) + tuple(art.base_facts))
+        with pytest.raises(RegistryError, match="D7BaseFact"):
+            verify_d7_artifact(art)
+        assert fired["acc"] is False                    # accessor never ran
+
     def test_liar_metaclass_container_refused_by_identity_check(self, tmp_path):
         # archive-re-review#21 P1: a container whose metaclass makes
         # `type(x) == str` return True (fooling an `in (bool,int,float,str)`

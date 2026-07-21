@@ -119,9 +119,12 @@ def verify_sealed(payload: dict, claimed_hash: str, *, field_name: str = "hash")
     `__eq__`/`__ne__` 的对象在此死,先于 `!=` 比对(否则 `real != evil` 被
     evil 的 __ne__ 骗过,伪哈希序列化进档案)。这是所有哈希注入的单点闸门。"""
     if type(claimed_hash) is not str or not _HEX64.fullmatch(claimed_hash):
+        # re-review#21 P1:错误信息**静态**——不读不可信 claimed_hash 的
+        # `type().__name__` / `repr`(会在抛异常前触发元类 __getattribute__ /
+        # 自定义 __repr__,拒绝路径也不得跑调用方代码)。`field_name` 是内部常量。
         raise SealError(
-            f"{field_name} 须恰 str 且 64 位小写 hex(得 {type(claimed_hash).__name__} "
-            f"{claimed_hash!r};str/int 子类脱钩拒,re-review#13)")
+            f"{field_name} 须恰 str 且 64 位小写 hex(str/int 子类等脱钩拒,"
+            f"re-review#13/#21)")
     recomputed = seal_hash(payload)
     if recomputed != claimed_hash:
         raise SealError(f"{field_name} 不符:自称 {claimed_hash[:12]} 重算 {recomputed[:12]}")

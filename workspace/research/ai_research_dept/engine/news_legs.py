@@ -146,7 +146,7 @@ class NewsLegOutcome:
                      "penalty_eligible_set_hash", "penalty_leg_status",
                      "news_status", "factor_payload_hash"):
             if type(getattr(self, name)) is not str:
-                raise RegistryError(f"{name} 须恰 str(得 {type(getattr(self, name)).__name__})")
+                raise RegistryError(f"{name} 须恰 str(re-review#21 静态错误)")
         for name in ("shadow_complete", "decision_complete", "binding_eligible"):
             if type(getattr(self, name)) is not bool:
                 raise RegistryError(f"{name} 须恰 bool(int 冒充拒,re-review B3)")
@@ -186,8 +186,8 @@ class NewsLegOutcome:
         # 拒非恰 str;`""` 是"未封印"合法哨兵(计算),非空须 64-hex 再 verify
         if type(self.outcome_hash) is not str:
             raise RegistryError(
-                f"outcome_hash 须恰 str(得 {type(self.outcome_hash).__name__};"
-                f"__dict__ 注入非 str 拒,re-review#13 P1)")
+                "outcome_hash 须恰 str(__dict__ 注入非 str 拒,re-review#13/#21;"
+                "静态错误)")
         if self.outcome_hash:
             if not _HEX64_RE.fullmatch(self.outcome_hash):
                 raise RegistryError(
@@ -229,8 +229,8 @@ def assert_base_outcome_fields(outcome) -> None:
                "factor_payload_hash", "outcome_hash"):
         if type(getattr(outcome, _f)) is not str:
             raise RegistryError(
-                f"NewsLegOutcome.{_f} 须恰 str(得 {type(getattr(outcome, _f)).__name__}"
-                f";__dict__ 注入子类拒,re-review#14 P1)")
+                f"NewsLegOutcome.{_f} 须恰 str(__dict__ 注入子类拒,re-review#14/#21"
+                f" 静态错误)")
     for _f in ("shadow_complete", "decision_complete", "binding_eligible"):
         if type(getattr(outcome, _f)) is not bool:
             raise RegistryError(f"NewsLegOutcome.{_f} 须恰 bool(re-review#14 P1)")
@@ -347,8 +347,8 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
     payload 冒充 factor 槽拒)重验且哈希与终态逐字节相等。"""
     if type(outcome) is not NewsLegOutcome:
         raise RegistryError(
-            f"绑定边界只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
-            f"子类可覆写 _payload 脱钩,拒(archive-re-review#6 P0 同类面)")
+            "绑定边界只收恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
+            "(archive-re-review#6 P0 同类面;re-review#21 静态错误)")
     assert_base_outcome_fields(outcome)                # re-review#14 P1:消费时复验
     if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
         raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"

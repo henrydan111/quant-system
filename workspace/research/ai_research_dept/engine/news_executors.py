@@ -131,8 +131,7 @@ class NewsScoringContract:
         if isinstance(self.contract_hash, str):
             object.__setattr__(self, "contract_hash", plain_str(self.contract_hash))
         if type(self.schema_id) is not str:
-            raise RegistryError(f"契约 schema_id 须恰 str(得 "
-                                f"{type(self.schema_id).__name__},re-review#12 P1)")
+            raise RegistryError("契约 schema_id 须恰 str(re-review#12/#21;静态错误)")
         if self.schema_id != SCHEMA_ID:
             raise RegistryError(f"契约 schema_id 须为 {SCHEMA_ID}(得 {self.schema_id!r})")
         if type(self.output_mode) is not str or self.output_mode not in OUTPUT_MODES:
@@ -172,9 +171,10 @@ def require_exact_contract(contract) -> NewsScoringContract:
     `contract.__dict__` 注入撤销(int 子类使承诺比对错误通过、写伪 contract_hash),
     故每次消费重跑硬化 verify_sealed(拒非 str/非 64-hex)与字段类型门。"""
     if type(contract) is not NewsScoringContract:
+        # re-review#21 P1:静态错误(不读不可信 contract 的 type().__name__)
         raise RegistryError(
-            f"须恰 NewsScoringContract(得 {type(contract).__name__})——子类可"
-            f"覆写 _payload 使承诺哈希与实际评分字段脱钩,拒(re-review#6 P0)")
+            "须恰 NewsScoringContract——子类可覆写 _payload 使承诺哈希与实际评分"
+            "字段脱钩,拒(re-review#6 P0)")
     if type(contract.schema_id) is not str or type(contract.output_mode) is not str \
             or not (contract.primary_decision_horizon is None
                     or type(contract.primary_decision_horizon) is str):
@@ -458,8 +458,8 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
     require_exact_contract(contract)
     if type(outcome) is not NewsLegOutcome:
         raise RegistryError(
-            f"承诺权威只收恰 NewsLegOutcome(得 {type(outcome).__name__})——"
-            f"子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
+            "承诺权威只收恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
+            "(re-review#6 P0 同类面;re-review#21 静态错误)")
     assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("execution_id 须恰 str 非空")

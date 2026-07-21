@@ -251,7 +251,7 @@ def _require_record_bound(record, row, *, leg: str, expect=None) -> None:
     传进调用方 record 的 `__ne__`;非纯 JSON record 在此拒。档案实际用的是
     `row["parsed_record"]`(盘上),本函数只确保调用方 records 与之相符。"""
     if not isinstance(record, dict):
-        raise RegistryError(f"{leg} 腿封存记录须为 dict(得 {type(record).__name__})")
+        raise RegistryError(f"{leg} 腿封存记录须为 dict(re-review#21 静态错误)")
     try:
         rec_json = _canon_json(record)
     except (TypeError, ValueError):
@@ -285,7 +285,9 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     # 容器代码(`.get`/`.items`/`__getitem__`/状态化迭代)再无触发点,`_canon_json`
     # 与 `seal_hash` 的连续序列化只作用于普通 dict。
     if type(bundle) is not dict:
-        raise RegistryError(f"bundle 须恰 dict(得 {type(bundle).__name__};re-review#20)")
+        # re-review#21 P1:错误信息**静态**——`{type(bundle).__name__}` 会在抛异常
+        # 前触发不可信对象的元类 __getattribute__(拒绝路径也不得跑调用方代码)
+        raise RegistryError("bundle 须恰 dict(子类/自定义对象拒,re-review#20/#21)")
     require_exact_contract(contract)                   # re-review#6 P0
     # re-review#16 P1:契约 canonical 载荷 + hash **验证后立即捕获**进本地(冻进
     # verified 快照)——seal 此后绝不回读 live contract/artifact,污染无处施展
@@ -293,9 +295,10 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     v_contract_hash = contract.contract_hash
     outcome = bundle["outcome"]                         # 密封对象,恰类型 + 断言
     if type(outcome) is not NewsLegOutcome:
+        # re-review#21 P1:静态错误(不读不可信 outcome 的 type().__name__)
         raise RegistryError(
-            f"bundle.outcome 须为恰 NewsLegOutcome(得 {type(outcome).__name__})"
-            f"——子类可覆写 _payload 脱钩,拒(re-review#6 P0 同类面)")
+            "bundle.outcome 须为恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
+            "(re-review#6 P0 同类面)")
     assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
     # 调用方 JSON 部分一次性深拍普通快照(下游只用它,绝不再碰 live bundle)
     execution_id = _deep_plain_json(bundle.get("execution_id"),
@@ -534,9 +537,9 @@ def _archive_path(archive_dir, decision_id: str, execution_id: str) -> Path:
     选定,不由文件先来后到)。文件名 = (decision_id, execution_id) JSON 对的
     **完整逐字节** sha256(JSON 编码定界无歧义;canon 折叠空白不可入路径)。"""
     if type(decision_id) is not str or not decision_id:
-        raise RegistryError(f"decision_id 须为非空 str(得 {decision_id!r})")
+        raise RegistryError("decision_id 须为非空 str(re-review#21 静态错误)")
     if type(execution_id) is not str or not execution_id:
-        raise RegistryError(f"execution_id 须为非空 str(得 {execution_id!r})")
+        raise RegistryError("execution_id 须为非空 str(re-review#21 静态错误)")
     digest = hashlib.sha256(json.dumps(
         [decision_id, execution_id],
         ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -613,14 +616,11 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     # d2 文件名、或用错工件读档,均在此死);re-review#4:执行身份同验
     if not (archive["decision_id"] == decision_id
             == artifact.bundle.decision_id):
-        raise RegistryError(
-            f"决策身份三向不符:档案 {archive['decision_id']!r} / 请求 "
-            f"{decision_id!r} / 工件束 {artifact.bundle.decision_id!r}"
-            f"(archive-review Major)")
+        # re-review#21 P1:静态错误(不读不可信 decision_id / 未验工件的 repr)
+        raise RegistryError("决策身份三向不符:档案 / 请求 / 工件束 decision_id 不一致"
+                            "(archive-review Major;re-review#21 静态错误)")
     if archive["execution_id"] != execution_id:
-        raise RegistryError(
-            f"档案 execution_id {archive['execution_id']!r} ≠ 请求 "
-            f"{execution_id!r}——执行身份不符(re-review#4)")
+        raise RegistryError("档案 execution_id ≠ 请求——执行身份不符(re-review#4/#21)")
     if archive["contract_hash"] != contract.contract_hash \
             or archive["contract"] != contract_canonical_payload(contract):
         raise RegistryError("档案契约与提供的冻结契约不符")
@@ -708,7 +708,7 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
     success = _find_success_commitment(chain, decision_id)
     if success is None:
         raise RegistryError(
-            f"决策 {decision_id!r} 无 success 执行承诺——无 canonical 决策档案"
+            "决策无 success 执行承诺——无 canonical 决策档案"
             f"(硬失败执行档案请经 load_and_verify_execution_archive 按执行"
             f"审计读取,re-review#4 P1-a)")
     return _load_and_verify_archive_file(
@@ -737,8 +737,7 @@ def recover_and_seal_success_archive(decision_id: str,
     success = _find_success_commitment(chain, decision_id)
     if success is None:
         raise RegistryError(
-            f"决策 {decision_id!r} 无 success 执行承诺——无可恢复的封存"
-            f"(re-review#4)")
+            "决策无 success 执行承诺——无可恢复的封存(re-review#4/#21 静态错误)")
     execution_id = success["execution_id"]
     # re-review#5 P0:恢复所用契约必须与承诺哈希绑定的契约**逐字节**相符——
     # 同 schema/同 mode/不同 primary_decision_horizon 的替换在写任何文件前拒

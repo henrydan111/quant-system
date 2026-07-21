@@ -371,8 +371,8 @@ def _plain_scalar(x):
         return x
     if isinstance(x, str):
         return _plain_str(x)
-    raise RegistryError(f"derivation 标量类型非法:{type(x).__name__}"
-                        f"(只许 str/None/bool/int/float,re-review#11 P0)")
+    raise RegistryError("derivation 标量类型非法(只许 str/None/bool/int/float,"
+                        "re-review#11 P0/#21 静态错误)")
 
 
 def _plain_derivation(derivation) -> tuple:
@@ -457,14 +457,14 @@ def assert_base_record_fields(record) -> None:
                "content_hash"):
         if type(getattr(record, _f)) is not str:
             raise RegistryError(
-                f"CardRecord.{_f} 非恰 str(得 {type(getattr(record, _f)).__name__}"
-                f";__dict__ 注入子类拒,re-review#12 P0)")
+                f"CardRecord.{_f} 非恰 str(__dict__ 注入子类拒,re-review#12 P0/#21"
+                f" 静态错误)")
     for _f in ("allowed_uses", "allowed_consumers", "allowed_dimensions"):
         s = getattr(record, _f)
         if type(s) is not frozenset or any(type(u) is not str for u in s):
             raise RegistryError(
-                f"CardRecord.{_f} 须恰 frozenset[恰 str](得 {type(s).__name__}"
-                f";迭代≠成员的子类/别名注入拒,re-review#12 P0)")
+                f"CardRecord.{_f} 须恰 frozenset[恰 str](迭代≠成员的子类/别名注入"
+                f"拒,re-review#12 P0/#21 静态错误)")
     d = record.derivation
     if type(d) is not tuple:
         raise RegistryError(f"CardRecord.derivation 须恰 tuple(re-review#12 P0)")
@@ -484,8 +484,8 @@ def verified_record_content_hash(record) -> str:
     被 __dict__ 注入为迭代≠成员的多态对象)。"""
     if type(record) is not CardRecord:
         raise RegistryError(
-            f"注册表只收恰 CardRecord(得 {type(record).__name__};子类可覆写 "
-            f"_payload 伪造 content_hash 脱钩,拒,re-review#9 P0)")
+            "注册表只收恰 CardRecord(子类可覆写 _payload 伪造 content_hash 脱钩,"
+            "拒,re-review#9 P0/#21 静态错误)")
     assert_base_record_fields(record)                  # re-review#12 P0
     verify_sealed(card_record_canonical_payload(record), record.content_hash,
                   field_name="card record content_hash")
@@ -500,8 +500,7 @@ def normalize_card_record(v) -> "CardRecord":
     使重建读到的字段本身已是干净基础值。"""
     if type(v) is not CardRecord:
         raise RegistryError(
-            f"注册表值须恰 CardRecord(得 {type(v).__name__};子类/duck-typed 拒,"
-            f"re-review#12 P0)")
+            "注册表值须恰 CardRecord(子类/duck-typed 拒,re-review#12 P0/#21 静态)")
     assert_base_record_fields(v)
     return CardRecord(
         record_id=v.record_id, domain=v.domain, evidence_class=v.evidence_class,
@@ -688,9 +687,9 @@ def require_sealed_registry(registry) -> SealedCardRegistry:
     # archive-re-review#7 P0:恰类型(子类可覆写 _payload 使 registry_hash 与实际
     # records 脱钩,自封假身份过全链)
     if type(registry) is not SealedCardRegistry:
-        raise RegistryError("registry 必须是恰 SealedCardRegistry"
-                            f"(得 {type(registry).__name__};子类/duck-typed 拒,"
-                            f"re-review#7 P0)")
+        # re-review#21 P1:静态错误(不读不可信 registry 的 type().__name__)
+        raise RegistryError("registry 必须是恰 SealedCardRegistry(子类/duck-typed "
+                            "拒,re-review#7 P0/#21)")
     fresh = SealedCardRegistry(cutoff_iso=registry.cutoff_iso,
                                records=registry.records,
                                registry_hash=registry.registry_hash)
