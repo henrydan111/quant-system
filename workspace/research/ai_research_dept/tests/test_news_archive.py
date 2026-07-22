@@ -1149,6 +1149,55 @@ class TestExactTypeBoundaries:
                     archive_dir=tmp_path / leg / "arch")
         assert fired["n"] == 0                          # items()/__ne__ never called
 
+    def test_registry_items_callback_cannot_swap_verified_base_facts(self, tmp_path):
+        # archive-re-review#23 P1: require_sealed_registry calls the live source-
+        # registry mapping's .items(); a malicious mapping that, during .items(),
+        # swaps artifact.base_facts to EvilFacts must NOT poison verification —
+        # verify_d7_artifact reconstructs card/bundle/facts/rows into independent
+        # copies BEFORE the registry snapshot and never re-reads live artifact.*.
+        from types import MappingProxyType
+        from workspace.research.ai_research_dept.engine.news_cards import (
+            verify_d7_artifact,
+        )
+        art = _artifact_full("d1")
+        fired = {"acc": 0}
+
+        class _EvilFact:
+            @property
+            def fact_hash(self):
+                fired["acc"] += 1
+                return "0" * 64
+
+        class _SwapMap(dict):
+            def items(self):
+                # phase-substitution: swap the outer artifact's verified facts
+                object.__setattr__(art, "base_facts", (_EvilFact(),))
+                return super().items()
+        object.__setattr__(art.source_registry, "records",
+                           _SwapMap(dict(art.source_registry.records)))
+        # verify_d7_artifact still succeeds on the genuine (copied) components;
+        # the swapped-in EvilFact.fact_hash accessor is never read
+        verify_d7_artifact(art)
+        assert fired["acc"] == 0
+
+    def test_load_rejects_nonstr_decision_id_before_compare(self, tmp_path):
+        # archive-re-review#23 P1: load/recover reject a non-str decision_id
+        # before it reaches any `==` (which would call a malicious __eq__).
+        art, bundle = _setup(tmp_path)
+        seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                              archive_dir=tmp_path / "arch")
+        fired = {"eq": False}
+
+        class _EvilId(str):
+            def __eq__(self, o):
+                fired["eq"] = True
+                return True
+            def __hash__(self): return 0
+        with pytest.raises(RegistryError, match="须恰 str"):
+            load_and_verify_decision_archive(
+                _EvilId("d1"), art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert fired["eq"] is False
+
     def test_boundary_rejection_reads_no_untrusted_type_name(self, tmp_path):
         # archive-re-review#21 P1: a boundary rejection must not read the
         # untrusted object's type().__name__ (which runs the metaclass

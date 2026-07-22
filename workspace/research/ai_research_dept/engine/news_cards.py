@@ -856,34 +856,74 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
         raise RegistryError("工件组件须恰 RenderedCard/AttributeBundle(子类拒,re-review#7)")
     assert_base_card_fields(card)
     assert_base_bundle_fields(bundle)
-    # re-review#22 P1:**全部子组件的精确类型 + 字段断言 + registry 快照先于任何
-    # 根/组件哈希构造**——`artifact_canonical_payload` 读 bf.fact_hash/r.row_hash/
-    # registry_hash;冻结 dataclass 可被 object.__setattr__ 篡改,故可注入对象的
-    # 属性访问器不得在其类型门之前运行
+    # re-review#23 P1:把 card/bundle/facts/rows **重建为独立可信副本**——之后的
+    # `require_sealed_registry` 会调 live registry mapping 的 `.items()`(回调),
+    # 恶意 mapping 可在回调里 object.__setattr__ 换掉 live `artifact.base_facts`
+    # 等已验组件;downstream 只用调用方无引用的副本 + fresh registry,回调后**绝不
+    # 重读 live `artifact.*`**,相位替换无处施展。副本构造即再验各自封哈希。
+    v_artifact_hash = artifact.artifact_hash           # 断言过为 str
+    card = RenderedCard(
+        card_name=card.card_name, cutoff_iso=card.cutoff_iso,
+        factor_payload_text=card.factor_payload_text,
+        restricted_text=card.restricted_text, record_ids=card.record_ids,
+        records_hash=card.records_hash, base_fact_hashes=card.base_fact_hashes,
+        card_hash=card.card_hash)
+    bundle = AttributeBundle(
+        decision_id=bundle.decision_id, cutoff_iso=bundle.cutoff_iso,
+        source_card_hash=bundle.source_card_hash,
+        base_fact_hashes=bundle.base_fact_hashes,
+        source_registry_hash=bundle.source_registry_hash,
+        claim_ids=bundle.claim_ids, row_hashes=bundle.row_hashes,
+        child_record_hashes=bundle.child_record_hashes,
+        demoted_record_hashes=bundle.demoted_record_hashes,
+        final_registry_hash=bundle.final_registry_hash,
+        bundle_hash=bundle.bundle_hash)
     facts_by_id = {}
+    _facts = []
     for bf in artifact.base_facts:
         if type(bf) is not D7BaseFact:
             raise RegistryError("base_facts 只收恰 D7BaseFact(子类拒,re-review#7)")
         assert_base_fact_fields(bf)                     # re-review#13 P0
+        bf = D7BaseFact(                                # 独立副本(__post_init__ 再验)
+            base_record_id=bf.base_record_id, base_content_hash=bf.base_content_hash,
+            claim_id=bf.claim_id, fact_cluster_id=bf.fact_cluster_id,
+            evidence_class=bf.evidence_class, importance=bf.importance,
+            fact_hash=bf.fact_hash)
+        _facts.append(bf)
         facts_by_id[bf.base_record_id] = bf
+    base_facts = tuple(_facts)
+    _rows = []
     for r in artifact.rows:
         if type(r) is not AttributeRow:
             raise RegistryError("rows 只收恰 AttributeRow(子类拒,re-review#7 P0)")
         assert_base_row_fields(r)                       # re-review#13 P0
-    src = require_sealed_registry(artifact.source_registry)
+        _rows.append(AttributeRow(                      # 独立副本
+            row_id=r.row_id, claim_id=r.claim_id, fact_cluster_id=r.fact_cluster_id,
+            evidence_group_id=r.evidence_group_id, attribute_type=r.attribute_type,
+            text=r.text, row_hash=r.row_hash))
+    rows = tuple(_rows)
+    src = require_sealed_registry(artifact.source_registry)   # ← 回调点(组件已副本化)
     fin = require_sealed_registry(artifact.final_registry)
-    # 现在从**已验证**子组件构造根/组件哈希(属性访问器已确认无覆写)
-    verify_sealed(artifact_canonical_payload(artifact), artifact.artifact_hash,
-                  field_name="artifact_hash")
+    # 根/组件哈希从**副本 + 已捕获值**构造,绝不重读 live artifact.*
+    verify_sealed({"card_hash": card.card_hash,
+                   "base_fact_hashes": sorted(bf.fact_hash for bf in base_facts),
+                   "source_registry_hash": src.registry_hash,
+                   "row_hashes": sorted(r.row_hash for r in rows),
+                   "bundle_hash": bundle.bundle_hash,
+                   "final_registry_hash": fin.registry_hash},
+                  v_artifact_hash, field_name="artifact_hash")
     verify_sealed(card_canonical_payload(card), card.card_hash, field_name="card_hash")
     verify_sealed(bundle_canonical_payload(bundle), bundle.bundle_hash,
                   field_name="bundle_hash")
-    for bf in artifact.base_facts:
+    for bf in base_facts:
         verify_sealed(base_fact_canonical_payload(bf), bf.fact_hash,
                       field_name="D7BaseFact fact_hash")
-    if len(facts_by_id) != len(artifact.base_facts):
+    for r in rows:
+        verify_sealed(attribute_row_canonical_payload(r), r.row_hash,
+                      field_name="attribute row_hash")
+    if len(facts_by_id) != len(base_facts):
         raise RegistryError("base_facts 含重复 base_record_id(re-review#6 B1)")
-    if sorted(bf.fact_hash for bf in artifact.base_facts) \
+    if sorted(bf.fact_hash for bf in base_facts) \
             != sorted(card.base_fact_hashes):
         raise RegistryError("工件基事实总体与卡封不精确相等(B1)")
     if _records_hash(list(src.records.values())) != card.records_hash:
@@ -920,10 +960,8 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
                 f"{bf.base_content_hash[:12]}——错 source 血缘拒(re-review#5 B1)")
     # ---- re-review#6 B1:**全量确定性重建**——行/降级父/子行/终注册表/束全部从
     # 卡绑基事实重新推导,束/终注册表**自报的总体绝非权威**。 ----
-    rows = artifact.rows
-    for r in rows:                                      # 已恰类型+断言(上方)
-        verify_sealed(attribute_row_canonical_payload(r), r.row_hash,
-                      field_name="attribute row_hash")
+    # re-review#23:用**独立副本 rows**(上方已恰类型+断言+验封+副本化),绝不
+    # 重读 live artifact.rows(回调后可能被相位替换)
     row_ids = [r.row_id for r in rows]
     if len(set(row_ids)) != len(rows) \
             or len({r.row_hash for r in rows}) != len(rows):
@@ -949,7 +987,7 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
         grouped.setdefault(prefix, {})[r.attribute_type] = r.text
     # re-review#6 B2:重大事件 D7 拆分**强制全覆盖**(设计 §6c D7 合同)——
     # importance≥4 的正向基事实必须逐一被拆;零拆/漏拆/多拆一律拒
-    required = {bf.base_record_id for bf in artifact.base_facts
+    required = {bf.base_record_id for bf in base_facts   # re-review#23:副本
                 if bf.importance >= D7_IMPORTANCE_FLOOR}
     if prefixes != required:
         raise RegistryError(

@@ -599,9 +599,23 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     (决策三向 + 执行)→ outcome 从封存字段重建(矩阵自验)→ 联合验证重跑
     (canonical 重建/选定行/哨兵/evaluation 重算/账本承诺)→ **链头锚验**
     (成员 + 祖先)。"""
+    # re-review#23 P1:ID 恰 str 门 + **验证并捕获 contract/artifact 先于任何身份
+    # 比较**——旧序在验证门前就读 `artifact.bundle.decision_id`/`contract.
+    # contract_hash`(未验对象的访问器先执行),且外部 decision_id 未先做类型门
+    # 就进 `==`。此后身份比较只用**已捕获的基础值**(archive 来自盘上普通 JSON)。
+    if type(decision_id) is not str or type(execution_id) is not str:
+        raise RegistryError("decision_id/execution_id 须恰 str(re-review#23)")
+    require_exact_contract(contract)                   # 验证 + 自封哈希校验
+    verify_d7_artifact(artifact)                       # 验证工件(re-review#23 P1#1 后可信)
+    v_contract_hash = contract.contract_hash
+    v_contract_payload = contract_canonical_payload(contract)
+    v_artifact_hash = artifact.artifact_hash
+    v_bundle_hash = artifact.bundle.bundle_hash
+    v_final_registry_hash = artifact.final_registry.registry_hash
+    v_bundle_decision_id = artifact.bundle.decision_id
     path = _archive_path(archive_dir, decision_id, execution_id)
     if not path.exists():
-        raise RegistryError(f"决策档案缺失:{path}")
+        raise RegistryError("决策档案缺失(re-review#21 静态错误)")
     archive = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(archive, dict) or set(archive) != _ARCHIVE_KEYS:
         raise RegistryError("档案顶层键集不符 news_decision_archive_v1 schema"
@@ -610,25 +624,21 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     verify_sealed(body, archive.get("archive_sha256", ""),
                   field_name="archive_sha256")
     if archive["archive_schema"] != _ARCHIVE_SCHEMA:
-        raise RegistryError(f"档案 archive_schema 须为 {_ARCHIVE_SCHEMA!r}"
-                            f"(得 {archive['archive_schema']!r})")
-    # archive-review Major:三向决策身份——档案 == 请求 == 工件束(d1 档案拷到
-    # d2 文件名、或用错工件读档,均在此死);re-review#4:执行身份同验
-    if not (archive["decision_id"] == decision_id
-            == artifact.bundle.decision_id):
-        # re-review#21 P1:静态错误(不读不可信 decision_id / 未验工件的 repr)
+        raise RegistryError("档案 archive_schema 不符(re-review#21 静态错误)")
+    # archive-review Major:三向决策身份(archive 盘上普通值 vs 已捕获基础值)
+    if not (archive["decision_id"] == decision_id == v_bundle_decision_id):
         raise RegistryError("决策身份三向不符:档案 / 请求 / 工件束 decision_id 不一致"
-                            "(archive-review Major;re-review#21 静态错误)")
+                            "(archive-review Major;re-review#21/#23)")
     if archive["execution_id"] != execution_id:
         raise RegistryError("档案 execution_id ≠ 请求——执行身份不符(re-review#4/#21)")
-    if archive["contract_hash"] != contract.contract_hash \
-            or archive["contract"] != contract_canonical_payload(contract):
+    if archive["contract_hash"] != v_contract_hash \
+            or archive["contract"] != v_contract_payload:
         raise RegistryError("档案契约与提供的冻结契约不符")
-    if archive["artifact_hash"] != artifact.artifact_hash:
+    if archive["artifact_hash"] != v_artifact_hash:
         raise RegistryError("档案工件哈希与提供的工件不符")
-    if archive["bundle_hash"] != artifact.bundle.bundle_hash:
+    if archive["bundle_hash"] != v_bundle_hash:
         raise RegistryError("档案 bundle_hash 与提供工件的证据束不符(archive-review Major)")
-    if archive["final_registry_hash"] != artifact.final_registry.registry_hash:
+    if archive["final_registry_hash"] != v_final_registry_hash:
         raise RegistryError("档案 final_registry_hash 与提供工件的注册表不符"
                             "(archive-review Major)")
     # outcome 从封存字段重建——NewsLegOutcome 构造即重跑 M3⁴ 矩阵自验
@@ -704,6 +714,8 @@ def load_and_verify_decision_archive(decision_id: str, artifact: D7DecisionArtif
     success 承诺在而档案缺 = 承诺后崩溃,走
     `recover_and_seal_success_archive` 从盘上重建。任何交错下本函数都不可能
     返回 hard_failed 档案(P1-b 的 TOCTOU 面结构性消除)。"""
+    if type(decision_id) is not str:                   # re-review#23:先于 == 比较
+        raise RegistryError("decision_id 须恰 str(re-review#23)")
     chain = _read_chain(_ledger_path(ledger_dir))
     success = _find_success_commitment(chain, decision_id)
     if success is None:
@@ -732,6 +744,8 @@ def recover_and_seal_success_archive(decision_id: str,
     (工件+契约+终态 verdict)经 M3⁴ 矩阵**重推导**,其 outcome_hash 必须等于
     承诺的 outcome_hash(权威锚);evaluation 确定性重算。随后
     `seal_decision_archive` 重跑全量联合验证 + write-once。"""
+    if type(decision_id) is not str:                   # re-review#23:先于 == 比较
+        raise RegistryError("decision_id 须恰 str(re-review#23)")
     require_exact_contract(contract)                   # re-review#6 P0
     chain = _read_chain(_ledger_path(ledger_dir))
     success = _find_success_commitment(chain, decision_id)
