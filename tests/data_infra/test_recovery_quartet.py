@@ -1999,3 +1999,31 @@ def test_run_family_reports_per_request_progress():
     cmd = inspect.getsource(rrc.cmd_fetch)
     assert "flush=True" in cmd, "operator output must not sit in a block buffer"
     assert "on_request=_tick" in cmd
+
+
+def test_cached_rows_are_byte_identical_to_a_full_replay(rig):
+    """Found by a §10 self-review probe, not by any existing test — every other test happens to append
+    only JSON-native scalars.
+
+    `_append` advances the chain cache with the record it just wrote, while `_load()` returns what
+    `json.loads` gives back. Those are NOT the same object: a tuple value is written as a JSON array
+    and read back as a LIST. Caching the in-memory record made `_load()` return a tuple with a warm
+    cache and a list with a cold one — the same call returning different types depending on nothing
+    but timing, which in a 4-day run is the worst possible class of bug."""
+    rp, L = rig
+    L.event("scalars", a=1, b="x", c=1.5, d=None, e=True)
+    L.event("containers", t=("a", "b"), nested={"k": [1, 2]}, deep={"x": ("y",)})
+    warm = L._load()
+    L._chain_cache = None
+    cold = L._load()
+    assert warm == cold, "cached rows diverge from the on-disk truth"
+    # and specifically: no tuple survives into the cached view
+    def _has_tuple(o):
+        if isinstance(o, tuple):
+            return True
+        if isinstance(o, dict):
+            return any(_has_tuple(v) for v in o.values())
+        if isinstance(o, list):
+            return any(_has_tuple(v) for v in o)
+        return False
+    assert not _has_tuple(warm), "a tuple survived into the cached rows"

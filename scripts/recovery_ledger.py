@@ -417,8 +417,16 @@ class PageReceiptLedger:
             except OSError:
                 self._chain_cache = None
             else:
+                # Cache the ROUND-TRIPPED record, not the in-memory one. `_load()` returns what
+                # json.loads gives back, and the two are not the same object: a tuple value is written
+                # as a JSON array and read back as a LIST. Caching `rec` directly made a caller see a
+                # tuple with a warm cache and a list with a cold one — the same call returning
+                # different types depending on nothing but timing. Caught by a self-review probe
+                # comparing cached rows against a full replay; found nowhere else, because every
+                # existing test happens to append only JSON-native scalars.
                 self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns,
-                                     "rows": cache["rows"] + [rec], "tail": rec["record_hash"],
+                                     "rows": cache["rows"] + [json.loads(_canon(rec))],
+                                     "tail": rec["record_hash"],
                                      "since_full": cache["since_full"] + 1}
         else:
             self._chain_cache = None        # force the next _load() to replay from genesis
