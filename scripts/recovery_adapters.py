@@ -476,42 +476,22 @@ CONSOLIDATED_AS_SECOND_LAYOUT: dict = {
 
 # ── the canonical A01 merger (design v4 F9 — shared pure function) ───────────────────────────────
 def merge_daily_legs(df_daily, df_basic, df_adj, target_date: str):
-    """The canonical per-date 3-leg merge with the production invariants STRENGTHENED
-    (update_daily_data.py's inline logic + validate='one_to_one'; the production caller is refactored
-    to call this in a tracked follow-up — F9 rider). Pure: no I/O, no mutation of inputs."""
-    import pandas as pd
-    if df_daily is None or not len(df_daily):
-        raise RuntimeError(f"market {target_date}: daily leg EMPTY — a dense per-date merge needs it")
-    if df_adj is None or not len(df_adj):
-        raise RuntimeError(f"market {target_date}: adj_factor EMPTY (required leg)")
-    if df_basic is None or not len(df_basic):
-        raise RuntimeError(f"market {target_date}: daily_basic EMPTY (required leg)")
-    for name, df in (("daily", df_daily), ("daily_basic", df_basic), ("adj_factor", df_adj)):
-        bad = df[df["trade_date"].astype(str) != str(target_date)]
-        if len(bad):
-            raise RuntimeError(f"market {target_date}: {name} carries {len(bad)} rows of ANOTHER date")
-    daily_codes = set(df_daily["ts_code"].dropna().astype(str))
-    adj_pos = df_adj.loc[pd.to_numeric(df_adj["adj_factor"], errors="coerce") > 0, "ts_code"]
-    missing_adj = daily_codes - set(adj_pos.dropna().astype(str))
-    if missing_adj:
-        raise RuntimeError(f"market {target_date}: {len(missing_adj)} priced daily codes lack a "
-                           f"positive adj_factor (must be 100%); e.g. {sorted(missing_adj)[:5]}")
-    basic_cov = len(set(df_basic["ts_code"].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
-    if basic_cov < 0.90:
-        raise RuntimeError(f"market {target_date}: daily_basic code coverage {basic_cov:.3f} < 0.90")
-    # drop the auxiliary close (daily's close is canonical) + the legs' duplicate raw_fetch_ts stamps
-    aux_basic = df_basic.drop(columns=[c for c in ("close", "raw_fetch_ts") if c in df_basic.columns])
-    aux_adj = df_adj.drop(columns=[c for c in ("raw_fetch_ts",) if c in df_adj.columns])
-    merged = pd.merge(df_daily, aux_basic, on=["ts_code", "trade_date"], how="left",
-                      validate="one_to_one")
-    merged = pd.merge(merged, aux_adj, on=["ts_code", "trade_date"], how="left",
-                      validate="one_to_one")
-    if len(merged) != len(df_daily):
-        raise RuntimeError(f"market {target_date}: merge changed the row count "
-                           f"({len(df_daily)} -> {len(merged)}) — base-key preservation violated")
-    if merged.duplicated(subset=["ts_code", "trade_date"]).any():
-        raise RuntimeError(f"market {target_date}: duplicate (ts_code, trade_date) keys in the merge")
-    return merged
+    """Delegates to the ONE canonical merger that the production daily pipeline also calls
+    (`data_infra.daily_merge`), so a recovered `market/daily` file and a live one are produced by
+    identical code — the F9 rider, now closed on both sides.
+
+    Restating the merge here would let the recovered store drift from the live store exactly the way a
+    restated field list would let the report_rc recovery digest drift from the SERVING digest. Imported
+    lazily, matching how the ledger reaches `pit_backend.report_rc_payload_digest`.
+
+    The consolidation was NOT cosmetic: this side was missing production's post-merge payload check, so
+    a mis-keyed daily_basic that left-merged to all-NULL would have been written into the recovered
+    store while passing every check that used to be here."""
+    _src = str(Path(__file__).resolve().parents[1] / "src")
+    if _src not in sys.path:
+        sys.path.insert(0, _src)
+    from data_infra.daily_merge import merge_daily_legs as _canonical
+    return _canonical(df_daily, df_basic, df_adj, target_date)
 
 
 # ── bundle manifest (design v4 Q1 — content-hashed, not git HEAD) ────────────────────────────────
@@ -521,6 +501,10 @@ _BUNDLE_FILES = (
     "scripts/recovery_write_broker.py",
     "scripts/raw_recovery_coordinator.py",
     "src/data_infra/fetchers/__init__.py",
+    # the canonical A01 merger now lives in src/ and is shared with the production daily pipeline —
+    # it decides what a recovered market/daily file CONTAINS, so a change to it must invalidate the
+    # frozen bundle exactly like a change to a recipe does
+    "src/data_infra/daily_merge.py",
 )
 
 

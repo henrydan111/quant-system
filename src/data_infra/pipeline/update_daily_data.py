@@ -30,6 +30,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
 sys.path.append(os.path.join(project_root, 'src'))
 
+from data_infra.daily_merge import DailyMergeError, merge_daily_legs
 from data_infra.fetchers import TushareFetcher
 from data_infra.pipeline.build_qlib_backend import _resolve_paths, build_unified_qlib
 from data_infra.storage import StorageManager
@@ -340,41 +341,14 @@ class DailyDataUpdater:
         _validate_endpoint_frame(df_basic, name="daily_basic", target_date=target_date,
                                  required_cols=("ts_code", "trade_date"))
 
-        daily_codes = set(df_daily['ts_code'].dropna().astype(str))
-        # adj_factor must cover 100% of priced daily codes with a positive value — every priced row needs
-        # real adjustment history (the builder rejects any missing/non-positive row; GPT REWORK-5 M1).
-        adj_pos = df_adj.loc[pd.to_numeric(df_adj['adj_factor'], errors='coerce') > 0, 'ts_code']
-        adj_codes = set(adj_pos.dropna().astype(str))
-        missing_adj = daily_codes - adj_codes
-        if missing_adj:
-            raise MarketDataError(f"market {target_date}: {len(missing_adj)} priced daily codes lack a "
-                                  f"positive adj_factor (must be 100%); e.g. {sorted(missing_adj)[:5]}")
-        basic_cov = len(set(df_basic['ts_code'].dropna().astype(str)) & daily_codes) / max(1, len(daily_codes))
-        if basic_cov < 0.90:
-            raise MarketDataError(f"market {target_date}: daily_basic code coverage {basic_cov:.3f} < 0.90")
-
-        df_merged = df_daily
-        basic_payload = [c for c in df_basic.columns if c not in ("ts_code", "trade_date", "close")]
-        df_basic = df_basic.drop(columns=['close'], errors='ignore')
-        df_merged = pd.merge(df_merged, df_basic, on=['ts_code', 'trade_date'], how='left')
-        df_merged = pd.merge(df_merged, df_adj, on=['ts_code', 'trade_date'], how='left')
-
-        # POST-merge validation (a wrong-date/mis-keyed aux frame merges to all-null even at 100% code
-        # overlap — GPT REWORK-5 M1): adj_factor non-null 100%, daily_basic payload non-null >= floor,
-        # and the OUTPUT keys unique.
-        if 'adj_factor' not in df_merged.columns:
-            raise MarketDataError(f"market {target_date}: merged frame lost the adj_factor column")
-        adj_nn = float(pd.to_numeric(df_merged['adj_factor'], errors='coerce').notna().mean())
-        if adj_nn < 1.0:
-            raise MarketDataError(f"market {target_date}: post-merge non-null adj_factor {adj_nn:.4f} < 1.0 "
-                                  f"(merge dropped adjustment rows)")
-        if basic_payload:
-            payload_nn = float(df_merged[basic_payload].notna().any(axis=1).mean())
-            if payload_nn < 0.90:
-                raise MarketDataError(f"market {target_date}: post-merge daily_basic payload coverage "
-                                      f"{payload_nn:.3f} < 0.90 (wrong-date/mis-keyed daily_basic?)")
-        if df_merged.duplicated(subset=["ts_code", "trade_date"]).any():
-            raise MarketDataError(f"market {target_date}: merged output has duplicate (ts_code, trade_date) keys")
+        # The 3-leg merge + every pre/post-merge invariant lives in ONE canonical function that the
+        # raw-store recovery calls too, so recovered history and live history cannot drift apart
+        # (adapter design v4, F9). Consolidating the two implementations strengthened BOTH sides — see
+        # daily_merge.py's module docstring for what each was missing.
+        try:
+            df_merged = merge_daily_legs(df_daily, df_basic, df_adj, target_date)
+        except DailyMergeError as exc:
+            raise MarketDataError(str(exc)) from exc
 
         file_path = os.path.join(self.market_daily_dir, target_date[:4], f"daily_{target_date}.parquet")
         _atomic_write_parquet(df_merged, file_path)  # validated -> atomic temp+replace (prior preserved)
