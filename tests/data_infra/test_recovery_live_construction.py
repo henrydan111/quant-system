@@ -93,7 +93,7 @@ def _audit(event, args):
 
 sys.addaudithook(_audit)
 
-import json, os, socket
+import ipaddress, json, os, socket
 from pathlib import Path
 
 RUN_ROOT = Path(sys.argv[1]).resolve()
@@ -123,8 +123,17 @@ def _allowed(path) -> bool:
 _WRITE_MODES = ("w", "a", "x", "+")
 
 #: Process spawning: an audit hook does not follow a child, so spawning one is BY DEFINITION an
-#: unobservable write surface.
-_PROCESS = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.startfile")
+#: unobservable write surface — the child's writes are invisible no matter where its EXECUTABLE lives.
+#: Matched by FAMILY, not by exact name. The exact-name form missed `os.spawn` (the real event name on
+#: Windows, reproduced), and worse, an unmatched spawn event fell through to the generic `os.*` path
+#: check, which ALLOWED it whenever the program path happened to be inside the run root. An enumerated
+#: deny list fails open toward more spawning being permitted; that is not a safe polarity.
+_PROCESS_PREFIXES = ("subprocess.", "os.spawn", "os.exec", "os.posix_spawn", "os.startfile")
+_PROCESS_EXACT = frozenset({"os.system", "os.fork", "os.forkpty"})
+
+
+def _is_process_event(event) -> bool:
+    return event.startswith(_PROCESS_PREFIXES) or event in _PROCESS_EXACT
 
 #: DEFAULT-DENY. The previous version enumerated the MUTATING events, so every event it forgot was
 #: silently allowed — `Path.touch()` on an existing file fires only `os.utime`, which the list missed
@@ -143,17 +152,23 @@ _NON_WRITE_OS_EVENTS = frozenset({
 
 
 def _is_loopback_bind(args) -> bool:
-    """A bind to a loopback literal cannot leave the host, so it is the one socket operation a clean
-    construction legitimately performs (observed: `('::1', 0)`). Anything else — any name resolution,
-    any connect, any bind to a routable address — fails."""
+    """A bind to a NUMERIC loopback address cannot leave the host, so it is the one socket operation a
+    clean construction legitimately performs (observed: `('::1', 0)`).
+
+    The address must PARSE as an IP literal. A `startswith("127.")` prefix test accepted
+    `127.not-a-numeric-literal.invalid`, which is a hostname (reproduced) — and bind resolves a hostname
+    BELOW the Python layer, so the getaddrinfo interceptor never sees it. `localhost` is rejected for the
+    same reason: it is a name requiring resolution, not a literal."""
     try:
         addr = args[1]
     except Exception:
         return False
     if not isinstance(addr, tuple) or not addr or not isinstance(addr[0], str):
         return False
-    host = addr[0]
-    return host == "::1" or host == "localhost" or host.startswith("127.")
+    try:
+        return ipaddress.ip_address(addr[0]).is_loopback
+    except ValueError:
+        return False                    # a NAME, not a literal — resolution happens out of our sight
 
 
 def _classify(event, args):
@@ -183,7 +198,7 @@ def _classify(event, args):
                 pass                    # loopback bind cannot leave the host
             else:
                 violations.append(f"{event} — NETWORK/RESOLUTION attempted")
-        elif event in _PROCESS:
+        elif _is_process_event(event):
             violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
         elif event.startswith(("os.", "shutil.")) and event not in _NON_WRITE_OS_EVENTS:
             for a in args[:2]:
@@ -304,6 +319,44 @@ REPORT.write_text(json.dumps(result), encoding="utf-8")
 #: an mtime far enough in the past that a touch() must move it regardless of filesystem resolution
 _OLD_MTIME_NS = 1_000_000_000 * 1_000_000_000
 
+#: Red-team payloads delivered through a shadowed `PYTHONPATH\json.py`, so every one of them also
+#: exercises the pre-bootstrap buffer-then-replay path. Each is deliberately harmless: a write into a
+#: probe directory, a loopback-only resolution, a spawn of a program that does not exist, and a bind
+#: that fails. What is being tested is whether the MONITOR sees them, not whether they succeed.
+_SHIM_PAYLOADS = {
+    "shadow_stdlib":
+        "with open(os.environ['F10_EXTERNAL_PROBE'], 'w') as _f:\n"
+        "    _f.write('escaped at bootstrap')\n",
+    "shadow_stdlib_dns":
+        "import socket\n"
+        "socket.gethostbyname('localhost')\n",
+    # the executable sits INSIDE the run root, which is exactly what the old code let through: the
+    # spawn event fell into the generic os.* path check and the path was "allowed". It does not exist,
+    # so no process is ever created — the audit event fires first regardless.
+    "shadow_stdlib_spawn":
+        "_t = os.path.join(os.environ['F10_RUN_ROOT'], 'nonexistent_child.exe')\n"
+        "try:\n"
+        "    os.spawnv(os.P_NOWAIT, _t, [_t])\n"
+        "except Exception:\n"
+        "    pass\n",
+    # `localhost` is a NAME, not a literal. Verified directly: this bind SUCCEEDS even with the
+    # Python-layer getaddrinfo replaced by a function that always raises, and fires only `socket.bind` —
+    # so bind's resolution happens below the Python layer where the interceptor cannot reach. The old
+    # `host == "localhost" or host.startswith("127.")` test waved it through.
+    # (`127.not-a-numeric-literal.invalid` is the same class but cannot be driven end to end here: its
+    # resolution fails first, so `socket.bind` never fires. Both are rejected by the same ip_address
+    # parse — confirmed by direct probe.)
+    "shadow_stdlib_bind_name":
+        "import socket\n"
+        "_sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "try:\n"
+        "    _sk.bind(('localhost', 0))\n"
+        "except Exception:\n"
+        "    pass\n"
+        "finally:\n"
+        "    _sk.close()\n",
+}
+
 
 def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = False):
     """Run the child in a fresh interpreter. `probe_from_root(run_root) -> Path` picks the red-team
@@ -327,27 +380,14 @@ def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = 
     if startup_inject:
         inj = run_root.parent / f"inj_{run_root.name}"
         inj.mkdir(parents=True, exist_ok=True)
-        if startup_inject == "shadow_stdlib_dns":
-            # Same shadowing vector, but the payload is NAME RESOLUTION rather than a file write:
-            # socket.gethostbyname fires `socket.gethostbyname`, which the enumerated socket list
-            # dropped silently. Runs at the child's own `import json`, i.e. during bootstrap.
+        env["F10_RUN_ROOT"] = str(run_root)
+        payload = _SHIM_PAYLOADS.get(startup_inject)
+        if payload is not None:
+            # A pre-placed PYTHONPATH\json.py that runs the payload and then proxies the REAL stdlib
+            # json (drops its own dir from sys.path, re-imports, republishes), so the child keeps
+            # working and the escape is silent. Fires at the child's own `import json` — bootstrap.
             (inj / "json.py").write_text(
-                "import sys, os, socket\n"
-                "socket.gethostbyname('localhost')\n"
-                "_here = os.path.dirname(os.path.abspath(__file__))\n"
-                "sys.path = [p for p in sys.path if os.path.abspath(p) != _here]\n"
-                "del sys.modules['json']\n"
-                "import json as _real\n"
-                "sys.modules['json'] = _real\n",
-                encoding="utf-8")
-        elif startup_inject == "shadow_stdlib":
-            # A pre-placed PYTHONPATH\json.py that writes outside the run root and then proxies the
-            # REAL stdlib json, so the child keeps working and the escape is silent. This runs at
-            # `import json`, i.e. during the child's own bootstrap imports.
-            (inj / "json.py").write_text(
-                "import sys, os\n"
-                "with open(os.environ['F10_EXTERNAL_PROBE'], 'w') as _f:\n"
-                "    _f.write('escaped at bootstrap')\n"
+                "import sys, os\n" + payload +
                 "_here = os.path.dirname(os.path.abspath(__file__))\n"
                 "sys.path = [p for p in sys.path if os.path.abspath(p) != _here]\n"
                 "del sys.modules['json']\n"
@@ -464,6 +504,33 @@ def test_the_monitor_catches_name_resolution():
     assert data["violations"], "the monitor MISSED a name resolution"
     assert any("gethostbyname" in v for v in data["violations"]), data["violations"]
     # and the construction still completed end to end
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+    assert data["page_rows"] == 1, data
+
+
+def test_the_monitor_catches_a_process_spawn_of_an_in_root_program():
+    """RED TEAM (fan-out re-review #6). `os.spawnv` fires the event `os.spawn`, which the exact-name
+    deny list missed — and it then fell into the generic `os.*` path check, which ALLOWED it because the
+    program path was inside the run root. A spawned child's writes are invisible to an audit hook no
+    matter where its executable lives, so location cannot be the test. Now matched by family."""
+    _, data, _ = _run_child("live", lambda r: r.parent / "f10_spawn_probe" / "unused.txt",
+                            startup_inject="shadow_stdlib_spawn")
+    assert data["violations"], "the monitor MISSED a process spawn"
+    assert any("spawn" in v for v in data["violations"]), data["violations"]
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+    assert data["page_rows"] == 1, data
+
+
+def test_the_monitor_rejects_a_bind_to_a_loopback_shaped_hostname():
+    """RED TEAM (fan-out re-review #6). The old allowance accepted `localhost` and any
+    `startswith('127.')` string. Both are NAMES, not literals, and a bind resolves a name BELOW the
+    Python layer — verified: `bind(('localhost', 0))` succeeds even with `socket.getaddrinfo` replaced
+    by a function that always raises, firing only `socket.bind`. So the interceptor cannot see that
+    resolution and the allowance must require a numeric loopback literal."""
+    _, data, _ = _run_child("live", lambda r: r.parent / "f10_bind_probe" / "unused.txt",
+                            startup_inject="shadow_stdlib_bind_name")
+    assert data["violations"], "the monitor ACCEPTED a bind to a loopback-shaped hostname"
+    assert any("socket.bind" in v for v in data["violations"]), data["violations"]
     assert data["constructed"] and data["real_client"] == "DataApi", data
     assert data["page_rows"] == 1, data
 
