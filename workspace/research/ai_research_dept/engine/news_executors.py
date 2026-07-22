@@ -256,6 +256,12 @@ def _persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: s
     attempt_started/call_error 为 None), verdict, schema_id, parsed_record_hash
     (canonical,记录承载终态必带), seq, entry_hash(封印)}。原子 fsync 写;
     **返回该行本体**。"""
+    # GPT #28(非阻断加固,当场收口而非记为条件债务):本函数是**写入器**不是
+    # 返回可信行的读取器,且全部生产调用方都已传入精确化 id,故不是第七条 v2 可
+    # 利用路径;但它内部同样做 `row_id == caller_id` 的状态机比较,且 reviewer 指出
+    # "若将来公开须单独加门"。直接加门 = 债务消除,且让机械 guard 无需白名单。
+    require_exact_id(decision_id, "decision_id")
+    require_exact_id(execution_id, "execution_id")
     if verdict not in PROV_VERDICTS:
         raise RegistryError(f"未注册出处 verdict {verdict!r}")
     if leg not in _PROV_LEGS:

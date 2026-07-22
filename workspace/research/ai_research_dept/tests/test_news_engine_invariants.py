@@ -218,8 +218,17 @@ class TestLedgerIdentityGate:
                     fn(*args)
         assert fired["eq"] == 0                          # no redirect ever ran
 
-    #: the three sanctioned ways an id becomes exactly-str before a row compare
-    GATE_MARKERS = ("require_exact_id", "_deep_plain_json", "is not str")
+    #: the three sanctioned ways an id becomes exactly-str before a row compare.
+    #: GPT #28 non-blocking hardening: the marker must name the SPECIFIC id
+    #: parameter being compared — a function-level marker scan would let an
+    #: unrelated `type(raw) is not str` elsewhere in the body wave the check
+    #: through. Still a syntactic check, not a dataflow proof; the runtime probe
+    #: above is the behavioural half of the guarantee.
+    @staticmethod
+    def _gate_markers(param: str) -> tuple:
+        return (f"require_exact_id({param}",
+                f"type({param}) is not str",
+                f"{param} = _deep_plain_json(")
 
     def test_no_ledger_reader_compares_an_id_without_the_gate(self):
         # Source guard for the PRECISE lookup shape: a ROW's id field compared
@@ -253,18 +262,22 @@ class TestLedgerIdentityGate:
                 # markers are matched against real SOURCE text — `type(x) is not
                 # str` renders as IsNot()/Name('str') in ast.dump and would be missed
                 seg = ast.get_source_segment(src, fn) or ""
-                if any(m in seg for m in self.GATE_MARKERS):
-                    continue
                 for cmp_node in ast.walk(fn):
                     if not isinstance(cmp_node, ast.Compare):
                         continue
                     if not any(isinstance(o, ast.Eq) for o in cmp_node.ops):
                         continue
                     ops = [cmp_node.left, *cmp_node.comparators]
-                    reads = any(_reads_row_id(o) for o in ops)
-                    raw = any(isinstance(o, ast.Name) and o.id in params for o in ops)
-                    if reads and raw:
-                        offenders.append(f"{name}:{fn.lineno} {fn.name}")
+                    if not any(_reads_row_id(o) for o in ops):
+                        continue
+                    # GPT #28: the gate must name THIS parameter, not merely exist
+                    ungated = [o.id for o in ops
+                               if isinstance(o, ast.Name) and o.id in params
+                               and not any(m in seg
+                                           for m in self._gate_markers(o.id))]
+                    if ungated:
+                        offenders.append(
+                            f"{name}:{fn.lineno} {fn.name}({', '.join(ungated)})")
                         break
         assert not offenders, (
             "a function compares a caller id against ledger rows without routing "
