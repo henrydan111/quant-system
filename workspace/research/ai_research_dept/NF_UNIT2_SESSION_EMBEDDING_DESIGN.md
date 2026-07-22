@@ -7,7 +7,12 @@ frozen v2 model. Unit 2 **assembles** that already-hardened core into the sessio
 stays NON_EVIDENTIARY with zero production callers until FORWARD_PREREG. *Tier is a user decision —
 say so and I re-scope.*
 
-**Status:** design frozen 2026-07-22, pending implementation.
+**Status (CORRECTED 2026-07-22):** premise FALSIFIED by the pre-implementation self-review — this
+unit consumes a sealed NF decision archive that **the session pipeline never produces** (the entire NF
+decision stack has zero production callers). This doc is now the spec for the LAST unit **C1**
+(consume + embed); it depends on producer units **P1→P4** landing first. See
+[NF_INTEGRATION_SEQUENCING.md](NF_INTEGRATION_SEQUENCING.md) for the corrected chain and the open
+scope decisions. The seven declared invariants below stay valid as the C1 contract.
 
 ---
 
