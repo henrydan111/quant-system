@@ -31,7 +31,7 @@ verified state and the corrected sequencing. Scope/tier decisions below are the 
 
 | unit | what | build vs wire | new LLM calls | depends on |
 |---|---|---|---|---|
-| **P1** | NF-flash typing pass — classify each day's flashes into the NF typing schema | **NEW** (prompt + adversarial payload tests) | 1 batched pass/day | — |
+| **P1** | NF-flash typing pass — classify each day's flashes into the NF typing schema | **DONE 2026-07-22** — driver around the EXISTING `news_ingest.type_batch` classifier + inherited `text_store.load_text` PIT gate (smaller than first thought: the classifier already exists and is tested) | 1 batched pass/day | — |
 | **P2** | per-stock: text_store read → `build_cluster_snapshots` → `assess_flash` (with P1 typing) | wire (+ new read path) | 0 | P1 |
 | **P3** | per-stock: `render_news_flash_section` → `build_attribute_bundle` → `D7DecisionArtifact` | wire (+ **open Q: D7 splits source**) | 0 or 1 | P2 |
 | **P4** | per-stock: `record_decision` → `execute_news_decision` (factor + penalty legs) → `seal_decision_archive` | wire | 2 | P3 |

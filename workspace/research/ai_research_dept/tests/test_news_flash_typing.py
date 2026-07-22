@@ -1,0 +1,210 @@
+# NF integration P1: market-wide news-flash typing driver — declared-invariant tests.
+import json
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+from data_infra.text_store import ingest_rows  # noqa: E402
+from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
+    load_typed_flash_artifact, type_day_flashes, write_typed_flash_artifact,
+)
+
+CUT = "2025-01-27 18:00:00"
+
+
+def _news_rows(contents, dt="2025-01-27 16:00:00"):
+    return pd.DataFrame([{"src": "sina", "datetime": dt, "content": c, "title": None,
+                          "channels": ""} for c in contents])
+
+
+def _ingest(tmp_path, contents, *, dt="2025-01-27 16:00:00", ingest_class="forward"):
+    ingest_rows("news", _news_rows(contents, dt), published_col="datetime",
+                retrieved_at=pd.Timestamp("2025-01-27 17:00:00"),
+                store_dir=tmp_path, ingest_class=ingest_class)
+
+
+class _Reply:
+    def __init__(self, text):
+        self.text = text
+
+
+def _stub_typer(**overrides):
+    """A deterministic stub call_fn: types every item as a plain fact, echoing the
+    request idx set so type_batch's exact-idx contract is satisfied."""
+    def fn(msgs):
+        payload = json.loads(msgs[1]["content"])
+        base = {"event_type": "订单合同", "verification_status": "官方证实",
+                "content_kind": "事实", "direction": "利好", "importance": 5,
+                "is_rumor": False, **overrides}
+        return _Reply(json.dumps({"results": [
+            {"idx": it["idx"], **base} for it in payload["items"]]}, ensure_ascii=False))
+    return fn
+
+
+# --------------------------------------------------- happy path
+
+def test_types_visible_flashes(tmp_path):
+    _ingest(tmp_path, ["签订 12 亿大单", "另一条快讯"])
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    assert art["artifact_schema"] == "nf_typed_flash_v1"
+    assert art["n_flashes"] == 2
+    assert all(set(t["typing"]) == {"event_type", "verification_status",
+                                    "content_kind", "direction", "importance",
+                                    "is_rumor"} for t in art["typed"])
+    assert all(t["typing"]["event_type"] == "订单合同" for t in art["typed"])
+
+
+# --------------------------------------------------- invariant 1: PIT (mechanical)
+
+def test_cutoff_excludes_future_visible_flashes(tmp_path):
+    # a flash visible AFTER the cutoff must never be typed — load_text's PIT gate.
+    _ingest(tmp_path, ["cutoff 前"], dt="2025-01-27 16:00:00")
+    _ingest(tmp_path, ["cutoff 后"], dt="2025-01-28 10:00:00")
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    previews = [t["content_preview"] for t in art["typed"]]
+    assert previews == ["cutoff 前"]
+    # every typed row's carried visibility is <= cutoff
+    assert all(pd.Timestamp(t["decision_visible_at"]) <= pd.Timestamp(CUT)
+               for t in art["typed"])
+
+
+def test_every_typed_row_is_cutoff_bound_after_type(tmp_path):
+    # defence-in-depth mechanical assertion over the whole artifact
+    _ingest(tmp_path, ["a", "b", "c"])
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    cut = pd.Timestamp(CUT)
+    assert art["typed"] and all(
+        pd.Timestamp(t["decision_visible_at"]) <= cut for t in art["typed"])
+
+
+# --------------------------------------------------- invariant 2: ingest_class isolation
+
+def test_forward_run_never_sees_history_bulk(tmp_path):
+    _ingest(tmp_path, ["2020 旧闻"], dt="2020-03-01 10:00:00", ingest_class="history_bulk")
+    fwd = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    assert fwd["n_flashes"] == 0            # forward panel is empty; bulk unreachable
+    bulk = type_day_flashes(CUT, ingest_class="history_bulk", call_fn=_stub_typer(),
+                            store_dir=tmp_path)
+    assert bulk["n_flashes"] == 1
+    assert bulk["ingest_class"] == "history_bulk"
+
+
+def test_bad_ingest_class_refused(tmp_path):
+    with pytest.raises(ValueError, match="ingest_class"):
+        type_day_flashes(CUT, ingest_class="live", call_fn=_stub_typer(),
+                         store_dir=tmp_path)
+
+
+# --------------------------------------------------- invariant 3: typed once per content
+
+def test_each_distinct_content_typed_exactly_once(tmp_path):
+    # the store guarantees content_hash uniqueness (dedups on ingest); P1 types each
+    # distinct store row exactly once — #LLM items == #distinct content_hashes.
+    _ingest(tmp_path, ["快讯一", "快讯二", "快讯三"])
+    calls = {"n": 0}
+    base = _stub_typer()
+
+    def counting(msgs):
+        calls["n"] += len(json.loads(msgs[1]["content"])["items"])
+        return base(msgs)
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=counting,
+                           store_dir=tmp_path)
+    assert art["n_flashes"] == 3
+    assert calls["n"] == 3                  # each distinct content typed exactly once
+
+
+def test_distinct_flashes_dedups_shared_content_hash(tmp_path):
+    # P1's defensive dedup: two rows sharing a content_hash collapse to one, keeping
+    # the EARLIEST visibility as representative (belt-and-suspenders vs the store).
+    from workspace.research.ai_research_dept.engine.news_flash_typing import (
+        _distinct_flashes,
+    )
+    df = pd.DataFrame([
+        {"content_hash": "a" * 64, "object_id_hash": "o1", "src": "sina",
+         "content": "晚到的副本", "decision_visible_at": "2025-01-27 16:00:00"},
+        {"content_hash": "a" * 64, "object_id_hash": "o0", "src": "sina",
+         "content": "早到的副本", "decision_visible_at": "2025-01-27 09:00:00"},
+        {"content_hash": "b" * 64, "object_id_hash": "o2", "src": "em",
+         "content": "另一条", "decision_visible_at": "2025-01-27 10:00:00"},
+    ])
+    out = _distinct_flashes(df, pd.Timestamp(CUT))
+    assert [f["content_hash"] for f in out] == ["a" * 64, "b" * 64]   # sorted, deduped
+    a = next(f for f in out if f["content_hash"] == "a" * 64)
+    assert a["decision_visible_at"].startswith("2025-01-27T09:00:00")   # earliest kept
+
+
+# --------------------------------------------------- invariant 4: deterministic/idempotent
+
+def test_deterministic_artifact_hash(tmp_path):
+    _ingest(tmp_path, ["z 最后", "a 最先", "m 中间"])
+    a1 = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                          store_dir=tmp_path)
+    a2 = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                          store_dir=tmp_path)
+    assert a1["artifact_sha256"] == a2["artifact_sha256"]
+    # output sorted by content_hash (position-independent join)
+    hashes = [t["content_hash"] for t in a1["typed"]]
+    assert hashes == sorted(hashes)
+
+
+# --------------------------------------------------- invariant 5: fail-closed persistence
+
+def test_write_load_round_trip(tmp_path):
+    _ingest(tmp_path, ["落盘再读"])
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    path = write_typed_flash_artifact(art, tmp_path / "out")
+    loaded = load_typed_flash_artifact(path)
+    assert loaded["artifact_sha256"] == art["artifact_sha256"]
+
+
+def test_tampered_artifact_refused(tmp_path):
+    _ingest(tmp_path, ["原始"])
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    path = write_typed_flash_artifact(art, tmp_path / "out")
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    obj["typed"][0]["typing"]["importance"] = 0     # tamper, keep old hash
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact_sha256 mismatch"):
+        load_typed_flash_artifact(path)
+
+
+def test_population_hash_detects_added_flash(tmp_path):
+    _ingest(tmp_path, ["一"])
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    path = write_typed_flash_artifact(art, tmp_path / "out")
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    # append a forged typed row AND fix artifact_sha256, but not population_hash
+    obj["typed"].append({**obj["typed"][0], "content_hash": "f" * 64})
+    from workspace.research.ai_research_dept.engine.news_seal import seal_hash
+    body = {k: v for k, v in obj.items() if k != "artifact_sha256"}
+    obj["artifact_sha256"] = seal_hash(body)
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="population_hash mismatch"):
+        load_typed_flash_artifact(path)
+
+
+# --------------------------------------------------- invariant 6: NON_EVIDENTIARY / empty
+
+def test_empty_population_no_llm_call(tmp_path):
+    called = {"n": 0}
+
+    def boom(msgs):
+        called["n"] += 1
+        raise AssertionError("must not call the typer on an empty population")
+    art = type_day_flashes(CUT, ingest_class="forward", call_fn=boom,
+                           store_dir=tmp_path)
+    assert art["n_flashes"] == 0 and called["n"] == 0
+    assert art["evidence_class"].endswith("NON_EVIDENTIARY")
