@@ -38,8 +38,10 @@ NF_INTEGRATION_SEQUENCING.md):
 5. **Immutable, self-describing, fail-closed persistence.** The artifact carries
    `cutoff_iso` + `ingest_class` + `population_hash` (over the typed content set) +
    `artifact_sha256`; load re-verifies both hashes and refuses a tampered/mismatched
-   artifact. The path is keyed by the FULL cutoff (not just the day, so 09:30 and
-   18:00 don't collide) and the write is **write-once / first-write-wins** — a second
+   artifact. The cutoff is canonicalized ONCE (Shanghai-naive, as `text_store` does)
+   and the path is keyed by that full cutoff to MICROSECOND precision (so 09:30 vs
+   18:00, two sub-second cutoffs, and two tz-offset cutoffs all get distinct files)
+   and the write is **write-once / first-write-wins** — a second
    typing run with different content is refused, never silently overwritten (a real
    LLM can return different valid types; a consumed version must stay stable). P2
    reads by (cutoff, ingest_class) and binds the `artifact_sha256` it verifies; P4
@@ -62,7 +64,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from data_infra.text_store import load_text  # noqa: E402
+from data_infra.text_store import load_text, to_cn_naive  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_ingest import type_batch  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash  # noqa: E402
 
@@ -147,7 +149,10 @@ def type_day_flashes(cutoff, *, ingest_class: str, call_fn,
     if ingest_class not in INGEST_CLASSES:
         raise ValueError(f"ingest_class must be ∈ {sorted(INGEST_CLASSES)} "
                          f"(a forward decision must not consume history_bulk types)")
-    cut = pd.Timestamp(cutoff)
+    # GPT-P1 re-review#2: canonicalize the cutoff ONCE, Shanghai-naive, the same way
+    # text_store does — this single value drives load, the PIT re-assert, cutoff_iso,
+    # and the path, so a tz-aware or sub-second cutoff can never disagree between them.
+    cut = to_cn_naive(cutoff)
     req = ingest_class == "forward" or bool(require_exists)   # forward: hard fail-closed
     df = load_text("news", cut, store_dir=store_dir, ingest_class=ingest_class,
                    require_exists=req)
@@ -191,9 +196,11 @@ class TypedFlashConflictError(ValueError):
 
 
 def _artifact_path(out_dir, cutoff_iso: str, ingest_class: str) -> Path:
-    # GPT-P1 Blocker-2: full cutoff timestamp, not just the day — 09:30 and 18:00 on
-    # the same day are DISTINCT decision cutoffs and must not collide.
-    stamp = pd.Timestamp(cutoff_iso).strftime("%Y%m%dT%H%M%S")
+    # GPT-P1 Blocker-2 + re-review#2: canonicalize (Shanghai-naive) and encode the FULL
+    # cutoff to MICROSECOND precision. `%Y%m%dT%H%M%S` (second-only) collapsed two
+    # sub-second cutoffs, and two tz-offset cutoffs, onto one identity; canonicalizing
+    # first resolves the offset and `%f` keeps sub-second cutoffs distinct.
+    stamp = to_cn_naive(cutoff_iso).strftime("%Y%m%dT%H%M%S%f")
     return Path(out_dir) / f"nf_typed_flash_{ingest_class}_{stamp}.json"
 
 

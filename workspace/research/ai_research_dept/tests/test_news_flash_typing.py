@@ -255,6 +255,39 @@ def test_different_cutoffs_same_day_distinct_files(tmp_path):
     assert a_am["n_flashes"] == 1 and a_pm["n_flashes"] == 2   # am sees only 盘前
 
 
+def test_subsecond_cutoffs_do_not_collide(tmp_path):
+    # GPT-P1 re-review#2: two sub-second cutoffs must map to DISTINCT artifact paths
+    # (second-only stamping collapsed them onto one identity and spuriously conflicted).
+    _ingest(tmp_path, ["盘前"], dt="2025-01-27 09:00:00", retrieved_at="2025-01-27 09:00:00")
+    a1 = type_day_flashes("2025-01-27 09:30:00.100000", ingest_class="forward",
+                          call_fn=_stub_typer(), store_dir=tmp_path)
+    a2 = type_day_flashes("2025-01-27 09:30:00.900000", ingest_class="forward",
+                          call_fn=_stub_typer(), store_dir=tmp_path)
+    p1 = write_typed_flash_artifact(a1, tmp_path / "out")
+    p2 = write_typed_flash_artifact(a2, tmp_path / "out")
+    assert p1 != p2 and p1.exists() and p2.exists()
+
+
+def test_tz_offset_cutoff_canonicalized_to_shanghai_identity(tmp_path):
+    # GPT-P1 re-review#2: a tz-aware cutoff is canonicalized to Shanghai-naive, so
+    # 18:00+08:00 (== 18:00 Shanghai) and 18:00+09:00 (== 17:00 Shanghai) are DISTINCT
+    # identities, and 18:00+08:00 equals the naive "18:00" identity.
+    _ingest(tmp_path, ["盘后"], dt="2025-01-27 16:00:00")
+    a_08 = type_day_flashes("2025-01-27 18:00:00+08:00", ingest_class="forward",
+                            call_fn=_stub_typer(), store_dir=tmp_path)
+    a_09 = type_day_flashes("2025-01-27 18:00:00+09:00", ingest_class="forward",
+                            call_fn=_stub_typer(), store_dir=tmp_path)
+    a_naive = type_day_flashes("2025-01-27 18:00:00", ingest_class="forward",
+                               call_fn=_stub_typer(), store_dir=tmp_path)
+    assert a_08["cutoff_iso"] == a_naive["cutoff_iso"] == "2025-01-27T18:00:00"
+    assert a_09["cutoff_iso"] == "2025-01-27T17:00:00"      # +09:00 -> 17:00 Shanghai
+    p08 = write_typed_flash_artifact(a_08, tmp_path / "out")
+    p09 = write_typed_flash_artifact(a_09, tmp_path / "out")
+    assert p08 != p09
+    # 18:00+08:00 and naive 18:00 are the SAME identity -> idempotent, no conflict
+    assert write_typed_flash_artifact(a_naive, tmp_path / "out") == p08
+
+
 def test_write_once_refuses_different_content(tmp_path):
     # GPT-P1 Blocker-2: a re-typing with a DIFFERENT valid classification must not
     # overwrite a possibly-consumed artifact; an identical re-write is idempotent.
