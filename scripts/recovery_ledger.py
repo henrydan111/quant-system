@@ -24,8 +24,12 @@ All writes go through the no-follow broker (recovery_write_broker). No network.
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
+import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -258,6 +262,50 @@ _PREPARE_REGISTRY: dict = {}       # endpoint -> callable(df) -> df  (populated 
 #: go unnoticed within one long-lived process; every process start replays fully regardless.
 _FULL_REVERIFY_EVERY = 2000
 
+#: A cache hit is not evidence that the bytes are unchanged — (size, mtime_ns) is a fast INVALIDATOR,
+#: not a proof. The append budget above never advances while a process only READS, so an idle-but-warm
+#: process could serve a cached view indefinitely. These bound that window in the two dimensions a
+#: read-only process actually moves through: hits and wall-clock.
+_FULL_REVERIFY_EVERY_HITS = 500
+_FULL_REVERIFY_AFTER_SECONDS = 300.0
+
+
+def _freeze_deep(obj):
+    """Recursively immutable view: dict -> MappingProxyType, list -> tuple.
+
+    Cached rows used to be handed out live: `_plan()` returned the cached dict ITSELF and `_load()`
+    only shallow-copied its list, so a caller could edit an ATTESTED request in memory and the ledger
+    would then dispatch it — a mis-certified fetch with the signed plan on disk untouched. Freezing is
+    applied on BOTH the cold and warm paths so the two never differ in type."""
+    if isinstance(obj, dict):
+        return MappingProxyType({k: _freeze_deep(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(_freeze_deep(v) for v in obj)
+    return obj
+
+
+class _DetachedPlanView(Mapping):
+    """Read-only plan mapping that hands out a DETACHED deep copy per row access.
+
+    The plan is the attested artifact the exploit targeted, and its callers legitimately treat a row as
+    a mutable dict, so freezing it in place would ripple through every consumer. Copying one small row
+    on access costs nothing next to re-verifying 102 MB, and nothing a caller does to what it receives
+    can reach the cache."""
+
+    __slots__ = ("_rows",)
+
+    def __init__(self, rows: dict):
+        self._rows = rows
+
+    def __getitem__(self, key):
+        return copy.deepcopy(self._rows[key])
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self):
+        return len(self._rows)
+
 
 class PageReceiptLedger:
     def __init__(self, rp, *, coordinator_commit: str, adapter_bundle_hash: str):
@@ -424,10 +472,11 @@ class PageReceiptLedger:
                 # different types depending on nothing but timing. Caught by a self-review probe
                 # comparing cached rows against a full replay; found nowhere else, because every
                 # existing test happens to append only JSON-native scalars.
-                self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns,
-                                     "rows": cache["rows"] + [json.loads(_canon(rec))],
-                                     "tail": rec["record_hash"],
-                                     "since_full": cache["since_full"] + 1}
+                self._chain_cache = {
+                    "size": st.st_size, "mtime": st.st_mtime_ns,
+                    "rows": cache["rows"] + (_freeze_deep(json.loads(_canon(rec))),),
+                    "tail": rec["record_hash"], "since_full": cache["since_full"] + 1,
+                    "hits": cache["hits"], "at": cache["at"]}
         else:
             self._chain_cache = None        # force the next _load() to replay from genesis
 
@@ -460,11 +509,25 @@ class PageReceiptLedger:
         stat-guarded, so a shrink or an in-place rewrite drops straight back to the full replay.
         """
         if not self.ledger_path.exists():
+            # A MISSING ledger is only a pristine run if nothing else durable exists yet. With a head,
+            # a genesis anchor or a frozen plan already on disk, an absent ledger is a DELETED one, and
+            # returning [] certified it as valid — a truncation accepted outright.
+            survivors = [p.name for p in (self.head_path, self.genesis_path, self.plan_path)
+                         if p.exists()]
+            if survivors:
+                raise LedgerError(f"recovery_ledger.jsonl is MISSING but the run still holds "
+                                  f"{survivors} — a deleted ledger is not an empty one")
             return []
         st = self.ledger_path.stat()
         cache = self._chain_cache
-        if cache is not None and cache["size"] == st.st_size and cache["mtime"] == st.st_mtime_ns:
-            return list(cache["rows"])          # nothing changed since we verified it
+        if cache is not None and cache["size"] == st.st_size and cache["mtime"] == st.st_mtime_ns \
+                and cache["hits"] < _FULL_REVERIFY_EVERY_HITS \
+                and (time.monotonic() - cache["at"]) < _FULL_REVERIFY_AFTER_SECONDS:
+            # The external anchors are small and are re-checked on EVERY warm hit: they are what makes
+            # a truncation visible, and they cost a couple of stats.
+            self._assert_head(cache["rows"], cache["tail"])
+            cache["hits"] += 1
+            return cache["rows"]
         # ANY mismatch falls through to the full replay below. The cache is only ever trusted when the
         # file is byte-for-byte the one we verified, and it is advanced in ONE place: `_append`, which
         # is the sole writer and holds the lock while it writes. Nothing is inferred from the file's
@@ -473,10 +536,14 @@ class PageReceiptLedger:
         # corruption took the incremental path (it still failed closed, but on the wrong evidence).
         rows, prev = self._verify_lines(
             self.ledger_path.read_text(encoding="utf-8").splitlines(), self._genesis(), 1)
-        self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns, "rows": list(rows),
-                             "tail": prev, "since_full": 0}
+        # VALIDATE FIRST, PUBLISH SECOND. The cache used to be stored before this check, so a clean
+        # truncation refused on the first call and then served the truncated prefix from cache on the
+        # second — the retry accepted what the first call had just rejected.
         self._assert_head(rows, prev)
-        return rows
+        frozen = tuple(_freeze_deep(r) for r in rows)
+        self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns, "rows": frozen,
+                             "tail": prev, "since_full": 0, "hits": 0, "at": time.monotonic()}
+        return frozen
 
     def _assert_head(self, rows: list, tail_hash: str) -> None:
         """The external head is the anti-truncation anchor: a ledger rewound to an earlier row still
@@ -565,7 +632,7 @@ class PageReceiptLedger:
         cache = self._plan_cache
         if cache is not None and cache[0] == st.st_size and cache[1] == st.st_mtime_ns \
                 and cache[2] == attested:
-            return cache[3]
+            return _DetachedPlanView(cache[3])
         plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
         recomputed = _h(_canon(plan["rows"]))
         if recomputed != plan["sha256"]:
@@ -575,7 +642,7 @@ class PageReceiptLedger:
                               f"event ({str(attested)[:12]}) — the plan was rewritten after freezing")
         out = {r["request_id"]: r for r in plan["rows"]}
         self._plan_cache = (st.st_size, st.st_mtime_ns, attested, out)
-        return out
+        return _DetachedPlanView(out)
 
     def event(self, name: str, **kw) -> None:
         with self.rp._lock():

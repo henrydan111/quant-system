@@ -1696,7 +1696,9 @@ def test_authorize_fetch_writes_the_event_and_binds_plan_and_bundle(rig):
            if r.get("kind") == "lifecycle" and r.get("event") == "fetch_authorized"]
     assert len(evs) == 1
     ev = evs[0]
-    assert ev["actor"] == "henry" and ev["endpoint_scope"] == ["daily"]
+    # the in-memory ledger view is deep-frozen (lists -> tuples) so a caller cannot edit an attested
+    # record; the on-disk JSON is unchanged, and production reads this field as set(...)
+    assert ev["actor"] == "henry" and list(ev["endpoint_scope"]) == ["daily"]
     assert ev["bundle_sha256"] == L.adapter_bundle_hash
     frozen = [r for r in L._load() if r.get("event") == "plan_frozen"][0]
     assert ev["plan_sha256"] == frozen["plan_sha256"]
@@ -2017,13 +2019,97 @@ def test_cached_rows_are_byte_identical_to_a_full_replay(rig):
     L._chain_cache = None
     cold = L._load()
     assert warm == cold, "cached rows diverge from the on-disk truth"
-    # and specifically: no tuple survives into the cached view
-    def _has_tuple(o):
-        if isinstance(o, tuple):
-            return True
-        if isinstance(o, dict):
-            return any(_has_tuple(v) for v in o.values())
-        if isinstance(o, list):
-            return any(_has_tuple(v) for v in o)
-        return False
-    assert not _has_tuple(warm), "a tuple survived into the cached rows"
+    # Both paths now hand back the SAME deep-frozen form (GPT round-1 P0-3: the cache used to be
+    # handed out live, so a caller could edit an attested record in memory). Type consistency is what
+    # matters and it is achieved by freezing on BOTH paths, not by hoping json round-trips match.
+    assert type(warm[0]) is type(cold[0])
+    with pytest.raises(TypeError):
+        warm[0]["event"] = "mutated"                     # the whole point: it must not be writable
+    assert isinstance(warm, tuple), "_load must not hand back a mutable list of live rows"
+
+
+# ── GPT ledger review round 1: three in-scope P0s + one P1, each reproduced before fixing ─────────
+def test_truncation_is_refused_on_the_RETRY_too(rig):
+    """P0. The cache was published BEFORE the head check, so a clean tail truncation refused on the
+    first call and then served the truncated prefix from cache on the second — the retry accepted
+    exactly what the first call had rejected (acceptance criterion 1, no race or adversary needed)."""
+    rp, L = rig
+    for i in range(4):
+        L.event("e%d" % i)
+    L._load()
+    lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
+    L.ledger_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    L._chain_cache = None
+    for attempt in (1, 2, 3):
+        with pytest.raises(rl.LedgerError, match="head does not match|hash-chain break"):
+            L._load()
+
+
+def test_a_deleted_ledger_is_not_an_empty_one(rig):
+    """P0. `if not ledger_path.exists(): return []` certified a DELETED ledger as a pristine run,
+    warm or cold, while the head/genesis/plan were still sitting there."""
+    rp, L = rig
+    L.event("something_real")
+    L._load()
+    L.ledger_path.unlink()
+    L._chain_cache = None
+    with pytest.raises(rl.LedgerError, match="MISSING but the run still holds"):
+        L._load()
+
+
+def test_a_genuinely_fresh_run_still_loads_empty(rig):
+    """...and the refusal above must not break the legitimate empty case."""
+    rp, L = rig
+    if L.ledger_path.exists():
+        L.ledger_path.unlink()
+    for p in (L.head_path, L.genesis_path, L.plan_path):
+        if p.exists():
+            p.unlink()
+    L._chain_cache = None
+    assert list(L._load()) == []
+
+
+def test_the_verified_plan_cache_cannot_be_edited_by_a_caller(rig):
+    """P0, the one with a working exploit: `_plan()` returned the cached object ITSELF, so editing an
+    attested request in memory made the ledger dispatch the edited request while the SIGNED plan on
+    disk was untouched — an in-scope mis-certified fetch."""
+    rp, L = rig
+    rows = ra.build_plan_rows(ra.ALL_FAMILIES["A01"], rrc.load_signed_contracts())[:1]
+    L._freeze_plan_unvalidated(rows)
+    rid = rows[0]["request_id"]
+    original = L._plan()[rid]["params"]["trade_date"]
+    handed_out = L._plan()
+    handed_out[rid]["params"]["trade_date"] = "20990101"
+    assert L._plan()[rid]["params"]["trade_date"] == original, "a caller edited the attested plan"
+    on_disk = json.loads(L.plan_path.read_text(encoding="utf-8"))["rows"][0]["params"]["trade_date"]
+    assert original == on_disk
+
+
+def test_the_verified_ledger_rows_cannot_be_edited_by_a_caller(rig):
+    """P0, same class on the chain side: `_load()` only shallow-copied its list, so the row dicts were
+    shared with the cache."""
+    rp, L = rig
+    L.event("attested")
+    rows = L._load()
+    with pytest.raises(TypeError):
+        rows[0]["event"] = "mutated"
+    with pytest.raises(AttributeError):          # mappingproxy exposes no mutating API at all
+        rows[0].pop("event", None)
+    assert L._load()[0]["event"] == "attested"
+
+
+def test_read_only_and_idle_processes_still_re_verify(rig, monkeypatch):
+    """P1. `since_full` advanced only on `_append`, so a process that merely READS could serve a warm
+    cache forever — and (size, mtime_ns) is a fast invalidator, not proof the bytes are unchanged.
+    Hits and wall-clock are now budgeted too."""
+    monkeypatch.setattr(rl, "_FULL_REVERIFY_EVERY_HITS", 5)
+    rp, L = rig
+    L.event("one")
+    L._load()
+    for _ in range(20):
+        L._load()
+    assert L._chain_cache["hits"] < 5, "the read budget never forced a replay"
+
+    monkeypatch.setattr(rl, "_FULL_REVERIFY_AFTER_SECONDS", -1.0)   # everything is immediately stale
+    L._load()
+    assert L._chain_cache["hits"] == 0, "the time budget never forced a replay"
