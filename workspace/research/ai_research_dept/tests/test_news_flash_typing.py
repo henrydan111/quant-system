@@ -288,6 +288,23 @@ def test_tz_offset_cutoff_canonicalized_to_shanghai_identity(tmp_path):
     assert write_typed_flash_artifact(a_naive, tmp_path / "out") == p08
 
 
+def test_nanosecond_cutoff_refused(tmp_path):
+    # GPT-P1 re-review#3 (user-decided): the cutoff is microsecond-max. Two
+    # nanosecond-distinct cutoffs would otherwise collide onto one microsecond path;
+    # they are both refused BEFORE any load/LLM, so the path stays bijective.
+    _ingest(tmp_path, ["x"])
+    called = {"n": 0}
+
+    def boom(msgs):
+        called["n"] += 1
+        return _stub_typer()(msgs)
+    for ns in ("2025-01-27T09:30:00.100000001", "2025-01-27T09:30:00.100000999"):
+        with pytest.raises(ValueError, match="sub-microsecond"):
+            type_day_flashes(ns, ingest_class="forward", call_fn=boom,
+                             store_dir=tmp_path)
+    assert called["n"] == 0
+
+
 def test_write_once_refuses_different_content(tmp_path):
     # GPT-P1 Blocker-2: a re-typing with a DIFFERENT valid classification must not
     # overwrite a possibly-consumed artifact; an identical re-write is idempotent.

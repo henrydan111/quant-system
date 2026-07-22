@@ -40,8 +40,11 @@ NF_INTEGRATION_SEQUENCING.md):
    `artifact_sha256`; load re-verifies both hashes and refuses a tampered/mismatched
    artifact. The cutoff is canonicalized ONCE (Shanghai-naive, as `text_store` does)
    and the path is keyed by that full cutoff to MICROSECOND precision (so 09:30 vs
-   18:00, two sub-second cutoffs, and two tz-offset cutoffs all get distinct files)
-   and the write is **write-once / first-write-wins** — a second
+   18:00, two sub-second cutoffs, and two tz-offset cutoffs all get distinct files).
+   The cutoff is **microsecond-max**: a sub-microsecond (nanosecond) cutoff is refused,
+   so the allowed cutoff domain is exactly what the path encodes → path identity is
+   bijective (no two distinct cutoffs share a file, no cutoff maps to two). The write is
+   **write-once / first-write-wins** — a second
    typing run with different content is refused, never silently overwritten (a real
    LLM can return different valid types; a consumed version must stay stable). P2
    reads by (cutoff, ingest_class) and binds the `artifact_sha256` it verifies; P4
@@ -83,6 +86,24 @@ _TYPING_FIELDS = ("event_type", "verification_status", "content_kind",
 #: the outlet (raw col, e.g. "sina"); the stamp `source` col is the store name
 #: ("news") for every row, so it is not carried.
 _PROV_FIELDS = ("content_hash", "object_id_hash", "src", "decision_visible_at")
+
+
+def _canonical_cutoff(cutoff):
+    """Canonicalize to Shanghai-naive AND enforce the precision contract (GPT-P1
+    re-review#3, user-decided): a decision cutoff is **microsecond-max**. `pd.Timestamp`
+    carries nanoseconds but the artifact path encodes only microseconds (`%f`), so a
+    sub-microsecond cutoff would make the path non-injective. Rejecting `nanosecond != 0`
+    makes the allowed cutoff domain EXACTLY what the path losslessly encodes — path
+    identity is bijective over every valid cutoff, closing the identity class. Decision
+    cutoffs are session times (whole-second in practice); sub-microsecond is nonsensical
+    here."""
+    cut = to_cn_naive(cutoff)
+    if cut.nanosecond != 0:
+        raise ValueError(
+            f"cutoff has sub-microsecond precision (nanosecond={cut.nanosecond}) — a "
+            f"decision cutoff is microsecond-max; refuse (the artifact identity path "
+            f"encodes microseconds only, GPT-P1 re-review#3)")
+    return cut
 
 
 def _iso(v) -> str:
@@ -152,7 +173,7 @@ def type_day_flashes(cutoff, *, ingest_class: str, call_fn,
     # GPT-P1 re-review#2: canonicalize the cutoff ONCE, Shanghai-naive, the same way
     # text_store does — this single value drives load, the PIT re-assert, cutoff_iso,
     # and the path, so a tz-aware or sub-second cutoff can never disagree between them.
-    cut = to_cn_naive(cutoff)
+    cut = _canonical_cutoff(cutoff)
     req = ingest_class == "forward" or bool(require_exists)   # forward: hard fail-closed
     df = load_text("news", cut, store_dir=store_dir, ingest_class=ingest_class,
                    require_exists=req)
@@ -196,11 +217,13 @@ class TypedFlashConflictError(ValueError):
 
 
 def _artifact_path(out_dir, cutoff_iso: str, ingest_class: str) -> Path:
-    # GPT-P1 Blocker-2 + re-review#2: canonicalize (Shanghai-naive) and encode the FULL
-    # cutoff to MICROSECOND precision. `%Y%m%dT%H%M%S` (second-only) collapsed two
-    # sub-second cutoffs, and two tz-offset cutoffs, onto one identity; canonicalizing
-    # first resolves the offset and `%f` keeps sub-second cutoffs distinct.
-    stamp = to_cn_naive(cutoff_iso).strftime("%Y%m%dT%H%M%S%f")
+    # GPT-P1 Blocker-2 + re-review#2/#3: canonicalize (Shanghai-naive), enforce the
+    # microsecond-max contract (defence-in-depth at the encoding boundary — a
+    # hand-built artifact with a nanosecond cutoff_iso is refused here too), and encode
+    # the FULL cutoff to MICROSECOND precision. `%f` over a microsecond-max domain is
+    # bijective, so distinct cutoffs never share a path and one cutoff never maps to two.
+    cut = _canonical_cutoff(cutoff_iso)
+    stamp = cut.strftime("%Y%m%dT%H%M%S%f")
     return Path(out_dir) / f"nf_typed_flash_{ingest_class}_{stamp}.json"
 
 
