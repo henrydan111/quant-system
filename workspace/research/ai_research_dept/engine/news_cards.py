@@ -304,7 +304,7 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple:
         rep = sorted(grp, key=lambda g: (
             -g["typing"]["importance"],
             g["cluster"].cluster_first_visible_at_iso,
-            str(g["route"].get("content", ""))))[0]
+            plain_str(g["route"].get("content", ""))))[0]   # GPT #25 同类面
         merged = dict(rep)
         merged["typing"] = dict(rep["typing"])
         merged["typing"]["importance"] = max(g["typing"]["importance"] for g in grp)
@@ -396,9 +396,11 @@ def render_news_flash_section(assessed: list[dict], cutoff) -> tuple:
 def _member_content(a: dict) -> str:
     """簇的代表正文:路由输入的 content(调用侧传入 route['content'] 时优先),
     否则退回簇第一成员的 datetime 占位——正式管线 route 恒带 content。"""
+    # GPT #25 同类面:`str(x)` 会执行不可信正文对象的 `__str__` 并把其返回值
+    # (可为 str 子类)送进渲染/封印;改走 fail-closed chokepoint
     if "content" in a["route"]:
-        return str(a["route"]["content"])
-    return str(a["cluster"].members[0].get("content", a["cluster"].cluster_id))
+        return plain_str(a["route"]["content"])
+    return plain_str(a["cluster"].members[0].get("content", a["cluster"].cluster_id))
 
 
 # --------------------------------------------------- 注意力上下文卡(D6,密封独立)
@@ -420,7 +422,11 @@ def render_attention_context_card(flow: dict, cutoff, *,
         return rid
 
     def _fmt(v) -> str:
-        return "not_applicable" if v is None else str(v)
+        # GPT #25 同类面:flow 值是调用方供给,`str(v)` 会跑其 __str__ 并把结果
+        # 渲进密封卡;safe_repr 只对恰基础标量用内建 repr,其余给占位符
+        if v is None:
+            return "not_applicable"
+        return plain_str(v) if type(v) is str else safe_repr(v)
 
     lines.append("【注意力上下文卡】(attention_only;绝不入正向计分;仅空头/首席/展示)")
     lines.append(f"- [{_att('NFV01')}]事实占位流强度: 1d={_fmt(flow.get('flow_count_1d'))} "
@@ -432,7 +438,7 @@ def render_attention_context_card(flow: dict, cutoff, *,
     lines.append(f"- [{_att('NFV03')}]velocity(=count_1d/(count_20d/20)): {vel_s}"
                  f" | {flow.get('flow_velocity_status', 'not_applicable')}")
     for rid, text in extra_rows:
-        lines.append(f"- [{_att(str(rid))}]{sanitize_text(text)}")
+        lines.append(f"- [{_att(plain_str(rid))}]{sanitize_text(text)}")  # GPT #25
 
     # re-review Major-2:封印前必须过注册表构造——重复 ID(如 extra_rows 撞 NFV01)
     # 在此拒绝,绝不铸出含重复身份的密封卡
@@ -962,7 +968,7 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
                 == bf.base_content_hash):
             raise RegistryError(
                 f"D7 子行 {rid} 的 source 父血缘不符:封 "
-                f"{str(d.get('source_parent_content_hash'))[:12]} vs 源注册表 "
+                f"{safe_repr(d.get('source_parent_content_hash'))[:14]} vs 源注册表 "
                 f"{src_parent.content_hash[:12]} vs 基事实 "
                 f"{bf.base_content_hash[:12]}——错 source 血缘拒(re-review#5 B1)")
     # ---- re-review#6 B1:**全量确定性重建**——行/降级父/子行/终注册表/束全部从
@@ -1082,4 +1088,5 @@ def is_legacy_attention_id(record_id: str) -> bool:
     attention_only——增量信息只是计数/广度/聚合。ND##/NI##(原子明细)/NX01
     (缺席声明)不是。物理移出在席位接线块;本判定是其唯一语义依据。
     re-review#3 M2:fullmatch(尾随换行不再算合法身份)。"""
-    return bool(_LEGACY_ATTENTION_RE.fullmatch(str(record_id)))
+    # GPT #25 同类面:非 str 的 record_id 不得经 `str()` 强转进身份判定
+    return bool(_LEGACY_ATTENTION_RE.fullmatch(plain_str(record_id)))

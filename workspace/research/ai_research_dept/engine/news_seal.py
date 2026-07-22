@@ -58,10 +58,19 @@ def canon(v):
             t = t.tz_convert("Asia/Shanghai").tz_localize(None)
         return "T:" + t.isoformat()
     if isinstance(v, dict):
-        return {str(k): canon(val) for k, val in v.items()}
+        # GPT #25 同类面:`str(k)` 会执行不可信键的 `__str__` 并把结果送进封印
+        # 哈希;键一律经 fail-closed chokepoint(非 str 键静态拒)
+        return {plain_str(k): canon(val) for k, val in v.items()}
     if isinstance(v, (list, tuple)):
         return [canon(x) for x in v]
-    return " ".join(str(v).split())
+    # GPT #25 同类面(哈希路径):旧兜底 `str(v)` 会对**任意**对象执行其 `__str__`
+    # (调用方代码),且其返回值直接进封印哈希。实际到达此分支的只有 str——所有
+    # canonical-payload helper 都先把字段门成恰基础类型。故收紧为 str-only:
+    # 非 str 在**哈希构造**前静态拒,封印输入面与快照面语义一致。
+    if not isinstance(v, str):
+        raise SealError("canon 兜底只接受 str——非 str 值不得进入封印哈希"
+                        "(绝不 str() 强转,GPT #25 同类面;静态错误)")
+    return " ".join(str.__str__(v).split())
 
 
 def canon_json(obj) -> str:
@@ -84,15 +93,24 @@ def deep_ro(obj):
 
 
 def plain_str(x) -> str:
-    """归一为**普通 str**(archive-re-review#11 P0 同类面:str 子类可覆写
+    """**全仓唯一**的 str 归一 chokepoint(GPT #25 结构化收口)。
+
+    归一为**普通 str**(archive-re-review#11 P0 同类面:str 子类可覆写
     `__eq__`/`__hash__`/`__str__` 使"封存哈希"与"语义==/成员"两次读取脱钩;
-    `str.__str__` 取真实字符内容,绕过可覆写的 `__str__`)。非 str 原样返回
-    (由调用点的类型契约另行保证)。"""
+    `str.__str__` 是内建未绑定方法,取真实字符内容,绕过可覆写的 `__str__`)。
+
+    GPT #25 P1#2:非 str **fail-closed 静态拒**——绝不 `str(x)` 兜底。旧的
+    `news_evidence._plain_str` 分叉实现正是以 `str(x)` 收尾:那会(a)在快照边界
+    上执行不可信对象的 `__str__`(类3/类5),且(b)`str()` 原样返回 `__str__` 所
+    返的 **str 子类**,于是"独立基础类型快照"的保证被击穿——快照字段仍非恰 str。
+    一个归一原语只许有一份实现、且只许有 fail-closed 一种语义。
+    """
     if type(x) is str:
         return x
-    if isinstance(x, str):
+    if isinstance(x, str):                     # str 子类 → 内建拍平,无调用方代码
         return str.__str__(x)
-    return x
+    raise SealError("须恰 str(str 子类拍平;非 str 一律拒——绝不 str() 强转,"
+                    "GPT #25 P1#2;静态错误)")
 
 
 def plain_str_tuple(x) -> tuple:
@@ -117,6 +135,24 @@ _HEX64 = __import__("re").compile(r"[0-9a-f]{64}")
 #: `is` 身份比对 + 字面量返回,全程零调用方代码。
 _PLAIN_KINDS = ((bool, "bool"), (int, "int"), (float, "float"), (str, "str"),
                 (list, "list"), (dict, "dict"), (tuple, "tuple"))
+
+
+#: GPT #25 P1#1 的**类级**修复:`type(x) in (bool, int, float)` 展开为
+#: `type(x) == bool or ...`——说谎的元类令 `type(x) == bool` 返真即可让任意对象
+#: 冒充基础标量,且该 `__eq__` 本身就是拒绝路径上执行的调用方代码。全仓唯一的
+#: 基础标量判定必须是**逐项 `is` 身份比对**;`type(x) in (...)` 在 NF 安全模块
+#: 内被 meta-test 机械禁止(见 tests/test_news_engine_invariants.py)。
+_PLAIN_SCALARS = (bool, int, float, str)
+
+
+def is_plain_scalar(x, *, allow_str: bool = True) -> bool:
+    """恰基础标量判定,零调用方代码(内建 `type()` + `is` 身份比对)。
+    `None` 不算标量——需要接受 None 的调用点自行 `x is None` 短路。"""
+    t = type(x)
+    for cls in _PLAIN_SCALARS:
+        if t is cls:
+            return allow_str or cls is not str
+    return False
 
 
 def safe_kind(x) -> str:

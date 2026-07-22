@@ -1,0 +1,188 @@
+# NF engine MECHANICAL invariant guards (GPT #25 repeat-class structural fold).
+#
+# CLAUDE.md §10 "repeat-class ⇒ structural chokepoint": when the same invariant
+# class gates two rounds running, per-site patching is banned — the fold must be
+# ONE shared chokepoint plus a MECHANICAL meta-test that enumerates the module
+# surface, so a newly added function cannot silently reintroduce the class.
+#
+# Two classes have now gated twice each:
+#   class 3 (rejection path runs caller code) — #24 and #25
+#   class 5 (pre-type-gate read)              — #24 and #25
+#
+# Both had the same root shape: a security module doing its OWN type/normalize
+# logic with `==` semantics or a `str()` fallback, instead of routing through the
+# single primitive in news_seal.py. These tests AST-scan every NF security module
+# and fail on the banned shapes — they are the enumeration guard, not a sample.
+import ast
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+ENGINE = Path(__file__).resolve().parents[1] / "engine"
+
+#: the sealing / governance surface these invariants bind (everything an
+#: untrusted in-process caller can reach through the archive boundary)
+SECURITY_MODULES = (
+    "news_seal.py", "news_evidence.py", "news_cards.py", "news_decision.py",
+    "news_legs.py", "news_executors.py", "news_archive.py", "news_horizon.py",
+)
+
+
+def _iter_modules():
+    for name in SECURITY_MODULES:
+        p = ENGINE / name
+        assert p.exists(), f"security module missing: {name}"
+        yield name, ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+
+
+def _is_type_call(node) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "type" and len(node.args) == 1)
+
+
+class TestNoEqualitySemanticsOnTypeGates:
+    """class 3/#25 P1#1 — `type(x) == C` / `type(x) in (...)` uses `==`, which a
+    lying metaclass answers with its own `__eq__`: it both (a) lets an arbitrary
+    object impersonate a plain scalar and (b) runs caller code on the rejection
+    path. Exact-type gates must use `is` / `is not` identity, and plain-scalar
+    tests must route through news_seal.is_plain_scalar."""
+
+    def test_no_type_call_compared_with_equality_or_membership(self):
+        banned = []
+        for name, tree in _iter_modules():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Compare):
+                    continue
+                operands = [node.left, *node.comparators]
+                if not any(_is_type_call(o) for o in operands):
+                    continue
+                for op in node.ops:
+                    if isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
+                        banned.append(f"{name}:{node.lineno} ({type(op).__name__})")
+        assert not banned, (
+            "type() compared with ==/!=/in/not in — a lying metaclass controls the "
+            "answer AND runs on the rejection path. Use `is`/`is not`, or "
+            "news_seal.is_plain_scalar for plain-scalar tests. Offenders: "
+            + "; ".join(banned))
+
+
+class TestSingleStrNormalizationChokepoint:
+    """class 5/#25 P1#2 — the fork. news_evidence used to carry its own
+    `_plain_str` whose fallback was `str(x)`: that runs an untrusted object's
+    `__str__` at a snapshot boundary AND returns whatever it produced (a str
+    SUBCLASS passes straight through), defeating the "independent plain-typed
+    snapshot" guarantee. There must be exactly ONE normalizer, it must be
+    fail-closed, and no security module may re-derive one via bare `str(...)`."""
+
+    def test_plain_str_is_fail_closed_and_flattens_subclasses(self):
+        from workspace.research.ai_research_dept.engine.news_seal import (
+            SealError, plain_str,
+        )
+
+        class _Evil:
+            def __str__(self):
+                raise AssertionError("__str__ must never be called")
+        with pytest.raises(SealError):
+            plain_str(_Evil())                       # non-str → static refusal
+
+        class _EvilStr(str):
+            def __str__(self):
+                raise AssertionError("__str__ must never be called")
+        out = plain_str(_EvilStr("x"))
+        assert type(out) is str and out == "x"       # subclass flattened, no hook
+
+    def test_no_security_module_stringifies_via_bare_str_call(self):
+        # `str(x)` on an untrusted value is the exact shape that produced #25 P1#2.
+        # Whitelist: only positions where the argument is provably not caller data.
+        WHITELIST = {
+            ("news_horizon.py", "sys.path bootstrap"): {43, 44},
+        }
+        allowed = {(m, ln) for (m, _why), lns in WHITELIST.items() for ln in lns}
+        banned = []
+        for name, tree in _iter_modules():
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "str" and node.args
+                        and (name, node.lineno) not in allowed):
+                    banned.append(f"{name}:{node.lineno}")
+        assert not banned, (
+            "bare str(x) in a security module — it runs the object's __str__ "
+            "(caller code) and returns whatever that produced, including a str "
+            "SUBCLASS. Route through news_seal.plain_str (fail-closed) or render "
+            "diagnostics with safe_repr/safe_kind. Offenders: " + "; ".join(banned))
+
+
+class TestReviewerReproducedProbes:
+    """the two probes GPT #25 reproduced against 4b14542, pinned."""
+
+    def test_lying_metaclass_cannot_impersonate_plain_scalar(self):
+        # #25 P1#1: `type(x) in (bool,int,float)` answered by a lying metaclass.
+        # is_plain_scalar uses all-`is`, so the metaclass __eq__/__hash__/__repr__
+        # never run and the impostor is refused.
+        from workspace.research.ai_research_dept.engine.news_seal import (
+            is_plain_scalar,
+        )
+        fired = {"n": 0}
+
+        class _LiarMeta(type):
+            def __eq__(cls, o):
+                fired["n"] += 1
+                return True
+            def __hash__(cls):
+                fired["n"] += 1
+                return hash(int)
+            def __repr__(cls):
+                fired["n"] += 1
+                return "<class 'int'>"
+
+        class _Liar(metaclass=_LiarMeta):
+            pass
+        assert is_plain_scalar(_Liar()) is False
+        assert fired["n"] == 0                       # no metaclass hook ran
+
+    def test_registry_snapshot_refuses_object_whose_str_returns_subclass(self):
+        # #25 P1#2: an object whose __str__ returns a str SUBCLASS used to pass
+        # the old `_plain_str` fork's `str(x)` fallback — verify_d7_artifact then
+        # returned an artifact whose final_registry.cutoff_iso was NOT exactly str.
+        # The snapshot now statically refuses before any __str__ runs.
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            RegistryError, SealedCardRegistry,
+        )
+        fired = {"str": 0}
+
+        class _SubStr(str):
+            pass
+
+        class _EvilCutoff:
+            def __str__(self):
+                fired["str"] += 1
+                return _SubStr("2025-01-27T18:00:00")
+        with pytest.raises(RegistryError, match="须为 str"):
+            SealedCardRegistry(cutoff_iso=_EvilCutoff(), records={},
+                               registry_hash="0" * 64)
+        assert fired["str"] == 0                     # __str__ never ran
+
+
+class TestCanonRejectsNonStrFallback:
+    """same class on the HASH path: canon()'s fallback used to `str(v)` an
+    arbitrary object straight into the seal hash."""
+
+    def test_canon_refuses_non_str_fallback(self):
+        from workspace.research.ai_research_dept.engine.news_seal import (
+            SealError, canon,
+        )
+
+        class _Evil:
+            def __str__(self):
+                raise AssertionError("__str__ must never be called")
+        with pytest.raises(SealError):
+            canon(_Evil())
+
+    def test_canon_str_path_unchanged(self):
+        from workspace.research.ai_research_dept.engine.news_seal import canon
+        assert canon("  a\tb\n c ") == "a b c"       # whitespace folding preserved

@@ -28,7 +28,8 @@ import re
 from dataclasses import dataclass, field
 
 from workspace.research.ai_research_dept.engine.news_seal import (
-    SealError, deep_ro, safe_kind, safe_repr, seal_hash, verify_sealed,
+    SealError, deep_ro, is_plain_scalar, plain_str, safe_kind, safe_repr,
+    seal_hash, verify_sealed,
 )
 
 # --------------------------------------------------- 规范 enum(M1⁴ 冻结)
@@ -348,11 +349,11 @@ class PayloadGateError(Exception):
     """正向 payload 含未授权/attention_only/未注册 ID —— 硬失败(§6b B1)。"""
 
 
-def _plain_str(x) -> str:
-    """归一为**普通 str**(archive-re-review#11 P0:str 子类可覆写 __eq__/__hash__
-    使"哈希"与"成员/比较"两次读取脱钩;`str.__str__(x)` 取真实字符内容,不经可
-    覆写的 `__str__`)。"""
-    return x if type(x) is str else str.__str__(x) if isinstance(x, str) else str(x)
+#: GPT #25 P1#2:本模块曾有一份**分叉**的 `_plain_str`,兜底是 `str(x)`——对非
+#: str 对象执行其 `__str__`(类3/类5 调用方代码),且返回值可为 str 子类,击穿
+#: "独立基础类型快照"。分叉已删除,统一走 news_seal 的唯一 chokepoint
+#: `plain_str`(fail-closed)。别名保留仅为最小化调用点改动。
+_plain_str = plain_str
 
 
 def _plain_str_frozenset(x) -> frozenset:
@@ -367,7 +368,9 @@ def _plain_scalar(x):
     覆写 __eq__/__hash__ 在"封存哈希"与"关系检查 =="间脱钩];None/bool/int/float
     等**内建不可变标量**原样保留[genuine derivation 含 None];其它类型拒——
     derivation 只该承载 JSON 标量血缘)。"""
-    if x is None or type(x) in (bool, int, float):
+    # GPT #25 P1#1:`type(x) in (...)` 用 `==`,说谎元类可令任意对象冒充标量
+    # (且该 __eq__ 就是拒绝路径上的调用方代码)→ 改走全 `is` 的 is_plain_scalar
+    if x is None or is_plain_scalar(x, allow_str=False):
         return x
     if isinstance(x, str):
         return _plain_str(x)
@@ -470,7 +473,7 @@ def assert_base_record_fields(record) -> None:
         raise RegistryError(f"CardRecord.derivation 须恰 tuple(re-review#12 P0)")
     for kv in d:
         if type(kv) is not tuple \
-                or any(not (x is None or type(x) in (str, bool, int, float))
+                or any(not (x is None or is_plain_scalar(x))   # GPT #25 P1#1:全 `is`
                        for x in kv):
             raise RegistryError(
                 "CardRecord.derivation 项须恰 tuple[str/None/bool/int/float]"
@@ -592,8 +595,21 @@ class SealedCardRegistry:
         # 外层 mapping)——状态化 mapping 在这唯一一次 items() 迭代里经 __dict__
         # 注入 evil 集合也被 normalize_card_record 的基础类型断言 + 重建捕获;
         # 消费门(verified_record_content_hash)每次再验字段确为基础类型
+        # GPT #25 P1#2:**恰 str 静态门先于任何归一/读取**。旧序把 cutoff_iso /
+        # registry_hash 直接交给分叉的 `_plain_str`,其 `str(x)` 兜底会执行不可信
+        # 对象的 `__str__`(类5 预类型门读取),且 `__str__` 返回 str 子类时快照
+        # 字段**仍非恰 str**——"独立基础类型快照"的保证被击穿。这里先静态拒非
+        # str,再由 fail-closed 的 chokepoint 拍平合法 str 子类。
+        for _f in ("cutoff_iso", "registry_hash"):
+            if not isinstance(getattr(self, _f), str):
+                raise RegistryError(
+                    f"SealedCardRegistry.{_f} 须为 str(非 str 一律拒,绝不 str() "
+                    f"强转——GPT #25 P1#2;静态错误)")
         snap = {}
         for k, v in list(self.records.items()):
+            if not isinstance(k, str):         # 键同门(先于归一)
+                raise RegistryError(
+                    "SealedCardRegistry.records 键须为 str(GPT #25 P1#2;静态错误)")
             snap[_plain_str(k)] = normalize_card_record(v)
         object.__setattr__(self, "records", deep_ro(snap))
         object.__setattr__(self, "cutoff_iso", _plain_str(self.cutoff_iso))
@@ -668,7 +684,7 @@ def _verify_d7_relationships(records) -> None:
         if d.get("registry_parent_content_hash") != parent.content_hash:
             raise RegistryError(
                 f"D7 子行 {rid} 绑的 registry 父哈希 "
-                f"{str(d.get('registry_parent_content_hash'))[:12]} ≠ 同表 ID-前缀父行 "
+                f"{safe_repr(d.get('registry_parent_content_hash'))[:14]} ≠ 同表 ID-前缀父行 "
                 f"{parent.record_id} 实际哈希 {parent.content_hash[:12]}——错父拒(B1)")
         if r.evidence_class != parent.evidence_class:
             raise RegistryError(

@@ -164,7 +164,9 @@ from workspace.research.ai_research_dept.engine.news_legs import (
     assert_base_outcome_fields, outcome_canonical_payload,
     penalty_eligible_records, snapshot_exact_outcome, verify_outcome_for_binding,
 )
-from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+from workspace.research.ai_research_dept.engine.news_seal import (
+    safe_kind, safe_repr, seal_hash, verify_sealed,
+)
 
 
 def _find_commitment(chain: list, decision_id: str,
@@ -685,7 +687,7 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     anchored_row = next((e for e in chain if e["entry_hash"] == anchored), None)
     if anchored_row is None:
         raise RegistryError(
-            f"档案锚定链头 {str(anchored)[:12]!r} 不在当前账本链内——账本被整本"
+            f"档案锚定链头 {safe_repr(anchored)[:14]} 不在当前账本链内——账本被整本"
             f"重算/替换或锚被降级为 genesis,拒(BINDING #6 外锚,re-review#2)")
     # re-review#3 P1:成员性不够——本执行的承诺行必须在**以锚为终点的祖先路径**
     # 上(线性链上祖先 ⟺ seq ≤ 锚 seq)。把锚降级到承诺之前的更早合法链成员
