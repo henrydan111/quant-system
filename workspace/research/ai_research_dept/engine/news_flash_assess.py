@@ -17,13 +17,15 @@ from `stock_basic` / the SW industry reference / the THS concept index.
 
 Declared invariants (Tier-2; see NF_UNIT_P2_DESIGN.md):
 
-1. **PIT inherited + one canonical cutoff + as-of registry.** `load_text` filters +
+1. **PIT inherited + one canonical cutoff + fully as-of registry.** `load_text` filters +
    forward fail-closed; the SAME `_canonical_cutoff` (microsecond-max) drives load,
    clustering, and routing; `build_cluster_snapshots` re-asserts `effective_at <= cutoff`.
-   **P2 builds the alias registry ITSELF as-of this canonical cutoff (GPT-P2 P0)** — it
-   can never be handed a registry built for a different (future) cutoff, so a future-listed
-   stock cannot resolve. The as-of routing basis (registry hash/version + term-set hashes)
-   is recorded in `routing_reference`.
+   **P2 builds the alias registry ITSELF as-of this canonical cutoff (GPT-P2 P0)** with
+   both PIT boundaries: (a) listing — `list_date`/`delist_date` filtered at `cut`,
+   **fail-closed on unparseable/missing dates**; (b) **names — the PIT name in effect at
+   `cut` from `namechange` history, NOT the current `stock_basic.name`** (a post-cutoff
+   rename can no longer resolve at a past cutoff). The as-of basis (registry hash/version,
+   as_of_names hash, term-set hashes) is recorded in `routing_reference`.
 2. **P1 binding — verified, same identity, POPULATION equality, fail-closed.** The consumed
    P1 artifact is fully verified whether passed as a dict or a path (`verify_typed_flash_
    artifact` — a dict's self-claimed SHA is never trusted, GPT-P2 P1-#2), must be for the
@@ -90,6 +92,45 @@ def _cluster_payload(cluster) -> dict:
             "n_outlets": cluster.n_outlets}
 
 
+#: typing fields that determine evidence identity (importance excluded — it is a max
+#: over cluster members, not an identity field)
+_TYPING_IDENTITY_FIELDS = ("event_type", "verification_status", "content_kind",
+                           "direction", "is_rumor")
+
+
+def _as_of_names(stock_basic, namechange, cut) -> dict:
+    """PIT name resolution (GPT-P2 P0): the name in effect AT `cut` for each ts_code,
+    from `namechange` history (name valid on `[start_date, end_date]`, end null = current).
+    Fail-closed: a stock WITH namechange rows but none covering `cut` (or overlapping
+    distinct names) refuses; a stock with NO namechange rows keeps `stock_basic.name`
+    (never renamed). This is what stops a post-cutoff rename (e.g. 000558.SZ '天府文旅'
+    effective 2025-02-14) from resolving at a 2025-01-27 cutoff."""
+    nc: dict[str, list] = {}
+    for _, r in namechange.iterrows():
+        tc = str(r["ts_code"]).strip()
+        s = pd.to_datetime(str(r.get("start_date")), errors="coerce")
+        e_raw = r.get("end_date")
+        e = (pd.to_datetime(str(e_raw), errors="coerce")
+             if not (e_raw is None or pd.isna(e_raw)) else None)
+        nc.setdefault(tc, []).append((s, e, str(r["name"]).strip()))
+    out: dict[str, str] = {}
+    for _, r in stock_basic.iterrows():
+        tc = str(r["ts_code"]).strip()
+        if not tc:
+            continue
+        rows = nc.get(tc, [])
+        covering = sorted({nm for (s, e, nm) in rows
+                           if pd.notna(s) and s <= cut and (e is None or cut <= e)})
+        if not rows:
+            out[tc] = str(r["name"]).strip()          # not in namechange → treat as never renamed
+        elif len(covering) == 1:
+            out[tc] = covering[0]                      # the PIT name in effect at cut
+        # else (rows exist but 0 or >1 distinct covering names): OMIT tc. If tc is actually
+        # LISTED at cut, build_alias_registry fail-closes on the missing name; if tc is not
+        # listed (e.g. a future-only rename row), build skips it — no false as-of name.
+    return out
+
+
 def _union_route(cluster, content_by_hash, registry, cut, industry_terms, concept_terms):
     """GPT-P2 representative-member fix: route EVERY member and UNION their mentions
     instead of routing only `members[0]`. The cluster key is only the first 120 canonical
@@ -117,14 +158,15 @@ def _union_route(cluster, content_by_hash, registry, cut, industry_terms, concep
 
 
 def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
-                       stock_basic, industry_terms: frozenset, concept_terms: frozenset,
+                       stock_basic, namechange, industry_terms: frozenset,
+                       concept_terms: frozenset,
                        alias_version: str = "p2_asof", alias_valid_from: str = "2000-01-01",
                        store_dir=None, require_exists: bool = False) -> dict:
     """Market-wide cluster + route + assess for one (cutoff, ingest_class). Reference
     inputs are injected: `typed_artifact` = the P1 artifact (dict OR path), `stock_basic`
-    = a DataFrame (P2 builds the alias registry from it AS-OF this canonical cutoff — see
-    GPT-P2 P0), `industry_terms`/`concept_terms` = frozensets. Returns a self-describing
-    assessed-flash artifact dict."""
+    + `namechange` = DataFrames (P2 builds the alias registry from them AS-OF this
+    canonical cutoff, with PIT names — see GPT-P2 P0), `industry_terms`/`concept_terms`
+    = frozensets. Returns a self-describing assessed-flash artifact dict."""
     cut = _canonical_cutoff(cutoff)
     # GPT-P2 P1-#2: verify the P1 artifact whether it came as a dict or a path — a dict's
     # self-claimed SHA is NEVER trusted unverified.
@@ -143,14 +185,19 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
 
     # GPT-P2 P0: build the alias registry AS-OF this canonical cutoff — P2 owns the as-of
     # binding, so it can never be handed a registry built for a different (future) cutoff
-    # that would resolve future-listed stocks. list_date/delist_date filtered at `cut`.
+    # that would resolve future-listed stocks. list_date/delist_date filtered at `cut`
+    # (fail-closed on unparseable dates); name aliases are the PIT names in effect at
+    # `cut` (from namechange), not the current stock_basic.name.
+    as_of_names = _as_of_names(stock_basic, namechange, cut)
     registry = build_alias_registry(stock_basic, version=alias_version,
-                                    valid_from=alias_valid_from, valid_to=None, cutoff=cut)
+                                    valid_from=alias_valid_from, valid_to=None, cutoff=cut,
+                                    as_of_names=as_of_names)
     # bind the full routing basis so P3/P4 can verify it
     routing_reference = {
         "as_of_cutoff_iso": cut.isoformat(),
         "alias_registry_version": registry.version,
         "alias_registry_hash": registry.content_hash,
+        "as_of_names_hash": seal_hash(sorted(as_of_names.items())),
         "industry_terms_hash": seal_hash(sorted(industry_terms)),
         "concept_terms_hash": seal_hash(sorted(concept_terms)),
     }
@@ -171,10 +218,22 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
 
     assessed: list[dict] = []
     for cluster in clusters:
-        rep_ch = cluster.members[0]["content_hash"]      # deterministic representative
-        if rep_ch not in typing_index:                   # (population gate makes this redundant,
-            raise ValueError(                            #  kept as a local fail-closed guard)
-                f"cluster {cluster.fact_occurrence_id} representative has no P1 typing")
+        member_hashes = [m["content_hash"] for m in cluster.members]
+        if any(h not in typing_index for h in member_hashes):   # population gate redundancy
+            raise ValueError(f"cluster {cluster.fact_occurrence_id} member has no P1 typing")
+        # GPT-P2 P1: the 120-char cluster key can group DISTINCT facts (e.g. an official
+        # bullish flash and a rumor bearish flash sharing a long prefix). Reusing the
+        # representative's typing would launder one fact's evidence class onto the other's
+        # stock. Refuse the cluster if members' evidence-identity typings disagree
+        # (fail-closed short-term fix — no cross-fact typing wash).
+        identities = {tuple(typing_index[h][f] for f in _TYPING_IDENTITY_FIELDS)
+                      for h in member_hashes}
+        if len(identities) > 1:
+            raise ValueError(
+                f"cluster {cluster.fact_occurrence_id} members carry conflicting typings "
+                f"{sorted(identities)} — distinct facts grouped by the 120-char key, "
+                f"refusing (GPT-P2 P1: no evidence-class wash across members)")
+        rep_ch = member_hashes[0]                         # members agree on evidence identity
         route = _union_route(cluster, content_by_hash, registry, cut,
                              industry_terms, concept_terms)   # union, not representative
         a = assess_flash(cluster, typing_index[rep_ch], route)   # recomputes evidence_class
@@ -274,12 +333,13 @@ def main() -> int:
     # reference inputs are assembled from existing sources; kept in the CLI (not the core).
     # P2 builds the alias registry itself AS-OF the cutoff (P0), so the CLI supplies raw
     # stock_basic + the industry/concept term sets.
-    stock_basic, industry_terms, concept_terms = _build_reference_inputs(args.cutoff)
+    stock_basic, namechange, industry_terms, concept_terms = \
+        _build_reference_inputs(args.cutoff)
     out_dir = Path(args.out_dir) if args.out_dir else C.OUT_ROOT / "nf_assessed_flash"
     artifact = assess_day_flashes(
         args.cutoff, ingest_class=args.ingest_class,
         typed_artifact=Path(args.typed_artifact), stock_basic=stock_basic,
-        industry_terms=industry_terms, concept_terms=concept_terms)
+        namechange=namechange, industry_terms=industry_terms, concept_terms=concept_terms)
     path = write_assessed_flash_artifact(artifact, out_dir)
     logger.info("assessed %d flashes @ %s (%s) -> %s",
                 artifact["n_flashes"], artifact["cutoff_iso"], args.ingest_class, path)
@@ -293,8 +353,8 @@ def _build_reference_inputs(cutoff):
     Left as a thin seam; the per-source PIT details are wired when the offline P2 driver
     is first run for real."""
     raise NotImplementedError(
-        "P2 CLI reference assembly (stock_basic, SW L1 industry-name set, THS "
-        "concept-name set) is wired at first offline run; the testable core "
+        "P2 CLI reference assembly (stock_basic, namechange history, SW L1 industry-name "
+        "set, THS concept-name set) is wired at first offline run; the testable core "
         "assess_day_flashes takes these injected")
 
 

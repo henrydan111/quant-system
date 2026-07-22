@@ -47,6 +47,14 @@ def _stock_basic():
     ])
 
 
+_NC_COLS = ["ts_code", "name", "start_date", "end_date", "ann_date", "change_reason"]
+
+
+def _namechange(rows=None):
+    # default: empty history -> every stock keeps its current name (never renamed)
+    return pd.DataFrame(rows or [], columns=_NC_COLS)
+
+
 class _Reply:
     def __init__(self, text):
         self.text = text
@@ -68,10 +76,11 @@ def _p1(tmp_path):
                             store_dir=tmp_path)
 
 
-def _assess(tmp_path, typed, **kw):
+def _assess(tmp_path, typed, *, stock_basic=None, namechange=None, **kw):
     return assess_day_flashes(CUT, ingest_class="forward", typed_artifact=typed,
-                              stock_basic=_stock_basic(), industry_terms=IND,
-                              concept_terms=CON, store_dir=tmp_path, **kw)
+                              stock_basic=stock_basic if stock_basic is not None else _stock_basic(),
+                              namechange=namechange if namechange is not None else _namechange(),
+                              industry_terms=IND, concept_terms=CON, store_dir=tmp_path, **kw)
 
 
 # --------------------------------------------------- happy path + routing
@@ -157,7 +166,7 @@ def test_consumed_p1_sha_and_routing_reference_bound(tmp_path):
     assert art["consumed_typed_flash_sha256"] == p1["artifact_sha256"]
     rr = art["routing_reference"]
     assert set(rr) == {"as_of_cutoff_iso", "alias_registry_version", "alias_registry_hash",
-                       "industry_terms_hash", "concept_terms_hash"}
+                       "as_of_names_hash", "industry_terms_hash", "concept_terms_hash"}
 
 
 def test_wrong_p1_identity_refused(tmp_path):
@@ -214,11 +223,71 @@ def test_write_once_refuses_different_content(tmp_path):
     write_assessed_flash_artifact(a1, tmp_path / "out")
     write_assessed_flash_artifact(a1, tmp_path / "out")            # idempotent
     a2 = assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
-                            stock_basic=_stock_basic(), industry_terms=IND,
-                            concept_terms=frozenset({"消费", "大消费"}), store_dir=tmp_path)
+                            stock_basic=_stock_basic(), namechange=_namechange(),
+                            industry_terms=IND, concept_terms=frozenset({"消费", "大消费"}),
+                            store_dir=tmp_path)
     if a2["artifact_sha256"] != a1["artifact_sha256"]:
         with pytest.raises(AssessedFlashConflictError, match="write-once"):
             write_assessed_flash_artifact(a2, tmp_path / "out")
+
+
+# --------------------------------------------------- GPT-P2 re-review#1: as-of names + typing wash
+
+def test_p0_post_cutoff_rename_does_not_resolve(tmp_path):
+    # GPT-P2 P0: 000558.SZ was '莱茵体育' at the 2025-01-27 cutoff; it renamed to
+    # '天府文旅' effective 2025-02-14. P2 resolves the AS-OF name (莱茵体育), so news
+    # mentioning the FUTURE name '天府文旅' does NOT resolve at this cutoff.
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "天府文旅",   # current name
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20140101",
+         "end_date": "20250213", "ann_date": "20140101", "change_reason": "更名"},
+        {"ts_code": "000558.SZ", "name": "天府文旅", "start_date": "20250214",
+         "end_date": None, "ann_date": "20250214", "change_reason": "更名"},
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告", "天府文旅发布重大公告"])
+    art = _assess(tmp_path, _p1(tmp_path), stock_basic=sb, namechange=nc)
+    assert art["n_flashes"] == 2                       # two distinct-content clusters
+    stock_flash = next(a for a in art["assessed"] if a["route"]["primary_route"] == "stock")
+    non_stock = next(a for a in art["assessed"] if a["route"]["primary_route"] != "stock")
+    assert "000558.SZ" in stock_flash["route"]["subject_codes"]      # 莱茵体育 (as-of) resolved
+    assert "000558.SZ" not in non_stock["route"]["subject_codes"]    # 天府文旅 (future) did NOT
+
+
+def test_p1_conflicting_member_typings_refused(tmp_path):
+    # GPT-P2 P1: two flashes share a >120-char prefix (one cluster) but P1 typed them
+    # differently (official-bullish vs rumor-bearish). Reusing one typing would launder
+    # evidence class across facts -> the cluster is refused (fail-closed).
+    prefix = "详情" * 70
+    _ingest(tmp_path, [prefix + "甲", prefix + "乙"])
+
+    def mixed_typer(msgs):
+        payload = json.loads(msgs[1]["content"])
+        out = []
+        for it in payload["items"]:
+            if "甲" in it["content"]:
+                t = {"event_type": "订单合同", "verification_status": "官方证实",
+                     "content_kind": "事实", "direction": "利好", "importance": 5,
+                     "is_rumor": False}
+            else:
+                t = {"event_type": "传闻未证实", "verification_status": "传闻",
+                     "content_kind": "评论", "direction": "利空", "importance": 3,
+                     "is_rumor": True}
+            out.append({"idx": it["idx"], **t})
+        return _Reply(json.dumps({"results": out}, ensure_ascii=False))
+    p1 = type_day_flashes(CUT, ingest_class="forward", call_fn=mixed_typer, store_dir=tmp_path)
+    with pytest.raises(ValueError, match="conflicting typings"):
+        _assess(tmp_path, p1)
+
+
+def test_p0_unparseable_list_date_fail_closed(tmp_path):
+    # GPT-P2 P0: a listed stock whose list_date can't be PIT-judged is refused, not
+    # admitted (the old code coerced it to NaT and admitted it).
+    sb = pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台",
+                        "list_date": None, "delist_date": None}])
+    _ingest(tmp_path, ["贵州茅台大单"])
+    with pytest.raises(ValueError, match="list_date"):
+        _assess(tmp_path, _p1(tmp_path), stock_basic=sb)
 
 
 # --------------------------------------------------- NON_EVIDENTIARY / empty

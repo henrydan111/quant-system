@@ -97,6 +97,27 @@ market-wide posture from typing to clustering+routing+assessment.
 - **coordination:** now recorded as `coordination_evaluated: False` (unassessed), not a bare `False`
   that could read as "confirmed no coordination".
 
+## GPT re-review #1 fold (1 P0 + 1 P1) — all folded
+
+- **P0 (registry not fully as-of):** two sub-parts. (a) **PIT names** — `build_alias_registry` used the
+  CURRENT `stock_basic.name`, so a post-cutoff rename resolved at a past cutoff (000558.SZ '天府文旅'
+  effective 2025-02-14 resolving at 2025-01-27). P2 now computes `_as_of_names(stock_basic, namechange,
+  cut)` — the PIT name in effect at `cut` from `namechange` history — and passes it to a new
+  `as_of_names` param on `build_alias_registry`; the resolved-name basis is bound as
+  `routing_reference.as_of_names_hash`. (b) **fail-closed dates** — `build_alias_registry` under a cutoff
+  now REFUSES a stock with a missing/unparseable `list_date` (or a non-null unparseable `delist_date`)
+  instead of coercing to NaT and admitting it.
+- **P1 (typing wash across a mixed cluster):** the 120-char cluster key can group DISTINCT facts. P2 now
+  refuses a cluster whose members' evidence-identity typings (event_type / verification_status /
+  content_kind / direction / is_rumor) disagree — no laundering one fact's evidence class onto another's
+  stock. Routing already unions all members' mentions.
+
+**Disclosed residual (one, honest):** a stock that was renamed but is ENTIRELY ABSENT from `namechange`
+falls back to `stock_basic.name` (treated as never-renamed). Distinguishing "never renamed" from
+"renamed but missing from the namechange reference" is impossible without external data; the reviewer's
+repro (000558) IS in namechange and is handled correctly. This residual is a namechange-completeness
+concern, recorded here, not a logic gap.
+
 ## Deferred / disclosed simplifications in the P2 implementation (honest, not hidden)
 
 - **CLI reference assembly is an explicit seam.** `assess_day_flashes` (the testable core) takes the
