@@ -26,8 +26,11 @@ NF_INTEGRATION_SEQUENCING.md):
    history_bulk is unreachable (inherited from `load_text` B1). The artifact records
    the class; a forward decision must never consume a history_bulk-typed artifact.
 3. **Typed once per content identity.** Each distinct `content_hash` is typed exactly
-   once; the downstream join key is `content_hash`, never row position. Typing
-   depends only on content, so syndicated copies share one type.
+   once; the downstream join key is `content_hash`, never row position. NB the store's
+   content basis is `[src, datetime, title, content, channels]`, so the same wording
+   from a different outlet or at a different time is a DISTINCT `content_hash` (a
+   distinct occurrence) and is typed separately — the store already guarantees
+   `content_hash` uniqueness on ingest, and P1's own dedup is defensive.
 4. **Deterministic + idempotent.** Same (cutoff, panel, content set, call_fn) →
    byte-identical `artifact_sha256` (distinct flashes sorted by `content_hash`;
    per-batch local idx; output sorted). Re-running never changes a type unless the
