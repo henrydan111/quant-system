@@ -2148,3 +2148,121 @@ def test_freezing_does_not_change_any_digest(rig):
     frozen = rl._freeze_deep(plain)
     assert rl._canon(frozen) == rl._canon(plain)
     assert rl._h(rl._canon(frozen)) == rl._h(rl._canon(plain))
+
+
+# ── the chokepoint: one gate, mechanically enumerated (GPT ledger review round 3) ─────────────────
+#
+# Three consecutive rounds gated on ONE invariant class — a cached value handed back without
+# re-establishing the guard that made it trustworthy (cache published before the head check; a wrapper
+# exposing the live cache; _genesis() serving a cached anchor after the file was deleted). Per the
+# convergence protocol, per-site patching of a class that gates twice is banned: the fourth fix has to
+# be structural. `_assert_durable_state` is that gate, and the meta-test below is what stops a NEW
+# reader from skipping it by simply not being on anyone's list.
+
+def _corruptions():
+    """Each entry mutates DURABLE state under a process that is already open and holding a warm cache."""
+    return {
+        "anchor deleted": lambda L: L.genesis_path.unlink(),
+        "anchor content swapped": lambda L: L.rp.write_json(
+            L.genesis_path, dict(json.loads(L.genesis_path.read_text(encoding="utf-8")),
+                                 genesis="0" * 64)),
+        "anchor names another run": lambda L: L.rp.write_json(
+            L.genesis_path, dict(json.loads(L.genesis_path.read_text(encoding="utf-8")),
+                                 run="somebody_elses_run")),
+        "head hash rewound": lambda L: L.rp.write_json(
+            L.head_path, dict(json.loads(L.head_path.read_text(encoding="utf-8")),
+                              record_hash="0" * 64)),
+        "head count rewound": lambda L: L.rp.write_json(
+            L.head_path, dict(json.loads(L.head_path.read_text(encoding="utf-8")), n=0)),
+        "head count inflated": lambda L: L.rp.write_json(
+            L.head_path, dict(json.loads(L.head_path.read_text(encoding="utf-8")), n=999)),
+    }
+
+
+@pytest.mark.parametrize("label", sorted(_corruptions()))
+@pytest.mark.parametrize("cache", ["warm", "cold"])
+def test_durable_state_corruption_is_refused_warm_and_cold(rig, label, cache):
+    """Same-process, no adversary needed — this is the shape of the 2026-07-13 incident itself
+    (durable files vanishing under a running process)."""
+    rp, L = rig
+    for i in range(3):
+        L.event("e%d" % i)
+    L._load()
+    _corruptions()[label](L)
+    if cache == "cold":
+        L._chain_cache = None
+    with pytest.raises(rl.LedgerError):
+        L._load()
+
+
+def test_sequence_continuity_is_enforced(rig):
+    """Checking only the head HASH let a head rewound to n=0 through, and the next append then produced
+    sequences [1, 2, 3, 1] — a duplicated seq in an append-only ledger."""
+    rp, L = rig
+    for i in range(3):
+        L.event("e%d" % i)
+    rows = L._load()
+    assert [r["seq"] for r in rows] == [1, 2, 3]
+    lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[-1])
+    rec["seq"] = 99
+    lines[-1] = json.dumps(rec)
+    L.ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    L._chain_cache = None
+    with pytest.raises(rl.LedgerError, match="hash-chain break|sequence break"):
+        L._load()
+
+
+def test_every_public_state_reader_goes_through_the_chokepoint(rig):
+    """THE MECHANICAL META-TEST. Enumerates the ledger's public surface and asserts that every method
+    which can serve verified state refuses once the durable anchor is gone. A newly added reader that
+    forgets the gate fails HERE, without anyone remembering to add it to a list."""
+    import inspect
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    L.event("some_history")
+    L._load()
+    L._plan()                                     # both caches warm
+
+    L.genesis_path.unlink()                       # durable anchor vanishes underneath us
+
+    readers, skipped = [], []
+    for name, fn in inspect.getmembers(type(L), inspect.isfunction):
+        if name.startswith("__"):
+            continue
+        params = list(inspect.signature(fn).parameters)[1:]   # drop self
+        if any(p.default is inspect.Parameter.empty for p in
+               (inspect.signature(fn).parameters[q] for q in params)):
+            skipped.append(name)                  # needs arguments we cannot synthesise here
+            continue
+        readers.append((name, fn))
+
+    assert any(n == "_load" for n, _ in readers), "the enumeration lost _load"
+    assert any(n == "_plan" for n, _ in readers), "the enumeration lost _plan"
+
+    # DEFAULT-DENY with a justified exemption list: anything not named here must route through the
+    # gate. A new method is a FAILURE until someone either wires it to the chokepoint or adds it below
+    # with a reason — which is the property that makes this test structural rather than a checklist.
+    exempt = {
+        # a primitive INPUT to the chokepoint; routing it through the gate would recurse forever
+        "_read_head": "reads the head file that _assert_durable_state itself validates",
+        # returns a lock context manager; serves no ledger state at all
+        "execution_guard": "acquires the run-execution lock, reads no verified state",
+    }
+    leaked = []
+    for name, fn in readers:
+        try:
+            fn(L)
+        except rl.LedgerError:
+            continue                              # refused: correct
+        except Exception:
+            continue                              # failed for an unrelated reason: not a state leak
+        else:
+            if name not in exempt:
+                leaked.append(name)
+    assert not leaked, (f"these zero-arg public methods served state with NO genesis anchor on disk: "
+                        f"{leaked}. Either route them through _assert_durable_state, or add them to "
+                        f"`exempt` with a reason they serve no verified state.")
+    # the exemptions must stay real, not become a dumping ground
+    assert set(exempt) <= {n for n, _ in readers}, "an exemption names a method that no longer exists"

@@ -409,6 +409,11 @@ class PageReceiptLedger:
         when the adapter changes, which is deliberate; bricking RESUMPTION was not.
         """
         if self._genesis_cache is not None:
+            # NEVER short-circuit past the file's existence: the round-3 P0 was exactly this — the
+            # anchor was deleted while the process stayed open and the cached value kept the run alive.
+            if not self.genesis_path.exists():
+                raise LedgerError("chain_genesis.json DISAPPEARED while the run was open — the chain "
+                                  "has no anchor; refusing to serve or extend it")
             return self._genesis_cache
         if self.genesis_path.exists():
             anchor = json.loads(self.genesis_path.read_text(encoding="utf-8"))
@@ -529,7 +534,7 @@ class PageReceiptLedger:
                 and (time.monotonic() - cache["at"]) < _FULL_REVERIFY_AFTER_SECONDS:
             # The external anchors are small and are re-checked on EVERY warm hit: they are what makes
             # a truncation visible, and they cost a couple of stats.
-            self._assert_head(cache["rows"], cache["tail"])
+            self._assert_durable_state(cache["rows"], cache["tail"])
             cache["hits"] += 1
             return cache["rows"]
         # ANY mismatch falls through to the full replay below. The cache is only ever trusted when the
@@ -543,17 +548,49 @@ class PageReceiptLedger:
         # VALIDATE FIRST, PUBLISH SECOND. The cache used to be stored before this check, so a clean
         # truncation refused on the first call and then served the truncated prefix from cache on the
         # second — the retry accepted what the first call had just rejected.
-        self._assert_head(rows, prev)
+        self._assert_durable_state(rows, prev)
         frozen = tuple(_freeze_deep(r) for r in rows)
         self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns, "rows": frozen,
                              "tail": prev, "since_full": 0, "hits": 0, "at": time.monotonic()}
         return frozen
 
-    def _assert_head(self, rows: list, tail_hash: str) -> None:
-        """The external head is the anti-truncation anchor: a ledger rewound to an earlier row still
-        chains perfectly, and only the head reveals it."""
-        if self._read_head().get("record_hash") != tail_hash:
+    def _assert_durable_state(self, rows, tail_hash: str) -> None:
+        """THE CHOKEPOINT. Every path that hands back verified state calls this immediately before
+        returning, whether the state came from a fresh replay or from cache.
+
+        It exists because the same invariant class gated three consecutive review rounds — a cached
+        value handed back without re-establishing the guard that made it trustworthy: the cache was
+        published before the head check (r1), a wrapper exposed the live cache (r2), and `_genesis()`
+        returned its cached anchor without checking the anchor still existed (r3). Each was patched at
+        its own site and the class reappeared one door down, so the fix is now a single gate rather
+        than a fourth patch. `test_every_public_state_reader_goes_through_the_chokepoint` enumerates the
+        class's public surface mechanically, so a NEW reader cannot skip it by simply not being on
+        anyone's list.
+
+        The 2026-07-13 incident was durable files vanishing under a running process, non-adversarially
+        — so re-checking them per call is the in-scope case, not paranoia about an attacker."""
+        # 1. the persisted anchor must still be there AND still say what it said
+        if not self.genesis_path.exists():
+            raise LedgerError("chain_genesis.json DISAPPEARED while the run was open — the chain has "
+                              "no anchor; refusing to serve or extend it")
+        on_disk = json.loads(self.genesis_path.read_text(encoding="utf-8"))
+        if on_disk.get("run") != self.rp.run_id:
+            raise LedgerError(f"genesis anchor names run {on_disk.get('run')!r}, not "
+                              f"{self.rp.run_id!r} — a ledger from another run cannot be adopted")
+        if self._genesis_cache is not None and on_disk.get("genesis") != self._genesis_cache:
+            raise LedgerError("the genesis anchor on disk CHANGED while the run was open")
+        # 2. the external head: hash, COUNT, and sequence continuity. Checking only the hash let a head
+        #    rewound to n=0 through, and the next append then produced sequences [1, 2, 3, 1].
+        head = self._read_head()
+        if head.get("record_hash") != tail_hash:
             raise LedgerError("ledger head does not match the chain tail (truncated/rewound)")
+        if int(head.get("n") or 0) != len(rows):
+            raise LedgerError(f"ledger head claims n={head.get('n')} but the chain holds {len(rows)} "
+                              f"records (rewound/forged head)")
+        for i, rec in enumerate(rows, 1):
+            if int(rec.get("seq") or 0) != i:
+                raise LedgerError(f"ledger sequence break at position {i}: record carries "
+                                  f"seq={rec.get('seq')} (duplicated/reordered/rewound)")
 
     # ── plan ─────────────────────────────────────────────────────────────────────────────────────
     def _freeze_plan_unvalidated(self, plan_rows: list) -> str:
