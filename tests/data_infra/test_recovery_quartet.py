@@ -9,6 +9,7 @@ signed A01 plan through the coordinator's full validation door. Runs under C:.""
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -192,13 +193,21 @@ def test_authorization_binds_the_adapter_bundle(rig):
     from datetime import datetime, timedelta, timezone
     fut = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     L.record_fetch_authorization(actor="henry", expires_at=fut, endpoint_scope=["*"])
-    # a ledger bound to a DIFFERENT bundle cannot even LOAD the run: the bundle hash is part of the
-    # chain GENESIS, so drift refuses at replay — STRICTLY stronger than the event-level check (which
-    # still exists for an authorization recorded under an older bundle within the same genesis).
+    # Adapter drift must refuse a live fetch — but at the AUTHORIZATION, not by making the run
+    # unopenable. This assertion used to read "hash-chain break", because the bundle hash was baked
+    # into the chain genesis and any drift broke the replay at line 1. That coupling also meant a
+    # DIFFERENT coordinator_commit (repo-wide git HEAD) bricked an in-flight run: three unrelated
+    # commits from a parallel session did exactly that during the first live fetch. The genesis is now
+    # a persisted per-run constant, so the run stays readable and the refusal comes from the check that
+    # actually means what it says — and can be cleared by re-authorizing.
     L2 = rl.PageReceiptLedger(rp, coordinator_commit="deadbeef", adapter_bundle_hash="0" * 64)
     L2._revalidate_contract = L._revalidate_contract
-    with pytest.raises(rl.LedgerError, match="hash-chain break"):
+    with pytest.raises(rl.LedgerError, match="DIFFERENT adapter bundle"):
         L2.claim_next_fetch(row["request_id"], "live_authorized")
+    # and the point of the change: the run is still OPENABLE under the drifted identity, so a code fix
+    # mid-recovery is recoverable by re-authorizing rather than by abandoning the run
+    assert len(L2._load()) > 0
+    assert L2._plan()[row["request_id"]]["endpoint"] == "daily"
 
 
 def test_promotion_refuses_a_synthetic_run(rig):
@@ -1911,3 +1920,82 @@ def test_the_ledger_binds_the_REAL_adapter_bundle_hash():
     rp, led = rrc.open_run("bundle_probe_" + uuid.uuid4().hex[:8], new=True)
     assert led.adapter_bundle_hash == ra.compute_bundle_hash()
     assert len(led.adapter_bundle_hash) == 64
+
+
+# ── defects the FIRST LIVE FETCH exposed (measured, not reviewed) ─────────────────────────────────
+def test_genesis_survives_unrelated_repo_commits(rig):
+    """The one that actually bricked a live run. `_genesis()` used to be RE-DERIVED from
+    `coordinator_commit` (repo-wide `git rev-parse HEAD`), so three commits from a PARALLEL session —
+    touching nothing in the recovery — made recover01 unopenable: `hash-chain break at line 1`, with a
+    350-row chain that was perfectly intact under its original anchor.
+
+    A recovery that runs for days across multiple authorization segments cannot require that nobody
+    commits to the repo. The anchor is now minted once and persisted."""
+    rp, L = rig
+    L.event("probe_one")
+    original = L._genesis()
+    assert L.genesis_path.exists(), "the genesis anchor was not persisted"
+
+    # a later process, same run dir, DIFFERENT repo commit and different adapter bundle
+    L2 = rl.PageReceiptLedger(rp, coordinator_commit="a-totally-different-head",
+                              adapter_bundle_hash="f" * 64)
+    assert L2._genesis() == original, "the anchor moved when unrelated identity inputs changed"
+    assert len(L2._load()) >= 1, "the run must still open and replay"
+    L2.event("probe_two")                       # and still be appendable
+    assert len(L2._load()) >= 2
+
+
+def test_genesis_anchor_refuses_a_ledger_from_another_run(rig):
+    """Persisting the anchor must not weaken it into 'any ledger goes'."""
+    rp, L = rig
+    L.event("probe")
+    anchor = json.loads(L.genesis_path.read_text(encoding="utf-8"))
+    anchor["run"] = "some_other_run"
+    L.genesis_path.write_text(json.dumps(anchor), encoding="utf-8")
+    L2 = rl.PageReceiptLedger(rp, coordinator_commit="x", adapter_bundle_hash="y" * 64)
+    with pytest.raises(rl.LedgerError, match="another run"):
+        L2._load()
+
+
+def test_plan_verification_is_cached_but_stat_guarded(rig):
+    """The 102 MB frozen plan was re-read, re-parsed, re-canonicalised and re-hashed ~4x per request —
+    the largest slice of the 6.4 s/request non-vendor overhead. Caching must not cost tamper-evidence."""
+    rp, L = rig
+    row = _prow("daily", "20260702", "req/daily/20260702.parquet")
+    L._freeze_plan_unvalidated([row])
+    assert L._plan()[row["request_id"]]["endpoint"] == "daily"
+    assert L._plan_cache is not None
+    doc = json.loads(L.plan_path.read_text(encoding="utf-8"))
+    doc["rows"][0]["endpoint"] = "moneyflow"
+    L.plan_path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(rl.LedgerError, match="self-hash mismatch|was rewritten"):
+        L._plan()
+
+
+def test_chain_cache_never_masks_a_tamper(rig):
+    """The chain cache is advanced only by `_append` (the sole writer, under the lock). An earlier
+    version inferred 'grew => was appended to', which the tamper test caught at once: rewriting line 1
+    also grows the file, so a real corruption took the incremental path."""
+    rp, L = rig
+    for i in range(3):
+        L.event("probe_%d" % i)
+    assert len(L._load()) == 3
+    lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[0])
+    rec["event"] = "tampered"
+    lines[0] = json.dumps(rec)                        # a rewrite that GROWS the file
+    L.ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    L._chain_cache = None                             # a fresh process
+    with pytest.raises(rl.LedgerError, match="hash-chain break|torn/malformed"):
+        L._load()
+
+
+def test_run_family_reports_per_request_progress():
+    """A 13,479-request family printed nothing for its entire runtime — an operator could not tell
+    running from hung (§10 requires visible completed/total/ETA)."""
+    import inspect
+    assert "on_request" in inspect.signature(ra.run_family).parameters
+    assert "on_request(i, len(rids)" in inspect.getsource(ra.run_family)
+    cmd = inspect.getsource(rrc.cmd_fetch)
+    assert "flush=True" in cmd, "operator output must not sit in a block buffer"
+    assert "on_request=_tick" in cmd

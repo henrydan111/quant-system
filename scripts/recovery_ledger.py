@@ -253,6 +253,12 @@ class PageResult:
 _PREPARE_REGISTRY: dict = {}       # endpoint -> callable(df) -> df  (populated below the class)
 
 
+#: How many appended rows the incremental chain verification may accept before forcing a full replay
+#: from genesis. Bounds the window in which an in-place corruption of an ALREADY-VERIFIED prefix could
+#: go unnoticed within one long-lived process; every process start replays fully regardless.
+_FULL_REVERIFY_EVERY = 2000
+
+
 class PageReceiptLedger:
     def __init__(self, rp, *, coordinator_commit: str, adapter_bundle_hash: str):
         # rp is the coordinator's RecoveryPaths (provides .broker() + run-root paths).
@@ -260,9 +266,19 @@ class PageReceiptLedger:
         self.ledger_path = rp.root / "ledger" / "recovery_ledger.jsonl"
         self.plan_path = rp.root / "ledger" / "request_plan.json"
         self.head_path = rp.root / "ledger" / "ledger_chain_head.json"
+        self.genesis_path = rp.root / "ledger" / "chain_genesis.json"
         self.receipts_dir = rp.root / "ledger" / "page_receipts"
         self.coordinator_commit = coordinator_commit
         self.adapter_bundle_hash = adapter_bundle_hash
+        self._genesis_cache = None
+        # ── verified-prefix caches (perf; see _load/_plan) ───────────────────────────────────────
+        # The first live fetch measured 9.49 s/request against a 1.60s vendor call and a 1.50s throttle
+        # — 6.4s of it was re-reading, re-canonicalising and re-hashing state that had not changed.
+        # Both caches are STAT-GUARDED: any size or mtime change forces the full verification again, so
+        # a crash-torn tail or an in-place rewrite is still caught. (An edit that preserves both size
+        # and mtime is the mid-operation local adversary the §6a threat model excludes.)
+        self._chain_cache = None        # (size, mtime_ns, rows, tail_hash)
+        self._plan_cache = None         # (size, mtime_ns, attested, plan_dict)
         # GPT impl re-review #2: the legacy fetch_page door is DISABLED by default — a battery-only
         # capability the fixture flips per instance; production never sets it (and a declared run mode
         # refuses it regardless, so the flag cannot leak into a production run).
@@ -332,8 +348,44 @@ class PageReceiptLedger:
 
     # ── hash chain (head anchored OUTSIDE the editable jsonl) ────────────────────────────────────
     def _genesis(self) -> str:
-        return _h(_canon({"run": self.rp.run_id, "commit": self.coordinator_commit,
-                          "adapters": self.adapter_bundle_hash}))
+        """The run's chain anchor — a PER-RUN CONSTANT, established once at creation and read back
+        thereafter.
+
+        It used to be RE-DERIVED on every open from `coordinator_commit` (repo-wide `git rev-parse
+        HEAD`) and the live adapter bundle hash. That made the anchor a function of mutable global
+        state: while the first live fetch was running, three unrelated commits from a PARALLEL SESSION
+        moved HEAD, the genesis stopped reproducing, and the run could no longer be opened at all —
+        `ledger hash-chain break at line 1`. The 350-row chain was perfectly intact (it re-verified
+        end-to-end under its original genesis); only the derivation had drifted. A recovery that runs
+        for days across multiple authorization segments cannot require that nobody commits to the repo.
+
+        So the anchor is now WRITTEN at run creation and read from disk afterwards. Code identity is
+        still bound — but where it belongs, and where it must stay live: the §13 authorization binds
+        `bundle_sha256`, and `run_family` refuses on live bundle drift. Those force RE-AUTHORIZATION
+        when the adapter changes, which is deliberate; bricking RESUMPTION was not.
+        """
+        if self._genesis_cache is not None:
+            return self._genesis_cache
+        if self.genesis_path.exists():
+            anchor = json.loads(self.genesis_path.read_text(encoding="utf-8"))
+            g = str(anchor.get("genesis") or "")
+            if not g:
+                raise LedgerError("genesis anchor file carries no genesis")
+            if anchor.get("run") != self.rp.run_id:
+                raise LedgerError(f"genesis anchor names run {anchor.get('run')!r}, not "
+                                  f"{self.rp.run_id!r} — a ledger from another run cannot be adopted")
+            self._genesis_cache = g
+            return g
+        # First open of a fresh run: mint and PERSIST it. The inputs are captured as evidence so the
+        # anchor stays auditable even though it is no longer re-derived from them.
+        g = _h(_canon({"run": self.rp.run_id, "commit": self.coordinator_commit,
+                       "adapters": self.adapter_bundle_hash}))
+        self.rp.write_json(self.genesis_path,
+                           {"run": self.rp.run_id, "genesis": g,
+                            "created_with_coordinator": self.coordinator_commit,
+                            "created_with_adapter_bundle": self.adapter_bundle_hash})
+        self._genesis_cache = g
+        return g
 
     def _read_head(self) -> dict:
         if not self.head_path.exists():
@@ -354,28 +406,75 @@ class PageReceiptLedger:
             fh.flush()
             os.fsync(fh.fileno())
         self.rp.write_json(self.head_path, {"n": rec["seq"], "record_hash": rec["record_hash"]})
+        # Advance the verified-prefix cache HERE — the one place that knows an append happened, rather
+        # than letting _load() guess from the file's size. Held under the caller's lock, so the stat we
+        # record is the state we just produced. A budget still forces a periodic full replay so a long
+        # process re-proves the whole chain rather than trusting an ever-growing cached prefix.
+        cache = self._chain_cache
+        if cache is not None and cache["since_full"] + 1 < _FULL_REVERIFY_EVERY:
+            try:
+                st = self.ledger_path.stat()
+            except OSError:
+                self._chain_cache = None
+            else:
+                self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns,
+                                     "rows": cache["rows"] + [rec], "tail": rec["record_hash"],
+                                     "since_full": cache["since_full"] + 1}
+        else:
+            self._chain_cache = None        # force the next _load() to replay from genesis
 
-    def _load(self) -> list:
-        """Replay + verify the chain from genesis; the recomputed tail MUST equal the head file. Any
-        torn line / broken link / head mismatch = fail closed."""
-        if not self.ledger_path.exists():
-            return []
-        rows, prev = [], self._genesis()
-        for i, line in enumerate(self.ledger_path.read_text(encoding="utf-8").splitlines()):
+    def _verify_lines(self, lines, prev: str, first_lineno: int) -> tuple:
+        """Verify a run of ledger lines chaining off `prev`. Returns (rows, new_tail_hash)."""
+        rows = []
+        for off, line in enumerate(lines):
             if not line.strip():
                 continue
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                raise LedgerError(f"ledger torn/malformed at line {i + 1}")
+                raise LedgerError(f"ledger torn/malformed at line {first_lineno + off}")
             body = {k: v for k, v in rec.items() if k != "record_hash"}
             if rec.get("prev_record_hash") != prev or rec.get("record_hash") != _h(prev + _canon(body)):
-                raise LedgerError(f"ledger hash-chain break at line {i + 1} (tamper/truncation)")
+                raise LedgerError(f"ledger hash-chain break at line {first_lineno + off} "
+                                  f"(tamper/truncation)")
             prev = rec["record_hash"]
             rows.append(rec)
-        if self._read_head().get("record_hash") != prev:
-            raise LedgerError("ledger head does not match the chain tail (truncated/rewound)")
+        return rows, prev
+
+    def _load(self) -> list:
+        """Replay + verify the chain from genesis; the recomputed tail MUST equal the head file. Any
+        torn line / broken link / head mismatch = fail closed.
+
+        INCREMENTAL (perf): the ledger is append-only and grows ~4 rows per request, so re-verifying it
+        from genesis on every operation is O(n^2) — at the full set's ~417,000 rows that alone makes the
+        recovery impossible. A verified prefix is cached and only the APPENDED TAIL is verified, which
+        is exactly what chain verification is: each record commits to its predecessor. The cache is
+        stat-guarded, so a shrink or an in-place rewrite drops straight back to the full replay.
+        """
+        if not self.ledger_path.exists():
+            return []
+        st = self.ledger_path.stat()
+        cache = self._chain_cache
+        if cache is not None and cache["size"] == st.st_size and cache["mtime"] == st.st_mtime_ns:
+            return list(cache["rows"])          # nothing changed since we verified it
+        # ANY mismatch falls through to the full replay below. The cache is only ever trusted when the
+        # file is byte-for-byte the one we verified, and it is advanced in ONE place: `_append`, which
+        # is the sole writer and holds the lock while it writes. Nothing is inferred from the file's
+        # shape — an earlier version of this fix tried to treat "grew" as "was appended to", and the
+        # tamper test caught it immediately: rewriting line 1 also grows the file, so a genuine
+        # corruption took the incremental path (it still failed closed, but on the wrong evidence).
+        rows, prev = self._verify_lines(
+            self.ledger_path.read_text(encoding="utf-8").splitlines(), self._genesis(), 1)
+        self._chain_cache = {"size": st.st_size, "mtime": st.st_mtime_ns, "rows": list(rows),
+                             "tail": prev, "since_full": 0}
+        self._assert_head(rows, prev)
         return rows
+
+    def _assert_head(self, rows: list, tail_hash: str) -> None:
+        """The external head is the anti-truncation anchor: a ledger rewound to an earlier row still
+        chains perfectly, and only the head reveals it."""
+        if self._read_head().get("record_hash") != tail_hash:
+            raise LedgerError("ledger head does not match the chain tail (truncated/rewound)")
 
     # ── plan ─────────────────────────────────────────────────────────────────────────────────────
     def _freeze_plan_unvalidated(self, plan_rows: list) -> str:
@@ -448,6 +547,17 @@ class PageReceiptLedger:
         if not self.plan_path.exists():
             raise LedgerError("plan_frozen is attested but request_plan.json is MISSING (orphaned by a "
                               "crash between the event and the file); re-freeze the SAME plan to heal it")
+        # STAT-GUARDED CACHE. The frozen plan is 102 MB / 104,176 rows for the full set, and verifying
+        # it re-reads, re-parses, re-canonicalises and re-hashes every row. That ran ~4x per request in
+        # the first live fetch and was the single largest slice of the 6.4s non-vendor overhead. The
+        # plan is immutable once frozen (a second freeze refuses), so re-proving identical bytes on
+        # every claim establishes nothing new — but any change to the file still forces the full
+        # re-verification below.
+        st = self.plan_path.stat()
+        cache = self._plan_cache
+        if cache is not None and cache[0] == st.st_size and cache[1] == st.st_mtime_ns \
+                and cache[2] == attested:
+            return cache[3]
         plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
         recomputed = _h(_canon(plan["rows"]))
         if recomputed != plan["sha256"]:
@@ -455,7 +565,9 @@ class PageReceiptLedger:
         if recomputed != attested:
             raise LedgerError(f"request_plan.json ({recomputed[:12]}) != the hash-chained plan_frozen "
                               f"event ({str(attested)[:12]}) — the plan was rewritten after freezing")
-        return {r["request_id"]: r for r in plan["rows"]}
+        out = {r["request_id"]: r for r in plan["rows"]}
+        self._plan_cache = (st.st_size, st.st_mtime_ns, attested, out)
+        return out
 
     def event(self, name: str, **kw) -> None:
         with self.rp._lock():

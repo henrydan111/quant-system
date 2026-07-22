@@ -1713,7 +1713,8 @@ def cmd_fetch(rp, led, *, families=None) -> int:
 
     in_scope = {s.output_family for s in specs}
     total = sum(1 for r in plan.values() if r["dataset"] in in_scope)
-    print(f"LIVE fetch: {len(specs)} families, {total} requests in scope, mode={mode}")
+    print(f"LIVE fetch: {len(specs)} families, {total} requests in scope, mode={mode}",
+          flush=True)
     print(f"  §6.1 floor {1.5}s/call -> ~{total * 1.5 / 3600:.1f}h minimum for this scope\n")
 
     started = time.time()
@@ -1721,9 +1722,24 @@ def cmd_fetch(rp, led, *, families=None) -> int:
     totals = {"verified": 0, "confirmed_empty": 0, "deferred": 0, "failed": 0, "in_flight": 0}
     for i, spec in enumerate(specs, 1):
         fam_n = sum(1 for r in plan.values() if r["dataset"] == spec.output_family)
-        print(f"[{i}/{len(specs)}] {spec.output_family}  ({fam_n} requests)")
+        print(f"[{i}/{len(specs)}] {spec.output_family}  ({fam_n} requests)", flush=True)
+        last = [time.time()]
+
+        def _tick(done_in_fam, fam_total, outcome, _base=done, _t0=started, _last=last):
+            # every 20 requests or 30s, whichever first — a long family must show it is alive
+            if done_in_fam % 20 and (time.time() - _last[0]) < 30.0 and done_in_fam != fam_total:
+                return
+            _last[0] = time.time()
+            el = time.time() - _t0
+            overall = _base + done_in_fam
+            rate = overall / el if el > 0 else 0.0
+            eta = (total - overall) / rate / 3600 if rate > 0 else float("nan")
+            print(f"    {done_in_fam}/{fam_total} in family | {overall}/{total} overall "
+                  f"({overall / max(1, total):.1%})  {rate * 3600:.0f} req/h  "
+                  f"elapsed={el / 3600:.2f}h  ETA={eta:.2f}h", flush=True)
+
         try:
-            summary = ra.run_family(spec, led, executor)
+            summary = ra.run_family(spec, led, executor, on_request=_tick)
         except Exception as exc:
             # An expired/绕不过 authorization surfaces HERE, and it is a normal operating condition on a
             # multi-segment run — not a crash. Nothing is lost: terminal requests stay terminal and the

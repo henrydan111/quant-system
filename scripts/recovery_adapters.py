@@ -664,7 +664,7 @@ class LiveExecutor:
 _RUNAWAY_CAP = 200_000            # hard backstop on claim iterations per family, far above any real run
 
 
-def run_family(spec: FamilySpec, ledger, executor) -> dict:
+def run_family(spec: FamilySpec, ledger, executor, on_request=None) -> dict:
     """Execute the family's already-frozen subset via the atomic claim loop. Consolidation is a
     SEPARATE step (consolidate_family). Live mode recomputes the bundle hash first — a dirty
     fetch-affecting file refuses before any wire call (design v4 Q1)."""
@@ -700,15 +700,21 @@ def run_family(spec: FamilySpec, ledger, executor) -> dict:
             raise RuntimeError(f"unknown claim kind {k!r}")
         raise RuntimeError(f"{rid}: runaway claim loop (> {_RUNAWAY_CAP}) — refusing")
 
-    for rid in rids:
+    for i, rid in enumerate(rids, 1):
         try:
             outcome = _drive(rid)
         except Exception as exc:
+            if on_request is not None:                  # report the failure BEFORE re-raising context
+                on_request(i, len(rids), "failed")
             summary["failed"].append((rid, f"{type(exc).__name__}: {exc}"))
             continue
         summary[outcome if outcome != "deferred" else "deferred"].append(rid)
         if outcome == "deferred":
             deferred.append(rid)
+        # Per-REQUEST progress. Reporting only per family meant a 13,479-request family printed nothing
+        # for its whole runtime — an operator could not tell running from hung (§10 visible progress).
+        if on_request is not None:
+            on_request(i, len(rids), outcome)
     # second pass: a canary may have verified since
     still = []
     for rid in deferred:
