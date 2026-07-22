@@ -96,8 +96,23 @@ def _allowed(path) -> bool:
 
 
 _WRITE_MODES = ("w", "a", "x", "+")
-_MUTATE = ("os.mkdir", "os.rmdir", "os.remove", "os.unlink", "os.rename", "os.replace",
-           "os.truncate", "os.chmod", "shutil.copyfile", "shutil.move")
+
+#: Process spawning: an audit hook does not follow a child, so spawning one is BY DEFINITION an
+#: unobservable write surface.
+_PROCESS = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.startfile")
+
+#: DEFAULT-DENY. The previous version enumerated the MUTATING events, so every event it forgot was
+#: silently allowed — `Path.touch()` on an existing file fires only `os.utime`, which the list missed
+#: (reproduced). Enumerating mutations is unbounded and fails open; enumerating the handful of
+#: NON-writing events is bounded and fails closed. Any `os.*`/`shutil.*` event not listed here — today's
+#: or a future Python's — is treated as a mutation. Derived by enumerating every os/shutil event that
+#: actually fires with an outside path during a real construction run; these four were the whole set,
+#: and none of them writes (putenv/unsetenv pass a variable NAME, not a path).
+_NON_WRITE_OS_EVENTS = frozenset({
+    "os.listdir", "os.scandir", "os.stat", "os.lstat", "os.access", "os.chdir", "os.fwalk",
+    "os.getxattr", "os.listxattr", "os.readlink", "os.add_dll_directory",
+    "os.putenv", "os.unsetenv",
+})
 
 
 def _audit(event, args):
@@ -114,16 +129,14 @@ def _audit(event, args):
                 isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND))
             if writing and not _allowed(path):
                 violations.append(f"open({path!r}, mode={m!r}, flags={flags})")
-        elif event in _MUTATE:
+        elif event in ("socket.connect", "socket.getaddrinfo"):
+            violations.append(f"{event} — NETWORK attempted")
+        elif event in _PROCESS:
+            violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
+        elif event.startswith(("os.", "shutil.")) and event not in _NON_WRITE_OS_EVENTS:
             for a in args[:2]:
                 if isinstance(a, (str, bytes, os.PathLike)) and not _allowed(a):
                     violations.append(f"{event}({a!r})")
-        elif event in ("socket.connect", "socket.getaddrinfo"):
-            violations.append(f"{event} — NETWORK attempted")
-        elif event in ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn"):
-            # an audit hook does not follow a child process, so spawning one is an unobserved write
-            # surface by definition — flag it rather than let it pass silently
-            violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
     except Exception:
         pass
 
@@ -141,6 +154,14 @@ class _NoNet(socket.socket):
 
 
 socket.socket = _NoNet
+
+# The parent launches this child with `-S`, so site initialisation has NOT run yet. Python's startup
+# (`.pth` handlers, `sitecustomize`) otherwise executes BEFORE this file's first line — a window the
+# hook could never see. Reproduced: a `sitecustomize` injected via PYTHONPATH wrote outside the run
+# root and F10 reported violations=[]. Running site.main() HERE puts the real startup sequence under
+# the hook instead of before it; the environment is still the real one, just observed.
+import site
+site.main()
 
 sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(SRC.parent / "scripts"))
@@ -166,6 +187,10 @@ try:
         probe = Path(os.environ["F10_EXTERNAL_PROBE"])
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_text("escaped", encoding="utf-8")
+    elif MODE == "redteam_touch":
+        # the parent PRE-CREATED this file outside the run root. touch() on an existing file fires
+        # ONLY os.utime — no `open`, no `os.rename` — which the enumerated mutation list missed.
+        Path(os.environ["F10_EXTERNAL_PROBE"]).touch()
 
     fetcher = TushareFetcher(config_path=str(SRC.parent / "config.yaml"),
                              avoid_token_cache=True)      # never touches the token cache
@@ -203,9 +228,14 @@ REPORT.write_text(json.dumps(result), encoding="utf-8")
 '''
 
 
-def _run_child(mode: str = "live", probe_from_root=None):
+#: an mtime far enough in the past that a touch() must move it regardless of filesystem resolution
+_OLD_MTIME_NS = 1_000_000_000 * 1_000_000_000
+
+
+def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = False):
     """Run the child in a fresh interpreter. `probe_from_root(run_root) -> Path` picks the red-team
-    target, so one mode covers every escape shape."""
+    target, so one mode covers every escape shape. `startup_inject` plants a `sitecustomize` on
+    PYTHONPATH that writes the probe during interpreter startup."""
     run_root = _recovery_test_root(f"f10_{mode}")
     run_root.mkdir(parents=True, exist_ok=True)
     report = run_root / "report.json"
@@ -217,8 +247,23 @@ def _run_child(mode: str = "live", probe_from_root=None):
     if probe_from_root is not None:
         probe = probe_from_root(run_root)
         env["F10_EXTERNAL_PROBE"] = str(probe)
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "redteam_touch":             # must PRE-EXIST: touch() on a new file also fires open
+            probe.write_text("pre-existing", encoding="utf-8")
+            os.utime(probe, ns=(_OLD_MTIME_NS, _OLD_MTIME_NS))
+    if startup_inject:
+        inj = run_root.parent / f"inj_{run_root.name}"
+        inj.mkdir(parents=True, exist_ok=True)
+        (inj / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            f"Path(r'{probe}').write_text('escaped at startup', encoding='utf-8')\n",
+            encoding="utf-8")
+        env["PYTHONPATH"] = str(inj) + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
-        [sys.executable, str(child), str(run_root), str(report), str(ROOT / "src"), mode],
+        # -S: site initialisation is deferred so the child can install the audit hook FIRST and then
+        # run site.main() UNDER it. Without this, .pth handlers and sitecustomize execute before the
+        # hook exists and their writes are invisible (reproduced).
+        [sys.executable, "-S", str(child), str(run_root), str(report), str(ROOT / "src"), mode],
         capture_output=True, text=True, timeout=300, cwd=str(ROOT), env=env)
     if not report.exists():
         pytest.fail(f"child produced no report.\nstdout={proc.stdout[-2000:]}\n"
@@ -261,6 +306,30 @@ def test_the_monitor_actually_catches_an_external_write(name, derive):
     assert probe.exists(), f"[{name}] the probe write did not actually happen — test is vacuous"
     assert data["violations"], f"[{name}] the write monitor MISSED a real external write to {probe}"
     assert any("escaped.txt" in v for v in data["violations"]), (name, data["violations"])
+
+
+def test_the_monitor_catches_a_touch_of_a_preexisting_external_file():
+    """RED TEAM (fan-out re-review #3). `Path.touch()` on an EXISTING file fires only `os.utime` — no
+    `open`, no rename — so the enumerated mutation list missed it entirely. The list is now default-deny,
+    which catches this and every other mutation event nobody thought to enumerate."""
+    _, data, probe = _run_child("redteam_touch", lambda r: r.parent / "f10_touch_probe" / "existing.txt")
+    assert probe.exists(), "the pre-existing probe file vanished — test is vacuous"
+    assert probe.stat().st_mtime_ns != _OLD_MTIME_NS, "touch() did not actually change mtime"
+    assert data["violations"], f"the monitor MISSED a touch() of the external file {probe}"
+    assert any("utime" in v for v in data["violations"]), data["violations"]
+
+
+def test_the_monitor_catches_a_write_during_interpreter_startup():
+    """RED TEAM (fan-out re-review #3). `.pth` handlers and `sitecustomize` run BEFORE the child's first
+    line, so a write there was invisible. The child now starts under `-S` and calls `site.main()` after
+    installing the hook, putting the real startup sequence under observation instead of ahead of it."""
+    _, data, probe = _run_child("live", lambda r: r.parent / "f10_startup_probe" / "startup_escaped.txt",
+                                startup_inject=True)
+    assert probe.exists(), "the startup write did not actually happen — test is vacuous"
+    assert data["violations"], f"the monitor MISSED a startup-time write to {probe}"
+    assert any("startup_escaped" in v for v in data["violations"]), data["violations"]
+    # and the real construction still happened under -S + site.main()
+    assert data["constructed"] and data["real_client"] == "DataApi", data
 
 
 def test_set_token_is_never_called_on_the_recovery_path():
