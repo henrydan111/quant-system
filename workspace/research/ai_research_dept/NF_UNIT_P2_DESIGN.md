@@ -86,6 +86,20 @@ matches how `assess_flash` consumes ONE typing + ONE route per cluster. If the r
 must union all members' mentions (a flash whose outlets phrase the same event with different stock
 mentions), that is a routing-semantics change and belongs in its own unit — flag it, don't fold here.
 
+## Deferred / disclosed simplifications in the P2 implementation (honest, not hidden)
+
+- **CLI reference assembly is an explicit seam.** `assess_day_flashes` (the testable core) takes the
+  alias registry, industry-term set, and concept-term set INJECTED. The CLI's `_build_reference_inputs`
+  (build the registry from `stock_basic` as-of cutoff; the SW L1 industry-name set from
+  `provider_metadata`; the THS concept-name set from `config.load_concept_members`) is a documented
+  `NotImplementedError` seam, wired at the first real offline run — it depends on live reference files
+  (some affected by the 2026-07-13 incident) and per-source PIT details that deserve their own care.
+  The reviewable unit is the injected core + persistence; the term sources are all confirmed to exist.
+- **`coordination_fired` is inert in P2 v1.** P2 calls `assess_flash` without a coordination flag, so
+  the NFC coordination/pump negative-evidence path is not exercised. `news_ingest.coordination_flag`
+  needs `structured_backing_status` from the event store (a §6 wiring); flagging coordination is its
+  own unit. P2 v1 assesses typing + route only.
+
 ## Not in P2 (separate units)
 
 - Per-stock selection + `render_news_flash_section` + D7 splits → **P3**.
