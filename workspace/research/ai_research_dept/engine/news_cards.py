@@ -1054,7 +1054,15 @@ def verify_d7_artifact(artifact: D7DecisionArtifact) -> D7DecisionArtifact:
         raise RegistryError(
             f"重建束 {rebuilt_bundle.bundle_hash[:12]} ≠ 工件束 "
             f"{bundle.bundle_hash[:12]}——束不是卡绑基事实的确定性推导(re-review#6 B1)")
-    return artifact
+    # GPT #23 P1#1:返回**由副本构造的独立可信工件**,不是调用方的 live artifact
+    # ——否则本函数内部的副本保护不出函数:registry `.items()` 回调(或验证后的
+    # 外部引用)仍可 object.__setattr__ 替换 live artifact 的 bundle/card/rows,
+    # 消费者后续读的还是被污染的活字段。消费边界必须**绑定返回值**
+    # (`artifact = verify_d7_artifact(artifact)`);调用方对返回工件的任何组件
+    # 都不持引用,__post_init__ 以已验的 v_artifact_hash 再自证一遍。
+    return D7DecisionArtifact(
+        card=card, base_facts=base_facts, source_registry=src, rows=rows,
+        bundle=bundle, final_registry=fin, artifact_hash=v_artifact_hash)
 
 
 # --------------------------------------------------- B1′ 存量 ID 语义分类

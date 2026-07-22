@@ -396,7 +396,7 @@ class TestBindingBoundary:
         assert fp.payload_hash == out.factor_payload_hash    # deterministic rebuild
         assert verify_outcome_for_binding(
             out, art, fp, pp, ledger_dir=tmp_path,
-            expected_output_mode="primary_horizon") is out
+            expected_output_mode="primary_horizon") == out    # GPT #23:独立副本
 
     def test_binding_boundary_rejects_foreign_artifact(self, tmp_path):
         from workspace.research.ai_research_dept.engine.news_legs import (

@@ -1198,6 +1198,136 @@ class TestExactTypeBoundaries:
                 _EvilId("d1"), art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert fired["eq"] is False
 
+    def test_registry_callback_bundle_swap_invisible_to_seal_and_load(self, tmp_path):
+        # GPT #23 P1#1: verify_d7_artifact used to return the LIVE artifact, so a
+        # registry-mapping .items() callback that swaps artifact.bundle to an
+        # EvilBundle (whose accessors return the real values) survived into
+        # verify_execution_bundle's post-verify reads — seal succeeded WITH the
+        # evil accessor running. Now every consumer binds the independent copy
+        # returned by verify_d7_artifact: seal AND decision-load both succeed on
+        # the genuine data and the EvilBundle accessors are NEVER invoked.
+        art, bundle = _setup(tmp_path)
+        real_bundle = art.bundle
+        genuine_records = dict(art.source_registry.records)
+        fired = {"acc": 0}
+
+        class _EvilBundle:
+            @property
+            def bundle_hash(self):
+                fired["acc"] += 1
+                return real_bundle.bundle_hash
+            @property
+            def decision_id(self):
+                fired["acc"] += 1
+                return real_bundle.decision_id
+            def __getattr__(self, name):
+                fired["acc"] += 1
+                return getattr(real_bundle, name)
+
+        class _SwapMap(dict):
+            def items(self):
+                # phase-substitution: swap the live bundle AFTER verify_d7_artifact
+                # has copied it — the OLD code re-read live artifact.bundle post-
+                # verify (accessor fires, seal succeeds WITH evil object read).
+                object.__setattr__(art, "bundle", _EvilBundle())
+                return super().items()
+        object.__setattr__(art.source_registry, "records",
+                           _SwapMap(genuine_records))
+        archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                        archive_dir=tmp_path / "arch")
+        assert archive["bundle_hash"] == real_bundle.bundle_hash
+        assert fired["acc"] == 0                        # evil accessors never ran
+        # the sealed archive is genuine — restore the clean artifact and load it
+        object.__setattr__(art.source_registry, "records", genuine_records)
+        object.__setattr__(art, "bundle", real_bundle)
+        loaded = load_and_verify_decision_archive(
+            "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert loaded["archive_sha256"] == archive["archive_sha256"]
+        assert fired["acc"] == 0
+
+    def test_registry_callback_contract_field_swap_invisible(self, tmp_path):
+        # GPT #23 P1#1 (contract face): the registry callback swaps the verified
+        # contract's output_mode to an object with __repr__/__eq__ hooks. The
+        # boundary snapshots the contract BEFORE any callback point; the live
+        # contract is never read again — seal succeeds on the frozen snapshot and
+        # the hooks never fire.
+        art, bundle = _setup(tmp_path)
+        contract = _contract()
+        fired = {"n": 0}
+
+        class _EvilMode:
+            def __repr__(self):
+                fired["n"] += 1
+                return "primary_horizon"
+            def __eq__(self, o):
+                fired["n"] += 1
+                return True
+            def __hash__(self):
+                return hash("primary_horizon")
+
+        class _SwapMap(dict):
+            def items(self):
+                object.__setattr__(contract, "output_mode", _EvilMode())
+                return super().items()
+        object.__setattr__(art.source_registry, "records",
+                           _SwapMap(dict(art.source_registry.records)))
+        archive = seal_decision_archive(
+            bundle, art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            contract=contract, archive_dir=tmp_path / "arch")
+        assert fired["n"] == 0                          # hooks never ran
+        assert archive["contract"]["output_mode"] == "primary_horizon"
+
+    def test_registry_callback_outcome_field_swap_invisible(self, tmp_path):
+        # GPT #23 P1#1 (outcome face): the registry callback swaps the verified
+        # outcome's penalty_leg_status to an object with a __eq__ hook (which the
+        # old dispatch comparisons would run twice). The boundary snapshots the
+        # outcome at entry, before any callback point — seal succeeds and the
+        # hook never fires.
+        art, bundle = _setup(tmp_path)
+        live_outcome = bundle["outcome"]
+        fired = {"n": 0}
+
+        class _EvilStatus:
+            def __eq__(self, o):
+                fired["n"] += 1
+                return o == "success"
+            def __hash__(self):
+                return hash("success")
+
+        class _SwapMap(dict):
+            def items(self):
+                object.__setattr__(live_outcome, "penalty_leg_status",
+                                   _EvilStatus())
+                return super().items()
+        object.__setattr__(art.source_registry, "records",
+                           _SwapMap(dict(art.source_registry.records)))
+        archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
+                                        archive_dir=tmp_path / "arch")
+        assert fired["n"] == 0                          # __eq__ never ran
+        assert archive["outcome"]["penalty_leg_status"] == "success"
+
+    def test_recover_rejects_subclass_rows_before_iteration(self, tmp_path):
+        # GPT #23 P1#2: recovery used to hand the UNVERIFIED artifact to
+        # build_leg_payload_ast, which iterates artifact.rows — a list-subclass
+        # rows ran its __iter__ before any unified validation. Recovery now
+        # verifies + snapshots the artifact at entry: the exact-type gate
+        # (rows must be exactly tuple) statically refuses BEFORE any iteration.
+        from workspace.research.ai_research_dept.engine.news_archive import (
+            recover_and_seal_success_archive,
+        )
+        art, bundle = _setup(tmp_path)
+        fired = {"it": 0}
+
+        class _EvilRows(list):
+            def __iter__(self):
+                fired["it"] += 1
+                return super().__iter__()
+        object.__setattr__(art, "rows", _EvilRows(art.rows))
+        with pytest.raises(RegistryError, match="须恰 tuple"):
+            recover_and_seal_success_archive(
+                "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+        assert fired["it"] == 0                         # __iter__ never ran
+
     def test_boundary_rejection_reads_no_untrusted_type_name(self, tmp_path):
         # archive-re-review#21 P1: a boundary rejection must not read the
         # untrusted object's type().__name__ (which runs the metaclass

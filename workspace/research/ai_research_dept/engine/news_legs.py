@@ -242,6 +242,30 @@ def assert_base_outcome_fields(outcome) -> None:
         raise RegistryError("NewsLegOutcome.penalty_payload_hash 须恰 str/None(re-review#14 P1)")
 
 
+def snapshot_exact_outcome(outcome) -> NewsLegOutcome:
+    """验证 + **重建独立终态快照**(GPT #23 P1 同类面:恰类型门+字段断言后的
+    live outcome 仍可被后续回调(registry `.items()` 等)经 object.__setattr__
+    改写——`penalty_leg_status` 换成带 `__eq__` 的对象即在分派比较时执行调用方
+    代码。边界必须在**任何回调点之前**绑定本快照,此后绝不再读/传原对象。
+    `__post_init__` 重跑 M3⁴ 矩阵自验 + 验 outcome_hash;调用方对快照无引用。"""
+    if type(outcome) is not NewsLegOutcome:
+        raise RegistryError(
+            "须恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒(GPT #23;静态错误)")
+    assert_base_outcome_fields(outcome)
+    return NewsLegOutcome(
+        decision_id=outcome.decision_id, output_mode=outcome.output_mode,
+        factor_leg_status=outcome.factor_leg_status,
+        penalty_eligible_count=outcome.penalty_eligible_count,
+        penalty_eligible_set_hash=outcome.penalty_eligible_set_hash,
+        penalty_leg_status=outcome.penalty_leg_status,
+        news_status=outcome.news_status, shadow_complete=outcome.shadow_complete,
+        decision_complete=outcome.decision_complete,
+        binding_eligible=outcome.binding_eligible,
+        factor_payload_hash=outcome.factor_payload_hash,
+        penalty_payload_hash=outcome.penalty_payload_hash,
+        outcome_hash=outcome.outcome_hash)
+
+
 def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: str,
                       output_mode: str, factor_payload_ast, penalty_payload_ast,
                       factor_leg_fn, penalty_leg_fn) -> NewsLegOutcome:
@@ -264,7 +288,7 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
     if type(decision_id) is not str or not decision_id.strip():
         raise RegistryError(f"decision_id 须恰 str 非空(得 {type(decision_id).__name__})"
                             f"——执行体前拒(re-review#2 M1)")
-    verify_d7_artifact(artifact)
+    artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     if decision_id != artifact.bundle.decision_id:
         raise RegistryError(f"decision_id {decision_id!r} ≠ 工件 "
                             f"{artifact.bundle.decision_id!r}——执行体前拒")
@@ -345,11 +369,7 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
     primary 终态不符,契约说 primary 则那才是合法模式);从已验工件**重算** penalty
     适格计数+集合哈希;两腿 payload 经执行体边界校验器(**带期望槽位**——penalty
     payload 冒充 factor 槽拒)重验且哈希与终态逐字节相等。"""
-    if type(outcome) is not NewsLegOutcome:
-        raise RegistryError(
-            "绑定边界只收恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
-            "(archive-re-review#6 P0 同类面;re-review#21 静态错误)")
-    assert_base_outcome_fields(outcome)                # re-review#14 P1:消费时复验
+    outcome = snapshot_exact_outcome(outcome)          # GPT #23:回调点前独立快照
     if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
         raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"
                             f"(来自冻结评分契约;得 {expected_output_mode!r})")
@@ -359,7 +379,7 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
         raise LegIntegrityError(
             f"终态自封 output_mode {outcome.output_mode!r} ≠ 冻结契约期望 "
             f"{expected_output_mode!r}——模式重放/翻铸拒(re-review#2 B1)")
-    verify_d7_artifact(artifact)
+    artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     if outcome.decision_id != artifact.bundle.decision_id:
         raise RegistryError("终态 decision_id 与工件不符(绑定边界)")
     eligible = penalty_eligible_records(artifact)

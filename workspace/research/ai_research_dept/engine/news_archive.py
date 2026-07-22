@@ -154,7 +154,7 @@ from workspace.research.ai_research_dept.engine.news_executors import (
     _EMPTY_PENALTY_RECORD, _EMPTY_PENALTY_SENTINEL, _TERMINAL_VERDICTS,
     NewsScoringContract, _check_terminal_row, _prov_lock, _rebuild_leg_payloads,
     _resolve_terminal, contract_canonical_payload, read_execution_provenance,
-    require_exact_contract,
+    require_exact_contract, snapshot_exact_contract,
 )
 from workspace.research.ai_research_dept.engine.news_horizon import (
     deterministic_zero_factor_record, evaluate_news_horizon,
@@ -162,7 +162,7 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
 from workspace.research.ai_research_dept.engine.news_legs import (
     NewsLegOutcome, _derive_terminal, _eligible_set_hash,
     assert_base_outcome_fields, outcome_canonical_payload,
-    penalty_eligible_records, verify_outcome_for_binding,
+    penalty_eligible_records, snapshot_exact_outcome, verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
 
@@ -288,7 +288,11 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         # re-review#21 P1:错误信息**静态**——`{type(bundle).__name__}` 会在抛异常
         # 前触发不可信对象的元类 __getattribute__(拒绝路径也不得跑调用方代码)
         raise RegistryError("bundle 须恰 dict(子类/自定义对象拒,re-review#20/#21)")
-    require_exact_contract(contract)                   # re-review#6 P0
+    # GPT #23 P1 同类面:contract/outcome 在**任何回调点之前**重建为独立快照——
+    # 验证过的 live 对象仍可被后续 registry `.items()` 回调经 object.__setattr__
+    # 改写(output_mode 换带 __repr__ 的对象、penalty_leg_status 换带 __eq__ 的
+    # 对象),之后的读取/比较/传参就在执行调用方代码。此后全程只用快照。
+    contract = snapshot_exact_contract(contract)       # re-review#6 P0 + GPT #23
     # re-review#16 P1:契约 canonical 载荷 + hash **验证后立即捕获**进本地(冻进
     # verified 快照)——seal 此后绝不回读 live contract/artifact,污染无处施展
     v_contract_payload = contract_canonical_payload(contract)
@@ -299,7 +303,7 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         raise RegistryError(
             "bundle.outcome 须为恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
             "(re-review#6 P0 同类面)")
-    assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
+    outcome = snapshot_exact_outcome(outcome)          # 含 assert(re-review#15/GPT #23)
     # 调用方 JSON 部分一次性深拍普通快照(下游只用它,绝不再碰 live bundle)
     execution_id = _deep_plain_json(bundle.get("execution_id"),
                                     path="bundle.execution_id")
@@ -315,7 +319,11 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
     # list;None 时下面自 `_read_chain`(其输出即普通 dict)。
     if chain is not None:
         chain = _deep_plain_json(chain, path="chain")
-    verify_d7_artifact(artifact)
+    # GPT #23 P1#1:**绑定 verify_d7_artifact 返回的独立可信副本**——旧代码丢弃
+    # 返回值继续读 live artifact,其内部的 registry `.items()` 回调可把
+    # live `artifact.bundle` 换成带属性钩子的对象再恢复,封档时 EvilBundle 的
+    # bundle_hash 访问器已被执行。此后全部 artifact 读取/传参都是可信副本。
+    artifact = verify_d7_artifact(artifact)
     v_artifact_hash = artifact.artifact_hash           # re-review#16:验证后即捕获
     v_bundle_hash = artifact.bundle.bundle_hash
     v_final_registry_hash = artifact.final_registry.registry_hash
@@ -470,24 +478,14 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             f"{v_contract_payload})——主评分周期等契约字段不可替换,拒(re-review#5 P0)")
     # re-review#16 P1:产出**完全独立、类型闭合的 verified 归档载荷**——归档
     # 序列化只消费它,seal 此后绝不回读 live bundle/contract/artifact。
-    # - outcome 重建为全新 NewsLegOutcome(字段已断言普通值;__post_init__ 重跑
-    #   M3⁴ + 验 outcome_hash),与 bundle["outcome"] 解除别名;
+    # - outcome 已在**入口**经 snapshot_exact_outcome 重建为独立快照
+    #   (GPT #23:与 bundle["outcome"] 解除别名且先于一切回调点),直接作
+    #   verified_outcome;
     # - records / selected_provenance 只由**磁盘解析终态行**(f_resolved/
     #   p_selected)构造,不取调用方 f_row/sel/bundle["records"];
     # - evaluation 基于该可信 records 重算;contract/artifact hash 用已捕获值;
     # - 整体经 JSON 深拷贝彻底解除别名(回调篡改的 live 输入到不了盘)。
-    verified_outcome = NewsLegOutcome(
-        decision_id=outcome.decision_id, output_mode=outcome.output_mode,
-        factor_leg_status=outcome.factor_leg_status,
-        penalty_eligible_count=outcome.penalty_eligible_count,
-        penalty_eligible_set_hash=outcome.penalty_eligible_set_hash,
-        penalty_leg_status=outcome.penalty_leg_status,
-        news_status=outcome.news_status, shadow_complete=outcome.shadow_complete,
-        decision_complete=outcome.decision_complete,
-        binding_eligible=outcome.binding_eligible,
-        factor_payload_hash=outcome.factor_payload_hash,
-        penalty_payload_hash=outcome.penalty_payload_hash,
-        outcome_hash=outcome.outcome_hash)
+    verified_outcome = outcome
     # re-review#17:trusted_records / trusted_eval 已在 evaluation 段用**冻结
     # registry 快照**在任何回调之前算好——此处直接复用,不再触碰 live artifact
     verified_payload = {
@@ -605,10 +603,13 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     # 就进 `==`。此后身份比较只用**已捕获的基础值**(archive 来自盘上普通 JSON)。
     if type(decision_id) is not str or type(execution_id) is not str:
         raise RegistryError("decision_id/execution_id 须恰 str(re-review#23)")
-    require_exact_contract(contract)                   # 验证 + 自封哈希校验
-    verify_d7_artifact(artifact)                       # 验证工件(re-review#23 P1#1 后可信)
+    # GPT #23:契约**先**快照(verify_d7_artifact 内的 registry 回调可改写 live
+    # contract 字段,旧序在其后才捕获 v_contract_*);artifact **绑定返回的独立
+    # 可信副本**——此后本函数与下游 verify_execution_bundle 只用可信对象。
+    contract = snapshot_exact_contract(contract)
     v_contract_hash = contract.contract_hash
     v_contract_payload = contract_canonical_payload(contract)
+    artifact = verify_d7_artifact(artifact)
     v_artifact_hash = artifact.artifact_hash
     v_bundle_hash = artifact.bundle.bundle_hash
     v_final_registry_hash = artifact.final_registry.registry_hash
@@ -746,7 +747,12 @@ def recover_and_seal_success_archive(decision_id: str,
     `seal_decision_archive` 重跑全量联合验证 + write-once。"""
     if type(decision_id) is not str:                   # re-review#23:先于 == 比较
         raise RegistryError("decision_id 须恰 str(re-review#23)")
-    require_exact_contract(contract)                   # re-review#6 P0
+    # GPT #23 P1#2:恢复入口**先**取得独立 contract/artifact 快照——旧代码在
+    # artifact 类型门之前就把它交给 build_leg_payload_ast 迭代(rows 换成 list
+    # 子类,其 __iter__ 在统一校验前执行)。verify_d7_artifact 的恰类型门
+    # (rows 须恰 tuple)静态拒于任何迭代之前;此后全程只用可信副本。
+    contract = snapshot_exact_contract(contract)       # re-review#6 P0 + GPT #23
+    artifact = verify_d7_artifact(artifact)
     chain = _read_chain(_ledger_path(ledger_dir))
     success = _find_success_commitment(chain, decision_id)
     if success is None:

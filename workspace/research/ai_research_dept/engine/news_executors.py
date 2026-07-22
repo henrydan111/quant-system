@@ -64,7 +64,7 @@ from workspace.research.ai_research_dept.engine.news_horizon import (
 )
 from workspace.research.ai_research_dept.engine.news_legs import (
     NewsLegOutcome, assert_base_outcome_fields, run_news_two_legs,
-    verify_outcome_for_binding,
+    snapshot_exact_outcome, verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
     plain_str, seal_hash, verify_sealed,
@@ -182,6 +182,19 @@ def require_exact_contract(contract) -> NewsScoringContract:
     verify_sealed(contract_canonical_payload(contract), contract.contract_hash,
                   field_name="contract_hash")
     return contract
+
+
+def snapshot_exact_contract(contract) -> NewsScoringContract:
+    """验证 + **重建独立契约快照**(GPT #23 P1 同类面:`require_exact_contract`
+    过门后的 live contract 仍可被后续回调(registry `.items()` 等)经
+    object.__setattr__ 改写——`output_mode` 换成带钩子的对象即在之后的读取/比较
+    时执行调用方代码。边界必须在**任何回调点之前**绑定本快照,此后绝不再读/传
+    原对象。`__post_init__` 重验一致性 + contract_hash;调用方对快照无引用。"""
+    require_exact_contract(contract)
+    return NewsScoringContract(
+        schema_id=contract.schema_id, output_mode=contract.output_mode,
+        primary_decision_horizon=contract.primary_decision_horizon,
+        contract_hash=contract.contract_hash)
 
 
 # --------------------------------------------------- 尝试绑定出处(先于绑定)
@@ -455,18 +468,22 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
     调用方能影响的只有"哪个执行被验证",不能影响"承诺什么哈希";伪造承诺
     要么在此验证死,要么(真实 success 已承诺后)死于 success-唯一。幂等重试
     安全(逐字节相同 → 返回已有承诺行)。"""
-    require_exact_contract(contract)
+    # GPT #23 P1 同类面:contract/outcome 在**任何回调点之前**重建为独立快照,
+    # artifact 绑定 verify_d7_artifact 返回的独立副本——此后全程只用可信对象
+    contract = snapshot_exact_contract(contract)
     if type(outcome) is not NewsLegOutcome:
         raise RegistryError(
             "承诺权威只收恰 NewsLegOutcome——子类可覆写 _payload 脱钩,拒"
             "(re-review#6 P0 同类面;re-review#21 静态错误)")
-    assert_base_outcome_fields(outcome)                # re-review#15 P1:先于字段读
+    outcome = snapshot_exact_outcome(outcome)          # 含 assert_base_outcome_fields
     if type(execution_id) is not str or not execution_id.strip():
         raise RegistryError("execution_id 须恰 str 非空")
+    if type(decision_id) is not str:                   # 先于 == 比较(GPT #23 类5)
+        raise RegistryError("decision_id 须恰 str(GPT #23;静态错误)")
     if outcome.decision_id != decision_id:
         raise RegistryError(
             f"outcome.decision_id {outcome.decision_id!r} ≠ {decision_id!r}")
-    verify_d7_artifact(artifact)
+    artifact = verify_d7_artifact(artifact)
     factor_payload, penalty_payload = _rebuild_leg_payloads(
         artifact, outcome, ledger_dir=ledger_dir)
     verify_outcome_for_binding(outcome, artifact, factor_payload, penalty_payload,

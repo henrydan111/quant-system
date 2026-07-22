@@ -609,7 +609,8 @@ class TestD7Artifact:
     def test_factory_artifact_verifies(self):
         from workspace.research.ai_research_dept.engine.news_cards import verify_d7_artifact
         _, _, _, art = self._artifact()
-        assert verify_d7_artifact(art) is art
+        verified = verify_d7_artifact(art)                # GPT #23:独立可信副本
+        assert verified is not art and verified == art    # 同值、非同一对象
         assert len(art.artifact_hash) == 64
 
     def test_wrong_source_correct_registry_rejected(self):
@@ -895,7 +896,7 @@ class TestD7Artifact:
         forged_facts = tuple(forged_nfi if bf.base_record_id == "NFI01" else bf
                              for bf in facts)
         art = self._hand_sealed_artifact(forged_facts)
-        assert verify_d7_artifact(art) is art                 # accepted
+        assert verify_d7_artifact(art) == art                 # accepted(GPT #23:独立副本)
 
     def test_shifted_registry_cutoff_rejected(self):
         # re-review#6 Major-1: registries dated differently from card/bundle refuse

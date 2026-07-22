@@ -206,7 +206,7 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
     if type(decision_id) is not str or not decision_id.strip():
         raise RegistryError(f"权威 decision_id 须恰 str 非空(得 "
                             f"{type(decision_id).__name__} {decision_id!r};子类拒)")
-    verify_d7_artifact(artifact)
+    artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     if artifact.bundle.decision_id != decision_id:
         raise RegistryError(
             f"工件束 decision_id {artifact.bundle.decision_id!r} ≠ 账本权威 "
@@ -341,7 +341,7 @@ def ledger_head(ledger_dir) -> str:
 def require_recorded(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) -> dict:
     """payload 构造/执行前的账本门(BINDING #1 + 实现审 M1):工件重验过门、决策
     已入账、且账本行与**全部工件派生字段**逐一相等(改任一字段/换行=拒)。"""
-    verify_d7_artifact(artifact)
+    artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     entry = lookup_decision(ledger_dir, decision_id)
     if entry is None:
         raise RegistryError(f"decision {decision_id!r} 未入账——payload 构造前必须"
