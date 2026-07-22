@@ -2079,10 +2079,19 @@ def test_the_verified_plan_cache_cannot_be_edited_by_a_caller(rig):
     rid = rows[0]["request_id"]
     original = L._plan()[rid]["params"]["trade_date"]
     handed_out = L._plan()
-    handed_out[rid]["params"]["trade_date"] = "20990101"
+    # the plan is now DEEP-FROZEN rather than detached-on-access: an edit is refused outright, and
+    # there is no wrapper carrying the live cache on an attribute (GPT round 2 walked straight through
+    # `_DetachedPlanView._rows` — the wrapper meant to close this was itself the way around it)
+    with pytest.raises(TypeError):
+        handed_out[rid]["params"]["trade_date"] = "20990101"
+    with pytest.raises(TypeError):
+        handed_out[rid] = {"hijacked": True}
+    assert not hasattr(handed_out, "_rows"), "a mutable cache is reachable off the returned object"
     assert L._plan()[rid]["params"]["trade_date"] == original, "a caller edited the attested plan"
     on_disk = json.loads(L.plan_path.read_text(encoding="utf-8"))["rows"][0]["params"]["trade_date"]
     assert original == on_disk
+    # a consumer that genuinely needs a mutable row takes an explicit local copy
+    assert dict(handed_out[rid])["endpoint"] == "daily"
 
 
 def test_the_verified_ledger_rows_cannot_be_edited_by_a_caller(rig):
@@ -2113,3 +2122,29 @@ def test_read_only_and_idle_processes_still_re_verify(rig, monkeypatch):
     monkeypatch.setattr(rl, "_FULL_REVERIFY_AFTER_SECONDS", -1.0)   # everything is immediately stale
     L._load()
     assert L._chain_cache["hits"] == 0, "the time budget never forced a replay"
+
+
+def test_a_deleted_genesis_anchor_is_not_re_minted(rig):
+    """GPT round 2 caught me claiming this was fixed when the code did no such thing — the claim was in
+    a commit message and a review prompt, and deleting only chain_genesis.json let a fresh instance
+    recreate it and accept the run. Under the SAME identity it even reproduces the old value, so the
+    run just carries on with a silently re-established baseline."""
+    rp, L = rig
+    L.event("real_history")
+    L._load()
+    assert L.genesis_path.exists()
+    L.genesis_path.unlink()
+    L2 = rl.PageReceiptLedger(rp, coordinator_commit=L.coordinator_commit,
+                              adapter_bundle_hash=L.adapter_bundle_hash)
+    with pytest.raises(rl.LedgerError, match="refusing to re-mint"):
+        L2._load()
+    assert not L2.genesis_path.exists(), "the anchor was re-created despite the refusal"
+
+
+def test_freezing_does_not_change_any_digest(rig):
+    """Freezing must be invisible to hashing: a frozen row has to canonicalise identically to the plain
+    dict it came from, or every downstream digest would shift under it."""
+    plain = {"b": 2, "a": [1, {"c": 3}], "d": {"e": "f"}}
+    frozen = rl._freeze_deep(plain)
+    assert rl._canon(frozen) == rl._canon(plain)
+    assert rl._h(rl._canon(frozen)) == rl._h(rl._canon(plain))

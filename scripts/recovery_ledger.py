@@ -24,11 +24,9 @@ All writes go through the no-follow broker (recovery_write_broker). No network.
 from __future__ import annotations
 
 import hashlib
-import copy
 import json
 import os
 import time
-from collections.abc import Mapping
 from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +37,17 @@ class LedgerError(RuntimeError):
 
 
 def _canon(obj) -> str:
-    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    """Canonical JSON. Handles the read-only mappings the verified caches hand out: a frozen row must
+    hash IDENTICALLY to the plain dict it was frozen from, otherwise freezing would silently change
+    every downstream digest. (`tuple` already serialises as a JSON array, so lists need nothing.)"""
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                      default=_canon_default)
+
+
+def _canon_default(o):
+    if isinstance(o, MappingProxyType):
+        return dict(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
 
 def _h(s: str) -> str:
@@ -284,27 +292,15 @@ def _freeze_deep(obj):
     return obj
 
 
-class _DetachedPlanView(Mapping):
-    """Read-only plan mapping that hands out a DETACHED deep copy per row access.
-
-    The plan is the attested artifact the exploit targeted, and its callers legitimately treat a row as
-    a mutable dict, so freezing it in place would ripple through every consumer. Copying one small row
-    on access costs nothing next to re-verifying 102 MB, and nothing a caller does to what it receives
-    can reach the cache."""
-
-    __slots__ = ("_rows",)
-
-    def __init__(self, rows: dict):
-        self._rows = rows
-
-    def __getitem__(self, key):
-        return copy.deepcopy(self._rows[key])
-
-    def __iter__(self):
-        return iter(self._rows)
-
-    def __len__(self):
-        return len(self._rows)
+#: The plan is returned DEEP-FROZEN, with no wrapper object at all.
+#:
+#: A previous attempt wrapped the live cache in a view that deep-copied on `__getitem__`. That was
+#: wrong twice over: the view still carried the mutable cache on `self._rows`, so the exploit it was
+#: meant to close survived one attribute access away; and copying every row on every access made a
+#: whole-plan scan ~100x slower than the underlying dict, which `cmd_fetch` does 59 times across the
+#: 29 families. Freezing removes the wrapper, the bypass and the copies together — there is nothing
+#: mutable to reach and nothing to copy. A consumer that genuinely needs a mutable row writes
+#: `dict(row)`, which is explicit and local.
 
 
 class PageReceiptLedger:
@@ -424,8 +420,16 @@ class PageReceiptLedger:
                                   f"{self.rp.run_id!r} — a ledger from another run cannot be adopted")
             self._genesis_cache = g
             return g
-        # First open of a fresh run: mint and PERSIST it. The inputs are captured as evidence so the
-        # anchor stays auditable even though it is no longer re-derived from them.
+        # Minting is for a genuinely FRESH run only. With a ledger, a head or a frozen plan already on
+        # disk, a missing anchor is a DELETED anchor, and re-minting it would silently establish a new
+        # baseline for an existing chain — under the same identity it even reproduces the old value and
+        # the run just carries on, which is the whole problem. (I previously claimed this was closed
+        # while the code did no such thing; it is closed now, and pinned.)
+        survivors = [p.name for p in (self.ledger_path, self.head_path, self.plan_path) if p.exists()]
+        if survivors:
+            raise LedgerError(f"chain_genesis.json is MISSING but the run still holds {survivors} — "
+                              f"the anchor was deleted; refusing to re-mint a baseline for an existing "
+                              f"chain")
         g = _h(_canon({"run": self.rp.run_id, "commit": self.coordinator_commit,
                        "adapters": self.adapter_bundle_hash}))
         self.rp.write_json(self.genesis_path,
@@ -632,7 +636,7 @@ class PageReceiptLedger:
         cache = self._plan_cache
         if cache is not None and cache[0] == st.st_size and cache[1] == st.st_mtime_ns \
                 and cache[2] == attested:
-            return _DetachedPlanView(cache[3])
+            return cache[3]                     # already deep-frozen; nothing mutable to hand out
         plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
         recomputed = _h(_canon(plan["rows"]))
         if recomputed != plan["sha256"]:
@@ -640,9 +644,9 @@ class PageReceiptLedger:
         if recomputed != attested:
             raise LedgerError(f"request_plan.json ({recomputed[:12]}) != the hash-chained plan_frozen "
                               f"event ({str(attested)[:12]}) — the plan was rewritten after freezing")
-        out = {r["request_id"]: r for r in plan["rows"]}
+        out = _freeze_deep({r["request_id"]: r for r in plan["rows"]})
         self._plan_cache = (st.st_size, st.st_mtime_ns, attested, out)
-        return _DetachedPlanView(out)
+        return out
 
     def event(self, name: str, **kw) -> None:
         with self.rp._lock():
