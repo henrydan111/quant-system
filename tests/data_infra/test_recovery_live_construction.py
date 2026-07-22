@@ -62,9 +62,38 @@ def _recovery_test_root(sub: str) -> Path:
     return base / sub / uuid.uuid4().hex
 
 
-#: The child program. Audit hook + socket guard FIRST, then lock isolation, then construct.
+#: The child program. Audit hook FIRST — before ANY import that can be shadowed — then everything else.
 _CHILD = r'''
-import json, os, socket, sys
+# `sys` is a BUILT-IN module: it is satisfied from the interpreter itself and can never be served from
+# PYTHONPATH. Every other import can be. `-S` defers site initialisation but does NOT drop PYTHONPATH
+# from sys.path (verified), so a pre-placed PYTHONPATH\json.py that proxies the real stdlib module runs
+# arbitrary code at `import json` — and the previous version imported json/os/socket/pathlib BEFORE
+# installing the hook, leaving a deterministic blind window at exactly the bootstrap stage. So: import
+# sys, install the hook, and only then import anything else.
+import sys
+
+violations = []
+_raw = []                       # events seen before os/pathlib exist, replayed once they do
+_ready = [False]
+
+
+def _audit(event, args):
+    if not _ready[0]:
+        # Pre-bootstrap: no os, no pathlib, so no path judgement is possible yet. BUFFER instead of
+        # dropping — the events still happened and are replayed through the identical classifier below.
+        # Filtering here uses str methods only, which are builtins.
+        try:
+            if event == "open" or event.startswith(("os.", "shutil.", "socket.", "subprocess.")):
+                _raw.append((event, tuple(args[:3])))
+        except Exception:
+            pass
+        return
+    _classify(event, args)
+
+
+sys.addaudithook(_audit)
+
+import json, os, socket
 from pathlib import Path
 
 RUN_ROOT = Path(sys.argv[1]).resolve()
@@ -72,10 +101,6 @@ REPORT = Path(sys.argv[2])
 SRC = Path(sys.argv[3])
 MODE = sys.argv[4] if len(sys.argv) > 4 else "live"
 
-violations = []
-
-# Armed from the FIRST line, not after the imports: F10 exists partly to catch IMPORT-time writes
-# (logging handlers, .env loading), so skipping the import phase would forfeit the thing being proven.
 # The parent sets PYTHONDONTWRITEBYTECODE=1, so there is NO legitimate write outside the run root and
 # therefore NO exemption of any kind — an exemption nobody counts is an unobserved escape hatch.
 
@@ -107,7 +132,9 @@ _PROCESS = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.st
 #: NON-writing events is bounded and fails closed. Any `os.*`/`shutil.*` event not listed here — today's
 #: or a future Python's — is treated as a mutation. Derived by enumerating every os/shutil event that
 #: actually fires with an outside path during a real construction run; these four were the whole set,
-#: and none of them writes (putenv/unsetenv pass a variable NAME, not a path).
+#: and none of them writes (putenv/unsetenv pass a variable NAME, not a path; add_dll_directory changes
+#: the process's DLL SEARCH PATH, which is process state, not a write to disk — per the reviewer, F10
+#: should not count it as an external write).
 _NON_WRITE_OS_EVENTS = frozenset({
     "os.listdir", "os.scandir", "os.stat", "os.lstat", "os.access", "os.chdir", "os.fwalk",
     "os.getxattr", "os.listxattr", "os.readlink", "os.add_dll_directory",
@@ -115,9 +142,10 @@ _NON_WRITE_OS_EVENTS = frozenset({
 })
 
 
-def _audit(event, args):
+def _classify(event, args):
     # sys.addaudithook fires for C-level opens too, so Path.write_text / io.open / os.open are all
-    # covered — a builtins.open shim is not (verified: it misses Path.write_text).
+    # covered — a builtins.open shim is not (verified: it misses Path.write_text). Buffered
+    # pre-bootstrap events are replayed through THIS function, so both phases share one classifier.
     try:
         if event == "open":
             path, mode = args[0], args[1]
@@ -141,7 +169,13 @@ def _audit(event, args):
         pass
 
 
-sys.addaudithook(_audit)
+# The classifier and the path judgement now exist, so switch the hook out of buffering mode and REPLAY
+# everything it saw during bootstrap. A `PYTHONPATH\json.py` shim's write lands here.
+_ready[0] = True
+for _ev, _ar in _raw:
+    _classify(_ev, _ar)
+_bootstrap_events_seen = len(_raw)
+_raw = []
 
 
 class _NoNet(socket.socket):
@@ -224,6 +258,7 @@ except BaseException as exc:
 
 result["violations"] = violations
 result["dont_write_bytecode"] = bool(sys.dont_write_bytecode)
+result["bootstrap_events_seen"] = _bootstrap_events_seen
 REPORT.write_text(json.dumps(result), encoding="utf-8")
 '''
 
@@ -254,10 +289,25 @@ def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = 
     if startup_inject:
         inj = run_root.parent / f"inj_{run_root.name}"
         inj.mkdir(parents=True, exist_ok=True)
-        (inj / "sitecustomize.py").write_text(
-            "from pathlib import Path\n"
-            f"Path(r'{probe}').write_text('escaped at startup', encoding='utf-8')\n",
-            encoding="utf-8")
+        if startup_inject == "shadow_stdlib":
+            # A pre-placed PYTHONPATH\json.py that writes outside the run root and then proxies the
+            # REAL stdlib json, so the child keeps working and the escape is silent. This runs at
+            # `import json`, i.e. during the child's own bootstrap imports.
+            (inj / "json.py").write_text(
+                "import sys, os\n"
+                "with open(os.environ['F10_EXTERNAL_PROBE'], 'w') as _f:\n"
+                "    _f.write('escaped at bootstrap')\n"
+                "_here = os.path.dirname(os.path.abspath(__file__))\n"
+                "sys.path = [p for p in sys.path if os.path.abspath(p) != _here]\n"
+                "del sys.modules['json']\n"
+                "import json as _real\n"
+                "sys.modules['json'] = _real\n",
+                encoding="utf-8")
+        else:
+            (inj / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path(r'{probe}').write_text('escaped at startup', encoding='utf-8')\n",
+                encoding="utf-8")
         env["PYTHONPATH"] = str(inj) + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
         # -S: site initialisation is deferred so the child can install the audit hook FIRST and then
@@ -330,6 +380,25 @@ def test_the_monitor_catches_a_write_during_interpreter_startup():
     assert any("startup_escaped" in v for v in data["violations"]), data["violations"]
     # and the real construction still happened under -S + site.main()
     assert data["constructed"] and data["real_client"] == "DataApi", data
+
+
+def test_the_monitor_catches_a_shadowed_stdlib_module_at_bootstrap():
+    """RED TEAM (fan-out re-review #4). `-S` defers site init but does NOT drop PYTHONPATH, so a
+    pre-placed `PYTHONPATH\\json.py` executes at the child's own `import json` — which used to happen
+    BEFORE the hook was installed. The shim writes outside the run root and then proxies the real
+    stdlib module, so nothing downstream breaks and the escape is silent.
+
+    The child now imports only the BUILT-IN `sys` first (never satisfiable from PYTHONPATH), installs a
+    buffering hook, and replays the buffer once path judgement exists."""
+    _, data, probe = _run_child("live", lambda r: r.parent / "f10_shadow_probe" / "bootstrap_escaped.txt",
+                                startup_inject="shadow_stdlib")
+    assert probe.exists(), "the bootstrap write did not actually happen — test is vacuous"
+    assert data["violations"], f"the monitor MISSED a bootstrap write to {probe} via a shadowed stdlib"
+    assert any("bootstrap_escaped" in v for v in data["violations"]), data["violations"]
+    assert data["bootstrap_events_seen"] > 0, "no pre-bootstrap events were buffered at all"
+    # and the proxy really did keep the interpreter working end to end
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+    assert data["page_rows"] == 1, data
 
 
 def test_set_token_is_never_called_on_the_recovery_path():
