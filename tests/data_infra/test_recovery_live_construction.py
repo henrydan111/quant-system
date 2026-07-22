@@ -29,11 +29,21 @@ History of what this test got wrong, because the pattern matters more than the f
 The assertion is an ALLOWLIST: with bytecode writing disabled and the API lock isolated into the run
 root, there is no legitimate write outside the run root at all, so the expected count is exactly zero.
 
-`sys.addaudithook` covers Python-level and C-level `open`, the `os.*` mutation events, sockets, and
-process spawning. It is NOT an OS sandbox: a direct `CreateFileW` via ctypes, a write through an
-already-established memory mapping, or a write performed inside a spawned child would not be caught by
-it. A static scan of the construction path finds none of those, and process spawning is now flagged, so
-this is a documented limit of the instrument rather than a known hole in the subject.
+Surfaces judged, all derived from ENUMERATING the full audit-event namespace of a clean run (through
+the executor page, not just construction — the first enumeration stopped at construction and missed
+`msvcrt`, `tempfile` and `ctypes.get_last_error`): `open` (flag/mode based), `os.*`/`shutil.*`/
+`tempfile.*` (path, default-deny), `socket.*` (default-deny), the process family (deny, incl. the raw
+`_winapi.CreateProcess` that Windows multiprocessing actually uses), `winreg.*` (default-deny),
+`ctypes.*` and `msvcrt.*` (default-deny).
+
+`sys.addaudithook` is NOT an OS sandbox, and the precise limit is worth stating correctly rather than
+comfortably: the clean construction path DOES load and resolve native symbols — `ctypes.dlopen` x7 and
+`ctypes.dlsym` x24, including the write broker's `CreateFileW`/`NtCreateFile`. Invoking an
+already-resolved `WinDLL` function attribute fires no audit event, so this test cannot prove no native
+write occurred. What it proves is that THIS F10 path performs no raw `ctypes.call_function`-style call
+and no un-audited namespace event. A write through an established memory mapping, or any write inside a
+spawned child, is likewise outside the instrument — which is why process creation is denied outright
+rather than inspected.
 """
 from __future__ import annotations
 
@@ -76,6 +86,13 @@ violations = []
 _raw = []                       # events seen before os/pathlib exist, replayed once they do
 _ready = [False]
 
+#: Every namespace the classifier judges. Derived by enumerating the FULL audit-event namespace of a
+#: clean construction run rather than by adding one surface per review round: the non-import namespaces
+#: are open / os / socket / winreg / ctypes, plus _winapi and shutil and subprocess which a clean run
+#: does not fire but which are reachable. Anything buffered here must have a branch in _classify.
+_WATCHED_NAMESPACES = ("os.", "shutil.", "tempfile.", "socket.", "subprocess.", "_winapi.",
+                       "winreg.", "ctypes.", "msvcrt.")
+
 
 def _audit(event, args):
     if not _ready[0]:
@@ -83,7 +100,7 @@ def _audit(event, args):
         # dropping — the events still happened and are replayed through the identical classifier below.
         # Filtering here uses str methods only, which are builtins.
         try:
-            if event == "open" or event.startswith(("os.", "shutil.", "socket.", "subprocess.")):
+            if event == "open" or event.startswith(_WATCHED_NAMESPACES):
                 _raw.append((event, tuple(args[:3])))
         except Exception:
             pass
@@ -122,13 +139,49 @@ def _allowed(path) -> bool:
 
 _WRITE_MODES = ("w", "a", "x", "+")
 
+#: Destructive open flags. O_WRONLY/O_RDWR/O_CREAT/O_APPEND alone missed Windows `O_TEMPORARY`, which
+#: opens an EXISTING file read-only and DELETES it on close (reproduced: the file was gone, flags=192,
+#: and the old mask reported no violation). Destruction is not the same predicate as writing, so the
+#: mask covers truncation and delete-on-close too.
+_DESTRUCTIVE_FLAGS = 0
+for _f in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC", "O_TEMPORARY", "O_TMPFILE"):
+    _DESTRUCTIVE_FLAGS |= getattr(os, _f, 0)
+
+#: winreg — the fifth surface, and one a clean run genuinely uses (ConnectRegistry / OpenKey /
+#: EnumValue / QueryInfoKey, all reads, resolving the Windows time-zone table). Default-deny with the
+#: READ set enumerated, same polarity as os/socket: DeleteKey, SetValue*, CreateKey*, LoadKey and
+#: anything else that mutates the registry is a violation.
+_NON_MUTATING_WINREG = frozenset({
+    "winreg.ConnectRegistry", "winreg.OpenKey", "winreg.OpenKey/result", "winreg.EnumKey",
+    "winreg.EnumValue", "winreg.QueryInfoKey", "winreg.QueryValue", "winreg.QueryValueEx",
+    "winreg.ExpandEnvironmentStrings", "winreg.QueryReflectionKey", "winreg.PyHKEY.Detach",
+})
+
+#: ctypes — a clean run loads and RESOLVES native symbols (dlopen x7, dlsym x24), including the write
+#: broker's CreateFileW/NtCreateFile. Loading and resolving are not calling, so those two are permitted
+#: and everything else in the namespace is denied. LIMIT, stated precisely: invoking an already-resolved
+#: WinDLL function attribute fires NO audit event, so this branch cannot prove a native write did not
+#: happen — it only proves this F10 path made no raw `ctypes.call_function` style call. The real
+#: guarantee for native writes is that the construction path does not invoke them, not that F10 sees it.
+_NON_CALLING_CTYPES = frozenset({"ctypes.dlopen", "ctypes.dlsym", "ctypes.dlsym/handle",
+                                 "ctypes.get_last_error"})
+
+#: FD-scoped events carry a file DESCRIPTOR, not a path, so they cannot be path-judged — but the `open`
+#: that produced the descriptor already was. Permitted on that basis (a lock on an in-root fd is in
+#: root by construction), not because they are inconvenient. Anything else in the namespace is denied.
+_FD_SCOPED_EVENTS = frozenset({"msvcrt.locking", "msvcrt.get_osfhandle", "msvcrt.open_osfhandle"})
+
 #: Process spawning: an audit hook does not follow a child, so spawning one is BY DEFINITION an
 #: unobservable write surface — the child's writes are invisible no matter where its EXECUTABLE lives.
 #: Matched by FAMILY, not by exact name. The exact-name form missed `os.spawn` (the real event name on
 #: Windows, reproduced), and worse, an unmatched spawn event fell through to the generic `os.*` path
 #: check, which ALLOWED it whenever the program path happened to be inside the run root. An enumerated
 #: deny list fails open toward more spawning being permitted; that is not a safe polarity.
-_PROCESS_PREFIXES = ("subprocess.", "os.spawn", "os.exec", "os.posix_spawn", "os.startfile")
+#: `_winapi.CreateProcess` is included because Windows `multiprocessing` calls it DIRECTLY — it never
+#: passes through `subprocess.Popen`, so the high-level families alone do not cover the real Windows
+#: process entry point (reproduced).
+_PROCESS_PREFIXES = ("subprocess.", "os.spawn", "os.exec", "os.posix_spawn", "os.startfile",
+                     "_winapi.CreateProcess")
 _PROCESS_EXACT = frozenset({"os.system", "os.fork", "os.forkpty"})
 
 
@@ -183,7 +236,7 @@ def _classify(event, args):
             m = mode if isinstance(mode, str) else ""
             flags = args[2] if len(args) > 2 else 0
             writing = any(c in m for c in _WRITE_MODES) or bool(
-                isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND))
+                isinstance(flags, int) and flags & _DESTRUCTIVE_FLAGS)
             if writing and not _allowed(path):
                 violations.append(f"open({path!r}, mode={m!r}, flags={flags})")
         elif event.startswith("socket."):
@@ -200,7 +253,19 @@ def _classify(event, args):
                 violations.append(f"{event} — NETWORK/RESOLUTION attempted")
         elif _is_process_event(event):
             violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
-        elif event.startswith(("os.", "shutil.")) and event not in _NON_WRITE_OS_EVENTS:
+        elif event.startswith("winreg."):
+            if event not in _NON_MUTATING_WINREG:
+                violations.append(f"{event}({args[:2]!r}) — REGISTRY MUTATION")
+        elif event.startswith("ctypes."):
+            if event not in _NON_CALLING_CTYPES:
+                violations.append(f"{event}({args[:1]!r}) — NATIVE CALL")
+        elif event.startswith("_winapi."):
+            # a clean run fires none of these; the process ones are already handled above
+            violations.append(f"{event}({args[:1]!r}) — RAW WIN32 API")
+        elif event.startswith("msvcrt."):
+            if event not in _FD_SCOPED_EVENTS:
+                violations.append(f"{event}({args[:2]!r}) — RAW CRT CALL")
+        elif event.startswith(("os.", "shutil.", "tempfile.")) and event not in _NON_WRITE_OS_EVENTS:
             for a in args[:2]:
                 if isinstance(a, (str, bytes, os.PathLike)) and not _allowed(a):
                     violations.append(f"{event}({a!r})")
@@ -346,6 +411,31 @@ _SHIM_PAYLOADS = {
     # (`127.not-a-numeric-literal.invalid` is the same class but cannot be driven end to end here: its
     # resolution fails first, so `socket.bind` never fires. Both are rejected by the same ip_address
     # parse — confirmed by direct probe.)
+    # Windows multiprocessing calls _winapi.CreateProcess DIRECTLY, never through subprocess.Popen.
+    # The program does not exist, so no process is ever created — the audit event fires first.
+    "shadow_stdlib_winapi":
+        "import _winapi\n"
+        "_t = os.path.join(os.environ['F10_RUN_ROOT'], 'nonexistent_child.exe')\n"
+        "try:\n"
+        "    _winapi.CreateProcess(_t, None, None, None, False, 0, None, None, None)\n"
+        "except Exception:\n"
+        "    pass\n",
+    # DeleteKey on a key that does not exist: a real winreg.DeleteKey audit event, no system change.
+    "shadow_stdlib_winreg":
+        "import winreg\n"
+        "try:\n"
+        "    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, 'F10_no_such_key_' + str(os.getpid()))\n"
+        "except Exception:\n"
+        "    pass\n",
+    # O_TEMPORARY opens an EXISTING file READ-ONLY and deletes it on close. The parent pre-creates the
+    # probe outside the run root; the child destroys it without ever "writing".
+    "shadow_stdlib_otemporary":
+        "_p = os.environ['F10_EXTERNAL_PROBE']\n"
+        "try:\n"
+        "    _fd = os.open(_p, os.O_RDONLY | os.O_TEMPORARY)\n"
+        "    os.close(_fd)\n"
+        "except Exception:\n"
+        "    pass\n",
     "shadow_stdlib_bind_name":
         "import socket\n"
         "_sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
@@ -358,7 +448,8 @@ _SHIM_PAYLOADS = {
 }
 
 
-def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = False):
+def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = False,
+               precreate_probe: bool = False):
     """Run the child in a fresh interpreter. `probe_from_root(run_root) -> Path` picks the red-team
     target, so one mode covers every escape shape. `startup_inject` plants a `sitecustomize` on
     PYTHONPATH that writes the probe during interpreter startup."""
@@ -377,6 +468,8 @@ def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = 
         if mode == "redteam_touch":             # must PRE-EXIST: touch() on a new file also fires open
             probe.write_text("pre-existing", encoding="utf-8")
             os.utime(probe, ns=(_OLD_MTIME_NS, _OLD_MTIME_NS))
+        elif precreate_probe:                   # O_TEMPORARY needs an existing file to destroy
+            probe.write_text("pre-existing", encoding="utf-8")
     if startup_inject:
         inj = run_root.parent / f"inj_{run_root.name}"
         inj.mkdir(parents=True, exist_ok=True)
@@ -533,6 +626,41 @@ def test_the_monitor_rejects_a_bind_to_a_loopback_shaped_hostname():
     assert any("socket.bind" in v for v in data["violations"]), data["violations"]
     assert data["constructed"] and data["real_client"] == "DataApi", data
     assert data["page_rows"] == 1, data
+
+
+def test_the_monitor_catches_the_raw_windows_process_entry_point():
+    """RED TEAM (fan-out re-review #7). Windows `multiprocessing` calls `_winapi.CreateProcess`
+    DIRECTLY — it never passes through `subprocess.Popen` — and the whole `_winapi` namespace was
+    neither buffered nor classified, so the real Windows process entry point was invisible."""
+    _, data, _ = _run_child("live", lambda r: r.parent / "f10_winapi_probe" / "unused.txt",
+                            startup_inject="shadow_stdlib_winapi")
+    assert data["violations"], "the monitor MISSED _winapi.CreateProcess"
+    assert any("CreateProcess" in v for v in data["violations"]), data["violations"]
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+    assert data["page_rows"] == 1, data
+
+
+def test_the_monitor_catches_a_registry_mutation():
+    """RED TEAM (fan-out re-review #7). `winreg` is a fifth surface a clean run genuinely uses (reads
+    of the time-zone table), and the whole namespace was ignored. `DeleteKey` on a nonexistent key
+    fires a real audit event without changing any system state."""
+    _, data, _ = _run_child("live", lambda r: r.parent / "f10_winreg_probe" / "unused.txt",
+                            startup_inject="shadow_stdlib_winreg")
+    assert data["violations"], "the monitor MISSED a registry mutation"
+    assert any("winreg.DeleteKey" in v for v in data["violations"]), data["violations"]
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+
+
+def test_the_monitor_catches_delete_on_close_via_o_temporary():
+    """RED TEAM (fan-out re-review #7). `O_TEMPORARY` opens an EXISTING file READ-ONLY and deletes it
+    on close, so a pure-write predicate misses it entirely: reproduced with flags=192 and the file gone
+    while the old mask reported nothing. Destruction is not the same predicate as writing."""
+    _, data, probe = _run_child("live", lambda r: r.parent / "f10_otemp_probe" / "victim.txt",
+                                startup_inject="shadow_stdlib_otemporary", precreate_probe=True)
+    assert not probe.exists(), "the probe was not actually destroyed — test is vacuous"
+    assert data["violations"], "the monitor MISSED a delete-on-close open"
+    assert any("victim.txt" in v for v in data["violations"]), data["violations"]
+    assert data["constructed"] and data["real_client"] == "DataApi", data
 
 
 def test_set_token_is_never_called_on_the_recovery_path():
