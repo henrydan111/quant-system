@@ -294,10 +294,19 @@ class FamilySpec:
         return tuple(c) if isinstance(c, (tuple, list)) else (c,)
 
     def partition_of(self, request: dict) -> str:
-        """`partition_key` may name ONE request key or a tuple of keys. The composite form is required
-        by the direct-quarter VIP families: (period, report_type) requests differ in params (so their
-        request_ids differ) but would collapse to the SAME partition — and therefore the same
-        receipt_output — under a single key, which the freeze refuses as a shared output."""
+        """DELEGATES to the coordinator's canonical per-unit label deriver — the SAME function the
+        freeze door's honesty check uses — so the planner and the check cannot disagree.
+
+        They had, in both directions, and no per-family test caught it because each side was
+        self-consistent: the VIP families planned on (period, report_type) while the check derived from
+        `period` alone, and A14/A15e planned on the raw `start_date` while the signed label is a month
+        / a year. Restating a derivation is the same defect class as restating the report_rc digest
+        field list or the daily merge. `partition_key` remains the DECLARATION of the axes (it is what
+        the registry entry and the composite-uniqueness reasoning read); the derivation itself has one
+        home. The fallback covers a family whose owner has no matrix unit."""
+        deriver = rrc.unit_label_deriver_for_owner(self.owner)
+        if deriver is not None:
+            return deriver(request)
         if isinstance(self.partition_key, (tuple, list)):
             return "_".join(str(request[k]) for k in self.partition_key)
         return str(request[self.partition_key])

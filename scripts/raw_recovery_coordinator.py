@@ -971,6 +971,18 @@ def _label_from_param(name):
     return _f
 
 
+def _label_from_params(*names):
+    """The COMPOSITE form, joined with '_' exactly as `FamilySpec.partition_of` joins a tuple
+    partition_key. A unit whose name carries two axes must derive its label from BOTH: the VIP
+    statement families partition on (period, report_type) because two report_types share one period and
+    must not collapse into one partition, so deriving the label from `period` alone made the honesty
+    check refuse every one of those rows at freeze — caught by the whole-set freeze, not by any
+    per-family test."""
+    def _f(params):
+        return "_".join(_label_from_param(n)(params) for n in names)
+    return _f
+
+
 def _label_from_month_range(params):
     if "start_date" not in params:
         raise RuntimeError(f"request {params} carries no 'start_date' — its monthly label derives from it")
@@ -981,13 +993,28 @@ _UNIT_LABEL_FROM_REQUEST = {
     "open_trade_date": _label_from_param("trade_date"), "stock": _label_from_param("ts_code"),
     "stock_repartition": _label_from_param("ts_code"), "index_range": _label_from_param("ts_code"),
     "month": _label_from_param("month"), "report_date_month": _label_from_month_range,
-    "period": _label_from_param("period"), "period_report_type": _label_from_param("period"),
+    "period": _label_from_param("period"),
+    "period_report_type": _label_from_params("period", "report_type"),
     # disclosure_date labels its partition by the quarter it asks for, which it sends as end_date
     "quarter_end_date": _label_from_param("end_date"),
     # repurchase's yearly file is named by the year its range covers
     "year_range": lambda params: _label_from_param("start_date")(params)[:4],
     "weekly_friday": _label_from_param("end_date"),
 }
+
+
+def unit_label_deriver_for_owner(owner: str):
+    """The canonical partition-label deriver for a matrix owner, or None if the owner/unit is unknown.
+
+    Exists so the PLANNER and the freeze door's honesty check share ONE derivation instead of each
+    restating it. They had drifted in both directions: the VIP statement families derived the label
+    from `period` alone while planning on (period, report_type), and A14/A15e planned on the raw
+    `start_date` while the signed label is a month / a year. Every one of those rows refused at the
+    whole-set freeze, and no per-family test caught it, because both sides were self-consistent."""
+    for r in ENDPOINT_MATRIX:
+        if r.owner == owner and r.query_mode != "UNBOUND":
+            return _UNIT_LABEL_FROM_REQUEST.get(_QUERY_MODE_TO_UNIT.get(r.query_mode))
+    return None
 
 
 def endpoint_expected_resolvers(endpoint: str) -> set:
@@ -1443,8 +1470,15 @@ def load_baseline() -> dict:
 
 def open_run(run_id: str, *, new: bool) -> tuple:
     rp = RecoveryPaths(run_id)
+    # The REAL content hash of every fetch-affecting module + the declarative registry. It was the
+    # placeholder "adapters_unbuilt" until the adapters existed, and leaving it there was load-bearing
+    # in BOTH directions: the §13 authorization binds `bundle_sha256`, so an adapter edit after
+    # authorizing would not have invalidated it; and `run_family`'s live drift check compares
+    # compute_bundle_hash() against this value, so a live run would have refused every time with
+    # "adapter bundle drifted". Imported lazily — recovery_adapters imports this module.
+    import recovery_adapters as _ra
     led = PageReceiptLedger(rp, coordinator_commit=_coordinator_commit(),
-                            adapter_bundle_hash="adapters_unbuilt")  # bound once adapters exist
+                            adapter_bundle_hash=_ra.compute_bundle_hash())
     if new:
         if rp.root.exists():
             raise SystemExit(f"REFUSED: run {run_id} already exists — immutable runs")
@@ -1603,15 +1637,152 @@ def cmd_authorize_fetch(rp, led, *, actor: str, hours: float, endpoints) -> int:
     return 0
 
 
-def cmd_fetch(_rp, _led) -> int:
-    """STILL REFUSED. The remaining §13 preconditions are the operator's, not the code's: this command
-    will only be wired to the live executor once the user gives the explicit go-ahead. Note that
-    `cmd_authorize_fetch` is deliberately NOT reachable from here — a fetch cannot mint its own
-    authorization (GPT impl re-review #2)."""
-    print("REFUSED: live fetching is not wired. Remaining order: F10 write-surface proof -> GPT review "
-          "of the fan-out -> explicit user §13 go-ahead -> wire the LiveExecutor. Authorization alone "
-          "(authorize-fetch) does NOT enable fetching.", file=sys.stderr)
-    return 3
+def _executable_specs():
+    """The 29 executable families, deterministically ordered. A07 is absent by construction (unsigned),
+    and the deferred set is declared, never silently missing."""
+    import recovery_adapters as ra
+    return [ra.ALL_FAMILIES[o] for o in sorted(ra.ALL_FAMILIES)]
+
+
+def cmd_freeze(rp, led, *, mode: str) -> int:
+    """Freeze the plan and fix the run's IMMUTABLE mode. SEPARATE from --fetch on purpose: the §13
+    authorization binds the FROZEN plan hash, so the order is freeze -> authorize -> fetch. Freezing is
+    idempotent per run (a second freeze refuses), and re-freezing after an adapter edit is exactly what
+    invalidates a standing authorization."""
+    import recovery_adapters as ra
+    contracts = load_signed_contracts()
+    specs = _executable_specs()
+    try:
+        plan_sha = ra.freeze_run_plan(led, specs, contracts)
+    except Exception as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 3
+    led.declare_run_mode(mode)
+    plan = led._plan()
+    by_family = {}
+    for row in plan.values():
+        by_family[row["dataset"]] = by_family.get(row["dataset"], 0) + 1
+    print(f"plan FROZEN  sha256={plan_sha[:16]}  mode={mode}")
+    print(f"  {len(specs)} families, {len(plan)} requests, bundle={led.adapter_bundle_hash[:12]}")
+    for fam in sorted(by_family):
+        print(f"    {fam:<34} {by_family[fam]:>7} requests")
+    if ra.DEFERRED_FAMILIES:
+        print(f"  DEFERRED (declared, not silently absent): {sorted(ra.DEFERRED_FAMILIES)}")
+    print("\nNext: --authorize-fetch --actor <human> --hours <=24 --endpoints '*'   then --fetch")
+    return 0
+
+
+def cmd_fetch(rp, led, *, families=None) -> int:
+    """Drive the frozen plan against the REAL vendor. This is the ONLY place the live fetcher is
+    constructed — and it is constructed AFTER the run-mode check, so a synthetic run can never build
+    one. Every deeper guarantee (§13 authorization, bundle drift, dispatch tokens, response scope,
+    receipts) is enforced by the ledger at claim/dispatch time, not re-implemented here.
+
+    `cmd_authorize_fetch` remains unreachable from this function — a fetch cannot mint its own
+    authorization (GPT impl re-review #2), and a lint asserts it.
+    """
+    import time
+    import recovery_adapters as ra
+
+    mode = led.run_mode()
+    if mode != "live_authorized":
+        print(f"REFUSED: run mode is {mode!r}. Freeze the run with --freeze --live first "
+              f"(a synthetic run never constructs a fetcher).", file=sys.stderr)
+        return 3
+    try:
+        plan = led._plan()
+    except Exception as exc:
+        print(f"REFUSED: no frozen plan to fetch ({exc}) — run --freeze --live first.", file=sys.stderr)
+        return 3
+    if not plan:
+        print("REFUSED: the frozen plan is empty.", file=sys.stderr)
+        return 3
+
+    specs = _executable_specs()
+    if families:
+        want = {f.strip() for f in families if f.strip()}
+        specs = [s for s in specs if s.output_family in want or _owner_of(s) in want]
+        if not specs:
+            print(f"REFUSED: --families matched nothing: {sorted(want)}", file=sys.stderr)
+            return 2
+
+    sys.path.insert(0, str(E_ROOT / "src"))
+    from data_infra.fetchers import TushareFetcher
+    fetcher = TushareFetcher(config_path=str(E_ROOT / "config.yaml"), avoid_token_cache=True)
+    executor = ra.LiveExecutor(fetcher, led)
+
+    in_scope = {s.output_family for s in specs}
+    total = sum(1 for r in plan.values() if r["dataset"] in in_scope)
+    print(f"LIVE fetch: {len(specs)} families, {total} requests in scope, mode={mode}")
+    print(f"  §6.1 floor {1.5}s/call -> ~{total * 1.5 / 3600:.1f}h minimum for this scope\n")
+
+    started = time.time()
+    done = 0
+    totals = {"verified": 0, "confirmed_empty": 0, "deferred": 0, "failed": 0, "in_flight": 0}
+    for i, spec in enumerate(specs, 1):
+        fam_n = sum(1 for r in plan.values() if r["dataset"] == spec.output_family)
+        print(f"[{i}/{len(specs)}] {spec.output_family}  ({fam_n} requests)")
+        try:
+            summary = ra.run_family(spec, led, executor)
+        except Exception as exc:
+            # An expired/绕不过 authorization surfaces HERE, and it is a normal operating condition on a
+            # multi-segment run — not a crash. Nothing is lost: terminal requests stay terminal and the
+            # next segment resumes from the ledger cursor.
+            elapsed = (time.time() - started) / 3600
+            print(f"\nSTOPPED in {spec.output_family} after {elapsed:.2f}h and {done} requests: {exc}",
+                  file=sys.stderr)
+            if "authoriz" in str(exc).lower():
+                print("  -> re-authorize (--authorize-fetch, scoping ALL still-outstanding endpoints) "
+                      "and re-run --fetch; it resumes from the ledger cursor.", file=sys.stderr)
+            _print_totals(totals, done, total, started)
+            return 4
+        for k in totals:
+            totals[k] += len(summary.get(k, ()))
+        done += fam_n
+        _print_totals(totals, done, total, started)
+
+    print("\nfetch pass COMPLETE for this scope. Deferred requests (empty awaiting a canary) need "
+          "another pass; then run --consolidate.")
+    return 0 if not totals["failed"] else 4
+
+
+def _owner_of(spec) -> str:
+    import recovery_adapters as ra
+    for owner, s in ra.ALL_FAMILIES.items():
+        if s is spec:
+            return owner
+    return ""
+
+
+def _print_totals(totals, done, total, started) -> None:
+    import time
+    el = time.time() - started
+    rate = done / el if el > 0 else 0.0
+    eta = (total - done) / rate / 3600 if rate > 0 else float("nan")
+    print(f"    verified={totals['verified']} empty={totals['confirmed_empty']} "
+          f"deferred={totals['deferred']} failed={totals['failed']} | {done}/{total} "
+          f"({done / max(1, total):.1%})  elapsed={el / 3600:.2f}h  ETA={eta:.2f}h", flush=True)
+
+
+def cmd_consolidate(rp, led, *, families=None) -> int:
+    """The SEPARATE consolidation step — verified per-request outputs become the physical family
+    layouts, each through the broker with a hash-chained conservation verdict."""
+    import recovery_adapters as ra
+    specs = _executable_specs()
+    if families:
+        want = {f.strip() for f in families if f.strip()}
+        specs = [s for s in specs if s.output_family in want or _owner_of(s) in want]
+    rc = 0
+    for spec in specs:
+        try:
+            out = ra.consolidate_family(spec, led)
+            for layout in out.get("layouts", []):
+                print(f"  {spec.output_family:<34} {layout.get('label', ''):<18} "
+                      f"{layout.get('partitions', 0):>6} partitions  {layout.get('rows', 0):>9} rows")
+        except Exception as exc:
+            print(f"  {spec.output_family:<34} FAILED: {exc}", file=sys.stderr)
+            rc = 4
+    return rc
 
 
 def main() -> int:
@@ -1622,7 +1793,15 @@ def main() -> int:
     ap.add_argument("--inventory", action="store_true")
     ap.add_argument("--preflight", action="store_true")
     ap.add_argument("--plan", action="store_true")
+    ap.add_argument("--freeze", action="store_true",
+                    help="freeze the plan + fix the immutable run mode (must precede authorize/fetch)")
+    ap.add_argument("--live", action="store_true",
+                    help="with --freeze: declare run_mode=live_authorized (default is synthetic)")
     ap.add_argument("--fetch", action="store_true")
+    ap.add_argument("--consolidate", action="store_true",
+                    help="turn verified per-request outputs into the physical family layouts")
+    ap.add_argument("--families", default="",
+                    help="comma-separated output_family or owner subset for --fetch/--consolidate")
     ap.add_argument("--authorize-fetch", action="store_true",
                     help="§13: write the hash-chained fetch_authorized event (separate, explicit, "
                          "user-triggered; --fetch can never mint it)")
@@ -1645,8 +1824,13 @@ def main() -> int:
             return 2
         return cmd_authorize_fetch(rp, led, actor=a.actor.strip(), hours=a.hours,
                                    endpoints=a.endpoints.split(","))
+    if a.freeze:
+        return cmd_freeze(rp, led,
+                          mode="live_authorized" if a.live else "synthetic_nonpromotable")
     if a.fetch:
-        return cmd_fetch(rp, led)
+        return cmd_fetch(rp, led, families=a.families.split(",") if a.families else None)
+    if a.consolidate:
+        return cmd_consolidate(rp, led, families=a.families.split(",") if a.families else None)
     ap.print_help()
     return 2
 

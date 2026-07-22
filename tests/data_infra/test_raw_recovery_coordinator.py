@@ -1026,8 +1026,10 @@ def test_request_key_is_the_complete_canonical_request():
     """`_request_population_key` returns EVERY parameter — the identity, not an axis. The partition
     label is checked for honesty but is never the key."""
     row = [r for r in rrc.ENDPOINT_MATRIX if r.query_mode == "per_period_report_type"][0]
+    # the label of a (period, report_type) unit carries BOTH axes — two report_types share one period
+    # and must not collapse into one partition
     pr = {"request_id": "r", "endpoint": "income_vip", "dataset": row.output_family,
-          "partition": "20260630", "params": {"period": "20260630", "report_type": "2"}}
+          "partition": "20260630_2", "params": {"period": "20260630", "report_type": "2"}}
     assert rrc._request_population_key(pr, row) == rrc._canon_request({"period": "20260630",
                                                                        "report_type": "2"})
     # an extra parameter CHANGES the request identity — it cannot ride along unseen
@@ -1035,7 +1037,10 @@ def test_request_key_is_the_complete_canonical_request():
     assert rrc._request_population_key(pr_extra, row) != rrc._request_population_key(pr, row)
     # a label that misdescribes its own request refuses
     with pytest.raises(RuntimeError, match="label is not evidence"):
-        rrc._request_population_key(dict(pr, partition="20260331"), row)
+        rrc._request_population_key(dict(pr, partition="20260331_2"), row)
+    # and a label naming the RIGHT period but the WRONG report_type is equally a lie
+    with pytest.raises(RuntimeError, match="label is not evidence"):
+        rrc._request_population_key(dict(pr, partition="20260630_3"), row)
 
 
 def test_index_range_request_key_carries_its_bounds():

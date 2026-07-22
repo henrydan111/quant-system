@@ -1720,8 +1720,33 @@ def test_fetch_command_cannot_mint_its_own_authorization():
     body = src.split('"""')[-1]          # strip the docstring: it NAMES the thing it must not call
     assert "record_fetch_authorization" not in body
     assert "cmd_authorize_fetch" not in body
-    # and it still refuses outright
-    assert rrc.cmd_fetch(None, None) == 3
+
+
+def test_fetch_refuses_and_builds_no_fetcher_on_a_synthetic_run(rig, monkeypatch):
+    """`cmd_fetch` used to be unconditionally `return 3`; now that it is wired, the property that
+    replaces that is: a run whose IMMUTABLE mode is synthetic refuses BEFORE constructing a fetcher.
+    No fetcher, no possible vendor call — the run-mode check is the door, and it is ahead of the
+    import."""
+    rp, L = rig
+    L.declare_run_mode("synthetic_nonpromotable")
+    built = []
+    import data_infra.fetchers as _f
+    monkeypatch.setattr(_f, "TushareFetcher",
+                        lambda *a, **kw: built.append(1) or (_ for _ in ()).throw(
+                            AssertionError("a synthetic run must NEVER construct a fetcher")))
+    assert rrc.cmd_fetch(rp, L) == 3
+    assert not built
+
+
+def test_fetch_refuses_without_a_frozen_plan(rig, monkeypatch):
+    """A live-declared run with nothing frozen has no requests to bind an authorization to."""
+    rp, L = rig
+    L.declare_run_mode("live_authorized")
+    import data_infra.fetchers as _f
+    monkeypatch.setattr(_f, "TushareFetcher",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            AssertionError("must refuse before constructing a fetcher")))
+    assert rrc.cmd_fetch(rp, L) == 3
 
 
 # ── GPT fan-out review P0-1: the payload digest must be a CONTRACT constraint ─────────────────────
@@ -1845,3 +1870,44 @@ def test_content_dedup_key_is_never_coarser_than_the_vendor_key():
         dropped = set(r.vendor_record_key) - set(r.content_dedup_key)
         assert not dropped, (f"{r.owner}: content_dedup_key drops vendor-key column(s) "
                              f"{sorted(dropped)} — distinct records would collapse")
+
+
+# ── the planner and the freeze door must derive the SAME partition label ─────────────────────────
+def test_every_family_plans_the_label_the_freeze_door_derives():
+    """The structural guard for the class that broke the whole-set freeze.
+
+    `FamilySpec.partition_of` and `_request_population_key`'s honesty check each derived the partition
+    label. They disagreed for 3 of the 29 families — the VIP statement pair (planned on
+    (period, report_type), checked on `period` alone) and A14/A15e (planned on the raw `start_date`,
+    signed as a month / a year) — and EVERY per-family test still passed, because each side was
+    self-consistent. Only the whole-set freeze refused.
+
+    `partition_of` now delegates to the coordinator's deriver, so this asserts the property directly
+    rather than re-listing which families are composite."""
+    contracts = rrc.load_signed_contracts()
+    by_family = {r.output_family: r for r in rrc.ENDPOINT_MATRIX}
+    checked = 0
+    for owner in sorted(ra.ALL_FAMILIES):
+        spec = ra.ALL_FAMILIES[owner]
+        row = by_family[spec.output_family]
+        for pr in ra.build_plan_rows(spec, contracts):
+            # raises if the planned label is not what the freeze door derives from the same request
+            rrc._request_population_key(pr, row)
+            checked += 1
+    assert checked > 100_000, f"only {checked} plan rows checked — the plan did not build"
+
+
+def test_the_ledger_binds_the_REAL_adapter_bundle_hash():
+    """`open_run` carried the placeholder "adapters_unbuilt" long after the adapters existed. That was
+    load-bearing twice over: the §13 authorization binds `bundle_sha256` (so an adapter edit would not
+    have invalidated a standing authorization), and `run_family`'s live drift check compares
+    `compute_bundle_hash()` against it (so every live run would have refused as "drifted")."""
+    import inspect
+    src = inspect.getsource(rrc.open_run)
+    # the ASSIGNMENT, not the word — the comment above it names the placeholder deliberately
+    assert 'adapter_bundle_hash="adapters_unbuilt"' not in src
+    assert "adapter_bundle_hash=_ra.compute_bundle_hash()" in src
+    # and the value a real run binds is the real content hash
+    rp, led = rrc.open_run("bundle_probe_" + uuid.uuid4().hex[:8], new=True)
+    assert led.adapter_bundle_hash == ra.compute_bundle_hash()
+    assert len(led.adapter_bundle_hash) == 64
