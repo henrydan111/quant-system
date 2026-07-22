@@ -48,7 +48,7 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
-    plain_str, plain_str_tuple, seal_hash, verify_sealed,
+    plain_str, plain_str_tuple, safe_kind, safe_repr, seal_hash, verify_sealed,
 )
 
 _LEDGER_NAME = "decision_ledger.jsonl"
@@ -203,9 +203,11 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
     """原子首写胜出入账(BINDING #1)。账本持有**权威** decision_id;工件必须
     `verify_d7_artifact` 过门且其束 decision_id 与之逐字节相等。幂等 = 全部工件
     派生字段逐一相等;任一不同 = 拒(第二个世界线无法成为同一决策的权威)。"""
+    # GPT #24 类3:类型门诊断经 safe_repr(旧码读 type().__name__ + {!r},在拒绝
+    # 路径上触发不可信 decision_id 的元类 __getattribute__ / __repr__)
     if type(decision_id) is not str or not decision_id.strip():
-        raise RegistryError(f"权威 decision_id 须恰 str 非空(得 "
-                            f"{type(decision_id).__name__} {decision_id!r};子类拒)")
+        raise RegistryError(
+            f"权威 decision_id 须恰 str 非空(得 {safe_repr(decision_id)};子类拒)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     if artifact.bundle.decision_id != decision_id:
         raise RegistryError(
@@ -248,27 +250,29 @@ def _append_commitment_row(ledger_dir, *, decision_id: str, execution_id: str,
       伪造的"全新执行"无法再为同一决策提交第二条 success——归档只认账本里
       那唯一的 success 执行;hard_failed 承诺可多条(崩溃/重试的审计痕迹);
     - 决策必须已注册。"""
+    # GPT #24 类3:类型门的诊断一律经 safe_repr/safe_kind(零调用方代码)
     if type(decision_id) is not str or not decision_id.strip():
-        raise RegistryError(f"decision_id 须恰 str 非空(得 {decision_id!r})")
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {safe_repr(decision_id)})")
     if type(execution_id) is not str or not execution_id.strip():
-        raise RegistryError(f"execution_id 须恰 str 非空(得 {execution_id!r})")
+        raise RegistryError(f"execution_id 须恰 str 非空(得 {safe_repr(execution_id)})")
     if not (type(factor_entry_hash) is str and _HEX64_RE.fullmatch(factor_entry_hash)):
-        raise RegistryError(f"factor_entry_hash 须 64-hex(得 {factor_entry_hash!r})")
+        raise RegistryError(f"factor_entry_hash 须 64-hex(得 {safe_repr(factor_entry_hash)})")
     if penalty_entry_hash is not None and not (
             type(penalty_entry_hash) is str
             and _HEX64_RE.fullmatch(penalty_entry_hash)):
-        raise RegistryError(f"penalty_entry_hash 须 None/64-hex(得 {penalty_entry_hash!r})")
+        raise RegistryError(
+            f"penalty_entry_hash 须 None/64-hex(得 {safe_repr(penalty_entry_hash)})")
     if not (type(outcome_hash) is str and _HEX64_RE.fullmatch(outcome_hash)):
-        raise RegistryError(f"outcome_hash 须 64-hex(得 {outcome_hash!r})")
-    if news_status not in _COMMITMENT_STATUSES:
-        raise RegistryError(f"news_status {news_status!r} 未注册")
+        raise RegistryError(f"outcome_hash 须 64-hex(得 {safe_repr(outcome_hash)})")
+    if type(news_status) is not str or news_status not in _COMMITMENT_STATUSES:
+        raise RegistryError(f"news_status {safe_repr(news_status)} 未注册")
     # re-review#5 P0:承诺**哈希绑定完整冻结契约**(含 primary_decision_horizon
     # ——outcome_hash 不含主评分周期,契约不绑进承诺则封存/恢复可合法换周期改分)
     # 并内嵌不可变契约载荷本体(纯磁盘恢复可自证,而非只能校验调用方供给)
     if type(contract_payload) is not dict:
-        raise RegistryError(f"contract_payload 须 dict(得 {type(contract_payload).__name__})")
+        raise RegistryError(f"contract_payload 须 dict(得 {safe_kind(contract_payload)})")
     if not (type(contract_hash) is str and _HEX64_RE.fullmatch(contract_hash)):
-        raise RegistryError(f"contract_hash 须 64-hex(得 {contract_hash!r})")
+        raise RegistryError(f"contract_hash 须 64-hex(得 {safe_repr(contract_hash)})")
     if seal_hash(contract_payload) != contract_hash:
         raise RegistryError("contract_payload/contract_hash 对不自洽——拒")
     expected = {"factor_entry_hash": factor_entry_hash,
@@ -341,11 +345,16 @@ def ledger_head(ledger_dir) -> str:
 def require_recorded(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) -> dict:
     """payload 构造/执行前的账本门(BINDING #1 + 实现审 M1):工件重验过门、决策
     已入账、且账本行与**全部工件派生字段**逐一相等(改任一字段/换行=拒)。"""
+    # GPT #24 类5:**入口即 decision_id 恰 str 非空门**——旧码无类型门就先验工件、
+    # 再拿它去查/比账本(str 子类的 __eq__ 在磁盘串比较时执行调用方代码)
+    if type(decision_id) is not str or not decision_id.strip():
+        raise RegistryError(
+            f"decision_id 须恰 str 非空(得 {safe_repr(decision_id)};GPT #24 类5)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     entry = lookup_decision(ledger_dir, decision_id)
     if entry is None:
-        raise RegistryError(f"decision {decision_id!r} 未入账——payload 构造前必须"
-                            f"原子首写(BINDING #1)")
+        raise RegistryError(f"decision {safe_repr(decision_id)} 未入账——payload 构造前"
+                            f"必须原子首写(BINDING #1)")
     expected = _expected_fields(artifact)
     if artifact.bundle.decision_id != decision_id \
             or any(entry[k] != expected[k] for k in _ARTIFACT_FIELDS):
@@ -372,19 +381,19 @@ def _walk_ast(o, occurrences: list):
         return o
     if t is float:
         if not math.isfinite(o):
-            raise RegistryError(f"payload AST 拒非有限 float({o!r})")
+            raise RegistryError(f"payload AST 拒非有限 float({safe_repr(o)})")
         return o
     if t is dict:
         out = {}
         for k, v in o.items():
             if type(k) is not str:
-                raise RegistryError(f"payload AST dict 键须恰 str(得 {type(k).__name__})")
+                raise RegistryError(f"payload AST dict 键须恰 str(得 {safe_kind(k)})")
             out[k] = _walk_ast(v, occurrences)
         return out
     if t is list or t is tuple:
         return [_walk_ast(x, occurrences) for x in o]
     raise RegistryError(
-        f"payload AST 闭集外的节点类型 {type(o).__name__}——set/自定义对象/子类拒,"
+        f"payload AST 闭集外的节点类型 {safe_kind(o)}——set/自定义对象/子类拒,"
         f"绝无 default=str(BINDING #2 + M2 精确类型)")
 
 
@@ -592,7 +601,7 @@ def build_sealed_payload(payload_ast, artifact: D7DecisionArtifact, *,
     终字节门 → 完整性 → 内部工厂铸印,一条不可分链。
     re-review#2(seat) M1:席位/用途/维度/决策 id 全部**精确类型**先验(str 子类拒)。"""
     if type(decision_id) is not str or not decision_id.strip():
-        raise RegistryError(f"decision_id 须恰 str 非空(得 {type(decision_id).__name__})")
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {safe_kind(decision_id)})")
     if type(consumer_seat) is not str or type(use) is not str:
         raise RegistryError("consumer_seat/use 须恰 str(子类拒,re-review#2 M1)")
     if target_dimension is not None and type(target_dimension) is not str:

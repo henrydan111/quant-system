@@ -288,6 +288,16 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
         # re-review#21 P1:错误信息**静态**——`{type(bundle).__name__}` 会在抛异常
         # 前触发不可信对象的元类 __getattribute__(拒绝路径也不得跑调用方代码)
         raise RegistryError("bundle 须恰 dict(子类/自定义对象拒,re-review#20/#21)")
+    # GPT #24 P1#2(类5):**恰 dict 仍不安全**——它可含非 str 键;若某恶意键的
+    # __hash__ 碰撞 hash("outcome"),内建 `bundle["outcome"]` 查槽时会调该键的
+    # __eq__(调用方代码,先于任何键类型检查)。故在**任何 bundle[...] /
+    # bundle.get(...) 之前**先遍历键做恰 str 门:恰 dict 的 __iter__ 是内建,
+    # 只产出键对象而不调其 __hash__/__eq__;`type(k) is str` 亦不跑调用方代码。
+    for _k in bundle:
+        if type(_k) is not str:
+            raise RegistryError(
+                "bundle 键须恰 str——非 str 键的 __hash__/__eq__ 是调用方代码,"
+                "拒(GPT #24 P1#2 类5;静态错误)")
     # GPT #23 P1 同类面:contract/outcome 在**任何回调点之前**重建为独立快照——
     # 验证过的 live 对象仍可被后续 registry `.items()` 回调经 object.__setattr__
     # 改写(output_mode 换带 __repr__ 的对象、penalty_leg_status 换带 __eq__ 的

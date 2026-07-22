@@ -48,7 +48,9 @@ from workspace.research.ai_research_dept.engine.news_decision import (
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
 )
-from workspace.research.ai_research_dept.engine.news_seal import seal_hash, verify_sealed
+from workspace.research.ai_research_dept.engine.news_seal import (
+    safe_kind, safe_repr, seal_hash, verify_sealed,
+)
 
 _HEX64_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -92,10 +94,15 @@ def _eligible_set_hash(records: list) -> str:
 def _derive_terminal(factor_status: str, eligible_count: int, penalty_status: str,
                      output_mode: str) -> dict:
     """M3⁴ 矩阵的**唯一**推导函数(状态机与终态自验共用同一张表)。"""
-    if output_mode not in OUTPUT_MODES:
-        raise RegistryError(f"未注册 output_mode {output_mode!r}(须 ∈ {sorted(OUTPUT_MODES)})")
-    if factor_status not in _FACTOR_STATUSES or penalty_status not in _PENALTY_STATUSES:
-        raise RegistryError(f"未注册腿状态 factor={factor_status!r} penalty={penalty_status!r}")
+    # GPT #24 类3:成员门的诊断经 safe_repr(不可信值的 __repr__ 是调用方代码)
+    if type(output_mode) is not str or output_mode not in OUTPUT_MODES:
+        raise RegistryError(
+            f"未注册 output_mode {safe_repr(output_mode)}(须 ∈ {sorted(OUTPUT_MODES)})")
+    if type(factor_status) is not str or type(penalty_status) is not str \
+            or factor_status not in _FACTOR_STATUSES \
+            or penalty_status not in _PENALTY_STATUSES:
+        raise RegistryError(f"未注册腿状态 factor={safe_repr(factor_status)} "
+                            f"penalty={safe_repr(penalty_status)}")
     # 第 5 行:零适格下 penalty 被执行(success/failed 都算"被调")= 完整性违规
     if eligible_count == 0 and penalty_status in ("success", "failed"):
         raise LegIntegrityError(
@@ -156,8 +163,9 @@ class NewsLegOutcome:
             raise RegistryError("penalty_eligible_count 须非负 int(非 bool)")
         # re-review B3:强制哈希 64 位小写 hex
         for name in ("penalty_eligible_set_hash", "factor_payload_hash"):
-            if not _HEX64_RE.fullmatch(getattr(self, name)):
-                raise RegistryError(f"{name} 须 64 位小写 hex(得 {getattr(self, name)!r})")
+            v = getattr(self, name)
+            if type(v) is not str or not _HEX64_RE.fullmatch(v):
+                raise RegistryError(f"{name} 须 64 位小写 hex(得 {safe_repr(v)})")
         derived = _derive_terminal(self.factor_leg_status, self.penalty_eligible_count,
                                    self.penalty_leg_status, self.output_mode)
         stated = {"news_status": self.news_status,
@@ -175,7 +183,7 @@ class NewsLegOutcome:
                     and _HEX64_RE.fullmatch(self.penalty_payload_hash)):
                 raise LegIntegrityError(
                     f"penalty {self.penalty_leg_status} 必须携带 64-hex payload 哈希"
-                    f"(得 {self.penalty_payload_hash!r})——无 payload 的执行不存在(B3)")
+                    f"(得 {safe_repr(self.penalty_payload_hash)})——无 payload 的执行不存在(B3)")
         else:                                     # empty_success / not_run
             if self.penalty_payload_hash is not None:
                 raise LegIntegrityError(
@@ -191,7 +199,7 @@ class NewsLegOutcome:
         if self.outcome_hash:
             if not _HEX64_RE.fullmatch(self.outcome_hash):
                 raise RegistryError(
-                    f"outcome_hash 须 64-hex(得 {self.outcome_hash!r},re-review#12 P1)")
+                    f"outcome_hash 须 64-hex(得 {safe_repr(self.outcome_hash)},re-review#12 P1)")
             verify_sealed(self._payload(), self.outcome_hash, field_name="outcome_hash")
         else:
             object.__setattr__(self, "outcome_hash", seal_hash(self._payload()))
@@ -282,11 +290,14 @@ def run_news_two_legs(artifact: D7DecisionArtifact, *, ledger_dir, decision_id: 
     view.payload_text,LLM 看到的就是被门与被封的字节。"""
     # ---- 预校验(re-review M3 + re-review#2 M1:一切确定性配置错误——含**精确
     # 类型**(str 子类冒充 mode/decision_id)——在任何执行体运行前发现)----
+    # GPT #24 类3:两处诊断经 safe_repr/safe_kind——旧码在**拒绝 str 子类**时
+    # 插值 `{output_mode!r}` / `type(decision_id).__name__`,正好在不可信对象上
+    # 触发其 __repr__ / 元类 __getattribute__(拒绝路径不得跑调用方代码)
     if type(output_mode) is not str or output_mode not in OUTPUT_MODES:
-        raise RegistryError(f"未注册 output_mode {output_mode!r}"
+        raise RegistryError(f"未注册 output_mode {safe_repr(output_mode)}"
                             f"(须恰 str ∈ {sorted(OUTPUT_MODES)},子类拒)——执行体前拒(M3)")
     if type(decision_id) is not str or not decision_id.strip():
-        raise RegistryError(f"decision_id 须恰 str 非空(得 {type(decision_id).__name__})"
+        raise RegistryError(f"decision_id 须恰 str 非空(得 {safe_kind(decision_id)})"
                             f"——执行体前拒(re-review#2 M1)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
     if decision_id != artifact.bundle.decision_id:
@@ -371,8 +382,9 @@ def verify_outcome_for_binding(outcome: NewsLegOutcome, artifact: D7DecisionArti
     payload 冒充 factor 槽拒)重验且哈希与终态逐字节相等。"""
     outcome = snapshot_exact_outcome(outcome)          # GPT #23:回调点前独立快照
     if type(expected_output_mode) is not str or expected_output_mode not in OUTPUT_MODES:
+        # GPT #24 类3:safe_repr(旧码在拒绝 str 子类时触发其 __repr__)
         raise RegistryError(f"expected_output_mode 须恰 str ∈ {sorted(OUTPUT_MODES)}"
-                            f"(来自冻结评分契约;得 {expected_output_mode!r})")
+                            f"(来自冻结评分契约;得 {safe_repr(expected_output_mode)})")
     verify_sealed(outcome_canonical_payload(outcome), outcome.outcome_hash,
                   field_name="outcome_hash")
     if outcome.output_mode != expected_output_mode:

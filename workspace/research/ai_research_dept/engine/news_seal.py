@@ -110,6 +110,36 @@ def plain_object_tuple(x) -> tuple:
 
 _HEX64 = __import__("re").compile(r"[0-9a-f]{64}")
 
+#: 安全渲染原语(GPT #24 类3 的**类级**修复)——拒绝路径上诊断不可信值时,
+#: 绝不调用调用方代码。`{x!r}` 走 `type(x).__repr__`、`type(x).__name__` 走元类
+#: `__getattribute__`,二者都是调用方代码;在**类型门**上(即正因为不信其类型
+#: 才拒绝)它们必然在不可信对象上触发。下面两个 helper 只用 `type(x)` 内建 +
+#: `is` 身份比对 + 字面量返回,全程零调用方代码。
+_PLAIN_KINDS = ((bool, "bool"), (int, "int"), (float, "float"), (str, "str"),
+                (list, "list"), (dict, "dict"), (tuple, "tuple"))
+
+
+def safe_kind(x) -> str:
+    """不可信值的**类型名**,零调用方代码:只对**恰**基础类型报真名,其余一律
+    `<非纯值>`(子类/自定义对象/说谎元类都落这里——正是要拒的那些)。"""
+    if x is None:
+        return "None"
+    t = type(x)                                # 内建,不跑调用方代码
+    for cls, name in _PLAIN_KINDS:
+        if t is cls:                           # `is` 身份比对,元类 __eq__ 无从干预
+            return name
+    return "<非纯值>"
+
+
+def safe_repr(x) -> str:
+    """不可信值的**可诊断渲染**,零调用方代码:仅当类型**恰**为 None/bool/int/
+    float/str 时才 `repr`(此时是内建 repr,安全且信息量最大);其余返回类型名
+    占位。凡在类型门/成员门上诊断调用方传入值,一律用本函数,绝不用 `!r`。"""
+    if x is None or type(x) is bool or type(x) is int or type(x) is float \
+            or type(x) is str:
+        return repr(x)                         # 恰基础类型 → 内建 repr
+    return f"<{safe_kind(x)}>"
+
 
 def verify_sealed(payload: dict, claimed_hash: str, *, field_name: str = "hash") -> None:
     """verify-not-trust:重算 payload 的 seal_hash 与自称哈希比对,不符硬失败。

@@ -1328,6 +1328,80 @@ class TestExactTypeBoundaries:
                 "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert fired["it"] == 0                         # __iter__ never ran
 
+    def test_bundle_colliding_key_eq_never_runs(self, tmp_path):
+        # GPT #24 P1#2 (class 5): an EXACT dict may still carry a non-str key whose
+        # __hash__ collides with hash("outcome") — the builtin lookup
+        # `bundle["outcome"]` would then call that key's __eq__ (caller code) before
+        # any key-type check. The boundary now sweeps every key for exact-str BEFORE
+        # the first bundle[...] / bundle.get(...).
+        art, bundle = _setup(tmp_path)
+        fired = {"eq": 0, "hash": 0}
+
+        class _EvilKey:
+            def __hash__(self):
+                fired["hash"] += 1
+                return hash("outcome")
+            def __eq__(self, o):
+                # False → a DISTINCT key sharing "outcome"'s bucket, so the builtin
+                # lookup must probe past it and call this __eq__ (caller code).
+                fired["eq"] += 1
+                return False
+        poisoned = dict(bundle)
+        poisoned[_EvilKey()] = "x"                      # collides with "outcome"
+        assert "outcome" in poisoned and len(poisoned) == len(bundle) + 1
+        fired["eq"] = fired["hash"] = 0                 # ignore insertion-time probes
+        with pytest.raises(RegistryError, match="键须恰 str"):
+            seal_decision_archive(poisoned, art, **_dirs(tmp_path),
+                                  archive_dir=tmp_path / "arch")
+        assert fired["eq"] == 0                         # key __eq__ never ran
+        assert not list((tmp_path / "arch").glob("*.json"))
+
+    def test_type_gate_rejections_run_no_caller_code(self, tmp_path):
+        # GPT #24 P1#1 (class 3): a rejection path must not run caller code. Every
+        # exact-type / membership gate on a caller-supplied value now diagnoses via
+        # safe_repr/safe_kind (builtin `type()` + `is` identity + literals only) —
+        # never `{x!r}` (calls __repr__) or `type(x).__name__` (calls the metaclass
+        # __getattribute__). Covers the four entries the reviewer reproduced.
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            record_decision, require_recorded,
+        )
+        from workspace.research.ai_research_dept.engine.news_legs import (
+            run_news_two_legs, verify_outcome_for_binding,
+        )
+        fired = {"n": 0}
+
+        class _LoudMeta(type):
+            def __getattribute__(cls, name):
+                if name == "__name__":
+                    fired["n"] += 1
+                return super().__getattribute__(name)
+
+        class _EvilStr(str, metaclass=_LoudMeta):
+            def __repr__(self):
+                fired["n"] += 1
+                return "'d1'"
+            def __eq__(self, o):
+                fired["n"] += 1
+                return True
+            def __hash__(self):
+                return hash("d1")
+        art, _ = _setup(tmp_path)
+        evil = _EvilStr("d1")
+        for call in (
+            lambda: record_decision(tmp_path / "ledger", evil, art),
+            lambda: require_recorded(tmp_path / "ledger", evil, art),
+            lambda: run_news_two_legs(
+                art, ledger_dir=tmp_path / "ledger", decision_id=evil,
+                output_mode=_EvilStr("primary_horizon"), factor_payload_ast=None,
+                penalty_payload_ast=None, factor_leg_fn=None, penalty_leg_fn=None),
+            lambda: verify_outcome_for_binding(
+                None, art, None, None, ledger_dir=tmp_path / "ledger",
+                expected_output_mode=_EvilStr("primary_horizon")),
+        ):
+            with pytest.raises(RegistryError):
+                call()
+        assert fired["n"] == 0                          # no caller code on any path
+
     def test_boundary_rejection_reads_no_untrusted_type_name(self, tmp_path):
         # archive-re-review#21 P1: a boundary rejection must not read the
         # untrusted object's type().__name__ (which runs the metaclass

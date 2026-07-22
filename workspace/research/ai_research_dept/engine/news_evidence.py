@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from workspace.research.ai_research_dept.engine.news_seal import (
-    SealError, deep_ro, seal_hash, verify_sealed,
+    SealError, deep_ro, safe_kind, safe_repr, seal_hash, verify_sealed,
 )
 
 # --------------------------------------------------- 规范 enum(M1⁴ 冻结)
@@ -526,17 +526,19 @@ def build_card_record(record_id: str, *, domain: str, evidence_class: str,
     dims = frozenset(allowed_dimensions)
     # re-review#2 M2 + re-review#3 M2:ID 语法 fullmatch(尾随换行/CR/NUL 拒)+
     # domain/schema enum 先于一切
+    # GPT #24 类3:类型/成员门的诊断经 safe_repr(不可信值的 __repr__ 是调用方代码)
     if not isinstance(record_id, str) or not _RECORD_ID_RE.fullmatch(record_id):
         raise RegistryError(
-            f"record_id {record_id!r} 不合语法 {RECORD_ID_GRAMMAR_VERSION}"
+            f"record_id {safe_repr(record_id)} 不合语法 {RECORD_ID_GRAMMAR_VERSION}"
             f"(大写字母开头 2-16 位大写字母数字,可选恰一注册 D7 属性后缀)")
-    if domain not in DOMAINS:
-        raise RegistryError(f"未注册 domain {domain!r}(须 ∈ {sorted(DOMAINS)})")
-    if record_schema_id not in RECORD_SCHEMAS:
-        raise RegistryError(f"未注册 record_schema_id {record_schema_id!r}"
+    if type(domain) is not str or domain not in DOMAINS:
+        raise RegistryError(f"未注册 domain {safe_repr(domain)}(须 ∈ {sorted(DOMAINS)})")
+    if type(record_schema_id) is not str or record_schema_id not in RECORD_SCHEMAS:
+        raise RegistryError(f"未注册 record_schema_id {safe_repr(record_schema_id)}"
                             f"(须 ∈ {sorted(RECORD_SCHEMAS)})")
-    if evidence_class not in EVIDENCE_CLASSES:
-        raise RegistryError(f"未知 evidence_class {evidence_class!r}(须 ∈ {sorted(EVIDENCE_CLASSES)})")
+    if type(evidence_class) is not str or evidence_class not in EVIDENCE_CLASSES:
+        raise RegistryError(
+            f"未知 evidence_class {safe_repr(evidence_class)}(须 ∈ {sorted(EVIDENCE_CLASSES)})")
     bad_use = uses - USES
     if bad_use:
         raise RegistryError(f"非法 allowed_uses {sorted(bad_use)}(须 ⊆ {sorted(USES)})")
@@ -618,8 +620,9 @@ def registry_canonical_payload(registry) -> dict:
     for k, r in registry.records.items():
         h = verified_record_content_hash(r)
         if type(k) is not str or k != r.record_id:
+            # GPT #24 类3:k 恰是刚被类型门拒的不可信键,不得 `!r`
             raise RegistryError(
-                f"registry 映射键 {k!r} ≠ 记录 record_id {r.record_id!r}——"
+                f"registry 映射键 {safe_repr(k)} ≠ 记录 record_id {r.record_id!r}——"
                 f"键↔记录绑定被换,拒(re-review#13 P0)")
         pairs.append([k, h])
     return {"cutoff": registry.cutoff_iso, "record_pairs": sorted(pairs)}

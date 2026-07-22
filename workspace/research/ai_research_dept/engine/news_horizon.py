@@ -48,6 +48,9 @@ from ai_layer.scorecard import ScorecardViolation, _valid_score  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_evidence import (  # noqa: E402
     RegistryError, authorize, dimension_ceiling, require_sealed_registry,
 )
+from workspace.research.ai_research_dept.engine.news_seal import (  # noqa: E402
+    safe_kind, safe_repr,
+)
 
 SCHEMA_ID = "c16_news_horizon_v1"
 #: 注册 horizon(冻结顺序;M2″)
@@ -76,10 +79,13 @@ OUTPUT_MODES = frozenset({"primary_horizon", "vector_only"})
 
 
 def _safe_repr(v) -> str:
+    """GPT #24 类3:旧实现对**任意**不可信对象调 `repr(v)`(= 调用方 __repr__)、
+    回退还读 `type(v).__name__`(= 元类 __getattribute__)。改为委托共享
+    `safe_repr`——只对恰基础类型用内建 repr,其余返回类型名占位,零调用方代码。"""
     try:
-        return repr(v)[:60]
+        return safe_repr(v)[:60]
     except (ValueError, OverflowError):          # repr(10**10000) 位数上限(复用模式)
-        return f"<{type(v).__name__}: unrepresentable>"
+        return "<unrepresentable>"
 
 
 def _require_score(entry: dict, where: str) -> float:
@@ -291,7 +297,7 @@ def news_final_scalar(finals: dict, *, output_mode: str,
     契约钉死 horizon 的确定性别名(不逐股、不事后选——horizon 由冻结契约供给);
     vector_only → **无标量**(None;永不喂 judge/composite/绑定)。"""
     if type(output_mode) is not str or output_mode not in OUTPUT_MODES:
-        raise RegistryError(f"未注册 output_mode {output_mode!r}")
+        raise RegistryError(f"未注册 output_mode {safe_repr(output_mode)}")
     if output_mode == "vector_only":
         if primary_decision_horizon is not None:
             raise RegistryError("vector_only 不得钉 primary_decision_horizon(无标量)")
@@ -300,7 +306,7 @@ def news_final_scalar(finals: dict, *, output_mode: str,
             or primary_decision_horizon not in HORIZONS:
         raise RegistryError(
             f"primary_horizon 模式须由冻结契约钉 primary_decision_horizon ∈ "
-            f"{list(HORIZONS)}(得 {primary_decision_horizon!r})")
+            f"{list(HORIZONS)}(得 {safe_repr(primary_decision_horizon)})")
     v = finals[primary_decision_horizon]
     if not (isinstance(v, float) and math.isfinite(v)):
         raise ScorecardViolation("primary 模式下选定 horizon final 必须有限(M2⁴)")

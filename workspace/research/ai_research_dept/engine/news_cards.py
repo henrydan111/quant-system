@@ -40,7 +40,8 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     build_card_registry, require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
-    plain_object_tuple, plain_str, plain_str_tuple, seal_hash, verify_sealed,
+    plain_object_tuple, plain_str, plain_str_tuple, safe_kind, safe_repr,
+    seal_hash, verify_sealed,
 )
 
 # --------------------------------------------------- 证据类围栏(§2 step 5+7)
@@ -67,18 +68,20 @@ def assign_evidence_class(typing_rec: dict, primary_route: str) -> str:
     from workspace.research.ai_research_dept.engine.news_ingest import (
         CONTENT_KIND, VERIFICATION_STATUS,
     )
-    if primary_route not in ROUTES:
-        raise RegistryError(f"未注册 primary_route {primary_route!r}(须 ∈ {sorted(ROUTES)})"
-                            f"——绝不默认归宏观正向(Major-1)")
+    # GPT #24 类3:围栏门的诊断经 safe_repr(不可信值的 __repr__ 是调用方代码)
+    if type(primary_route) is not str or primary_route not in ROUTES:
+        raise RegistryError(f"未注册 primary_route {safe_repr(primary_route)}"
+                            f"(须 ∈ {sorted(ROUTES)})——绝不默认归宏观正向(Major-1)")
     kind = typing_rec.get("content_kind")
     status = typing_rec.get("verification_status")
     rumor = typing_rec.get("is_rumor")
-    if kind not in CONTENT_KIND:
-        raise RegistryError(f"未注册 content_kind {kind!r}——围栏拒绝(Major-1)")
-    if status not in VERIFICATION_STATUS:
-        raise RegistryError(f"未注册 verification_status {status!r}——围栏拒绝(Major-1)")
+    if type(kind) is not str or kind not in CONTENT_KIND:
+        raise RegistryError(f"未注册 content_kind {safe_repr(kind)}——围栏拒绝(Major-1)")
+    if type(status) is not str or status not in VERIFICATION_STATUS:
+        raise RegistryError(
+            f"未注册 verification_status {safe_repr(status)}——围栏拒绝(Major-1)")
     if type(rumor) is not bool:
-        raise RegistryError(f"is_rumor 须字面 bool(得 {rumor!r})——围栏拒绝(Major-1)")
+        raise RegistryError(f"is_rumor 须字面 bool(得 {safe_repr(rumor)})——围栏拒绝(Major-1)")
     macro = primary_route == "macro"
     if kind == "推广" or rumor is True or status == "传闻":
         return "MFR" if macro else "NFR"
@@ -98,13 +101,14 @@ def _validate_typing(typing_rec: dict) -> dict:
     (status/kind/rumor)由 assign_evidence_class 校验。"""
     from workspace.research.ai_research_dept.engine.news_ingest import EVENT_TYPES
     t = dict(typing_rec)
-    if t.get("event_type") not in EVENT_TYPES:
-        raise RegistryError(f"未注册 event_type {t.get('event_type')!r}")
-    if t.get("direction") not in _DIRECTIONS:
-        raise RegistryError(f"未注册 direction {t.get('direction')!r}")
+    _et, _dir = t.get("event_type"), t.get("direction")
+    if type(_et) is not str or _et not in EVENT_TYPES:
+        raise RegistryError(f"未注册 event_type {safe_repr(_et)}")
+    if type(_dir) is not str or _dir not in _DIRECTIONS:
+        raise RegistryError(f"未注册 direction {safe_repr(_dir)}")
     imp = t.get("importance", 2)
     if type(imp) is not int or not 0 <= imp <= 5:
-        raise RegistryError(f"importance 须字面 int ∈ [0,5](得 {imp!r})")
+        raise RegistryError(f"importance 须字面 int ∈ [0,5](得 {safe_repr(imp)})")
     t["importance"] = imp
     return t
 
@@ -470,7 +474,7 @@ class AttributeRow:
         # "\\ufe0f"(默认可忽略-only)都曾能接 event_materiality=5(no silent gaps)
         if not has_substantive_text(self.text):
             raise RegistryError(
-                f"AttributeRow.text 须为恰 str 且含实质性字符(得 {self.text!r})——"
+                f"AttributeRow.text 须为恰 str 且含实质性字符(得 {safe_repr(self.text)})——"
                 f"空/语义空证据正文不得封印(executor-review#2/#3)")
         if self.row_hash:
             object.__setattr__(self, "row_hash", plain_str(self.row_hash))
@@ -502,20 +506,23 @@ def _build_attribute_records(base_record_id: str, *, claim_id: str, fact_cluster
                             "降级证据却不产任何子行)")
     if len(attributes) > MAX_ATTRIBUTE_ROWS:
         raise RegistryError(f"每事件属性行 ≤{MAX_ATTRIBUTE_ROWS}(得 {len(attributes)})")
-    if evidence_class not in ("NFD", "NFI", "NFA"):
-        raise RegistryError(f"D7 只拆正向类事件(得 {evidence_class})")
+    if type(evidence_class) is not str or evidence_class not in ("NFD", "NFI", "NFA"):
+        raise RegistryError(f"D7 只拆正向类事件(得 {safe_repr(evidence_class)})")
     out = []
     group = f"{claim_id}:attrs"
+    # GPT #24 类3:attr/text 都是调用方供给且正被类型/成员门拒——诊断经
+    # safe_repr/safe_kind(旧码 `{attr!r}` / `type(text).__name__` 在拒绝路径跑调用方代码)
     for attr, text in attributes.items():   # dict 键唯一 = 本调用内每属性恰一
-        if attr not in ATTRIBUTE_TYPES:
-            raise RegistryError(f"未注册 attribute_type {attr!r}(须 ∈ {ATTRIBUTE_TYPES})")
+        if type(attr) is not str or attr not in ATTRIBUTE_TYPES:
+            raise RegistryError(
+                f"未注册 attribute_type {safe_repr(attr)}(须 ∈ {ATTRIBUTE_TYPES})")
         # executor-review#2 Major-1 + #3 Major:非 str 先拒;净化后无实质性字符
         # (控制符/变体选择符/组合标记-only 输入)拒
         if type(text) is not str:
-            raise RegistryError(f"属性 {attr!r} 正文须为恰 str(得 {type(text).__name__})")
+            raise RegistryError(f"属性 {attr!r} 正文须为恰 str(得 {safe_kind(text)})")
         clean = sanitize_text(text)
         if not has_substantive_text(clean):
-            raise RegistryError(f"属性 {attr!r} 正文净化后无实质性字符({text!r})——"
+            raise RegistryError(f"属性 {attr!r} 正文净化后无实质性字符({safe_repr(text)})——"
                                 f"空/语义空证据不得拆行(executor-review#2/#3)")
         rid = f"{base_record_id}.{attr}"
         # 规范键序(_SCHEMA_DERIVATION_KEYS['d7_child_v2']):source, registry, attribute_type
@@ -621,7 +628,7 @@ def build_attribute_bundle(splits: list[dict], base_facts: list, base_records: l
     cutoff_iso = pd.Timestamp(cutoff).isoformat()
     # re-review#3 M1:decision_id 严格非空字符串,绝不 str() 强转(1 与 "1" 不同一)
     if not isinstance(decision_id, str) or not decision_id.strip():
-        raise RegistryError(f"decision_id 须非空 str(得 {decision_id!r},不强转)")
+        raise RegistryError(f"decision_id 须非空 str(得 {safe_repr(decision_id)},不强转)")
     if type(card) is not RenderedCard:
         raise RegistryError("card 必须是恰 RenderedCard(子类拒,re-review#7 P0)")
     verify_sealed(card_canonical_payload(card), card.card_hash, field_name="card_hash")

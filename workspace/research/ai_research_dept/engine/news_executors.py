@@ -67,7 +67,7 @@ from workspace.research.ai_research_dept.engine.news_legs import (
     snapshot_exact_outcome, verify_outcome_for_binding,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
-    plain_str, seal_hash, verify_sealed,
+    plain_str, safe_kind, safe_repr, seal_hash, verify_sealed,
 )
 
 _PROV_NAME = "execution_provenance.jsonl"
@@ -268,7 +268,7 @@ def _persist_execution_provenance(prov_dir, *, execution_id: str, decision_id: s
         if type(raw) is not str:
             # executor-review#2:恰 str;哈希由写入器内算(re-review#2 Blocker)
             raise RegistryError(f"{verdict} 行须携带恰 str raw"
-                                f"(得 {type(raw).__name__})")
+                                f"(得 {safe_kind(raw)};GPT #24 类3)")
         raw_sha256 = _raw_sha256(raw)
     if verdict in ("valid", "deterministic_zero", "empty_penalty"):
         if type(parsed_record) is not dict:
@@ -530,7 +530,7 @@ def commit_execution(ledger_dir, prov_dir, *, decision_id: str, execution_id: st
 def _require_view(view) -> ExecutionView:
     if type(view) is not ExecutionView:
         raise RegistryError("执行体只收新铸 ExecutionView(BINDING #1;得 "
-                            f"{type(view).__name__})")
+                            f"{safe_kind(view)};GPT #24 类3)")
     return view
 
 
@@ -558,7 +558,7 @@ def _make_leg_executor(call_fn, contract: NewsScoringContract, registry, *,
                              {"role": "user", "content": view.payload_text}])
             raw = reply.text
             if type(raw) is not str:
-                raise RegistryError(f"LLM raw text 须为恰 str(得 {type(raw).__name__})")
+                raise RegistryError(f"LLM raw text 须为恰 str(得 {safe_kind(raw)})")
             raw.encode("utf-8")                    # 不可编码文本在守卫内暴露
         except Exception:
             results[f"{leg}_prov"] = _persist_execution_provenance(
