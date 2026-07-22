@@ -23,9 +23,10 @@ def _news_rows(contents, dt="2025-01-27 16:00:00"):
                           "channels": ""} for c in contents])
 
 
-def _ingest(tmp_path, contents, *, dt="2025-01-27 16:00:00", ingest_class="forward"):
+def _ingest(tmp_path, contents, *, dt="2025-01-27 16:00:00", ingest_class="forward",
+            retrieved_at="2025-01-27 17:00:00"):
     ingest_rows("news", _news_rows(contents, dt), published_col="datetime",
-                retrieved_at=pd.Timestamp("2025-01-27 17:00:00"),
+                retrieved_at=pd.Timestamp(retrieved_at),
                 store_dir=tmp_path, ingest_class=ingest_class)
 
 
@@ -89,13 +90,15 @@ def test_every_typed_row_is_cutoff_bound_after_type(tmp_path):
 # --------------------------------------------------- invariant 2: ingest_class isolation
 
 def test_forward_run_never_sees_history_bulk(tmp_path):
+    # ingest one forward + one history_bulk flash; each run sees only its own panel
     _ingest(tmp_path, ["2020 旧闻"], dt="2020-03-01 10:00:00", ingest_class="history_bulk")
+    _ingest(tmp_path, ["盘后 forward 快讯"], dt="2025-01-27 16:00:00", ingest_class="forward")
     fwd = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
                            store_dir=tmp_path)
-    assert fwd["n_flashes"] == 0            # forward panel is empty; bulk unreachable
+    assert fwd["n_flashes"] == 1 and fwd["typed"][0]["content_preview"] == "盘后 forward 快讯"
     bulk = type_day_flashes(CUT, ingest_class="history_bulk", call_fn=_stub_typer(),
                             store_dir=tmp_path)
-    assert bulk["n_flashes"] == 1
+    assert bulk["n_flashes"] == 1 and bulk["typed"][0]["content_preview"] == "2020 旧闻"
     assert bulk["ingest_class"] == "history_bulk"
 
 
@@ -198,7 +201,11 @@ def test_population_hash_detects_added_flash(tmp_path):
 
 # --------------------------------------------------- invariant 6: NON_EVIDENTIARY / empty
 
-def test_empty_population_no_llm_call(tmp_path):
+def test_existing_forward_panel_empty_before_cutoff(tmp_path):
+    # GPT-P1 Blocker-1: an EXISTING forward panel with no rows before cutoff is a real
+    # empty artifact (not 'source unavailable') and must not call the typer. The panel
+    # exists (a flash visible AFTER cutoff), so load_text(require_exists=True) passes.
+    _ingest(tmp_path, ["cutoff 之后才可见"], dt="2025-01-28 10:00:00")
     called = {"n": 0}
 
     def boom(msgs):
@@ -208,3 +215,61 @@ def test_empty_population_no_llm_call(tmp_path):
                            store_dir=tmp_path)
     assert art["n_flashes"] == 0 and called["n"] == 0
     assert art["evidence_class"].endswith("NON_EVIDENTIARY")
+
+
+def test_missing_forward_store_raises(tmp_path):
+    # GPT-P1 Blocker-1: a MISSING forward store is 'data unavailable', a hard error —
+    # never a legitimate zero-news NON_EVIDENTIARY result.
+    from data_infra.text_store import TextStoreError
+    called = {"n": 0}
+
+    def boom(msgs):
+        called["n"] += 1
+        return _stub_typer()(msgs)
+    with pytest.raises(TextStoreError, match="required text store missing"):
+        type_day_flashes(CUT, ingest_class="forward", call_fn=boom, store_dir=tmp_path)
+    assert called["n"] == 0
+
+
+def test_missing_history_bulk_store_tolerated(tmp_path):
+    # history_bulk replay of a never-backfilled day is legitimately empty (opt-in
+    # require_exists stays off by default for the replay panel).
+    art = type_day_flashes(CUT, ingest_class="history_bulk", call_fn=_stub_typer(),
+                           store_dir=tmp_path)
+    assert art["n_flashes"] == 0
+
+
+def test_different_cutoffs_same_day_distinct_files(tmp_path):
+    # GPT-P1 Blocker-2: 09:30 and 18:00 on the same day must not collide.
+    _ingest(tmp_path, ["盘前快讯"], dt="2025-01-27 09:00:00",
+            retrieved_at="2025-01-27 09:00:00")
+    _ingest(tmp_path, ["盘后快讯"], dt="2025-01-27 16:00:00",
+            retrieved_at="2025-01-27 16:00:00")
+    a_am = type_day_flashes("2025-01-27 09:30:00", ingest_class="forward",
+                            call_fn=_stub_typer(), store_dir=tmp_path)
+    a_pm = type_day_flashes("2025-01-27 18:00:00", ingest_class="forward",
+                            call_fn=_stub_typer(), store_dir=tmp_path)
+    p_am = write_typed_flash_artifact(a_am, tmp_path / "out")
+    p_pm = write_typed_flash_artifact(a_pm, tmp_path / "out")
+    assert p_am != p_pm and p_am.exists() and p_pm.exists()
+    assert a_am["n_flashes"] == 1 and a_pm["n_flashes"] == 2   # am sees only 盘前
+
+
+def test_write_once_refuses_different_content(tmp_path):
+    # GPT-P1 Blocker-2: a re-typing with a DIFFERENT valid classification must not
+    # overwrite a possibly-consumed artifact; an identical re-write is idempotent.
+    from workspace.research.ai_research_dept.engine.news_flash_typing import (
+        TypedFlashConflictError,
+    )
+    _ingest(tmp_path, ["同一条快讯"])
+    a1 = type_day_flashes(CUT, ingest_class="forward", call_fn=_stub_typer(),
+                          store_dir=tmp_path)
+    write_typed_flash_artifact(a1, tmp_path / "out")
+    # idempotent: identical artifact re-writes fine
+    write_typed_flash_artifact(a1, tmp_path / "out")
+    # different valid typing (importance 5 -> 3) for the SAME (class, cutoff)
+    a2 = type_day_flashes(CUT, ingest_class="forward",
+                          call_fn=_stub_typer(importance=3), store_dir=tmp_path)
+    assert a2["artifact_sha256"] != a1["artifact_sha256"]
+    with pytest.raises(TypedFlashConflictError, match="write-once"):
+        write_typed_flash_artifact(a2, tmp_path / "out")

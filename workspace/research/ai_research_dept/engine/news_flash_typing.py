@@ -32,10 +32,15 @@ NF_INTEGRATION_SEQUENCING.md):
    byte-identical `artifact_sha256` (distinct flashes sorted by `content_hash`;
    per-batch local idx; output sorted). Re-running never changes a type unless the
    input population changes.
-5. **Self-describing + fail-closed persistence.** The artifact carries
+5. **Immutable, self-describing, fail-closed persistence.** The artifact carries
    `cutoff_iso` + `ingest_class` + `population_hash` (over the typed content set) +
    `artifact_sha256`; load re-verifies both hashes and refuses a tampered/mismatched
-   artifact. Atomic write.
+   artifact. The path is keyed by the FULL cutoff (not just the day, so 09:30 and
+   18:00 don't collide) and the write is **write-once / first-write-wins** — a second
+   typing run with different content is refused, never silently overwritten (a real
+   LLM can return different valid types; a consumed version must stay stable). P2
+   reads by (cutoff, ingest_class) and binds the `artifact_sha256` it verifies; P4
+   binds the consumed SHA into the sealed decision.
 6. **NON_EVIDENTIARY.** Zero flashes → empty artifact (not an error); every artifact
    carries the replay-class marker (this is replay infra until FORWARD_PREREG).
 """
@@ -120,18 +125,29 @@ def _distinct_flashes(df: pd.DataFrame, cutoff: pd.Timestamp) -> list[dict]:
 
 
 def type_day_flashes(cutoff, *, ingest_class: str, call_fn,
-                     store_dir=None, batch: int = BATCH) -> dict:
+                     store_dir=None, batch: int = BATCH,
+                     require_exists: bool = False) -> dict:
     """Market-wide per-day NF-flash typing. Returns a self-describing artifact dict.
 
     `call_fn(messages) -> reply` (reply has `.text`) is injected — the CLI wires the
     real Ark route; tests inject a stub. `cutoff` is the decision cutoff; only
     `decision_visible_at <= cutoff` rows (of the requested `ingest_class` panel) are
-    typed."""
+    typed.
+
+    GPT-P1 Blocker-1: the FORWARD panel is **always** fail-closed — a missing forward
+    store is a config error ("data unavailable"), never a legitimate zero-news result;
+    it must not be mislabeled as a valid NON_EVIDENTIARY empty artifact. history_bulk
+    replay stays tolerant by default (`require_exists` opt-in) since a bulk panel for a
+    day that was never backfilled is legitimately empty. Either way, an EXISTING panel
+    with genuinely no rows before `cutoff` yields an empty artifact (that is real
+    'no news at cutoff', not 'source unavailable')."""
     if ingest_class not in INGEST_CLASSES:
         raise ValueError(f"ingest_class must be ∈ {sorted(INGEST_CLASSES)} "
                          f"(a forward decision must not consume history_bulk types)")
     cut = pd.Timestamp(cutoff)
-    df = load_text("news", cut, store_dir=store_dir, ingest_class=ingest_class)
+    req = ingest_class == "forward" or bool(require_exists)   # forward: hard fail-closed
+    df = load_text("news", cut, store_dir=store_dir, ingest_class=ingest_class,
+                   require_exists=req)
     flashes = _distinct_flashes(df, cut) if not df.empty else []
     typed: list[dict] = []
     n_batches = (len(flashes) + batch - 1) // batch
@@ -164,29 +180,56 @@ def type_day_flashes(cutoff, *, ingest_class: str, call_fn,
     return artifact
 
 
+class TypedFlashConflictError(ValueError):
+    """GPT-P1 Blocker-2: a typed-flash artifact for this (ingest_class, cutoff) already
+    exists with DIFFERENT content. The artifact is write-once/first-write-wins — a
+    second typing run (a real LLM can legitimately return different valid types) must
+    NOT overwrite the version a downstream decision may already have consumed."""
+
+
 def _artifact_path(out_dir, cutoff_iso: str, ingest_class: str) -> Path:
-    day = pd.Timestamp(cutoff_iso).strftime("%Y%m%d")
-    return Path(out_dir) / f"nf_typed_flash_{ingest_class}_{day}.json"
+    # GPT-P1 Blocker-2: full cutoff timestamp, not just the day — 09:30 and 18:00 on
+    # the same day are DISTINCT decision cutoffs and must not collide.
+    stamp = pd.Timestamp(cutoff_iso).strftime("%Y%m%dT%H%M%S")
+    return Path(out_dir) / f"nf_typed_flash_{ingest_class}_{stamp}.json"
 
 
 def write_typed_flash_artifact(artifact: dict, out_dir) -> Path:
-    """Atomic write (fsync + os.replace). Path keyed by (ingest_class, day)."""
+    """Immutable, atomic write — **write-once / first-write-wins** per (ingest_class,
+    cutoff) (GPT-P1 Blocker-2). If the path already holds a byte-identical artifact the
+    write is idempotent (returns it); if it holds a DIFFERENT artifact the write is
+    refused (`TypedFlashConflictError`) so a re-typing can never silently replace a
+    consumed version. Atomic (fsync + os.replace) for the first write."""
+    from research_orchestrator.file_lock import file_lock
     path = _artifact_path(out_dir, artifact["cutoff_iso"], artifact["ingest_class"])
     path.parent.mkdir(parents=True, exist_ok=True)
     blob = json.dumps(artifact, ensure_ascii=False, indent=1)
-    fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(blob)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
+    # the exists-check + write are serialized so write-once actually holds under a
+    # concurrent re-run, not merely advisory (same pattern as seal_decision_archive)
+    with file_lock(path.parent / (path.name + ".lock")):
+        if path.exists():
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing == artifact:
+                return path                              # idempotent re-write
+            raise TypedFlashConflictError(
+                f"typed-flash artifact for ({artifact['ingest_class']}, "
+                f"{artifact['cutoff_iso']}) already exists with different content "
+                f"(existing {existing.get('artifact_sha256', '')[:12]} vs new "
+                f"{artifact.get('artifact_sha256', '')[:12]}) — write-once, refusing to "
+                f"overwrite a possibly-consumed version")
+        fd, tmp = tempfile.mkstemp(suffix=".json.tmp", dir=path.parent)
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(blob)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     return path
 
 
