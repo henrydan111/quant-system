@@ -142,6 +142,20 @@ _NON_WRITE_OS_EVENTS = frozenset({
 })
 
 
+def _is_loopback_bind(args) -> bool:
+    """A bind to a loopback literal cannot leave the host, so it is the one socket operation a clean
+    construction legitimately performs (observed: `('::1', 0)`). Anything else — any name resolution,
+    any connect, any bind to a routable address — fails."""
+    try:
+        addr = args[1]
+    except Exception:
+        return False
+    if not isinstance(addr, tuple) or not addr or not isinstance(addr[0], str):
+        return False
+    host = addr[0]
+    return host == "::1" or host == "localhost" or host.startswith("127.")
+
+
 def _classify(event, args):
     # sys.addaudithook fires for C-level opens too, so Path.write_text / io.open / os.open are all
     # covered — a builtins.open shim is not (verified: it misses Path.write_text). Buffered
@@ -157,8 +171,18 @@ def _classify(event, args):
                 isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND))
             if writing and not _allowed(path):
                 violations.append(f"open({path!r}, mode={m!r}, flags={flags})")
-        elif event in ("socket.connect", "socket.getaddrinfo"):
-            violations.append(f"{event} — NETWORK attempted")
+        elif event.startswith("socket."):
+            # DEFAULT-DENY, same inversion as the os/shutil surface. Naming the forbidden events
+            # (`connect`, `getaddrinfo`) failed open on every one not listed — `socket.gethostbyname`
+            # was silently dropped (reproduced), and that resolves through external DNS for any
+            # non-loopback name. Only two socket events occur in a clean construction run, and both are
+            # permitted under a STRICT condition rather than by name alone.
+            if event == "socket.__new__":
+                pass                    # allocating a socket object is not I/O; every USE is judged
+            elif event == "socket.bind" and _is_loopback_bind(args):
+                pass                    # loopback bind cannot leave the host
+            else:
+                violations.append(f"{event} — NETWORK/RESOLUTION attempted")
         elif event in _PROCESS:
             violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
         elif event.startswith(("os.", "shutil.")) and event not in _NON_WRITE_OS_EVENTS:
@@ -188,6 +212,20 @@ class _NoNet(socket.socket):
 
 
 socket.socket = _NoNet
+
+
+def _deny_resolution(_name):
+    def _f(*a, **kw):
+        violations.append(f"socket.{_name} — NAME RESOLUTION attempted")
+        raise OSError(f"name resolution is denied in the F10 live-construction test ({_name})")
+    return _f
+
+
+# The classifier RECORDS; these ENFORCE. Recording alone would let a resolution actually reach external
+# DNS before the test noticed it after the fact.
+for _n in ("gethostbyname", "gethostbyname_ex", "getaddrinfo", "create_connection"):
+    if hasattr(socket, _n):
+        setattr(socket, _n, _deny_resolution(_n))
 
 # The parent launches this child with `-S`, so site initialisation has NOT run yet. Python's startup
 # (`.pth` handlers, `sitecustomize`) otherwise executes BEFORE this file's first line — a window the
@@ -289,7 +327,20 @@ def _run_child(mode: str = "live", probe_from_root=None, startup_inject: bool = 
     if startup_inject:
         inj = run_root.parent / f"inj_{run_root.name}"
         inj.mkdir(parents=True, exist_ok=True)
-        if startup_inject == "shadow_stdlib":
+        if startup_inject == "shadow_stdlib_dns":
+            # Same shadowing vector, but the payload is NAME RESOLUTION rather than a file write:
+            # socket.gethostbyname fires `socket.gethostbyname`, which the enumerated socket list
+            # dropped silently. Runs at the child's own `import json`, i.e. during bootstrap.
+            (inj / "json.py").write_text(
+                "import sys, os, socket\n"
+                "socket.gethostbyname('localhost')\n"
+                "_here = os.path.dirname(os.path.abspath(__file__))\n"
+                "sys.path = [p for p in sys.path if os.path.abspath(p) != _here]\n"
+                "del sys.modules['json']\n"
+                "import json as _real\n"
+                "sys.modules['json'] = _real\n",
+                encoding="utf-8")
+        elif startup_inject == "shadow_stdlib":
             # A pre-placed PYTHONPATH\json.py that writes outside the run root and then proxies the
             # REAL stdlib json, so the child keeps working and the escape is silent. This runs at
             # `import json`, i.e. during the child's own bootstrap imports.
@@ -397,6 +448,22 @@ def test_the_monitor_catches_a_shadowed_stdlib_module_at_bootstrap():
     assert any("bootstrap_escaped" in v for v in data["violations"]), data["violations"]
     assert data["bootstrap_events_seen"] > 0, "no pre-bootstrap events were buffered at all"
     # and the proxy really did keep the interpreter working end to end
+    assert data["constructed"] and data["real_client"] == "DataApi", data
+    assert data["page_rows"] == 1, data
+
+
+def test_the_monitor_catches_name_resolution():
+    """RED TEAM (fan-out re-review #5). `socket.gethostbyname` fires an event of that exact name, which
+    the enumerated socket list (`connect`, `getaddrinfo`) dropped silently — so F10's "no vendor
+    interaction" proof was incomplete: for any non-loopback name that call reaches external DNS.
+
+    The socket surface is now default-deny like the os/shutil surface. Driven from the bootstrap shim so
+    it also exercises the buffer-then-replay path."""
+    _, data, _ = _run_child("live", lambda r: r.parent / "f10_dns_probe" / "unused.txt",
+                            startup_inject="shadow_stdlib_dns")
+    assert data["violations"], "the monitor MISSED a name resolution"
+    assert any("gethostbyname" in v for v in data["violations"]), data["violations"]
+    # and the construction still completed end to end
     assert data["constructed"] and data["real_client"] == "DataApi", data
     assert data["page_rows"] == 1, data
 
