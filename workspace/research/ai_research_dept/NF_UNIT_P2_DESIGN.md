@@ -112,11 +112,29 @@ market-wide posture from typing to clustering+routing+assessment.
   content_kind / direction / is_rumor) disagree — no laundering one fact's evidence class onto another's
   stock. Routing already unions all members' mentions.
 
-**Disclosed residual (one, honest):** a stock that was renamed but is ENTIRELY ABSENT from `namechange`
-falls back to `stock_basic.name` (treated as never-renamed). Distinguishing "never renamed" from
-"renamed but missing from the namechange reference" is impossible without external data; the reviewer's
-repro (000558) IS in namechange and is handled correctly. This residual is a namechange-completeness
-concern, recorded here, not a logic gap.
+## GPT re-review #2 → USER ARBITRATION (fail-closed omit) — P2 name-PIT closed
+
+GPT re-review#2 hit the Tier-2 budget ceiling on name-PIT completeness (ann_date anchor ignored;
+current-name fallback unsafe; 635/5395 real stocks with gap/overlap intervals). Per protocol it went
+to user arbitration; the user chose **fail-closed omit** (over "build a sealed PIT-complete name
+reference" or "tracked debt"). Folded:
+
+- **Name = fail-closed omit.** `_as_of_names(namechange, cut)` gives a ts_code an as-of name ONLY if
+  namechange yields exactly ONE name that at `cut` is both IN EFFECT (`start<=cut<=end|∞`) AND
+  ANNOUNCED (`ann_date<=cut` — the PIT visibility anchor). 0 / >1 (gap/overlap) / unannounced / absent
+  → **no name alias** (the code still resolves by numeric A/H code). **No fallback to
+  `stock_basic.name`** — that reopened the future-name leak. `build_alias_registry` omits (does not
+  raise on) a listed code missing from `as_of_names`, keeping it in `a_universe` for numeric routing.
+  Trade-off (accepted): reduced NAME recall for stocks without a clean announced unique name; full
+  recall would need the sealed PIT-complete name reference (a pre-forward item), not built here.
+- **P0(b) schema:** `build_alias_registry` under a cutoff now requires BOTH `list_date` and
+  `delist_date` columns to exist (empty `delist_date` cell = not delisted).
+- **P1 importance:** after the identity gate, `importance` is the MAX over cluster members (was the
+  representative's), preserving sort order and the D7 `importance>=4` split gate.
+
+Regressions: post-cutoff rename doesn't resolve; a name in effect but unannounced (`ann_date>cut`)
+doesn't resolve; conflicting member typings refused; importance is the member max; missing/unparseable
+`list_date` and missing `delist_date` column fail-closed.
 
 ## Deferred / disclosed simplifications in the P2 implementation (honest, not hidden)
 

@@ -141,13 +141,13 @@ def build_alias_registry(stock_basic: pd.DataFrame, *, version: str,
     已退市股票在该 cutoff 不解析。重名 → 歧义不入 exact。H/ADR 种子 target 须在 a_universe。
     content_hash = 全 SHA-256(行序无关)。
 
-    GPT-P2 P0:
-    - `as_of_names`(可选 {ts_code: 截至 cutoff 生效的名称})——**PIT 名称别名**。给定时,
-      名称别名取该映射而非当前 `stock_basic.name`(否则改名后的未来名会在过去 cutoff
-      被路由——真实未来别名泄漏)。名称解析的 as-of/namechange 逻辑由调用方(PIT 感知的
-      P2)负责,本工厂只按映射装配并封存。
-    - **日期 fail-closed**:给定 cutoff 时,list_date **必须存在且可解析**;delist_date
-      若非空则必须可解析——无法 PIT 判定的行一律拒(不再 `coerce→NaT→放行`)。"""
+    GPT-P2 P0 (fail-closed omit):
+    - `as_of_names`(可选 {ts_code: 截至 cutoff 的 PIT 名称})——**PIT 名称别名**。给定时,
+      名称别名取该映射而非当前 `stock_basic.name`。**映射里没有的上市股 → 省略其名称别名**
+      (仍留在 a_universe,数字 A/H 代码照常解析),而不是回退当前名(回退会重开未来名
+      泄漏)。哪些股有干净、ann_date 锚定、唯一的 as-of 名由调用方(PIT 感知的 P2)判定。
+    - **日期 fail-closed**:给定 cutoff 时,list_date/delist_date **列都必须存在**;list_date
+      须可解析;delist_date 单元格若非空须可解析(空=未退市)——无法 PIT 判定一律拒。"""
     cut = pd.Timestamp(cutoff) if cutoff is not None else None
     exact, name_counts, a_universe = {}, {}, set()
     for _, r in stock_basic.iterrows():
@@ -155,8 +155,9 @@ def build_alias_registry(stock_basic: pd.DataFrame, *, version: str,
         if not tc:
             continue
         if cut is not None:
-            if "list_date" not in r.index:
-                raise ValueError(f"{tc}: 无 list_date 列,无法按 cutoff PIT 过滤——拒(fail-closed)")
+            if "list_date" not in r.index or "delist_date" not in r.index:
+                raise ValueError(f"{tc}: cutoff 模式须存在 list_date+delist_date 列"
+                                 f"(空单元格=未退市)——拒(fail-closed)")
             ld_raw = r.get("list_date")
             ld = pd.to_datetime(str(ld_raw), errors="coerce") \
                 if not (ld_raw is None or pd.isna(ld_raw)) else pd.NaT
@@ -175,9 +176,8 @@ def build_alias_registry(stock_basic: pd.DataFrame, *, version: str,
                     continue                      # 已退市
         a_universe.add(tc)
         if as_of_names is not None:
-            if tc not in as_of_names:
-                raise ValueError(f"{tc}: as_of_names 缺该上市股的截至名称——拒(GPT-P2 P0 fail-closed)")
-            nm = str(as_of_names[tc]).strip()
+            nm = as_of_names.get(tc)              # 缺 → 省略名称(fail-closed omit)
+            nm = str(nm).strip() if nm is not None else ""
         else:
             nm = str(r["name"]).strip()
         if nm:

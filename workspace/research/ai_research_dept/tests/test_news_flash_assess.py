@@ -51,8 +51,16 @@ _NC_COLS = ["ts_code", "name", "start_date", "end_date", "ann_date", "change_rea
 
 
 def _namechange(rows=None):
-    # default: empty history -> every stock keeps its current name (never renamed)
-    return pd.DataFrame(rows or [], columns=_NC_COLS)
+    # default: clean, announced, unique as-of names for the two resolvable stocks (under
+    # fail-closed-omit, a stock without a clean namechange entry gets NO name alias).
+    if rows is None:
+        rows = [
+            {"ts_code": "600519.SH", "name": "贵州茅台", "start_date": "20010827",
+             "end_date": None, "ann_date": "20010827", "change_reason": "上市"},
+            {"ts_code": "300750.SZ", "name": "宁德时代", "start_date": "20180611",
+             "end_date": None, "ann_date": "20180611", "change_reason": "上市"},
+        ]
+    return pd.DataFrame(rows, columns=_NC_COLS)
 
 
 class _Reply:
@@ -278,6 +286,52 @@ def test_p1_conflicting_member_typings_refused(tmp_path):
     p1 = type_day_flashes(CUT, ingest_class="forward", call_fn=mixed_typer, store_dir=tmp_path)
     with pytest.raises(ValueError, match="conflicting typings"):
         _assess(tmp_path, p1)
+
+
+def test_p0_name_in_effect_but_unannounced_does_not_resolve(tmp_path):
+    # GPT-P2 re-review#2: ann_date is the PIT visibility anchor. A name in effect at cut
+    # (start_date <= cut) but announced AFTER cut (ann_date > cut) must NOT resolve.
+    sb = pd.DataFrame([{"ts_code": "000001.SZ", "name": "刚改的名",
+                        "list_date": "19910403", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000001.SZ", "name": "刚改的名", "start_date": "20250101",
+         "end_date": None, "ann_date": "20250201", "change_reason": "更名"},  # ann > cut
+    ])
+    _ingest(tmp_path, ["刚改的名发布重大公告"])
+    art = _assess(tmp_path, _p1(tmp_path), stock_basic=sb, namechange=nc)
+    assert "000001.SZ" not in {c for a in art["assessed"]
+                               for c in a["route"]["subject_codes"]}
+
+
+def test_p1_importance_is_max_over_members(tmp_path):
+    # GPT-P2 re-review#2: after the identity gate, importance is the MAX over members
+    # (a low-importance representative must not drop the D7 importance>=4 split gate).
+    prefix = "详情" * 70
+    _ingest(tmp_path, [prefix + "甲", prefix + "乙"])
+
+    def imp_typer(msgs):
+        payload = json.loads(msgs[1]["content"])
+        out = []
+        for it in payload["items"]:
+            imp = 1 if "甲" in it["content"] else 5      # same identity, different importance
+            out.append({"idx": it["idx"], "event_type": "订单合同",
+                        "verification_status": "官方证实", "content_kind": "事实",
+                        "direction": "利好", "importance": imp, "is_rumor": False})
+        return _Reply(json.dumps({"results": out}, ensure_ascii=False))
+    p1 = type_day_flashes(CUT, ingest_class="forward", call_fn=imp_typer, store_dir=tmp_path)
+    art = _assess(tmp_path, p1)
+    assert art["n_flashes"] == 1
+    assert art["assessed"][0]["typing"]["importance"] == 5   # max(1, 5), not the rep's
+
+
+def test_p0_missing_delist_date_column_fail_closed(tmp_path):
+    # GPT-P2 re-review#2: under a cutoff the delist_date COLUMN must exist (empty cell =
+    # not delisted); a missing column was silently treated as 'not delisted'.
+    sb = pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台",
+                        "list_date": "20010827"}])          # no delist_date column
+    _ingest(tmp_path, ["贵州茅台大单"])
+    with pytest.raises(ValueError, match="delist_date"):
+        _assess(tmp_path, _p1(tmp_path), stock_basic=sb)
 
 
 def test_p0_unparseable_list_date_fail_closed(tmp_path):
