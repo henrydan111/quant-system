@@ -2266,3 +2266,17 @@ def test_every_public_state_reader_goes_through_the_chokepoint(rig):
                         f"`exempt` with a reason they serve no verified state.")
     # the exemptions must stay real, not become a dumping ground
     assert set(exempt) <= {n for n, _ in readers}, "an exemption names a method that no longer exists"
+
+
+def test_cmd_consolidate_reports_the_real_partition_and_row_counts():
+    """A live market/daily consolidation wrote 4,493 files / 14,821,292 rows but `cmd_consolidate`
+    printed "0 partitions / 0 rows" — it read `layout['partitions']` and `layout['rows']`, keys the
+    layout dict does not carry, so a flawless recovery reported as a total failure. The counts must
+    come from the actual `outputs` list."""
+    import inspect
+    src = inspect.getsource(rrc.cmd_consolidate)
+    assert 'layout.get("partitions"' not in src and "layout.get('partitions'" not in src
+    assert 'layout.get("rows"' not in src and "layout.get('rows'" not in src
+    assert 'layout.get("outputs"' in src or "layout.get('outputs'" in src
+    # the number printed is derived from the outputs, not a missing key
+    assert "len(outs)" in src and 'o.get("rows"' in src

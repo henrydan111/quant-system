@@ -1793,8 +1793,13 @@ def cmd_consolidate(rp, led, *, families=None) -> int:
         try:
             out = ra.consolidate_family(spec, led)
             for layout in out.get("layouts", []):
+                # count from the actual `outputs` list — the layout dict has no 'partitions'/'rows'
+                # keys, so reading them printed "0 partitions / 0 rows" for a run that had just written
+                # 4,493 files / 14,821,292 rows. A recovery that succeeds must not REPORT as a failure.
+                outs = layout.get("outputs", [])
+                n_rows = sum(o.get("rows", 0) for o in outs)
                 print(f"  {spec.output_family:<34} {layout.get('label', ''):<18} "
-                      f"{layout.get('partitions', 0):>6} partitions  {layout.get('rows', 0):>9} rows")
+                      f"{len(outs):>6} partitions  {n_rows:>11,} rows", flush=True)
         except Exception as exc:
             print(f"  {spec.output_family:<34} FAILED: {exc}", file=sys.stderr)
             rc = 4
