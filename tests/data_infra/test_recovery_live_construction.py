@@ -151,8 +151,12 @@ for _f in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC", "O_TEMPORARY"
 #: EnumValue / QueryInfoKey, all reads, resolving the Windows time-zone table). Default-deny with the
 #: READ set enumerated, same polarity as os/socket: DeleteKey, SetValue*, CreateKey*, LoadKey and
 #: anything else that mutates the registry is a violation.
+#: `winreg.ConnectRegistry` is NOT in this set: it is only a local read when `computer_name is None`,
+#: and a blanket allowance would pass a connection to a REMOTE registry. It is judged by argument below
+#: instead (hardening debt closed after re-review #8 — cheap, strictly narrowing, and the clean run's
+#: two ConnectRegistry calls both pass None).
 _NON_MUTATING_WINREG = frozenset({
-    "winreg.ConnectRegistry", "winreg.OpenKey", "winreg.OpenKey/result", "winreg.EnumKey",
+    "winreg.OpenKey", "winreg.OpenKey/result", "winreg.EnumKey",
     "winreg.EnumValue", "winreg.QueryInfoKey", "winreg.QueryValue", "winreg.QueryValueEx",
     "winreg.ExpandEnvironmentStrings", "winreg.QueryReflectionKey", "winreg.PyHKEY.Detach",
 })
@@ -167,9 +171,11 @@ _NON_CALLING_CTYPES = frozenset({"ctypes.dlopen", "ctypes.dlsym", "ctypes.dlsym/
                                  "ctypes.get_last_error"})
 
 #: FD-scoped events carry a file DESCRIPTOR, not a path, so they cannot be path-judged — but the `open`
-#: that produced the descriptor already was. Permitted on that basis (a lock on an in-root fd is in
-#: root by construction), not because they are inconvenient. Anything else in the namespace is denied.
-_FD_SCOPED_EVENTS = frozenset({"msvcrt.locking", "msvcrt.get_osfhandle", "msvcrt.open_osfhandle"})
+#: that produced the descriptor already was, so a lock on an in-root fd is in-root by construction.
+#: `msvcrt.open_osfhandle` is DELIBERATELY excluded: that argument does not hold for it, since it can
+#: wrap a native or INHERITED handle that no audited `open` ever created. The clean path needs only
+#: `locking` (hardening debt closed after re-review #8).
+_FD_SCOPED_EVENTS = frozenset({"msvcrt.locking", "msvcrt.get_osfhandle"})
 
 #: Process spawning: an audit hook does not follow a child, so spawning one is BY DEFINITION an
 #: unobservable write surface — the child's writes are invisible no matter where its EXECUTABLE lives.
@@ -253,6 +259,10 @@ def _classify(event, args):
                 violations.append(f"{event} — NETWORK/RESOLUTION attempted")
         elif _is_process_event(event):
             violations.append(f"{event}({args[0]!r}) — SPAWNED a process (write surface not observable)")
+        elif event == "winreg.ConnectRegistry":
+            # local ONLY: a non-None computer_name is a connection to a REMOTE machine's registry
+            if args[:1] and args[0] is not None:
+                violations.append(f"{event}({args[0]!r}) — REMOTE REGISTRY")
         elif event.startswith("winreg."):
             if event not in _NON_MUTATING_WINREG:
                 violations.append(f"{event}({args[:2]!r}) — REGISTRY MUTATION")
