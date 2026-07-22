@@ -77,14 +77,25 @@ market-wide posture from typing to clustering+routing+assessment.
 5. Tampered P2 artifact (or altered consumed-P1 SHA) → refused on load.
 6. Write-once/first-write-wins + microsecond-cutoff path (inherited discipline) hold.
 
-## Open point declared up front (for the reviewer)
+## GPT round-1 fold (CHANGES-REQUIRED: 1 P0 + 2 P1) — all folded
 
-**Representative-member approximation.** A cluster (wording family) is typed/routed by its
-deterministic representative member (`members[0]`), not by every member. Members share a wording
-family so their content/typing/routing are ~identical; using the representative is deterministic and
-matches how `assess_flash` consumes ONE typing + ONE route per cluster. If the reviewer thinks routing
-must union all members' mentions (a flash whose outlets phrase the same event with different stock
-mentions), that is a routing-semantics change and belongs in its own unit — flag it, don't fold here.
+- **P0 (as-of registry PIT leak):** P2 no longer accepts a pre-built registry (whose build-cutoff it
+  couldn't verify). It takes raw `stock_basic` and **builds the alias registry itself AS-OF the
+  canonical cutoff**, so a future-listed stock cannot resolve. The as-of routing basis (registry
+  hash/version + industry/concept term-set hashes) is recorded in `routing_reference`.
+- **P1-#2 (dict artifact bypassed the seal):** `verify_typed_flash_artifact(dict)` extracted in P1;
+  P2 verifies the P1 artifact for BOTH dict and path inputs (schema + artifact_sha256 +
+  population_hash + content_hash uniqueness + n_flashes count). A dict's self-claimed SHA is never
+  trusted.
+- **P1-#3 (coverage only checked the representative):** P2 now asserts the raw content-hash set
+  EQUALS the P1-typed set exactly (`seal_hash(sorted(set(df.content_hash))) == P1.population_hash`)
+  before clustering — missing/extra/duplicate refuses.
+- **Representative-member routing:** RESOLVED IN P2 (not deferred) — routing now UNIONs every cluster
+  member's mentions, so a cluster whose members mention different stocks (the 120-char-key case) keeps
+  all of them. Typing still uses the representative (the population gate guarantees every member is
+  P1-typed; `assess_flash` consumes one typing per cluster).
+- **coordination:** now recorded as `coordination_evaluated: False` (unassessed), not a bare `False`
+  that could read as "confirmed no coordination".
 
 ## Deferred / disclosed simplifications in the P2 implementation (honest, not hidden)
 

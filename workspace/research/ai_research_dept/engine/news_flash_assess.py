@@ -17,17 +17,23 @@ from `stock_basic` / the SW industry reference / the THS concept index.
 
 Declared invariants (Tier-2; see NF_UNIT_P2_DESIGN.md):
 
-1. **PIT inherited + one canonical cutoff.** `load_text` filters + forward fail-closed;
-   the SAME `_canonical_cutoff` (microsecond-max) drives load, clustering, and routing
-   as-of; `build_cluster_snapshots` re-asserts `effective_at <= cutoff`; an alias listed
-   after cutoff does not resolve.
-2. **P1 binding — same identity, full coverage, fail-closed.** The consumed P1 artifact
-   MUST be for the exact (cutoff, ingest_class); its `artifact_sha256` is verified and
-   bound into P2's artifact. Every cluster representative's `content_hash` MUST be in the
-   P1 typing index — a miss is a hard error (population mismatch), never a default typing.
-3. **Deterministic PIT routing, no LLM.** Routing is a pure function of (content,
-   registry, cutoff, terms); the registry's `content_hash`+version is recorded so P3/P4
-   can bind the exact routing basis.
+1. **PIT inherited + one canonical cutoff + as-of registry.** `load_text` filters +
+   forward fail-closed; the SAME `_canonical_cutoff` (microsecond-max) drives load,
+   clustering, and routing; `build_cluster_snapshots` re-asserts `effective_at <= cutoff`.
+   **P2 builds the alias registry ITSELF as-of this canonical cutoff (GPT-P2 P0)** — it
+   can never be handed a registry built for a different (future) cutoff, so a future-listed
+   stock cannot resolve. The as-of routing basis (registry hash/version + term-set hashes)
+   is recorded in `routing_reference`.
+2. **P1 binding — verified, same identity, POPULATION equality, fail-closed.** The consumed
+   P1 artifact is fully verified whether passed as a dict or a path (`verify_typed_flash_
+   artifact` — a dict's self-claimed SHA is never trusted, GPT-P2 P1-#2), must be for the
+   exact (cutoff, ingest_class), and its `artifact_sha256` is bound into P2's artifact. The
+   raw news content-hash set MUST EQUAL the P1-typed set exactly (`population_hash`, not just
+   the cluster representatives, GPT-P2 P1-#3) — any missing/extra/duplicate refuses.
+3. **Deterministic PIT routing, no LLM, union over members.** Routing is a pure function of
+   (content, registry, cutoff, terms); every cluster member is routed and the mentions are
+   UNIONed (not just the representative — the 120-char cluster key can group members that
+   mention different stocks, GPT-P2). The routing basis is recorded so P3/P4 can bind it.
 4. **evidence_class is verify-not-trust.** `assess_flash` recomputes it from typing+route.
 5. **Macro-routed flashes kept but flagged.** A `primary_route=='macro'` cluster stays in
    the artifact (audit) with `news_render_eligible=False`; the news D7 render (P3) excludes
@@ -53,12 +59,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from data_infra.text_store import load_text  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_cards import assess_flash  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
-    _canonical_cutoff, load_typed_flash_artifact,
+    _canonical_cutoff, load_typed_flash_artifact, verify_typed_flash_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
     build_cluster_snapshots,
 )
-from workspace.research.ai_research_dept.engine.news_routing import route_cluster  # noqa: E402
+from workspace.research.ai_research_dept.engine.news_routing import (  # noqa: E402
+    build_alias_registry, route_cluster,
+)
 from workspace.research.ai_research_dept.engine.news_seal import seal_hash  # noqa: E402
 
 logger = logging.getLogger("news_flash_assess")
@@ -82,16 +90,47 @@ def _cluster_payload(cluster) -> dict:
             "n_outlets": cluster.n_outlets}
 
 
+def _union_route(cluster, content_by_hash, registry, cut, industry_terms, concept_terms):
+    """GPT-P2 representative-member fix: route EVERY member and UNION their mentions
+    instead of routing only `members[0]`. The cluster key is only the first 120 canonical
+    chars of content, so two members can share a family yet mention different stocks in
+    their tails; routing the representative alone dropped the other stock. Union removes
+    that approximation. Deterministic (sorted); `content` for render stays the
+    representative's text."""
+    codes, ind, con, mentions = set(), set(), set(), []
+    for m in cluster.members:
+        ch = m["content_hash"]
+        if ch not in content_by_hash:
+            raise ValueError(f"cluster {cluster.fact_occurrence_id} member content_hash "
+                             f"absent from loaded rows — refusing")
+        r = route_cluster(str(content_by_hash[ch]), registry, cut,
+                          industry_terms, concept_terms)
+        codes.update(r["subject_codes"])
+        ind.update(r["industry_tags"])
+        con.update(r["concept_tags"])
+        mentions.extend(r["mentions"])
+    primary = "stock" if codes else ("industry_concept" if (ind or con) else "macro")
+    rep_ch = cluster.members[0]["content_hash"]
+    return {"primary_route": primary, "subject_codes": sorted(codes),
+            "industry_tags": sorted(ind), "concept_tags": sorted(con),
+            "mentions": mentions, "content": str(content_by_hash[rep_ch])}
+
+
 def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
-                       registry, industry_terms: frozenset, concept_terms: frozenset,
+                       stock_basic, industry_terms: frozenset, concept_terms: frozenset,
+                       alias_version: str = "p2_asof", alias_valid_from: str = "2000-01-01",
                        store_dir=None, require_exists: bool = False) -> dict:
     """Market-wide cluster + route + assess for one (cutoff, ingest_class). Reference
-    inputs are injected: `typed_artifact` = the loaded P1 artifact dict (or a path),
-    `registry` = an `AliasRegistry`, `industry_terms`/`concept_terms` = frozensets. Returns
-    a self-describing assessed-flash artifact dict."""
+    inputs are injected: `typed_artifact` = the P1 artifact (dict OR path), `stock_basic`
+    = a DataFrame (P2 builds the alias registry from it AS-OF this canonical cutoff — see
+    GPT-P2 P0), `industry_terms`/`concept_terms` = frozensets. Returns a self-describing
+    assessed-flash artifact dict."""
     cut = _canonical_cutoff(cutoff)
-    if not isinstance(typed_artifact, dict):
-        typed_artifact = load_typed_flash_artifact(typed_artifact)   # accept a path
+    # GPT-P2 P1-#2: verify the P1 artifact whether it came as a dict or a path — a dict's
+    # self-claimed SHA is NEVER trusted unverified.
+    typed_artifact = (verify_typed_flash_artifact(typed_artifact)
+                      if isinstance(typed_artifact, dict)
+                      else load_typed_flash_artifact(typed_artifact))
     # invariant 2: the P1 artifact must be for the EXACT (cutoff, ingest_class)
     if typed_artifact.get("cutoff_iso") != cut.isoformat() \
             or typed_artifact.get("ingest_class") != ingest_class:
@@ -102,37 +141,55 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
     typing_index = {t["content_hash"]: t["typing"] for t in typed_artifact["typed"]}
     consumed_p1_sha = typed_artifact["artifact_sha256"]
 
+    # GPT-P2 P0: build the alias registry AS-OF this canonical cutoff — P2 owns the as-of
+    # binding, so it can never be handed a registry built for a different (future) cutoff
+    # that would resolve future-listed stocks. list_date/delist_date filtered at `cut`.
+    registry = build_alias_registry(stock_basic, version=alias_version,
+                                    valid_from=alias_valid_from, valid_to=None, cutoff=cut)
+    # bind the full routing basis so P3/P4 can verify it
+    routing_reference = {
+        "as_of_cutoff_iso": cut.isoformat(),
+        "alias_registry_version": registry.version,
+        "alias_registry_hash": registry.content_hash,
+        "industry_terms_hash": seal_hash(sorted(industry_terms)),
+        "concept_terms_hash": seal_hash(sorted(concept_terms)),
+    }
+
     req = ingest_class == "forward" or bool(require_exists)   # forward: hard fail-closed
     df = load_text("news", cut, store_dir=store_dir, ingest_class=ingest_class,
                    require_exists=req)
-    clusters = build_cluster_snapshots(df, cut) if not df.empty else []
     content_by_hash = {} if df.empty else dict(zip(df["content_hash"], df["content"]))
+    # GPT-P2 P1-#3: the raw panel content set MUST EQUAL the P1-typed set exactly (not
+    # just the cluster representatives). A missing/extra/duplicate content_hash is a
+    # P1/P2 population mismatch — refuse before clustering.
+    raw_hashes = sorted(set(content_by_hash))
+    if seal_hash(raw_hashes) != typed_artifact["population_hash"]:
+        raise ValueError(
+            "raw news population does not equal the P1-typed population "
+            "(population_hash mismatch) — P1 and P2 saw different content sets, refusing")
+    clusters = build_cluster_snapshots(df, cut) if not df.empty else []
 
     assessed: list[dict] = []
     for cluster in clusters:
-        rep = cluster.members[0]                 # deterministic representative (sorted)
-        ch = rep["content_hash"]
-        if ch not in content_by_hash:
-            raise ValueError(f"cluster {cluster.fact_occurrence_id} representative "
-                             f"content_hash absent from loaded rows — refusing")
-        if ch not in typing_index:               # invariant 2: full P1 coverage
-            raise ValueError(
-                f"cluster {cluster.fact_occurrence_id} representative content_hash "
-                f"{ch[:12]} has no P1 typing — P1/P2 population mismatch, refusing "
-                f"(never default a typing)")
-        content = str(content_by_hash[ch])
-        route = route_cluster(content, registry, cut, industry_terms, concept_terms)
-        route["content"] = content               # render uses it as the representative text
-        a = assess_flash(cluster, typing_index[ch], route)   # recomputes evidence_class
+        rep_ch = cluster.members[0]["content_hash"]      # deterministic representative
+        if rep_ch not in typing_index:                   # (population gate makes this redundant,
+            raise ValueError(                            #  kept as a local fail-closed guard)
+                f"cluster {cluster.fact_occurrence_id} representative has no P1 typing")
+        route = _union_route(cluster, content_by_hash, registry, cut,
+                             industry_terms, concept_terms)   # union, not representative
+        a = assess_flash(cluster, typing_index[rep_ch], route)   # recomputes evidence_class
         assessed.append({
             "cluster": _cluster_payload(cluster),
-            "content_hash": ch,
+            "content_hash": rep_ch,
             "typing": a["typing"],
             "route": {k: a["route"][k] for k in
                       ("primary_route", "subject_codes", "industry_tags",
                        "concept_tags", "mentions")},
             "evidence_class": a["evidence_class"],
+            # GPT-P2 note: coordination is NOT evaluated in P2 v1 — this is 'unassessed',
+            # NOT 'confirmed no coordination'. The NFC path is a separate wiring.
             "coordination_fired": a["coordination_fired"],
+            "coordination_evaluated": False,
             # invariant 5: macro-routed flashes stay for audit but are not news-render eligible
             "news_render_eligible": a["route"]["primary_route"] != "macro",
         })
@@ -144,8 +201,7 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
         "ingest_class": ingest_class,
         "evidence_class": EVIDENCE_CLASS,
         "consumed_typed_flash_sha256": consumed_p1_sha,
-        "alias_registry_version": registry.version,
-        "alias_registry_hash": registry.content_hash,   # bind the exact routing basis
+        "routing_reference": routing_reference,          # as-of-bound routing basis (P0)
         "population_hash": population_hash,
         "n_flashes": len(assessed),
         "assessed": assessed,
@@ -215,13 +271,14 @@ def main() -> int:
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     from workspace.research.ai_research_dept.engine import config as C
-    from data_infra import provider_metadata  # noqa: F401 (real SW industry source)
-    # reference inputs are assembled from existing sources; kept in the CLI (not the core)
-    registry, industry_terms, concept_terms = _build_reference_inputs(args.cutoff)
+    # reference inputs are assembled from existing sources; kept in the CLI (not the core).
+    # P2 builds the alias registry itself AS-OF the cutoff (P0), so the CLI supplies raw
+    # stock_basic + the industry/concept term sets.
+    stock_basic, industry_terms, concept_terms = _build_reference_inputs(args.cutoff)
     out_dir = Path(args.out_dir) if args.out_dir else C.OUT_ROOT / "nf_assessed_flash"
     artifact = assess_day_flashes(
         args.cutoff, ingest_class=args.ingest_class,
-        typed_artifact=Path(args.typed_artifact), registry=registry,
+        typed_artifact=Path(args.typed_artifact), stock_basic=stock_basic,
         industry_terms=industry_terms, concept_terms=concept_terms)
     path = write_assessed_flash_artifact(artifact, out_dir)
     logger.info("assessed %d flashes @ %s (%s) -> %s",
@@ -231,12 +288,14 @@ def main() -> int:
 
 def _build_reference_inputs(cutoff):
     """CLI-side assembly of the injected reference inputs from existing sources
-    (kept out of the testable core). Left as a thin seam; the per-source PIT details
-    are wired when the offline P2 driver is first run for real."""
+    (kept out of the testable core): raw `stock_basic` (P2 builds the alias registry
+    from it AS-OF the cutoff), the SW L1 industry-name set, and the THS concept-name set.
+    Left as a thin seam; the per-source PIT details are wired when the offline P2 driver
+    is first run for real."""
     raise NotImplementedError(
-        "P2 CLI reference assembly (alias registry from stock_basic as-of cutoff, "
-        "SW L1 industry-name set, THS concept-name set) is wired at first offline run; "
-        "the testable core assess_day_flashes takes these injected")
+        "P2 CLI reference assembly (stock_basic, SW L1 industry-name set, THS "
+        "concept-name set) is wired at first offline run; the testable core "
+        "assess_day_flashes takes these injected")
 
 
 if __name__ == "__main__":

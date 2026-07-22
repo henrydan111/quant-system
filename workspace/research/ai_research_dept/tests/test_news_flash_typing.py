@@ -189,8 +189,10 @@ def test_population_hash_detects_added_flash(tmp_path):
                            store_dir=tmp_path)
     path = write_typed_flash_artifact(art, tmp_path / "out")
     obj = json.loads(path.read_text(encoding="utf-8"))
-    # append a forged typed row AND fix artifact_sha256, but not population_hash
+    # append a forged typed row + fix n_flashes AND artifact_sha256, but NOT
+    # population_hash — so it passes the count/uniqueness checks and trips population_hash
     obj["typed"].append({**obj["typed"][0], "content_hash": "f" * 64})
+    obj["n_flashes"] = len(obj["typed"])
     from workspace.research.ai_research_dept.engine.news_seal import seal_hash
     body = {k: v for k, v in obj.items() if k != "artifact_sha256"}
     obj["artifact_sha256"] = seal_hash(body)

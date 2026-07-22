@@ -266,19 +266,33 @@ def write_typed_flash_artifact(artifact: dict, out_dir) -> Path:
     return path
 
 
-def load_typed_flash_artifact(path) -> dict:
-    """Load + re-verify both hashes (invariant 5). A tampered artifact is refused."""
-    artifact = json.loads(Path(path).read_text(encoding="utf-8"))
+def verify_typed_flash_artifact(artifact: dict) -> dict:
+    """Full structural + seal verification of a typed-flash artifact **dict** (schema,
+    artifact_sha256, population_hash, content_hash uniqueness, n_flashes count). This is
+    the SINGLE verification any consumer must run — whether it read the artifact from disk
+    or was handed a dict — so a dict input can never bypass the seal check (GPT-P2 P1-#2).
+    Returns the same dict on success; raises `ValueError` on any mismatch."""
     if not isinstance(artifact, dict) or artifact.get("artifact_schema") != ARTIFACT_SCHEMA:
         raise ValueError("not an nf_typed_flash_v1 artifact")
-    claimed = artifact.get("artifact_sha256")
     body = {k: v for k, v in artifact.items() if k != "artifact_sha256"}
-    if seal_hash(body) != claimed:
+    if seal_hash(body) != artifact.get("artifact_sha256"):
         raise ValueError("artifact_sha256 mismatch — typed-flash artifact tampered")
-    if seal_hash(sorted(x["content_hash"] for x in artifact["typed"])) \
-            != artifact["population_hash"]:
+    typed = artifact.get("typed")
+    if not isinstance(typed, list):
+        raise ValueError("typed-flash artifact 'typed' must be a list")
+    hashes = [x["content_hash"] for x in typed]
+    if len(set(hashes)) != len(hashes):
+        raise ValueError("typed-flash artifact has duplicate content_hash")
+    if artifact.get("n_flashes") != len(typed):
+        raise ValueError("typed-flash artifact n_flashes != len(typed)")
+    if seal_hash(sorted(hashes)) != artifact.get("population_hash"):
         raise ValueError("population_hash mismatch — typed set altered")
     return artifact
+
+
+def load_typed_flash_artifact(path) -> dict:
+    """Load from disk + fully verify (invariant 5). A tampered artifact is refused."""
+    return verify_typed_flash_artifact(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def _ark_call_fn():
