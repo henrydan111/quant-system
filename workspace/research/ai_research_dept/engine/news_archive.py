@@ -145,7 +145,7 @@ from workspace.research.ai_research_dept.engine.news_cards import (
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
     _ledger_path, _read_chain, build_leg_payload_ast, build_sealed_payload,
-    ledger_head,
+    ledger_head, require_exact_id,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
@@ -171,12 +171,16 @@ from workspace.research.ai_research_dept.engine.news_seal import (
 
 def _find_commitment(chain: list, decision_id: str,
                      execution_id: str) -> "dict | None":
+    # GPT #27 P1#2 同形状面:同样是 `disk_str == caller_id`,同样过唯一身份门
+    require_exact_id(decision_id, "decision_id")
+    require_exact_id(execution_id, "execution_id")
     return next((e for e in chain if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
                  and e["execution_id"] == execution_id), None)
 
 
 def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2 同形状面
     return next((e for e in chain if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
                  and e["news_status"] == "success"), None)

@@ -55,7 +55,7 @@ from workspace.research.ai_research_dept.engine.news_cards import (
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
     ExecutionView, _append_commitment_row, build_leg_payload_ast,
-    build_sealed_payload, leg_expected_ids,
+    build_sealed_payload, leg_expected_ids, require_exact_id,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import RegistryError
 from workspace.research.ai_research_dept.engine.news_horizon import (
@@ -366,6 +366,10 @@ def _resolve_terminal(all_rows: list, *, execution_id: str, decision_id: str,
     """从盘上出处文件按 (decision_id, execution_id, leg) 解析**唯一、状态机相连**
     的终态行(archive-re-review#2 Blocker:验证不信调用方带入的行——盘上多于
     一条终态 = 有人事后追加伪造行 → 整个键失去可验证性,fail-closed 拒)。"""
+    # GPT #27 P1#2 同形状面(元测试枚举出的第 6 处,reviewer 未点名):这里同样是
+    # `row_id == caller_id`,str 子类的 __eq__ 可把终态解析重定向到他人的出处行
+    require_exact_id(decision_id, "decision_id")
+    require_exact_id(execution_id, "execution_id")
     key_rows = [r for r in all_rows if isinstance(r, dict)
                 and r.get("execution_id") == execution_id
                 and r.get("decision_id") == decision_id
@@ -601,7 +605,16 @@ def execute_news_decision(artifact: D7DecisionArtifact, *, ledger_dir, prov_dir,
     5. news 成功 → `evaluate_news_horizon`(独占+钉死公式+契约模式别名);
     6. 返回执行束:{execution_id, outcome, evaluation, selected_provenance
        (每腿**选定终态行本体**——不重读目录), selected_entry_hashes}。"""
-    require_exact_contract(contract)                   # re-review#6 P0
+    # GPT #27 P1#1:**对外唯一入口**此前只 `require_exact_contract`(验证但返回
+    # 活对象),随后 `artifact.final_registry` 的 `.items()` 回调即可把已验证的
+    # contract 换成另一份**自洽**契约(primary_horizon/1-3d → vector_only/None
+    # 并重算 hash),而 run_news_two_legs / 评估 / commit_execution 全部使用被换
+    # 后的版本 → 替换后的契约被**接受**并流入承诺与归档(v2 class 2/4,非良性
+    # 回调)。入口先门 decision_id,再绑定 contract/artifact 的**独立快照**,
+    # 此后全程只用副本。
+    require_exact_id(decision_id, "decision_id")
+    contract = snapshot_exact_contract(contract)       # re-review#6 P0 + GPT #27
+    artifact = verify_d7_artifact(artifact)            # 独立可信副本(GPT #23/#27)
     registry = artifact.final_registry
     execution_id = f"{decision_id}:{uuid.uuid4().hex[:16]}"   # 尝试身份(review Major)
     factor_expected = leg_expected_ids(registry, use="factor_positive",

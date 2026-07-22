@@ -312,8 +312,25 @@ def _append_commitment_row(ledger_dir, *, decision_id: str, execution_id: str,
     return dict(entry)
 
 
+def require_exact_id(value, what: str) -> str:
+    """账本/出处**身份门**——全仓唯一(GPT #27 P1#2)。任何拿调用方 id 去和**磁盘
+    串**比较的读取器,必须先经此门。
+
+    `disk_str == caller_id` 会调用 `str` 子类的 `__eq__`(反射比较):一个实际值
+    为 `attacker-id`、`__eq__` 恒真的对象能让 `lookup_decision` 返回 `victim-d1`
+    的**受信账本行**。这不是"拒绝后回调"——它在**错误身份下返回可信数据**,
+    即威胁模型 v2 的 decision-flip / leak,必须在读链与比较之前静态拒绝。"""
+    if type(value) is not str or not value.strip():
+        raise RegistryError(
+            f"{what} 须恰 str 非空——str 子类的 __eq__ 可把账本查询重定向到他人的"
+            f"受信行(GPT #27 P1#2 decision-flip/leak;静态错误)")
+    return value
+
+
 def find_execution_commitment(ledger_dir, decision_id: str,
                               execution_id: str) -> "dict | None":
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2:先于读链/比较
+    require_exact_id(execution_id, "execution_id")
     return next((e for e in _read_chain(_ledger_path(ledger_dir))
                  if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
@@ -322,6 +339,7 @@ def find_execution_commitment(ledger_dir, decision_id: str,
 
 def find_success_commitment(ledger_dir, decision_id: str) -> "dict | None":
     """该决策的**唯一** success 执行承诺(链级不变量保证至多一条)。"""
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2
     return next((e for e in _read_chain(_ledger_path(ledger_dir))
                  if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
@@ -329,6 +347,7 @@ def find_success_commitment(ledger_dir, decision_id: str) -> "dict | None":
 
 
 def lookup_decision(ledger_dir, decision_id: str) -> "dict | None":
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2
     return next((e for e in _read_chain(_ledger_path(ledger_dir))
                  if e["kind"] == "decision"
                  and e["decision_id"] == decision_id), None)

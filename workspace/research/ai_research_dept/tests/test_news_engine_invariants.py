@@ -168,6 +168,155 @@ class TestReviewerReproducedProbes:
         assert fired["str"] == 0                     # __str__ never ran
 
 
+class TestLedgerIdentityGate:
+    """GPT #27 P1#2 — `disk_str == caller_id` calls a str subclass's reflected
+    __eq__, so an object whose real value is 'attacker-id' but whose __eq__ is
+    always True gets back the TRUSTED ledger row of a different decision. That is
+    not a benign rejection-path callback: it returns trusted data under the wrong
+    identity = v2 decision-flip / leak. Every reader that compares a caller id
+    against disk strings must pass news_decision.require_exact_id FIRST."""
+
+    #: every public/boundary reader that takes a caller id into a disk comparison
+    GATED_READERS = (
+        ("news_decision", "lookup_decision", ("decision_id",)),
+        ("news_decision", "find_success_commitment", ("decision_id",)),
+        ("news_decision", "find_execution_commitment",
+         ("decision_id", "execution_id")),
+        ("news_archive", "_find_success_commitment", ("decision_id",)),
+        ("news_archive", "_find_commitment", ("decision_id", "execution_id")),
+    )
+
+    def test_every_ledger_reader_refuses_str_subclass_ids(self, tmp_path):
+        # MECHANICAL surface enumeration: each reader, each id parameter, probed
+        # with an always-equal str subclass. A newly added reader that forgets the
+        # gate is caught by adding it to GATED_READERS (and by the source scan
+        # below, which fails if a reader compares an id without calling the gate).
+        import importlib
+        from workspace.research.ai_research_dept.engine.news_evidence import (
+            RegistryError,
+        )
+        fired = {"eq": 0}
+
+        class _EvilId(str):
+            def __eq__(self, o):
+                fired["eq"] += 1
+                return True
+            def __ne__(self, o):
+                fired["eq"] += 1
+                return False
+            def __hash__(self):
+                return hash(str.__str__(self))
+        for mod_name, fn_name, id_params in self.GATED_READERS:
+            mod = importlib.import_module(
+                f"workspace.research.ai_research_dept.engine.{mod_name}")
+            fn = getattr(mod, fn_name)
+            first = tmp_path if mod_name == "news_decision" else []
+            for bad in range(len(id_params)):
+                args = [first] + ["ok-id"] * len(id_params)
+                args[1 + bad] = _EvilId("attacker-id")
+                with pytest.raises(RegistryError, match="须恰 str 非空"):
+                    fn(*args)
+        assert fired["eq"] == 0                          # no redirect ever ran
+
+    #: the three sanctioned ways an id becomes exactly-str before a row compare
+    GATE_MARKERS = ("require_exact_id", "_deep_plain_json", "is not str")
+
+    def test_no_ledger_reader_compares_an_id_without_the_gate(self):
+        # Source guard for the PRECISE lookup shape: a ROW's id field compared
+        # against a bare parameter name — `e["decision_id"] == decision_id` or
+        # `r.get("execution_id") == execution_id`. That is the shape whose result
+        # a str subclass's __eq__ can redirect. (Field-binding comparisons like
+        # `row["decision_id"] != outcome.decision_id` compare against an already
+        # snapshotted attribute, not a raw caller name, and are not this shape.)
+        import ast
+        ID_KEYS = ("decision_id", "execution_id")
+
+        def _reads_row_id(node):
+            if isinstance(node, ast.Subscript):         # e["decision_id"]
+                s = node.slice
+                return isinstance(s, ast.Constant) and s.value in ID_KEYS
+            if (isinstance(node, ast.Call)              # r.get("decision_id")
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get" and node.args):
+                a = node.args[0]
+                return isinstance(a, ast.Constant) and a.value in ID_KEYS
+            return False
+
+        offenders = []
+        for name in SECURITY_MODULES:
+            src = (ENGINE / name).read_text(encoding="utf-8")
+            tree = ast.parse(src, filename=name)
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+                # markers are matched against real SOURCE text — `type(x) is not
+                # str` renders as IsNot()/Name('str') in ast.dump and would be missed
+                seg = ast.get_source_segment(src, fn) or ""
+                if any(m in seg for m in self.GATE_MARKERS):
+                    continue
+                for cmp_node in ast.walk(fn):
+                    if not isinstance(cmp_node, ast.Compare):
+                        continue
+                    if not any(isinstance(o, ast.Eq) for o in cmp_node.ops):
+                        continue
+                    ops = [cmp_node.left, *cmp_node.comparators]
+                    reads = any(_reads_row_id(o) for o in ops)
+                    raw = any(isinstance(o, ast.Name) and o.id in params for o in ops)
+                    if reads and raw:
+                        offenders.append(f"{name}:{fn.lineno} {fn.name}")
+                        break
+        assert not offenders, (
+            "a function compares a caller id against ledger rows without routing "
+            "through news_decision.require_exact_id — a str subclass's __eq__ can "
+            "redirect the lookup to another decision's trusted row. Offenders: "
+            + "; ".join(offenders))
+
+
+class TestExecutionEntrySnapshotsContract:
+    """GPT #27 P1#1 — execute_news_decision (the sole public entry) only called
+    require_exact_contract, which VERIFIES but returns the LIVE object. The
+    registry's .items() callback could then swap the verified contract for a
+    different SELF-CONSISTENT one (primary_horizon/1-3d → vector_only/None with a
+    recomputed hash), and run_news_two_legs / evaluation / commit_execution all
+    used the swapped version — an accepted substitution flowing into the
+    commitment and the archive (v2 class 2/4, not a benign callback)."""
+
+    def test_registry_callback_cannot_swap_the_executing_contract(self, tmp_path):
+        import test_news_archive as ta                  # reuse the fixtures
+        from workspace.research.ai_research_dept.engine.news_decision import (
+            record_decision,
+        )
+        from workspace.research.ai_research_dept.engine.news_executors import (
+            NewsScoringContract, execute_news_decision,
+        )
+        art = ta._artifact_full("d1")
+        record_decision(tmp_path / "ledger", "d1", art)
+        contract = ta._contract()
+        swapped = {"n": 0}
+
+        class _SwapMap(dict):
+            def items(self):
+                # substitute a DIFFERENT but self-consistent contract
+                swapped["n"] += 1
+                object.__setattr__(contract, "output_mode", "vector_only")
+                object.__setattr__(contract, "primary_decision_horizon", None)
+                object.__setattr__(contract, "contract_hash", NewsScoringContract(
+                    schema_id=contract.schema_id, output_mode="vector_only",
+                    primary_decision_horizon=None).contract_hash)
+                return super().items()
+        object.__setattr__(art.final_registry, "records",
+                           _SwapMap(dict(art.final_registry.records)))
+        bundle = execute_news_decision(
+            art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+            decision_id="d1", contract=contract, call_fn=ta._call_fn())
+        assert swapped["n"] > 0                          # the callback DID fire
+        # the entry snapshot froze the ORIGINAL contract: the executed outcome is
+        # primary_horizon, not the substituted vector_only
+        assert bundle["outcome"].output_mode == "primary_horizon"
+        assert bundle["evaluation"] is not None          # vector_only has no scalar
+
+
 class TestCanonRejectsNonStrFallback:
     """same class on the HASH path: canon()'s fallback used to `str(v)` an
     arbitrary object straight into the seal hash."""
