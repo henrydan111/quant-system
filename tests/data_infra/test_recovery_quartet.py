@@ -2280,3 +2280,111 @@ def test_cmd_consolidate_reports_the_real_partition_and_row_counts():
     assert 'layout.get("outputs"' in src or "layout.get('outputs'" in src
     # the number printed is derived from the outputs, not a missing key
     assert "len(outs)" in src and 'o.get("rows"' in src
+
+
+# ── the AST guard: structural, signature-independent (GPT chokepoint review P1-2) ─────────────────
+#
+# The runtime meta-test could only CALL zero-arg methods, so it silently skipped argument-taking
+# readers and never enumerated properties at all. GPT injected both and each returned the cached rows
+# with the durable anchor deleted. A guard that depends on being callable cannot be load-bearing.
+#
+# This one is static: it parses the module and enumerates EVERY function, async function, and property
+# on the ledger class regardless of signature, then forbids direct access to the verified caches and
+# the durable ledger files outside a small, justified primitive whitelist. State-serving code must go
+# through _load() / _plan(), which end at the chokepoint.
+
+_LEDGER_SRC = ROOT / "scripts" / "recovery_ledger.py"
+
+#: the verified caches, and the durable files whose guarantees the chokepoint re-establishes
+_GUARDED_ATTRS = {"_chain_cache", "_plan_cache", "_genesis_cache",
+                  "ledger_path", "head_path", "genesis_path", "plan_path"}
+
+#: the ONLY methods allowed to touch them, each with the reason it is a primitive rather than a reader
+_PRIMITIVES = {
+    "__init__": "establishes the paths and the empty caches",
+    "_genesis": "THE anchor primitive — reads/mints chain_genesis.json",
+    "_read_head": "THE head primitive — raw, unverified input TO the chokepoint",
+    "_append": "THE sole writer; advances the cache it just produced, under the lock",
+    "_load": "the chain reader — ends at _assert_durable_state",
+    "_plan": "the plan reader — ends at _assert_durable_state",
+    "_assert_durable_state": "the chokepoint itself",
+    "_freeze_plan_unvalidated": "THE plan writer — writes request_plan.json once",
+}
+
+
+def _ledger_class_defs():
+    import ast
+    tree = ast.parse(_LEDGER_SRC.read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.ClassDef) and n.name == "PageReceiptLedger")
+    out = []
+    for node in cls.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            kind = "property" if any(getattr(d, "id", getattr(d, "attr", None)) == "property"
+                                     for d in node.decorator_list) else "method"
+            out.append((node.name, kind, node))
+    return cls, out
+
+
+def test_no_new_reader_can_touch_the_verified_caches_directly():
+    """DEFAULT-DENY, statically. A newly added method OR PROPERTY that reads _chain_cache/_plan_cache/
+    _genesis_cache or a durable ledger file fails here — whatever its signature — unless it is added to
+    _PRIMITIVES with a reason. This is what makes the chokepoint structural: the previous runtime
+    enumeration could be walked around by taking an argument or being a property."""
+    import ast
+    _, defs = _ledger_class_defs()
+    assert any(k == "method" and n == "_load" for n, k, _ in defs), "the AST scan lost _load"
+
+    offenders = {}
+    for name, kind, node in defs:
+        if name in _PRIMITIVES:
+            continue
+        touched = {sub.attr for sub in ast.walk(node)
+                   if isinstance(sub, ast.Attribute) and sub.attr in _GUARDED_ATTRS}
+        if touched:
+            offenders[f"{name} ({kind})"] = sorted(touched)
+    assert not offenders, (
+        f"these members read verified caches / durable ledger files directly, bypassing the "
+        f"chokepoint: {offenders}. Route them through _load()/_plan(), or add them to _PRIMITIVES "
+        f"with the reason they are a primitive.")
+
+
+def test_the_primitive_whitelist_stays_honest():
+    """Every exemption must still name a real member — a whitelist that outlives its members is how a
+    default-deny list rots into a default-allow one."""
+    _, defs = _ledger_class_defs()
+    names = {n for n, _, _ in defs}
+    stale = set(_PRIMITIVES) - names
+    assert not stale, f"the primitive whitelist names members that no longer exist: {sorted(stale)}"
+
+
+def test_the_raw_head_primitive_is_reachable_only_from_the_gate_and_the_writer():
+    """GPT: `_read_head` is a reasonable exemption ONLY because it is raw unverified input. That holds
+    just as long as nothing else calls it — otherwise the head can be consulted without the checks the
+    chokepoint wraps around it."""
+    import ast
+    _, defs = _ledger_class_defs()
+    callers = set()
+    for name, _kind, node in defs:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
+                    and sub.func.attr == "_read_head":
+                callers.add(name)
+    assert callers <= {"_assert_durable_state", "_append", "_genesis"}, (
+        f"_read_head is called from {sorted(callers)} — the raw head primitive must stay confined to "
+        f"the chokepoint and the writer")
+
+
+def test_properties_are_enumerated_at_all():
+    """The runtime meta-test never looked at properties; GPT's injected property was invisible to it.
+    This asserts the AST enumeration DOES see property-shaped members, so the guard above cannot be
+    walked around the same way."""
+    import ast
+    src = "class X:\n    @property\n    def p(self):\n        return self._chain_cache\n"
+    tree = ast.parse(src)
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+    found = [(n.name, any(getattr(d, "id", None) == "property" for d in n.decorator_list))
+             for n in cls.body if isinstance(n, ast.FunctionDef)]
+    assert found == [("p", True)], f"the property-detection logic does not see properties: {found}"
+    touched = {s.attr for s in ast.walk(cls) if isinstance(s, ast.Attribute)}
+    assert "_chain_cache" in touched, "an attribute read inside a property is not detected"

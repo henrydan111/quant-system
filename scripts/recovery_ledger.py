@@ -44,6 +44,12 @@ def _canon(obj) -> str:
                       default=_canon_default)
 
 
+def _is_exact_int(v) -> bool:
+    """True only for a genuine JSON integer. `bool` is an `int` subclass in Python and must not pass as
+    a count; a float never may, because `int(1.5) == 1` is exactly how a forged head slipped through."""
+    return type(v) is int
+
+
 def _canon_default(o):
     if isinstance(o, MappingProxyType):
         return dict(o)
@@ -584,11 +590,20 @@ class PageReceiptLedger:
         head = self._read_head()
         if head.get("record_hash") != tail_hash:
             raise LedgerError("ledger head does not match the chain tail (truncated/rewound)")
-        if int(head.get("n") or 0) != len(rows):
+        # STRICT integers. `int(1.5) == 1`, so coercing let a one-row ledger with head n=1.5 pass and
+        # then produced sequences [1, 2.5] — a counter that is not a counter. A count read from JSON
+        # must BE an integer, not something that survives coercion into one; bool is an int subclass,
+        # so it is excluded explicitly.
+        if not _is_exact_int(head.get("n")):
+            raise LedgerError(f"ledger head n={head.get('n')!r} is not an exact integer "
+                              f"(forged/corrupt head)")
+        if head["n"] != len(rows):
             raise LedgerError(f"ledger head claims n={head.get('n')} but the chain holds {len(rows)} "
                               f"records (rewound/forged head)")
         for i, rec in enumerate(rows, 1):
-            if int(rec.get("seq") or 0) != i:
+            if not _is_exact_int(rec.get("seq")):
+                raise LedgerError(f"ledger record {i} carries a non-integer seq={rec.get('seq')!r}")
+            if rec["seq"] != i:
                 raise LedgerError(f"ledger sequence break at position {i}: record carries "
                                   f"seq={rec.get('seq')} (duplicated/reordered/rewound)")
 
