@@ -3,7 +3,11 @@
 **Review tier:** Tier-2 (pipeline plumbing; declared-invariant review; Tier-1 crafted-object analysis
 out of tier). *Tier is a user call.*
 
-**Status:** design frozen 2026-07-22 after a read-only premise check; pending implementation.
+**Status:** **SOUND-TO-PROCEED 2026-07-23** at `2ac7192` — 3-round GPT Tier-2 arc, within budget
+(round-1 P1: provenance was a droppable dict → `AssemblyProvenance` bound identity; round-2 P2: value
+domain closed [falsy-hash free pass / str-explosion / dup+unsorted facts / split-count] with 9
+genuinely fail-pre-fix probes; round-3: full open sweep, no new findings). The five FROZEN P4
+OBLIGATIONS below remain live — this verdict is "may enter P4", NOT "the NF chain is publishable".
 
 ## Premise check (read-only, done — no falsified assumption)
 
@@ -82,7 +86,7 @@ Until P4 does all five, the chain still terminates at P3b's exit:
 | # | obligation |
 |---|---|
 | a | **require** the `AssemblyProvenance` at `record_decision` / `seal_decision_archive` — no default, no `None` path |
-| b | call `require_assembly_for(assembly, artifact)` so a provenance for a different artifact is refused |
+| b | call `require_assembly_for(assembly, artifact)` so a provenance for a different artifact is refused — **and in this order: `verify_d7_artifact` first, then the binding door** (re-review#3: binding to an unverified artifact proves nothing) |
 | c | write `assembly_hash` into the decision ledger entry (first-write-wins then also pins *which upstream chain* owns the decision id) |
 | d | embed `assembly.payload` + `assembly_hash` in the sealed archive under a bumped `_ARCHIVE_SCHEMA` (v1 → v2, extending the strict key set), re-verified through `verify_assembly_provenance` on read-back |
 | e | refusal tests: missing provenance, artifact-hash mismatch, and an archive round-trip proving the chain survives (a v1-shaped archive must not verify) |

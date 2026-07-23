@@ -48,7 +48,9 @@ it. P4 MUST:
   a. **require** the `AssemblyProvenance` (no default, no `None` path) at
      `record_decision` / `seal_decision_archive`;
   b. call `require_assembly_for(assembly, artifact)` — the single binding door below — so a
-     provenance for a *different* artifact is refused;
+     provenance for a *different* artifact is refused. **ORDER IS PART OF THE OBLIGATION**
+     (re-review#3): `verify_d7_artifact(artifact)` FIRST, then `require_assembly_for` —
+     binding a provenance to an unverified artifact proves nothing;
   c. write `assembly_hash` into the decision ledger entry (first-write-wins then also pins
      WHICH upstream chain owns the decision id);
   d. embed `assembly.payload` + `assembly_hash` in the sealed archive under a bumped
