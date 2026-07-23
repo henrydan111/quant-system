@@ -1,0 +1,243 @@
+# NF integration P3a: market-wide D7 attribute splitting — declared-invariant tests.
+import json
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+from data_infra.text_store import ingest_rows  # noqa: E402
+from workspace.research.ai_research_dept.engine.news_flash_assess import (  # noqa: E402
+    assess_day_flashes,
+)
+from workspace.research.ai_research_dept.engine.news_flash_split import (  # noqa: E402
+    SplitConflictError, load_split_artifact, split_day_flashes, write_split_artifact,
+)
+from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
+    type_day_flashes,
+)
+from workspace.research.ai_research_dept.engine.news_seal import seal_hash  # noqa: E402
+
+CUT = "2025-01-27 18:00:00"
+IND = frozenset({"白酒"})
+CON = frozenset({"消费"})
+_CAL = pd.DatetimeIndex(pd.bdate_range("2025-01-02", "2025-03-31"))
+_NC_COLS = ["ts_code", "name", "start_date", "end_date", "ann_date", "change_reason"]
+
+
+def _stock_basic():
+    return pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台",
+                          "list_date": "20010827", "delist_date": None}])
+
+
+def _namechange():
+    return pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台",
+                          "start_date": "20010827", "end_date": None,
+                          "ann_date": "20010827", "change_reason": "上市"}],
+                        columns=_NC_COLS)
+
+
+def _ingest(tmp_path, contents):
+    ingest_rows("news", pd.DataFrame([{"src": "sina", "datetime": "2025-01-27 16:00:00",
+                                       "content": c, "title": None, "channels": ""}
+                                      for c in contents]),
+                published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 17:00:00"),
+                store_dir=tmp_path, ingest_class="forward")
+
+
+class _Reply:
+    def __init__(self, text):
+        self.text = text
+
+
+def _typer(importance=5, **over):
+    def fn(msgs):
+        payload = json.loads(msgs[1]["content"])
+        base = {"event_type": "订单合同", "verification_status": "官方证实",
+                "content_kind": "事实", "direction": "利好", "importance": importance,
+                "is_rumor": False, **over}
+        return _Reply(json.dumps({"results": [{"idx": it["idx"], **base}
+                                              for it in payload["items"]]},
+                                 ensure_ascii=False))
+    return fn
+
+
+def _splitter(fact="签订 12 亿元大单", link="预计增厚年营收 15%", **over):
+    def fn(msgs):
+        payload = json.loads(msgs[1]["content"])
+        return _Reply(json.dumps({"results": [
+            {"idx": it["idx"], "fact": fact, "economic_linkage": link, **over}
+            for it in payload["items"]]}, ensure_ascii=False))
+    return fn
+
+
+def _pipeline(tmp_path, contents_list, *, importance=5, typer_over=None):
+    """P1 -> P2 -> the (assessed artifact, contents) P3a consumes."""
+    _ingest(tmp_path, contents_list)
+    p1 = type_day_flashes(CUT, ingest_class="forward",
+                          call_fn=_typer(importance, **(typer_over or {})),
+                          store_dir=tmp_path)
+    p2 = assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
+                            stock_basic=_stock_basic(), namechange=_namechange(),
+                            open_calendar=_CAL, industry_terms=IND, concept_terms=CON,
+                            store_dir=tmp_path)
+    from data_infra.text_store import load_text
+    df = load_text("news", pd.Timestamp(CUT), store_dir=tmp_path, ingest_class="forward")
+    contents = dict(zip(df["content_hash"], df["content"]))
+    return p2, contents
+
+
+def _split(tmp_path, p2, contents, **kw):
+    return split_day_flashes(CUT, ingest_class="forward", assessed_artifact=p2,
+                             contents=contents, call_fn=kw.pop("call_fn", _splitter()), **kw)
+
+
+# --------------------------------------------------- happy path
+
+def test_splits_importance_ge_4_positive_facts(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, contents)
+    assert art["artifact_schema"] == "nf_d7_split_v1" and art["n_splits"] == 1
+    s = art["splits"][0]
+    assert s["fact_occurrence_id"] == p2["assessed"][0]["cluster"]["fact_occurrence_id"]
+    assert s["attributes"]["fact"] == "签订 12 亿元大单"
+    assert s["attributes"]["economic_linkage"] == "预计增厚年营收 15%"
+    assert s["evidence_class"] in ("NFD", "NFI", "NFA")
+
+
+# --------------------------------------------------- invariant 3: derived population
+
+def test_below_floor_importance_not_split(tmp_path):
+    # importance 3 < D7 floor 4 -> no split required, no LLM call
+    p2, contents = _pipeline(tmp_path, ["贵州茅台小事件"], importance=3)
+    called = {"n": 0}
+
+    def boom(msgs):
+        called["n"] += 1
+        raise AssertionError("must not call the splitter below the D7 floor")
+    art = _split(tmp_path, p2, contents, call_fn=boom)
+    assert art["n_splits"] == 0 and called["n"] == 0
+
+
+def test_non_positive_class_not_split(tmp_path):
+    # a rumor flash is NFR (not a positive class) -> never split even at importance 5
+    p2, contents = _pipeline(tmp_path, ["市场传闻贵州茅台将重组"],
+                             typer_over={"verification_status": "传闻", "is_rumor": True,
+                                         "content_kind": "评论",
+                                         "event_type": "传闻未证实"})
+    art = _split(tmp_path, p2, contents)
+    assert art["n_splits"] == 0
+
+
+def test_missing_content_is_hard_error(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    with pytest.raises(ValueError, match="正文未提供"):
+        _split(tmp_path, p2, {})            # population non-empty, no texts supplied
+
+
+# --------------------------------------------------- invariant 2: P2 binding
+
+def test_wrong_p2_identity_refused(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    bad = dict(p2)
+    bad["cutoff_iso"] = "2025-01-27T09:30:00"
+    body = {k: v for k, v in bad.items() if k != "artifact_sha256"}
+    bad["artifact_sha256"] = seal_hash(body)      # re-seal so only IDENTITY differs
+    with pytest.raises(ValueError, match="identity mismatch"):
+        _split(tmp_path, bad, contents)
+
+
+def test_forged_p2_dict_refused(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    forged = {**p2, "artifact_sha256": "not-verified"}
+    with pytest.raises(ValueError, match="artifact_sha256 mismatch"):
+        _split(tmp_path, forged, contents)
+
+
+def test_consumed_p2_sha_bound(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, contents)
+    assert art["consumed_assessed_flash_sha256"] == p2["artifact_sha256"]
+
+
+# --------------------------------------------------- invariant 4: derived source_status
+
+def test_source_status_is_derived_not_model_authored(tmp_path):
+    # the splitter tries to inject its own source_status; the derived one wins
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, contents,
+                 call_fn=_splitter(source_status="来源状态:我说它是官方的"))
+    ss = art["splits"][0]["attributes"]["source_status"]
+    assert ss == "来源状态:公司/官方公告证实"       # from verification_status, not the model
+
+
+def test_source_status_tracks_verification_status(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["署名媒体报道贵州茅台大单"],
+                             typer_over={"verification_status": "署名媒体"})
+    art = _split(tmp_path, p2, contents)
+    assert "署名媒体" in art["splits"][0]["attributes"]["source_status"]
+
+
+# --------------------------------------------------- invariant 5: text validation
+
+@pytest.mark.parametrize("bad_fact", ["", "   ", "​​", 5])
+def test_non_substantive_or_non_str_fact_refused(tmp_path, bad_fact):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    with pytest.raises(ValueError, match="fact"):
+        _split(tmp_path, p2, contents, call_fn=_splitter(fact=bad_fact))
+
+
+def test_empty_economic_linkage_is_allowed_and_omitted(tmp_path):
+    # an unsupported linkage must be an empty string (not invented) -> attribute omitted
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, contents, call_fn=_splitter(link=""))
+    attrs = art["splits"][0]["attributes"]
+    assert "economic_linkage" not in attrs and attrs["fact"]
+
+
+# --------------------------------------------------- invariant 6/7: determinism, seal, empty
+
+def test_deterministic_and_round_trip(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单", "贵州茅台再签 5 亿单"])
+    a1 = _split(tmp_path, p2, contents)
+    a2 = _split(tmp_path, p2, contents)
+    assert a1["artifact_sha256"] == a2["artifact_sha256"]
+    path = write_split_artifact(a1, tmp_path / "out")
+    assert load_split_artifact(path)["artifact_sha256"] == a1["artifact_sha256"]
+
+
+def test_tampered_artifact_refused(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, contents)
+    path = write_split_artifact(art, tmp_path / "out")
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    obj["splits"][0]["attributes"]["fact"] = "被篡改的事实"
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact_sha256 mismatch"):
+        load_split_artifact(path)
+
+
+def test_write_once_refuses_different_content(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    a1 = _split(tmp_path, p2, contents)
+    write_split_artifact(a1, tmp_path / "out")
+    write_split_artifact(a1, tmp_path / "out")                 # idempotent
+    a2 = _split(tmp_path, p2, contents, call_fn=_splitter(fact="另一种抽取结果"))
+    with pytest.raises(SplitConflictError, match="write-once"):
+        write_split_artifact(a2, tmp_path / "out")
+
+
+def test_empty_population_no_llm_call(tmp_path):
+    p2, contents = _pipeline(tmp_path, ["贵州茅台小事件"], importance=2)
+    called = {"n": 0}
+
+    def boom(msgs):
+        called["n"] += 1
+        raise AssertionError("no LLM call on an empty population")
+    art = _split(tmp_path, p2, contents, call_fn=boom)
+    assert art["n_splits"] == 0 and called["n"] == 0
+    assert art["evidence_class"].endswith("NON_EVIDENTIARY")

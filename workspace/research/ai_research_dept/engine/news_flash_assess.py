@@ -381,19 +381,34 @@ def write_assessed_flash_artifact(artifact: dict, out_dir) -> Path:
     return path
 
 
-def load_assessed_flash_artifact(path) -> dict:
-    """Load + re-verify both hashes (a tampered artifact, or an altered consumed-P1 SHA,
-    changes artifact_sha256 → refused)."""
-    artifact = json.loads(Path(path).read_text(encoding="utf-8"))
+def verify_assessed_flash_artifact(artifact: dict) -> dict:
+    """Full structural + seal verification of an assessed-flash artifact **dict** — the
+    SINGLE check any consumer runs, whether it read the artifact from disk or was handed a
+    dict (a dict's self-claimed SHA is never trusted). Extracted from
+    `load_assessed_flash_artifact` so P3a can verify an injected dict too; the checks are
+    unchanged, plus key-uniqueness/count (same hardening as P1's verifier)."""
     if not isinstance(artifact, dict) or artifact.get("artifact_schema") != ARTIFACT_SCHEMA:
         raise ValueError("not an nf_assessed_flash_v1 artifact")
     body = {k: v for k, v in artifact.items() if k != "artifact_sha256"}
     if seal_hash(body) != artifact.get("artifact_sha256"):
         raise ValueError("artifact_sha256 mismatch — assessed-flash artifact tampered")
-    if seal_hash(sorted(x["cluster"]["fact_occurrence_id"] for x in artifact["assessed"])) \
-            != artifact["population_hash"]:
+    assessed = artifact.get("assessed")
+    if not isinstance(assessed, list):
+        raise ValueError("assessed-flash artifact 'assessed' must be a list")
+    keys = [x["cluster"]["fact_occurrence_id"] for x in assessed]
+    if len(set(keys)) != len(keys):
+        raise ValueError("assessed-flash artifact has duplicate fact_occurrence_id")
+    if artifact.get("n_flashes") != len(assessed):
+        raise ValueError("assessed-flash artifact n_flashes != len(assessed)")
+    if seal_hash(sorted(keys)) != artifact.get("population_hash"):
         raise ValueError("population_hash mismatch — assessed set altered")
     return artifact
+
+
+def load_assessed_flash_artifact(path) -> dict:
+    """Load from disk + fully verify (a tampered artifact, or an altered consumed-P1 SHA,
+    changes artifact_sha256 → refused)."""
+    return verify_assessed_flash_artifact(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def main() -> int:
