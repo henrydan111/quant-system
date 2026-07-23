@@ -324,6 +324,37 @@ def test_p1_importance_is_max_over_members(tmp_path):
     assert art["assessed"][0]["typing"]["importance"] == 5   # max(1, 5), not the rep's
 
 
+def test_p0_end_date_on_cutoff_day_still_resolves(tmp_path):
+    # GPT-P2 re-review#4: end_date == the cutoff DAY must still resolve. namechange dates
+    # parse to 00:00, the cutoff is 18:00 — a raw `cut <= end_date` wrongly omitted it.
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "天府文旅",
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20240101",
+         "end_date": "20250127", "ann_date": "20240101", "change_reason": "更名"},
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告"])
+    art = _assess(tmp_path, _p1(tmp_path), stock_basic=sb, namechange=nc)
+    assert "000558.SZ" in {c for a in art["assessed"]
+                           for c in a["route"]["subject_codes"]}
+
+
+@pytest.mark.parametrize("bad", [5.9, "5", True])
+def test_p1_non_literal_int_importance_refused(tmp_path, bad):
+    # GPT-P2 re-review#4: importance must NOT be coerced. A tampered-but-hash-consistent
+    # P1 artifact carrying 5.9 / "5" / True must be refused, not int()-ed into a value
+    # that moves the D7 importance>=4 gate.
+    from workspace.research.ai_research_dept.engine.news_seal import seal_hash
+    _ingest(tmp_path, ["贵州茅台大单"])
+    p1 = _p1(tmp_path)
+    p1_bad = json.loads(json.dumps(p1, ensure_ascii=False))
+    p1_bad["typed"][0]["typing"]["importance"] = bad
+    body = {k: v for k, v in p1_bad.items() if k != "artifact_sha256"}
+    p1_bad["artifact_sha256"] = seal_hash(body)      # re-seal: passes P1's own verify
+    with pytest.raises(ValueError, match="literal int"):
+        _assess(tmp_path, p1_bad)
+
+
 def test_p0_missing_delist_date_column_fail_closed(tmp_path):
     # GPT-P2 re-review#2: under a cutoff the delist_date COLUMN must exist (empty cell =
     # not delisted); a missing column was silently treated as 'not delisted'.

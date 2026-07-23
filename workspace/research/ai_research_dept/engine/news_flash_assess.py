@@ -108,21 +108,30 @@ def _as_of_names(namechange, cut) -> dict:
     alias** — it still resolves by numeric A/H code, just not by name. There is NO fallback
     to the current `stock_basic.name` (that reopens the future-name leak: an empty
     namechange would resolve every current — possibly future — name)."""
+    # GPT-P2 re-review#4: compare at DAY granularity. namechange dates are YYYYMMDD (they
+    # parse to 00:00:00), while `cut` is a wall-clock timestamp — a raw `cut <= end_date`
+    # wrongly excluded a name whose end_date IS the cutoff day (18:00 <= 00:00 is False).
+    # All four dates are normalized; start/end/ann are inclusive day bounds.
+    cut_d = pd.Timestamp(cut).normalize()
+
+    def _d(v):
+        t = pd.to_datetime(str(v), errors="coerce")
+        return t.normalize() if pd.notna(t) else pd.NaT
+
     nc: dict[str, list] = {}
     for _, r in namechange.iterrows():
         tc = str(r["ts_code"]).strip()
-        s = pd.to_datetime(str(r.get("start_date")), errors="coerce")
+        s = _d(r.get("start_date"))
         e_raw = r.get("end_date")
-        e = (pd.to_datetime(str(e_raw), errors="coerce")
-             if not (e_raw is None or pd.isna(e_raw)) else None)
-        a = pd.to_datetime(str(r.get("ann_date")), errors="coerce")
+        e = (_d(e_raw) if not (e_raw is None or pd.isna(e_raw)) else None)
+        a = _d(r.get("ann_date"))
         nc.setdefault(tc, []).append((s, e, a, str(r["name"]).strip()))
     out: dict[str, str] = {}
     for tc, rows in nc.items():
         covering = sorted({nm for (s, e, a, nm) in rows
-                           if pd.notna(s) and s <= cut         # in effect
-                           and (e is None or cut <= e)
-                           and pd.notna(a) and a <= cut})      # announced (PIT anchor)
+                           if pd.notna(s) and s <= cut_d       # in effect (inclusive)
+                           and (e is None or (pd.notna(e) and cut_d <= e))
+                           and pd.notna(a) and a <= cut_d})    # announced (PIT anchor)
         if len(covering) == 1:                                 # clean, unique → usable
             out[tc] = covering[0]
         # else (0, gap/overlap, unannounced): omit → no name alias (numeric code still works)
@@ -235,9 +244,22 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
         # GPT-P2 P1: identity fields agree across members; importance is NOT an identity
         # field — take the MAX over members (matches render's dedup, and preserves the D7
         # importance>=4 split gate that a low-importance representative would drop).
+        # GPT-P2 re-review#4: NO coercion. `int()` silently turned 5.9/"5"/True into a
+        # valid-looking importance that `assess_flash`'s exact-type gate would have
+        # REJECTED, letting a tampered-but-hash-consistent P1 artifact move the D7
+        # importance>=4 gate. Validate each member with the same rule as
+        # `_validate_typing` (literal int in [0,5]; bool excluded since type(True) is bool)
+        # and max the RAW values.
+        imps = []
+        for h in member_hashes:
+            v = typing_index[h]["importance"]
+            if type(v) is not int or not 0 <= v <= 5:
+                raise ValueError(
+                    f"cluster {cluster.fact_occurrence_id} member importance {v!r} is not a "
+                    f"literal int in [0,5] — refusing (no coercion, GPT-P2 re-review#4)")
+            imps.append(v)
         rep_typing = dict(typing_index[rep_ch])
-        rep_typing["importance"] = max(int(typing_index[h]["importance"])
-                                       for h in member_hashes)
+        rep_typing["importance"] = max(imps)
         route = _union_route(cluster, content_by_hash, registry, cut,
                              industry_terms, concept_terms)   # union, not representative
         a = assess_flash(cluster, rep_typing, route)          # recomputes evidence_class
