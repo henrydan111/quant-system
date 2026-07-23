@@ -15,7 +15,8 @@ from workspace.research.ai_research_dept.engine.news_cards import (  # noqa: E40
     verify_d7_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_assemble import (  # noqa: E402
-    NothingToDecide, assemble_stock_artifact,
+    ASSEMBLY_SCHEMA, AssemblyProvenance, NothingToDecide, assemble_stock_artifact,
+    require_assembly_for, verify_assembly_provenance,
 )
 from workspace.research.ai_research_dept.engine.news_flash_assess import (  # noqa: E402
     assess_day_flashes,
@@ -106,9 +107,9 @@ def test_assembles_a_verified_d7_artifact(tmp_path):
     art, prov = _assemble(p2, p3a, rows)
     assert verify_d7_artifact(art) == art            # full lineage re-derivation passes
     assert art.bundle.decision_id == "d1"
-    assert prov["ts_code"] == MAOTAI and prov["n_selected"] == 1
-    assert prov["consumed_assessed_flash_sha256"] == p2["artifact_sha256"]
-    assert prov["consumed_d7_split_sha256"] == p3a["artifact_sha256"]
+    assert prov.ts_code == MAOTAI and prov.n_selected == 1
+    assert prov.consumed_assessed_flash_sha256 == p2["artifact_sha256"]
+    assert prov.consumed_d7_split_sha256 == p3a["artifact_sha256"]
 
 
 # --------------------------------------------------- invariant 3: derived selection
@@ -117,9 +118,10 @@ def test_only_flashes_routing_to_this_stock_are_used(tmp_path):
     p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单", "宁德时代扩产 20GWh"])
     art_m, prov_m = _assemble(p2, p3a, rows, ts_code=MAOTAI)
     art_c, prov_c = _assemble(p2, p3a, rows, ts_code=CATL, decision_id="d2")
-    assert prov_m["n_selected"] == 1 and prov_c["n_selected"] == 1
-    assert prov_m["selected_fact_occurrence_ids"] != prov_c["selected_fact_occurrence_ids"]
+    assert prov_m.n_selected == 1 and prov_c.n_selected == 1
+    assert prov_m.selected_fact_occurrence_ids != prov_c.selected_fact_occurrence_ids
     assert art_m.artifact_hash != art_c.artifact_hash
+    assert prov_m.assembly_hash != prov_c.assembly_hash
 
 
 def test_stock_with_no_routed_flash_yields_no_artifact(tmp_path):
@@ -133,7 +135,7 @@ def test_macro_flash_is_not_selected(tmp_path):
     # P2 marks macro-routed flashes news_render_eligible=False; they never reach render
     p2, p3a, rows = _chain(tmp_path, ["央行今日开展逆回购", "贵州茅台签订 12 亿元大单"])
     _, prov = _assemble(p2, p3a, rows)
-    assert prov["n_selected"] == 1
+    assert prov.n_selected == 1
 
 
 # --------------------------------------------------- invariant 1: chain binding
@@ -195,7 +197,7 @@ def test_below_floor_facts_need_no_split(tmp_path):
     p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"], importance=3)
     assert p3a["n_splits"] == 0
     art, prov = _assemble(p2, p3a, rows)
-    assert prov["n_splits_used"] == 0
+    assert prov.n_splits_used == 0
     assert verify_d7_artifact(art) == art
 
 
@@ -214,10 +216,78 @@ def test_bad_ts_code_refused(tmp_path):
         _assemble(p2, p3a, rows, ts_code="")
 
 
+# ------------------------------- invariant 8: the assembly result is a bound identity
+# (GPT P3b#1 P1: the upstream chain must not be droppable. P4's consumption of this is
+# the FROZEN P4 OBLIGATION recorded in the module docstring.)
+
+def test_assembly_is_frozen_and_self_verifying(tmp_path):
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    _, prov = _assemble(p2, p3a, rows)
+    with pytest.raises(Exception):                       # frozen dataclass
+        prov.ts_code = "000001.SZ"
+    assert verify_assembly_provenance(prov.payload) == prov      # round-trips
+
+
+def test_assembly_hash_binds_the_artifact(tmp_path):
+    # the whole point: a provenance minted for artifact A cannot be paired with artifact B
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单", "宁德时代扩产 20GWh"])
+    art_m, prov_m = _assemble(p2, p3a, rows, ts_code=MAOTAI)
+    art_c, _ = _assemble(p2, p3a, rows, ts_code=CATL, decision_id="d2")
+    assert require_assembly_for(prov_m, art_m).assembly_hash == prov_m.assembly_hash
+    with pytest.raises(ValueError, match="不成对"):
+        require_assembly_for(prov_m, art_c)
+
+
+def test_assembly_hash_covers_the_upstream_shas(tmp_path):
+    # swapping which P2/P3a run produced it changes the identity
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    _, base = _assemble(p2, p3a, rows)
+    swapped = AssemblyProvenance(
+        artifact_hash=base.artifact_hash, ts_code=base.ts_code,
+        decision_id=base.decision_id, cutoff_iso=base.cutoff_iso,
+        ingest_class=base.ingest_class,
+        consumed_assessed_flash_sha256="0" * 64,          # a different upstream run
+        consumed_d7_split_sha256=base.consumed_d7_split_sha256,
+        selected_fact_occurrence_ids=base.selected_fact_occurrence_ids,
+        n_splits_used=base.n_splits_used)
+    assert swapped.assembly_hash != base.assembly_hash
+
+
+def test_forged_assembly_payload_refused(tmp_path):
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    _, prov = _assemble(p2, p3a, rows)
+    tampered = {**prov.payload, "ts_code": "000001.SZ"}   # hash left stale
+    with pytest.raises(ValueError, match="伪造"):
+        verify_assembly_provenance(tampered)
+    with pytest.raises(ValueError, match="键集"):
+        verify_assembly_provenance({k: v for k, v in prov.payload.items()
+                                    if k != "n_splits_used"})
+    with pytest.raises(ValueError, match="键集"):
+        verify_assembly_provenance({**prov.payload, "extra": 1})
+    with pytest.raises(ValueError, match="schema"):
+        bad = {**prov.payload, "schema": "nf_d7_assembly_v0"}
+        verify_assembly_provenance({**bad, "assembly_hash": prov.assembly_hash})
+
+
+def test_p4_binding_door_refuses_a_plain_dict(tmp_path):
+    # P4 must not be satisfiable with a look-alike dict — the chain has to be an identity
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art, prov = _assemble(p2, p3a, rows)
+    with pytest.raises(ValueError, match="AssemblyProvenance"):
+        require_assembly_for(prov.payload, art)
+    with pytest.raises(ValueError, match="AssemblyProvenance"):
+        require_assembly_for(None, art)
+
+
+def test_assembly_schema_is_the_content_contract_version():
+    assert ASSEMBLY_SCHEMA == "nf_d7_assembly_v1"
+
+
 # --------------------------------------------------- determinism
 
 def test_deterministic_artifact_hash(tmp_path):
     p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    a1, _ = _assemble(p2, p3a, rows)
-    a2, _ = _assemble(p2, p3a, rows)
+    a1, s1 = _assemble(p2, p3a, rows)
+    a2, s2 = _assemble(p2, p3a, rows)
     assert a1.artifact_hash == a2.artifact_hash
+    assert s1.assembly_hash == s2.assembly_hash

@@ -25,15 +25,37 @@ Declared invariants (Tier-2; see NF_UNIT_P3B_DESIGN.md):
 6. **`decision_id` discipline**: exact non-empty `str` (the ledger becomes its authority in P4).
 7. **NON_EVIDENTIARY.** A stock with no selected flash yields **no artifact** — an explicit
    "nothing to decide" result, never an empty-but-valid D7 artifact.
+8. **The assembly result is an immutable, canonically-hashed IDENTITY that binds the D7
+   artifact** (GPT P3b#1 P1). It is not a loose dict: `AssemblyProvenance` is frozen,
+   self-verifying (`assembly_hash` recomputed in `__post_init__`), and its hash body
+   contains `artifact_hash` — so the upstream chain (which P2/P3a artifacts, which stock,
+   which facts) cannot be silently dropped, swapped, or paired with a different artifact.
 
-Output: the in-memory `D7DecisionArtifact` + a provenance dict (consumed SHAs, selection
-basis). P3b seals nothing of its own — **P4 is the sealing boundary** and binds all of it
-into the decision archive.
+Output: `(D7DecisionArtifact, AssemblyProvenance)`. P3b seals nothing on disk of its own —
+**P4 is the sealing boundary**.
+
+⚠ **FROZEN P4 OBLIGATION** (the consumer half of GPT P3b#1 P1; a precondition of the P4
+unit, not optional). Without it the chain still terminates here, because the archive would
+prove only the D7 artifact and not which P2/P3a inputs, which stock, or which facts produced
+it. P4 MUST:
+
+  a. **require** the `AssemblyProvenance` (no default, no `None` path) at
+     `record_decision` / `seal_decision_archive`;
+  b. call `require_assembly_for(assembly, artifact)` — the single binding door below — so a
+     provenance for a *different* artifact is refused;
+  c. write `assembly_hash` into the decision ledger entry (first-write-wins then also pins
+     WHICH upstream chain owns the decision id);
+  d. embed `assembly.payload` + `assembly_hash` in the sealed archive under a bumped
+     `_ARCHIVE_SCHEMA` (v1 → v2, extending the strict key set), and re-verify it through
+     `verify_assembly_provenance` on read-back;
+  e. ship refusal tests: missing provenance, artifact-hash mismatch, and an archive
+     round-trip that proves the chain survives (a v1-shaped archive must not verify).
 """
 from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -56,13 +78,150 @@ from workspace.research.ai_research_dept.engine.news_flash_typing import (  # no
 from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
     ClusterSnapshot,
 )
+from workspace.research.ai_research_dept.engine.news_seal import (  # noqa: E402
+    safe_kind, safe_repr, seal_hash,
+)
 
 logger = logging.getLogger("news_flash_assemble")
+
+#: 装配身份 schema。**内容契约**版本(同 P3a 的 ARTIFACT_SCHEMA 治理约定):
+#: 任何改变 `_body()` 字段集合/取值派生方式的修改都必须升版,否则两种派生会共享
+#: 一个哈希空间(旧档案的 assembly_hash 会与新派生冲撞或静默不可复算)。
+ASSEMBLY_SCHEMA = "nf_d7_assembly_v1"
+
+#: 装配载荷顶层严格键集(多/少键 = 拒;同 news_archive 的 _ARCHIVE_KEYS 约定)
+_ASSEMBLY_KEYS = frozenset({
+    "schema", "artifact_hash", "ts_code", "decision_id", "cutoff", "ingest_class",
+    "assessed_sha", "split_sha", "selected_facts", "n_splits_used", "assembly_hash",
+})
 
 
 class NothingToDecide(Exception):
     """No flash routes to this stock at this cutoff (invariant 7). An explicit result, not
     an empty D7 artifact — a decision with no evidence must not be manufactured."""
+
+
+@dataclass(frozen=True)
+class AssemblyProvenance:
+    """P3b 的**不可变、规范哈希**装配身份(invariant 8;GPT P3b#1 P1)。
+
+    旧版返回一个普通 dict:P4 的三个接口都只收 `D7DecisionArtifact`,那个 dict
+    无处可传、无处可封存,最终档案只能证明 D7 工件本体,**证明不了它来自哪次
+    P2/P3a 运行、针对哪只股票、选了哪些事实**——上游链在此被丢弃。
+
+    现在它是一等身份:frozen,字段恰基础类型,`assembly_hash` 在 `__post_init__`
+    **重算**(自称不符 = 硬失败),且哈希体内含 `artifact_hash` ——装配结果与 D7
+    工件互相绑定,换任一方哈希即变。P4 据此把整条链钉进账本与档案。"""
+    artifact_hash: str
+    ts_code: str
+    decision_id: str
+    cutoff_iso: str
+    ingest_class: str
+    consumed_assessed_flash_sha256: str
+    consumed_d7_split_sha256: str
+    #: 选中事实的 fact_occurrence_id(按其排序;P3b 的选择基础)
+    selected_fact_occurrence_ids: tuple
+    n_splits_used: int
+    assembly_hash: str = field(default="")
+
+    def __post_init__(self):
+        for name in ("artifact_hash", "ts_code", "decision_id", "cutoff_iso",
+                     "ingest_class", "consumed_assessed_flash_sha256",
+                     "consumed_d7_split_sha256"):
+            v = getattr(self, name)
+            if type(v) is not str or not v.strip():
+                raise ValueError(
+                    f"AssemblyProvenance.{name} 须恰 str 非空(得 {safe_repr(v)})——"
+                    f"子类/非 str 会让身份的两次读取脱钩,静态拒")
+        ids = tuple(self.selected_fact_occurrence_ids)
+        if not ids:
+            raise ValueError(
+                "AssemblyProvenance 选中事实为空——绝不产无证据的装配身份(invariant 7)")
+        for fid in ids:
+            if type(fid) is not str or not fid.strip():
+                raise ValueError(
+                    f"selected_fact_occurrence_ids 成员须恰 str 非空(得 {safe_repr(fid)})")
+        object.__setattr__(self, "selected_fact_occurrence_ids", ids)
+        if type(self.n_splits_used) is not int or self.n_splits_used < 0:
+            raise ValueError(
+                f"n_splits_used 须恰非负 int(得 {safe_repr(self.n_splits_used)};"
+                f"bool 亦拒——`type(x) is int` 对 True 为假)")
+        recomputed = seal_hash(self._body())
+        if self.assembly_hash and self.assembly_hash != recomputed:
+            raise ValueError(
+                f"assembly_hash 伪造:自称 {self.assembly_hash[:12]} "
+                f"重算 {recomputed[:12]}——拒")
+        if not self.assembly_hash:
+            object.__setattr__(self, "assembly_hash", recomputed)
+
+    def _body(self) -> dict:
+        return {"schema": ASSEMBLY_SCHEMA,
+                "artifact_hash": self.artifact_hash,
+                "ts_code": self.ts_code,
+                "decision_id": self.decision_id,
+                "cutoff": self.cutoff_iso,
+                "ingest_class": self.ingest_class,
+                "assessed_sha": self.consumed_assessed_flash_sha256,
+                "split_sha": self.consumed_d7_split_sha256,
+                "selected_facts": list(self.selected_fact_occurrence_ids),
+                "n_splits_used": self.n_splits_used}
+
+    @property
+    def n_selected(self) -> int:
+        return len(self.selected_fact_occurrence_ids)
+
+    @property
+    def payload(self) -> dict:
+        """P4 封存进档案的**纯 JSON** 载荷(含自称 `assembly_hash`;读回一律经
+        `verify_assembly_provenance` 重算,不信自称值)。"""
+        return {**self._body(), "assembly_hash": self.assembly_hash}
+
+
+def verify_assembly_provenance(payload) -> AssemblyProvenance:
+    """从纯 JSON 载荷重建装配身份并**重算**其哈希(recompute-not-trust)。
+
+    P4 读回档案时的唯一门:严格键集 + schema 值 + 逐字段类型门 + 哈希重算。"""
+    if type(payload) is not dict:
+        raise ValueError(f"装配载荷须恰 dict(得 {safe_kind(payload)})——拒")
+    if set(payload) != _ASSEMBLY_KEYS:
+        raise ValueError(
+            f"装配载荷顶层键集不符 {ASSEMBLY_SCHEMA} schema——多/少键 = 拒")
+    schema = payload["schema"]
+    if type(schema) is not str or schema != ASSEMBLY_SCHEMA:
+        raise ValueError(f"装配载荷 schema {safe_repr(schema)} ≠ {ASSEMBLY_SCHEMA}——拒")
+    facts = payload["selected_facts"]
+    if type(facts) is not list:
+        raise ValueError(f"selected_facts 须恰 list(得 {safe_kind(facts)})——拒")
+    return AssemblyProvenance(
+        artifact_hash=payload["artifact_hash"], ts_code=payload["ts_code"],
+        decision_id=payload["decision_id"], cutoff_iso=payload["cutoff"],
+        ingest_class=payload["ingest_class"],
+        consumed_assessed_flash_sha256=payload["assessed_sha"],
+        consumed_d7_split_sha256=payload["split_sha"],
+        selected_fact_occurrence_ids=tuple(facts),
+        n_splits_used=payload["n_splits_used"],
+        assembly_hash=payload["assembly_hash"])      # 自称 → __post_init__ 重算比对
+
+
+def require_assembly_for(assembly, artifact) -> AssemblyProvenance:
+    """**P4 必须调用的单一绑定门**(FROZEN P4 OBLIGATION b)。
+
+    装配身份必须恰为 `AssemblyProvenance`、自哈希自洽,且其 `artifact_hash` /
+    `decision_id` 与该 D7 工件逐字节相符——他次装配的出处配不上这个工件。"""
+    if type(assembly) is not AssemblyProvenance:
+        raise ValueError(
+            f"装配出处须恰 AssemblyProvenance(得 {safe_kind(assembly)})——"
+            f"P4 不接受普通 dict/子类:上游链必须是自验身份,拒")
+    assembly = verify_assembly_provenance(assembly.payload)     # 重算,不信实例自称
+    if assembly.artifact_hash != artifact.artifact_hash:
+        raise ValueError(
+            f"装配出处绑定的工件 {assembly.artifact_hash[:12]} ≠ 供给的 D7 工件 "
+            f"{artifact.artifact_hash[:12]}——出处与工件不成对,拒")
+    if assembly.decision_id != artifact.bundle.decision_id:
+        raise ValueError(
+            f"装配出处 decision_id {assembly.decision_id!r} ≠ 工件束 "
+            f"{artifact.bundle.decision_id!r}——拒")
+    return assembly
 
 
 def _verified_inputs(cut, ingest_class: str, assessed_artifact, split_artifact):
@@ -83,8 +242,8 @@ def _verified_inputs(cut, ingest_class: str, assessed_artifact, split_artifact):
     if p3a.get("consumed_assessed_flash_sha256") != p2.get("artifact_sha256"):
         raise ValueError(
             f"D7 split artifact was produced from a DIFFERENT assessed-flash artifact "
-            f"(consumed {str(p3a.get('consumed_assessed_flash_sha256'))[:12]} vs supplied "
-            f"{str(p2.get('artifact_sha256'))[:12]}) — artifacts from two runs cannot be "
+            f"(consumed {safe_repr(p3a.get('consumed_assessed_flash_sha256'))} vs supplied "
+            f"{safe_repr(p2.get('artifact_sha256'))}) — artifacts from two runs cannot be "
             f"mixed, refusing (chain binding)")
     return p2, p3a
 
@@ -112,7 +271,9 @@ def _reconstruct_cluster(payload: dict) -> ClusterSnapshot:
 def assemble_stock_artifact(cutoff, *, ingest_class: str, ts_code: str, decision_id: str,
                             assessed_artifact, split_artifact, source_rows) -> tuple:
     """Assemble ONE stock's `D7DecisionArtifact` for `cutoff`. Returns
-    `(artifact, provenance)`. Raises `NothingToDecide` when no flash routes to the stock."""
+    `(artifact, AssemblyProvenance)` — the second is the immutable, canonically-hashed
+    identity of the whole upstream chain, bound to `artifact.artifact_hash` (invariant 8);
+    P4 must require it and seal it. Raises `NothingToDecide` when nothing routes here."""
     cut = _canonical_cutoff(cutoff)
     if type(decision_id) is not str or not decision_id.strip():
         raise ValueError("decision_id 须恰 str 非空——拒(P4 的账本随后持有其权威)")
@@ -156,19 +317,18 @@ def assemble_stock_artifact(cutoff, *, ingest_class: str, ts_code: str, decision
 
     artifact = build_attribute_bundle(splits, base_facts, records, card=card,
                                       decision_id=decision_id, cutoff=cut)
-    provenance = {
-        "ts_code": ts_code,
-        "decision_id": decision_id,
-        "cutoff_iso": cut.isoformat(),
-        "ingest_class": ingest_class,
-        "consumed_assessed_flash_sha256": p2["artifact_sha256"],
-        "consumed_d7_split_sha256": p3a["artifact_sha256"],
-        "selected_fact_occurrence_ids": [a["cluster"]["fact_occurrence_id"]
-                                         for a in selected],
-        "n_selected": len(selected),
-        "n_splits_used": len(splits),
-    }
-    logger.info("%s @ %s: %d flashes selected, %d D7 splits -> artifact %s",
+    # invariant 8: the chain identity — binds the artifact it was assembled FOR, so P4
+    # cannot seal this artifact against a different upstream chain (or none at all)
+    assembly = AssemblyProvenance(
+        artifact_hash=artifact.artifact_hash,
+        ts_code=ts_code, decision_id=decision_id,
+        cutoff_iso=cut.isoformat(), ingest_class=ingest_class,
+        consumed_assessed_flash_sha256=p2["artifact_sha256"],
+        consumed_d7_split_sha256=p3a["artifact_sha256"],
+        selected_fact_occurrence_ids=tuple(a["cluster"]["fact_occurrence_id"]
+                                           for a in selected),
+        n_splits_used=len(splits))
+    logger.info("%s @ %s: %d flashes selected, %d D7 splits -> artifact %s (assembly %s)",
                 ts_code, cut.isoformat(), len(selected), len(splits),
-                artifact.artifact_hash[:12])
-    return artifact, provenance
+                artifact.artifact_hash[:12], assembly.assembly_hash[:12])
+    return artifact, assembly

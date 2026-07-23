@@ -57,12 +57,38 @@ render-minted `base_record_id` back to P3a's split.
 7. **NON_EVIDENTIARY**; a stock with no selected flashes yields **no artifact** (an explicit
    "nothing to decide" result), never an empty-but-valid D7 artifact.
 
-## Output shape (declared decision)
+8. **The assembly result is a bound identity** (added after GPT review round-1 P1). Not a loose dict:
+   `AssemblyProvenance` is frozen, canonically hashed, self-verifying, and its hash body contains
+   `artifact_hash` — the upstream chain cannot be dropped, swapped, or paired with another artifact.
 
-P3b returns the in-memory `D7DecisionArtifact` plus a small provenance dict (consumed P2/P3a SHAs,
-selection basis). It does **not** seal a separate on-disk artifact: P4 (`record_decision` →
-`execute_news_decision` → `seal_decision_archive`) is the sealing boundary and binds all of it into the
-decision archive. Flag if you think P3b needs its own seal.
+## Output shape (was a declared decision; RULED ON in review round-1)
+
+P3b returns the in-memory `D7DecisionArtifact` plus the assembly provenance, and seals nothing on
+disk of its own — P4 is the sealing boundary. **The reviewer accepted "no separate on-disk seal" but
+raised a P1 on the rest of it:** the provenance was a plain dict, and P4's three interfaces
+(`record_decision`, the executors, `seal_decision_archive`) all take only a `D7DecisionArtifact` —
+so the dict had nowhere to go. An ordinary call sequence silently dropped it, and the sealed archive
+could then prove the D7 artifact but **not which P2/P3a run, which stock, or which facts produced
+it**. The design claim "P4 binds all of it" was false as built.
+
+**Fold (P3b half, done):** `AssemblyProvenance` — frozen, canonically hashed, self-verifying, hash
+body includes `artifact_hash` — plus `verify_assembly_provenance` (strict key set + schema + recompute)
+and `require_assembly_for(assembly, artifact)`, the single binding door P4 must call.
+
+### ⚠ FROZEN P4 OBLIGATION (the consumer half — a precondition of the P4 unit, not optional)
+
+Until P4 does all five, the chain still terminates at P3b's exit:
+
+| # | obligation |
+|---|---|
+| a | **require** the `AssemblyProvenance` at `record_decision` / `seal_decision_archive` — no default, no `None` path |
+| b | call `require_assembly_for(assembly, artifact)` so a provenance for a different artifact is refused |
+| c | write `assembly_hash` into the decision ledger entry (first-write-wins then also pins *which upstream chain* owns the decision id) |
+| d | embed `assembly.payload` + `assembly_hash` in the sealed archive under a bumped `_ARCHIVE_SCHEMA` (v1 → v2, extending the strict key set), re-verified through `verify_assembly_provenance` on read-back |
+| e | refusal tests: missing provenance, artifact-hash mismatch, and an archive round-trip proving the chain survives (a v1-shaped archive must not verify) |
+
+This is mirrored verbatim in the [news_flash_assemble.py](engine/news_flash_assemble.py) module
+docstring so it cannot be lost between units.
 
 ## Not in P3b
 
