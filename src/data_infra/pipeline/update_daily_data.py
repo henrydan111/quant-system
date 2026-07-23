@@ -782,6 +782,10 @@ def resolve_last_complete_session(ref_dir: str, close_hhmm: str = "1730", now=No
 
 
 def main():
+    # Raw-store quiescence (HARD pre-promotion integration gate): refuse to run while a
+    # recovered family is being swapped into the live store — the tree may be half-replaced.
+    from data_infra.recovery_quiescence import assert_no_active_recovery
+    assert_no_active_recovery()
     parser = argparse.ArgumentParser(
         description="Daily Data Updater (Market + Fundamentals + Index Weights)"
     )

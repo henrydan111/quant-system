@@ -81,6 +81,10 @@ def build_unified_qlib(
 
 
 def main() -> None:
+    # Raw-store quiescence (HARD pre-promotion integration gate): refuse to run while a
+    # recovered family is being swapped into the live store — the tree may be half-replaced.
+    from data_infra.recovery_quiescence import assert_no_active_recovery
+    assert_no_active_recovery()
     parser = argparse.ArgumentParser(description="Build the staged PIT-aware local Qlib provider")
     parser.add_argument("--data-root", type=str, default=None, help="Override data root (default: config.yaml)")
     parser.add_argument("--qlib-dir", type=str, default=None, help="Override provider output dir (default: config.yaml)")

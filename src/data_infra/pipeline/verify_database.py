@@ -81,6 +81,10 @@ def _run_pit_live_harness() -> tuple[int, int, int, list[str]]:
 
 
 def main() -> None:
+    # Raw-store quiescence (HARD pre-promotion integration gate): refuse to run while a
+    # recovered family is being swapped into the live store — the tree may be half-replaced.
+    from data_infra.recovery_quiescence import assert_no_active_recovery
+    assert_no_active_recovery()
     parser = argparse.ArgumentParser(description="Profile and validate raw datasets for the staged PIT backend")
     parser.add_argument("--datasets", type=str, default=None, help="Comma-separated dataset subset")
     parser.add_argument("--exclude-phase3", action="store_true", help="Skip Phase 3 datasets")
