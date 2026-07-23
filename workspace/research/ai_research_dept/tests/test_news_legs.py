@@ -96,6 +96,13 @@ def _fail(sp):
 
 # --------------------------------------------------- eligible derivation
 
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+
+
 class TestEligible:
     def test_no_penalty_records(self):
         assert penalty_eligible_records(_artifact(with_penalty=False)) == []
@@ -112,7 +119,7 @@ class TestMatrix:
     def _run(self, tmp_path, *, with_penalty, output_mode="primary_horizon",
              factor_fn=_OK, penalty_fn=_OK, penalty_calls=None, did="d1"):
         art = _artifact(with_penalty=with_penalty, decision_id=did)
-        record_decision(tmp_path, did, art)
+        _rec(tmp_path, did, art)
         def counted_penalty(sp):
             if penalty_calls is not None:
                 penalty_calls.append(sp)
@@ -180,7 +187,7 @@ class TestMatrix:
 class TestOutcomeSeal:
     def _outcome(self, tmp_path):
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         return run_news_two_legs(
             art, ledger_dir=tmp_path, decision_id="d1",
             output_mode="primary_horizon", factor_payload_ast=_factor_ast(art),
@@ -232,7 +239,7 @@ class TestOutcomeSeal:
 class TestLegIsolation:
     def test_penalty_ref_in_factor_leg_refused(self, tmp_path):
         art = _artifact(with_penalty=True)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         bad_factor = {"facts": [EvidenceRef("NFR01")]}   # penalty-only record
         with pytest.raises(PayloadGateError, match="NFR01"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -243,7 +250,7 @@ class TestLegIsolation:
 
     def test_factor_ref_in_penalty_leg_refused(self, tmp_path):
         art = _artifact(with_penalty=True)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         bad_penalty = {"risks": [EvidenceRef("NFD01.fact")]}   # factor-only record
         with pytest.raises(PayloadGateError, match="NFD01.fact"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -254,7 +261,7 @@ class TestLegIsolation:
 
     def test_missing_penalty_payload_with_eligibles_refused(self, tmp_path):
         art = _artifact(with_penalty=True)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         with pytest.raises(RegistryError, match="penalty 适格"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
                               output_mode="primary_horizon",
@@ -277,7 +284,7 @@ class TestLegIsolation:
 class TestPrevalidation:
     def test_invalid_output_mode_before_any_executor(self, tmp_path):
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         calls = []
         with pytest.raises(RegistryError, match="output_mode"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -290,7 +297,7 @@ class TestPrevalidation:
 
     def test_missing_penalty_payload_detected_before_factor(self, tmp_path):
         art = _artifact(with_penalty=True)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         calls = []
         with pytest.raises(RegistryError, match="penalty 适格"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -303,7 +310,7 @@ class TestPrevalidation:
 
     def test_penalty_payload_with_zero_eligible_refused(self, tmp_path):
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         with pytest.raises(RegistryError, match="配置错误"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
                               output_mode="primary_horizon",
@@ -315,7 +322,7 @@ class TestPrevalidation:
         # re-review B1 at the leg level: a factor payload omitting available
         # positive records never reaches the executor
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         calls = []
         with pytest.raises(RegistryError, match="完整性"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -375,7 +382,7 @@ class TestBindingBoundary:
             build_sealed_payload,
         )
         art = _artifact(with_penalty=True)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         f_ast, p_ast = _factor_ast(art), _penalty_ast(art)
         out = run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
                                 output_mode="primary_horizon",
@@ -437,7 +444,7 @@ class TestExactTypePrevalidation:
         class S(str):
             pass
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         calls = []
         with pytest.raises(RegistryError, match="output_mode"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id="d1",
@@ -452,7 +459,7 @@ class TestExactTypePrevalidation:
         class S(str):
             pass
         art = _artifact(with_penalty=False)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         calls = []
         with pytest.raises(RegistryError, match="decision_id"):
             run_news_two_legs(art, ledger_dir=tmp_path, decision_id=S("d1"),

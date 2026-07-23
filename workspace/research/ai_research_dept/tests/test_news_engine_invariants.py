@@ -30,6 +30,9 @@ ENGINE = Path(__file__).resolve().parents[1] / "engine"
 SECURITY_MODULES = (
     "news_seal.py", "news_evidence.py", "news_cards.py", "news_decision.py",
     "news_legs.py", "news_executors.py", "news_archive.py", "news_horizon.py",
+    # P4a: its AssemblyProvenance verifier/binding door now gates the ledger AND
+    # the sealed archive — it joined the sealing surface, so it joins the sweep
+    "news_flash_assemble.py",
 )
 
 
@@ -43,6 +46,16 @@ def _iter_modules():
 def _is_type_call(node) -> bool:
     return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "type" and len(node.args) == 1)
+
+
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.engine.news_decision import (
+        record_decision,
+    )
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
 
 
 class TestNoEqualitySemanticsOnTypeGates:
@@ -101,6 +114,7 @@ class TestSingleStrNormalizationChokepoint:
         # Whitelist: only positions where the argument is provably not caller data.
         WHITELIST = {
             ("news_horizon.py", "sys.path bootstrap"): {43, 44},
+            ("news_flash_assemble.py", "sys.path bootstrap"): {71, 72},
         }
         allowed = {(m, ln) for (m, _why), lns in WHITELIST.items() for ln in lns}
         banned = []
@@ -304,7 +318,7 @@ class TestExecutionEntrySnapshotsContract:
             NewsScoringContract, execute_news_decision,
         )
         art = ta._artifact_full("d1")
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         contract = ta._contract()
         swapped = {"n": 0}
 

@@ -47,6 +47,9 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     build_factor_payload_ids, extract_candidate_id_occurrences,
     require_sealed_registry,
 )
+from workspace.research.ai_research_dept.engine.news_flash_assemble import (
+    require_assembly_for,
+)
 from workspace.research.ai_research_dept.engine.news_seal import (
     plain_str, plain_str_tuple, safe_kind, safe_repr, seal_hash, verify_sealed,
 )
@@ -59,8 +62,13 @@ _HEX64_RE = re.compile(r"[0-9a-f]{64}")
 #  archive-re-review#2 Blocker:账本承载**两类**行——决策注册行 + 执行承诺行
 #  (受控执行器把选定终态出处 entry_hash 提交进这条不可重写哈希链;归档验证对
 #  承诺行复验,出处文件里事后追加/替换的伪造终态到不了档案)。
+#  P4a 义务(c):决策行内嵌**完整装配载荷** + assembly_hash——首写胜出从此也钉死
+#  "哪条上游链(P2/P3a/股票/事实集合)拥有这个 decision_id";载荷内嵌(而非只存
+#  哈希)沿承诺行内嵌契约载荷的先例(re-review#5 P0),使 success 承诺后的崩溃
+#  恢复可从**纯盘上状态**取回装配身份重验封档。
 _DECISION_KEYS = frozenset({"kind", "decision_id", "bundle_hash", "artifact_hash",
                             "final_registry_hash", "source_card_hash", "cutoff_iso",
+                            "assembly", "assembly_hash",
                             "seq", "prev_hash", "entry_hash"})
 _COMMITMENT_KEYS = frozenset({"kind", "decision_id", "execution_id",
                               "factor_entry_hash", "penalty_entry_hash",
@@ -124,6 +132,16 @@ def _read_chain(path: Path) -> list:
                 if set(entry) != _DECISION_KEYS:
                     raise RegistryError(
                         f"账本行 {i} 键集不符 {sorted(entry)}——严格 schema 拒(M1)")
+                # P4a 义务(c):决策行内嵌装配载荷,其哈希对必须自洽(承诺行
+                # contract 对的同款检查;深绑定在持有工件的门做——record/seal/读档)
+                a = entry["assembly"]
+                if type(a) is not dict \
+                        or entry["assembly_hash"] != a.get("assembly_hash") \
+                        or seal_hash({k: v for k, v in a.items()
+                                      if k != "assembly_hash"}) \
+                        != entry["assembly_hash"]:
+                    raise RegistryError(
+                        f"账本行 {i} 决策行 assembly/assembly_hash 对不自洽——拒(P4a)")
             elif kind == "execution_commitment":
                 if set(entry) != _COMMITMENT_KEYS:
                     raise RegistryError(
@@ -199,16 +217,26 @@ def _expected_fields(artifact: D7DecisionArtifact) -> dict:
             "cutoff_iso": artifact.bundle.cutoff_iso}
 
 
-def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) -> dict:
-    """原子首写胜出入账(BINDING #1)。账本持有**权威** decision_id;工件必须
-    `verify_d7_artifact` 过门且其束 decision_id 与之逐字节相等。幂等 = 全部工件
-    派生字段逐一相等;任一不同 = 拒(第二个世界线无法成为同一决策的权威)。"""
+def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact, *,
+                    assembly) -> dict:
+    """原子首写胜出入账(BINDING #1 + P4a 义务 a/b/c)。账本持有**权威**
+    decision_id;工件必须 `verify_d7_artifact` 过门且其束 decision_id 与之逐字节
+    相等;装配出处 **REQUIRED 无默认**(义务 a),经 `require_assembly_for` 绑定
+    到**已验证**的工件(义务 b:先验工件后绑定——绑到未验工件什么也证明不了)。
+    行内嵌 `assembly.payload` + `assembly_hash`(义务 c)。幂等 = 全部工件派生
+    字段 + 装配身份逐一相等;工件同而装配异 = 拒(首写胜出也钉死**哪条上游链**
+    拥有这个决策 id)。"""
     # GPT #24 类3:类型门诊断经 safe_repr(旧码读 type().__name__ + {!r},在拒绝
     # 路径上触发不可信 decision_id 的元类 __getattribute__ / __repr__)
     if type(decision_id) is not str or not decision_id.strip():
         raise RegistryError(
             f"权威 decision_id 须恰 str 非空(得 {safe_repr(decision_id)};子类拒)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
+    # P4a 义务 a+b:装配出处必经唯一绑定门,且晚于工件验证;返回值 = 重验副本
+    try:
+        assembly = require_assembly_for(assembly, artifact)
+    except ValueError as e:
+        raise RegistryError(f"装配出处过门失败:{e}") from e
     if artifact.bundle.decision_id != decision_id:
         raise RegistryError(
             f"工件束 decision_id {artifact.bundle.decision_id!r} ≠ 账本权威 "
@@ -221,14 +249,24 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact) 
         existing = next((e for e in entries if e["kind"] == "decision"
                          and e["decision_id"] == decision_id), None)
         if existing is not None:
-            if all(existing[k] == expected[k] for k in _ARTIFACT_FIELDS):
+            same_artifact = all(existing[k] == expected[k]
+                                for k in _ARTIFACT_FIELDS)
+            if same_artifact and existing["assembly_hash"] == assembly.assembly_hash \
+                    and existing["assembly"] == assembly.payload:
                 return dict(existing)              # 逐字节相同重算 → 幂等
+            if same_artifact:
+                raise RegistryError(
+                    f"decision {decision_id!r} 已以装配链 "
+                    f"{existing['assembly_hash'][:12]} 入账——同一工件配第二条上游"
+                    f"链 {assembly.assembly_hash[:12]} 拒(P4a:首写胜出钉死链)")
             raise RegistryError(
                 f"decision {decision_id!r} 已入账 bundle "
                 f"{existing['bundle_hash'][:12]}——首写胜出,第二个不同世界线 "
                 f"{artifact.bundle.bundle_hash[:12]} 拒(BINDING #1)")
         prev = entries[-1]["entry_hash"] if entries else _GENESIS
         body = {"kind": "decision", "decision_id": decision_id, **expected,
+                "assembly": assembly.payload,
+                "assembly_hash": assembly.assembly_hash,
                 "seq": len(entries), "prev_hash": prev}
         entry = {**body, "entry_hash": seal_hash(body)}
         _atomic_durable_write(entries + [entry], path)

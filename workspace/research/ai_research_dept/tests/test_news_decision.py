@@ -66,21 +66,28 @@ def _artifact(decision_id="d1"):
 
 # --------------------------------------------------- ledger (BINDING #1)
 
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+
+
 class TestDecisionLedger:
     def test_first_write_and_lookup(self, tmp_path):
         art = _artifact()
-        entry = record_decision(tmp_path, "d1", art)
+        entry = _rec(tmp_path, "d1", art)
         assert entry["bundle_hash"] == art.bundle.bundle_hash
         assert lookup_decision(tmp_path, "d1")["artifact_hash"] == art.artifact_hash
 
     def test_idempotent_identical_recompute(self, tmp_path):
         art = _artifact()
-        e1 = record_decision(tmp_path, "d1", art)
-        e2 = record_decision(tmp_path, "d1", art)      # byte-identical recompute
+        e1 = _rec(tmp_path, "d1", art)
+        e2 = _rec(tmp_path, "d1", art)      # byte-identical recompute
         assert e1 == e2
 
     def test_second_different_hash_refused(self, tmp_path):
-        record_decision(tmp_path, "d1", _artifact())
+        _rec(tmp_path, "d1", _artifact())
         # a different world line for the SAME decision (different split text)
         card, records, facts = render_news_flash_section(
             [_assessed("重大订单甲", importance=5),
@@ -89,25 +96,25 @@ class TestDecisionLedger:
             [{"base_record_id": "NFD01", "attributes": {"fact": "另一措辞"}}],
             facts, records, card=card, decision_id="d1", cutoff=CUT)
         with pytest.raises(RegistryError, match="首写胜出"):
-            record_decision(tmp_path, "d1", other)
+            _rec(tmp_path, "d1", other)
 
     def test_ledger_owns_expected_id(self, tmp_path):
         # artifact minted for d1 cannot be recorded under the authoritative d2
         with pytest.raises(RegistryError, match="权威"):
-            record_decision(tmp_path, "d2", _artifact(decision_id="d1"))
+            _rec(tmp_path, "d2", _artifact(decision_id="d1"))
 
     def test_empty_decision_id_refused(self, tmp_path):
         with pytest.raises(RegistryError, match="decision_id"):
-            record_decision(tmp_path, "  ", _artifact())
+            _rec(tmp_path, "  ", _artifact())
 
     def test_lock_released_and_second_decision_appends(self, tmp_path):
-        record_decision(tmp_path, "d1", _artifact("d1"))
+        _rec(tmp_path, "d1", _artifact("d1"))
         assert not (tmp_path / "decision_ledger.jsonl.lock").exists()
-        record_decision(tmp_path, "d2", _artifact("d2"))
+        _rec(tmp_path, "d2", _artifact("d2"))
         assert lookup_decision(tmp_path, "d2")["seq"] == 1
 
     def test_tampered_ledger_duplicate_line_fail_closed(self, tmp_path):
-        record_decision(tmp_path, "d1", _artifact())
+        _rec(tmp_path, "d1", _artifact())
         p = tmp_path / "decision_ledger.jsonl"
         line = p.read_text(encoding="utf-8")
         p.write_text(line + line, encoding="utf-8")    # hand-append duplicate id
@@ -120,7 +127,7 @@ class TestDecisionLedger:
     def test_every_field_mutation_fail_closed(self, tmp_path, fld):
         # re-review M1: mutating ANY ledger field breaks the per-row hash/chain
         import json as _json
-        record_decision(tmp_path, "d1", _artifact())
+        _rec(tmp_path, "d1", _artifact())
         p = tmp_path / "decision_ledger.jsonl"
         entry = _json.loads(p.read_text(encoding="utf-8"))
         entry[fld] = 0 if fld == "seq" and entry[fld] != 0 else \
@@ -136,7 +143,7 @@ class TestDecisionLedger:
         # the substituted world itself needs the external head anchor (archive
         # unit integration, documented).
         art_a = _artifact("d1")
-        record_decision(tmp_path, "d1", art_a)
+        _rec(tmp_path, "d1", art_a)
         # world B: same decision id, different split text
         card, records, facts = render_news_flash_section(
             [_assessed("重大订单甲", importance=5),
@@ -147,7 +154,7 @@ class TestDecisionLedger:
         # attacker rewrites the ledger with a self-consistent B row
         p = tmp_path / "decision_ledger.jsonl"
         p.unlink()
-        record_decision(tmp_path, "d1", art_b)
+        _rec(tmp_path, "d1", art_b)
         with pytest.raises(RegistryError, match="不符"):
             require_recorded(tmp_path, "d1", art_a)
 
@@ -213,7 +220,7 @@ class TestClosedAst:
 class TestSealedPayloadChokePoint:
     def _ready(self, tmp_path):
         art = _artifact()
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         return art
 
     def test_happy_path(self, tmp_path):
@@ -347,7 +354,7 @@ class TestRoleReplay:
               "attributes": {"fact": "签订 12 亿订单",
                              "source_status": "公司公告官方证实"}}],
             facts, records, card=card, decision_id="d1", cutoff=CUT)
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         pen_ids = leg_expected_ids(art.final_registry, use="penalty",
                                    consumer_seat="news")
         pen = build_sealed_payload({"risks": [EvidenceRef(r) for r in pen_ids]},
@@ -401,7 +408,7 @@ class TestProvenanceMultiplicity:
     # re-review#2(seat) B2: a typed reference cannot shield bare same-id copies
     def _ready(self, tmp_path):
         art = _artifact()
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         from workspace.research.ai_research_dept.engine.news_decision import (
             leg_expected_ids,
         )
@@ -438,7 +445,7 @@ class TestLegCompleteness:
     # re-review B1: expected populations enforced exactly-once before executors
     def _ready(self, tmp_path):
         art = _artifact()
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         return art
 
     def _leg_expected(self, art):

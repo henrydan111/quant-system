@@ -67,6 +67,16 @@ def _penalty(entries=()):
 
 # --------------------------------------------------- c16_v1 unchanged (M2″)
 
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.engine.news_decision import (
+        record_decision,
+    )
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+
+
 class TestLegacyRejectsHorizon:
     def test_c16_v1_rejects_horizon_fields(self):
         rec = {"factor_scores": [], "horizon_factor_scores": []}
@@ -393,7 +403,7 @@ class TestExecutionView:
               "attributes": {"fact": "签订 12 亿订单"}}],
             facts, records, card=card, decision_id="d1",
             cutoff="2025-01-27 18:00:00")
-        record_decision(tmp_path, "d1", art)
+        _rec(tmp_path, "d1", art)
         got = []
         from workspace.research.ai_research_dept.engine.news_decision import (
             build_leg_payload_ast,

@@ -145,10 +145,13 @@ from workspace.research.ai_research_dept.engine.news_cards import (
 )
 from workspace.research.ai_research_dept.engine.news_decision import (
     _ledger_path, _read_chain, build_leg_payload_ast, build_sealed_payload,
-    ledger_head, require_exact_id,
+    require_exact_id,
 )
 from workspace.research.ai_research_dept.engine.news_evidence import (
     RegistryError, require_sealed_registry,
+)
+from workspace.research.ai_research_dept.engine.news_flash_assemble import (
+    require_assembly_for, verify_assembly_provenance,
 )
 from workspace.research.ai_research_dept.engine.news_executors import (
     _EMPTY_PENALTY_RECORD, _EMPTY_PENALTY_SENTINEL, _TERMINAL_VERDICTS,
@@ -184,6 +187,29 @@ def _find_success_commitment(chain: list, decision_id: str) -> "dict | None":
     return next((e for e in chain if e["kind"] == "execution_commitment"
                  and e["decision_id"] == decision_id
                  and e["news_status"] == "success"), None)
+
+
+def _find_decision(chain: list, decision_id: str) -> "dict | None":
+    """决策注册行(P4a:封档/读档/恢复对账装配链所用;同 `_find_commitment`
+    的唯一身份门形状)。首写胜出 + 哈希链使该行一经写入不可变。"""
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2 同形状面
+    return next((e for e in chain if e["kind"] == "decision"
+                 and e["decision_id"] == decision_id), None)
+
+
+def _require_ledger_assembly(chain: list, decision_id: str, assembly) -> None:
+    """P4a 共享对账核:封存/恢复所持装配身份必须**逐字节**等于账本决策行钉定的
+    装配链(载荷 + 哈希双比;决策以链 A 入账不得以链 B 封档)。"""
+    row = _find_decision(chain, decision_id)
+    if row is None:
+        raise RegistryError(
+            "账本无本决策注册行——装配身份无账本锚,拒(P4a 义务 c)")
+    if row["assembly_hash"] != assembly.assembly_hash \
+            or row["assembly"] != assembly.payload:
+        raise RegistryError(
+            f"装配身份 {assembly.assembly_hash[:12]} ≠ 账本钉定 "
+            f"{safe_repr(row['assembly_hash'])[:16]}——决策以链 A 入账不得以链 B "
+            f"封档/读档,拒(P4a)")
 
 def _deep_plain_json(x, *, path: str = "bundle"):
     """递归验证**精确基础 JSON 类型**并重建为普通结构(archive-re-review#20:
@@ -527,7 +553,11 @@ def verify_execution_bundle(bundle: dict, artifact: D7DecisionArtifact, *,
             "penalty_payload_hash": (penalty_payload.payload_hash
                                      if penalty_payload else None),
             "commitment": commitment, "verified": verified_payload,
-            "verified_outcome": verified_outcome}
+            "verified_outcome": verified_outcome,
+            # P4a:内部 `verify_d7_artifact` 产出的独立可信副本——seal 用它绑
+            # 装配身份,而非在自己入口新增一个先于 contract/outcome 快照的回调点
+            # (那会重新引入 GPT #23 P1#1 的时序类,被钉死探针当场抓获)
+            "verified_artifact": artifact}
 
 
 class ArchiveWriteOnceConflictError(RegistryError):
@@ -535,11 +565,14 @@ class ArchiveWriteOnceConflictError(RegistryError):
     据此与"验证性失败"区分——并发竞争的输家转为读验既有档案返回)。"""
 
 
-_ARCHIVE_SCHEMA = "news_decision_archive_v1"
+#: v1 → v2(P4a 义务 d):档案封入装配身份 `assembly`(P3b `AssemblyProvenance.
+#: payload`)——档案从此自证**哪条上游链**(P2/P3a SHA、股票、事实集合)产出了
+#: 被执行的工件。严格键集使 v1 形状档案在 v2 门下**结构性**不可验证(义务 e)。
+_ARCHIVE_SCHEMA = "news_decision_archive_v2"
 #: 档案顶层严格键集(archive-review Major:多/少键=拒)
 _ARCHIVE_KEYS = frozenset({
     "archive_schema", "decision_id", "execution_id", "contract", "contract_hash",
-    "artifact_hash", "bundle_hash", "final_registry_hash", "outcome",
+    "artifact_hash", "bundle_hash", "final_registry_hash", "assembly", "outcome",
     "outcome_hash", "evaluation", "records", "selected_provenance",
     "ledger_head_at_seal", "archive_sha256",
 })
@@ -562,20 +595,39 @@ def _archive_path(archive_dir, decision_id: str, execution_id: str) -> Path:
 
 def seal_decision_archive(bundle: dict, artifact: D7DecisionArtifact, *,
                           ledger_dir, prov_dir, contract: NewsScoringContract,
-                          archive_dir) -> dict:
+                          archive_dir, assembly) -> dict:
     """联合验证 → 密封**本执行**的档案(news 席切片)+ **账本链头外锚**
-    (BINDING #6)。archive_sha256 = 全 SHA-256 over {契约/工件/outcome/评估/
-    记录/选定出处行/封印时账本链头};原子 fsync 写盘。**write-once +
+    (BINDING #6)。archive_sha256 = 全 SHA-256 over {契约/工件/**装配身份**/
+    outcome/评估/记录/选定出处行/封印时账本链头};原子 fsync 写盘。**write-once +
     first-write-wins per (decision, execution)**(archive-review B1 +
     re-review#4 P1-a):档案按执行独立不可变——已有档案仅在重推导档案**逐字节
     完全相同**的幂等重试时返回,任何不同一律拒;成功执行的封存永不被失败执行
-    的档案堵死(不同文件)。"""
+    的档案堵死(不同文件)。
+
+    P4a(义务 a-d):`assembly` REQUIRED 无默认——P3b 的 `AssemblyProvenance`,
+    先验工件后经 `require_assembly_for` 绑定,再与账本决策行钉定的装配链逐字节
+    对账;档案封入 `assembly.payload`(schema v2),读档重算重验。档案从此自证
+    **哪条上游链**(P2/P3a SHA、股票、事实集合)产出了被执行的工件。"""
     # re-review#16 P1:seal 只消费 verify 产出的**完整独立 verified 归档载荷**,
-    # 除追加 `ledger_head_at_seal` 外**绝不回读任何 live 输入**(bundle/contract/
-    # artifact 都不读)——验证后回调污染 live 输入到不了盘。
-    verified = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
-                                       prov_dir=prov_dir, contract=contract)["verified"]
-    payload = {**verified, "ledger_head_at_seal": ledger_head(ledger_dir)}
+    # 除追加 `assembly`/`ledger_head_at_seal` 外**绝不回读任何 live 输入**(bundle/
+    # contract/artifact 都不读)——验证后回调污染 live 输入到不了盘。
+    res = verify_execution_bundle(bundle, artifact, ledger_dir=ledger_dir,
+                                  prov_dir=prov_dir, contract=contract)
+    verified = res["verified"]
+    # P4a 义务 a/b:装配出处 REQUIRED 无默认;绑定到 verify 内部产出的**独立可信
+    # 工件副本**(义务 b 的"先验后绑"——验证发生在 verify_execution_bundle 内,
+    # 且必须如此:在 seal 入口自行 verify_d7_artifact 会在 contract/outcome 快照
+    # **之前**引入一个 registry 回调点,重新打开 GPT #23 P1#1 的时序类)
+    try:
+        assembly = require_assembly_for(assembly, res["verified_artifact"])
+    except ValueError as e:
+        raise RegistryError(f"封档装配出处过门失败:{e}") from e
+    # P4a 义务 c 封档端:封存的链必须逐字节 = 账本钉定的链;链头锚取**同一快照**
+    # 的链尾(决策+承诺行必已在链内 → 非空;锚祖先规则 seq≤ 由此天然满足)
+    chain = _read_chain(_ledger_path(ledger_dir))
+    _require_ledger_assembly(chain, verified["decision_id"], assembly)
+    payload = {**verified, "assembly": assembly.payload,
+               "ledger_head_at_seal": chain[-1]["entry_hash"]}
     archive = {**payload, "archive_sha256": seal_hash(payload)}
     path = _archive_path(archive_dir, verified["decision_id"], verified["execution_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -635,8 +687,9 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
         raise RegistryError("决策档案缺失(re-review#21 静态错误)")
     archive = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(archive, dict) or set(archive) != _ARCHIVE_KEYS:
-        raise RegistryError("档案顶层键集不符 news_decision_archive_v1 schema"
-                            "(archive-review Major;多/少键=拒)")
+        raise RegistryError("档案顶层键集不符 news_decision_archive_v2 schema"
+                            "(archive-review Major;多/少键=拒——v1 形状档案"
+                            "[无 assembly]在此结构性不可验证,P4a 义务 e)")
     body = {k: v for k, v in archive.items() if k != "archive_sha256"}
     verify_sealed(body, archive.get("archive_sha256", ""),
                   field_name="archive_sha256")
@@ -658,6 +711,14 @@ def _load_and_verify_archive_file(decision_id: str, execution_id: str,
     if archive["final_registry_hash"] != v_final_registry_hash:
         raise RegistryError("档案 final_registry_hash 与提供工件的注册表不符"
                             "(archive-review Major)")
+    # P4a 义务 d 读档端:档案封存的装配身份**重算重验**(recompute-not-trust)、
+    # 绑定到已验工件、并在**同一份** `chain` 快照上对账账本钉定的链
+    try:
+        recovered_assembly = verify_assembly_provenance(archive["assembly"])
+        require_assembly_for(recovered_assembly, artifact)
+    except ValueError as e:
+        raise RegistryError(f"档案装配身份验证失败:{e}(P4a 义务 d)") from e
+    _require_ledger_assembly(chain, decision_id, recovered_assembly)
     # outcome 从封存字段重建——NewsLegOutcome 构造即重跑 M3⁴ 矩阵自验
     o = archive["outcome"]
     outcome = NewsLegOutcome(
@@ -791,6 +852,17 @@ def recover_and_seal_success_archive(decision_id: str,
         return load_and_verify_execution_archive(
             decision_id, execution_id, artifact, ledger_dir=ledger_dir,
             prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)
+    # P4a:装配身份从**账本决策行**取回(义务 c 内嵌完整载荷正为此刻——record
+    # 与 seal 之间崩溃时装配只存于账本;纯盘上状态自证,恢复无需调用方供给),
+    # 重算重验 + 绑定到已验工件后交给正常封印(seal 内再对账,幂等)
+    decision_row = _find_decision(chain, decision_id)
+    if decision_row is None:
+        raise RegistryError("恢复:账本无本决策注册行——无装配身份可恢复,拒(P4a)")
+    try:
+        assembly = verify_assembly_provenance(decision_row["assembly"])
+        assembly = require_assembly_for(assembly, artifact)
+    except ValueError as e:
+        raise RegistryError(f"恢复:账本装配身份验证失败:{e}(P4a)") from e
     all_rows = read_execution_provenance(prov_dir)
     f_row = _resolve_terminal(all_rows, execution_id=execution_id,
                               decision_id=decision_id, leg="factor")
@@ -857,7 +929,7 @@ def recover_and_seal_success_archive(decision_id: str,
     try:
         return seal_decision_archive(bundle, artifact, ledger_dir=ledger_dir,
                                      prov_dir=prov_dir, contract=contract,
-                                     archive_dir=archive_dir)
+                                     archive_dir=archive_dir, assembly=assembly)
     except ArchiveWriteOnceConflictError:
         # re-review#6 P2:入口存在检查与封存不在同一锁内——并发的恢复/封存
         # 赢了竞争后账本又合法增长,本次重建的锚更晚 → write-once 冲突。输家

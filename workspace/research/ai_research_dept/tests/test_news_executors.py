@@ -123,7 +123,7 @@ def _execute(tmp_path, art=None, decision_id="d1", mode="primary_horizon",
              prov_sub="prov"):
     art = art or _artifact_full(decision_id)
     try:
-        record_decision(tmp_path / "ledger", decision_id, art)
+        _rec(tmp_path / "ledger", decision_id, art)
     except RegistryError:
         pass                                            # already recorded (retry)
     calls = calls if calls is not None else []
@@ -137,6 +137,13 @@ def _execute(tmp_path, art=None, decision_id="d1", mode="primary_horizon",
 
 
 # --------------------------------------------------- frozen contract slice
+
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+
 
 class TestContract:
     def test_valid_primary(self):
@@ -200,7 +207,7 @@ class TestPayloadContent:
             run_news_two_legs,
         )
         art = _artifact_full()
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         got = []
         bare = {"facts": [EvidenceRef(rid) for rid, r in
                           sorted(art.final_registry.records.items())
@@ -255,7 +262,7 @@ class TestProvenance:
         def boom(msgs):
             raise ConnectionError("transport down")
         art = _artifact_full()
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         out = execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=boom)
@@ -287,7 +294,7 @@ class TestProvenance:
         def boom(msgs):
             raise ConnectionError("down")
         art = _artifact_full("d1")
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         out1 = execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=boom)
@@ -402,7 +409,7 @@ class TestEmptyContentLock:
 class TestMalformedEnvelope:
     def _run_with_reply(self, tmp_path, reply_obj):
         art = _artifact_full()
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         return execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=lambda m: reply_obj)
@@ -429,7 +436,7 @@ class TestMalformedEnvelope:
         # attempt began, terminal write fails -> execute must RAISE, never return
         import workspace.research.ai_research_dept.engine.news_executors as mod
         art = _artifact_full()
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         real = mod._persist_execution_provenance
 
         def flaky(*a, **kw):

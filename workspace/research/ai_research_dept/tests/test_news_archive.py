@@ -35,6 +35,9 @@ from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E4
 from workspace.research.ai_research_dept.engine.news_seal import (  # noqa: E402
     SealError, seal_hash,
 )
+from workspace.research.ai_research_dept.tests.assembly_fixtures import (  # noqa: E402
+    asm_for,
+)
 
 CUT = "2025-01-27 18:00:00"
 
@@ -128,7 +131,7 @@ def _contract():
 
 def _setup(tmp_path, *, art_fn=_artifact_full, decision_id="d1", call_fn=None):
     art = art_fn(decision_id)
-    record_decision(tmp_path / "ledger", decision_id, art)
+    _rec(tmp_path / "ledger", decision_id, art)
     bundle = execute_news_decision(
         art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
         decision_id=decision_id, contract=_contract(),
@@ -191,11 +194,19 @@ def _reeval(bundle, art, record):
 
 # --------------------------------------------------- happy paths
 
+def _rec(ledger_dir, decision_id, art):
+    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
+    # derive a valid one from the artifact (deterministic -> record/seal match)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
+    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+
+
 class TestSealAndVerify:
     def test_success_archive_round_trip(self, tmp_path):
         art, bundle = _setup(tmp_path)
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert len(archive["archive_sha256"]) == 64
         assert archive["evaluation"]["news_final"] == 74.0
         loaded = load_and_verify_decision_archive(
@@ -207,7 +218,8 @@ class TestSealAndVerify:
         # joint empty-penalty tuple sealed and re-verified
         art, bundle = _setup(tmp_path, art_fn=_artifact_context_only)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["outcome"]["penalty_leg_status"] == "empty_success"
@@ -226,7 +238,8 @@ class TestSealAndVerify:
         art, bundle = _setup(tmp_path, call_fn=boom)
         assert bundle["outcome"].news_status == "hard_failed"
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         loaded = load_and_verify_execution_archive(
             "d1", bundle["execution_id"], art, **_dirs(tmp_path),
             archive_dir=tmp_path / "arch")
@@ -485,7 +498,8 @@ class TestArchiveIntegrity:
     def test_archive_file_tamper_refused(self, tmp_path):
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["evaluation"]["news_final"] = 99.0
@@ -506,11 +520,12 @@ class TestArchiveIntegrity:
         )
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         (tmp_path / "ledger" / "decision_ledger.jsonl").unlink()
         other = _artifact_full("d0")                    # prepend a foreign decision
-        record_decision(tmp_path / "ledger", "d0", other)
-        record_decision(tmp_path / "ledger", "d1", art) # same fields, new chain
+        _rec(tmp_path / "ledger", "d0", other)
+        _rec(tmp_path / "ledger", "d1", art) # same fields, new chain
         with pytest.raises((RegistryError, LegIntegrityError)):
             load_and_verify_decision_archive("d1", art, **_dirs(tmp_path),
                                              archive_dir=tmp_path / "arch")
@@ -520,8 +535,9 @@ class TestArchiveIntegrity:
         # an ancestor — verification must still pass (anchor ≠ freeze)
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
-        record_decision(tmp_path / "ledger", "d2", _artifact_full("d2"))
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
+        _rec(tmp_path / "ledger", "d2", _artifact_full("d2"))
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["decision_id"] == "d1"
@@ -529,7 +545,8 @@ class TestArchiveIntegrity:
     def test_wrong_contract_refused(self, tmp_path):
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         other = NewsScoringContract(schema_id="c16_news_horizon_v1",
                                     output_mode="primary_horizon",
                                     primary_decision_horizon="next_open")
@@ -555,7 +572,8 @@ class TestWriteOnce:
         # even reaches the archive; the sealed archive stays intact
         art, bundle1 = _setup(tmp_path)
         first = seal_decision_archive(bundle1, art, **_dirs(tmp_path),
-                                      archive_dir=tmp_path / "arch")
+                                      archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         with pytest.raises(RegistryError, match="成功执行唯一"):
             execute_news_decision(
                 art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
@@ -576,7 +594,8 @@ class TestWriteOnce:
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=_call_fn())
         seal_decision_archive(good, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["outcome"]["news_status"] == "success"
@@ -595,12 +614,14 @@ class TestWriteOnce:
             raise ConnectionError("down")
         art, fail_bundle = _setup(tmp_path, call_fn=boom)
         seal_decision_archive(fail_bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         good = execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=_call_fn())
         seal_decision_archive(good, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")   # NOT blocked
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))   # NOT blocked
         canonical = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert canonical["outcome"]["news_status"] == "success"
@@ -620,7 +641,8 @@ class TestWriteOnce:
             raise ConnectionError("down")
         art, fail_bundle = _setup(tmp_path, call_fn=boom)
         seal_decision_archive(fail_bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         execute_news_decision(
             art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d1", contract=_contract(), call_fn=_call_fn())
@@ -664,7 +686,8 @@ class TestCrashRecovery:
         )
         art, bundle = _setup(tmp_path)
         sealed = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                       archive_dir=tmp_path / "arch")
+                                       archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         recovered = recover_and_seal_success_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert recovered == sealed
@@ -690,8 +713,9 @@ class TestCrashRecovery:
         )
         art, bundle = _setup(tmp_path)
         sealed = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                       archive_dir=tmp_path / "arch")
-        record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+                                       archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
+        _rec(tmp_path / "ledger", "d9", _artifact_full("d9"))
         recovered = recover_and_seal_success_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert recovered == sealed
@@ -725,7 +749,8 @@ class TestContractCommitmentBinding:
             seal_decision_archive(
                 bundle, art, ledger_dir=tmp_path / "ledger",
                 prov_dir=tmp_path / "prov", contract=alt,
-                archive_dir=tmp_path / "arch")
+                archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert not list((tmp_path / "arch").glob("news_decision_*.json"))
 
     def test_recovery_with_different_primary_horizon_refused(self, tmp_path):
@@ -751,7 +776,8 @@ class TestContractCommitmentBinding:
         # cannot read the canonical archive either
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         with pytest.raises(RegistryError, match="契约"):
             load_and_verify_decision_archive(
                 "d1", art, ledger_dir=tmp_path / "ledger",
@@ -779,7 +805,7 @@ class TestExactTypeBoundaries:
         # the reviewer's flow: record_decision -> execute with the evil
         # contract — refused at entry; NOTHING reaches provenance or ledger
         art = _artifact_full("d1")
-        record_decision(tmp_path / "ledger", "d1", art)
+        _rec(tmp_path / "ledger", "d1", art)
         with pytest.raises(RegistryError, match="子类"):
             execute_news_decision(
                 art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
@@ -800,7 +826,8 @@ class TestExactTypeBoundaries:
             seal_decision_archive(
                 bundle, art, ledger_dir=tmp_path / "ledger",
                 prov_dir=tmp_path / "prov", contract=self._evil(),
-                archive_dir=tmp_path / "arch")
+                archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         with pytest.raises(RegistryError, match="子类"):
             recover_and_seal_success_archive(
                 "d1", art, ledger_dir=tmp_path / "ledger",
@@ -905,7 +932,7 @@ class TestExactTypeBoundaries:
         with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
             verify_d7_artifact(evil)
         with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
-            record_decision(tmp_path / "ledger", "d1", evil)
+            _rec(tmp_path / "ledger", "d1", evil)
 
     def test_polymorphic_frozenset_field_neutralized(self, tmp_path):
         # archive-re-review#11 P0 (the reviewer's probe): a frozenset SUBCLASS
@@ -1079,7 +1106,8 @@ class TestExactTypeBoundaries:
         assert v["records"] is not bundle["records"]
         assert v["selected_provenance"]["factor"] is not bundle["selected_provenance"]["factor"]
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert archive["outcome"]["output_mode"] == v["outcome"]["output_mode"]
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
@@ -1090,7 +1118,8 @@ class TestExactTypeBoundaries:
         # come from the DISK-resolved terminal rows, not the caller's bundle.
         art, bundle = _setup(tmp_path)
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         rows = _prov_rows(tmp_path)
         f_term = next(r for r in rows if r["leg"] == "factor"
                       and r["verdict"] in _TERMINALS)
@@ -1117,7 +1146,8 @@ class TestExactTypeBoundaries:
         bundle["selected_provenance"] = _EvilSel(dict(bundle["selected_provenance"]))
         with pytest.raises(RegistryError, match="非纯 JSON"):
             seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                  archive_dir=tmp_path / "arch")
+                                  archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert fired["n"] == 0                          # get/items never called
         assert not list((tmp_path / "arch").glob("*.json"))
 
@@ -1146,7 +1176,8 @@ class TestExactTypeBoundaries:
                 seal_decision_archive(
                     bundle, art, ledger_dir=tmp_path / leg / "ledger",
                     prov_dir=tmp_path / leg / "prov", contract=_contract(),
-                    archive_dir=tmp_path / leg / "arch")
+                    archive_dir=tmp_path / leg / "arch",
+            assembly=asm_for(art))
         assert fired["n"] == 0                          # items()/__ne__ never called
 
     def test_registry_items_callback_cannot_swap_verified_base_facts(self, tmp_path):
@@ -1185,7 +1216,8 @@ class TestExactTypeBoundaries:
         # before it reaches any `==` (which would call a malicious __eq__).
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         fired = {"eq": False}
 
         class _EvilId(str):
@@ -1234,7 +1266,8 @@ class TestExactTypeBoundaries:
         object.__setattr__(art.source_registry, "records",
                            _SwapMap(genuine_records))
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert archive["bundle_hash"] == real_bundle.bundle_hash
         assert fired["acc"] == 0                        # evil accessors never ran
         # the sealed archive is genuine — restore the clean artifact and load it
@@ -1273,7 +1306,8 @@ class TestExactTypeBoundaries:
                            _SwapMap(dict(art.source_registry.records)))
         archive = seal_decision_archive(
             bundle, art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
-            contract=contract, archive_dir=tmp_path / "arch")
+            contract=contract, archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert fired["n"] == 0                          # hooks never ran
         assert archive["contract"]["output_mode"] == "primary_horizon"
 
@@ -1302,7 +1336,8 @@ class TestExactTypeBoundaries:
         object.__setattr__(art.source_registry, "records",
                            _SwapMap(dict(art.source_registry.records)))
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert fired["n"] == 0                          # __eq__ never ran
         assert archive["outcome"]["penalty_leg_status"] == "success"
 
@@ -1352,7 +1387,8 @@ class TestExactTypeBoundaries:
         fired["eq"] = fired["hash"] = 0                 # ignore insertion-time probes
         with pytest.raises(RegistryError, match="键须恰 str"):
             seal_decision_archive(poisoned, art, **_dirs(tmp_path),
-                                  archive_dir=tmp_path / "arch")
+                                  archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert fired["eq"] == 0                         # key __eq__ never ran
         assert not list((tmp_path / "arch").glob("*.json"))
 
@@ -1388,7 +1424,7 @@ class TestExactTypeBoundaries:
         art, _ = _setup(tmp_path)
         evil = _EvilStr("d1")
         for call in (
-            lambda: record_decision(tmp_path / "ledger", evil, art),
+            lambda: _rec(tmp_path / "ledger", evil, art),
             lambda: require_recorded(tmp_path / "ledger", evil, art),
             lambda: run_news_two_legs(
                 art, ledger_dir=tmp_path / "ledger", decision_id=evil,
@@ -1467,7 +1503,8 @@ class TestExactTypeBoundaries:
         bundle["selected_provenance"] = _Liar(dict(bundle["selected_provenance"]))
         with pytest.raises(RegistryError, match="非纯 JSON"):
             seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                  archive_dir=tmp_path / "arch")
+                                  archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert fired["meta_eq"] is False and fired["get"] is False
 
     def test_injected_chain_list_subclass_refused(self, tmp_path):
@@ -1510,7 +1547,8 @@ class TestExactTypeBoundaries:
                 seal_decision_archive(
                     bundle, art, ledger_dir=tmp_path / leg / "ledger",
                     prov_dir=tmp_path / leg / "prov", contract=_contract(),
-                    archive_dir=tmp_path / leg / "arch")
+                    archive_dir=tmp_path / leg / "arch",
+            assembly=asm_for(art))
         assert fired["n"] == 0                          # items() never called
 
     def test_selected_row_nonjson_value_refused(self, tmp_path):
@@ -1555,7 +1593,8 @@ class TestExactTypeBoundaries:
         art, bundle = _setup(tmp_path)
         genuine_final = bundle["evaluation"]["news_final"]
         archive = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                        archive_dir=tmp_path / "arch")
+                                        archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert archive["evaluation"]["news_final"] == genuine_final
         assert archive["evaluation"] is not bundle["evaluation"]
         loaded = load_and_verify_decision_archive(
@@ -1808,9 +1847,10 @@ class TestExactTypeBoundaries:
             out = real(chain, decision_id)          # A's snapshot resolved here
             if not state.get("raced"):
                 state["raced"] = True               # B: grow ledger THEN seal
-                record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+                _rec(tmp_path / "ledger", "d9", _artifact_full("d9"))
                 state["sealed"] = seal_decision_archive(
-                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
+                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
             return out
         try:
             na._find_success_commitment = racing_find
@@ -1837,8 +1877,9 @@ class TestExactTypeBoundaries:
             if not state.get("raced"):
                 state["raced"] = True               # B wins the race here:
                 state["sealed"] = seal_decision_archive(
-                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
-                record_decision(tmp_path / "ledger", "d9", _artifact_full("d9"))
+                    bundle, art, **_dirs(tmp_path), archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
+                _rec(tmp_path / "ledger", "d9", _artifact_full("d9"))
             return real_read(prov_dir)
         try:
             na.read_execution_provenance = racing_read
@@ -1853,9 +1894,11 @@ class TestExactTypeBoundaries:
         # byte-identical, so the retry returns the existing archive
         art, bundle = _setup(tmp_path)
         first = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                      archive_dir=tmp_path / "arch")
+                                      archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         again = seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                                      archive_dir=tmp_path / "arch")
+                                      archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         assert again == first
         assert len(list((tmp_path / "arch").glob("news_decision_*.json"))) == 1
 
@@ -1871,14 +1914,16 @@ class TestLoadIdentity:
         )
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         art2 = _artifact_full("d2")
-        record_decision(tmp_path / "ledger", "d2", art2)
+        _rec(tmp_path / "ledger", "d2", art2)
         bundle2 = execute_news_decision(
             art2, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
             decision_id="d2", contract=_contract(), call_fn=_call_fn())
         seal_decision_archive(bundle2, art2, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art2))
         src = _archive_path(tmp_path / "arch", "d1", bundle["execution_id"])
         _archive_path(tmp_path / "arch", "d2",
                       bundle2["execution_id"]).write_bytes(src.read_bytes())
@@ -1891,7 +1936,8 @@ class TestLoadIdentity:
         # the schema-value pin must be the kill, not just the seal
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["archive_schema"] = "evil_v2"
@@ -1905,7 +1951,8 @@ class TestLoadIdentity:
     def test_archive_extra_key_reseal_refused(self, tmp_path):
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["note"] = "x"
@@ -1927,7 +1974,8 @@ class TestLoadIdentity:
         # rebuilt canonical payload field-for-field
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["outcome"]["unverified_alias"] = {"x": 1}
@@ -1939,7 +1987,8 @@ class TestLoadIdentity:
     def test_selected_provenance_alias_key_reseal_refused(self, tmp_path):
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["selected_provenance"]["unverified_alias"] = {"x": 1}
@@ -1958,7 +2007,8 @@ class TestLoadIdentity:
         )
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         dec_row = lookup_decision(tmp_path / "ledger", "d1")
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
@@ -1975,7 +2025,8 @@ class TestLoadIdentity:
         # execution commitment, so genesis is never a legal anchored head
         art, bundle = _setup(tmp_path)
         seal_decision_archive(bundle, art, **_dirs(tmp_path),
-                              archive_dir=tmp_path / "arch")
+                              archive_dir=tmp_path / "arch",
+            assembly=asm_for(art))
         p = next((tmp_path / "arch").glob("news_decision_*.json"))
         doc = json.loads(p.read_text(encoding="utf-8"))
         doc["ledger_head_at_seal"] = "0" * 64
