@@ -99,6 +99,32 @@ _TYPING_IDENTITY_FIELDS = ("event_type", "verification_status", "content_kind",
                            "direction", "is_rumor")
 
 
+def _require_open_calendar(cal) -> pd.DatetimeIndex:
+    """GPT-P2 re-review#6 (P0): the strict-visibility guarantee only holds for a CANONICAL
+    day-granular calendar. An intra-day entry breaks it: with `ann_date=2025-01-27` (00:00)
+    and a calendar entry `2025-01-27 09:30`, `strictly_next_open_trade_day` returns 09:30
+    (strictly after 00:00) — i.e. the SAME day — and a same-day rename becomes visible
+    again. So the calendar is validated, never silently normalized/coerced: exact
+    `DatetimeIndex`, tz-naive (CN-naive), non-empty, no NaT, sorted, unique, and EVERY
+    entry at midnight."""
+    if not isinstance(cal, pd.DatetimeIndex):
+        raise ValueError("open_calendar 须为 pd.DatetimeIndex(交易日索引)——拒")
+    if cal.tz is not None:
+        raise ValueError("open_calendar 须为 tz-naive(CN-naive 墙钟)——拒")
+    if len(cal) == 0:
+        raise ValueError("open_calendar 为空——无法判定可见性,拒(fail-closed)")
+    if cal.hasnans:
+        raise ValueError("open_calendar 含 NaT——拒")
+    if not cal.is_monotonic_increasing:
+        raise ValueError("open_calendar 须升序排序——拒(锚点依赖有序 searchsorted)")
+    if cal.has_duplicates:
+        raise ValueError("open_calendar 须去重——拒")
+    if (cal.normalize() != cal).any():
+        raise ValueError("open_calendar 每项须为午夜日级时间戳——含盘中时刻会让"
+                         "同日公告被判为'严格次日可见',拒(GPT-P2 re-review#6 P0)")
+    return cal
+
+
 def _as_of_names(namechange, cut, open_calendar) -> dict:
     """PIT name resolution — **fail-closed omit** (GPT-P2 re-review#2, user-decided). A
     ts_code gets an as-of name ONLY if `namechange` gives exactly ONE name that is, at
@@ -117,6 +143,7 @@ def _as_of_names(namechange, cut, open_calendar) -> dict:
     # GPT-P2 re-review#4: compare at DAY granularity. namechange dates are YYYYMMDD (they
     # parse to 00:00:00), while `cut` is a wall-clock timestamp — a raw `cut <= end_date`
     # wrongly excluded a name whose end_date IS the cutoff day (18:00 <= 00:00 is False).
+    open_calendar = _require_open_calendar(open_calendar)   # validate BEFORE any early return
     cut_d = pd.Timestamp(cut).normalize()
 
     def _d(v):
@@ -137,8 +164,11 @@ def _as_of_names(namechange, cut, open_calendar) -> dict:
         s = _d(r.get("start_date"))
         e_raw = r.get("end_date")
         e = (_d(e_raw) if not (e_raw is None or pd.isna(e_raw)) else None)
+        # NO normalize() here — the calendar is validated day-granular, so the anchor's
+        # output IS the visible DAY. Normalizing was what masked the intra-day-calendar
+        # bug (it pulled a same-day 09:30 entry back to the same day). GPT-P2 #6.
         v = visible_from.iloc[i]
-        v = pd.Timestamp(v).normalize() if pd.notna(v) else pd.NaT
+        v = pd.Timestamp(v) if pd.notna(v) else pd.NaT
         nc.setdefault(tc, []).append((s, e, v, str(r["name"]).strip()))
     out: dict[str, str] = {}
     for tc, rows in nc.items():

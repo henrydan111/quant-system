@@ -347,6 +347,32 @@ def test_p0_same_day_announcement_is_not_visible(tmp_path):
                                for c in a["route"]["subject_codes"]}
 
 
+@pytest.mark.parametrize("bad_cal, why", [
+    (pd.DatetimeIndex(["2025-01-27 09:30", "2025-01-28"]), "午夜"),      # intra-day entry
+    (pd.DatetimeIndex(["2025-01-28", "2025-01-27"]), "升序"),            # unsorted
+    (pd.DatetimeIndex(["2025-01-27", "2025-01-27"]), "去重"),            # duplicated
+    (pd.DatetimeIndex([]), "为空"),                                      # empty
+    (pd.DatetimeIndex(["2025-01-27", pd.NaT]), "NaT"),                   # NaT
+])
+def test_p0_non_canonical_calendar_refused(tmp_path, bad_cal, why):
+    # GPT-P2 re-review#6 (P0): the strict-visibility guarantee only holds for a canonical
+    # day-granular calendar. The reviewer's probe: a '2025-01-27 09:30' entry makes a
+    # SAME-DAY announcement look 'strictly next open' and re-opens same-day resolution.
+    # The calendar shape is validated, never silently coerced.
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "莱茵体育",
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20250101",
+         "end_date": None, "ann_date": "20250127", "change_reason": "更名"},
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告"])
+    p1 = _p1(tmp_path)
+    with pytest.raises(ValueError, match=why):
+        assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
+                           stock_basic=sb, namechange=nc, open_calendar=bad_cal,
+                           industry_terms=IND, concept_terms=CON, store_dir=tmp_path)
+
+
 def test_p0_visible_from_strictly_next_open_day(tmp_path):
     # ...and the SAME rename announced on the previous open trading day (Fri 2025-01-24)
     # IS visible at the Monday 2025-01-27 cutoff.
