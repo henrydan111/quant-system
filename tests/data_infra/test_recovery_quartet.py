@@ -2370,9 +2370,25 @@ def test_the_raw_head_primitive_is_reachable_only_from_the_gate_and_the_writer()
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
                     and sub.func.attr == "_read_head":
                 callers.add(name)
-    assert callers <= {"_assert_durable_state", "_append", "_genesis"}, (
+    assert callers == {"_assert_durable_state", "_append"}, (
         f"_read_head is called from {sorted(callers)} — the raw head primitive must stay confined to "
-        f"the chokepoint and the writer")
+        f"EXACTLY the chokepoint and the writer (an allowed-but-unused caller is a door left open)")
+
+
+def test_the_genesis_primitive_has_an_exact_caller_set():
+    """Same tightening for the other raw primitive, per the final-budget verdict: allowing a caller
+    that does not exist is a door standing open for no reason."""
+    import ast
+    _, defs = _ledger_class_defs()
+    callers = set()
+    for name, _kind, node in defs:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
+                    and sub.func.attr == "_genesis":
+                callers.add(name)
+    assert callers == {"_load", "_read_head"}, (
+        f"_genesis is called from {sorted(callers)} — expected exactly the chain reader and the head "
+        f"primitive")
 
 
 def test_properties_are_enumerated_at_all():
@@ -2388,3 +2404,56 @@ def test_properties_are_enumerated_at_all():
     assert found == [("p", True)], f"the property-detection logic does not see properties: {found}"
     touched = {s.attr for s in ast.walk(cls) if isinstance(s, ast.Attribute)}
     assert "_chain_cache" in touched, "an attribute read inside a property is not detected"
+
+
+# ── strict integer counts, warm AND cold (GPT chokepoint round 2 P1-1) ────────────────────────────
+# ACCURACY NOTE: I reported these exact verifications in the round-1 fold's commit message but only
+# committed the AST tests — the second time in this arc I described a check I had not checked in. The
+# matrix is here now.
+
+@pytest.mark.parametrize("bad", [1.5, True, False, "1", None, [1], 2.0])
+@pytest.mark.parametrize("cache", ["warm", "cold"])
+def test_head_n_must_be_an_exact_integer(rig, bad, cache):
+    """`int(1.5) == 1`, so a one-row ledger with head n=1.5 passed the count check and then extended to
+    sequences [1, 2.5]. bool is an int SUBCLASS and must not pass as a count either."""
+    rp, L = rig
+    L.event("one")
+    L._load()
+    head = json.loads(L.head_path.read_text(encoding="utf-8"))
+    head["n"] = bad
+    L.rp.write_json(L.head_path, head)
+    if cache == "cold":
+        L._chain_cache = None
+    with pytest.raises(rl.LedgerError):
+        L._load()
+
+
+@pytest.mark.parametrize("bad", [1.5, True, "1", None, 2.0])
+@pytest.mark.parametrize("cache", ["warm", "cold"])
+def test_row_seq_must_be_an_exact_integer(rig, bad, cache):
+    """The same coercion applied to every row's seq — a counter that is not a counter."""
+    rp, L = rig
+    for i in range(3):
+        L.event("e%d" % i)
+    L._load()
+    lines = L.ledger_path.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[-1])
+    rec["seq"] = bad
+    lines[-1] = json.dumps(rec)
+    L.ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if cache == "cold":
+        L._chain_cache = None
+    with pytest.raises(rl.LedgerError):
+        L._load()
+
+
+def test_a_legitimate_integer_head_still_passes(rig):
+    """The strictness must not break the normal path: real appends produce real ints throughout."""
+    rp, L = rig
+    for i in range(4):
+        L.event("e%d" % i)
+    rows = L._load()
+    head = json.loads(L.head_path.read_text(encoding="utf-8"))
+    assert type(head["n"]) is int and head["n"] == len(rows)
+    assert all(type(r["seq"]) is int for r in rows)
+    assert [r["seq"] for r in rows] == list(range(1, len(rows) + 1))
