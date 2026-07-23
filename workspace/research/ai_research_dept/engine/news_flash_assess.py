@@ -58,6 +58,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
+from data_infra.pit_backend import strictly_next_open_trade_day  # noqa: E402
 from data_infra.text_store import load_text  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_cards import assess_flash  # noqa: E402
 from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
@@ -98,43 +99,56 @@ _TYPING_IDENTITY_FIELDS = ("event_type", "verification_status", "content_kind",
                            "direction", "is_rumor")
 
 
-def _as_of_names(namechange, cut) -> dict:
+def _as_of_names(namechange, cut, open_calendar) -> dict:
     """PIT name resolution — **fail-closed omit** (GPT-P2 re-review#2, user-decided). A
     ts_code gets an as-of name ONLY if `namechange` gives exactly ONE name that is, at
-    `cut`, both (a) IN EFFECT (`start_date <= cut <= end_date|∞`) and (b) ANNOUNCED
-    (`ann_date <= cut` — the project's PIT visibility anchor; a name in effect but not yet
-    announced is NOT usable). Any code with 0 covering names, >1 (gap/overlap), an
-    unparseable/missing start/ann date, or entirely absent from namechange gets **NO name
-    alias** — it still resolves by numeric A/H code, just not by name. There is NO fallback
-    to the current `stock_basic.name` (that reopens the future-name leak: an empty
-    namechange would resolve every current — possibly future — name)."""
+    `cut`, both (a) IN EFFECT (`start_date <= cut <= end_date|∞`, inclusive DAY bounds) and
+    (b) PIT-VISIBLE. Any code with 0 covering names, >1 (gap/overlap), an unparseable/missing
+    start/ann date, or entirely absent from namechange gets **NO name alias** — it still
+    resolves by numeric A/H code, just not by name. There is NO fallback to the current
+    `stock_basic.name` (that reopens the future-name leak: an empty namechange would resolve
+    every current — possibly future — name).
+
+    GPT-P2 re-review#5 (P0): visibility is **STRICT**, per the repo's hard PIT contract
+    (CLAUDE.md §3.2, `effective_date > disclosure_date`): a rename announced on `ann_date`
+    is usable only from `strictly_next_open_trade_day(ann_date, open_calendar)` — a
+    SAME-DAY announcement does NOT resolve. `open_calendar` is REQUIRED; there is no
+    fail-open fallback to a day-inclusive `ann_date <= cut` comparison."""
     # GPT-P2 re-review#4: compare at DAY granularity. namechange dates are YYYYMMDD (they
     # parse to 00:00:00), while `cut` is a wall-clock timestamp — a raw `cut <= end_date`
     # wrongly excluded a name whose end_date IS the cutoff day (18:00 <= 00:00 is False).
-    # All four dates are normalized; start/end/ann are inclusive day bounds.
     cut_d = pd.Timestamp(cut).normalize()
 
     def _d(v):
         t = pd.to_datetime(str(v), errors="coerce")
         return t.normalize() if pd.notna(t) else pd.NaT
 
+    nc_df = namechange.reset_index(drop=True)
+    if nc_df.empty:
+        return {}
+    # STRICT visibility anchor: the name is knowable only from the first open trading day
+    # STRICTLY AFTER its announcement (the same function the PIT ledger is built on).
+    ann = pd.to_datetime(nc_df.get("ann_date"), errors="coerce")
+    visible_from = strictly_next_open_trade_day(ann, open_calendar)
+
     nc: dict[str, list] = {}
-    for _, r in namechange.iterrows():
+    for i, r in nc_df.iterrows():
         tc = str(r["ts_code"]).strip()
         s = _d(r.get("start_date"))
         e_raw = r.get("end_date")
         e = (_d(e_raw) if not (e_raw is None or pd.isna(e_raw)) else None)
-        a = _d(r.get("ann_date"))
-        nc.setdefault(tc, []).append((s, e, a, str(r["name"]).strip()))
+        v = visible_from.iloc[i]
+        v = pd.Timestamp(v).normalize() if pd.notna(v) else pd.NaT
+        nc.setdefault(tc, []).append((s, e, v, str(r["name"]).strip()))
     out: dict[str, str] = {}
     for tc, rows in nc.items():
-        covering = sorted({nm for (s, e, a, nm) in rows
-                           if pd.notna(s) and s <= cut_d       # in effect (inclusive)
+        covering = sorted({nm for (s, e, v, nm) in rows
+                           if pd.notna(s) and s <= cut_d       # in effect (inclusive day)
                            and (e is None or (pd.notna(e) and cut_d <= e))
-                           and pd.notna(a) and a <= cut_d})    # announced (PIT anchor)
+                           and pd.notna(v) and v <= cut_d})    # STRICTLY-next-open visible
         if len(covering) == 1:                                 # clean, unique → usable
             out[tc] = covering[0]
-        # else (0, gap/overlap, unannounced): omit → no name alias (numeric code still works)
+        # else (0, gap/overlap, not-yet-visible): omit → no name alias (numeric still works)
     return out
 
 
@@ -165,7 +179,7 @@ def _union_route(cluster, content_by_hash, registry, cut, industry_terms, concep
 
 
 def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
-                       stock_basic, namechange, industry_terms: frozenset,
+                       stock_basic, namechange, open_calendar, industry_terms: frozenset,
                        concept_terms: frozenset,
                        alias_version: str = "p2_asof", alias_valid_from: str = "2000-01-01",
                        store_dir=None, require_exists: bool = False) -> dict:
@@ -195,7 +209,7 @@ def assess_day_flashes(cutoff, *, ingest_class: str, typed_artifact,
     # that would resolve future-listed stocks. list_date/delist_date filtered at `cut`
     # (fail-closed on unparseable dates); name aliases are the PIT names in effect at
     # `cut` (from namechange), not the current stock_basic.name.
-    as_of_names = _as_of_names(namechange, cut)
+    as_of_names = _as_of_names(namechange, cut, open_calendar)
     registry = build_alias_registry(stock_basic, version=alias_version,
                                     valid_from=alias_valid_from, valid_to=None, cutoff=cut,
                                     as_of_names=as_of_names)
@@ -359,13 +373,14 @@ def main() -> int:
     # reference inputs are assembled from existing sources; kept in the CLI (not the core).
     # P2 builds the alias registry itself AS-OF the cutoff (P0), so the CLI supplies raw
     # stock_basic + the industry/concept term sets.
-    stock_basic, namechange, industry_terms, concept_terms = \
+    stock_basic, namechange, open_calendar, industry_terms, concept_terms = \
         _build_reference_inputs(args.cutoff)
     out_dir = Path(args.out_dir) if args.out_dir else C.OUT_ROOT / "nf_assessed_flash"
     artifact = assess_day_flashes(
         args.cutoff, ingest_class=args.ingest_class,
         typed_artifact=Path(args.typed_artifact), stock_basic=stock_basic,
-        namechange=namechange, industry_terms=industry_terms, concept_terms=concept_terms)
+        namechange=namechange, open_calendar=open_calendar,
+        industry_terms=industry_terms, concept_terms=concept_terms)
     path = write_assessed_flash_artifact(artifact, out_dir)
     logger.info("assessed %d flashes @ %s (%s) -> %s",
                 artifact["n_flashes"], artifact["cutoff_iso"], args.ingest_class, path)
@@ -379,8 +394,9 @@ def _build_reference_inputs(cutoff):
     Left as a thin seam; the per-source PIT details are wired when the offline P2 driver
     is first run for real."""
     raise NotImplementedError(
-        "P2 CLI reference assembly (stock_basic, namechange history, SW L1 industry-name "
-        "set, THS concept-name set) is wired at first offline run; the testable core "
+        "P2 CLI reference assembly (stock_basic, namechange history, the OPEN TRADING "
+        "CALENDAR from data/reference/trade_cal.parquet, SW L1 industry-name set, THS "
+        "concept-name set) is wired at first offline run; the testable core "
         "assess_day_flashes takes these injected")
 
 

@@ -84,10 +84,16 @@ def _p1(tmp_path):
                             store_dir=tmp_path)
 
 
+#: open trading days for the test window (the CLI loads the real trade_cal.parquet).
+#: 2025-01-27 is a Monday; the prior open day is Friday 2025-01-24.
+_CAL = pd.DatetimeIndex(pd.bdate_range("2025-01-02", "2025-03-31"))
+
+
 def _assess(tmp_path, typed, *, stock_basic=None, namechange=None, **kw):
     return assess_day_flashes(CUT, ingest_class="forward", typed_artifact=typed,
                               stock_basic=stock_basic if stock_basic is not None else _stock_basic(),
                               namechange=namechange if namechange is not None else _namechange(),
+                              open_calendar=_CAL,
                               industry_terms=IND, concept_terms=CON, store_dir=tmp_path, **kw)
 
 
@@ -232,6 +238,7 @@ def test_write_once_refuses_different_content(tmp_path):
     write_assessed_flash_artifact(a1, tmp_path / "out")            # idempotent
     a2 = assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
                             stock_basic=_stock_basic(), namechange=_namechange(),
+                            open_calendar=_CAL,
                             industry_terms=IND, concept_terms=frozenset({"消费", "大消费"}),
                             store_dir=tmp_path)
     if a2["artifact_sha256"] != a1["artifact_sha256"]:
@@ -322,6 +329,37 @@ def test_p1_importance_is_max_over_members(tmp_path):
     art = _assess(tmp_path, p1)
     assert art["n_flashes"] == 1
     assert art["assessed"][0]["typing"]["importance"] == 5   # max(1, 5), not the rep's
+
+
+def test_p0_same_day_announcement_is_not_visible(tmp_path):
+    # GPT-P2 re-review#5 (P0): the repo's hard PIT contract is effective > disclosure
+    # STRICTLY — a rename ANNOUNCED ON the cutoff day is not yet knowable and must NOT
+    # resolve (visibility starts at strictly_next_open_trade_day(ann_date)).
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "莱茵体育",
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20250101",
+         "end_date": None, "ann_date": "20250127", "change_reason": "更名"},  # ann == cut day
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告"])
+    art = _assess(tmp_path, _p1(tmp_path), stock_basic=sb, namechange=nc)
+    assert "000558.SZ" not in {c for a in art["assessed"]
+                               for c in a["route"]["subject_codes"]}
+
+
+def test_p0_visible_from_strictly_next_open_day(tmp_path):
+    # ...and the SAME rename announced on the previous open trading day (Fri 2025-01-24)
+    # IS visible at the Monday 2025-01-27 cutoff.
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "莱茵体育",
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20250101",
+         "end_date": None, "ann_date": "20250124", "change_reason": "更名"},
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告"])
+    art = _assess(tmp_path, _p1(tmp_path), stock_basic=sb, namechange=nc)
+    assert "000558.SZ" in {c for a in art["assessed"]
+                           for c in a["route"]["subject_codes"]}
 
 
 def test_p0_end_date_on_cutoff_day_still_resolves(tmp_path):
