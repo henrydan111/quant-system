@@ -106,7 +106,8 @@ def test_splits_importance_ge_4_positive_facts(tmp_path):
     assert art["artifact_schema"] == "nf_d7_split_v1" and art["n_splits"] == 1
     s = art["splits"][0]
     assert s["fact_occurrence_id"] == p2["assessed"][0]["cluster"]["fact_occurrence_id"]
-    assert s["attributes"]["fact"] == "签订 12 亿元大单"          # verbatim span
+    # the span is expanded to its enclosing sentence (here: the whole one-sentence source)
+    assert s["attributes"]["fact"] == "贵州茅台签订 12 亿元大单"
     assert "economic_linkage" not in s["attributes"]            # deferred in v1
     assert s["evidence_class"] in ("NFD", "NFI", "NFA")
 
@@ -152,10 +153,51 @@ def test_p1_span_must_be_str(tmp_path):
         _split(tmp_path, p2, rows, call_fn=_splitter(span=5))
 
 
-def test_p1_verbatim_span_accepted(tmp_path):
+def test_p1_negation_context_cannot_be_truncated(tmp_path):
+    # GPT-P3a re-review#2 (P1), the reviewer's probe: the span IS verbatim, but cutting it
+    # away from "It is false that" would invert the meaning and flow into
+    # factor_positive/event_materiality. The deterministic sentence expansion keeps it.
+    # (the subject name must be present so the flash routes to a stock and becomes a
+    # POSITIVE class — a nameless English flash routes to macro and is never split)
+    src = "It is false that 贵州茅台 signed a $12bn contract."
+    p2, rows = _pipeline(tmp_path, [src])
+    art = _split(tmp_path, p2, rows,
+                 call_fn=_splitter(span="贵州茅台 signed a $12bn contract"))
+    fact = art["splits"][0]["attributes"]["fact"]
+    assert fact == src                       # full sentence, negation intact
+    assert "It is false that" in fact
+
+
+def test_p1_attribution_context_preserved_cn(tmp_path):
+    # the Chinese equivalent: "有传闻称" must not be truncated off
+    src = "有传闻称贵州茅台签订 12 亿元大单。"
+    p2, rows = _pipeline(tmp_path, [src])
+    art = _split(tmp_path, p2, rows, call_fn=_splitter(span="贵州茅台签订 12 亿元大单"))
+    assert "有传闻称" in art["splits"][0]["attributes"]["fact"]
+
+
+def test_p1_expansion_is_the_sentence_not_the_whole_source(tmp_path):
+    # a multi-sentence source expands to the ENCLOSING sentence only
+    p2, rows = _pipeline(tmp_path, ["公司发布澄清公告。贵州茅台签订 12 亿元大单。后续待跟踪。"])
+    art = _split(tmp_path, p2, rows, call_fn=_splitter(span="贵州茅台签订 12 亿元大单"))
+    fact = art["splits"][0]["attributes"]["fact"]
+    assert fact == "贵州茅台签订 12 亿元大单。"
+    assert "澄清公告" not in fact and "后续待跟踪" not in fact
+
+
+def test_p1_decimal_is_not_a_sentence_boundary(tmp_path):
+    # an ASCII '.' between digits is a decimal, not a terminator
+    p2, rows = _pipeline(tmp_path, ["贵州茅台 revenue grew 12.5 percent this year."])
+    art = _split(tmp_path, p2, rows, call_fn=_splitter(span="grew 12.5 percent"))
+    assert art["splits"][0]["attributes"]["fact"] == \
+        "贵州茅台 revenue grew 12.5 percent this year."
+
+
+def test_p1_verbatim_span_accepted_and_expanded(tmp_path):
+    # a valid partial span is accepted, and the emitted fact is its enclosing sentence
     p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
     art = _split(tmp_path, p2, rows, call_fn=_splitter(span="贵州茅台签订"))
-    assert art["splits"][0]["attributes"]["fact"] == "贵州茅台签订"
+    assert art["splits"][0]["attributes"]["fact"] == "贵州茅台签订 12 亿元大单"
 
 
 # --------------------------------------------------- invariant 3: derived population
@@ -258,11 +300,13 @@ def test_tampered_artifact_refused(tmp_path):
 
 
 def test_write_once_refuses_different_content(tmp_path):
-    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    a1 = _split(tmp_path, p2, contents)
+    # two sentences -> spans in DIFFERENT sentences expand to different facts
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单。同日另公告回购计划。"])
+    a1 = _split(tmp_path, p2, rows, call_fn=_splitter(span="贵州茅台签订 12 亿元大单"))
     write_split_artifact(a1, tmp_path / "out")
     write_split_artifact(a1, tmp_path / "out")                 # idempotent
-    a2 = _split(tmp_path, p2, contents, call_fn=_splitter(span="贵州茅台"))  # different valid span
+    a2 = _split(tmp_path, p2, rows, call_fn=_splitter(span="回购计划"))
+    assert a2["artifact_sha256"] != a1["artifact_sha256"]
     with pytest.raises(SplitConflictError, match="write-once"):
         write_split_artifact(a2, tmp_path / "out")
 
