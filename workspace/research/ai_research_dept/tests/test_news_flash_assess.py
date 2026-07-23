@@ -373,6 +373,32 @@ def test_p0_non_canonical_calendar_refused(tmp_path, bad_cal, why):
                            industry_terms=IND, concept_terms=CON, store_dir=tmp_path)
 
 
+def test_p0_datetimeindex_subclass_refused_before_any_override_runs(tmp_path):
+    # GPT-P2 re-review#7 (P0): isinstance() accepted a DatetimeIndex SUBCLASS, which can
+    # override normalize() to pass the midnight check and re-enable same-day visibility.
+    # The exact-type gate must fire BEFORE any calendar attribute is read.
+    fired = {"n": 0}
+
+    class _EvilCal(pd.DatetimeIndex):
+        def normalize(self, *a, **k):              # would fake "already midnight"
+            fired["n"] += 1
+            return self
+    cal = _EvilCal(["2025-01-27 09:30", "2025-01-28"])
+    sb = pd.DataFrame([{"ts_code": "000558.SZ", "name": "莱茵体育",
+                        "list_date": "19970116", "delist_date": None}])
+    nc = _namechange([
+        {"ts_code": "000558.SZ", "name": "莱茵体育", "start_date": "20250101",
+         "end_date": None, "ann_date": "20250127", "change_reason": "更名"},  # same day
+    ])
+    _ingest(tmp_path, ["莱茵体育发布重大公告"])
+    p1 = _p1(tmp_path)
+    with pytest.raises(ValueError, match="恰 pd.DatetimeIndex"):
+        assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
+                           stock_basic=sb, namechange=nc, open_calendar=cal,
+                           industry_terms=IND, concept_terms=CON, store_dir=tmp_path)
+    assert fired["n"] == 0                          # override never ran
+
+
 def test_p0_visible_from_strictly_next_open_day(tmp_path):
     # ...and the SAME rename announced on the previous open trading day (Fri 2025-01-24)
     # IS visible at the Monday 2025-01-27 cutoff.

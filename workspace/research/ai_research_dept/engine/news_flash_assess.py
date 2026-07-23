@@ -107,8 +107,14 @@ def _require_open_calendar(cal) -> pd.DatetimeIndex:
     again. So the calendar is validated, never silently normalized/coerced: exact
     `DatetimeIndex`, tz-naive (CN-naive), non-empty, no NaT, sorted, unique, and EVERY
     entry at midnight."""
-    if not isinstance(cal, pd.DatetimeIndex):
-        raise ValueError("open_calendar 须为 pd.DatetimeIndex(交易日索引)——拒")
+    # GPT-P2 re-review#7 (P0): **EXACT type**, checked BEFORE reading any calendar
+    # attribute. `isinstance` accepts a DatetimeIndex SUBCLASS, which can override
+    # `normalize()` / `.values` / indexing to pass every check below and then re-enable
+    # same-day visibility. Every guard after this line reads an attribute, so the exact
+    # gate must come first.
+    if type(cal) is not pd.DatetimeIndex:
+        raise ValueError("open_calendar 须为恰 pd.DatetimeIndex——子类拒(可覆写 "
+                         "normalize/values/索引绕过形状校验,GPT-P2 re-review#7 P0)")
     if cal.tz is not None:
         raise ValueError("open_calendar 须为 tz-naive(CN-naive 墙钟)——拒")
     if len(cal) == 0:
