@@ -66,17 +66,20 @@ def _typer(importance=5, **over):
     return fn
 
 
-def _splitter(fact="签订 12 亿元大单", link="预计增厚年营收 15%", **over):
+def _splitter(span=None, **over):
+    """Default: echo a verbatim prefix of the supplied content (a valid grounded span)."""
     def fn(msgs):
         payload = json.loads(msgs[1]["content"])
-        return _Reply(json.dumps({"results": [
-            {"idx": it["idx"], "fact": fact, "economic_linkage": link, **over}
-            for it in payload["items"]]}, ensure_ascii=False))
+        out = []
+        for it in payload["items"]:
+            s = span if span is not None else it["content"][:12]
+            out.append({"idx": it["idx"], "fact_span": s, **over})
+        return _Reply(json.dumps({"results": out}, ensure_ascii=False))
     return fn
 
 
 def _pipeline(tmp_path, contents_list, *, importance=5, typer_over=None):
-    """P1 -> P2 -> the (assessed artifact, contents) P3a consumes."""
+    """P1 -> P2 -> the (assessed artifact, raw source rows) P3a consumes."""
     _ingest(tmp_path, contents_list)
     p1 = type_day_flashes(CUT, ingest_class="forward",
                           call_fn=_typer(importance, **(typer_over or {})),
@@ -86,27 +89,73 @@ def _pipeline(tmp_path, contents_list, *, importance=5, typer_over=None):
                             open_calendar=_CAL, industry_terms=IND, concept_terms=CON,
                             store_dir=tmp_path)
     from data_infra.text_store import load_text
-    df = load_text("news", pd.Timestamp(CUT), store_dir=tmp_path, ingest_class="forward")
-    contents = dict(zip(df["content_hash"], df["content"]))
-    return p2, contents
+    rows = load_text("news", pd.Timestamp(CUT), store_dir=tmp_path, ingest_class="forward")
+    return p2, rows
 
 
-def _split(tmp_path, p2, contents, **kw):
+def _split(tmp_path, p2, rows, **kw):
     return split_day_flashes(CUT, ingest_class="forward", assessed_artifact=p2,
-                             contents=contents, call_fn=kw.pop("call_fn", _splitter()), **kw)
+                             source_rows=rows, call_fn=kw.pop("call_fn", _splitter()), **kw)
 
 
 # --------------------------------------------------- happy path
 
 def test_splits_importance_ge_4_positive_facts(tmp_path):
-    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    art = _split(tmp_path, p2, contents)
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, rows, call_fn=_splitter(span="签订 12 亿元大单"))
     assert art["artifact_schema"] == "nf_d7_split_v1" and art["n_splits"] == 1
     s = art["splits"][0]
     assert s["fact_occurrence_id"] == p2["assessed"][0]["cluster"]["fact_occurrence_id"]
-    assert s["attributes"]["fact"] == "签订 12 亿元大单"
-    assert s["attributes"]["economic_linkage"] == "预计增厚年营收 15%"
+    assert s["attributes"]["fact"] == "签订 12 亿元大单"          # verbatim span
+    assert "economic_linkage" not in s["attributes"]            # deferred in v1
     assert s["evidence_class"] in ("NFD", "NFI", "NFA")
+
+
+# --------------------------------------------------- GPT-P3a P0: source bound to P2
+
+def test_p0_substituted_text_under_p2_hash_refused(tmp_path):
+    # The reviewer's probe: point P2's content_hash at a DIFFERENT (future) text. Because
+    # content_hash is recomputed from the row, the edited row no longer matches and the
+    # population member has no verified source -> hard error (previously the future text
+    # was accepted while the artifact still claimed the P2 SHA).
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    forged = rows.copy()
+    forged.loc[:, "content"] = "贵州茅台明年将签订 50 亿元大单(未来正文)"
+    with pytest.raises(ValueError, match="未绑定|重算校验"):
+        _split(tmp_path, p2, forged)
+
+
+def test_p0_rows_must_be_dataframe_and_cover_population(tmp_path):
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    with pytest.raises(ValueError, match="DataFrame"):
+        _split(tmp_path, p2, {"whatever": "text"})
+    with pytest.raises(ValueError, match="无来源行|未绑定|重算校验"):
+        _split(tmp_path, p2, rows.iloc[0:0])       # empty rows, non-empty population
+
+
+# --------------------------------------------------- GPT-P3a P1: span grounding
+
+@pytest.mark.parametrize("ungrounded", [
+    "预计增厚年营收 15%",            # invented number/claim, not in the source
+    "茅台签了个大单",                # paraphrase
+    "",                              # empty
+])
+def test_p1_ungrounded_span_refused(tmp_path, ungrounded):
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    with pytest.raises(ValueError, match="fact_span"):
+        _split(tmp_path, p2, rows, call_fn=_splitter(span=ungrounded))
+
+
+def test_p1_span_must_be_str(tmp_path):
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    with pytest.raises(ValueError, match="fact_span"):
+        _split(tmp_path, p2, rows, call_fn=_splitter(span=5))
+
+
+def test_p1_verbatim_span_accepted(tmp_path):
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(tmp_path, p2, rows, call_fn=_splitter(span="贵州茅台签订"))
+    assert art["splits"][0]["attributes"]["fact"] == "贵州茅台签订"
 
 
 # --------------------------------------------------- invariant 3: derived population
@@ -131,12 +180,6 @@ def test_non_positive_class_not_split(tmp_path):
                                          "event_type": "传闻未证实"})
     art = _split(tmp_path, p2, contents)
     assert art["n_splits"] == 0
-
-
-def test_missing_content_is_hard_error(tmp_path):
-    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    with pytest.raises(ValueError, match="正文未提供"):
-        _split(tmp_path, p2, {})            # population non-empty, no texts supplied
 
 
 # --------------------------------------------------- invariant 2: P2 binding
@@ -184,19 +227,12 @@ def test_source_status_tracks_verification_status(tmp_path):
 
 # --------------------------------------------------- invariant 5: text validation
 
-@pytest.mark.parametrize("bad_fact", ["", "   ", "​​", 5])
-def test_non_substantive_or_non_str_fact_refused(tmp_path, bad_fact):
-    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+def test_whitespace_only_span_refused(tmp_path):
+    # a span that IS in the source but carries no substantive characters still fails the
+    # frozen predicate (grounding alone is not enough)
+    p2, rows = _pipeline(tmp_path, ["贵州茅台 签订大单"])
     with pytest.raises(ValueError, match="fact"):
-        _split(tmp_path, p2, contents, call_fn=_splitter(fact=bad_fact))
-
-
-def test_empty_economic_linkage_is_allowed_and_omitted(tmp_path):
-    # an unsupported linkage must be an empty string (not invented) -> attribute omitted
-    p2, contents = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    art = _split(tmp_path, p2, contents, call_fn=_splitter(link=""))
-    attrs = art["splits"][0]["attributes"]
-    assert "economic_linkage" not in attrs and attrs["fact"]
+        _split(tmp_path, p2, rows, call_fn=_splitter(span=" "))
 
 
 # --------------------------------------------------- invariant 6/7: determinism, seal, empty
@@ -226,7 +262,7 @@ def test_write_once_refuses_different_content(tmp_path):
     a1 = _split(tmp_path, p2, contents)
     write_split_artifact(a1, tmp_path / "out")
     write_split_artifact(a1, tmp_path / "out")                 # idempotent
-    a2 = _split(tmp_path, p2, contents, call_fn=_splitter(fact="另一种抽取结果"))
+    a2 = _split(tmp_path, p2, contents, call_fn=_splitter(span="贵州茅台"))  # different valid span
     with pytest.raises(SplitConflictError, match="write-once"):
         write_split_artifact(a2, tmp_path / "out")
 
