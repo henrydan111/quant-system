@@ -90,8 +90,8 @@ def _split(p2, rows):
 def test_splits_importance_ge_4_positive_facts(tmp_path):
     p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
     art = _split(p2, rows)
-    assert art["artifact_schema"] == "nf_d7_split_v2" and art["n_splits"] == 1
-    assert art["fact_mode"] == "deterministic_whole_source_v1"
+    assert art["artifact_schema"] == "nf_d7_split_v3" and art["n_splits"] == 1
+    assert art["fact_mode"] == "deterministic_whole_source_v2"
     s = art["splits"][0]
     assert s["fact_occurrence_id"] == p2["assessed"][0]["cluster"]["fact_occurrence_id"]
     assert s["attributes"]["fact"] == "贵州茅台签订 12 亿元大单"     # the WHOLE source
@@ -172,26 +172,15 @@ def test_newline_becomes_a_space_not_a_fused_word(tmp_path):
 
 # --------------------------------------------------- GPT-P3a re-review#4 P1: read-boundary contract
 
-def test_v1_or_wrong_fact_mode_artifact_refused(tmp_path):
-    # An old (LLM-era) artifact, or any artifact claiming a different extraction mode,
-    # must be REFUSED at the read boundary — otherwise P3b could consume exactly the
-    # de-contextualized facts this arc eliminated.
+def test_spoofed_extraction_mode_refused(tmp_path):
+    # a properly re-sealed artifact claiming an LLM extraction mode is refused
+    # (the superseded-version matrix below covers the schema/derivation dimension)
     from workspace.research.ai_research_dept.engine.news_flash_split import (
         verify_split_artifact,
     )
     p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
-    good = _split(p2, rows)
-
-    legacy = json.loads(json.dumps(good, ensure_ascii=False))
-    legacy["artifact_schema"] = "nf_d7_split_v1"          # old schema
-    legacy.pop("fact_mode", None)                          # v1 had no fact_mode
-    body = {k: v for k, v in legacy.items() if k != "artifact_sha256"}
-    legacy["artifact_sha256"] = seal_hash(body)            # properly re-sealed
-    with pytest.raises(ValueError, match="nf_d7_split_v2"):
-        verify_split_artifact(legacy)
-
-    spoofed = json.loads(json.dumps(good, ensure_ascii=False))
-    spoofed["fact_mode"] = "llm_span_v0"                   # re-sealed wrong mode
+    spoofed = json.loads(json.dumps(_split(p2, rows), ensure_ascii=False))
+    spoofed["fact_mode"] = "llm_span_v0"
     body = {k: v for k, v in spoofed.items() if k != "artifact_sha256"}
     spoofed["artifact_sha256"] = seal_hash(body)
     with pytest.raises(ValueError, match="fact_mode"):
@@ -201,7 +190,46 @@ def test_v1_or_wrong_fact_mode_artifact_refused(tmp_path):
 def test_artifact_path_tracks_schema_version(tmp_path):
     p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
     path = write_split_artifact(_split(p2, rows), tmp_path / "out")
-    assert path.name.startswith("nf_d7_split_v2_")
+    assert path.name.startswith("nf_d7_split_v3_")
+
+
+@pytest.mark.parametrize("schema, mode", [
+    ("nf_d7_split_v1", None),                              # LLM era, no fact_mode
+    ("nf_d7_split_v2", "deterministic_whole_source_v1"),   # pre-boundary-fix (word-fused)
+    ("nf_d7_split_v3", "deterministic_whole_source_v1"),   # right shape, stale derivation
+])
+def test_superseded_artifact_versions_refused(tmp_path, schema, mode):
+    # GPT-P3a re-review#6: the Cc/Cf boundary fix CHANGED the derived fact text for the
+    # same input, so the version had to move with it. A validly-sealed artifact from ANY
+    # older schema/derivation must be refused - otherwise a stale word-fused fact reaches
+    # P3b while a corrected regeneration collides with write-once at the same path.
+    from workspace.research.ai_research_dept.engine.news_flash_split import (
+        verify_split_artifact,
+    )
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    old = json.loads(json.dumps(_split(p2, rows), ensure_ascii=False))
+    old["artifact_schema"] = schema
+    if mode is None:
+        old.pop("fact_mode", None)
+    else:
+        old["fact_mode"] = mode
+    body = {k: v for k, v in old.items() if k != "artifact_sha256"}
+    old["artifact_sha256"] = seal_hash(body)               # PROPERLY sealed, still refused
+    with pytest.raises(ValueError, match="nf_d7_split_v3|fact_mode"):
+        verify_split_artifact(old)
+
+
+def test_v3_path_does_not_collide_with_a_stale_v2_file(tmp_path):
+    # a leftover v2 file on disk must not block the corrected v3 write
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art = _split(p2, rows)
+    out = tmp_path / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    stale = out / f"nf_d7_split_v2_forward_{pd.Timestamp(CUT).strftime('%Y%m%dT%H%M%S%f')}.json"
+    stale.write_text(json.dumps({"artifact_schema": "nf_d7_split_v2"}, ensure_ascii=False),
+                     encoding="utf-8")
+    path = write_split_artifact(art, out)                  # no write-once conflict
+    assert path != stale and path.exists() and stale.exists()
 
 
 def test_abbreviation_does_not_truncate(tmp_path):

@@ -95,10 +95,17 @@ logger = logging.getLogger("news_flash_split")
 #: verified, so P3b could consume exactly the de-contextualized facts this arc eliminated.
 #: The verifier now REQUIRES the exact `fact_mode`, and the artifact filename tracks the
 #: schema so a stale v1 file cannot occupy a v2 path.
-ARTIFACT_SCHEMA = "nf_d7_split_v2"
+#: **v3** (GPT-P3a re-review#6): the version tracks the CONTENT contract, not just the
+#: schema shape. The Cc/Cf boundary fix CHANGED the derived `fact` text for the same input
+#: (`does<NEL>not` produced `doesnot` at v2, `does not` now), so leaving the name at v2
+#: would let a stale, word-fused artifact keep verifying while a corrected regeneration
+#: collided with write-once at the same path — the same read-boundary hole as the v1→v2
+#: bump. **Rule: any change to how a sealed field is DERIVED bumps the artifact version.**
+ARTIFACT_SCHEMA = "nf_d7_split_v3"
 EVIDENCE_CLASS = "nf_d7_split/NON_EVIDENTIARY"
-#: how `fact` was produced — recorded AND enforced at the read boundary
-FACT_MODE = "deterministic_whole_source_v1"
+#: how `fact` was produced — recorded AND enforced at the read boundary. Bumped with the
+#: derivation change above (v1 = pre-boundary-fix text, v2 = Cc/Cf spaced out).
+FACT_MODE = "deterministic_whole_source_v2"
 #: categories the frozen `sanitize_text` DELETES (it does NFKC then drops Cc/Cf). Mirrored
 #: here so the two cannot drift.
 _SANITIZER_DELETES = ("Cc", "Cf")
@@ -292,15 +299,18 @@ def verify_split_artifact(artifact: dict) -> dict:
     """Full structural + seal verification (the single check any consumer runs, dict or
     path) — schema, artifact_sha256, population_hash, key uniqueness, count."""
     if not isinstance(artifact, dict) or artifact.get("artifact_schema") != ARTIFACT_SCHEMA:
-        raise ValueError(f"not an {ARTIFACT_SCHEMA} artifact (a v1 artifact carries "
-                         f"LLM-chosen, possibly truncated fact text — refused)")
-    # GPT-P3a re-review#4 P1: the deterministic-whole-source contract is ENFORCED here, not
-    # merely recorded. An artifact claiming any other extraction mode is refused, so a
-    # de-contextualized fact cannot reach P3b.
+        raise ValueError(
+            f"not an {ARTIFACT_SCHEMA} artifact (got "
+            f"{artifact.get('artifact_schema') if isinstance(artifact, dict) else None!r}) — "
+            f"older versions carry different `fact` text (v1: LLM-chosen/truncated; "
+            f"v2: word-fused across sanitizer-deleted characters), refused")
+    # GPT-P3a re-review#4 P1 + #6: the derivation contract is ENFORCED here, not merely
+    # recorded — and the version tracks the CONTENT, so an artifact produced by an older
+    # derivation of the same shape is refused too.
     if artifact.get("fact_mode") != FACT_MODE:
         raise ValueError(
-            f"fact_mode {artifact.get('fact_mode')!r} != {FACT_MODE!r} — only the "
-            f"deterministic whole-source contract is consumable, refused")
+            f"fact_mode {artifact.get('fact_mode')!r} != {FACT_MODE!r} — only the current "
+            f"deterministic whole-source derivation is consumable, refused")
     body = {k: v for k, v in artifact.items() if k != "artifact_sha256"}
     if seal_hash(body) != artifact.get("artifact_sha256"):
         raise ValueError("artifact_sha256 mismatch — D7 split artifact tampered")
