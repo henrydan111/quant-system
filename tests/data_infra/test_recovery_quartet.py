@@ -2327,10 +2327,33 @@ def _ledger_class_defs():
 
 
 def test_no_new_reader_can_touch_the_verified_caches_directly():
-    """DEFAULT-DENY, statically. A newly added method OR PROPERTY that reads _chain_cache/_plan_cache/
-    _genesis_cache or a durable ledger file fails here — whatever its signature — unless it is added to
-    _PRIMITIVES with a reason. This is what makes the chokepoint structural: the previous runtime
-    enumeration could be walked around by taking an argument or being a property."""
+    """MAINTENANCE LINT — deliberately NOT load-bearing (user decision, 2026-07-22, after the
+    chokepoint review's final-budget HOLD).
+
+    What it does: flags a new method or property that reads _chain_cache / _plan_cache /
+    _genesis_cache or a durable path attribute directly, whatever its signature. That is a real and
+    useful catch — it found two bypasses I had not enumerated.
+
+    What it CANNOT do, stated plainly so nobody mistakes it for a guarantee: it is a NAME-based scan,
+    so a reader that REBUILDS the path (`self.rp.root / "ledger" / "request_plan.json"`) touches none
+    of the guarded names and passes. Reproduced: with the anchor deleted, such a reader still returned
+    the plan row while this test reported no violation. It likewise misses `getattr(...)`,
+    `self.__dict__[...]`, members attached outside the class body, and inherited readers.
+
+    WHY IT IS NOT LOAD-BEARING, and why that is the honest position rather than a concession: the
+    LOAD-BEARING guarantee is `_assert_durable_state` at RUNTIME, which GPT confirmed refuses every
+    in-scope corruption shape (anchor deleted/swapped/foreign, head hash or count rewound, sequence
+    break, non-integer counts) warm and cold. This lint guards against a FUTURE DEVELOPER adding a
+    bypassing reader — a maintenance regression, not a failure class in the frozen §6a threat model
+    (which covers crashes, torn writes, byte corruption, junctions and concurrency, and explicitly
+    excludes a mid-operation local adversary).
+
+    Four mechanisms have now been tried against this one class — enumerated event names, a detaching
+    wrapper, a runtime enumeration, and this name-based AST scan — and every one was a bounded
+    enumeration standing in for an unbounded property. That is the same conclusion the NF-archive and
+    incident fan-out arcs reached: in-process Python cannot be sandboxed from in-process Python by
+    enumeration. Completing it would need an OS-level mechanism, which the threat model does not
+    justify."""
     import ast
     _, defs = _ledger_class_defs()
     assert any(k == "method" and n == "_load" for n, k, _ in defs), "the AST scan lost _load"

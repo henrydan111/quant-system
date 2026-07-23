@@ -564,6 +564,14 @@ class PageReceiptLedger:
         """THE CHOKEPOINT. Every path that hands back verified state calls this immediately before
         returning, whether the state came from a fresh replay or from cache.
 
+        SCOPE OF THE GUARANTEE (user decision 2026-07-22, after the review budget closed): THIS is the
+        load-bearing mechanism — it refuses every in-scope corruption shape at runtime, warm cache or
+        cold. The companion AST lint in the test suite is explicitly NOT load-bearing: it catches a
+        future reader that touches the caches by NAME, but a reader that rebuilds the path around it
+        passes. Closing that statically would need an OS-level mechanism, which the frozen §6a threat
+        model (crashes, torn writes, byte corruption, junctions, concurrency — NOT a local adversary)
+        does not justify.
+
         It exists because the same invariant class gated three consecutive review rounds — a cached
         value handed back without re-establishing the guard that made it trustworthy: the cache was
         published before the head check (r1), a wrapper exposed the live cache (r2), and `_genesis()`
