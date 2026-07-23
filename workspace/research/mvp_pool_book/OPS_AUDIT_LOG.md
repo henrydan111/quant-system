@@ -45,3 +45,14 @@ tests/harness/test_forward_refuses_stale_provider_or_text_inputs.py 全文件 = 
 
 **Tier 3 治理**：结构化自评已做（闸门语义零变更逐条核对 + 40 测试全绿）；一轮 GPT 审
 待送（送审前需按 §10 push 工作分支）。
+
+## 2026-07-23 · B1/B2 GPT 一轮审（`30780a2`）= CHANGES REQUIRED → 已折叠收官
+
+**发现（唯一，B2）**：preflight 只捕获 ForwardGateError——损坏/半写入的清单 JSON 或字段
+格式异常会使脚本异常退出、来不及写状态文件与当日 flag；而日拉刻意隔离预检退出码，
+当日告警因此静默失效（正式 runner 事后仍会拒绝，无错误放行，但 B2 的"当日"目的落空）。
+**修复**：setup（config/yaml/runner 导入）与两道闸调用均加非预期异常捕获，一律记为
+`unexpected_error` 问题 → 写 flag → exit 1（fail-closed alerting）；新增"损坏 latest"
+与"损坏历史清单"两个回归测试。tests/text 全目录 + 前向 harness = **42 绿**。
+其余审查项全部通过（partial run 不覆盖 latest、not_attempted 无覆盖信用、重试/熔断
+不掩盖截断与残余失败、时区与正式闸一致）。**Tier-3 单轮预算用尽，单元收官。**

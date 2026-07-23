@@ -153,10 +153,10 @@ transition 视图（依赖 B3 ledger）。Tier 3。
 
 | 项 | 窗口 | 治理 | review unit |
 |---|---|---|---|
-| B1+B2 | **✅ 已实现 2026-07-22**（40 测试全绿；审计见 [OPS_AUDIT_LOG.md](../mvp_pool_book/OPS_AUDIT_LOG.md)；GPT 一轮待送）。⚠ 首次真实预检发现 07-09 起文本拉取全停，不回填则 202608 周期必被拒——回填命令与授权见审计日志 | 运维通道+审计日志；Tier 3 | 合一单（自评+1 轮 GPT 待送） |
+| B1+B2 | **✅ 收官 2026-07-23**：GPT 一轮审（`30780a2`）CHANGES REQUIRED（唯一发现=B2 损坏清单时告警静默失效）→ 已折叠（fail-closed alerting + 2 回归测试，42 绿）；其余项全过。审计见 [OPS_AUDIT_LOG.md](../mvp_pool_book/OPS_AUDIT_LOG.md)。⚠ 07-09 起文本拉取停摆的回填仍待用户授权 | 运维通道+审计日志；Tier 3 | **CLOSED** |
 | A1 | NF 波收口后、投研部前向就绪工作流内（=①b 前置件的实现载体） | CHAIN_VERSION bump；Tier 2 | 单独一单 |
 | A2 | 与 A1 同一次版本翻转 | 同上 | 与 A1 分开审、同版合并 |
-| C1 | **✅ v0 已实现并首跑 2026-07-23**（提前开工吃 202501 测试数据，用户确认）：[outcome_stats.py](../ai_chain_observatory/outcome_stats.py) + 报告 [OUTCOME_STATS_202501.md](../ai_chain_observatory/OUTCOME_STATS_202501.md)。首跑发现：旧链具名文本通道 IC 为负且匿名消融更好（名称先验偏置证据）、fund 卡最强、combined 未跑赢量化输入、无文本名=弱负信号（A1 分桶价值实证）。#10 重放后直接复跑升级 leg-chain | NON_EVIDENTIARY；Tier 3→2（若上平台） | 单独一单 |
+| C1 | **✅ v0.1 收官 2026-07-23**：GPT 一轮审（`30780a2`）CHANGES REQUIRED → 全部折叠：combined 口径修正（=文本+基本面，量化分是独立对照非输入，"未超过独立量化基准"）、名称偏置降格为"与具名/匿名输入差异一致"（归因需受控消融：同文本仅遮名）、no_text=未控混杂的分桶观察、五分位并列确定性拆分+顶部桶实际覆盖 20.1-24.1% 披露、h≥3 重叠更正、**输入显式钉住**（chain_v3.0 + 档案集 sha + 逐 scorecard 哈希入输出元数据）、机械复核去 0.051 容差改精确 round 对照（149 仍全绿）。首跑数字零漂移。审查确认无前视、无 C16 回流。#10 重放后复跑升级 leg-chain | NON_EVIDENTIARY；Tier 3 | **CLOSED** |
 | C2/B3 | C1 后 / 第 2 周期前 | Tier 3 / prereg 既定 | — |
 | D | 仅用户裁定后 | 新 C16 注册 | — |
 

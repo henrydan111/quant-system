@@ -79,35 +79,52 @@ def main(argv: list[str] | None = None) -> int:
     if now.tzinfo is None:
         now = now.tz_localize(CN_TZ)
 
-    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    required_sources = list(cfg["dossier"]["sources"])
-    lookback_days = int(cfg["dossier"]["lookback_days"])
-
-    rfc = _load_runner()
+    # GPT 复审修正(B2 告警兜底):损坏/半写入的清单 JSON、字段格式异常等
+    # 非预期异常同样必须记为预检失败并写 flag——否则脚本异常退出时当日告警
+    # 静默失效(日拉刻意隔离预检退出码,不会替它报警)。
     problems: list[dict] = []
-
-    latest = manifest_dir / "pull_manifest_latest.json"
-    if not latest.exists():
-        problems.append({"check": "latest_pull",
-                         "error": f"{latest} missing — text_daily_pull has "
-                                  f"never completed a full run"})
-    else:
-        try:
-            rfc.check_pull_manifest(
-                json.loads(latest.read_text(encoding="utf-8")), now,
-                required_sources)
-        except rfc.ForwardGateError as e:
-            problems.append({"check": "latest_pull", "error": str(e)})
-
+    required_sources: list[str] = []
+    lookback_days: int | None = None
     coverage_window = None
+    rfc = None
     try:
-        record = rfc.check_text_coverage_history(
-            manifest_dir, decision_time=now,
-            lookback_days=lookback_days, required_sources=required_sources)
-        coverage_window = {"start": record["window_start"],
-                           "end": record["window_end"]}
-    except rfc.ForwardGateError as e:
-        problems.append({"check": "coverage_history", "error": str(e)})
+        cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+        required_sources = list(cfg["dossier"]["sources"])
+        lookback_days = int(cfg["dossier"]["lookback_days"])
+        rfc = _load_runner()
+    except Exception as e:  # noqa: BLE001 — fail-closed alerting
+        problems.append({"check": "preflight_setup",
+                         "error": f"unexpected_error {type(e).__name__}: {e}"})
+
+    if rfc is not None:
+        latest = manifest_dir / "pull_manifest_latest.json"
+        if not latest.exists():
+            problems.append({"check": "latest_pull",
+                             "error": f"{latest} missing — text_daily_pull has "
+                                      f"never completed a full run"})
+        else:
+            try:
+                rfc.check_pull_manifest(
+                    json.loads(latest.read_text(encoding="utf-8")), now,
+                    required_sources)
+            except rfc.ForwardGateError as e:
+                problems.append({"check": "latest_pull", "error": str(e)})
+            except Exception as e:  # noqa: BLE001 — 损坏 latest 也要当日报警
+                problems.append({"check": "latest_pull",
+                                 "error": f"unexpected_error "
+                                          f"{type(e).__name__}: {e}"})
+        try:
+            record = rfc.check_text_coverage_history(
+                manifest_dir, decision_time=now,
+                lookback_days=lookback_days, required_sources=required_sources)
+            coverage_window = {"start": record["window_start"],
+                               "end": record["window_end"]}
+        except rfc.ForwardGateError as e:
+            problems.append({"check": "coverage_history", "error": str(e)})
+        except Exception as e:  # noqa: BLE001 — 损坏历史清单也要当日报警
+            problems.append({"check": "coverage_history",
+                             "error": f"unexpected_error "
+                                      f"{type(e).__name__}: {e}"})
 
     status = {
         "checked_at": now.isoformat(),

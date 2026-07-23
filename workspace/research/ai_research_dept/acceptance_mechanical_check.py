@@ -102,8 +102,9 @@ def main(argv: list[str] | None = None) -> int:
                 bad_math.append((code, comp_key, "missing"))
                 continue
             want = sum(COMPOSITE_W[s] * float(fins[s]) for s in SEATS)
-            # 链存 1 位小数;按同一 round 语义对照,另放 0.051 容差兜浮点
-            if float(got) != round(want, 1) and abs(float(got) - want) > 0.051:
+            # 链存 1 位小数:精确按 round(...,1) 语义对照。GPT 复审修正:去掉
+            # 0.051 容差兜底——它会放过边界上错误的相邻 0.1 分档。
+            if float(got) != round(want, 1):
                 bad_math.append((code, comp_key,
                                  f"got {got} want {round(want, 2)}"))
         for s in SEATS:

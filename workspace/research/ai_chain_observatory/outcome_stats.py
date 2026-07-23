@@ -65,21 +65,24 @@ def load_obs_scorecards() -> pd.DataFrame:
     return df
 
 
-def pick_chain_version() -> tuple[str, Path]:
-    """Prefer the newest chain version whose CHAIN_DAY dir holds a full pool
-    of complete archives (>=140)."""
-    candidates = sorted(CHAIN_ROOT.glob("chain_v*"), reverse=True,
-                        key=lambda p: [int(x) for x in
-                                       p.name.replace("chain_v", "").split(".")])
-    for vdir in candidates:
-        day = vdir / CHAIN_DAY
-        if day.is_dir() and len(list(day.glob("*.json"))) >= 140:
-            return vdir.name, day
-    raise RuntimeError(f"no chain version has a full {CHAIN_DAY} archive set")
+def pick_chain_version(pinned: str) -> tuple[str, Path]:
+    """GPT 复审修正:显式锁定链版本(默认 chain_v3.0),不再自动取最新——
+    重跑的输入集合必须可复现,不允许悄悄漂移。"""
+    day = CHAIN_ROOT / pinned / CHAIN_DAY
+    if not (day.is_dir() and len(list(day.glob("*.json"))) >= 140):
+        raise RuntimeError(
+            f"pinned chain version {pinned} lacks a full {CHAIN_DAY} archive set "
+            f"({day}) — pass an explicit valid version, auto-pick is disabled")
+    return pinned, day
 
 
-def load_chain_cross_section() -> tuple[str, pd.DataFrame]:
-    version, day_dir = pick_chain_version()
+def _sha256_file(p: Path) -> str:
+    import hashlib
+    return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+
+
+def load_chain_cross_section(pinned: str) -> tuple[str, pd.DataFrame]:
+    version, day_dir = pick_chain_version(pinned)
     rows = []
     for p in sorted(day_dir.glob("*.json")):
         a = json.loads(p.read_text(encoding="utf-8"))
@@ -153,15 +156,22 @@ def rank_ic(score: pd.Series, ret: pd.Series) -> float | None:
 
 
 def quintile_spread(score: pd.Series, ret: pd.Series) -> float | None:
-    df = pd.concat([score, ret], axis=1, keys=["s", "r"]).dropna()
+    """GPT 复审修正:并列分数原先按行序硬拆入不同组(结果依赖行顺序)。
+    先按 (score, 代码) 稳定排序再 rank(method='first'),使并列拆分确定且
+    与输入行序无关;并列仍会被拆(披露于 caveats),但不再不可复现。"""
+    df = pd.concat([score, ret], axis=1, keys=["s", "r"]).dropna().sort_index()
     if len(df) < 25 or df["s"].nunique() < 5:
         return None
+    df = df.sort_values("s", kind="mergesort")          # 稳定:并列按代码序
     q = pd.qcut(df["s"].rank(method="first"), 5, labels=False)
     return float(df.loc[q == 4, "r"].mean() - df.loc[q == 0, "r"].mean())
 
 
-def top_q_beats_median(score: pd.Series, ret: pd.Series) -> float | None:
-    """相对命中率:顶部五分位名字中,前向收益跑赢当日池中位数的比例。"""
+def top_q_beats_median(score: pd.Series, ret: pd.Series
+                       ) -> tuple[float, float] | None:
+    """相对命中率:顶部五分位名字中,前向收益跑赢当日池中位数的比例。
+    返回 (命中率, 顶部桶实际占比)——阈值取 >=P80,并列使实际覆盖 >20%
+    (实测 ~20-24%,GPT 复审要求披露而非宣称严格 20%)。"""
     df = pd.concat([score, ret], axis=1, keys=["s", "r"]).dropna()
     if len(df) < 25:
         return None
@@ -169,7 +179,7 @@ def top_q_beats_median(score: pd.Series, ret: pd.Series) -> float | None:
     top = df[df["s"] >= df["s"].quantile(0.8)]
     if top.empty:
         return None
-    return float((top["r"] > med).mean())
+    return float((top["r"] > med).mean()), float(len(top) / len(df))
 
 
 def summarize_ic_series(vals: list[float]) -> dict:
@@ -189,6 +199,7 @@ def run_leg_obs(sc: pd.DataFrame, adj: pd.DataFrame) -> dict:
     daily_rows, per_score = [], {s: {h: [] for h in HORIZONS} for s in OBS_SCORES}
     spread = {s: {h: [] for h in HORIZONS} for s in OBS_SCORES}
     hitrate = {s: {h: [] for h in HORIZONS} for s in OBS_SCORES}
+    top_fracs: list[float] = []
     bucket_ic = {"has_text": {h: [] for h in HORIZONS},
                  "in_floor": {h: [] for h in HORIZONS}}
     no_text_excess, corr_combined_quant = [], []
@@ -205,7 +216,10 @@ def run_leg_obs(sc: pd.DataFrame, adj: pd.DataFrame) -> dict:
                 ic = rank_ic(g[s], r)
                 per_score[s][h].append(ic)
                 spread[s][h].append(quintile_spread(g[s], r))
-                hitrate[s][h].append(top_q_beats_median(g[s], r))
+                tq = top_q_beats_median(g[s], r)
+                hitrate[s][h].append(tq[0] if tq else None)
+                if tq:
+                    top_fracs.append(tq[1])
                 if ic is not None:
                     daily_rows.append({"day": day, "score": s, "horizon": h,
                                        "rank_ic": round(ic, 4)})
@@ -232,6 +246,10 @@ def run_leg_obs(sc: pd.DataFrame, adj: pd.DataFrame) -> dict:
         "top_quintile_beats_median": {
             s: {str(h): summarize_ic_series(hitrate[s][h])
                 for h in HORIZONS} for s in OBS_SCORES},
+        "top_bucket_realized_fraction": {          # >=P80 并列 → 实际 >20%,披露
+            "mean": round(float(np.mean(top_fracs)), 4) if top_fracs else None,
+            "min": round(float(np.min(top_fracs)), 4) if top_fracs else None,
+            "max": round(float(np.max(top_fracs)), 4) if top_fracs else None},
         "bucket_rank_ic_combined": {
             b: {str(h): summarize_ic_series(bucket_ic[b][h]) for h in HORIZONS}
             for b in bucket_ic},
@@ -275,9 +293,14 @@ def run_leg_chain(cs: pd.DataFrame, adj: pd.DataFrame) -> dict:
     return out
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--chain-version", default="chain_v3.0",
+                    help="explicit chain version pin (auto-pick disabled)")
+    args = ap.parse_args(argv if argv is not None else [])
     sc = load_obs_scorecards()
-    version, cs = load_chain_cross_section()
+    version, cs = load_chain_cross_section(args.chain_version)
     codes = sorted(set(sc["ts_code"]) | set(cs["ts_code"]))
     start = min(sc["trade_date"].min(), CHAIN_DAY)
     log.info("obs days=%d rows=%d | chain %s names=%d | prices %s..%s (%d codes)",
@@ -294,12 +317,29 @@ def main() -> int:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     obs["daily"].to_parquet(OUT_DIR / "obs202501_daily_ic.parquet", index=False)
+    obs_files = sorted(OBS_DAILY.glob("*/scorecards.parquet"))
+    chain_files = sorted((CHAIN_ROOT / version / CHAIN_DAY).glob("*.json"))
+    import hashlib as _hl
+    chain_set_sha = _hl.sha256("".join(
+        f"{p.name}:{_sha256_file(p)}" for p in chain_files).encode()).hexdigest()[:16]
     payload = {"evidence_class": EVIDENCE_CLASS,
-               "generated_by": "outcome_stats.py (C1 v0)",
+               "generated_by": "outcome_stats.py (C1 v0.1, GPT-review folded)",
                "price_basis": "provider adj open (open*adj_factor), gross, no cost",
+               # GPT 复审修正:输入显式钉住,重跑不允许悄悄换输入
+               "inputs": {
+                   "chain_version_pinned": version,
+                   "chain_day": CHAIN_DAY,
+                   "chain_archive_count": len(chain_files),
+                   "chain_archive_set_sha16": chain_set_sha,
+                   "obs_scorecard_files": {p.parent.name: _sha256_file(p)
+                                           for p in obs_files},
+               },
                "caveats": [
                    "202501 单月/单日样本,诊断性观察,非 alpha 证据",
-                   "h>=5 的逐日 IC 存在窗口重叠自相关,ICIR 不作显著性使用",
+                   "h>=3 的逐日 IC 存在窗口重叠自相关(16 个连续决策日),ICIR 不作显著性使用",
+                   "五分位并列分数按 (score,代码) 稳定序拆分——确定但仍是硬拆;"
+                   "顶部桶阈值 >=P80,并列使实际覆盖 >20%(见 top_bucket_realized_fraction)",
+                   "combined = 文本+基本面加权,量化分是独立对照而非其输入",
                    f"dropped_codes_no_price={len(dropped)}",
                ],
                "leg_obs_202501": obs["summary"],

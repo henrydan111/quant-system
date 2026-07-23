@@ -119,6 +119,33 @@ def test_failed_manifest_recovered_by_later_clean_pull(preflight_mod, tmp_path):
     assert rc == 0 and status["ok"] is True
 
 
+def test_corrupted_latest_manifest_still_writes_flag(preflight_mod, tmp_path):
+    """GPT 复审修正:损坏的 latest JSON 曾使脚本异常退出、当日 flag 静默缺失。"""
+    mdir = tmp_path / "text_pull"
+    now = pd.Timestamp(NOW)
+    _write_manifest(mdir, now - pd.Timedelta(hours=1), "2026-06-20", "2026-07-22")
+    (mdir / "pull_manifest_latest.json").write_text("{corrupt", encoding="utf-8")
+    rc, status, flags = _run(preflight_mod, tmp_path)
+    assert rc == 1 and status["ok"] is False
+    latest_problems = [p for p in status["problems"] if p["check"] == "latest_pull"]
+    assert latest_problems and "unexpected_error" in latest_problems[0]["error"]
+    assert flags                                     # 当日告警必须落地
+
+
+def test_corrupted_historical_manifest_still_writes_flag(preflight_mod, tmp_path):
+    mdir = tmp_path / "text_pull"
+    now = pd.Timestamp(NOW)
+    _write_manifest(mdir, now - pd.Timedelta(hours=1), "2026-06-20",
+                    "2026-07-22", latest=True)
+    (mdir / "pull_manifest_20260701_000000.json").write_text("]]not json",
+                                                             encoding="utf-8")
+    rc, status, flags = _run(preflight_mod, tmp_path)
+    assert rc == 1
+    cov = [p for p in status["problems"] if p["check"] == "coverage_history"]
+    assert cov and "unexpected_error" in cov[0]["error"]
+    assert flags
+
+
 def test_preflight_reuses_runner_gates_verbatim():
     src = SCRIPT.read_text(encoding="utf-8")
     assert "check_text_coverage_history(" in src
