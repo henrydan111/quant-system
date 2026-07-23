@@ -81,7 +81,9 @@ Sporadic — 6 failures across ~11,700 statement requests (~0.1%) — but the cl
 endpoints whose natural key omits `comp_type`**: `income`, `income_vip`, `balancesheet`, `cashflow`,
 `cashflow_vip`, `fina_audit`, `express`, `forecast`.
 
-### Candidate fix — tested and CLEAN
+### Candidate fix — tested, and it DIFFERS BY ENDPOINT SHAPE
+
+**Per-stock endpoints** (`income`, `balancesheet`, `cashflow`, …) — add `comp_type` only:
 
 ```
 income        28,714 rows   [signed... + comp_type]              OK  (no nulls, no duplicates)
@@ -90,8 +92,24 @@ balancesheet  27,844 rows   [signed... + comp_type]              OK
                             [signed... + comp_type + end_type]   nulls(end_type)=64
 ```
 
-**Add `comp_type` only.** Adding `end_type` reintroduces Class 1 (it is nullable). `comp_type` must
-also be added to `required_fields`, where it is currently absent for all 8 endpoints.
+Adding `end_type` reintroduces Class 1 (it is nullable).
+
+**Per-period VIP endpoints** (`income_vip`, `cashflow_vip`) — `comp_type` is NOT enough. Their signed
+key omits `ann_date`, which the per-stock variant includes, so two rows for the same
+company/period/report_type/f_ann_date/update_flag can differ in announcement date alone. Measured over
+391,453 rows:
+
+```
+income_vip    SIGNED                       28 duplicate rows
+              + comp_type                  26      <- barely helps
+              + ann_date                    2
+              + comp_type + ann_date        0      OK  (no nulls)
+```
+
+**A single uniform amendment would therefore have failed a second time.** Per-stock needs
+`+comp_type`; per-period VIP needs `+comp_type, +ann_date`.
+
+`comp_type` must also be added to `required_fields`, where it is currently absent for all 8 endpoints.
 
 ---
 
