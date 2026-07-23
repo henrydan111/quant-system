@@ -106,6 +106,14 @@ EVIDENCE_CLASS = "nf_d7_split/NON_EVIDENTIARY"
 #: how `fact` was produced — recorded AND enforced at the read boundary. Bumped with the
 #: derivation change above (v1 = pre-boundary-fix text, v2 = Cc/Cf spaced out).
 FACT_MODE = "deterministic_whole_source_v2"
+
+#: **Version governance** (settled in the GPT-P3a review, recorded so it is not
+#: rediscovered): `ARTIFACT_SCHEMA` is the UMBRELLA version for the derivation logic of
+#: EVERY sealed field; `FACT_MODE` describes only how `fact` is derived. So a future change
+#: to any of — the `_SOURCE_STATUS_TEXT` template, the population predicate,
+#: `D7_IMPORTANCE_FLOOR` / `POSITIVE_CLASSES`, the frozen sanitizer, or the
+#: `content_hash_for` binding method — must bump `ARTIFACT_SCHEMA` to v4 under the rule
+#: above. No per-item version field is needed; the umbrella carries them.
 #: categories the frozen `sanitize_text` DELETES (it does NFKC then drops Cc/Cf). Mirrored
 #: here so the two cannot drift.
 _SANITIZER_DELETES = ("Cc", "Cf")
