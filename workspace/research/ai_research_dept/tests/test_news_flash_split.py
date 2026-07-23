@@ -125,6 +125,42 @@ def test_newline_separated_headline_body_preserved(tmp_path):
     assert "澄清公告" in fact and "不实" in fact
 
 
+@pytest.mark.parametrize("ch, name", [
+    ("\n", "LF"), ("\r", "CR"), ("\t", "TAB"), ("", "NEL"),
+    ("‍", "ZWJ"), ("‌", "ZWNJ"), ("​", "ZWSP"),
+    (" ", "LS"), (" ", "PS"), ("﻿", "BOM"), ("­", "SHY"),
+])
+def test_sanitizer_deleted_char_never_fuses_words(tmp_path, ch, name):
+    # GPT-P3a re-review#5 (P2): the frozen sanitizer DELETES Cc/Cf, so any such character
+    # between two words fused them ("doesnot" -> "doesnot") and could silently
+    # destroy a negation the whole-source contract exists to preserve.
+    p2, rows = _pipeline(tmp_path, [f"贵州茅台 does{ch}not have a contract."])
+    fact = _split(p2, rows)["splits"][0]["attributes"]["fact"]
+    assert "doesnot" not in fact, f"{name} fused the words"
+    assert "does not" in fact
+
+
+def test_every_sanitizer_deleted_codepoint_is_a_boundary():
+    # STRUCTURAL guard (not a sample): enumerate every codepoint the frozen sanitizer
+    # deletes and assert the pre-pass turns it into a boundary. Enumerating separators is
+    # what kept failing (CR/LF -> then NEL/Tab/ZWJ); this mirrors the sanitizer's own
+    # predicate, so a codepoint we never thought of cannot fuse tokens either.
+    import unicodedata as ud
+    from workspace.research.ai_research_dept.engine.cards import sanitize_text
+    from workspace.research.ai_research_dept.engine.news_flash_split import (
+        _space_out_deleted_controls,
+    )
+    fused = []
+    for cp in range(0x110000):
+        ch = chr(cp)
+        if ud.category(ch) not in ("Cc", "Cf"):
+            continue
+        out = sanitize_text(_space_out_deleted_controls(f"does{ch}not"))
+        if "doesnot" in out:
+            fused.append(hex(cp))
+    assert not fused, f"{len(fused)} sanitizer-deleted codepoints still fuse words: {fused[:8]}"
+
+
 def test_newline_becomes_a_space_not_a_fused_word(tmp_path):
     # GPT-P3a re-review#4 (P2): the frozen sanitizer DELETES control chars, so a raw
     # newline fused the words across it ("does\nnot" -> "doesnot"), destroying a word

@@ -65,9 +65,9 @@ import argparse
 import json
 import logging
 import os
-import re
 import sys
 import tempfile
+import unicodedata as _ud
 from pathlib import Path
 
 import pandas as pd
@@ -99,11 +99,26 @@ ARTIFACT_SCHEMA = "nf_d7_split_v2"
 EVIDENCE_CLASS = "nf_d7_split/NON_EVIDENTIARY"
 #: how `fact` was produced — recorded AND enforced at the read boundary
 FACT_MODE = "deterministic_whole_source_v1"
-#: line separators are replaced by a space BEFORE the frozen sanitizer runs — the sanitizer
-#: DELETES control characters, which would fuse the words across a newline
-#: ("does\nnot" → "doesnot") and destroy a word boundary in the very context we promised to
-#: preserve (GPT-P3a re-review#4 P2).
-_LINE_SEP_RE = re.compile(r"[\r\n  ]+")
+#: categories the frozen `sanitize_text` DELETES (it does NFKC then drops Cc/Cf). Mirrored
+#: here so the two cannot drift.
+_SANITIZER_DELETES = ("Cc", "Cf")
+
+
+def _space_out_deleted_controls(s: str) -> str:
+    """GPT-P3a re-review#5 (P2): every character the frozen sanitizer would DELETE is first
+    replaced by a SPACE, so it can never fuse the tokens on either side.
+
+    Enumerating separators was the wrong shape — CR/LF was fixed, then NEL / Tab / ZWJ were
+    still fusing (`does<NEL>not` → `doesnot`), which silently destroys the very negation the
+    whole-source contract exists to preserve. This mirrors the sanitizer's own deletion
+    predicate (NFKC, then `category in {Cc, Cf}`) instead of listing characters, so ANY such
+    codepoint — present or future — becomes a boundary rather than a fusion.
+    `sanitize_text`'s own whitespace collapse then merges the runs."""
+    normalized = _ud.normalize("NFKC", s)
+    return "".join(" " if _ud.category(ch) in _SANITIZER_DELETES else ch
+                   for ch in normalized)
+
+
 #: evidence classes that `render_news_flash_section` mints POSITIVE base facts for
 POSITIVE_CLASSES = frozenset({"NFD", "NFI", "NFA"})
 
@@ -133,7 +148,8 @@ def _require_attr_text(v, *, where: str) -> str:
     """Exact-str + substantive after the frozen sanitizer (invariant 5)."""
     if type(v) is not str:
         raise ValueError(f"{where} 须恰 str——拒")
-    clean = sanitize_text(_LINE_SEP_RE.sub(" ", v))   # newline → space, then sanitize
+    # every sanitizer-deleted codepoint becomes a space FIRST, so nothing can fuse tokens
+    clean = sanitize_text(_space_out_deleted_controls(v))
     if not clean.strip() or not has_substantive_text(clean):
         raise ValueError(f"{where} 净化后无实质性字符——拒(D7 拆行不得无事实)")
     return clean
