@@ -53,10 +53,11 @@ def _namechange():
     ], columns=_NC_COLS)
 
 
-def _ingest(tmp_path, contents):
-    ingest_rows("news", pd.DataFrame([{"src": "sina", "datetime": "2025-01-27 16:00:00",
+def _ingest(tmp_path, contents, *, srcs=None):
+    srcs = srcs or ["sina"] * len(contents)
+    ingest_rows("news", pd.DataFrame([{"src": s, "datetime": "2025-01-27 16:00:00",
                                        "content": c, "title": None, "channels": ""}
-                                      for c in contents]),
+                                      for c, s in zip(contents, srcs)]),
                 published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 17:00:00"),
                 store_dir=tmp_path, ingest_class="forward")
 
@@ -281,6 +282,109 @@ def test_p4_binding_door_refuses_a_plain_dict(tmp_path):
 
 def test_assembly_schema_is_the_content_contract_version():
     assert ASSEMBLY_SCHEMA == "nf_d7_assembly_v1"
+
+
+# ---- round-2 P2: the identity's value domain is CLOSED. Every probe below is
+# ---- ordinary base types (no Tier-1 craft) and every one PASSED before the fold.
+
+def _prov_kwargs(base, **over):
+    kw = {"artifact_hash": base.artifact_hash, "ts_code": base.ts_code,
+          "decision_id": base.decision_id, "cutoff_iso": base.cutoff_iso,
+          "ingest_class": base.ingest_class,
+          "consumed_assessed_flash_sha256": base.consumed_assessed_flash_sha256,
+          "consumed_d7_split_sha256": base.consumed_d7_split_sha256,
+          "selected_fact_occurrence_ids": base.selected_fact_occurrence_ids,
+          "n_splits_used": base.n_splits_used}
+    kw.update(over)
+    return kw
+
+
+@pytest.fixture
+def base_prov(tmp_path):
+    p2, p3a, rows = _chain(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    art, prov = _assemble(p2, p3a, rows)
+    return art, prov
+
+
+@pytest.mark.parametrize("falsy", [None, False, 0])
+def test_falsy_assembly_hash_is_not_a_free_pass(base_prov, falsy):
+    # pre-fold: `if self.assembly_hash and ...` treated these as "not supplied",
+    # recomputed, and ACCEPTED — a forged identity with a null hash sailed through
+    _, base = base_prov
+    with pytest.raises(ValueError, match="assembly_hash 须恰 str"):
+        AssemblyProvenance(**_prov_kwargs(base, assembly_hash=falsy))
+
+
+def test_empty_hash_sentinel_refused_on_read_back(base_prov):
+    # '' is the constructor's "compute it" sentinel; accepting it on read-back would
+    # make the verifier unconditional
+    _, base = base_prov
+    with pytest.raises(ValueError, match="哨兵"):
+        verify_assembly_provenance({**base.payload, "assembly_hash": ""})
+
+
+def test_bare_string_fact_ids_refused(base_prov):
+    # pre-fold: `tuple("fact-1")` exploded a str into 6 single-char "facts"
+    _, base = base_prov
+    with pytest.raises(ValueError, match="须恰 tuple"):
+        AssemblyProvenance(**_prov_kwargs(base, selected_fact_occurrence_ids="fact-1"))
+    with pytest.raises(ValueError, match="须恰 tuple"):
+        AssemblyProvenance(**_prov_kwargs(base, selected_fact_occurrence_ids=["f1"]))
+
+
+def test_duplicate_and_unsorted_fact_ids_refused(base_prov):
+    _, base = base_prov
+    with pytest.raises(ValueError, match="含重复"):
+        AssemblyProvenance(**_prov_kwargs(
+            base, selected_fact_occurrence_ids=("f1", "f1")))
+    with pytest.raises(ValueError, match="升序"):
+        AssemblyProvenance(**_prov_kwargs(
+            base, selected_fact_occurrence_ids=("f2", "f1")))
+
+
+def test_split_count_cannot_exceed_the_fact_set(base_prov):
+    _, base = base_prov
+    with pytest.raises(ValueError, match="选中事实数"):
+        AssemblyProvenance(**_prov_kwargs(base, n_splits_used=base.n_selected + 1))
+
+
+def test_split_count_cross_checked_against_the_artifact(base_prov):
+    # a provenance claiming 0 splits for an artifact that HAS a >=4 base fact is refused
+    art, base = base_prov
+    assert base.n_splits_used == 1
+    with pytest.raises(ValueError, match="工件实有"):
+        require_assembly_for(AssemblyProvenance(**_prov_kwargs(base, n_splits_used=0)),
+                             art)
+
+
+def test_provenance_claiming_unrelated_facts_refused(base_prov):
+    art, base = base_prov
+    unrelated = AssemblyProvenance(**_prov_kwargs(
+        base, selected_fact_occurrence_ids=("zzz-not-this-artifacts-fact",)))
+    with pytest.raises(ValueError, match="不在装配出处"):
+        require_assembly_for(unrelated, art)
+
+
+def test_multi_outlet_flash_is_ONE_fact_occurrence(tmp_path):
+    # the structural reason the fact set can be required unique: the same wording from
+    # two outlets clusters into ONE fact occurrence (n_outlets=2), so P2 emits at most
+    # one assessed entry per placeholder. Asserted, not assumed.
+    _ingest(tmp_path, ["贵州茅台签订 12 亿元大单"] * 2, srcs=["sina", "wallstreetcn"])
+    p1 = type_day_flashes(CUT, ingest_class="forward", call_fn=_typer(5),
+                          store_dir=tmp_path)
+    p2 = assess_day_flashes(CUT, ingest_class="forward", typed_artifact=p1,
+                            stock_basic=_stock_basic(), namechange=_namechange(),
+                            open_calendar=_CAL, industry_terms=IND, concept_terms=CON,
+                            store_dir=tmp_path)
+    assert len(p2["assessed"]) == 1 and p2["assessed"][0]["cluster"]["n_outlets"] == 2
+    rows = load_text("news", pd.Timestamp(CUT), store_dir=tmp_path,
+                     ingest_class="forward")
+    p3a = split_day_flashes(CUT, ingest_class="forward", assessed_artifact=p2,
+                            source_rows=rows)
+    art, prov = _assemble(p2, p3a, rows)
+    assert prov.n_selected == 1                       # two flashes, ONE fact
+    assert require_assembly_for(prov, art).assembly_hash == prov.assembly_hash
+    assert verify_d7_artifact(art) == art
 
 
 # --------------------------------------------------- determinism

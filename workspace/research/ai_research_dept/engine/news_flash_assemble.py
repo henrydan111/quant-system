@@ -30,6 +30,12 @@ Declared invariants (Tier-2; see NF_UNIT_P3B_DESIGN.md):
    self-verifying (`assembly_hash` recomputed in `__post_init__`), and its hash body
    contains `artifact_hash` — so the upstream chain (which P2/P3a artifacts, which stock,
    which facts) cannot be silently dropped, swapped, or paired with a different artifact.
+   Its **value domain is closed** (round-2 P2): every field is an exact base type, the fact
+   set is an exact `tuple` that is non-empty / duplicate-free / ascending (so one fact set
+   has exactly one hash), `assembly_hash` is an exact `str` whose only "not yet computed"
+   sentinel is `""` (`None`/`False`/`0` are refused, not silently recomputed), the read-back
+   verifier demands a real claimed hash, and `n_splits_used` is cross-checked against the
+   artifact's **actual** `importance >= D7_IMPORTANCE_FLOOR` base facts.
 
 Output: `(D7DecisionArtifact, AssemblyProvenance)`. P3b seals nothing on disk of its own —
 **P4 is the sealing boundary**.
@@ -119,7 +125,13 @@ class AssemblyProvenance:
     ingest_class: str
     consumed_assessed_flash_sha256: str
     consumed_d7_split_sha256: str
-    #: 选中事实的 fact_occurrence_id(按其排序;P3b 的选择基础)
+    #: 本决策所依据的**事实占位集合**(恰 tuple、无重复、升序)。
+    #: ⚠ 语义是"事实"而非"快讯":P2 的每个 (family, day) 恰出一条 assessed——同一
+    #: 措辞的多家媒体合并进同一簇(`n_outlets>1`,实测确认),`render_news_flash_section`
+    #: 再按 fact_occurrence_id 分组去重。故占位在 P2 路径上**天然唯一**;此处的
+    #: 无重复+升序是**身份稳定性**门(同一事实集合的两种排列不得产出两个
+    #: assembly_hash),不是在容忍某种合法重复。哪些快讯路由到此,由 `assessed_sha`
+    #: + `ts_code` 确定性重推,不丢信息。
     selected_fact_occurrence_ids: tuple
     n_splits_used: int
     assembly_hash: str = field(default="")
@@ -133,7 +145,14 @@ class AssemblyProvenance:
                 raise ValueError(
                     f"AssemblyProvenance.{name} 须恰 str 非空(得 {safe_repr(v)})——"
                     f"子类/非 str 会让身份的两次读取脱钩,静态拒")
-        ids = tuple(self.selected_fact_occurrence_ids)
+        # re-review#2 P2:值域封闭。旧码 `tuple(ids)` 会把一个普通 str **逐字符
+        # 炸开**成事实占位;且重复/乱序都能过门,同一事实集合因而可产出两个不同
+        # 的 assembly_hash(身份不唯一)。故:恰 tuple + 无重 + 升序。
+        ids = self.selected_fact_occurrence_ids
+        if type(ids) is not tuple:
+            raise ValueError(
+                f"selected_fact_occurrence_ids 须恰 tuple(得 {safe_kind(ids)})——"
+                f"str 会被逐字符炸开成假占位,list/生成器一律静态拒")
         if not ids:
             raise ValueError(
                 "AssemblyProvenance 选中事实为空——绝不产无证据的装配身份(invariant 7)")
@@ -141,17 +160,35 @@ class AssemblyProvenance:
             if type(fid) is not str or not fid.strip():
                 raise ValueError(
                     f"selected_fact_occurrence_ids 成员须恰 str 非空(得 {safe_repr(fid)})")
-        object.__setattr__(self, "selected_fact_occurrence_ids", ids)
+        if len(set(ids)) != len(ids):
+            raise ValueError(
+                "selected_fact_occurrence_ids 含重复事实占位——身份基础是**去重事实"
+                "集合**(P3a 的拆分即以占位为键,重复只会静默折叠),拒")
+        if list(ids) != sorted(ids):
+            raise ValueError(
+                "selected_fact_occurrence_ids 须升序——同一事实集合的两种排列不得"
+                "产出两个 assembly_hash(身份须对集合唯一),拒")
         if type(self.n_splits_used) is not int or self.n_splits_used < 0:
             raise ValueError(
                 f"n_splits_used 须恰非负 int(得 {safe_repr(self.n_splits_used)};"
                 f"bool 亦拒——`type(x) is int` 对 True 为假)")
-        recomputed = seal_hash(self._body())
-        if self.assembly_hash and self.assembly_hash != recomputed:
+        if self.n_splits_used > len(ids):
             raise ValueError(
-                f"assembly_hash 伪造:自称 {self.assembly_hash[:12]} "
-                f"重算 {recomputed[:12]}——拒")
-        if not self.assembly_hash:
+                f"n_splits_used {self.n_splits_used} > 选中事实数 {len(ids)}——每个"
+                f"拆分恰对一个 ≥{D7_IMPORTANCE_FLOOR} 的基事实,不可能多于事实数,拒")
+        # re-review#2 P2:旧码用 truthiness 判"是否自称",于是 None/False/0 都被当作
+        # "未提供"→ 重算后照收。收紧为**恰 str**,空串是唯一的"待计算"哨兵。
+        recomputed = seal_hash(self._body())
+        claimed = self.assembly_hash
+        if type(claimed) is not str:
+            raise ValueError(
+                f"assembly_hash 须恰 str(得 {safe_repr(claimed)});构造期未算时用"
+                f"空串 '' ——None/False/0 一律拒(它们曾被当作'未提供'而静默放行)")
+        if claimed:
+            if claimed != recomputed:
+                raise ValueError(
+                    f"assembly_hash 伪造:自称 {claimed[:12]} 重算 {recomputed[:12]}——拒")
+        else:
             object.__setattr__(self, "assembly_hash", recomputed)
 
     def _body(self) -> dict:
@@ -168,6 +205,7 @@ class AssemblyProvenance:
 
     @property
     def n_selected(self) -> int:
+        """本决策所依据的**去重事实**数(非选中快讯条数——见字段注释)。"""
         return len(self.selected_fact_occurrence_ids)
 
     @property
@@ -192,6 +230,13 @@ def verify_assembly_provenance(payload) -> AssemblyProvenance:
     facts = payload["selected_facts"]
     if type(facts) is not list:
         raise ValueError(f"selected_facts 须恰 list(得 {safe_kind(facts)})——拒")
+    # re-review#2 P2:读回路径**必须**有一个真实自称哈希可比对——空串是构造期
+    # 哨兵,若放它进来就等于"重算后无条件接受",verifier 便形同虚设
+    claimed = payload["assembly_hash"]
+    if type(claimed) is not str or not claimed.strip():
+        raise ValueError(
+            f"装配载荷 assembly_hash 须恰 str 非空(得 {safe_repr(claimed)})——"
+            f"空串是构造期'待计算'哨兵,读回路径不接受(否则重算即无条件放行)")
     return AssemblyProvenance(
         artifact_hash=payload["artifact_hash"], ts_code=payload["ts_code"],
         decision_id=payload["decision_id"], cutoff_iso=payload["cutoff"],
@@ -221,6 +266,21 @@ def require_assembly_for(assembly, artifact) -> AssemblyProvenance:
         raise ValueError(
             f"装配出处 decision_id {assembly.decision_id!r} ≠ 工件束 "
             f"{artifact.bundle.decision_id!r}——拒")
+    # re-review#2 P2:与工件**实际**高重要度基事实交叉校验(不只是范围检查)。
+    # 基事实由渲染器铸,调用方无权提供,故它是该问题的权威答案。
+    high = [bf for bf in artifact.base_facts if bf.importance >= D7_IMPORTANCE_FLOOR]
+    if assembly.n_splits_used != len(high):
+        raise ValueError(
+            f"装配出处自称 {assembly.n_splits_used} 个拆分,工件实有 {len(high)} 条 "
+            f"≥{D7_IMPORTANCE_FLOOR} 基事实——不符,拒")
+    # 基事实的事实占位必须**被**出处的事实集合覆盖(NFR/context 行不铸基事实,
+    # 故是子集而非相等):出处不得声称一批与该工件无关的事实
+    orphan = {bf.fact_cluster_id for bf in artifact.base_facts} - set(
+        assembly.selected_fact_occurrence_ids)
+    if orphan:
+        raise ValueError(
+            f"工件基事实的事实占位 {sorted(orphan)} 不在装配出处的选中事实集合内"
+            f"——出处与工件描述的不是同一批事实,拒")
     return assembly
 
 
@@ -325,8 +385,9 @@ def assemble_stock_artifact(cutoff, *, ingest_class: str, ts_code: str, decision
         cutoff_iso=cut.isoformat(), ingest_class=ingest_class,
         consumed_assessed_flash_sha256=p2["artifact_sha256"],
         consumed_d7_split_sha256=p3a["artifact_sha256"],
-        selected_fact_occurrence_ids=tuple(a["cluster"]["fact_occurrence_id"]
-                                           for a in selected),
+        # 去重 + 升序:render 按事实占位分组,两条选中快讯可合法共享一个占位
+        selected_fact_occurrence_ids=tuple(sorted(
+            {a["cluster"]["fact_occurrence_id"] for a in selected})),
         n_splits_used=len(splits))
     logger.info("%s @ %s: %d flashes selected, %d D7 splits -> artifact %s (assembly %s)",
                 ts_code, cut.isoformat(), len(selected), len(splits),
