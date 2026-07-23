@@ -65,6 +65,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -88,11 +89,21 @@ from workspace.research.ai_research_dept.engine.news_seal import seal_hash  # no
 
 logger = logging.getLogger("news_flash_split")
 
-ARTIFACT_SCHEMA = "nf_d7_split_v1"
+#: GPT-P3a re-review#4 (P1): the schema is bumped to **v2** because the CONTRACT changed —
+#: v1 artifacts carry LLM-chosen (possibly truncated) `fact` text. Leaving the name at v1
+#: meant an old sealed artifact, or a re-sealed one with `fact_mode="llm_span_v0"`, still
+#: verified, so P3b could consume exactly the de-contextualized facts this arc eliminated.
+#: The verifier now REQUIRES the exact `fact_mode`, and the artifact filename tracks the
+#: schema so a stale v1 file cannot occupy a v2 path.
+ARTIFACT_SCHEMA = "nf_d7_split_v2"
 EVIDENCE_CLASS = "nf_d7_split/NON_EVIDENTIARY"
-#: how `fact` was produced — recorded in the artifact so audit/downstream knows the
-#: provenance of the attribute text without re-deriving it
+#: how `fact` was produced — recorded AND enforced at the read boundary
 FACT_MODE = "deterministic_whole_source_v1"
+#: line separators are replaced by a space BEFORE the frozen sanitizer runs — the sanitizer
+#: DELETES control characters, which would fuse the words across a newline
+#: ("does\nnot" → "doesnot") and destroy a word boundary in the very context we promised to
+#: preserve (GPT-P3a re-review#4 P2).
+_LINE_SEP_RE = re.compile(r"[\r\n  ]+")
 #: evidence classes that `render_news_flash_section` mints POSITIVE base facts for
 POSITIVE_CLASSES = frozenset({"NFD", "NFI", "NFA"})
 
@@ -122,7 +133,7 @@ def _require_attr_text(v, *, where: str) -> str:
     """Exact-str + substantive after the frozen sanitizer (invariant 5)."""
     if type(v) is not str:
         raise ValueError(f"{where} 须恰 str——拒")
-    clean = sanitize_text(v)
+    clean = sanitize_text(_LINE_SEP_RE.sub(" ", v))   # newline → space, then sanitize
     if not clean.strip() or not has_substantive_text(clean):
         raise ValueError(f"{where} 净化后无实质性字符——拒(D7 拆行不得无事实)")
     return clean
@@ -226,7 +237,8 @@ class SplitConflictError(ValueError):
 
 def _artifact_path(out_dir, cutoff_iso: str, ingest_class: str) -> Path:
     stamp = _canonical_cutoff(cutoff_iso).strftime("%Y%m%dT%H%M%S%f")
-    return Path(out_dir) / f"nf_d7_split_{ingest_class}_{stamp}.json"
+    # the filename tracks the SCHEMA so a stale v1 artifact cannot occupy a v2 path
+    return Path(out_dir) / f"{ARTIFACT_SCHEMA}_{ingest_class}_{stamp}.json"
 
 
 def write_split_artifact(artifact: dict, out_dir) -> Path:
@@ -264,7 +276,15 @@ def verify_split_artifact(artifact: dict) -> dict:
     """Full structural + seal verification (the single check any consumer runs, dict or
     path) — schema, artifact_sha256, population_hash, key uniqueness, count."""
     if not isinstance(artifact, dict) or artifact.get("artifact_schema") != ARTIFACT_SCHEMA:
-        raise ValueError("not an nf_d7_split_v1 artifact")
+        raise ValueError(f"not an {ARTIFACT_SCHEMA} artifact (a v1 artifact carries "
+                         f"LLM-chosen, possibly truncated fact text — refused)")
+    # GPT-P3a re-review#4 P1: the deterministic-whole-source contract is ENFORCED here, not
+    # merely recorded. An artifact claiming any other extraction mode is refused, so a
+    # de-contextualized fact cannot reach P3b.
+    if artifact.get("fact_mode") != FACT_MODE:
+        raise ValueError(
+            f"fact_mode {artifact.get('fact_mode')!r} != {FACT_MODE!r} — only the "
+            f"deterministic whole-source contract is consumable, refused")
     body = {k: v for k, v in artifact.items() if k != "artifact_sha256"}
     if seal_hash(body) != artifact.get("artifact_sha256"):
         raise ValueError("artifact_sha256 mismatch — D7 split artifact tampered")

@@ -90,7 +90,7 @@ def _split(p2, rows):
 def test_splits_importance_ge_4_positive_facts(tmp_path):
     p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
     art = _split(p2, rows)
-    assert art["artifact_schema"] == "nf_d7_split_v1" and art["n_splits"] == 1
+    assert art["artifact_schema"] == "nf_d7_split_v2" and art["n_splits"] == 1
     assert art["fact_mode"] == "deterministic_whole_source_v1"
     s = art["splits"][0]
     assert s["fact_occurrence_id"] == p2["assessed"][0]["cluster"]["fact_occurrence_id"]
@@ -123,6 +123,49 @@ def test_newline_separated_headline_body_preserved(tmp_path):
     p2, rows = _pipeline(tmp_path, [src])
     fact = _split(p2, rows)["splits"][0]["attributes"]["fact"]
     assert "澄清公告" in fact and "不实" in fact
+
+
+def test_newline_becomes_a_space_not_a_fused_word(tmp_path):
+    # GPT-P3a re-review#4 (P2): the frozen sanitizer DELETES control chars, so a raw
+    # newline fused the words across it ("does\nnot" -> "doesnot"), destroying a word
+    # boundary. Line separators are replaced by a space BEFORE sanitizing.
+    p2, rows = _pipeline(tmp_path, ["贵州茅台 does\nnot have a contract."])
+    fact = _split(p2, rows)["splits"][0]["attributes"]["fact"]
+    assert "does not" in fact and "doesnot" not in fact
+
+
+# --------------------------------------------------- GPT-P3a re-review#4 P1: read-boundary contract
+
+def test_v1_or_wrong_fact_mode_artifact_refused(tmp_path):
+    # An old (LLM-era) artifact, or any artifact claiming a different extraction mode,
+    # must be REFUSED at the read boundary — otherwise P3b could consume exactly the
+    # de-contextualized facts this arc eliminated.
+    from workspace.research.ai_research_dept.engine.news_flash_split import (
+        verify_split_artifact,
+    )
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    good = _split(p2, rows)
+
+    legacy = json.loads(json.dumps(good, ensure_ascii=False))
+    legacy["artifact_schema"] = "nf_d7_split_v1"          # old schema
+    legacy.pop("fact_mode", None)                          # v1 had no fact_mode
+    body = {k: v for k, v in legacy.items() if k != "artifact_sha256"}
+    legacy["artifact_sha256"] = seal_hash(body)            # properly re-sealed
+    with pytest.raises(ValueError, match="nf_d7_split_v2"):
+        verify_split_artifact(legacy)
+
+    spoofed = json.loads(json.dumps(good, ensure_ascii=False))
+    spoofed["fact_mode"] = "llm_span_v0"                   # re-sealed wrong mode
+    body = {k: v for k, v in spoofed.items() if k != "artifact_sha256"}
+    spoofed["artifact_sha256"] = seal_hash(body)
+    with pytest.raises(ValueError, match="fact_mode"):
+        verify_split_artifact(spoofed)
+
+
+def test_artifact_path_tracks_schema_version(tmp_path):
+    p2, rows = _pipeline(tmp_path, ["贵州茅台签订 12 亿元大单"])
+    path = write_split_artifact(_split(p2, rows), tmp_path / "out")
+    assert path.name.startswith("nf_d7_split_v2_")
 
 
 def test_abbreviation_does_not_truncate(tmp_path):
