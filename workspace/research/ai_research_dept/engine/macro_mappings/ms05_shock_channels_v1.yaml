@@ -1,0 +1,66 @@
+# MS05 external_shock_transmission 暴露映射 v1 — 申万2021 L1 → 外部冲击通道
+# 作者流程(用户裁定 2026-07-24):Claude 草拟 v1 → 用户审改 → 冻结(sha256 入
+# 注册表;改内容 = 升版 v2)。通道语义**无符号**(产者/用者皆"暴露",方向由
+# 宏观席配合 M/MF 外部冲击事实评定);sensitivity ∈ {high, medium}(low 不注册
+# ——弱暴露按 mapped_no_exposure 处理,防噪声配对)。
+# 空列表 = 该行业无注册外部冲击通道暴露(mapped_no_exposure)。
+mapping_id: ms05_shock_channels
+mapping_version: v1
+key_type: sw2021_l1_code
+channels:
+  - export_demand            # 海外需求/关税
+  - commodity_price_linkage  # 大宗商品价格联动(产者与用者)
+  - energy_price_linkage     # 能源价格联动(油气煤电)
+  - fx_sensitivity           # 汇率敏感(收入/成本币种错配)
+  - global_supply_chain      # 全球供应链/出口管制
+  - global_risk_appetite     # 全球风险偏好传导(北向/高β)
+map:
+  "801010.SI": [{channel: commodity_price_linkage, sensitivity: medium}]   # 农林牧渔
+  "801030.SI": [{channel: commodity_price_linkage, sensitivity: high},
+                {channel: energy_price_linkage, sensitivity: medium},
+                {channel: export_demand, sensitivity: medium}]             # 基础化工
+  "801040.SI": [{channel: commodity_price_linkage, sensitivity: high},
+                {channel: export_demand, sensitivity: medium}]             # 钢铁
+  "801050.SI": [{channel: commodity_price_linkage, sensitivity: high},
+                {channel: fx_sensitivity, sensitivity: medium}]            # 有色金属
+  "801080.SI": [{channel: global_supply_chain, sensitivity: high},
+                {channel: export_demand, sensitivity: high},
+                {channel: fx_sensitivity, sensitivity: medium}]            # 电子
+  "801110.SI": [{channel: export_demand, sensitivity: high},
+                {channel: commodity_price_linkage, sensitivity: medium}]   # 家用电器
+  "801120.SI": [{channel: commodity_price_linkage, sensitivity: medium}]   # 食品饮料
+  "801130.SI": [{channel: export_demand, sensitivity: high},
+                {channel: fx_sensitivity, sensitivity: high}]              # 纺织服饰
+  "801140.SI": [{channel: export_demand, sensitivity: high},
+                {channel: commodity_price_linkage, sensitivity: medium}]   # 轻工制造
+  "801150.SI": [{channel: global_supply_chain, sensitivity: medium},
+                {channel: export_demand, sensitivity: medium}]             # 医药生物
+  "801160.SI": [{channel: energy_price_linkage, sensitivity: medium}]      # 公用事业
+  "801170.SI": [{channel: energy_price_linkage, sensitivity: high},
+                {channel: export_demand, sensitivity: medium}]             # 交通运输
+  "801180.SI": []                                                          # 房地产
+  "801200.SI": []                                                          # 商贸零售
+  "801210.SI": []                                                          # 社会服务
+  "801230.SI": []                                                          # 综合
+  "801710.SI": [{channel: energy_price_linkage, sensitivity: medium}]      # 建筑材料
+  "801720.SI": []                                                          # 建筑装饰
+  "801730.SI": [{channel: export_demand, sensitivity: high},
+                {channel: commodity_price_linkage, sensitivity: medium},
+                {channel: global_supply_chain, sensitivity: medium}]       # 电力设备
+  "801740.SI": []                                                          # 国防军工
+  "801750.SI": [{channel: global_supply_chain, sensitivity: medium}]       # 计算机
+  "801760.SI": []                                                          # 传媒
+  "801770.SI": [{channel: global_supply_chain, sensitivity: medium},
+                {channel: export_demand, sensitivity: medium}]             # 通信
+  "801780.SI": []                                                          # 银行
+  "801790.SI": [{channel: global_risk_appetite, sensitivity: medium}]      # 非银金融
+  "801880.SI": [{channel: export_demand, sensitivity: high},
+                {channel: global_supply_chain, sensitivity: medium},
+                {channel: commodity_price_linkage, sensitivity: medium}]   # 汽车
+  "801890.SI": [{channel: export_demand, sensitivity: medium},
+                {channel: commodity_price_linkage, sensitivity: medium}]   # 机械设备
+  "801950.SI": [{channel: energy_price_linkage, sensitivity: high}]        # 煤炭
+  "801960.SI": [{channel: energy_price_linkage, sensitivity: high},
+                {channel: commodity_price_linkage, sensitivity: high}]     # 石油石化
+  "801970.SI": []                                                          # 环保
+  "801980.SI": []                                                          # 美容护理

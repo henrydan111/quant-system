@@ -1,0 +1,52 @@
+# MS04 policy_alignment 暴露映射 v1 — 申万2021 L1 → 政策通道
+# 作者流程(用户裁定 2026-07-24):Claude 草拟 v1 → 用户审改 → 冻结(sha256 入
+# 注册表;改内容 = 升版 v2)。通道 = 该行业股票"对哪类政策事实存在系统性暴露"
+# ——方向(受益/受损)由宏观席配合 M/MF 政策事实评定,映射本身无符号。
+# 空列表 = 该行业无注册政策通道暴露(mapped_no_exposure,exposure_value=null)。
+mapping_id: ms04_policy_channels
+mapping_version: v1
+key_type: sw2021_l1_code
+channels:
+  - industrial_policy        # 产业扶持/规划(信创、乡村振兴、设备更新等)
+  - monetary_credit          # 货币信贷(降准降息、信贷投放)
+  - fiscal_infra             # 财政/基建(专项债、新基建)
+  - property_policy          # 地产政策链(限购、融资、后周期)
+  - consumption_stimulus     # 消费刺激(补贴、以旧换新)
+  - healthcare_policy        # 医保/集采/审评审批
+  - tech_selfreliance        # 科技自立/国产替代/出口管制反制
+  - energy_transition        # 双碳/能源转型
+  - defense_budget           # 国防预算/军贸
+  - financial_regulation     # 金融监管(资管、资本市场制度)
+  - environmental_regulation # 环保监管/限产
+map:
+  "801010.SI": [industrial_policy, consumption_stimulus]        # 农林牧渔
+  "801030.SI": [environmental_regulation, energy_transition]    # 基础化工
+  "801040.SI": [fiscal_infra, environmental_regulation, property_policy]  # 钢铁
+  "801050.SI": [energy_transition, fiscal_infra]                # 有色金属
+  "801080.SI": [tech_selfreliance]                              # 电子
+  "801110.SI": [consumption_stimulus, property_policy]          # 家用电器
+  "801120.SI": [consumption_stimulus]                           # 食品饮料
+  "801130.SI": [consumption_stimulus]                           # 纺织服饰
+  "801140.SI": [consumption_stimulus, property_policy]          # 轻工制造
+  "801150.SI": [healthcare_policy]                              # 医药生物
+  "801160.SI": [energy_transition]                              # 公用事业
+  "801170.SI": [fiscal_infra]                                   # 交通运输
+  "801180.SI": [property_policy, monetary_credit]               # 房地产
+  "801200.SI": [consumption_stimulus]                           # 商贸零售
+  "801210.SI": [consumption_stimulus]                           # 社会服务
+  "801230.SI": []                                               # 综合
+  "801710.SI": [fiscal_infra, property_policy]                  # 建筑材料
+  "801720.SI": [fiscal_infra, property_policy]                  # 建筑装饰
+  "801730.SI": [energy_transition, industrial_policy]           # 电力设备
+  "801740.SI": [defense_budget]                                 # 国防军工
+  "801750.SI": [tech_selfreliance, industrial_policy]           # 计算机
+  "801760.SI": [industrial_policy]                              # 传媒
+  "801770.SI": [tech_selfreliance, fiscal_infra]                # 通信
+  "801780.SI": [monetary_credit, financial_regulation, property_policy]   # 银行
+  "801790.SI": [financial_regulation, monetary_credit]          # 非银金融
+  "801880.SI": [consumption_stimulus, energy_transition]        # 汽车
+  "801890.SI": [fiscal_infra, industrial_policy]                # 机械设备
+  "801950.SI": [energy_transition, environmental_regulation]    # 煤炭
+  "801960.SI": [energy_transition]                              # 石油石化
+  "801970.SI": [environmental_regulation, fiscal_infra]         # 环保
+  "801980.SI": [consumption_stimulus]                           # 美容护理
