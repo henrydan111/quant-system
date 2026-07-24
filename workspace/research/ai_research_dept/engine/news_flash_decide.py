@@ -17,13 +17,14 @@ Declared invariants (Tier-2; see NF_UNIT_P4_DESIGN.md):
    re-runs) — a driver artifact is by construction the one the door will prove.
 3. **One object flow.** The SAME `(artifact, assembly)` pair flows
    assemble → record → execute → seal; the driver never re-assembles between steps.
-4. **Crash-safe idempotent re-entry.** A decision with an existing SUCCESS
-   commitment is never re-executed (the ledger's success-unique invariant would
-   refuse a second success anyway): its canonical archive is loaded — or, if the
-   process died between commit and seal, recovered via
-   `recover_and_seal_success_archive` (pure-disk). A hard_failed execution does
-   NOT block re-entry — the retry executes fresh (success-unique gates success
-   only, and each execution's archive is an independent audit record).
+4. **Crash-safe idempotent re-entry, with audit backfill** (P4b review P1). On
+   every re-entry, EVERY committed execution whose per-execution archive is
+   missing — success OR hard_failed, i.e. any crash between commit and seal —
+   is first recovered from pure disk state via
+   `recover_and_seal_execution_archive`, so no committed execution can ever
+   lose its independent audit archive. Then: an existing SUCCESS commitment is
+   never re-executed (its archive is loaded); a hard_failed one does NOT block
+   a fresh retry (success-unique gates success only).
 5. **NothingToDecide propagates** — a stock with no routed flash writes NOTHING
    (no ledger row, no execution, no archive).
 6. **Identities out, payloads stay sealed.** The return value carries identities
@@ -46,10 +47,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from workspace.research.ai_research_dept.engine.news_archive import (  # noqa: E402
     _archive_path, load_and_verify_execution_archive,
-    recover_and_seal_success_archive, seal_decision_archive,
+    recover_and_seal_execution_archive, seal_decision_archive,
 )
 from workspace.research.ai_research_dept.engine.news_decision import (  # noqa: E402
-    find_success_commitment, record_decision,
+    find_success_commitment, list_execution_commitments, record_decision,
 )
 from workspace.research.ai_research_dept.engine.news_executors import (  # noqa: E402
     NewsScoringContract, execute_news_decision,
@@ -100,18 +101,28 @@ def decide_stock(cutoff, *, ingest_class: str, ts_code: str, ledger_dir,
     record_decision(ledger_dir, decision_id, artifact, assembly=assembly,
                     store_dir=store_dir, artifact_dir=artifact_dir)
 
+    # invariant 4 (P4b review P1): BACKFILL first — every committed execution
+    # whose per-execution audit archive is missing (a crash between commit and
+    # seal, hard_failed included) is recovered from pure disk state BEFORE any
+    # resume or new retry. Without this, a hard_failed commit whose seal never
+    # ran would lose its independent audit archive forever (only success had a
+    # recovery path).
+    for c in list_execution_commitments(ledger_dir, decision_id):
+        if not _archive_path(archive_dir, decision_id, c["execution_id"]).exists():
+            recover_and_seal_execution_archive(
+                decision_id, c["execution_id"], artifact, ledger_dir=ledger_dir,
+                prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)
+            logger.info("%s: backfilled missing archive for committed execution %s",
+                        decision_id, c["execution_id"])
+
     # invariant 4: success is terminal per decision — never re-execute it
+    # (its archive is guaranteed present by the backfill above)
     success = find_success_commitment(ledger_dir, decision_id)
     if success is not None:
         execution_id = success["execution_id"]
-        if _archive_path(archive_dir, decision_id, execution_id).exists():
-            archive = load_and_verify_execution_archive(
-                decision_id, execution_id, artifact, ledger_dir=ledger_dir,
-                prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)
-        else:                                  # crashed between commit and seal
-            archive = recover_and_seal_success_archive(
-                decision_id, artifact, ledger_dir=ledger_dir, prov_dir=prov_dir,
-                contract=contract, archive_dir=archive_dir)
+        archive = load_and_verify_execution_archive(
+            decision_id, execution_id, artifact, ledger_dir=ledger_dir,
+            prov_dir=prov_dir, contract=contract, archive_dir=archive_dir)
         logger.info("%s: success already committed — idempotent re-entry", decision_id)
         return {"decision_id": decision_id, "execution_id": execution_id,
                 "news_status": "success", "assembly_hash": assembly.assembly_hash,

@@ -134,6 +134,70 @@ def test_hard_failure_does_not_block_retry(tmp_path):
     assert out1["archive_sha256"] != out2["archive_sha256"]
 
 
+def test_unsealed_hard_failed_commitment_is_backfilled_on_reentry(tmp_path):
+    # P4b review P1 (the reviewer's probe): hard_failed COMMITTED, crash before
+    # seal_decision_archive -> the old execution's independent audit archive was
+    # lost forever (recovery only supported success). Re-entry must FIRST
+    # backfill the missing hard_failed archive from pure disk state, then retry;
+    # afterwards the old execution is verifiable BY EXECUTION.
+    from workspace.research.ai_research_dept.engine.news_archive import (
+        load_and_verify_execution_archive,
+    )
+    root = chain_store("full")
+    art = chain_artifact(NF_ID, variant="full")
+    record_decision(tmp_path / "ledger", NF_ID, art, **evidence_for(art))
+
+    def broken_fn(msgs):
+        return ta._Reply("not json at all")
+    bundle = execute_news_decision(                      # committed, NOT sealed
+        art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+        decision_id=NF_ID, contract=ta._contract(), call_fn=broken_fn)
+    assert bundle["outcome"].news_status == "hard_failed"
+    failed_exec = bundle["execution_id"]
+
+    out = _decide(tmp_path)                              # re-entry with good LLM
+    assert out["news_status"] == "success"
+    assert out["execution_id"] != failed_exec
+    # the old hard_failed execution's audit archive now EXISTS and verifies
+    old = load_and_verify_execution_archive(
+        NF_ID, failed_exec, art, ledger_dir=tmp_path / "ledger",
+        prov_dir=tmp_path / "prov", contract=ta._contract(),
+        archive_dir=tmp_path / "arch")
+    assert old["outcome"]["news_status"] == "hard_failed"
+    assert old["evaluation"] is None
+    assert old["archive_schema"] == "news_decision_archive_v2"
+
+
+def test_backfill_also_runs_when_success_already_exists(tmp_path):
+    # even a decision that later SUCCEEDED must backfill an older unsealed
+    # hard_failed execution on re-entry (the reviewer's explicit ask)
+    from workspace.research.ai_research_dept.engine.news_archive import (
+        load_and_verify_execution_archive,
+    )
+    art = chain_artifact(NF_ID, variant="full")
+    record_decision(tmp_path / "ledger", NF_ID, art, **evidence_for(art))
+
+    def broken_fn(msgs):
+        return ta._Reply("not json at all")
+    failed = execute_news_decision(                      # hard_failed, unsealed
+        art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+        decision_id=NF_ID, contract=ta._contract(), call_fn=broken_fn)
+    good = execute_news_decision(                        # success, ALSO unsealed
+        art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+        decision_id=NF_ID, contract=ta._contract(), call_fn=ta._call_fn())
+    out = _decide(tmp_path)                              # re-entry
+    assert out["resumed"] is True
+    assert out["execution_id"] == good["execution_id"]
+    # BOTH unsealed executions were backfilled
+    for eid, status in ((failed["execution_id"], "hard_failed"),
+                        (good["execution_id"], "success")):
+        loaded = load_and_verify_execution_archive(
+            NF_ID, eid, art, ledger_dir=tmp_path / "ledger",
+            prov_dir=tmp_path / "prov", contract=ta._contract(),
+            archive_dir=tmp_path / "arch")
+        assert loaded["outcome"]["news_status"] == status
+
+
 # --------------------------------------------------- invariant 5: nothing to decide
 
 def test_unrouted_stock_writes_nothing(tmp_path):

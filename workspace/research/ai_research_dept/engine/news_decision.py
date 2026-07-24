@@ -390,6 +390,15 @@ def find_success_commitment(ledger_dir, decision_id: str) -> "dict | None":
                  and e["news_status"] == "success"), None)
 
 
+def list_execution_commitments(ledger_dir, decision_id: str) -> list:
+    """该决策的**全部**执行承诺,链序(P4b P1:重入补封已承诺但未封档的执行
+    ——hard_failed 承诺后封档前崩溃,其独立审计档案曾永久缺失)。"""
+    require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2 同形状面
+    return [e for e in _read_chain(_ledger_path(ledger_dir))
+            if e["kind"] == "execution_commitment"
+            and e["decision_id"] == decision_id]
+
+
 def lookup_decision(ledger_dir, decision_id: str) -> "dict | None":
     require_exact_id(decision_id, "decision_id")       # GPT #27 P1#2
     return next((e for e in _read_chain(_ledger_path(ledger_dir))
