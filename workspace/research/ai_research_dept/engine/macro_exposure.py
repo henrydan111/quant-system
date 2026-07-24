@@ -176,7 +176,15 @@ def select_ths_snapshot(ths_members, cutoff):
             or not {"fetched_at", "ts_code", "con_code"} <= set(ths_members.columns):
         return pd.DataFrame(), None, None, "source_unavailable"
     cut_ts = pd.Timestamp(cutoff)
-    stamps = pd.to_datetime(ths_members["fetched_at"], errors="coerce")
+    raw = ths_members["fetched_at"]
+    # re-review#5 P1:**数值型时间戳在解析前拒**——整数 20260709(本意 2026-07-09)
+    # 会被 pd.to_datetime 当纳秒纪元解析成 1970-01-01,穿过 2025 cutoff 门,把
+    # 未来概念注入历史决策(实际 no-lookahead 漏洞)。只接受 datetime 值或
+    # 字符串;任何 int/float/bool 元素 = 源畸形。
+    if pd.api.types.is_numeric_dtype(raw) or raw.map(
+            lambda v: isinstance(v, (int, float))).any():
+        return pd.DataFrame(), None, None, "source_unavailable"
+    stamps = pd.to_datetime(raw, errors="coerce")
     # re-review#4 P1:**任一**行时间戳不可解析 = 源畸形(旧码只拒全坏——混合
     # "有效行 + not-a-date 行"的帧曾静默丢坏行并报 selected,既非
     # source_unavailable 也非可证明完整的快照);逐行 ts_code/con_code 非空同理

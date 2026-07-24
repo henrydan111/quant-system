@@ -297,6 +297,41 @@ def test_mixed_valid_and_bad_timestamp_rows_are_source_unavailable(mappings):
         assert rows[2]["mapping_status"] == "source_unavailable"
 
 
+def test_numeric_timestamp_is_source_failure_not_epoch_1970(mappings):
+    # re-review#5 P1 (the reviewer's probe): integer 20260709 (meant as
+    # 2026-07-09) parses as ~1970-01-01 epoch-nanoseconds, slips through the
+    # 2025 cutoff and injects FUTURE concepts into a historical decision — an
+    # actual no-lookahead hole via ordinary types. Numeric fetched_at now
+    # refuses BEFORE parsing; the same date as a legit ISO string is still the
+    # legal no-eligible omission.
+    fut_int = pd.DataFrame([{"ts_code": "FUTURE.TI", "con_code": SMIC,
+                             "con_name": "x", "fetched_at": 20260709}])
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=fut_int, mappings=mappings)
+    assert rows[2]["mapping_status"] == "source_unavailable"
+    assert "FUTURE.TI" not in str(rows[2]["exposure_value"])
+    # legit ISO string, genuinely later than cutoff -> legal M4 omission
+    fut_str = pd.DataFrame([{"ts_code": "FUTURE.TI", "con_code": SMIC,
+                             "con_name": "x",
+                             "fetched_at": "2026-07-09T00:00:00"}])
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=fut_str, mappings=mappings)
+    assert rows[2]["mapping_status"] == "mapped"
+    assert rows[2]["exposure_value"]["concepts_omitted"] \
+        == "no_contemporaneous_snapshot"
+    # mixed string + numeric rows: source failure in both orders
+    good_row = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+                "fetched_at": "2025-01-01T00:00:00"}
+    num_row = {"ts_code": "883418.TI", "con_code": SMIC, "con_name": "x",
+               "fetched_at": 20260709}
+    for order in ([good_row, num_row], [num_row, good_row]):
+        rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                      pool_metrics=_pool(),
+                                      ths_members=pd.DataFrame(order),
+                                      mappings=mappings)
+        assert rows[2]["mapping_status"] == "source_unavailable"
+
+
 def test_duplicate_pool_rows_refused_in_both_orders(mappings):
     # P1#2 (the reviewer's probe): duplicated ts_code rows made the buckets
     # depend on row order (low-first -> low, high-first -> high). Fail-closed:
