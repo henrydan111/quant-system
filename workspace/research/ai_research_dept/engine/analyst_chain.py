@@ -679,6 +679,8 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     的契约不被信任);缺输入=MissingInputError(复审#5 Major-1:不得静默 None);
     逐(日,股)跨进程锁从档案检查持有到发布结束(并发双跑不再互覆盖)。"""
     from research_orchestrator.file_lock import file_lock
+    if nf_roots is not None:
+        _require_nf_roots(nf_roots)    # re-review#2 P2:先于缓存复用/任何执行
     verify_contract_matches_manifest(contract, out_dir.parent)
     inputs = build_inputs(code, day, facts, pv, retr, biz, regime, series)
     if inputs is None:
@@ -695,6 +697,9 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
             verify_existing_archive(existing, manifest_fp, artifact_fp, code, day,
                                     contract.manifest_sha256)
             if archive_complete(existing, dict(contract.scoring)):
+                # BUMP re-review#2 P1:NF 启用调用不得复用 legacy 模式档案
+                # (反之亦然)——缓存曾整体绕过 _consume_nf_seat 的绑定
+                _require_reusable_mode(existing, nf_roots, code, day)
                 return existing
         # attempts 状态机(复审#4 Major-1):跨进程锁分配编号,started→completed/
         # failed→published 全程留痕;失败 raw 永不被覆盖;只有完整结果原子发布
@@ -756,6 +761,31 @@ _NF_IDENTITY_KEYS = frozenset({
     "assembly_hash"})
 
 
+def _require_nf_roots(nf_roots) -> None:
+    """五根映射预检(BUMP re-review#2 P2:必须先于**任何**席位/外部调用——旧位
+    在 news 迭代时才验,fund/tech 已白跑)。唯一实现,run_stock 入口、
+    _execute_attempt 入口与 _consume_nf_seat 共用。"""
+    if not isinstance(nf_roots, dict) or set(nf_roots) != _NF_ROOT_KEYS:
+        raise VersionCollisionError(
+            f"nf_roots 须为恰 {sorted(_NF_ROOT_KEYS)} 五根映射——自由回调已废除"
+            f"(BUMP P1#1:回调可绕过 cutoff/契约/身份绑定),拒")
+
+
+def _require_reusable_mode(existing: dict, nf_roots, code: str, day: str) -> None:
+    """跨 NF 模式复用门(BUMP re-review#2 P1:NF 启用调用曾直接返回 default-off
+    产生的完整 legacy 档案——绕过 _consume_nf_seat/身份/cutoff 绑定)。`nf_mode`
+    自 v3.2 起是档案身份的一部分(封入 archive_sha256);模式不符 = fail-closed
+    拒绝复用,**绝不覆盖**旧档案(保旧封印/台账对应)——NF 启用运行使用独立
+    out_dir/版本空间。"""
+    if bool(existing.get("nf_mode")) != (nf_roots is not None):
+        have = "NF 模式" if existing.get("nf_mode") else "非 NF 模式"
+        want = "NF 启用" if nf_roots is not None else "NF 关闭"
+        raise VersionCollisionError(
+            f"{code}@{day}: 既有完整档案产生于{have},本次调用为{want}——跨模式"
+            f"复用被拒(BUMP re-review#2 P1;不覆盖旧档案,请为 NF 运行使用"
+            f"独立 out_dir)")
+
+
 def _consume_nf_seat(code: str, day: str, contract: "ChainContract",
                      nf_roots) -> dict:
     """v3.2 NF 消费的**引擎属地绑定**(BUMP 复审 P1#1 结构折叠:自由回调可绕过
@@ -769,10 +799,7 @@ def _consume_nf_seat(code: str, day: str, contract: "ChainContract",
     from workspace.research.ai_research_dept.engine.news_session_embed import (
         consume_news_decision, nf_contract_from_chain, nf_cutoff_for_day,
     )
-    if not isinstance(nf_roots, dict) or set(nf_roots) != _NF_ROOT_KEYS:
-        raise VersionCollisionError(
-            f"nf_roots 须为恰 {sorted(_NF_ROOT_KEYS)} 五根映射——自由回调已废除"
-            f"(BUMP P1#1:回调可绕过 cutoff/契约/身份绑定),拒")
+    _require_nf_roots(nf_roots)
     got = consume_news_decision(
         code, nf_cutoff_for_day(day, contract),
         ingest_class=contract.nf["ingest_class"],
@@ -797,6 +824,8 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                      card_ids: dict | None = None,
                      nf_roots=None) -> dict:
     card_ids = card_ids or {}
+    if nf_roots is not None:
+        _require_nf_roots(nf_roots)    # re-review#2 P2:先于任何席位/外部调用
     seat_results = {}
     # v3.2 NF 接线(C1 冻结义务 a/c/d + BUMP 复审 P1#1):调用方只供受信五根
     # (nf_roots),消费/绑定/完整性全在引擎内(_consume_nf_seat)。
@@ -875,6 +904,10 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                   for s, r in seat_results.items()},
         "bear": bear, "judge": verdict,
         "evidence_class": "research_summary/" + C.EVIDENCE_CLASS_REPLAY,
+        # BUMP re-review#2 P1:执行模式是档案**身份**的一部分(封入
+        # archive_sha256)——跨模式复用门据此判定;no_decision 回退产生的
+        # NF 模式档案同样标 True(模式≠是否带 nf_decision 块)
+        "nf_mode": nf_roots is not None,
     }
     if nf_block is not None:
         # v3.2 NF C1 义务 a:严格新增的**身份块**(ids+哈希,无载荷拷贝),

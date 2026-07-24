@@ -200,15 +200,63 @@ def test_hook_on_engine_binds_and_seals_the_identity(tmp_path, monkeypatch):
     assert archive["complete"] is True
 
 
-def test_free_form_callback_is_dead(tmp_path, monkeypatch):
+def test_free_form_callback_is_dead_before_any_seat(tmp_path, monkeypatch):
     # BUMP re-review P1#1 (the reviewer's probe): a caller-supplied callable
     # could bypass consumption, identity and cutoff binding entirely — the
-    # parameter now accepts ONLY the five-root mapping; anything else refuses
-    # before any seat runs
+    # parameter now accepts ONLY the five-root mapping. re-review#2 P2: the
+    # refusal fires at ENTRY, before ANY seat or external call runs (previously
+    # fund/tech had already executed by the time news validated).
     for bad in (lambda code, day: {"no_decision": True}, {}, {"ledger_dir": "x"},
                 {**_roots(tmp_path, tmp_path), "extra": 1}):
+        calls: list = []
         with pytest.raises(AC.VersionCollisionError, match="五根映射|自由回调"):
-            _attempt(tmp_path, bad, monkeypatch, [])
+            _attempt(tmp_path, bad, monkeypatch, calls)
+        assert calls == []                             # no seat ever ran
+
+
+def test_archives_carry_the_sealed_nf_mode(tmp_path, monkeypatch):
+    # re-review#2 P1: nf_mode is part of the archive IDENTITY (sealed) — the
+    # cross-mode reuse gate keys on it; a no-decision-fallback NF archive is
+    # STILL nf_mode=True (mode != whether an nf_decision block exists)
+    root = chain_store("full")
+    legacy = _attempt(tmp_path, None, monkeypatch, [])
+    assert legacy["nf_mode"] is False
+    nf_on = _attempt(tmp_path / "b", _roots(tmp_path / "b", root), monkeypatch,
+                     [], code="300750.SZ")             # no_decision fallback
+    assert nf_on["nf_mode"] is True and "nf_decision" not in nf_on
+    # sealed: flipping the flag changes the seal
+    from workspace.research.ai_research_dept.engine.integrity import archive_seal
+    forged = json.loads(json.dumps(legacy, ensure_ascii=False))
+    forged["nf_mode"] = True
+    body = {k: v for k, v in forged.items() if k != "archive_sha256"}
+    assert archive_seal(body) != legacy["archive_sha256"]
+
+
+def test_cross_mode_reuse_gate_matrix():
+    # re-review#2 P1 (the reviewer's probe): an NF-enabled call must NOT return
+    # a cached complete legacy archive (and vice versa); matched modes reuse
+    roots = {"ledger_dir": "x", "prov_dir": "x", "archive_dir": "x",
+             "store_dir": "x", "artifact_dir": "x"}
+    legacy_arch = {"nf_mode": False}
+    pre_v32_arch: dict = {}                            # no key = legacy mode
+    nf_arch = {"nf_mode": True}
+    with pytest.raises(AC.VersionCollisionError, match="跨模式"):
+        AC._require_reusable_mode(legacy_arch, roots, "c", "d")
+    with pytest.raises(AC.VersionCollisionError, match="跨模式"):
+        AC._require_reusable_mode(pre_v32_arch, roots, "c", "d")
+    with pytest.raises(AC.VersionCollisionError, match="跨模式"):
+        AC._require_reusable_mode(nf_arch, None, "c", "d")
+    AC._require_reusable_mode(legacy_arch, None, "c", "d")   # matched: reuse ok
+    AC._require_reusable_mode(nf_arch, roots, "c", "d")
+
+
+def test_run_stock_reuse_path_calls_the_mode_gate():
+    # the gate's run_stock call site (the cached-return branch) — pinned by
+    # source assertion; the decision logic itself is matrix-tested above
+    import inspect
+    src = inspect.getsource(AC.run_stock)
+    assert "_require_reusable_mode(existing, nf_roots" in src
+    assert src.index("_require_reusable_mode") < src.index("return existing")
 
 
 def test_hook_no_decision_falls_back_to_inline_seat(tmp_path, monkeypatch):

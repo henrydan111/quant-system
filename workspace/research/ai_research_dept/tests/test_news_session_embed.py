@@ -223,11 +223,12 @@ def test_tampered_identity_block_changes_the_session_seal(tmp_path):
 #: 钉 Git 规范 blob 的内容(等于 `git cat-file` 内容的 sha256))。
 #: 本钉**只随**正式 chain-version bump 一起移动:
 #:   chain_v3.1 = 12b1a3244c2e8c4a01af3800705c9bd9542b7fddc0ca83d7a5bc48c5498b3bac
-#:   chain_v3.2 = 当前值(NF 接线 bump 2026-07-24 + BUMP 复审 round-1 三 P1 折叠
-#:   [引擎属地绑定/值锁/consumer 入指纹];v3.2 manifest 尚未落盘冻结,故为同一
-#:   飞行版本内的合法修正——CHAIN_VERSION 与本钉同提交移动,义务 a)
+#:   chain_v3.2 = 当前值(NF 接线 bump 2026-07-24 + BUMP round-1 三 P1 [引擎属地
+#:   绑定/值锁/consumer 入指纹] + round-2 P1/P2 [nf_mode 入档案身份+跨模式复用门/
+#:   五根预检先于一切席] 折叠;v3.2 manifest 尚未落盘冻结,均为同一飞行版本内的
+#:   合法修正——CHAIN_VERSION 与本钉同提交移动,义务 a)
 _FROZEN_ANALYST_CHAIN_LF_SHA256 = \
-    "78a9b4286723578a69bee08e143cfb14b712c8825589e47f88f345d854c64326"
+    "d770cdfb038e5ef43a880a6d134a02feaefeb19f11ad9128c843df69565e1135"
 
 
 def test_analyst_chain_bytes_are_pinned_until_the_version_bump():
