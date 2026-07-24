@@ -1,11 +1,13 @@
-# Macro wave M1 — MS01-MS05 per-stock exposure rows (design draft)
+# Macro wave M1 — MS01-MS05 per-stock exposure rows (design, FROZEN)
 
-**Review tier:** proposed Tier-2 (data-layer plumbing; mapping assets are versioned + hashed;
-fail-closed omission semantics). *Tier is a user call at freeze.*
+**Review tier:** **Tier-2** (user-assigned 2026-07-24).
 
-**Status:** DRAFT 2026-07-24 after premise checks. Open decisions at the bottom need the user
-before freeze. Spec source: [NEWS_FLASH_INTEGRATION_v1.md](NEWS_FLASH_INTEGRATION_v1.md) §6 +
-§0d m1/m2/M4 rows.
+**Status:** FROZEN 2026-07-24 — user decisions recorded: (1) MS04/MS05 curated mappings =
+**Claude drafts v1 YAML, user reviews/edits BEFORE the GPT arc** (mapping sha256 into the
+registry; content change = version bump); (2) MS01/MS02 buckets = **pool-relative terciles** on
+D-close metrics (stable to universe drift); (3) Tier-2. Mapping keys = SW2021 **L1 codes**
+(`industry_as_of` returns e.g. `801120.SI` — verified). Spec source:
+[NEWS_FLASH_INTEGRATION_v1.md](NEWS_FLASH_INTEGRATION_v1.md) §6 + §0d m1/m2/M4 rows.
 
 ## Premise checks (done)
 
