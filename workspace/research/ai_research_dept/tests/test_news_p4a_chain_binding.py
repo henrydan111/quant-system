@@ -76,6 +76,24 @@ def test_record_without_evidence_is_a_typeerror(tmp_path):
         record_decision(tmp_path / "ledger", "d1", art, assembly=asm_for(art))
 
 
+def test_first_write_door_accepts_no_caller_evidence_objects():
+    # re-review#2 structural lock (repeat-class => mechanical guard): the door's
+    # parameter surface is ids + trusted ROOTS only. A dict/DataFrame evidence
+    # parameter reopening the caller-supplied-evidence class fails this
+    # enumeration until deliberately reviewed.
+    import inspect
+    from workspace.research.ai_research_dept.engine.news_flash_assemble import (
+        prove_assembly_by_rederivation, resolve_committed_evidence,
+    )
+    assert list(inspect.signature(record_decision).parameters) == [
+        "ledger_dir", "decision_id", "artifact", "assembly",
+        "store_dir", "artifact_dir"]
+    assert list(inspect.signature(prove_assembly_by_rederivation).parameters) == [
+        "assembly", "artifact", "store_dir", "artifact_dir"]
+    assert list(inspect.signature(resolve_committed_evidence).parameters) == [
+        "cutoff", "ingest_class", "store_dir", "artifact_dir"]
+
+
 def test_seal_without_assembly_is_a_typeerror(tmp_path):
     art, asm, bundle = _executed(tmp_path)
     with pytest.raises(TypeError, match="assembly"):
@@ -107,7 +125,8 @@ def test_gpt_probe_forged_provenance_refused_and_writes_nothing(tmp_path):
                          consumed_d7_split_sha256="2" * 64)
     ev = evidence_for(art)
     ev["assembly"] = forged
-    with pytest.raises(RegistryError, match="重推导|不符|does not match"):
+    with pytest.raises(RegistryError,
+                       match="重推导|不符|无上游记录|无面板|does not match"):
         record_decision(tmp_path / "ledger", "d1", art, **ev)
     assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
 
@@ -171,15 +190,78 @@ def test_hand_built_artifact_cannot_be_recorded(tmp_path):
 
 
 def test_evidence_from_another_chain_refused(tmp_path):
-    # artifact from chain A, evidence from chain B: identity check or hash
-    # mismatch refuses (the two genuine chains cannot be cross-wired)
+    # artifact from chain A, trusted roots pointing at chain B: re-derivation
+    # rebuilds B's artifact under A's claimed identity -> hash mismatch refuses
+    # (two genuine committed chains cannot be cross-wired)
     art_a = chain_artifact("d1", variant="full")
     art_b = chain_artifact("d1", variant="basic")
-    ev_b = evidence_for(art_b)
-    ev = dict(ev_b)
-    ev["assembly"] = asm_for(art_a)
+    ev = evidence_for(art_b)                          # B's roots
+    ev["assembly"] = asm_for(art_a)                   # A's claim
     with pytest.raises(RegistryError):
         record_decision(tmp_path / "ledger", "d1", art_a, **ev)
+    assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
+
+
+# ------------------------------------------------ re-review#2 P1#1: no trusted root
+# ------------------------------------------------ => now resolved FROM the roots
+
+def test_wholly_forged_evidence_files_refused_without_a_store(tmp_path):
+    # the reviewer's round-2 probe, half 1: an attacker fabricates plain-dict
+    # P1/P2/P3a with RECOMPUTED self-hashes and commits them to a scratch dir.
+    # The door resolves the TEXT STORE first — a claimed identity with no store
+    # panel has no data root, refused before any artifact parsing. No ledger.
+    from workspace.research.ai_research_dept.engine.news_flash_typing import (
+        ARTIFACT_SCHEMA as P1_SCHEMA,
+    )
+    from workspace.research.ai_research_dept.engine.news_flash_typing import (
+        _artifact_path as p1_path,
+    )
+    art = chain_artifact("d1", variant="full")
+    scratch = tmp_path / "forged_root"
+    scratch.mkdir()
+    forged_p1 = {"artifact_schema": P1_SCHEMA, "cutoff_iso": "2025-01-27T18:00:00",
+                 "ingest_class": "forward", "evidence_class": "NON_EVIDENTIARY",
+                 "population_hash": seal_hash([]), "n_flashes": 0, "typed": []}
+    forged_p1["artifact_sha256"] = seal_hash(forged_p1)   # recomputed self-hash
+    p1_path(scratch, forged_p1["cutoff_iso"], "forward").write_text(
+        json.dumps(forged_p1, ensure_ascii=False), encoding="utf-8")
+    ev = dict(assembly=asm_for(art), store_dir=scratch, artifact_dir=scratch)
+    with pytest.raises(RegistryError, match="文本库|无面板|数据根"):
+        record_decision(tmp_path / "ledger", "d1", art, **ev)
+    assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
+
+
+def test_forged_p2_file_over_a_real_store_dies_on_chain_binding(tmp_path):
+    # the reviewer's round-2 probe, half 2: a REAL text store + REAL P1, but the
+    # committed P2/P3a slots hold a fully self-consistent P2/P3a from ANOTHER
+    # chain (equivalently: hand-forged with recomputed hashes). The P2<-P1
+    # binding (consumed_typed_flash_sha256 == the committed P1's artifact_sha256)
+    # refuses. No ledger.
+    import shutil
+    from workspace.research.ai_research_dept.engine.news_flash_assess import (
+        _artifact_path as p2_path,
+    )
+    from workspace.research.ai_research_dept.engine.news_flash_split import (
+        _artifact_path as p3a_path,
+    )
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_store,
+    )
+    art = chain_artifact("d1", variant="full")
+    real_root = evidence_for(art)["store_dir"]
+    basic_root = chain_store("basic")                 # another GENUINE chain
+    cut_iso = asm_for(art).cutoff_iso
+    hybrid = tmp_path / "hybrid_root"
+    shutil.copytree(real_root, hybrid)
+    # substitute the committed P2/P3a slots with the other chain's (valid,
+    # self-consistent, wrong lineage)
+    for pth in (p2_path, p3a_path):
+        dst = pth(hybrid, cut_iso, "forward")
+        dst.unlink()
+        shutil.copy(pth(basic_root, cut_iso, "forward"), dst)
+    ev = dict(assembly=asm_for(art), store_dir=hybrid, artifact_dir=hybrid)
+    with pytest.raises(RegistryError, match="P2←P1|链绑定"):
+        record_decision(tmp_path / "ledger", "d1", art, **ev)
     assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
 
 

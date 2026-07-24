@@ -218,15 +218,16 @@ def _expected_fields(artifact: D7DecisionArtifact) -> dict:
 
 
 def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact, *,
-                    assembly, assessed_artifact, split_artifact,
-                    source_rows) -> dict:
+                    assembly, store_dir, artifact_dir) -> dict:
     """原子首写胜出入账(BINDING #1 + P4a 义务 a/b/c)。账本持有**权威**
     decision_id;工件必须 `verify_d7_artifact` 过门且其束 decision_id 与之逐字节
-    相等。装配出处 **REQUIRED 无默认**(义务 a),且首写门要求**证据**:P2 评定
-    工件 + P3a 拆分工件 + 源文本行,经 `prove_assembly_by_rederivation` 整条重跑
-    P3b 比对哈希(P4a round-1 P1,用户裁定的折叠形状——自洽声明不是证明;真
-    `artifact_hash` 配伪造 ts_code/cutoff/SHA 曾全链走通)。证明失败在任何写入
-    之前抛出——**不产生账本行**。行内嵌 `assembly.payload` + `assembly_hash`
+    相等。装配出处 **REQUIRED 无默认**(义务 a);首写门**不接受任何调用方证据
+    对象**(P4a re-review#2 双 P1 的结构折叠:调用方 dict/path/DataFrame 只自证
+    "自造材料彼此自洽",且 stateful dict 可验证后换值)——门经
+    `prove_assembly_by_rederivation` 从**固定受信位置**(`store_dir` 文本库 +
+    `artifact_dir` 写一次即定的 canonical 工件位)自行解析已提交的 P1/P2/P3a/
+    源文本行,重验全链绑定后整条重跑 P3b 比对双哈希。证明失败在任何写入之前
+    抛出——**不产生账本行**。行内嵌 `assembly.payload` + `assembly_hash`
     (义务 c;下游 seal/读档/恢复对账本行字节比对,继承本门的证明)。幂等 =
     全部工件派生字段 + 装配身份逐一相等;工件同而装配异 = 拒(首写胜出也钉死
     **哪条上游链**拥有这个决策 id)。"""
@@ -236,11 +237,10 @@ def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact, 
         raise RegistryError(
             f"权威 decision_id 须恰 str 非空(得 {safe_repr(decision_id)};子类拒)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
-    # P4a 义务 a+b:先验工件,后以证据重推导证明装配声明;返回值 = 重建可信实例
+    # P4a 义务 a+b:先验工件,后从已提交记录重推导证明;返回值 = 重建可信实例
     try:
         assembly = prove_assembly_by_rederivation(
-            assembly, artifact, assessed_artifact=assessed_artifact,
-            split_artifact=split_artifact, source_rows=source_rows)
+            assembly, artifact, store_dir=store_dir, artifact_dir=artifact_dir)
     except ValueError as e:
         raise RegistryError(f"装配出处过门失败:{e}") from e
     if artifact.bundle.decision_id != decision_id:

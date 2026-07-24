@@ -36,13 +36,13 @@ from workspace.research.ai_research_dept.engine.news_flash_assemble import (  # 
     assemble_stock_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_assess import (  # noqa: E402
-    assess_day_flashes,
+    assess_day_flashes, write_assessed_flash_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_split import (  # noqa: E402
-    split_day_flashes,
+    split_day_flashes, write_split_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
-    type_day_flashes,
+    type_day_flashes, write_typed_flash_artifact,
 )
 
 CUT = "2025-01-27 18:00:00"
@@ -109,8 +109,8 @@ def _typer(specs):
     return fn
 
 
-_CHAINS: dict = {}                 # variant -> (p2, p3a, rows)
-_EVIDENCE: dict = {}               # artifact_hash -> (assembly, p2, p3a, rows)
+_CHAINS: dict = {}                 # variant -> (p2, p3a, rows, store_dir)
+_EVIDENCE: dict = {}               # artifact_hash -> (assembly, store_dir)
 
 
 def _chain(variant):
@@ -135,18 +135,29 @@ def _chain(variant):
                          ingest_class="forward")
         p3a = split_day_flashes(CUT, ingest_class="forward",
                                 assessed_artifact=p2, source_rows=rows)
-        _CHAINS[variant] = (p2, p3a, rows)
+        # COMMIT the three stage artifacts at their canonical write-once slots
+        # (flat in the store dir): re-review#2 fold — the record door resolves
+        # committed records from the trusted roots, never caller objects
+        write_typed_flash_artifact(p1, store)
+        write_assessed_flash_artifact(p2, store)
+        write_split_artifact(p3a, store)
+        _CHAINS[variant] = (p2, p3a, rows, store)
     return _CHAINS[variant]
+
+
+def chain_store(variant="basic") -> Path:
+    """The variant chain's trusted root (text store + committed artifacts)."""
+    return _chain(variant)[3]
 
 
 def chain_artifact(decision_id="d1", *, variant="basic", ts_code=SMIC):
     """A genuine D7 artifact for `decision_id` from the cached `variant` chain,
-    with its evidence registered for `rec`/`evidence_for`/`asm_for`."""
-    p2, p3a, rows = _chain(variant)
+    with its assembly + trusted root registered for `rec`/`evidence_for`/`asm_for`."""
+    p2, p3a, rows, store = _chain(variant)
     artifact, assembly = assemble_stock_artifact(
         CUT, ingest_class="forward", ts_code=ts_code, decision_id=decision_id,
         assessed_artifact=p2, split_artifact=p3a, source_rows=rows)
-    _EVIDENCE[artifact.artifact_hash] = (assembly, p2, p3a, rows)
+    _EVIDENCE[artifact.artifact_hash] = (assembly, store)
     return artifact
 
 
@@ -156,14 +167,13 @@ def asm_for(artifact):
 
 
 def evidence_for(artifact) -> dict:
-    """record_decision's full evidence kwargs for a chain-built artifact."""
-    assembly, p2, p3a, rows = _EVIDENCE[artifact.artifact_hash]
-    return dict(assembly=assembly, assessed_artifact=p2, split_artifact=p3a,
-                source_rows=rows)
+    """record_decision's trusted-root kwargs for a chain-built artifact."""
+    assembly, store = _EVIDENCE[artifact.artifact_hash]
+    return dict(assembly=assembly, store_dir=store, artifact_dir=store)
 
 
 def rec(ledger_dir, decision_id, artifact):
-    """record_decision with full re-derivation evidence (the P4a first-write door)."""
+    """record_decision through the P4a first-write door (committed-evidence proof)."""
     from workspace.research.ai_research_dept.engine.news_decision import (
         record_decision,
     )

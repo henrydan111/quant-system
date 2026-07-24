@@ -23,7 +23,28 @@ upstream identity/chain gates or the hash comparison, BEFORE any ledger write. D
 (seal / read-back / recovery) byte-compare against the ledger-pinned row and inherit the proof.
 Two cheaper shapes were rejected in arbitration: field-level cross-checking (leaves the
 same-fingerprint-prefix and forged-split-text faces open) and a persisted P3b record (the writer
-is equally forgeable). Collateral: the engine test corpus's hand-built artifact factories were
+is equally forgeable).
+
+**Round-2 fold (2026-07-24, repeat-class ⇒ structural chokepoint).** The re-review found the
+round-1 fold's evidence was still CALLER-SUPPLIED (2 P1): self-hashes over forged content are
+recomputable, so re-derivation only proved "the caller's own materials cohere" (the reviewer
+walked a wholly forged plain-dict P2→P3a→record→seal→load end to end); and a stateful dict
+subclass could swap values after verification (`_verified_inputs` returned the caller's dict).
+Same invariant class two rounds running → per §10 the fold is architectural:
+`resolve_committed_evidence` — the door now takes **trusted roots** (`store_dir`,
+`artifact_dir`), never evidence objects, and resolves the COMMITTED records itself: text store
+first (`require_exists`, the data root), then P1 at its canonical write-once slot (re-verified,
+and every typed flash's `content_hash` must recompute from THE store's rows — P1←store), then
+P2 (`consumed_typed_flash_sha256` == that P1 — P2←P1), then P3a (P3a←P2). Disk JSON is plain by
+construction, so the caller-object TOCTOU surface is gone wholesale; `_verified_inputs` also
+snapshots-then-verifies for its remaining producer-path callers. The mechanical guard
+(repeat-class rule): a parameter-enumeration test pins the exact signatures of
+`record_decision` / `prove_assembly_by_rederivation` / `resolve_committed_evidence` — a future
+evidence-object parameter fails the enumeration until deliberately reviewed. Trust bottoms out
+at: the text store (upstream data-provenance layer) + first-write-wins canonical artifact slots
+(the same trust class as the ledger itself). Both reviewer probes pinned as regressions
+(forged files without a store; a valid-but-wrong-lineage P2/P3a over a real store dying on
+chain binding), each asserting no ledger row is produced. Collateral: the engine test corpus's hand-built artifact factories were
 migrated to REAL chains (`tests/assembly_fixtures.py` builds cached
 text_store→P1→P2→P3a→P3b chains; variants basic/full/context_only/floor3 re-express the old
 shapes — a P3a split ALWAYS carries a penalty-eligible `source_status` child, so "empty penalty

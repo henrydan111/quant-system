@@ -111,7 +111,7 @@ class TestSingleStrNormalizationChokepoint:
         # Whitelist: only positions where the argument is provably not caller data.
         WHITELIST = {
             ("news_horizon.py", "sys.path bootstrap"): {43, 44},
-            ("news_flash_assemble.py", "sys.path bootstrap"): {74, 75},
+            ("news_flash_assemble.py", "sys.path bootstrap"): {75, 76},
         }
         allowed = {(m, ln) for (m, _why), lns in WHITELIST.items() for ln in lns}
         banned = []

@@ -64,6 +64,7 @@ it. P4 MUST:
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -74,17 +75,29 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
+from data_infra.text_store import (  # noqa: E402
+    TextStoreError, content_hash_for, load_text,
+)
 from workspace.research.ai_research_dept.engine.news_cards import (  # noqa: E402
     D7_IMPORTANCE_FLOOR, build_attribute_bundle, render_news_flash_section,
+)
+from workspace.research.ai_research_dept.engine.news_flash_assess import (  # noqa: E402
+    _artifact_path as _p2_artifact_path,
 )
 from workspace.research.ai_research_dept.engine.news_flash_assess import (  # noqa: E402
     load_assessed_flash_artifact, verify_assessed_flash_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_split import (  # noqa: E402
+    _artifact_path as _p3a_artifact_path,
+)
+from workspace.research.ai_research_dept.engine.news_flash_split import (  # noqa: E402
     _bind_source_rows, load_split_artifact, verify_split_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
-    _canonical_cutoff,
+    _artifact_path as _p1_artifact_path,
+)
+from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
+    _canonical_cutoff, load_typed_flash_artifact,
 )
 from workspace.research.ai_research_dept.engine.news_ingest import (  # noqa: E402
     ClusterSnapshot,
@@ -253,38 +266,114 @@ def verify_assembly_provenance(payload) -> AssemblyProvenance:
         assembly_hash=payload["assembly_hash"])      # 自称 → __post_init__ 重算比对
 
 
-def prove_assembly_by_rederivation(assembly, artifact, *, assessed_artifact,
-                                   split_artifact, source_rows) -> AssemblyProvenance:
-    """**证据到门的重推导证明**(P4a Tier-1 round-1 P1;用户裁定的折叠形状)。
+def resolve_committed_evidence(cutoff, *, ingest_class: str, store_dir,
+                               artifact_dir) -> tuple:
+    """**从固定受信位置解析已提交的上游记录**(P4a re-review#2 双 P1 的结构折叠;
+    repeat-class ⇒ 结构 chokepoint)。
 
-    `require_assembly_for` 只证明"装配声明与工件互相绑定"——它是**自洽声明**,
-    不是上游证明:真 `artifact_hash` 配伪造的 ts_code/cutoff/SHA 可全链走通
-    (GPT 探针:公开构造器、无磁盘篡改、无补丁)。进程内 Python 没有不可伪造
-    原语,故唯一完全闭合是**证据在手、整条重跑**:
+    调用方递交的证据对象——无论 dict、path 还是 DataFrame——只自证"这批调用方
+    自造材料彼此一致":自哈希可被伪造者对伪造内容重算(#2 P1#1),stateful dict
+    子类还能在验证后换值(#2 P1#2)。本函数不接受任何证据对象;它按声明的
+    `(cutoff, ingest_class)` 自行解析:
 
-    用**声明的身份**(cutoff/class/ts_code/decision_id)对调用方供给的 P2/P3a
-    工件+源文本重跑 `assemble_stock_artifact`(确定性;内部已验证两工件、链
-    绑定、population、内容哈希重算绑定),然后要求:
+    1. **文本库行**:`load_text(store_dir, require_exists=True)`——数据根;
+       声明身份在库中无面板 → 在解析任何工件之前拒;
+    2. **P1 typed 工件**:canonical 写一次即定路径;载入即重验封印;逐 flash
+       `content_hash` 必须能从**本库行**重算得出(P1←库 绑定——指向他库的
+       P1 文件在此死);
+    3. **P2 评定工件**:canonical 路径;`consumed_typed_flash_sha256` 必须等于
+       该 P1 的 `artifact_sha256`(P2←P1);
+    4. **P3a 拆分工件**:canonical 路径;`consumed_assessed_flash_sha256` 必须
+       等于该 P2 的(P3a←P2;assemble 内还会再验)。
+
+    盘上 JSON 经 `json.loads` 天然为普通对象——调用方对象的 TOCTOU 面整体消失。
+    信任底座 = 文本库(上游数据出处层)+ 写一次即定的 canonical 工件位
+    (与账本首写同一信任类:先提交者胜)。返回 `(p2, p3a, rows)`。"""
+    cut = _canonical_cutoff(cutoff)
+    if type(ingest_class) is not str or not ingest_class.strip():
+        raise ValueError(
+            f"ingest_class 须恰 str 非空(得 {safe_repr(ingest_class)})——拒")
+    try:
+        rows = load_text("news", cut, store_dir=store_dir,
+                         ingest_class=ingest_class, require_exists=True)
+    except (FileNotFoundError, TextStoreError) as e:
+        # fail-closed 语义保留:未知 ingest_class / 缺失面板 都是"声明身份无
+        # 数据根",统一为 ValueError 让首写门包成 RegistryError
+        raise ValueError(
+            f"声明身份 ({ingest_class}, {cut.isoformat()}) 在文本库无面板——"
+            f"无数据根,拒({e})") from e
+    p1_path = _p1_artifact_path(artifact_dir, cut.isoformat(), ingest_class)
+    if not p1_path.exists():
+        raise ValueError(
+            f"无已提交 P1 typed 工件({p1_path.name})——声明身份无上游记录,拒")
+    p1 = load_typed_flash_artifact(p1_path)            # 载入即重验封印
+    if p1.get("cutoff_iso") != cut.isoformat() \
+            or p1.get("ingest_class") != ingest_class:
+        raise ValueError("P1 工件身份与声明不符——拒")
+    if rows.empty:
+        recomputed: set = set()
+    else:
+        cols = list(rows.columns)
+        recomputed = {content_hash_for("news", r, cols)
+                      for _, r in rows.iterrows()}
+    orphan = {t["content_hash"] for t in p1["typed"]} - recomputed
+    if orphan:
+        raise ValueError(
+            f"P1 工件含 {len(orphan)} 个本文本库无法重算绑定的 flash"
+            f"(如 {sorted(orphan)[0][:12]})——该 P1 非由本库产出,拒(P1←库)")
+    p2_path = _p2_artifact_path(artifact_dir, cut.isoformat(), ingest_class)
+    if not p2_path.exists():
+        raise ValueError(
+            f"无已提交 P2 评定工件({p2_path.name})——声明身份无上游记录,拒")
+    p2 = load_assessed_flash_artifact(p2_path)
+    if p2.get("consumed_typed_flash_sha256") != p1["artifact_sha256"]:
+        raise ValueError(
+            f"P2 工件消费的 P1 {safe_repr(p2.get('consumed_typed_flash_sha256'))[:16]} "
+            f"≠ 已提交 P1 {p1['artifact_sha256'][:12]}——链绑定断裂,拒(P2←P1)")
+    p3a_path = _p3a_artifact_path(artifact_dir, cut.isoformat(), ingest_class)
+    if not p3a_path.exists():
+        raise ValueError(
+            f"无已提交 P3a 拆分工件({p3a_path.name})——声明身份无上游记录,拒")
+    p3a = load_split_artifact(p3a_path)
+    if p3a.get("consumed_assessed_flash_sha256") != p2["artifact_sha256"]:
+        raise ValueError(
+            f"P3a 工件消费的 P2 ≠ 已提交 P2 {p2['artifact_sha256'][:12]}"
+            f"——链绑定断裂,拒(P3a←P2)")
+    return p2, p3a, rows
+
+
+def prove_assembly_by_rederivation(assembly, artifact, *, store_dir,
+                                   artifact_dir) -> AssemblyProvenance:
+    """**从已提交记录重推导的证明**(P4a round-1 P1 + re-review#2 双 P1 的结构
+    折叠;用户裁定:证据到门 → 收紧为门自己解析证据)。
+
+    round-1 版接受调用方递交的证据对象,re-review#2 证明那只是"自造材料自洽":
+    伪造者可对伪造内容重算全部自哈希(P1#1),stateful dict 还能验证后换值
+    (P1#2)。现在**证据没有参数**——本门经 `resolve_committed_evidence` 从
+    固定受信位置(文本库 + 写一次即定的 canonical 工件位)解析已提交的
+    P2/P3a/源文本行,再用**声明的身份**整条重跑 P3b(确定性),要求:
 
     - 重建工件 `artifact_hash` == 供给工件的(内容级证明——伪造拆分文本、
-      前缀碰撞正文在此死,逐字段对账关不死这两个残面);
+      前缀碰撞正文在此死);
     - 重建装配 `assembly_hash` == 声明的(全字段证明,一个哈希覆盖全部)。
 
-    任一伪造字段 → 声明身份与证据不符 → 重跑在上游验证死或哈希不等,拒。
-    返回**重建的**装配实例(可信;绝不返回调用方实例)。"""
+    任一伪造字段 → 无库面板/无工件位/链绑定断裂/哈希不等,拒——全部先于
+    任何账本写入。返回**重建的**装配实例(可信;绝不返回调用方实例)。"""
     if type(assembly) is not AssemblyProvenance:
         raise ValueError(
             f"装配出处须恰 AssemblyProvenance(得 {safe_kind(assembly)})——拒")
+    p2, p3a, rows = resolve_committed_evidence(
+        assembly.cutoff_iso, ingest_class=assembly.ingest_class,
+        store_dir=store_dir, artifact_dir=artifact_dir)
     try:
         rebuilt_artifact, rebuilt_assembly = assemble_stock_artifact(
             assembly.cutoff_iso, ingest_class=assembly.ingest_class,
             ts_code=assembly.ts_code, decision_id=assembly.decision_id,
-            assessed_artifact=assessed_artifact, split_artifact=split_artifact,
-            source_rows=source_rows)
+            assessed_artifact=p2, split_artifact=p3a, source_rows=rows)
     except NothingToDecide as e:
         raise ValueError(
-            f"重推导证明失败:声明的 ts_code {assembly.ts_code!r} 在该 P2 工件中"
-            f"无路由命中——装配声明与证据不符,拒({e})") from e
+            f"重推导证明失败:声明的 ts_code {assembly.ts_code!r} 在已提交 P2 中"
+            f"无路由命中——装配声明与已提交记录不符,拒({e})") from e
     if rebuilt_artifact.artifact_hash != artifact.artifact_hash:
         raise ValueError(
             f"重推导证明失败:证据链重建工件 {rebuilt_artifact.artifact_hash[:12]} "
@@ -339,13 +428,27 @@ def require_assembly_for(assembly, artifact) -> AssemblyProvenance:
     return assembly
 
 
+def _plain_snapshot(art) -> dict:
+    """P4a re-review#2 P1#2:**快照先行、后验证**。旧序验证后返回调用方原 dict,
+    stateful dict 子类可在 `items()`/首次 SHA 读取时交出真实内容、验证通过后再由
+    `.get()`/`__getitem__` 返回伪值。JSON 往返把内容冻结成普通对象**在验证之前**
+    ——子类若在 dumps 时说谎,则被验证的与被使用的是同一份谎(自洽伪造归 P1#1
+    的磁盘解析门管);验证与使用永不脱钩。"""
+    return json.loads(json.dumps(art, ensure_ascii=False, allow_nan=False))
+
+
 def _verified_inputs(cut, ingest_class: str, assessed_artifact, split_artifact):
     """Invariant 1: verify both artifacts, identity-match both to this run, and require the
-    split artifact to have been produced FROM this exact assessed artifact."""
-    p2 = (verify_assessed_flash_artifact(assessed_artifact)
+    split artifact to have been produced FROM this exact assessed artifact.
+
+    Dict inputs are SNAPSHOT-then-verified (`_plain_snapshot`) so what was verified is
+    byte-identical to what gets used (re-review#2 P1#2). The PROOF door
+    (`prove_assembly_by_rederivation`) never passes caller dicts at all — it resolves
+    committed records from disk; this snapshot guards the producer path (P3b callers)."""
+    p2 = (verify_assessed_flash_artifact(_plain_snapshot(assessed_artifact))
           if isinstance(assessed_artifact, dict)
           else load_assessed_flash_artifact(assessed_artifact))
-    p3a = (verify_split_artifact(split_artifact)
+    p3a = (verify_split_artifact(_plain_snapshot(split_artifact))
            if isinstance(split_artifact, dict)
            else load_split_artifact(split_artifact))
     for name, art in (("assessed-flash", p2), ("D7 split", p3a)):
