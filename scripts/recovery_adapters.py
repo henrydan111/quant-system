@@ -703,13 +703,6 @@ def run_family(spec: FamilySpec, ledger, executor, on_request=None) -> dict:
     for i, rid in enumerate(rids, 1):
         try:
             outcome = _drive(rid)
-        except rl.FetchAuthorizationError as exc:
-            # NOT a per-request failure: the §13 authorization is gone (expired / out of scope), which
-            # applies IDENTICALLY to every remaining request. Catching it here as 'failed' marked
-            # thousands of un-attempted requests failed and printed fake progress while the ledger did
-            # not advance (observed 2026-07-24). Halt the pass; the caller re-authorizes and resumes
-            # from the ledger cursor — nothing done so far is lost.
-            raise
         except Exception as exc:
             if on_request is not None:                  # report the failure BEFORE re-raising context
                 on_request(i, len(rids), "failed")
@@ -727,8 +720,6 @@ def run_family(spec: FamilySpec, ledger, executor, on_request=None) -> dict:
     for rid in deferred:
         try:
             outcome = _drive(rid)
-        except rl.FetchAuthorizationError:
-            raise                                       # halt, same as the first pass
         except Exception as exc:
             summary["failed"].append((rid, f"{type(exc).__name__}: {exc}"))
             continue

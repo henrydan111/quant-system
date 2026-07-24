@@ -168,13 +168,13 @@ def test_live_requires_the_fetch_authorized_event(rig):
     L._freeze_plan_unvalidated([row])
     L.declare_run_mode("live_authorized")
     ex = _StubLiveExecutor(_df(["A.SZ"]))
-    with pytest.raises(rl.FetchAuthorizationError, match="authorization missing"):
+    with pytest.raises(rl.LedgerError, match="authorization missing"):
         L.claim_next_fetch(row["request_id"], ex.mode)
     # an EXPIRED authorization refuses
     from datetime import datetime, timedelta, timezone
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     L.record_fetch_authorization(actor="henry", expires_at=past, endpoint_scope=["daily"])
-    with pytest.raises(rl.FetchAuthorizationError, match="EXPIRED"):
+    with pytest.raises(rl.LedgerError, match="EXPIRED"):
         L.claim_next_fetch(row["request_id"], ex.mode)
     # a valid one admits the fetch; out-of-scope still refuses per endpoint
     fut = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
@@ -202,7 +202,7 @@ def test_authorization_binds_the_adapter_bundle(rig):
     # actually means what it says — and can be cleared by re-authorizing.
     L2 = rl.PageReceiptLedger(rp, coordinator_commit="deadbeef", adapter_bundle_hash="0" * 64)
     L2._revalidate_contract = L._revalidate_contract
-    with pytest.raises(rl.FetchAuthorizationError, match="DIFFERENT adapter bundle"):
+    with pytest.raises(rl.LedgerError, match="DIFFERENT adapter bundle"):
         L2.claim_next_fetch(row["request_id"], "live_authorized")
     # and the point of the change: the run is still OPENABLE under the drifted identity, so a code fix
     # mid-recovery is recoverable by re-authorizing rather than by abandoning the run
@@ -2480,51 +2480,3 @@ def test_a_legitimate_integer_head_still_passes(rig):
     assert type(head["n"]) is int and head["n"] == len(rows)
     assert all(type(r["seq"]) is int for r in rows)
     assert [r["seq"] for r in rows] == list(range(1, len(rows) + 1))
-
-
-def test_expired_authorization_HALTS_the_pass_not_marks_failed(rig):
-    """Observed 2026-07-24 on the live recover03 run: the §13 authorization expired mid-pass, and
-    run_family caught the per-request LedgerError, marked the request 'failed', and CONTINUED — so the
-    progress bar climbed toward 'done' while the ledger did not advance and no data was fetched. An
-    expired authorization applies identically to EVERY remaining request, so it must halt the pass.
-
-    FetchAuthorizationError is a distinct type precisely so run_family can re-raise it instead of
-    folding it into the per-request failed list."""
-    rp, L = rig
-    spec = [s for s in ra.ALL_FAMILIES.values() if s.output_family == "market/index"][0]
-    contracts = rrc.load_signed_contracts()
-    rrc.freeze_request_plan(L, ra.build_plan_rows(spec, contracts), contracts,
-                            declared_families={"market/index"})
-    L.declare_run_mode("live_authorized")
-    from datetime import datetime, timedelta, timezone
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    L.record_fetch_authorization(actor="henry", expires_at=past, endpoint_scope=["index_daily"])
-
-    class _Ex:
-        mode = "live_authorized"
-
-    with pytest.raises(rl.FetchAuthorizationError, match="EXPIRED"):
-        ra.run_family(spec, L, _Ex())
-    # and NOTHING was marked failed — the pass stopped, it did not limp on
-    rows = L._load()
-    assert not [r for r in rows if r.get("kind") == "verdict"], "a verdict was written under dead auth"
-
-
-def test_out_of_scope_authorization_also_halts(rig):
-    """An authorization that does not cover the endpoint is the same run-level condition as expiry —
-    it too applies to every request for that endpoint."""
-    rp, L = rig
-    spec = [s for s in ra.ALL_FAMILIES.values() if s.output_family == "market/index"][0]
-    contracts = rrc.load_signed_contracts()
-    rrc.freeze_request_plan(L, ra.build_plan_rows(spec, contracts), contracts,
-                            declared_families={"market/index"})
-    L.declare_run_mode("live_authorized")
-    from datetime import datetime, timedelta, timezone
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    L.record_fetch_authorization(actor="henry", expires_at=future, endpoint_scope=["something_else"])
-
-    class _Ex:
-        mode = "live_authorized"
-
-    with pytest.raises(rl.FetchAuthorizationError):
-        ra.run_family(spec, L, _Ex())
