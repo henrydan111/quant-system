@@ -19,9 +19,12 @@ ts_code / dimension / source`;`mapped_no_exposure → exposure_value=null`
 
 输入契约(M3 装配供给;M1 不读会话 pv 卡形帧):
 - `pool_metrics`: DataFrame[ts_code, float_mv, turnover_20d, vol_20d] —— 决策池
-  全体的 D 收盘指标(§0a 晚间模式下 D 收盘合法);
+  全体的 D 收盘指标(§0a 晚间模式下 D 收盘合法);**全帧 ts_code 必须唯一**
+  (round-3 P1#2:重复行使档位依赖行序,fail-closed 拒、不静默去重);
 - `ths_members`: ths_members.parquet 形状(ts_code=板块, con_code=个股,
-  fetched_at);快照门:`fetched_at <= cutoff` 才可用(未来快照套历史 = 省略)。
+  fetched_at);快照门:`fetched_at <= cutoff` 才可用(未来快照套历史 = 省略);
+  **任一行时间戳不可解析或 ts_code/con_code 空 = 源畸形 → source_unavailable**
+  (re-review#4 P1:坏行绝不静默丢弃)。
 
 方向语义:映射通道**无符号**——受益/受损由宏观席配对 M/MF 事实评定;
 缺席的**渲染措辞**(confirmed_absent_through)是 M3 宏观卡的职责,M1 行只携带
@@ -174,9 +177,16 @@ def select_ths_snapshot(ths_members, cutoff):
         return pd.DataFrame(), None, None, "source_unavailable"
     cut_ts = pd.Timestamp(cutoff)
     stamps = pd.to_datetime(ths_members["fetched_at"], errors="coerce")
-    if stamps.isna().all():
+    # re-review#4 P1:**任一**行时间戳不可解析 = 源畸形(旧码只拒全坏——混合
+    # "有效行 + not-a-date 行"的帧曾静默丢坏行并报 selected,既非
+    # source_unavailable 也非可证明完整的快照);逐行 ts_code/con_code 非空同理
+    if stamps.isna().any():
         return pd.DataFrame(), None, None, "source_unavailable"
-    ok = stamps.notna() & (stamps <= cut_ts)
+    for col in ("ts_code", "con_code"):
+        vals = ths_members[col]
+        if vals.isna().any() or (vals.astype(str).str.strip() == "").any():
+            return pd.DataFrame(), None, None, "source_unavailable"
+    ok = stamps <= cut_ts
     if not ok.any():
         return pd.DataFrame(), None, None, "no_eligible_snapshot"
     chosen = stamps[ok].max()

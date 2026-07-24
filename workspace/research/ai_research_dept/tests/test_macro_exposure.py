@@ -272,6 +272,31 @@ def test_source_unavailable_is_distinct_from_legal_omission(mappings):
         == "no_contemporaneous_snapshot"
 
 
+def test_mixed_valid_and_bad_timestamp_rows_are_source_unavailable(mappings):
+    # re-review#4 P1 (the reviewer's probe): one valid row + one not-a-date row
+    # used to silently DROP the bad row and report selected — neither
+    # source_unavailable nor a provably complete snapshot. ANY unparseable
+    # row-level timestamp is now source failure, in both row orders; per-row
+    # empty ts_code/con_code likewise.
+    good = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+            "fetched_at": "2025-01-01T00:00:00"}
+    bad = {"ts_code": "883418.TI", "con_code": SMIC, "con_name": "x",
+           "fetched_at": "not-a-date"}
+    for order in ([good, bad], [bad, good]):
+        rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                      pool_metrics=_pool(),
+                                      ths_members=pd.DataFrame(order),
+                                      mappings=mappings)
+        assert rows[2]["mapping_status"] == "source_unavailable"
+        assert rows[2]["exposure_value"] is None
+    for hole in ({"con_code": ""}, {"ts_code": None}):
+        broken = pd.DataFrame([good, {**good, "ts_code": "883500.TI", **hole}])
+        rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                      pool_metrics=_pool(),
+                                      ths_members=broken, mappings=mappings)
+        assert rows[2]["mapping_status"] == "source_unavailable"
+
+
 def test_duplicate_pool_rows_refused_in_both_orders(mappings):
     # P1#2 (the reviewer's probe): duplicated ts_code rows made the buckets
     # depend on row order (low-first -> low, high-first -> high). Fail-closed:
