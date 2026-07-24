@@ -4,8 +4,10 @@
 2-round budget; no crafted-object analysis; v3 root-scope rule applies). *Tier is a user call.*
 
 **Status:** design frozen 2026-07-24 after a read-only premise check of `analyst_chain.py`.
-The seven invariants of [NF_UNIT2_SESSION_EMBEDDING_DESIGN.md](NF_UNIT2_SESSION_EMBEDDING_DESIGN.md)
-remain the contract; this doc adds the premise-checked wiring shape.
+**This document is THE C1 contract** (re-review#3 P2-1): the old
+[NF_UNIT2_SESSION_EMBEDDING_DESIGN.md](NF_UNIT2_SESSION_EMBEDDING_DESIGN.md) is HISTORICAL /
+superseded — its seven invariants carry over here (and into the bump unit's inherited
+requirements), but its §1 wiring scope is NOT C1.
 
 **Round-1 fold (2026-07-24, 2×P1, zero declines — the unit SHRINKS).** P1#1: even a default-OFF
 hook parameter edits `analyst_chain.py`, whose BYTES are hashed into `engine_contract_sha256` —

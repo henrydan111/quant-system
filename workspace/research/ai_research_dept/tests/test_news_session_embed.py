@@ -73,6 +73,8 @@ def test_consume_success_recomputes_final_and_returns_identity(tmp_path):
     seat = got["seat"]
     assert seat["final"] == 49.0                      # the sealed chain scalar
     assert seat.get("error") is None
+    # re-review#3 note: every successful consumption is externally sourced
+    assert seat["opaque_external"] is True and seat["opaque_scalar"] is True
     nf = got["nf_decision"]
     assert nf["decision_id"] == produced["decision_id"]
     assert nf["archive_sha256"] == produced["archive_sha256"]
@@ -214,25 +216,30 @@ def test_tampered_identity_block_changes_the_session_seal(tmp_path):
 
 # ---------------------------------------------- acceptance 6: legacy unchanged
 
-#: analyst_chain.py 的冻结 v3.1 字节哈希(C1 round-1 P1#1 + re-review#2 P2#3:
-#: 字符串缺席证明不了字节未变——追加一行无关注释即可绕过;唯一机械保证是
-#: 字节钉)。本钉随正式 chain-version bump 一起移动,除此之外不得更新。
-_FROZEN_V31_ANALYST_CHAIN_SHA256 = \
-    "0a9c58904a1fc1f0ac1f4e9b00d5f69cd3c807e39555ab317bffda501ff2350a"
+#: analyst_chain.py 的冻结 v3.1 **LF 规范**内容哈希(C1 round-1 P1#1 +
+#: re-review#2 P2#3 + re-review#3 P2#2:字符串缺席证明不了字节未变;裸工作区
+#: 字节哈希又不可移植——本机 core.autocrlf=true 使 Windows checkout 为 CRLF、
+#: Linux CI 为 LF,同一未改源码得到两个哈希。故:哈希前把 CRLF 归一为 LF,
+#: 钉 Git 规范 blob 的内容(等于 `git cat-file` 内容的 sha256);不改
+#: analyst_chain.py 的 checkout EOL——那本身会改现行 v3.1 运行时 manifest)。
+#: 本钉随正式 chain-version bump 一起移动,除此之外不得更新。
+_FROZEN_V31_ANALYST_CHAIN_LF_SHA256 = \
+    "12b1a3244c2e8c4a01af3800705c9bd9542b7fddc0ca83d7a5bc48c5498b3bac"
 
 
 def test_analyst_chain_bytes_are_pinned_until_the_version_bump():
-    # C1 round-1 P1#1: the manifest hashes analyst_chain.py's BYTES into
+    # C1 round-1 P1#1: the manifest hashes analyst_chain.py's bytes into
     # engine_contract_sha256 — even a default-OFF hook parameter changes the
-    # frozen chain_v3.1 contract. Byte-hash pin (re-review#2 P2#3): ANY edit —
-    # including an innocuous comment — fails this until the formal bump moves
-    # the pin together with the new CHAIN_VERSION.
+    # frozen chain_v3.1 contract. Canonical-content pin: ANY edit — including
+    # an innocuous comment — fails this on EVERY platform until the formal
+    # bump moves the pin together with the new CHAIN_VERSION.
     import hashlib
     blob = (ROOT / "workspace" / "research" / "ai_research_dept" / "engine"
-            / "analyst_chain.py").read_bytes()
-    assert hashlib.sha256(blob).hexdigest() == _FROZEN_V31_ANALYST_CHAIN_SHA256, (
-        "analyst_chain.py bytes changed without a chain-version bump — the "
-        "frozen v3.1 contract hash covers this file (C1 P1#1)")
+            / "analyst_chain.py").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(blob).hexdigest() \
+        == _FROZEN_V31_ANALYST_CHAIN_LF_SHA256, (
+        "analyst_chain.py canonical content changed without a chain-version "
+        "bump — the frozen v3.1 contract hash covers this file (C1 P1#1)")
 
 
 def test_consumed_seat_declares_the_opaque_scalar(tmp_path):

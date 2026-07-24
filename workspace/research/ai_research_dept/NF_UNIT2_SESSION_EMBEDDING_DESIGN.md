@@ -7,12 +7,26 @@ frozen v2 model. Unit 2 **assembles** that already-hardened core into the sessio
 stays NON_EVIDENTIARY with zero production callers until FORWARD_PREREG. *Tier is a user decision —
 say so and I re-scope.*
 
-**Status (CORRECTED 2026-07-22):** premise FALSIFIED by the pre-implementation self-review — this
-unit consumes a sealed NF decision archive that **the session pipeline never produces** (the entire NF
-decision stack has zero production callers). This doc is now the spec for the LAST unit **C1**
-(consume + embed); it depends on producer units **P1→P4** landing first. See
-[NF_INTEGRATION_SEQUENCING.md](NF_INTEGRATION_SEQUENCING.md) for the corrected chain and the open
-scope decisions. The seven declared invariants below stay valid as the C1 contract.
+**Status (HISTORICAL — SUPERSEDED 2026-07-24; do not implement from this document).**
+First correction (2026-07-22): the premise was FALSIFIED by the pre-implementation self-review —
+this unit consumes a sealed NF decision archive that the session pipeline never produces; the doc
+was retained as the C1 spec pending producers P1→P4. Second correction (C1 review round-1 P1#1 +
+re-review#3 P2-1): §1's scope — "replace the inline news seat in `analyst_chain._execute_attempt`
+and write the session archive" — is **NOT C1 and must not be built before the chain-version bump**:
+the manifest hashes `analyst_chain.py`'s bytes into the frozen v3.1 contract, so ANY edit to that
+file (even a default-OFF hook parameter) is a version bump by definition. The live contracts are:
+
+- **C1 (consumption only, closed separately):** [NF_UNIT_C1_DESIGN.md](NF_UNIT_C1_DESIGN.md) —
+  `news_session_embed.consume_news_decision` + identity block + opaque flags; NO `analyst_chain`
+  change (byte-hash-pinned until the bump).
+- **The session WIRING (this doc's §1 scope):** deferred to the final-integration chain-version
+  bump unit, governed by the **FROZEN WIRING OBLIGATIONS** in
+  [news_session_embed.py](engine/news_session_embed.py)'s module docstring (bump-first;
+  opaque-scalar judge semantics; full-timestamp cutoff binding; fixed fallback dichotomy).
+
+The seven invariants below remain valid **as the bump unit's inherited requirements** (1–5, 7 are
+already discharged inside the consumption module; 6 becomes the bump's own legacy-compat proof).
+Nothing below this line is a current work order.
 
 ---
 
