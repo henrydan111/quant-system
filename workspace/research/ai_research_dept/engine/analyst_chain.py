@@ -53,8 +53,11 @@ from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
 logger = logging.getLogger("analyst_chain")
 
 CHAIN_VERSION = "chain_v3.2"  # v3.2: NF 波次接线(C1 冻结义务 a-d 全数 discharge):
-#   nf_news 可选钩子(默认 None=遗留路径;开启权属调用方/FORWARD_PREREG governed
-#   runner)+ news 席消费分支(no_decision→遗留 inline 回退;错误席照采 fail-closed)+
+#   nf_roots 可选参数(默认 None=遗留路径;**只收恰五根受信映射,自由回调已废除**
+#   ——BUMP 复审 P1#1:消费/cutoff/契约/身份全在引擎内 _consume_nf_seat 派生;
+#   开启权属调用方/FORWARD_PREREG governed runner;nf_mode 入档案身份,跨模式
+#   复用 fail-closed)+ news 席消费分支(no_decision→遗留 inline 回退;错误席
+#   照采 fail-closed)+
 #   档案严格新增 nf_decision 身份块(封入 archive_sha256)+ judge 不透明外部标量
 #   直通(opaque_scalar 席 adj_final==final,不经空计分列表重算——那曾把密封 49.0
 #   归零)+ manifest 新增 nf_contract 节(schema/mode/主周期 1-3d/cutoff 18:00:00/

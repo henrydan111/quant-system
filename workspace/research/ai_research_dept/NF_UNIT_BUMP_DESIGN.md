@@ -31,11 +31,17 @@ before the separate macro-seat / prompt-freeze / smoke+M6 units.
 ## Scope — the four obligations, discharged
 
 **(a) Bump-first.** `CHAIN_VERSION = "chain_v3.2"`; the C1-reverted wiring lands NOW, under the new
-version: `run_stock(..., nf_news=None)` → `_execute_attempt(..., nf_news=None)`; news-seat branch
-(`no_decision` → legacy inline fallback; consumed seat otherwise — the obligation-(d) dichotomy is
-in `consume_news_decision` itself, the hook only routes); strictly-additive `nf_decision` identity
-block sealed under `archive_sha256`. The C1 byte pin MOVES: the test constant becomes the v3.2
-LF-canonical hash (its comment already mandates exactly this).
+version. **AMENDED IN-FLIGHT (review round-1 P1#1 / round-2 P1+P2 — supersedes the original
+"optional `nf_news` callable" shape):** the parameter is `run_stock(..., nf_roots=None)` →
+`_execute_attempt(..., nf_roots=None)` — a mapping with EXACTLY the five trusted root dirs; a
+caller-supplied callable is refused at entry, before cache reuse and before any seat. The engine
+chokepoint `_consume_nf_seat` derives cutoff / NF contract / ingest class from the disk-verified
+`ChainContract` and validates the consumption result's completeness. Every v3.2 archive carries a
+sealed `nf_mode`; cross-mode cache reuse fails closed (never an overwrite). News-seat branch:
+`no_decision` → legacy inline fallback; consumed/error seat otherwise — the obligation-(d)
+dichotomy is in `consume_news_decision` itself. Strictly-additive `nf_decision` identity block
+sealed under `archive_sha256`. The C1 byte pin MOVES with each in-flight amendment (its comment
+mandates exactly this).
 
 **(b) Opaque-scalar judge semantics.** In `judge()`, before the recompute loop:
 `if res.get("opaque_scalar") is True: adj_finals[seat] = res["final"]; continue` — the sealed
@@ -53,9 +59,10 @@ ingest_class: "forward"}`. New helpers in `news_session_embed`:
   on-disk-verified `ChainContract`'s `nf` mapping (read-only, validated at `ChainContract.load`
   with exact-type checks; missing/malformed section → load refuses, fail-closed);
 - `nf_cutoff_for_day(day, chain_contract) -> Timestamp` — `f"{day} {input_cutoff_time}"`
-  canonicalized by the SAME `_canonical_cutoff` every NF door uses. The production hook closure is
-  then `lambda code, day: consume_news_decision(code, nf_cutoff_for_day(day, cc), ...)` — a bare
-  date can never reach the NF doors.
+  canonicalized by the SAME `_canonical_cutoff` every NF door uses. **AMENDED (round-1 P1#1):
+  there is NO caller-side closure** — the engine's `_consume_nf_seat` calls both helpers and
+  `consume_news_decision` itself; the caller supplies only the five trusted roots. A bare date can
+  never reach the NF doors, and neither can a caller-chosen cutoff/contract/class.
 
 **(d) Fallback dichotomy** — already fixed inside `consume_news_decision` (C1); the hook branch
 preserves it verbatim (a `no_decision` result falls through to the legacy inline seat; an error

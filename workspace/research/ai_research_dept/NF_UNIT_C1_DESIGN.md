@@ -77,7 +77,10 @@ New module `engine/news_session_embed.py`:
 
 **Session wiring: NOT in C1** (round-1 P1#1 + re-review#2 P2#2 sweep). C1 ships NO `analyst_chain`
 change of any kind — the manifest hashes that file's bytes into the frozen v3.1 contract, so even a
-default-OFF parameter is a contract change. The hook (`nf_news` parameter, news-seat branch, the
+default-OFF parameter is a contract change. *(Historical note: the hook described below shipped in
+the BUMP unit as a **roots-only API** — `nf_roots`, five trusted dirs, engine-derived binding; the
+free-form `nf_news` callable named here was retired by the BUMP review's P1#1 before any freeze.)*
+The hook (`nf_news` parameter, news-seat branch, the
 strictly-additive `nf_decision` archive block, `run_stock` threading) is specified ONLY as the
 **FROZEN WIRING OBLIGATIONS** in the [news_session_embed.py](engine/news_session_embed.py) module
 docstring, and lands exclusively with the formal chain-version bump: (a) any `analyst_chain.py`
