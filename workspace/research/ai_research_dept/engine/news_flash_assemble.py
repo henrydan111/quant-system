@@ -47,9 +47,12 @@ it. P4 MUST:
 
   a. **require** the `AssemblyProvenance` (no default, no `None` path) at
      `record_decision` / `seal_decision_archive`;
-  b. call `require_assembly_for(assembly, artifact)` — the single binding door below — so a
-     provenance for a *different* artifact is refused. **ORDER IS PART OF THE OBLIGATION**
-     (re-review#3): `verify_d7_artifact(artifact)` FIRST, then `require_assembly_for` —
+  b. at the FIRST WRITE (`record_decision`) call `prove_assembly_by_rederivation` with the
+     P2/P3a artifacts + source rows as EVIDENCE — a self-consistent claim is NOT a proof
+     (P4a Tier-1 round-1 P1; user-arbitrated fold shape: evidence-at-the-door). Downstream
+     doors (seal / read-back) use `require_assembly_for` + byte-comparison against the
+     ledger-pinned row, INHERITING the first write's proof. **ORDER IS PART OF THE
+     OBLIGATION** (re-review#3): `verify_d7_artifact(artifact)` FIRST, then bind —
      binding a provenance to an unverified artifact proves nothing;
   c. write `assembly_hash` into the decision ledger entry (first-write-wins then also pins
      WHICH upstream chain owns the decision id);
@@ -250,11 +253,61 @@ def verify_assembly_provenance(payload) -> AssemblyProvenance:
         assembly_hash=payload["assembly_hash"])      # 自称 → __post_init__ 重算比对
 
 
+def prove_assembly_by_rederivation(assembly, artifact, *, assessed_artifact,
+                                   split_artifact, source_rows) -> AssemblyProvenance:
+    """**证据到门的重推导证明**(P4a Tier-1 round-1 P1;用户裁定的折叠形状)。
+
+    `require_assembly_for` 只证明"装配声明与工件互相绑定"——它是**自洽声明**,
+    不是上游证明:真 `artifact_hash` 配伪造的 ts_code/cutoff/SHA 可全链走通
+    (GPT 探针:公开构造器、无磁盘篡改、无补丁)。进程内 Python 没有不可伪造
+    原语,故唯一完全闭合是**证据在手、整条重跑**:
+
+    用**声明的身份**(cutoff/class/ts_code/decision_id)对调用方供给的 P2/P3a
+    工件+源文本重跑 `assemble_stock_artifact`(确定性;内部已验证两工件、链
+    绑定、population、内容哈希重算绑定),然后要求:
+
+    - 重建工件 `artifact_hash` == 供给工件的(内容级证明——伪造拆分文本、
+      前缀碰撞正文在此死,逐字段对账关不死这两个残面);
+    - 重建装配 `assembly_hash` == 声明的(全字段证明,一个哈希覆盖全部)。
+
+    任一伪造字段 → 声明身份与证据不符 → 重跑在上游验证死或哈希不等,拒。
+    返回**重建的**装配实例(可信;绝不返回调用方实例)。"""
+    if type(assembly) is not AssemblyProvenance:
+        raise ValueError(
+            f"装配出处须恰 AssemblyProvenance(得 {safe_kind(assembly)})——拒")
+    try:
+        rebuilt_artifact, rebuilt_assembly = assemble_stock_artifact(
+            assembly.cutoff_iso, ingest_class=assembly.ingest_class,
+            ts_code=assembly.ts_code, decision_id=assembly.decision_id,
+            assessed_artifact=assessed_artifact, split_artifact=split_artifact,
+            source_rows=source_rows)
+    except NothingToDecide as e:
+        raise ValueError(
+            f"重推导证明失败:声明的 ts_code {assembly.ts_code!r} 在该 P2 工件中"
+            f"无路由命中——装配声明与证据不符,拒({e})") from e
+    if rebuilt_artifact.artifact_hash != artifact.artifact_hash:
+        raise ValueError(
+            f"重推导证明失败:证据链重建工件 {rebuilt_artifact.artifact_hash[:12]} "
+            f"≠ 供给工件 {safe_repr(artifact.artifact_hash)[:16]}——该工件并非由"
+            f"此 P2/P3a 链产出(伪造拆分文本/替换正文在此死),拒")
+    if rebuilt_assembly.assembly_hash != assembly.assembly_hash:
+        raise ValueError(
+            f"重推导证明失败:证据链重建装配 {rebuilt_assembly.assembly_hash[:12]} "
+            f"≠ 声明 {assembly.assembly_hash[:12]}——声明的某字段(ts_code/cutoff/"
+            f"class/SHA/事实集合)与证据不符,拒")
+    return rebuilt_assembly
+
+
 def require_assembly_for(assembly, artifact) -> AssemblyProvenance:
-    """**P4 必须调用的单一绑定门**(FROZEN P4 OBLIGATION b)。
+    """装配声明 ↔ 工件的**绑定门**(FROZEN P4 OBLIGATION b)。
 
     装配身份必须恰为 `AssemblyProvenance`、自哈希自洽,且其 `artifact_hash` /
-    `decision_id` 与该 D7 工件逐字节相符——他次装配的出处配不上这个工件。"""
+    `decision_id` 与该 D7 工件逐字节相符——他次装配的出处配不上这个工件。
+
+    ⚠ **这只是绑定,不是上游证明**(P4a round-1 P1):它证明不了 ts_code/
+    cutoff/class/SHA 来自真实的 P2/P3a。首写入账门必须用
+    `prove_assembly_by_rederivation`(证据到门);本门只服务**已被账本钉定**
+    身份的下游对账(seal/读档在字节比对账本行之外的工件绑定检查)。"""
     if type(assembly) is not AssemblyProvenance:
         raise ValueError(
             f"装配出处须恰 AssemblyProvenance(得 {safe_kind(assembly)})——"

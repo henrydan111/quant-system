@@ -11,6 +11,25 @@ contract-embedding precedent (re-review#5 P0); (2) seal binds the assembly again
 the contract/outcome snapshots and re-opens the GPT #23 P1#1 timing class (the pinned probes
 caught exactly this on the first attempt).
 
+**Round-1 fold (2026-07-24, user-arbitrated: evidence-at-the-door).** The Tier-1 review's P1:
+`AssemblyProvenance` was a *self-consistent claim*, not a verifiable proof — the reviewer's
+public-constructor probe (real `artifact_hash`, forged ts_code/cutoff/SHAs) completed
+record → execute → seal → load end-to-end. In-process Python has no unforgeability primitive,
+so the only complete closure is evidence at the first-write door: `record_decision` now REQUIRES
+`assessed_artifact` + `split_artifact` + `source_rows` and proves the claim via
+`prove_assembly_by_rederivation` — re-run P3b from the evidence with the CLAIMED identity and
+demand bit-equality of both `artifact_hash` and `assembly_hash`. Any forged field dies in the
+upstream identity/chain gates or the hash comparison, BEFORE any ledger write. Downstream doors
+(seal / read-back / recovery) byte-compare against the ledger-pinned row and inherit the proof.
+Two cheaper shapes were rejected in arbitration: field-level cross-checking (leaves the
+same-fingerprint-prefix and forged-split-text faces open) and a persisted P3b record (the writer
+is equally forgeable). Collateral: the engine test corpus's hand-built artifact factories were
+migrated to REAL chains (`tests/assembly_fixtures.py` builds cached
+text_store→P1→P2→P3a→P3b chains; variants basic/full/context_only/floor3 re-express the old
+shapes — a P3a split ALWAYS carries a penalty-eligible `source_status` child, so "empty penalty
+population" now means floor3 = no ≥floor fact; evaluation pins moved 74.0→49.0 because
+`fundamental_link` is uncited under the chain's 2-row factor population).
+
 ## What P4 is
 
 The persistence boundary of the NF chain. Per (stock, cutoff): take P3b's

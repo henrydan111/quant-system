@@ -55,22 +55,21 @@ def _assessed(content, *, status="官方证实", importance=3, dt="2025-01-27 10
 
 
 def _artifact(decision_id="d1"):
-    card, records, facts = render_news_flash_section(
-        [_assessed("重大订单甲", importance=5),
-         _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00")], CUT)
-    split = {"base_record_id": "NFD01",
-             "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}}
-    return build_attribute_bundle([split], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    # P4a P1 fold: recordable artifacts must come from the REAL chain (the
+    # first-write door proves the assembly by re-derivation from P2/P3a evidence)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id, variant="basic")
 
 
 # --------------------------------------------------- ledger (BINDING #1)
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestDecisionLedger:
@@ -87,14 +86,13 @@ class TestDecisionLedger:
         assert e1 == e2
 
     def test_second_different_hash_refused(self, tmp_path):
+        from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+            chain_artifact,
+        )
         _rec(tmp_path, "d1", _artifact())
-        # a different world line for the SAME decision (different split text)
-        card, records, facts = render_news_flash_section(
-            [_assessed("重大订单甲", importance=5),
-             _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00")], CUT)
-        other = build_attribute_bundle(
-            [{"base_record_id": "NFD01", "attributes": {"fact": "另一措辞"}}],
-            facts, records, card=card, decision_id="d1", cutoff=CUT)
+        # a different GENUINE world line for the SAME decision (different chain —
+        # under the P4a evidence door a hand-built world can no longer be recorded)
+        other = chain_artifact("d1", variant="full")
         with pytest.raises(RegistryError, match="首写胜出"):
             _rec(tmp_path, "d1", other)
 
@@ -142,15 +140,13 @@ class TestDecisionLedger:
         # artifact (full-field comparison). Wholesale-replacement detection for
         # the substituted world itself needs the external head anchor (archive
         # unit integration, documented).
+        from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+            chain_artifact,
+        )
         art_a = _artifact("d1")
         _rec(tmp_path, "d1", art_a)
-        # world B: same decision id, different split text
-        card, records, facts = render_news_flash_section(
-            [_assessed("重大订单甲", importance=5),
-             _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00")], CUT)
-        art_b = build_attribute_bundle(
-            [{"base_record_id": "NFD01", "attributes": {"fact": "另一措辞"}}],
-            facts, records, card=card, decision_id="d1", cutoff=CUT)
+        # world B: same decision id, a different GENUINE chain
+        art_b = chain_artifact("d1", variant="full")
         # attacker rewrites the ledger with a self-consistent B row
         p = tmp_path / "decision_ledger.jsonl"
         p.unlink()
@@ -345,15 +341,11 @@ class TestRoleReplay:
         from workspace.research.ai_research_dept.engine.news_decision import (
             leg_expected_ids,
         )
-        card, records, facts = render_news_flash_section(
-            [_assessed("重大订单甲", importance=5),
-             _assessed("传闻将重组", status="传闻", importance=3,
-                       dt="2025-01-27 08:00:00")], CUT)
-        art = build_attribute_bundle(
-            [{"base_record_id": "NFD01",
-              "attributes": {"fact": "签订 12 亿订单",
-                             "source_status": "公司公告官方证实"}}],
-            facts, records, card=card, decision_id="d1", cutoff=CUT)
+        from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+            chain_artifact,
+        )
+        # "full" chain: NFD01 split (fact/source_status children) + NFR01 rumor
+        art = chain_artifact("d1", variant="full")
         _rec(tmp_path, "d1", art)
         pen_ids = leg_expected_ids(art.final_registry, use="penalty",
                                    consumer_seat="news")

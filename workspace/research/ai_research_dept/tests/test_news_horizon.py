@@ -68,13 +68,10 @@ def _penalty(entries=()):
 # --------------------------------------------------- c16_v1 unchanged (M2″)
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.engine.news_decision import (
-        record_decision,
-    )
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestLegacyRejectsHorizon:
@@ -378,31 +375,13 @@ class TestExecutionView:
             run_news_two_legs,
         )
 
-        def _stamp(rows):
-            df = pd.DataFrame(rows)
-            df["source_published_at"] = pd.to_datetime(df["datetime"])
-            df["first_ingested_at"] = df["source_published_at"] + pd.Timedelta(minutes=1)
-            df["decision_visible_at"] = df["first_ingested_at"]
-            df["object_id_hash"] = "obj:" + df["content"]
-            df["content_hash"] = "ch:" + df["content"]
-            df["ingest_class"] = "forward"
-            return df
-
-        cl = build_cluster_snapshots(
-            _stamp([{"src": "sina", "datetime": "2025-01-27 10:00:00",
-                     "content": "重大订单甲"}]), "2025-01-27 18:00:00")[0]
-        typing = {"event_type": "订单合同", "verification_status": "官方证实",
-                  "content_kind": "事实", "direction": "利好", "importance": 5,
-                  "is_rumor": False}
-        route = {"primary_route": "stock", "subject_codes": ["688981.SH"],
-                 "industry_tags": [], "concept_tags": [], "content": "重大订单甲"}
-        card, records, facts = render_news_flash_section(
-            [assess_flash(cl, typing, route)], "2025-01-27 18:00:00")
-        art = build_attribute_bundle(
-            [{"base_record_id": "NFD01",
-              "attributes": {"fact": "签订 12 亿订单"}}],
-            facts, records, card=card, decision_id="d1",
-            cutoff="2025-01-27 18:00:00")
+        # P4a P1 fold: the recordable artifact comes from the real chain; floor3
+        # (no split, no rumor) keeps the penalty population empty so the factor
+        # leg can run with penalty_payload_ast=None
+        from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+            chain_artifact,
+        )
+        art = chain_artifact("d1", variant="floor3")
         _rec(tmp_path, "d1", art)
         got = []
         from workspace.research.ai_research_dept.engine.news_decision import (

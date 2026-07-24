@@ -58,18 +58,15 @@ def _assessed(content, *, status="官方证实", rumor=False, importance=3,
 
 
 def _artifact(*, with_penalty: bool, decision_id="d1"):
-    assessed = [_assessed("重大订单甲", importance=5),
-                _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00")]
-    if with_penalty:
-        assessed.append(_assessed("传闻将重组", status="传闻", rumor=True,
-                                  dt="2025-01-27 08:00:00"))
-    card, records, facts = render_news_flash_section(assessed, CUT)
-    attrs = {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%"}
-    if with_penalty:
-        attrs["source_status"] = "公司公告官方证实"     # penalty-eligible D7 child
-    split = {"base_record_id": "NFD01", "attributes": attrs}
-    return build_attribute_bundle([split], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    # P4a P1 fold: recordable artifacts come from the REAL chain. In the chain's
+    # vocabulary a P3a split ALWAYS carries a penalty-eligible source_status
+    # child, so "empty penalty population" can only mean "no >=floor fact at
+    # all" — with_penalty=False maps to the floor3 variant (2x imp3, no split).
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id,
+                          variant="full" if with_penalty else "floor3")
 
 
 def _factor_ast(art):
@@ -97,10 +94,10 @@ def _fail(sp):
 # --------------------------------------------------- eligible derivation
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestEligible:

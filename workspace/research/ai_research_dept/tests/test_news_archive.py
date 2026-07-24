@@ -69,24 +69,18 @@ def _assessed(content, *, status="官方证实", kind="事实", rumor=False, imp
 
 
 def _artifact_full(decision_id="d1"):
-    card, records, facts = render_news_flash_section(
-        [_assessed("重大订单甲", importance=5),
-         _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00"),
-         _assessed("传闻将重组", status="传闻", rumor=True,
-                   dt="2025-01-27 08:00:00")], CUT)
-    split = {"base_record_id": "NFD01",
-             "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%",
-                            "source_status": "公司公告官方证实"}}
-    return build_attribute_bundle([split], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    # P4a P1 fold: recordable artifacts come from the REAL chain (evidence door)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id, variant="full")
 
 
 def _artifact_context_only(decision_id="d1"):
-    card, records, facts = render_news_flash_section(
-        [_assessed("盘面点评甲", kind="评论"),
-         _assessed("盘面点评乙", kind="评论", dt="2025-01-27 09:00:00")], CUT)
-    return build_attribute_bundle([], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id, variant="context_only")
 
 
 class _Reply:
@@ -99,7 +93,7 @@ def _valid_factor_record():
                 {"name": "event_materiality", "score_0_5": 5,
                  "citations": ["NFD01.fact"]},
                 {"name": "fundamental_link", "score_0_5": 5,
-                 "citations": ["NFD01.economic_linkage"]},
+                 "citations": []},
                 {"name": "novelty", "score_0_5": 5, "citations": ["NFD02"]}],
             "horizon_factor_scores": [
                 {"name": "tradeability_at_horizon", "horizon": h,
@@ -195,10 +189,10 @@ def _reeval(bundle, art, record):
 # --------------------------------------------------- happy paths
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestSealAndVerify:
@@ -208,7 +202,7 @@ class TestSealAndVerify:
                                         archive_dir=tmp_path / "arch",
             assembly=asm_for(art))
         assert len(archive["archive_sha256"]) == 64
-        assert archive["evaluation"]["news_final"] == 74.0
+        assert archive["evaluation"]["news_final"] == 49.0
         loaded = load_and_verify_decision_archive(
             "d1", art, **_dirs(tmp_path), archive_dir=tmp_path / "arch")
         assert loaded["archive_sha256"] == archive["archive_sha256"]
@@ -931,8 +925,14 @@ class TestExactTypeBoundaries:
         assert evil.artifact_hash != art.artifact_hash     # forged identity
         with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
             verify_d7_artifact(evil)
+        # at the record door the exact-type gate fires BEFORE the evidence proof
+        # ever touches the evidence (P4a: verify first, then prove) — pass the
+        # REAL chain's evidence so the only refusal cause is the evil artifact
+        from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+            evidence_for,
+        )
         with pytest.raises(RegistryError, match="恰 D7DecisionArtifact"):
-            _rec(tmp_path / "ledger", "d1", evil)
+            record_decision(tmp_path / "ledger", "d1", evil, **evidence_for(art))
 
     def test_polymorphic_frozenset_field_neutralized(self, tmp_path):
         # archive-re-review#11 P0 (the reviewer's probe): a frozenset SUBCLASS

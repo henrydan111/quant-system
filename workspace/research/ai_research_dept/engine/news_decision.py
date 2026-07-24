@@ -48,7 +48,7 @@ from workspace.research.ai_research_dept.engine.news_evidence import (
     require_sealed_registry,
 )
 from workspace.research.ai_research_dept.engine.news_flash_assemble import (
-    require_assembly_for,
+    prove_assembly_by_rederivation,
 )
 from workspace.research.ai_research_dept.engine.news_seal import (
     plain_str, plain_str_tuple, safe_kind, safe_repr, seal_hash, verify_sealed,
@@ -218,23 +218,29 @@ def _expected_fields(artifact: D7DecisionArtifact) -> dict:
 
 
 def record_decision(ledger_dir, decision_id: str, artifact: D7DecisionArtifact, *,
-                    assembly) -> dict:
+                    assembly, assessed_artifact, split_artifact,
+                    source_rows) -> dict:
     """原子首写胜出入账(BINDING #1 + P4a 义务 a/b/c)。账本持有**权威**
     decision_id;工件必须 `verify_d7_artifact` 过门且其束 decision_id 与之逐字节
-    相等;装配出处 **REQUIRED 无默认**(义务 a),经 `require_assembly_for` 绑定
-    到**已验证**的工件(义务 b:先验工件后绑定——绑到未验工件什么也证明不了)。
-    行内嵌 `assembly.payload` + `assembly_hash`(义务 c)。幂等 = 全部工件派生
-    字段 + 装配身份逐一相等;工件同而装配异 = 拒(首写胜出也钉死**哪条上游链**
-    拥有这个决策 id)。"""
+    相等。装配出处 **REQUIRED 无默认**(义务 a),且首写门要求**证据**:P2 评定
+    工件 + P3a 拆分工件 + 源文本行,经 `prove_assembly_by_rederivation` 整条重跑
+    P3b 比对哈希(P4a round-1 P1,用户裁定的折叠形状——自洽声明不是证明;真
+    `artifact_hash` 配伪造 ts_code/cutoff/SHA 曾全链走通)。证明失败在任何写入
+    之前抛出——**不产生账本行**。行内嵌 `assembly.payload` + `assembly_hash`
+    (义务 c;下游 seal/读档/恢复对账本行字节比对,继承本门的证明)。幂等 =
+    全部工件派生字段 + 装配身份逐一相等;工件同而装配异 = 拒(首写胜出也钉死
+    **哪条上游链**拥有这个决策 id)。"""
     # GPT #24 类3:类型门诊断经 safe_repr(旧码读 type().__name__ + {!r},在拒绝
     # 路径上触发不可信 decision_id 的元类 __getattribute__ / __repr__)
     if type(decision_id) is not str or not decision_id.strip():
         raise RegistryError(
             f"权威 decision_id 须恰 str 非空(得 {safe_repr(decision_id)};子类拒)")
     artifact = verify_d7_artifact(artifact)            # GPT #23:绑定独立可信副本
-    # P4a 义务 a+b:装配出处必经唯一绑定门,且晚于工件验证;返回值 = 重验副本
+    # P4a 义务 a+b:先验工件,后以证据重推导证明装配声明;返回值 = 重建可信实例
     try:
-        assembly = require_assembly_for(assembly, artifact)
+        assembly = prove_assembly_by_rederivation(
+            assembly, artifact, assessed_artifact=assessed_artifact,
+            split_artifact=split_artifact, source_rows=source_rows)
     except ValueError as e:
         raise RegistryError(f"装配出处过门失败:{e}") from e
     if artifact.bundle.decision_id != decision_id:

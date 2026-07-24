@@ -57,25 +57,20 @@ def _assessed(content, *, status="官方证实", kind="事实", rumor=False, imp
 
 
 def _artifact_full(decision_id="d1"):
-    """NFD01(imp5, split w/ source_status) + NFD02(imp3) + NFR01(rumor)."""
-    card, records, facts = render_news_flash_section(
-        [_assessed("重大订单甲", importance=5),
-         _assessed("小事件乙", importance=3, dt="2025-01-27 09:00:00"),
-         _assessed("传闻将重组", status="传闻", rumor=True,
-                   dt="2025-01-27 08:00:00")], CUT)
-    split = {"base_record_id": "NFD01",
-             "attributes": {"fact": "签订 12 亿订单", "economic_linkage": "年营收 15%",
-                            "source_status": "公司公告官方证实"}}
-    return build_attribute_bundle([split], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    """NFD01(imp5, split w/ fact+source_status) + NFD02(imp3) + NFR01(rumor) —
+    the real chain's `full` variant (P4a P1 fold: recordable artifacts must
+    come with re-derivation evidence)."""
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id, variant="full")
 
 
 def _artifact_context_only(decision_id="d1"):
-    card, records, facts = render_news_flash_section(
-        [_assessed("盘面点评甲", kind="评论"),
-         _assessed("盘面点评乙", kind="评论", dt="2025-01-27 09:00:00")], CUT)
-    return build_attribute_bundle([], facts, records, card=card,
-                                  decision_id=decision_id, cutoff=CUT)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import (
+        chain_artifact,
+    )
+    return chain_artifact(decision_id, variant="context_only")
 
 
 class _Reply:
@@ -88,7 +83,7 @@ def _valid_factor_record():
                 {"name": "event_materiality", "score_0_5": 5,
                  "citations": ["NFD01.fact"]},
                 {"name": "fundamental_link", "score_0_5": 5,
-                 "citations": ["NFD01.economic_linkage"]},
+                 "citations": []},
                 {"name": "novelty", "score_0_5": 5, "citations": ["NFD02"]}],
             "horizon_factor_scores": [
                 {"name": "tradeability_at_horizon", "horizon": h,
@@ -139,10 +134,10 @@ def _execute(tmp_path, art=None, decision_id="d1", mode="primary_horizon",
 # --------------------------------------------------- frozen contract slice
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestContract:
@@ -177,14 +172,15 @@ class TestPayloadContent:
         out, calls = _execute(tmp_path)
         factor_msg = [m for m in calls if "因子分析" in m[0]["content"]][0]
         user = factor_msg[1]["content"]
-        # the LLM SEES the evidence text, not just ids (review Blocker)
-        assert "签订 12 亿订单" in user                  # D7 fact child text
-        assert "年营收 15%" in user                      # D7 linkage child text
+        # the LLM SEES the evidence text, not just ids (review Blocker). Chain
+        # variant `full`: the fact child text is the WHOLE hash-bound source
+        # (P3a deterministic_whole_source_v2)
+        assert "中芯国际签订重大订单甲" in user           # D7 fact child text
         assert "小事件乙" in user                        # NFD02 card-line content
-        # D7 child replacement: the demoted broad parent's line is EXCLUDED
-        assert "重大订单甲" not in user
         # cross-leg exclusion: rumor/risk text never enters the factor leg
-        assert "传闻将重组" not in user and "公司公告官方证实" not in user
+        assert "将重组" not in user and "来源状态" not in user
+        # D7 child replacement: the demoted broad parent NEVER appears as a ref
+        assert '"ref": "[NFD01]"' not in user
         # exact-once ids
         assert user.count("[NFD01.fact]") == 1 and user.count("[NFD02]") == 1
 
@@ -192,9 +188,9 @@ class TestPayloadContent:
         out, calls = _execute(tmp_path)
         pen_msg = [m for m in calls if "风险罚分" in m[0]["content"]][0]
         user = pen_msg[1]["content"]
-        assert "传闻将重组" in user                      # NFR01 card-line content
-        assert "公司公告官方证实" in user                # source_status child text
-        assert "签订 12 亿订单" not in user              # factor evidence excluded
+        assert "中芯国际将重组" in user                  # NFR01 card-line content
+        assert "来源状态" in user                        # source_status child text
+        assert "[NFD01.fact]" not in user                # factor evidence excluded
         assert user.count("[NFR01]") == 1
 
     def test_noncanonical_payload_never_reaches_executor(self, tmp_path):
@@ -231,9 +227,11 @@ class TestHappyPath:
         out, calls = _execute(tmp_path)
         assert out["outcome"].news_status == "success"
         assert out["outcome"].binding_eligible is True
+        # chain `full` variant: fundamental_link is uncited (only 2 exclusive
+        # factor rows exist: NFD01.fact + NFD02) -> 74.0 * 2/3 = 49.0
         assert out["evaluation"]["news_final_by_horizon"] == {
-            "next_open": 74.0, "1-3d": 74.0, "5-20d": 74.0}
-        assert out["evaluation"]["news_final"] == 74.0
+            "next_open": 49.0, "1-3d": 49.0, "5-20d": 49.0}
+        assert out["evaluation"]["news_final"] == 49.0
         assert len(calls) == 2
 
     def test_vector_only_no_scalar_no_binding(self, tmp_path):

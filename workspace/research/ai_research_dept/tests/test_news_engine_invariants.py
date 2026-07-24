@@ -49,13 +49,10 @@ def _is_type_call(node) -> bool:
 
 
 def _rec(ledger_dir, decision_id, art):
-    # P4a: record_decision now REQUIRES the assembly identity (obligation a);
-    # derive a valid one from the artifact (deterministic -> record/seal match)
-    from workspace.research.ai_research_dept.engine.news_decision import (
-        record_decision,
-    )
-    from workspace.research.ai_research_dept.tests.assembly_fixtures import asm_for
-    return record_decision(ledger_dir, decision_id, art, assembly=asm_for(art))
+    # P4a P1 fold: record with FULL re-derivation evidence (chain-built artifacts
+    # register their evidence in assembly_fixtures)
+    from workspace.research.ai_research_dept.tests.assembly_fixtures import rec
+    return rec(ledger_dir, decision_id, art)
 
 
 class TestNoEqualitySemanticsOnTypeGates:
@@ -114,7 +111,7 @@ class TestSingleStrNormalizationChokepoint:
         # Whitelist: only positions where the argument is provably not caller data.
         WHITELIST = {
             ("news_horizon.py", "sys.path bootstrap"): {43, 44},
-            ("news_flash_assemble.py", "sys.path bootstrap"): {71, 72},
+            ("news_flash_assemble.py", "sys.path bootstrap"): {74, 75},
         }
         allowed = {(m, ln) for (m, _why), lns in WHITELIST.items() for ln in lns}
         banned = []
