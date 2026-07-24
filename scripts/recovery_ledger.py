@@ -32,6 +32,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+class FetchAuthorizationError(RuntimeError):
+    """The §13 authorization is missing, EXPIRED, out-of-scope, or bound to a different plan/bundle.
+
+    A SEPARATE type from LedgerError on purpose: it is a run-level halt condition, not a per-request
+    failure. run_family must STOP the whole pass when it sees this — an expired authorization applies
+    to every remaining request identically, so catching it as a per-request failure would silently
+    mark thousands of un-attempted requests 'failed' and print fake progress while writing no data
+    (observed 2026-07-24: the pass ran on past expiry marking requests failed, ledger not advancing)."""
+
+
 class LedgerError(RuntimeError):
     pass
 
@@ -961,25 +971,25 @@ class PageReceiptLedger:
         wire call."""
         evs = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "fetch_authorized"]
         if not evs:
-            raise LedgerError("live run without a fetch_authorized event — §13 authorization missing "
+            raise FetchAuthorizationError("live run without a fetch_authorized event — §13 authorization missing "
                               "(run authorize-fetch; the fetch path cannot mint it)")
         ev = evs[-1]
         try:
             exp = datetime.fromisoformat(str(ev.get("expires_at")))
         except ValueError:
-            raise LedgerError("fetch_authorized carries an unparseable expires_at")
+            raise FetchAuthorizationError("fetch_authorized carries an unparseable expires_at")
         if exp <= datetime.now(timezone.utc):
-            raise LedgerError(f"fetch authorization {ev.get('auth_id', '?')[:8]} EXPIRED at "
+            raise FetchAuthorizationError(f"fetch authorization {ev.get('auth_id', '?')[:8]} EXPIRED at "
                               f"{ev.get('expires_at')}")
         scope = set(ev.get("endpoint_scope") or [])
         if endpoint not in scope and "*" not in scope:
-            raise LedgerError(f"fetch authorization does not cover endpoint {endpoint!r} "
+            raise FetchAuthorizationError(f"fetch authorization does not cover endpoint {endpoint!r} "
                               f"(scope: {sorted(scope)})")
         frozen = [r for r in rows if r.get("kind") == "lifecycle" and r.get("event") == "plan_frozen"]
         if len(frozen) != 1 or ev.get("plan_sha256") != frozen[0].get("plan_sha256"):
-            raise LedgerError("fetch authorization binds a DIFFERENT plan than the one frozen here")
+            raise FetchAuthorizationError("fetch authorization binds a DIFFERENT plan than the one frozen here")
         if ev.get("bundle_sha256") != self.adapter_bundle_hash:
-            raise LedgerError("fetch authorization binds a DIFFERENT adapter bundle — the adapter code "
+            raise FetchAuthorizationError("fetch authorization binds a DIFFERENT adapter bundle — the adapter code "
                               "changed since authorization; re-authorize deliberately")
 
     def assert_run_promotable(self) -> None:

@@ -111,6 +111,20 @@ income_vip    SIGNED                       28 duplicate rows
 
 `comp_type` must also be added to `required_fields`, where it is currently absent for all 8 endpoints.
 
+**`forecast` — a THIRD sub-shape (high incidence: 3,779 / 5,861 ≈ 64%).** Earnings pre-announcements are
+frequently revised, and each revision shares the signed key `[ts_code, ann_date, end_date, type]` while
+differing in `update_flag`. Measured over 6,606 rows:
+
+```
+forecast   SIGNED                 992 duplicate rows
+           + update_flag            0   OK  (no nulls)
+```
+
+Add `update_flag` only — clean. (Adding `summary` reintroduces Class 1: 4 nulls.) So the Class-2 fix is
+now three-shaped: per-stock statements `+comp_type`; per-period VIP `+comp_type,+ann_date`; forecast
+`+update_flag`. Each was derived from the real response, not assumed — a single uniform rule would have
+failed three times.
+
 ---
 
 ## What this does NOT change
