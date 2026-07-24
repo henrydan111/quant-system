@@ -158,6 +158,36 @@ def load_default_mappings() -> dict:
     }
 
 
+def _parse_fetched_at(v):
+    """`fetched_at` 的**正向允许列表**解析(re-review#6 P1)。只接受:
+
+    - `str`:经 `pd.Timestamp` 解析,失败/NaT → None;
+    - `datetime.datetime` / `pd.Timestamp`:直接接受;
+
+    带时区值统一折算 Asia/Shanghai 后去 tz(NF canon 同约定——修掉"带时区源
+    对无时区 cutoff 抛 TypeError"的边界);**裸 `datetime.date` 拒**(默认
+    午夜的假设不足以对含具体时刻的 cutoff 证明 PIT);其余任何类型(NumPy
+    数值标量、int/float/bool、None、NaT…)一律 None = 源畸形。绝不整列
+    `pd.to_datetime`——数值会被当纳秒纪元解析成 1970 穿过 cutoff 门。"""
+    import datetime as _dt
+    if isinstance(v, str):
+        try:
+            t = pd.Timestamp(v)
+        except (ValueError, TypeError):
+            return None
+    elif isinstance(v, _dt.datetime):              # 含 pd.Timestamp
+        t = pd.Timestamp(v)
+    elif isinstance(v, _dt.date):
+        return None                                # 裸 date:PIT 证据不足,拒
+    else:
+        return None                                # NumPy 标量/数值/None/其它
+    if pd.isna(t):
+        return None
+    if t.tzinfo is not None:
+        t = t.tz_convert("Asia/Shanghai").tz_localize(None)
+    return t
+
+
 def select_ths_snapshot(ths_members, cutoff):
     """选定**唯一、完整、一致**的 THS 快照(round-1 P1#1:旧码取
     `fetched_at.iloc[0]` 判门却用整表取成员——混合新旧快照的帧会把未来概念漏进
@@ -176,20 +206,15 @@ def select_ths_snapshot(ths_members, cutoff):
             or not {"fetched_at", "ts_code", "con_code"} <= set(ths_members.columns):
         return pd.DataFrame(), None, None, "source_unavailable"
     cut_ts = pd.Timestamp(cutoff)
-    raw = ths_members["fetched_at"]
-    # re-review#5 P1:**数值型时间戳在解析前拒**——整数 20260709(本意 2026-07-09)
-    # 会被 pd.to_datetime 当纳秒纪元解析成 1970-01-01,穿过 2025 cutoff 门,把
-    # 未来概念注入历史决策(实际 no-lookahead 漏洞)。只接受 datetime 值或
-    # 字符串;任何 int/float/bool 元素 = 源畸形。
-    if pd.api.types.is_numeric_dtype(raw) or raw.map(
-            lambda v: isinstance(v, (int, float))).any():
+    # re-review#5/#6 P1:时间戳解析走**正向允许列表**,逐元素、绝不整列
+    # to_datetime——黑名单(int/float)漏掉 np.int64 等 NumPy 标量,20260709
+    # 仍被当纳秒纪元解析成 1970 穿过 cutoff 门(no-lookahead 洞)。只接受
+    # str / datetime / pd.Timestamp;其余任何类型一律源畸形。任一行失败 =
+    # 整源 source_unavailable(re-review#4:坏行绝不静默丢弃)。
+    parsed = [_parse_fetched_at(v) for v in ths_members["fetched_at"]]
+    if any(p is None for p in parsed):
         return pd.DataFrame(), None, None, "source_unavailable"
-    stamps = pd.to_datetime(raw, errors="coerce")
-    # re-review#4 P1:**任一**行时间戳不可解析 = 源畸形(旧码只拒全坏——混合
-    # "有效行 + not-a-date 行"的帧曾静默丢坏行并报 selected,既非
-    # source_unavailable 也非可证明完整的快照);逐行 ts_code/con_code 非空同理
-    if stamps.isna().any():
-        return pd.DataFrame(), None, None, "source_unavailable"
+    stamps = pd.Series(parsed, index=ths_members.index)
     for col in ("ts_code", "con_code"):
         vals = ths_members[col]
         if vals.isna().any() or (vals.astype(str).str.strip() == "").any():

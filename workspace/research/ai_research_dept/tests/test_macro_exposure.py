@@ -297,6 +297,47 @@ def test_mixed_valid_and_bad_timestamp_rows_are_source_unavailable(mappings):
         assert rows[2]["mapping_status"] == "source_unavailable"
 
 
+def test_numpy_scalar_timestamp_is_source_failure(mappings):
+    # re-review#6 P1 (the reviewer's probe verbatim): np.int64(20260709) is not
+    # a Python int, slipped the isinstance blacklist, and parsed as epoch
+    # nanoseconds -> 1970 -> FUTURE concepts into a 2025 decision. The positive
+    # allowlist refuses every non-str/datetime element.
+    import numpy as np
+    good = {"ts_code": "ALSO_FUTURE.TI", "con_code": SMIC, "con_name": "x",
+            "fetched_at": pd.Timestamp("2026-07-09T13:53:14")}
+    for scalar in (np.int64(20260709), np.int32(20260709),
+                   np.float32(20260709.0), np.uint64(20260709)):
+        bad = {"ts_code": "FUTURE.TI", "con_code": SMIC, "con_name": "x",
+               "fetched_at": scalar}
+        for order in ([bad, good], [good, bad]):
+            rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                          pool_metrics=_pool(),
+                                          ths_members=pd.DataFrame(order),
+                                          mappings=mappings)
+            assert rows[2]["mapping_status"] == "source_unavailable"
+            assert "FUTURE.TI" not in str(rows[2]["exposure_value"])
+
+
+def test_tz_aware_and_bare_date_boundaries(mappings):
+    # re-review#6 boundary rulings: tz-aware ISO strings normalize to CN-naive
+    # (no TypeError, correct instant); a bare datetime.date refuses (midnight
+    # assumption is not PIT proof against an intra-day cutoff)
+    import datetime as dt
+    tz_row = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+              "fetched_at": "2025-01-01T00:00:00+08:00"}
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=pd.DataFrame([tz_row]),
+                                  mappings=mappings)
+    assert rows[2]["mapping_status"] == "mapped"
+    assert rows[2]["snapshot_effective_at"] == "2025-01-01T00:00:00"
+    date_row = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+                "fetched_at": dt.date(2025, 1, 1)}
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=pd.DataFrame([date_row]),
+                                  mappings=mappings)
+    assert rows[2]["mapping_status"] == "source_unavailable"
+
+
 def test_numeric_timestamp_is_source_failure_not_epoch_1970(mappings):
     # re-review#5 P1 (the reviewer's probe): integer 20260709 (meant as
     # 2026-07-09) parses as ~1970-01-01 epoch-nanoseconds, slips through the
