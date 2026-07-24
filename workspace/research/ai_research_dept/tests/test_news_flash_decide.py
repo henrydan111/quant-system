@@ -26,7 +26,7 @@ from workspace.research.ai_research_dept.engine.news_flash_assemble import (  # 
 )
 from workspace.research.ai_research_dept.engine.news_flash_decide import (  # noqa: E402
     decide_stock, nf_decision_id,
-)
+)  # noqa: F401 — decide_stock also used via _decide
 from workspace.research.ai_research_dept.tests.assembly_fixtures import (  # noqa: E402
     CUT, SMIC, chain_artifact, chain_store, evidence_for,
 )
@@ -166,6 +166,69 @@ def test_unsealed_hard_failed_commitment_is_backfilled_on_reentry(tmp_path):
     assert old["outcome"]["news_status"] == "hard_failed"
     assert old["evaluation"] is None
     assert old["archive_schema"] == "news_decision_archive_v2"
+
+
+def test_two_task_barrier_A_backfills_B_before_succeeding(tmp_path):
+    # P4b re-review#2 P1 (the reviewer's cross-task probe): task B is mid-flow
+    # (holds the per-decision lock), task A's decide_stock must BLOCK; B commits
+    # hard_failed and crashes before seal (lock released, archive missing); A
+    # then proceeds and MUST backfill B's archive before returning success.
+    # Pre-fold, A's one-shot snapshot missed B's commitment and returned success
+    # with B's audit archive permanently unsealed.
+    import shutil
+    import threading
+    import time as _time
+    from workspace.research.ai_research_dept.engine.news_archive import (
+        load_and_verify_execution_archive,
+    )
+    from workspace.research.ai_research_dept.engine.news_flash_decide import (
+        _decision_flow_lock_path,
+    )
+    art = chain_artifact(NF_ID, variant="full")
+    lock = _decision_flow_lock_path(tmp_path / "ledger", NF_ID)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.mkdir()                                         # B holds the flow lock
+    result: dict = {}
+
+    def task_a():
+        result["out"] = _decide(tmp_path)
+    t = threading.Thread(target=task_a, daemon=True)
+    t.start()
+    _time.sleep(0.4)
+    assert t.is_alive(), "task A must block on B's per-decision flow lock"
+    # B's flow while holding the lock: record + hard_failed commit, crash pre-seal
+    record_decision(tmp_path / "ledger", NF_ID, art, **evidence_for(art))
+
+    def broken_fn(msgs):
+        return ta._Reply("not json at all")
+    b_bundle = execute_news_decision(
+        art, ledger_dir=tmp_path / "ledger", prov_dir=tmp_path / "prov",
+        decision_id=NF_ID, contract=ta._contract(), call_fn=broken_fn)
+    shutil.rmtree(lock)                                  # B crashes; lock released
+    t.join(timeout=60)
+    assert not t.is_alive() and result["out"]["news_status"] == "success"
+    # A backfilled B's hard_failed archive BEFORE returning success
+    old = load_and_verify_execution_archive(
+        NF_ID, b_bundle["execution_id"], art, ledger_dir=tmp_path / "ledger",
+        prov_dir=tmp_path / "prov", contract=ta._contract(),
+        archive_dir=tmp_path / "arch")
+    assert old["outcome"]["news_status"] == "hard_failed"
+
+
+def test_stale_flow_lock_fails_closed(tmp_path):
+    # a crash-leftover lock dir blocks the next driver until timeout, then
+    # fails closed (operator intervention; same semantics as the ledger lock)
+    from workspace.research.ai_research_dept.engine.news_flash_decide import (
+        _decision_flow_lock_path,
+    )
+    lock = _decision_flow_lock_path(tmp_path / "ledger", NF_ID)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.mkdir()
+    root = chain_store("full")
+    with pytest.raises(RuntimeError, match="决策流锁超时"):
+        decide_stock(CUT, ingest_class="forward", ts_code=SMIC,
+                     **_dirs(tmp_path, root), contract=ta._contract(),
+                     call_fn=ta._call_fn(), lock_timeout=0.3)
 
 
 def test_backfill_also_runs_when_success_already_exists(tmp_path):
