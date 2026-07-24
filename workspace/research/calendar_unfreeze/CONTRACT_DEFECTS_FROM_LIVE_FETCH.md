@@ -139,3 +139,44 @@ Amending a contract changes `contract_sha256`, which changes the frozen plan has
 `dividends` and `repurchase` must be **re-fetched** after the amendment (~5,878 requests ≈ 3h). That is
 why `dividends` was stopped at 83 rather than allowed to run to 5,861: those receipts could never have
 been used.
+
+---
+
+## Class 3 — the contract REQUIRES a field the call never asks for
+
+Tushare marks each output field 默认显示 Y/N. An **N** field is omitted unless the request passes
+`fields=`. Two signed contracts list an N-field in `required_fields` while their `CallRecipe` sends no
+`fields` constant — so the fetch succeeds, the response is complete *for what was asked*, and
+verification then fails on a column that was never going to be there.
+
+```
+stk_limit         required_fields  down_limit, pre_close, up_limit
+                  response cols    down_limit, trade_date, ts_code, up_limit
+                  MISSING          pre_close     -> 4,493 / 4,493 failed (100%)
+                  doc 183_每日涨跌停价格.md:  pre_close | float | N | 昨日收盘价
+
+disclosure_date   required_fields  actual_date, modify_date, pre_date
+                  MISSING          modify_date   -> 73 requests, not yet reached, certain to fail
+                  doc 162_财报披露日期表.md:   modify_date 默认显示 N
+```
+
+Scanned the whole signed set against the offline doc mirror: **exactly these two**. Every other
+endpoint's required fields are 默认显示 Y, which is why `daily`, `moneyflow`, `income` and the rest
+verified normally without a `fields` constant.
+
+### Fix — one of two, and they are not equivalent
+
+1. **Add `fields=` to the recipe** (the `report_rc` precedent — it already carries a fixed projection
+   via `constant_kwargs`, precisely to force `create_time`). This *keeps* the field, so the recovered
+   store matches what the contract says it holds. Changes the recipe → the bundle hash.
+2. **Drop the field from `required_fields`.** Cheaper, but it silently narrows what the recovered
+   dataset contains versus the signed intent — for `stk_limit` that means losing `pre_close`, which the
+   engine's limit-price fallback (`compute_limit_prices(pre_close, band)`) reads.
+
+For `stk_limit` option 1 is the right one: `pre_close` is load-bearing for execution. Both endpoints
+should be decided deliberately, not defaulted.
+
+**This class was invisible to every earlier check.** The contract sign-off verified the field exists in
+the doc; it did not compare 默认显示 against what the recipe requests. The pre-fetch battery used
+synthetic frames built *from* `required_fields`, so they always contained the column. Only a real call
+could show it.
