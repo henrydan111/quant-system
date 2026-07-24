@@ -28,12 +28,12 @@ shape = NF_UNIT_C1_DESIGN.md):
 5. **`vector_only` never yields a scalar.** A vector_only decision produces
    `final=None` WITHOUT an error; the identity block carries
    `binding_eligible=False`; the session archive stays unpublishable-as-scalar.
-6. **Legacy unchanged — `analyst_chain.py` is NOT touched by C1 at all** (C1
+6. **Legacy unchanged — C1 itself touched no `analyst_chain.py` byte** (C1
    review round-1 P1#1: the manifest hashes that file's BYTES into
-   `engine_contract_sha256`, so even a default-OFF hook parameter changes the
-   frozen `chain_v3.1` contract / collides with existing manifests). The wiring
-   lives in the FROZEN WIRING OBLIGATIONS below and lands ONLY with the formal
-   chain-version bump.
+   `engine_contract_sha256`, so even a default-OFF hook parameter would have
+   changed the then-frozen `chain_v3.1` contract). The wiring landed with the
+   **chain_v3.2 bump** per the (now-discharged) FROZEN WIRING OBLIGATIONS
+   below; v3.1 archives live in their own version dir, untouched.
 7. **No post-cutoff reads.** Inputs are the committed evidence + sealed artifacts
    only — every one of them is cutoff-bound by the producer chain.
 8. **Opaque external scalar, declared** (C1 review round-1 P1#2 + re-review#2
@@ -47,13 +47,21 @@ shape = NF_UNIT_C1_DESIGN.md):
    no-scalar (vector_only) seat carrying it would make that obligation
    self-contradictory.
 
-⚠ **FROZEN WIRING OBLIGATIONS** (the final-integration unit's preconditions —
-the pattern that carried P3b→P4a; none of this may be "simplified away"):
+⚠ **FROZEN WIRING OBLIGATIONS — DISCHARGED by chain_v3.2 (2026-07-24)**. The
+four obligations below were frozen at the C1 arc's close and discharged by the
+version-bump unit: (a) the wiring landed WITH `CHAIN_VERSION = "chain_v3.2"`
+(the byte pin moved in the same commit); (b) `judge()` passes `opaque_scalar`
+seats through (`adj_final == final`, hook-on regression pinned); (c) the
+manifest's frozen `nf_contract` section + `nf_contract_from_chain` /
+`nf_cutoff_for_day` below bind the session day to the full 18:00:00 cutoff;
+(d) preserved verbatim in the hook branch. The text is kept as the contract
+record; it now BINDS v3.2 (any further `analyst_chain.py` edit = another
+bump):
 
   a. **Chain-version bump first.** Any edit to `analyst_chain.py` (the hook
      parameter, the news-seat branch, the `nf_decision` block) is a NEW chain
-     version with a re-frozen manifest — never an in-place edit of `chain_v3.1`
-     (its contract hash covers the file bytes; P1#1).
+     version with a re-frozen manifest — never an in-place edit of the current
+     frozen version (its contract hash covers the file bytes; P1#1).
   b. **Opaque-scalar judge semantics.** For a seat with `opaque_scalar=True`
      (set ONLY on seats with a scalar `final` — re-review#2 P2#1), the judge
      must set `adj_final = final` when no NF-native bear-discount contract
@@ -95,11 +103,42 @@ from workspace.research.ai_research_dept.engine.news_flash_assemble import (  # 
 from workspace.research.ai_research_dept.engine.news_flash_decide import (  # noqa: E402
     nf_decision_id,
 )
+from workspace.research.ai_research_dept.engine.news_executors import (  # noqa: E402
+    NewsScoringContract,
+)
 from workspace.research.ai_research_dept.engine.news_flash_typing import (  # noqa: E402
     _canonical_cutoff,
 )
 
 logger = logging.getLogger("news_session_embed")
+
+
+def nf_contract_from_chain(chain_contract) -> NewsScoringContract:
+    """义务 (c) 前半(v3.2):NF 评分契约**只能**从对盘验证过的 `ChainContract`
+    的冻结 `nf` 节构造(该节在 `ChainContract.load` 逐值校验、对盘复核比对);
+    v3.2 之前的契约无此节 → fail-closed 拒——NF 消费不可能接错契约。"""
+    nf = getattr(chain_contract, "nf", None)
+    if not nf:
+        raise ValueError(
+            "ChainContract 无 nf_contract 节——chain_v3.2 之前的契约不可驱动 NF"
+            "消费,拒(义务 c)")
+    return NewsScoringContract(
+        schema_id=nf["schema_id"], output_mode=nf["output_mode"],
+        primary_decision_horizon=nf["primary_decision_horizon"])
+
+
+def nf_cutoff_for_day(day, chain_contract):
+    """义务 (c) 后半(v3.2):会话 `day`(YYYYMMDD)→ **完整冻结 cutoff 时间戳**
+    的唯一绑定——裸日期永远到不了 NF 门。时刻来自契约冻结的
+    `nf.input_cutoff_time`;经与所有 NF 门相同的 `_canonical_cutoff` 规范化。"""
+    nf = getattr(chain_contract, "nf", None)
+    if not nf:
+        raise ValueError("ChainContract 无 nf_contract 节——拒(义务 c)")
+    d = str(day)
+    if len(d) != 8 or not d.isdigit():
+        raise ValueError(f"day 须为 YYYYMMDD(得 {day!r})——拒")
+    return _canonical_cutoff(
+        f"{d[:4]}-{d[4:6]}-{d[6:8]} {nf['input_cutoff_time']}")
 
 #: 会话层证伪条目的合法域(与 analyst_chain._normalize_falsifiers 同标);NF 论点
 #: 的最强反证在新闻域可观察

@@ -216,30 +216,32 @@ def test_tampered_identity_block_changes_the_session_seal(tmp_path):
 
 # ---------------------------------------------- acceptance 6: legacy unchanged
 
-#: analyst_chain.py 的冻结 v3.1 **LF 规范**内容哈希(C1 round-1 P1#1 +
+#: analyst_chain.py 的冻结 **LF 规范**内容哈希(C1 round-1 P1#1 +
 #: re-review#2 P2#3 + re-review#3 P2#2:字符串缺席证明不了字节未变;裸工作区
 #: 字节哈希又不可移植——本机 core.autocrlf=true 使 Windows checkout 为 CRLF、
 #: Linux CI 为 LF,同一未改源码得到两个哈希。故:哈希前把 CRLF 归一为 LF,
-#: 钉 Git 规范 blob 的内容(等于 `git cat-file` 内容的 sha256);不改
-#: analyst_chain.py 的 checkout EOL——那本身会改现行 v3.1 运行时 manifest)。
-#: 本钉随正式 chain-version bump 一起移动,除此之外不得更新。
-_FROZEN_V31_ANALYST_CHAIN_LF_SHA256 = \
-    "12b1a3244c2e8c4a01af3800705c9bd9542b7fddc0ca83d7a5bc48c5498b3bac"
+#: 钉 Git 规范 blob 的内容(等于 `git cat-file` 内容的 sha256))。
+#: 本钉**只随**正式 chain-version bump 一起移动:
+#:   chain_v3.1 = 12b1a3244c2e8c4a01af3800705c9bd9542b7fddc0ca83d7a5bc48c5498b3bac
+#:   chain_v3.2 = 当前值(NF 接线 bump,2026-07-24——CHAIN_VERSION 与本钉同一
+#:   提交内移动,义务 a)
+_FROZEN_ANALYST_CHAIN_LF_SHA256 = \
+    "1c67261b7fd7d5b9efeb43b8c2c4d00738f8aa34cefc02a1cf24a95d40b193d5"
 
 
 def test_analyst_chain_bytes_are_pinned_until_the_version_bump():
     # C1 round-1 P1#1: the manifest hashes analyst_chain.py's bytes into
-    # engine_contract_sha256 — even a default-OFF hook parameter changes the
-    # frozen chain_v3.1 contract. Canonical-content pin: ANY edit — including
-    # an innocuous comment — fails this on EVERY platform until the formal
-    # bump moves the pin together with the new CHAIN_VERSION.
+    # engine_contract_sha256 — ANY in-place edit under an unchanged
+    # CHAIN_VERSION is a frozen-contract violation. Canonical-content pin:
+    # any edit — including an innocuous comment — fails this on EVERY platform
+    # unless the pin moves together with a CHAIN_VERSION bump (same commit).
     import hashlib
     blob = (ROOT / "workspace" / "research" / "ai_research_dept" / "engine"
             / "analyst_chain.py").read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(blob).hexdigest() \
-        == _FROZEN_V31_ANALYST_CHAIN_LF_SHA256, (
+        == _FROZEN_ANALYST_CHAIN_LF_SHA256, (
         "analyst_chain.py canonical content changed without a chain-version "
-        "bump — the frozen v3.1 contract hash covers this file (C1 P1#1)")
+        "bump — the frozen contract hash covers this file (C1 P1#1)")
 
 
 def test_consumed_seat_declares_the_opaque_scalar(tmp_path):

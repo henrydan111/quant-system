@@ -45,6 +45,8 @@ obligations, bind `NewsScoringContract` from the on-disk `ChainContract`, bind t
 roots (threat model v3's governed-runner obligation), `scorecard.py` strict-additive change, the
 macro seat, adversarial prompt-freeze tests, single-day smoke + §5 M6 read-quality gate.
 
+| **BUMP** | **chain_v3.2 (2026-07-24, Tier-2 user-assigned, pending review)** — the four frozen wiring obligations DISCHARGED: (a) `nf_news` hook + news-seat branch + strictly-additive `nf_decision` identity block land WITH the version bump (byte pin moved in the same commit; hook default OFF — enablement stays the caller's/FORWARD_PREREG governed runner's); (b) `judge()` passes `opaque_scalar` seats through (`adj_final == final`; empty-list recompute that zeroed the sealed 49.0 is dead; legacy discount path untouched); (c) manifest gains the frozen `nf_contract` section (`c16_news_horizon_v1` / `primary_horizon` / **1-3d** / **18:00:00** / `forward`, user-frozen 2026-07-24) + `nf_contract_from_chain` / `nf_cutoff_for_day` (bare dates cannot reach the NF doors); (d) fallback dichotomy preserved in the hook branch. Platform `RENDER_VERSION` synced. Design: [NF_UNIT_BUMP_DESIGN.md](NF_UNIT_BUMP_DESIGN.md) | wire | 0 | C1 |
+
 Each unit is Tier-2, sequential. Net new LLM cost per stock ≈ **P4's 2 legs** (factor+penalty) + a
 share of P1's batched typing (+ possibly P3 splits). That is a material per-stock cost increase on top
 of the existing fund/tech/news/bear seats.

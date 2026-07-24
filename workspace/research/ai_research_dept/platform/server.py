@@ -39,7 +39,7 @@ from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "engine" / "prompts"
 #: 现行渲染器/prompt 对应的链版本(GPT Blocker-1:平台按版本取数;
 #  与 analyst_chain.CHAIN_VERSION 一致性由 workspace 测试断言——平台进程禁 import 编排模块)
-RENDER_VERSION = "chain_v3.1"
+RENDER_VERSION = "chain_v3.2"   # v3.2: NF 接线 bump(与 CHAIN_VERSION 同步)
 #: legacy 显式 allowlist(复审#4 B1:legacy 绝不由"缺字段"推断)——
 #  这些历史版本产生于封印 schema 之前,只做结构性校验
 LEGACY_CHAINS = frozenset({"chain_v1.0", "chain_v2.1", "chain_v2.2", "chain_v2.3"})

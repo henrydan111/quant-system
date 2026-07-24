@@ -52,7 +52,15 @@ from workspace.research.ai_research_dept.engine.integrity import (  # noqa: E402
 
 logger = logging.getLogger("analyst_chain")
 
-CHAIN_VERSION = "chain_v3.1"  # v3.1: B3 热修(GPT news-flash R1/R3 放行) —— 渲染边界
+CHAIN_VERSION = "chain_v3.2"  # v3.2: NF 波次接线(C1 冻结义务 a-d 全数 discharge):
+#   nf_news 可选钩子(默认 None=遗留路径;开启权属调用方/FORWARD_PREREG governed
+#   runner)+ news 席消费分支(no_decision→遗留 inline 回退;错误席照采 fail-closed)+
+#   档案严格新增 nf_decision 身份块(封入 archive_sha256)+ judge 不透明外部标量
+#   直通(opaque_scalar 席 adj_final==final,不经空计分列表重算——那曾把密封 49.0
+#   归零)+ manifest 新增 nf_contract 节(schema/mode/主周期 1-3d/cutoff 18:00:00/
+#   ingest_class,用户冻结 2026-07-24)——会话 day 只能经 nf_cutoff_for_day 绑定为
+#   完整时间戳后进 NF 门;
+#   v3.1: B3 热修(GPT news-flash R1/R3 放行) —— 渲染边界
 #   净化(NFKC/剥控制符零宽符/方括号全角化,应用于全部外部标题+业务构成)+渲染器
 #   emit-time ID 注册表(封入档案 card_ids,校验只认注册表∩席位域,注入 [F01] 死)+
 #   席位-ID 域强制;现行链活漏洞修复(半可信研报/互动易标题),独立于 news-flash 全波;
@@ -87,6 +95,17 @@ from workspace.research.ai_research_dept.engine.cards import (  # noqa: E402
     COMPOSITE_W, FIELD_CN, SEAT_ID_DOMAINS, SEAT_WEIGHTS, SUBCARD_CN,
     disclosure_status, render_fund_card, render_news_card, render_pv_card,
 )
+#: v3.2 NF 契约节(冻进 manifest;值为用户裁定 2026-07-24——改任一值=再 bump)。
+#: input_cutoff_time:会话 day → NF cutoff 的**唯一**冻结绑定(义务 c:裸日期
+#: 到不了 NF 门);主评分周期 1-3d = 快讯信号的自然兽命区间。
+NF_CONTRACT = {
+    "schema_id": "c16_news_horizon_v1",
+    "output_mode": "primary_horizon",
+    "primary_decision_horizon": "1-3d",
+    "input_cutoff_time": "18:00:00",
+    "ingest_class": "forward",
+}
+
 BEAR_DISCOUNT_STRENGTH = 4      # 反驳强度≥4 且有反证 → 目标维贡献 ×0.5
 DIVERGENCE_GAP = 40             # 席位 final 两两差 > 40 → 背离旗
 CHAIN_DIR = C.OUT_ROOT / "analyst_chain"
@@ -127,6 +146,39 @@ def _deep_ro(obj):
     return obj
 
 
+_NF_CONTRACT_KEYS = frozenset({"schema_id", "output_mode",
+                               "primary_decision_horizon", "input_cutoff_time",
+                               "ingest_class"})
+_NF_CUTOFF_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$")
+
+
+def _verify_nf_contract(nf) -> list:
+    """v3.2 NF 契约节逐值校验(义务 c:day→cutoff 绑定的冻结源;fail-closed)。"""
+    if not isinstance(nf, dict):
+        return ["须为对象(chain_v3.2 起必需)"]
+    if set(nf) != _NF_CONTRACT_KEYS:
+        return [f"键集不符(须恰 {sorted(_NF_CONTRACT_KEYS)})"]
+    problems = []
+    for k in ("schema_id", "output_mode", "ingest_class", "input_cutoff_time"):
+        if not isinstance(nf[k], str) or not nf[k]:
+            problems.append(f"{k} 须为非空字符串")
+    if nf.get("output_mode") == "primary_horizon":
+        if not isinstance(nf.get("primary_decision_horizon"), str) \
+                or not nf["primary_decision_horizon"]:
+            problems.append("primary_horizon 模式必须给定主评分周期")
+    elif nf.get("output_mode") == "vector_only":
+        if nf.get("primary_decision_horizon") is not None:
+            problems.append("vector_only 模式不得携带主评分周期")
+    else:
+        problems.append(f"output_mode {nf.get('output_mode')!r} 未注册")
+    if isinstance(nf.get("input_cutoff_time"), str) \
+            and not _NF_CUTOFF_RE.fullmatch(nf["input_cutoff_time"]):
+        problems.append("input_cutoff_time 须为 HH:MM:SS(完整时刻,义务 c)")
+    if nf.get("ingest_class") not in ("forward", "history_bulk"):
+        problems.append(f"ingest_class {nf.get('ingest_class')!r} 未注册")
+    return problems
+
+
 @dataclass(frozen=True)
 class ChainContract:
     """已验证的执行契约(复审#4 B2 + #5 B1):**只能经 `ChainContract.load(vdir)` 从
@@ -139,6 +191,7 @@ class ChainContract:
     scoring: object = field(default_factory=dict)             # 只读 Mapping
     routing: object = field(default_factory=dict)             # 只读 Mapping
     llm_config_hash: str = ""       # 冻结的 LLM 配置指纹(复审#7 B1:档案从此取)
+    nf: object = field(default_factory=dict)   # v3.2:冻结 NF 契约节(只读 Mapping)
 
     @classmethod
     def load(cls, vdir: Path) -> "ChainContract":
@@ -182,12 +235,20 @@ class ChainContract:
                     f"契约构造被拒: routing[{leg}] {';'.join(rp)}")
         if not manifest.get("llm_config_hash"):
             raise VersionCollisionError("契约构造被拒: manifest 缺 llm_config_hash")
+        # v3.2:NF 契约节必需且逐值校验(fail-closed——义务 c 的对盘构造前提;
+        # 缺节/畸形节的 manifest 不可作为 v3.2 执行契约)
+        nf = manifest.get("nf_contract")
+        nf_problems = _verify_nf_contract(nf)
+        if nf_problems:
+            raise VersionCollisionError(
+                f"契约构造被拒: nf_contract {';'.join(nf_problems)}")
         return cls(manifest_fp=manifest["manifest_fp"],
                    manifest_sha256=manifest["manifest_sha256"],
                    effective_prompts=_deep_ro(prompts),
                    scoring=_deep_ro(sc),
                    routing=_deep_ro(routing),
-                   llm_config_hash=manifest["llm_config_hash"])
+                   llm_config_hash=manifest["llm_config_hash"],
+                   nf=_deep_ro(nf))
 
 
 def verify_contract_matches_manifest(contract: "ChainContract", vdir: Path) -> None:
@@ -199,7 +260,8 @@ def verify_contract_matches_manifest(contract: "ChainContract", vdir: Path) -> N
             or fresh.effective_prompts != contract.effective_prompts
             or fresh.scoring != contract.scoring
             or fresh.routing != contract.routing
-            or fresh.llm_config_hash != contract.llm_config_hash):
+            or fresh.llm_config_hash != contract.llm_config_hash
+            or fresh.nf != contract.nf):                    # v3.2:NF 节同比对
         raise VersionCollisionError(
             "传入契约与磁盘 manifest 不符(疑似伪造契约)——拒绝执行")
 
@@ -402,6 +464,14 @@ def judge(seat_results: dict, bear: dict, scoring=None) -> dict:
     discounts = []
     adj_finals = {}
     for seat, res in seat_results.items():
+        # v3.2(NF C1 冻结义务 b):**不透明外部标量席直通**——密封 final 不经
+        # 空计分列表重算(那曾把密封 49.0 归零成 adj 0.0 而档案照发)。无 NF
+        # 原生折减合约前不折减:空头反驳没有契约注册的 NF 维可作用,凭空发明
+        # 映射=新计分合约=独立单元。opaque_scalar 只标有标量 final 的席
+        # (news_session_embed 旗语纪律);无标量席(final=None)进不了本函数。
+        if res.get("opaque_scalar") is True:
+            adj_finals[seat] = max(0.0, min(100.0, res["final"]))
+            continue
         w = seat_w[seat]
         total = 0.0
         strong = {r["target_dim"] for r in bear["refutations"]
@@ -483,6 +553,7 @@ def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
         "chain_version": CHAIN_VERSION,
         "integrity_schema": 2,     # schema2 = 封印必带 executed_contract_sha256
         "sealed_required": True,
+        "nf_contract": dict(NF_CONTRACT),   # v3.2:NF 契约节(冻结,义务 c)
         "job_spec": {
             "scope_kind": "full_month",
             "days": job_days, "codes": job_codes,
@@ -586,7 +657,7 @@ def _safe_error(exc: BaseException) -> str:
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
               retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
               series: pd.DataFrame, out_dir: Path,
-              contract: ChainContract) -> dict:
+              contract: ChainContract, nf_news=None) -> dict:
     """必须持已验证 ChainContract;进入时与磁盘 manifest 复核(复审#5 B1:调用方传入
     的契约不被信任);缺输入=MissingInputError(复审#5 Major-1:不得静默 None);
     逐(日,股)跨进程锁从档案检查持有到发布结束(并发双跑不再互覆盖)。"""
@@ -618,7 +689,8 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
                                  "manifest_fp": manifest_fp})
         try:
             archive = _execute_attempt(code, day, cards, mc, contract, audit,
-                                       artifact_fp, attempt_no, card_ids)
+                                       artifact_fp, attempt_no, card_ids,
+                                       nf_news=nf_news)
         except BaseException as exc:  # 意外异常也必须留痕(孤儿 attempt 封死)
             err = _safe_error(exc)
             (attempt_dir / "status.json").write_text(json.dumps(
@@ -660,12 +732,25 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
 def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                      contract: ChainContract, audit: Path,
                      artifact_fp: str, attempt_no: int,
-                     card_ids: dict | None = None) -> dict:
+                     card_ids: dict | None = None,
+                     nf_news=None) -> dict:
     card_ids = card_ids or {}
     seat_results = {}
+    # v3.2 NF 接线(C1 冻结义务 a/d):nf_news(code, day) ->
+    # news_session_embed.consume_news_decision 的返回。no_decision=True(当日无
+    # 路由快讯)→ 回退遗留 inline 席;消费席/错误席一律照采(fail-closed:坏的
+    # 生产链绝不静默回退)。默认 None = 遗留路径;开启权属调用方(FORWARD_PREREG
+    # governed runner),main() 不自动启用。
+    nf_block = None
     for seat, pfile, key in [("fund", "fund_analyst_v2.txt", "fund_card"),
                               ("tech", "tech_analyst_v2.txt", "pv_card"),
                               ("news", "news_analyst_v2.txt", "news_card")]:
+        if seat == "news" and nf_news is not None:
+            got = nf_news(code, day)
+            if not got.get("no_decision"):
+                seat_results[seat] = got["seat"]
+                nf_block = got.get("nf_decision")
+                continue                               # 消费席;不跑 inline LLM
         prompt = contract.effective_prompts[pfile]     # 冻结契约,不重读磁盘(#4 B2)
         seat_w = contract.scoring["seat_weights"][seat]   # 评分参数从契约执行(#5 B1)
         payload = {key: cards[key]}
@@ -729,6 +814,10 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
         "bear": bear, "judge": verdict,
         "evidence_class": "research_summary/" + C.EVIDENCE_CLASS_REPLAY,
     }
+    if nf_block is not None:
+        # v3.2 NF C1 义务 a:严格新增的**身份块**(ids+哈希,无载荷拷贝),
+        # 封入 archive_sha256 —— 会话档案承诺"消费的是哪个 NF 决策"
+        archive["nf_decision"] = nf_block
     archive["complete"] = archive_complete(archive, dict(contract.scoring))
     archive["attempt"] = attempt_no
     # archive_sha256 输出正文封印(复审#3 B2;#4 minor:完整 64 位摘要)
