@@ -25,6 +25,18 @@ Two cheaper shapes were rejected in arbitration: field-level cross-checking (lea
 same-fingerprint-prefix and forged-split-text faces open) and a persisted P3b record (the writer
 is equally forgeable).
 
+**Round-3 arbitration (2026-07-24, at the §10 budget ceiling).** Re-review#3: REVISE, 2 P1.
+P1#2 (the P1←store binding checked only the subset direction — a valid 2-row chain over a 3-row
+store recorded successfully) — folded: exact-SET equality both directions, matching the P2
+production path's own population gate; regression = the reviewer's probe (store grown after the
+chain committed → refused, no ledger). P1#1 (a caller can designate its OWN roots and run the
+genuine pipeline over fabricated data) — **user-arbitrated: re-scope the threat model** (over a
+config-binding mechanism — the NF-archive 24-round lesson — and over tracked debt):
+[NF_ARCHIVE_THREAT_MODEL.md](NF_ARCHIVE_THREAT_MODEL.md) **v3** rules root selection out of scope
+(all five operator root dirs are one trust class; guarantees are relative to a fixed root set;
+production-root binding = a FORWARD_PREREG governed-runner obligation, the `book_seal.py`
+live-refusal pattern). Confirmation round #4 is scoped to the P1#2 diff + the v3 model.
+
 **Round-2 fold (2026-07-24, repeat-class ⇒ structural chokepoint).** The re-review found the
 round-1 fold's evidence was still CALLER-SUPPLIED (2 P1): self-hashes over forged content are
 recomputable, so re-derivation only proved "the caller's own materials cohere" (the reviewer

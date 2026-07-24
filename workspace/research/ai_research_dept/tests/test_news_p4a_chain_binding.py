@@ -265,6 +265,63 @@ def test_forged_p2_file_over_a_real_store_dies_on_chain_binding(tmp_path):
     assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
 
 
+def test_store_grown_after_p1_commit_refused(tmp_path):
+    # re-review#3 P1#2 (the reviewer's probe): a REAL store of 3 rows with a
+    # valid-but-2-row P1->P2->P3a chain used to write the ledger. The P1<-store
+    # binding must be EXACT-SET (the P2 production path already demands set
+    # equality): a store row not covered by the committed P1 refuses, no ledger.
+    import pandas as pd
+    from data_infra.text_store import ingest_rows
+    from workspace.research.ai_research_dept.engine.news_flash_assess import (
+        assess_day_flashes, write_assessed_flash_artifact,
+    )
+    from workspace.research.ai_research_dept.engine.news_flash_split import (
+        split_day_flashes, write_split_artifact,
+    )
+    from workspace.research.ai_research_dept.engine.news_flash_typing import (
+        type_day_flashes, write_typed_flash_artifact,
+    )
+    from workspace.research.ai_research_dept.tests import assembly_fixtures as fx
+    root = tmp_path / "grown_root"
+    specs = fx.VARIANTS["basic"]
+    ingest_rows("news", pd.DataFrame(
+        [{"src": "sina", "datetime": dt, "content": c, "title": None,
+          "channels": ""} for c, dt, _t in specs]),
+        published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 17:00:00"),
+        store_dir=root, ingest_class="forward")
+    p1 = type_day_flashes(fx.CUT, ingest_class="forward",
+                          call_fn=fx._typer(specs), store_dir=root)
+    p2 = assess_day_flashes(fx.CUT, ingest_class="forward", typed_artifact=p1,
+                            stock_basic=fx._stock_basic(),
+                            namechange=fx._namechange(), open_calendar=fx._CAL,
+                            industry_terms=frozenset({"半导体"}),
+                            concept_terms=frozenset({"芯片"}), store_dir=root)
+    from data_infra.text_store import load_text
+    rows2 = load_text("news", pd.Timestamp(fx.CUT), store_dir=root,
+                      ingest_class="forward")
+    p3a = split_day_flashes(fx.CUT, ingest_class="forward",
+                            assessed_artifact=p2, source_rows=rows2)
+    write_typed_flash_artifact(p1, root)
+    write_assessed_flash_artifact(p2, root)
+    write_split_artifact(p3a, root)
+    from workspace.research.ai_research_dept.engine.news_flash_assemble import (
+        assemble_stock_artifact,
+    )
+    art, asm = assemble_stock_artifact(
+        fx.CUT, ingest_class="forward", ts_code=fx.SMIC, decision_id="d1",
+        assessed_artifact=p2, split_artifact=p3a, source_rows=rows2)
+    # the store GROWS after the chain committed (a 3rd row, visible pre-cutoff)
+    ingest_rows("news", pd.DataFrame(
+        [{"src": "sina", "datetime": "2025-01-27 11:00:00",
+          "content": "中芯国际盘后新增快讯丙", "title": None, "channels": ""}]),
+        published_col="datetime", retrieved_at=pd.Timestamp("2025-01-27 17:30:00"),
+        store_dir=root, ingest_class="forward")
+    with pytest.raises(RegistryError, match="等集|未覆盖"):
+        record_decision(tmp_path / "ledger", "d1", art, assembly=asm,
+                        store_dir=root, artifact_dir=root)
+    assert not (tmp_path / "ledger" / "decision_ledger.jsonl").exists()
+
+
 # ------------------------------------------------ obligation (c): the ledger pins
 
 def test_ledger_entry_pins_hash_and_embeds_payload(tmp_path):

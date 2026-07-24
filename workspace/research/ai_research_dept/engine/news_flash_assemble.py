@@ -316,11 +316,21 @@ def resolve_committed_evidence(cutoff, *, ingest_class: str, store_dir,
         cols = list(rows.columns)
         recomputed = {content_hash_for("news", r, cols)
                       for _, r in rows.iterrows()}
-    orphan = {t["content_hash"] for t in p1["typed"]} - recomputed
+    # re-review#3 P1#2:**完全等集**,不是子集——旧检查只拒"P1 有、库没有",
+    # 漏掉"库有、P1 缺"(库 3 条、有效 P1 只覆盖 2 条曾入账)。P2 生产路径
+    # 本就要求两边完全相等(news_flash_assess 的 population 等集门);此处同标。
+    claimed = {t["content_hash"] for t in p1["typed"]}
+    orphan = claimed - recomputed
     if orphan:
         raise ValueError(
             f"P1 工件含 {len(orphan)} 个本文本库无法重算绑定的 flash"
             f"(如 {sorted(orphan)[0][:12]})——该 P1 非由本库产出,拒(P1←库)")
+    uncovered = recomputed - claimed
+    if uncovered:
+        raise ValueError(
+            f"文本库有 {len(uncovered)} 个 flash 不在 P1 工件总体内"
+            f"(如 {sorted(uncovered)[0][:12]})——P1 未覆盖本库该 cutoff 全量"
+            f"(库在 P1 提交后增行/P1 部分覆盖),链不再代表本库,拒(P1←库等集)")
     p2_path = _p2_artifact_path(artifact_dir, cut.isoformat(), ingest_class)
     if not p2_path.exists():
         raise ValueError(

@@ -1,10 +1,26 @@
-# NF Decision-Archive Boundary — Frozen Threat Model (v2)
+# NF Decision-Archive Boundary — Frozen Threat Model (v3)
 
 **Status:** v1 frozen + user-approved 2026-07-22 (commit `fe99286`). **v2 amendment user-approved
 2026-07-22** after the round-3 arbitration on the GPT #26 verdict (the 3-round budget for classes
-3/5 was reached; the user chose *re-scope* over further folding). Once approved this is FROZEN again;
-per CLAUDE.md §10, findings are judged against THIS spec; re-scoping is a user decision, never
-round-N legislation.
+3/5 was reached; the user chose *re-scope* over further folding). **v3 amendment user-approved
+2026-07-24** after the P4a round-3 arbitration (GPT P4a re-review#3 P1#1: a caller can supply its
+own root directories and commit a genuine chain over fabricated data; the user chose *re-scope*
+over a config-binding mechanism or tracked debt). Once approved this is FROZEN again; per CLAUDE.md
+§10, findings are judged against THIS spec; re-scoping is a user decision, never round-N legislation.
+
+**v3 amendment in one line:** **root selection is OUT OF SCOPE.** The operator-designated root
+directories (`ledger_dir`, `prov_dir`, `archive_dir`, and — since P4a — `store_dir`,
+`artifact_dir`) are ONE trust class: the boundary's guarantees are **relative to a given, fixed set
+of roots** ("no forged/decoupled value is ever sealed or accepted *within the operator's world*").
+An in-process caller who designates different roots and runs the genuine pipeline over them has not
+forged anything *in the operator's world* — it has built its own world, which in-process Python
+cannot prevent (a caller with root-selection freedom could equally point `ledger_dir` itself at a
+fresh directory; caller-distinguishing inside one process is the documented combinatorial trap —
+ledger-integrity arc, user decision 2026-07-22). **Binding "which roots are the production roots" is
+a deployment/configuration obligation discharged at the FORWARD_PREREG integration** (a governed
+runner pins the roots; the same pattern as `book_seal.py`'s live-refusal preconditions), NOT an
+in-process boundary property. A finding is admissible against this boundary iff it demonstrates
+forgery / decoupling / mutation / leak **within one fixed root set** the operator designated.
 
 **v2 amendment in one line:** the load-bearing guarantee is **fail-closed integrity** — nothing
 forged or non-exact is ever sealed/accepted, and no callback can mutate trusted state or leak. A
@@ -92,6 +108,11 @@ integrity, not the hook count.
 - **Cross-process concurrency races** — covered by `file_lock` + write-once-first-write-wins.
 - **Cryptographic breaks** — sha256 collision/preimage are assumed hard.
 - **Denial of service / resource exhaustion** — availability is not a sealing-integrity property.
+- **(v3) Root selection / root identity** — an in-process caller designating its OWN root
+  directories (`store_dir` / `artifact_dir` / `ledger_dir` / `prov_dir` / `archive_dir`) and running
+  the genuine pipeline over them. The boundary's guarantees are relative to a fixed root set;
+  production-root binding is a FORWARD_PREREG deployment obligation (governed runner), not an
+  in-process property. In-scope findings must hold the root set fixed.
 - **(v2) Benign callback on a raising/refusing path** — a crafted instance's `__class__` / `__str__`
   / `__getattr__` / `__array__` / `__repr__` firing on a gate that then raises, when it flips no
   security decision, seals/accepts nothing, mutates no trusted state, and leaks nothing. Documented
