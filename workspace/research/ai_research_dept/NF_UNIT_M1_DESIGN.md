@@ -59,18 +59,20 @@ in the MS05 map.
 
 ## The MS row schema (frozen by §0d m1 + the recorded `row_id` amendment)
 
-Every row: `mapping_id / mapping_version / mapping_sha256 / mapping_status / exposure_type /
-exposure_bucket / exposure_value / snapshot_effective_at / ts_code / dimension / source`.
+Every row — the frozen 11 §0d fields PLUS the M1-amendment `row_id` (12 keys total, matching the
+implementation's `MS_ROW_KEYS` exactly; re-review#2 P2#1): `row_id / mapping_id /
+mapping_version / mapping_sha256 / mapping_status / exposure_type / exposure_bucket /
+exposure_value / snapshot_effective_at / ts_code / dimension / source`.
 `mapped_no_exposure → exposure_value=null` (never a fabricated 0). Absence rendering carries
 `confirmed_absent_through=<exact channel cutoff>` — wording must never imply whole-evening
-coverage.
+coverage (an M3 rendering duty).
 
-## v1 exposure sources per dimension (proposal)
+## v1 exposure sources per dimension (as implemented)
 
 | row | dimension | exposure_type | v1 source | PIT basis |
 |---|---|---|---|---|
-| MS01 | risk_appetite_fit | style_bucket | size (float-mv tercile vs pool) + volatility bucket from D-close pv | D close |
-| MS02 | liquidity_funding | liquidity_bucket | turnover-rate + free-float-mv bucket from D-close pv | D close |
+| MS01 | risk_appetite_fit | style_bucket | `float_mv` + `vol_20d` pool terciles from D-close metrics | D close |
+| MS02 | liquidity_funding | liquidity_bucket | `turnover_20d` pool tercile from D-close metrics (**turnover only** — the earlier "turnover-rate + free-float-mv" wording was wrong; re-review#2 P2#2. float_mv already carries the size face in MS01; a future second MS02 metric = tercile-rule version bump) | D close |
 | MS03 | industry_concept_prosperity | industry_tag + concept_tags | `industry_as_of` (PIT) + THS members (snapshot-gated) | PIT / snapshot |
 | MS04 | policy_alignment | policy_channel | **curated** SW-industry→policy-channel mapping asset (versioned YAML, sha256 into the registry) | mapping version |
 | MS05 | external_shock_transmission | shock_channel | **curated** SW-industry→shock-channel mapping (export / commodity-input / FX / supply-chain sensitivity) | mapping version |
