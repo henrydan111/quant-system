@@ -9,21 +9,25 @@ D-close metrics (stable to universe drift); (3) Tier-2. Mapping keys = SW2021 **
 (`industry_as_of` returns e.g. `801120.SI` — verified). Spec source:
 [NEWS_FLASH_INTEGRATION_v1.md](NEWS_FLASH_INTEGRATION_v1.md) §6 + §0d m1/m2/M4 rows.
 
-## Premise checks (done)
+## Premise checks (done; phrasing synced to the implemented contract — re-review#3 P2)
 
 - **SW industry, PIT-correct**: `src/data_infra/provider_metadata.industry_as_of(ts_code, as_of,
   level)` exists — the SW2021 industry a stock belonged to ON the date. ✓ usable for any day.
 - **THS concepts = CURRENT snapshot only**: `data/reference/ths_concept/ths_members.parquet`
   (71,868 rows; `ts_code`(board)/`con_code`/`con_name`/`fetched_at=2026-07-09T13:53`). Per the
-  frozen M4 rule: a replay day BEFORE the snapshot has no contemporaneous membership → concept
-  tags are **omitted** (`mapping_status=no_contemporaneous_snapshot`), never today's members
-  applied to 2025; forward days ≥ snapshot date use it with
-  `snapshot_effective_at = fetched_at`.
-- **Style/liquidity inputs**: the session's pv pack carries D-close per-stock fields (exact
-  column set to re-verify at implementation); §0a evening mode makes D-close inputs legal.
-- **MS04/MS05 mapping tables DO NOT EXIST** — policy-channel and external-shock-channel
-  exposures need **curated, versioned mapping assets** (the biggest research-content decision;
-  see open decisions).
+  frozen M4 rule: a replay day with no eligible (`fetched_at <= cutoff`) snapshot omits concept
+  tags — the MS03 row stays `mapped` on its industry face with the value marker
+  `concepts_omitted="no_contemporaneous_snapshot"` (never today's members applied to history);
+  eligible snapshots are consumed via `select_ths_snapshot` (unique latest, content-hashed).
+  A missing/malformed THS SOURCE is the distinct row status `source_unavailable`
+  (re-review#3 P1#1: an ops incident is never disguised as a provable historical omission).
+- **Style/liquidity inputs**: `pool_metrics` contract = `ts_code / float_mv / turnover_20d /
+  vol_20d` at D close (verified; §0a evening mode makes D-close inputs legal); `ts_code` must be
+  UNIQUE across the frame (re-review#3 P1#2 — duplicated rows made buckets order-dependent;
+  fail-closed refusal, no silent dedup).
+- **MS04/MS05 curated mapping assets**: authored as v1 YAML
+  ([macro_mappings/](engine/macro_mappings/)), pending the user's content edit pass; sha256 per
+  file + the role-labelled bundle hash are the C16b registration surface.
 
 ## Round-1 fold record (2026-07-24, 3×P1 + 2×P2, zero declines)
 
@@ -78,16 +82,16 @@ coverage (an M3 rendering duty).
 | MS05 | external_shock_transmission | shock_channel | **curated** SW-industry→shock-channel mapping (export / commodity-input / FX / supply-chain sensitivity) | mapping version |
 
 All five rows are emitted per (stock, day) by one builder `build_ms_exposure_rows(...)`; a
-dimension with no resolvable source emits `mapped_no_exposure` (null value) or the omission
-status — never silence.
+dimension with no resolvable source lands in one of the REGISTERED statuses
+(`mapped_no_exposure` / `unmapped_industry` / `metric_unavailable` / `source_unavailable`) —
+never silence, never a status the enum does not carry.
 
-## Open decisions (user, before freeze)
+## Resolved decisions (historical record — all three answered by the user 2026-07-24;
+## nothing here is open. Re-review#3 P2: this section previously read as still-open.)
 
-1. **MS04/MS05 curated mapping content** — authored by me as v1 YAML assets (SW L1/L2 →
-   channels), then user-reviewed before the freeze? Or user supplies/edits the mapping directly?
-   (They are research content: which industries are export/commodity/FX-sensitive, which policy
-   channels exist.)
-2. **MS01/MS02 bucket definitions** — proposal: terciles within the decision pool (~149 names)
-   per D-close metric; alternative: fixed absolute thresholds. Pool-relative is stable to
-   universe drift; absolute is more interpretable.
-3. **Tier** — proposed Tier-2.
+1. **MS04/MS05 curated mapping content** → Claude drafts v1 (SW **L1** keys only), user
+   reviews/edits before freeze; queued edit note: 交通运输/家电 + `fx_sensitivity: medium`
+   (reviewer suggestion, user to decide).
+2. **MS01/MS02 bucket definitions** → pool-relative terciles (rule frozen + hashed:
+   min 6 observations / min 3 distinct / le-boundary-falls-lower / degenerate = unavailable).
+3. **Tier** → Tier-2.

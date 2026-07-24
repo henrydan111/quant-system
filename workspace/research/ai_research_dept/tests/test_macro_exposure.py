@@ -237,9 +237,55 @@ def test_snapshot_content_sha_lands_in_ms03(mappings):
     )
     rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
                                   ths_members=_ths(), mappings=mappings)
-    _, _, content = select_ths_snapshot(_ths(), CUT)
+    _, _, content, status = select_ths_snapshot(_ths(), CUT)
+    assert status == "selected"
     assert rows[2]["exposure_value"]["ths_content_sha256"] == content
     assert len(content) == 64
+
+
+# ------------------------------------------------ round-3 P1 regressions
+
+def test_source_unavailable_is_distinct_from_legal_omission(mappings):
+    # P1#1 (the reviewer's probe): an EMPTY/malformed THS input used to produce
+    # the SAME row as a genuine all-later-snapshot store — an ops incident
+    # disguised as a provable historical omission. Now: source failure is the
+    # distinct row status source_unavailable (null everything); the genuine M4
+    # case keeps mapped + concepts_omitted marker.
+    for bad in (pd.DataFrame(),                              # empty
+                pd.DataFrame([{"x": 1}]),                    # missing columns
+                pd.DataFrame([{"ts_code": "a", "con_code": SMIC,
+                               "fetched_at": "not-a-date"}]),  # unparseable
+                None):                                       # not a frame
+        rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                      pool_metrics=_pool(),
+                                      ths_members=bad, mappings=mappings)
+        ms03 = rows[2]
+        assert ms03["mapping_status"] == "source_unavailable"
+        assert ms03["exposure_value"] is None and ms03["exposure_bucket"] is None
+    # the genuine all-future store (legal M4 omission) stays mapped + marker
+    rows = build_ms_exposure_rows(
+        SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+        ths_members=_ths(fetched="2026-07-09T13:53:14"), mappings=mappings)
+    ms03 = rows[2]
+    assert ms03["mapping_status"] == "mapped"
+    assert ms03["exposure_value"]["concepts_omitted"] \
+        == "no_contemporaneous_snapshot"
+
+
+def test_duplicate_pool_rows_refused_in_both_orders(mappings):
+    # P1#2 (the reviewer's probe): duplicated ts_code rows made the buckets
+    # depend on row order (low-first -> low, high-first -> high). Fail-closed:
+    # both orders refuse identically; no silent dedup.
+    lo = {"ts_code": SMIC, "float_mv": 1e9, "turnover_20d": 0.5, "vol_20d": 0.05}
+    hi = {"ts_code": SMIC, "float_mv": 9e9, "turnover_20d": 4.0, "vol_20d": 0.4}
+    base = [{"ts_code": f"00000{i}.SZ", "float_mv": (i + 1) * 1e9,
+             "turnover_20d": (i + 1) * 0.5, "vol_20d": (i + 1) * 0.05}
+            for i in range(8)]
+    for order in ([lo, hi], [hi, lo]):
+        with pytest.raises(MappingAssetError, match="重复"):
+            build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                   pool_metrics=pd.DataFrame(base + order),
+                                   ths_members=_ths(), mappings=mappings)
 
 
 def test_degenerate_distribution_refuses_to_bucket(mappings):

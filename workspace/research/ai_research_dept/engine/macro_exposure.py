@@ -1,11 +1,15 @@
 # SCRIPT_STATUS: ACTIVE — Macro wave M1: MS01-MS05 per-stock exposure rows
 """MS01-MS05 维度专属股票暴露行(宏观波次 M1,Tier-2)。
 
-规范源:NEWS_FLASH_INTEGRATION_v1.md §6 + §0d m1/m2/M4(冻结 schema 逐字):
-每行 `mapping_id / mapping_version / mapping_sha256 / mapping_status /
+规范源:NEWS_FLASH_INTEGRATION_v1.md §6 + §0d m1/m2/M4。行 schema = 冻结的
+11 字段 **+ M1 修订新增 `row_id`**(round-1 P2#1 记录在案,非"逐字"):
+`row_id / mapping_id / mapping_version / mapping_sha256 / mapping_status /
 exposure_type / exposure_bucket / exposure_value / snapshot_effective_at /
 ts_code / dimension / source`;`mapped_no_exposure → exposure_value=null`
-(绝不造 0);THS 概念无同期快照即省略(M4:不得拿今日成员套历史)。
+(绝不造 0);THS 概念无同期快照即省略(M4:不得拿今日成员套历史;省略 =
+`mapped` 行业面 + value 内 `concepts_omitted` 标记,**非**行状态);THS **源
+缺失/畸形**是独立的 `source_unavailable` 行状态(round-3 P1#1:源事故 ≠
+合法省略)。
 
 设计裁定(用户 2026-07-24,NF_UNIT_M1_DESIGN.md):
 - MS04/MS05 = 策划映射资产(YAML,Claude 草拟 v1 → 用户审改 → 冻结;内容
@@ -65,6 +69,9 @@ MS_STATUSES = frozenset({
     "mapped_no_exposure",           # 已映射但该行业无注册通道 → value=null
     "unmapped_industry",            # PIT 行业不可解析/不在映射键内
     "metric_unavailable",           # 池指标缺该股/该列/分布不可分桶
+    "source_unavailable",           # 上游源缺失/畸形(≠合法的历史无快照;
+                                    # round-3 P1#1:源事故必须大声浮出,绝不
+                                    # 伪装成 M4 省略)
 })
 
 #: 池内三分位的规则描述符(MS01/MS02 的 mapping_sha256 哈希对象——档位规则
@@ -149,30 +156,36 @@ def load_default_mappings() -> dict:
 
 
 def select_ths_snapshot(ths_members, cutoff):
-    """选定**唯一、完整、一致**的 THS 快照(GPT M1 round-1 P1#1:旧码取
+    """选定**唯一、完整、一致**的 THS 快照(round-1 P1#1:旧码取
     `fetched_at.iloc[0]` 判门却用整表取成员——混合新旧快照的帧会把未来概念漏进
     历史行,且结果依赖行序)。
 
-    规则:按 `fetched_at` 分组,候选 = 全部 `<= cutoff` 的快照,取**最新**一个,
-    只使用该时点的完整成员;无候选(全部晚于 cutoff)→ (空帧, None, None)
-    = M4 省略。返回 `(snapshot_frame, effective_at_iso, content_sha256)`——
-    content_sha256 = 该快照 (板块, 个股) 有序对集合的规范哈希(同 fetched_at、
-    不同成员 → 不同哈希;round-1 P1#2 的快照内容身份)。"""
+    返回 `(snapshot_frame, effective_at_iso, content_sha256, status)`,
+    status ∈ {selected, no_eligible_snapshot, source_unavailable}——
+    round-3 P1#1:**源缺失/畸形**(非 DataFrame/空帧/缺列/时间戳全不可解析)
+    与**真实历史库但快照全部晚于 cutoff**(合法的 M4 省略)必须可区分:前者
+    是运维/配置事故,绝不伪装成"可证明的历史无快照"。
+
+    规则:按 `fetched_at` 分组,候选 = 全部 `<= cutoff`,取**最新**一个,只用
+    该时点完整成员;content_sha256 = 该快照 (板块, 个股) 有序对集合的规范哈希
+    (round-1 P1#2 的快照内容身份)。"""
     if not isinstance(ths_members, pd.DataFrame) or ths_members.empty \
-            or "fetched_at" not in ths_members.columns:
-        return pd.DataFrame(), None, None
+            or not {"fetched_at", "ts_code", "con_code"} <= set(ths_members.columns):
+        return pd.DataFrame(), None, None, "source_unavailable"
     cut_ts = pd.Timestamp(cutoff)
     stamps = pd.to_datetime(ths_members["fetched_at"], errors="coerce")
+    if stamps.isna().all():
+        return pd.DataFrame(), None, None, "source_unavailable"
     ok = stamps.notna() & (stamps <= cut_ts)
     if not ok.any():
-        return pd.DataFrame(), None, None
+        return pd.DataFrame(), None, None, "no_eligible_snapshot"
     chosen = stamps[ok].max()
     snap = ths_members[stamps == chosen]
     pairs = sorted(zip(snap["ts_code"].astype(str),
                        snap["con_code"].astype(str)))
     content = hashlib.sha256(
         "\n".join(f"{b}|{c}" for b, c in pairs).encode()).hexdigest()
-    return snap, chosen.isoformat(), content
+    return snap, chosen.isoformat(), content, "selected"
 
 
 def exposure_mapping_bundle_sha256(mappings: dict, *, ths_snapshot=None) -> str:
@@ -239,6 +252,16 @@ def build_ms_exposure_rows(ts_code: str, day, *, cutoff, pool_metrics,
     cut_ts = pd.Timestamp(cutoff)
     rows: list = []
 
+    # round-3 P1#2:池指标 ts_code 必须**全表唯一**——重复行(上游 merge 事故
+    # 的常见形态)曾让同股同日的档位随行序在 low/high 间翻转,iloc[0] 只是把
+    # 任意选择封存下来。fail-closed 拒,不定义静默去重。
+    if isinstance(pool_metrics, pd.DataFrame) and "ts_code" in pool_metrics:
+        dup = pool_metrics["ts_code"][pool_metrics["ts_code"].duplicated()]
+        if len(dup):
+            raise MappingAssetError(
+                f"pool_metrics.ts_code 重复({sorted(set(dup.astype(str)))[:3]}…)"
+                f"——档位会依赖行序,拒(round-3 P1#2;上游先去重再供给)")
+
     # ---- MS01 风险偏好 / MS02 流动性:池内三分位(D 收盘) ----
     me = None
     if isinstance(pool_metrics, pd.DataFrame) and "ts_code" in pool_metrics:
@@ -289,15 +312,30 @@ def build_ms_exposure_rows(ts_code: str, day, *, cutoff, pool_metrics,
 
     # ---- MS03 行业·概念:PIT 行业 + THS 概念(快照门) ----
     # round-1 P1#1:经 select_ths_snapshot 选定**唯一最新 <= cutoff** 的完整
-    # 快照——混合新旧快照的帧不再漏未来概念,且与行序无关;快照内容哈希
-    # 进 value(P1#2 的内容身份)
-    snap, ths_snapshot, ths_content_sha = select_ths_snapshot(ths_members, cut_ts)
+    # 快照;round-3 P1#1:源缺失/畸形 ≠ 合法省略——source_unavailable 整行
+    # 独立状态(即便行业可解析,源事故必须大声浮出,不可评分)
+    snap, ths_snapshot, ths_content_sha, ths_status = \
+        select_ths_snapshot(ths_members, cut_ts)
+    if ths_status == "source_unavailable":
+        rows.append(_row("MS03", "industry_concept_prosperity",
+                         mapping_id="ms03_industry_concept_tags",
+                         mapping_version=_MS03_RULE_V1["version"],
+                         mapping_sha256=_MS03_RULE_SHA256,
+                         status="source_unavailable",
+                         exposure_type="industry_concept_tags", bucket=None,
+                         value=None, snapshot_at=None, ts_code=ts_code,
+                         source="sw2021_pit+ths_members"))
+        l1_for_ms03_done = True
+    else:
+        l1_for_ms03_done = False
     concepts = []
     if ths_snapshot is not None:
         concepts = sorted(
             snap[snap["con_code"] == ts_code]["ts_code"]
             .astype(str).unique().tolist())
-    if l1 is None:
+    if l1_for_ms03_done:
+        pass
+    elif l1 is None:
         rows.append(_row("MS03", "industry_concept_prosperity",
                          mapping_id="ms03_industry_concept_tags",
                          mapping_version=_MS03_RULE_V1["version"],
