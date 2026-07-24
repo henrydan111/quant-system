@@ -34,9 +34,12 @@ the wiring until the bump.
    under an unchanged `CHAIN_VERSION` is refused. The old Unit-2 wording ("replace the news seat
    inline scoring") would flip seat behaviour on external state (archive presence) inside v3.1 —
    *that is the excluded chain-bump territory (§2 of the Unit-2 spec)*.
-   **Correction (option B, user-approved 2026-07-22):** C1 lands as an **optional hook, default
-   OFF**. Hook off ⇒ the legacy path is BYTE-IDENTICAL (invariant 6 holds trivially). Switching the
-   hook on in production is the final-integration unit's chain-version bump, not C1's.
+   **Correction #1 (option B, user-approved 2026-07-22):** consumption is optional with a legacy
+   fallback, never a replacement of v3.1 behaviour.
+   **Correction #2 (round-1 P1#1 — supersedes the "optional hook, default OFF" shape):** even a
+   default-OFF hook PARAMETER edits `analyst_chain.py`, whose bytes are hashed into the frozen
+   contract — so C1 ships NO `analyst_chain` change at all; ALL session wiring is deferred to the
+   chain-version bump under the FROZEN WIRING OBLIGATIONS.
 3. `load_and_verify_decision_archive(decision_id, artifact, ...)` needs the D7 **artifact** — the
    consumer must rebuild it deterministically from the committed evidence
    (`resolve_committed_evidence` + `assemble_stock_artifact` under the driver's
@@ -70,25 +73,34 @@ New module `engine/news_session_embed.py`:
 - **AST guard test**: `load_and_verify_execution_archive` never imported/called in this module
   (invariant 1's mechanical guard).
 
-`analyst_chain._execute_attempt` gains one optional parameter `nf_news=None`:
-- `None` (default): the legacy inline path, byte-identical archives (invariant 6 proven by fixture
-  test).
-- a callable `(code, day) -> consume_news_decision(...)` result: the news seat result comes from the
-  consumption (no inline LLM call for the news seat), and the archive gains a strictly-additive
-  `nf_decision` identity block sealed under `archive_sha256` (tamper test = acceptance 2).
-  `run_stock` threads it through unchanged; NOTHING reads global config.
+**Session wiring: NOT in C1** (round-1 P1#1 + re-review#2 P2#2 sweep). C1 ships NO `analyst_chain`
+change of any kind — the manifest hashes that file's bytes into the frozen v3.1 contract, so even a
+default-OFF parameter is a contract change. The hook (`nf_news` parameter, news-seat branch, the
+strictly-additive `nf_decision` archive block, `run_stock` threading) is specified ONLY as the
+**FROZEN WIRING OBLIGATIONS** in the [news_session_embed.py](engine/news_session_embed.py) module
+docstring, and lands exclusively with the formal chain-version bump: (a) any `analyst_chain.py`
+edit = new chain version; (b) opaque-scalar judge semantics (`adj_final == final` for
+`opaque_scalar=True` seats — set ONLY on scalar seats; vector_only carries `opaque_external` only)
++ the hook-on regression; (c) session `day` binds to the FULL pre-declared NF cutoff timestamp;
+(d) the fallback dichotomy (`no_decision` → legacy seat; verification failure → error seat, never
+fallback). Until the bump, a mechanical guard pins `analyst_chain.py`'s **byte hash** (re-review#2
+P2#3 — string-absence alone cannot prove frozen bytes).
 
 ## Not in C1 (per the Unit-2 spec §2 — separate units)
 
-Macro seat; `scorecard.py`/scoring-contract/chain bump (turning the hook ON in production);
-post-judge isolation; prompt-freeze tests; single-day smoke + §5 M6 gate.
+Macro seat; `scorecard.py`/scoring-contract/chain bump (ALL session wiring, incl. the hook and the
+`nf_decision` archive embedding); post-judge isolation; prompt-freeze tests; single-day smoke +
+§5 M6 gate.
 
-## Acceptance criteria (each invariant one failing-without-it test)
+## Acceptance criteria (each invariant one failing-without-it test; wiring items are
+## OBLIGATION DEMOS, not C1 acceptances — re-review#2 P2#2)
 
 1. AST guard (execution-archive door absent).
-2. Tampered `nf_decision` block ⇒ session `archive_sha256` changes.
+2. *(obligation demo)* an `nf_decision`-shaped block under `archive_seal` — tampering changes the
+   seal (property of the FUTURE embedding, demonstrated so the bump unit inherits a pinned test).
 3. Forged sealed `evaluation` ⇒ recompute mismatch ⇒ hard error seat.
-4. {no archive, verify raises, hard_failed} ⇒ error seat, `complete=False`, nothing published.
-5. `vector_only` ⇒ no scalar, `binding_eligible=false` carried.
-6. Hook off ⇒ legacy archive byte-identical (fixture).
+4. {no archive, verify raises, hard_failed} ⇒ error seat; a seat with an error is unpublishable
+   through the SHARED integrity predicate.
+5. `vector_only` ⇒ no scalar, no `opaque_scalar` flag, `binding_eligible=false` carried.
+6. `analyst_chain.py` byte-hash pinned to the frozen v3.1 blob until the version bump.
 7. No new post-cutoff read (the consumption takes only sealed artifacts + committed evidence).

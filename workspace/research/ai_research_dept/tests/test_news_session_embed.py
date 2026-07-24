@@ -178,6 +178,11 @@ def test_vector_only_never_yields_a_scalar(tmp_path):
     assert got["seat"]["final"] is None
     assert got["seat"].get("error") is None            # NOT an error
     assert got["seat"]["vector_only"] is True
+    # re-review#2 P2#1: opaque_scalar ⇒ adj_final == final is a SCALAR
+    # obligation — a no-scalar seat must never carry it (external origin is
+    # marked by opaque_external instead)
+    assert "opaque_scalar" not in got["seat"]
+    assert got["seat"]["opaque_external"] is True
     assert got["nf_decision"]["binding_eligible"] is False
     assert got["nf_decision"]["output_mode"] == "vector_only"
 
@@ -191,7 +196,9 @@ def test_unrouted_stock_is_no_decision_not_error(tmp_path):
     assert got["seat"] is None and got["nf_decision"] is None
 
 
-# ---------------------------------------------- acceptance 2: seal commitment
+# ------------------------------- wiring-obligation DEMO (not a C1 acceptance —
+# ------------------------------- re-review#2 P2#2: C1 writes no session archive;
+# ------------------------------- the bump unit inherits this pinned property)
 
 def test_tampered_identity_block_changes_the_session_seal(tmp_path):
     from workspace.research.ai_research_dept.engine.integrity import archive_seal
@@ -207,16 +214,25 @@ def test_tampered_identity_block_changes_the_session_seal(tmp_path):
 
 # ---------------------------------------------- acceptance 6: legacy unchanged
 
-def test_analyst_chain_is_untouched_before_the_version_bump():
+#: analyst_chain.py 的冻结 v3.1 字节哈希(C1 round-1 P1#1 + re-review#2 P2#3:
+#: 字符串缺席证明不了字节未变——追加一行无关注释即可绕过;唯一机械保证是
+#: 字节钉)。本钉随正式 chain-version bump 一起移动,除此之外不得更新。
+_FROZEN_V31_ANALYST_CHAIN_SHA256 = \
+    "0a9c58904a1fc1f0ac1f4e9b00d5f69cd3c807e39555ab317bffda501ff2350a"
+
+
+def test_analyst_chain_bytes_are_pinned_until_the_version_bump():
     # C1 round-1 P1#1: the manifest hashes analyst_chain.py's BYTES into
     # engine_contract_sha256 — even a default-OFF hook parameter changes the
-    # frozen chain_v3.1 contract. The wiring is DEFERRED to the formal version
-    # bump; until then the file must contain no trace of it.
-    src = (ROOT / "workspace" / "research" / "ai_research_dept" / "engine"
-           / "analyst_chain.py").read_text(encoding="utf-8")
-    assert "nf_news" not in src
-    assert "nf_decision" not in src
-    assert "news_session_embed" not in src
+    # frozen chain_v3.1 contract. Byte-hash pin (re-review#2 P2#3): ANY edit —
+    # including an innocuous comment — fails this until the formal bump moves
+    # the pin together with the new CHAIN_VERSION.
+    import hashlib
+    blob = (ROOT / "workspace" / "research" / "ai_research_dept" / "engine"
+            / "analyst_chain.py").read_bytes()
+    assert hashlib.sha256(blob).hexdigest() == _FROZEN_V31_ANALYST_CHAIN_SHA256, (
+        "analyst_chain.py bytes changed without a chain-version bump — the "
+        "frozen v3.1 contract hash covers this file (C1 P1#1)")
 
 
 def test_consumed_seat_declares_the_opaque_scalar(tmp_path):

@@ -36,14 +36,16 @@ shape = NF_UNIT_C1_DESIGN.md):
    chain-version bump.
 7. **No post-cutoff reads.** Inputs are the committed evidence + sealed artifacts
    only — every one of them is cutoff-bound by the producer chain.
-8. **Opaque external scalar, declared** (C1 review round-1 P1#2). The consumed
-   seat's `final` is a SEALED EXTERNAL score: its `record` deliberately carries
-   empty legacy scoring lists (NF dimensions are a different contract), so a
-   legacy judge that recomputes `adj_final` from those lists would silently zero
-   the sealed score while the archive stays publishable. The seat therefore
-   carries `opaque_scalar=True`, and the wiring obligations REQUIRE the judge to
-   honour it (`adj_final == final` absent an NF-native discount contract) before
-   the hook may ever be turned on.
+8. **Opaque external scalar, declared** (C1 review round-1 P1#2 + re-review#2
+   P2#1). The consumed seat's `final` is a SEALED EXTERNAL score: its `record`
+   deliberately carries empty legacy scoring lists (NF dimensions are a
+   different contract), so a legacy judge that recomputes `adj_final` from
+   those lists would silently zero the sealed score while the archive stays
+   publishable. Flag discipline: `opaque_external=True` marks EVERY consumed
+   seat (external origin); `opaque_scalar=True` marks ONLY the scalar branch —
+   it is the anchor of wiring obligation (b) (`adj_final == final`), and a
+   no-scalar (vector_only) seat carrying it would make that obligation
+   self-contradictory.
 
 ⚠ **FROZEN WIRING OBLIGATIONS** (the final-integration unit's preconditions —
 the pattern that carried P3b→P4a; none of this may be "simplified away"):
@@ -52,11 +54,13 @@ the pattern that carried P3b→P4a; none of this may be "simplified away"):
      parameter, the news-seat branch, the `nf_decision` block) is a NEW chain
      version with a re-frozen manifest — never an in-place edit of `chain_v3.1`
      (its contract hash covers the file bytes; P1#1).
-  b. **Opaque-scalar judge semantics.** For a seat with `opaque_scalar=True`, the
-     judge must set `adj_final = final` when no NF-native bear-discount contract
+  b. **Opaque-scalar judge semantics.** For a seat with `opaque_scalar=True`
+     (set ONLY on seats with a scalar `final` — re-review#2 P2#1), the judge
+     must set `adj_final = final` when no NF-native bear-discount contract
      exists (P1#2) — an empty-scoring recompute that zeroes the sealed score is
-     forbidden. Ship a hook-on regression pinning
-     `news.adj_final == news.final` with no bear refutations.
+     forbidden; seats carrying only `opaque_external` (vector_only) have no
+     scalar and the judge must not manufacture one. Ship a hook-on regression
+     pinning `news.adj_final == news.final` with no bear refutations.
   c. **Cutoff binding.** The production hook must bind the session `day` to the
      FULL, pre-declared NF cutoff timestamp (never a bare date) — reviewer-noted
      boundary, frozen here.
@@ -203,7 +207,11 @@ def consume_news_decision(code: str, cutoff, *, ingest_class: str, ledger_dir,
 
         if contract_payload["output_mode"] == "vector_only":
             # invariant 5: the mode is carried, never collapsed to a number
-            seat = {"final": None, "opaque_scalar": True,
+            # C1 re-review#2 P2#1:vector_only **不带** opaque_scalar——义务 (b)
+            # 的语义是 `opaque_scalar ⇒ adj_final == final`,无标量席打这个旗
+            # 会让义务自相矛盾;外部来源身份另用 opaque_external 标注,裁判只
+            # 处理有标量 final 的席
+            seat = {"final": None, "opaque_external": True,
                     "record": {"factor_scores": [], "penalty_scores": [],
                                "what_could_weaken": falsifiers},
                     "scored_dims": 0, "total_dims": 0,
@@ -227,8 +235,10 @@ def consume_news_decision(code: str, cutoff, *, ingest_class: str, ledger_dir,
         # invariant 8: the sealed external scalar is OPAQUE to the legacy judge —
         # the flag is the wiring obligation (b) anchor (adj_final must equal
         # final absent an NF-native discount contract; empty legacy scoring
-        # lists must never let a recompute zero the sealed score)
+        # lists must never let a recompute zero the sealed score). SCALAR branch
+        # ONLY (re-review#2 P2#1) — a no-scalar seat carries opaque_external.
         seat = {"final": float(final), "opaque_scalar": True,
+                "opaque_external": True,
                 "record": {"factor_scores": [], "penalty_scores": [],
                            "what_could_weaken": falsifiers},
                 "scored_dims": n_factor, "total_dims": n_factor,
