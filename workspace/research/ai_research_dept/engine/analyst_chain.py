@@ -586,7 +586,7 @@ def _safe_error(exc: BaseException) -> str:
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
               retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
               series: pd.DataFrame, out_dir: Path,
-              contract: ChainContract, nf_news=None) -> dict:
+              contract: ChainContract) -> dict:
     """必须持已验证 ChainContract;进入时与磁盘 manifest 复核(复审#5 B1:调用方传入
     的契约不被信任);缺输入=MissingInputError(复审#5 Major-1:不得静默 None);
     逐(日,股)跨进程锁从档案检查持有到发布结束(并发双跑不再互覆盖)。"""
@@ -618,8 +618,7 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
                                  "manifest_fp": manifest_fp})
         try:
             archive = _execute_attempt(code, day, cards, mc, contract, audit,
-                                       artifact_fp, attempt_no, card_ids,
-                                       nf_news=nf_news)
+                                       artifact_fp, attempt_no, card_ids)
         except BaseException as exc:  # 意外异常也必须留痕(孤儿 attempt 封死)
             err = _safe_error(exc)
             (attempt_dir / "status.json").write_text(json.dumps(
@@ -661,24 +660,12 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
 def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                      contract: ChainContract, audit: Path,
                      artifact_fp: str, attempt_no: int,
-                     card_ids: dict | None = None,
-                     nf_news=None) -> dict:
+                     card_ids: dict | None = None) -> dict:
     card_ids = card_ids or {}
     seat_results = {}
-    # NF C1(可选钩子,默认 OFF = 遗留路径逐字节不变;生产开启属最终集成的
-    # 链版本 bump):nf_news(code, day) -> news_session_embed.consume_news_decision
-    # 的返回。no_decision=True(当日无路由快讯)→ 回退遗留 inline 席;错误席/
-    # 成功席一律采用(fail-closed:坏的生产链绝不静默回退)。
-    nf_block = None
     for seat, pfile, key in [("fund", "fund_analyst_v2.txt", "fund_card"),
                               ("tech", "tech_analyst_v2.txt", "pv_card"),
                               ("news", "news_analyst_v2.txt", "news_card")]:
-        if seat == "news" and nf_news is not None:
-            got = nf_news(code, day)
-            if not got.get("no_decision"):
-                seat_results[seat] = got["seat"]
-                nf_block = got.get("nf_decision")
-                continue                               # 消费席;不跑 inline LLM
         prompt = contract.effective_prompts[pfile]     # 冻结契约,不重读磁盘(#4 B2)
         seat_w = contract.scoring["seat_weights"][seat]   # 评分参数从契约执行(#5 B1)
         payload = {key: cards[key]}
@@ -742,10 +729,6 @@ def _execute_attempt(code: str, day: str, cards: dict, mc: str,
         "bear": bear, "judge": verdict,
         "evidence_class": "research_summary/" + C.EVIDENCE_CLASS_REPLAY,
     }
-    if nf_block is not None:
-        # NF C1 invariant 2:严格新增的**身份块**(ids+哈希,无载荷拷贝),
-        # 封入 archive_sha256 —— 会话档案承诺"消费的是哪个决策"
-        archive["nf_decision"] = nf_block
     archive["complete"] = archive_complete(archive, dict(contract.scoring))
     archive["attempt"] = attempt_no
     # archive_sha256 输出正文封印(复审#3 B2;#4 minor:完整 64 位摘要)

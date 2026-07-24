@@ -207,15 +207,25 @@ def test_tampered_identity_block_changes_the_session_seal(tmp_path):
 
 # ---------------------------------------------- acceptance 6: legacy unchanged
 
-def test_hook_off_leaves_the_legacy_path_untouched():
-    import inspect
-    from workspace.research.ai_research_dept.engine.analyst_chain import (
-        _execute_attempt, run_stock,
-    )
-    for fn in (run_stock, _execute_attempt):
-        p = inspect.signature(fn).parameters["nf_news"]
-        assert p.default is None                       # OFF by default
-    # with the default, the nf branch and the nf_decision block are unreachable:
-    src = inspect.getsource(_execute_attempt)
-    assert "if seat == \"news\" and nf_news is not None:" in src
-    assert "if nf_block is not None:" in src
+def test_analyst_chain_is_untouched_before_the_version_bump():
+    # C1 round-1 P1#1: the manifest hashes analyst_chain.py's BYTES into
+    # engine_contract_sha256 — even a default-OFF hook parameter changes the
+    # frozen chain_v3.1 contract. The wiring is DEFERRED to the formal version
+    # bump; until then the file must contain no trace of it.
+    src = (ROOT / "workspace" / "research" / "ai_research_dept" / "engine"
+           / "analyst_chain.py").read_text(encoding="utf-8")
+    assert "nf_news" not in src
+    assert "nf_decision" not in src
+    assert "news_session_embed" not in src
+
+
+def test_consumed_seat_declares_the_opaque_scalar(tmp_path):
+    # C1 round-1 P1#2: the sealed external score is OPAQUE to the legacy judge
+    # (its record's legacy scoring lists are empty BY CONTRACT); the flag is the
+    # anchor for wiring obligation (b): adj_final == final absent an NF-native
+    # discount contract — a recompute from the empty lists must never zero it.
+    root, _ = _produce(tmp_path)
+    got = _consume(tmp_path, root)
+    assert got["seat"]["opaque_scalar"] is True
+    assert got["seat"]["record"]["factor_scores"] == []
+    assert got["seat"]["record"]["penalty_scores"] == []

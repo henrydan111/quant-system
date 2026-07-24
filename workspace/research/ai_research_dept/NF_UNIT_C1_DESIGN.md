@@ -7,6 +7,24 @@
 The seven invariants of [NF_UNIT2_SESSION_EMBEDDING_DESIGN.md](NF_UNIT2_SESSION_EMBEDDING_DESIGN.md)
 remain the contract; this doc adds the premise-checked wiring shape.
 
+**Round-1 fold (2026-07-24, 2×P1, zero declines — the unit SHRINKS).** P1#1: even a default-OFF
+hook parameter edits `analyst_chain.py`, whose BYTES are hashed into `engine_contract_sha256` —
+the "byte-identical legacy path" claim held at runtime but broke the frozen v3.1 CONTRACT
+(manifest collision under the same version label). Folded per the reviewer's minimal fix:
+`analyst_chain.py` reverted to the exact frozen v3.1 bytes; C1 now ships the consumption module
+ONLY, and the wiring (hook parameter, news-seat branch, `nf_decision` block) is deferred to the
+formal chain-version bump — recorded as **FROZEN WIRING OBLIGATIONS** in the module docstring
+(the P3b→P4a pattern): (a) any `analyst_chain.py` edit = a NEW chain version, never in-place;
+(b) opaque-scalar judge semantics — `adj_final == final` absent an NF-native discount contract,
+with a hook-on regression pinning it (P1#2: the legacy judge recomputes `adj_final` from the
+seat's legacy scoring lists, which are empty BY CONTRACT for a consumed seat, so the sealed 49.0
+became `adj_final=0.0` in a publishable archive — the sealed score silently erased); the consumed
+seat now carries `opaque_scalar=True` as the anchor; (c) the production hook binds the session
+`day` to the FULL pre-declared NF cutoff timestamp, never a bare date (reviewer-noted boundary);
+(d) the fallback dichotomy is fixed (`no_decision` → legacy seat; verification failure → error
+seat, never fallback). A mechanical guard test asserts `analyst_chain.py` contains no trace of
+the wiring until the bump.
+
 ## Premise check (read-only, done — one load-bearing correction)
 
 1. `_execute_attempt` runs three inline seats (`fund`/`tech`/`news`) via `run_seat`, then bear +

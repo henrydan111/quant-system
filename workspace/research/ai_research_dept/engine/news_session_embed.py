@@ -28,11 +28,40 @@ shape = NF_UNIT_C1_DESIGN.md):
 5. **`vector_only` never yields a scalar.** A vector_only decision produces
    `final=None` WITHOUT an error; the identity block carries
    `binding_eligible=False`; the session archive stays unpublishable-as-scalar.
-6. **Legacy unchanged.** This module is consumed via an OPTIONAL hook in
-   `analyst_chain` (default OFF = byte-identical legacy path); turning it on in
-   production is the final-integration unit's chain-version bump, not C1's.
+6. **Legacy unchanged — `analyst_chain.py` is NOT touched by C1 at all** (C1
+   review round-1 P1#1: the manifest hashes that file's BYTES into
+   `engine_contract_sha256`, so even a default-OFF hook parameter changes the
+   frozen `chain_v3.1` contract / collides with existing manifests). The wiring
+   lives in the FROZEN WIRING OBLIGATIONS below and lands ONLY with the formal
+   chain-version bump.
 7. **No post-cutoff reads.** Inputs are the committed evidence + sealed artifacts
    only — every one of them is cutoff-bound by the producer chain.
+8. **Opaque external scalar, declared** (C1 review round-1 P1#2). The consumed
+   seat's `final` is a SEALED EXTERNAL score: its `record` deliberately carries
+   empty legacy scoring lists (NF dimensions are a different contract), so a
+   legacy judge that recomputes `adj_final` from those lists would silently zero
+   the sealed score while the archive stays publishable. The seat therefore
+   carries `opaque_scalar=True`, and the wiring obligations REQUIRE the judge to
+   honour it (`adj_final == final` absent an NF-native discount contract) before
+   the hook may ever be turned on.
+
+⚠ **FROZEN WIRING OBLIGATIONS** (the final-integration unit's preconditions —
+the pattern that carried P3b→P4a; none of this may be "simplified away"):
+
+  a. **Chain-version bump first.** Any edit to `analyst_chain.py` (the hook
+     parameter, the news-seat branch, the `nf_decision` block) is a NEW chain
+     version with a re-frozen manifest — never an in-place edit of `chain_v3.1`
+     (its contract hash covers the file bytes; P1#1).
+  b. **Opaque-scalar judge semantics.** For a seat with `opaque_scalar=True`, the
+     judge must set `adj_final = final` when no NF-native bear-discount contract
+     exists (P1#2) — an empty-scoring recompute that zeroes the sealed score is
+     forbidden. Ship a hook-on regression pinning
+     `news.adj_final == news.final` with no bear refutations.
+  c. **Cutoff binding.** The production hook must bind the session `day` to the
+     FULL, pre-declared NF cutoff timestamp (never a bare date) — reviewer-noted
+     boundary, frozen here.
+  d. The hook's fallback dichotomy is fixed: `no_decision` → legacy inline seat;
+     verification failure → error seat, NEVER fallback.
 
 Structural distinction (the fallback semantics): `NothingToDecide` — the chain
 routed NO flash to this stock at this cutoff — is NOT a failure; it returns
@@ -174,7 +203,7 @@ def consume_news_decision(code: str, cutoff, *, ingest_class: str, ledger_dir,
 
         if contract_payload["output_mode"] == "vector_only":
             # invariant 5: the mode is carried, never collapsed to a number
-            seat = {"final": None,
+            seat = {"final": None, "opaque_scalar": True,
                     "record": {"factor_scores": [], "penalty_scores": [],
                                "what_could_weaken": falsifiers},
                     "scored_dims": 0, "total_dims": 0,
@@ -195,7 +224,11 @@ def consume_news_decision(code: str, cutoff, *, ingest_class: str, ledger_dir,
             return _error_seat(f"nf_consume:recompute:final out of range {final!r}")
 
         n_factor = len(archive["records"]["factor"].get("factor_scores", []))
-        seat = {"final": float(final),
+        # invariant 8: the sealed external scalar is OPAQUE to the legacy judge —
+        # the flag is the wiring obligation (b) anchor (adj_final must equal
+        # final absent an NF-native discount contract; empty legacy scoring
+        # lists must never let a recompute zero the sealed score)
+        seat = {"final": float(final), "opaque_scalar": True,
                 "record": {"factor_scores": [], "penalty_scores": [],
                            "what_could_weaken": falsifiers},
                 "scored_dims": n_factor, "total_dims": n_factor,
