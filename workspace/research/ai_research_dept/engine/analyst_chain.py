@@ -242,6 +242,13 @@ class ChainContract:
         if nf_problems:
             raise VersionCollisionError(
                 f"契约构造被拒: nf_contract {';'.join(nf_problems)}")
+        # BUMP 复审 P1#2:形状检查之外,**值锁**——本版本的 NF 契约值是用户冻结
+        # 合同(1-3d/18:00:00/forward…),哈希自洽但改值(如 17:00)的 manifest
+        # 一律拒;改任一值 = 再 bump(NF_CONTRACT 常量与 CHAIN_VERSION 同移)
+        if dict(nf) != NF_CONTRACT:
+            raise VersionCollisionError(
+                f"契约构造被拒: nf_contract 值与本版本冻结合同不符"
+                f"(须恰 {NF_CONTRACT})——改值=再 bump(BUMP P1#2)")
         return cls(manifest_fp=manifest["manifest_fp"],
                    manifest_sha256=manifest["manifest_sha256"],
                    effective_prompts=_deep_ro(prompts),
@@ -510,6 +517,20 @@ PROMPT_FILES = ["fund_analyst_v2.txt", "tech_analyst_v2.txt",
                 "news_analyst_v2.txt", "bear_analyst_v2.txt"]
 
 
+def _engine_contract_files() -> list:
+    """执行合同哈希覆盖的引擎文件(v3.2 起含 NF consumer;测试按名单断言成员)。"""
+    return [
+        Path(__file__),
+        Path(__file__).with_name("cards.py"),
+        Path(__file__).with_name("validators.py"),
+        Path(__file__).with_name("integrity.py"),
+        Path(__file__).with_name("llm_config.py"),
+        Path(__file__).with_name("news_session_embed.py"),   # v3.2 BUMP P1#3
+        C.PROJECT_ROOT / "src" / "ai_layer" / "scorecard.py",
+        C.PROJECT_ROOT / "src" / "ai_layer" / "ark_client.py",
+    ]
+
+
 def read_prompt_bundle() -> dict:
     """有效 prompt 只从磁盘读**一次**(复审#4 B2),之后一律经 ChainContract 执行。"""
     pdir = Path(__file__).parent / "prompts"
@@ -530,16 +551,12 @@ def build_manifest(pv: pd.DataFrame, retr: pd.DataFrame,
     ph = hashlib.sha256(b"".join(prompt_bundle[p].encode() for p in pfiles)).hexdigest()[:16]
     # 确定性评分/校验/传输引擎契约(复审#4 Major-2:integrity 决定封印规则、
     # llm_config 决定路由与 fallback、ark_client 决定解析语义——全部入指纹;
-    # PIT loaders 不入:其产物 cards 已由 artifact_fp 绑定)
-    contract_files = [
-        Path(__file__),
-        Path(__file__).with_name("cards.py"),
-        Path(__file__).with_name("validators.py"),
-        Path(__file__).with_name("integrity.py"),
-        Path(__file__).with_name("llm_config.py"),
-        C.PROJECT_ROOT / "src" / "ai_layer" / "scorecard.py",
-        C.PROJECT_ROOT / "src" / "ai_layer" / "ark_client.py",
-    ]
+    # PIT loaders 不入:其产物 cards 已由 artifact_fp 绑定)。
+    # v3.2(BUMP 复审 P1#3):news_session_embed.py 入指纹——它是 hook 路径上
+    # 实际执行的 C1 consumer(消费/重算/身份映射),不入则可在同版本内静默漂移。
+    # 其下层 NF 引擎(news_archive 等)由各自的 SOUND 弧 + 测试体制治理,消费
+    # 行为对档案的影响面由 consumer 文件承载——评审如认为需扩大哈希面,另裁。
+    contract_files = _engine_contract_files()
     h = hashlib.sha256()
     for path in contract_files:
         rel = path.resolve().relative_to(C.PROJECT_ROOT.resolve()).as_posix()
@@ -657,7 +674,7 @@ def _safe_error(exc: BaseException) -> str:
 def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
               retr: pd.DataFrame, biz: pd.DataFrame, regime: pd.DataFrame,
               series: pd.DataFrame, out_dir: Path,
-              contract: ChainContract, nf_news=None) -> dict:
+              contract: ChainContract, nf_roots=None) -> dict:
     """必须持已验证 ChainContract;进入时与磁盘 manifest 复核(复审#5 B1:调用方传入
     的契约不被信任);缺输入=MissingInputError(复审#5 Major-1:不得静默 None);
     逐(日,股)跨进程锁从档案检查持有到发布结束(并发双跑不再互覆盖)。"""
@@ -690,7 +707,7 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
         try:
             archive = _execute_attempt(code, day, cards, mc, contract, audit,
                                        artifact_fp, attempt_no, card_ids,
-                                       nf_news=nf_news)
+                                       nf_roots=nf_roots)
         except BaseException as exc:  # 意外异常也必须留痕(孤儿 attempt 封死)
             err = _safe_error(exc)
             (attempt_dir / "status.json").write_text(json.dumps(
@@ -729,24 +746,69 @@ def run_stock(code: str, day: str, facts: pd.DataFrame, pv: pd.DataFrame,
     return archive
 
 
+_NF_ROOT_KEYS = frozenset({"ledger_dir", "prov_dir", "archive_dir",
+                           "store_dir", "artifact_dir"})
+
+#: 消费结果无错误时身份块的必备字段(BUMP 复审 P1#1:不完整/非真实结果拒封)
+_NF_IDENTITY_KEYS = frozenset({
+    "decision_id", "archive_sha256", "contract_hash", "artifact_hash",
+    "bundle_hash", "final_registry_hash", "outcome_hash", "ledger_head_at_seal",
+    "assembly_hash"})
+
+
+def _consume_nf_seat(code: str, day: str, contract: "ChainContract",
+                     nf_roots) -> dict:
+    """v3.2 NF 消费的**引擎属地绑定**(BUMP 复审 P1#1 结构折叠:自由回调可绕过
+    消费/身份/cutoff 绑定——义务 c 必须是引擎代码,不是调用方约定)。
+
+    调用方只供**受信五根**(v3 威胁模型:根选择在边界范围外);cutoff / NF
+    契约 / ingest_class 一律由**已对盘验证的 ChainContract** 派生
+    (`nf_cutoff_for_day` / `nf_contract_from_chain` / `contract.nf`——三者在
+    引擎内调用,无旁路);消费结果的完整性在封印前把门:非 no_decision 的结果
+    必须是错误席(fail-closed),或带**齐 9 字段身份块**的消费席。"""
+    from workspace.research.ai_research_dept.engine.news_session_embed import (
+        consume_news_decision, nf_contract_from_chain, nf_cutoff_for_day,
+    )
+    if not isinstance(nf_roots, dict) or set(nf_roots) != _NF_ROOT_KEYS:
+        raise VersionCollisionError(
+            f"nf_roots 须为恰 {sorted(_NF_ROOT_KEYS)} 五根映射——自由回调已废除"
+            f"(BUMP P1#1:回调可绕过 cutoff/契约/身份绑定),拒")
+    got = consume_news_decision(
+        code, nf_cutoff_for_day(day, contract),
+        ingest_class=contract.nf["ingest_class"],
+        nf_contract=nf_contract_from_chain(contract), **nf_roots)
+    if got.get("no_decision"):
+        return got
+    seat = got.get("seat")
+    if not isinstance(seat, dict):
+        raise VersionCollisionError("NF 消费结果缺 seat——不完整结果拒封(P1#1)")
+    if seat.get("error") is None:
+        nf_block = got.get("nf_decision")
+        if not isinstance(nf_block, dict) \
+                or not _NF_IDENTITY_KEYS <= set(nf_block):
+            raise VersionCollisionError(
+                "NF 消费结果无错误却缺完整身份块——不完整/非真实消费拒封(P1#1)")
+    return got
+
+
 def _execute_attempt(code: str, day: str, cards: dict, mc: str,
                      contract: ChainContract, audit: Path,
                      artifact_fp: str, attempt_no: int,
                      card_ids: dict | None = None,
-                     nf_news=None) -> dict:
+                     nf_roots=None) -> dict:
     card_ids = card_ids or {}
     seat_results = {}
-    # v3.2 NF 接线(C1 冻结义务 a/d):nf_news(code, day) ->
-    # news_session_embed.consume_news_decision 的返回。no_decision=True(当日无
-    # 路由快讯)→ 回退遗留 inline 席;消费席/错误席一律照采(fail-closed:坏的
-    # 生产链绝不静默回退)。默认 None = 遗留路径;开启权属调用方(FORWARD_PREREG
-    # governed runner),main() 不自动启用。
+    # v3.2 NF 接线(C1 冻结义务 a/c/d + BUMP 复审 P1#1):调用方只供受信五根
+    # (nf_roots),消费/绑定/完整性全在引擎内(_consume_nf_seat)。
+    # no_decision=True(当日无路由快讯)→ 回退遗留 inline 席;消费席/错误席
+    # 一律照采(fail-closed:坏的生产链绝不静默回退)。默认 None = 遗留路径;
+    # 开启权属调用方(FORWARD_PREREG governed runner),main() 不自动启用。
     nf_block = None
     for seat, pfile, key in [("fund", "fund_analyst_v2.txt", "fund_card"),
                               ("tech", "tech_analyst_v2.txt", "pv_card"),
                               ("news", "news_analyst_v2.txt", "news_card")]:
-        if seat == "news" and nf_news is not None:
-            got = nf_news(code, day)
+        if seat == "news" and nf_roots is not None:
+            got = _consume_nf_seat(code, day, contract, nf_roots)
             if not got.get("no_decision"):
                 seat_results[seat] = got["seat"]
                 nf_block = got.get("nf_decision")

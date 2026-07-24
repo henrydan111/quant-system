@@ -129,7 +129,11 @@ def test_manifest_nf_section_validation():
     assert AC._verify_nf_contract(vec) == []
 
 
-# ------------------------------------------ obligations (a)+(d): the hook wiring
+# ------------------------------------------ obligations (a)+(c)+(d): the wiring
+# ------------------------------------------ (BUMP re-review P1#1: the caller
+# ------------------------------------------ supplies TRUSTED ROOTS only — the
+# ------------------------------------------ engine derives cutoff/contract/class
+# ------------------------------------------ from the verified ChainContract)
 
 def _stub_seat_runner(calls):
     def fake_run_seat(seat, prompt, payload, card_text, audit, weights, route,
@@ -154,37 +158,38 @@ def _fake_contract():
         nf=dict(AC.NF_CONTRACT))
 
 
-def _attempt(tmp_path, nf_news, monkeypatch, calls):
+def _roots(tmp_path, root):
+    return {"ledger_dir": tmp_path / "led", "prov_dir": tmp_path / "prov",
+            "archive_dir": tmp_path / "arch", "store_dir": root,
+            "artifact_dir": root}
+
+
+def _attempt(tmp_path, nf_roots, monkeypatch, calls, *, code=SMIC):
     monkeypatch.setattr(AC, "run_seat", _stub_seat_runner(calls))
     monkeypatch.setattr(AC, "run_bear", _fake_bear)
     cards = {"fund_card": "F", "pv_card": "T", "news_card": "N"}
-    return AC._execute_attempt(SMIC, "20250127", cards, "", _fake_contract(),
-                               tmp_path, "afp", 1, {}, nf_news=nf_news)
+    return AC._execute_attempt(code, "20250127", cards, "", _fake_contract(),
+                               tmp_path, "afp", 1, {}, nf_roots=nf_roots)
 
 
-def test_hook_on_consumed_seat_and_sealed_identity_block(tmp_path, monkeypatch):
+def test_hook_on_engine_binds_and_seals_the_identity(tmp_path, monkeypatch):
+    # the ENGINE derives the 18:00 cutoff + forward class + NF contract from the
+    # ChainContract (the produced chain lives exactly at that frozen cutoff, so
+    # a successful consumption IS proof of the binding); the caller supplied
+    # only the five trusted roots
     root = chain_store("full")
     produced = decide_stock(CUT, ingest_class="forward", ts_code=SMIC,
-                            ledger_dir=tmp_path / "led", prov_dir=tmp_path / "prov",
-                            archive_dir=tmp_path / "arch", store_dir=root,
-                            artifact_dir=root, contract=ta._contract(),
+                            **_roots(tmp_path, root), contract=ta._contract(),
                             call_fn=ta._call_fn())
-
-    def nf_news(code, day):
-        cut = nf_cutoff_for_day(day, _chain_contract_ns())
-        assert cut.isoformat() == "2025-01-27T18:00:00"
-        return consume_news_decision(
-            code, cut, ingest_class="forward", ledger_dir=tmp_path / "led",
-            prov_dir=tmp_path / "prov", archive_dir=tmp_path / "arch",
-            store_dir=root, artifact_dir=root, nf_contract=ta._contract())
     calls: list = []
-    archive = _attempt(tmp_path, nf_news, monkeypatch, calls)
+    archive = _attempt(tmp_path, _roots(tmp_path, root), monkeypatch, calls)
     assert calls == ["fund", "tech"]                   # news inline LLM NOT run
     assert archive["seats"]["news"]["final"] == 49.0
     # obligation (b) end to end: the sealed scalar survives the judge
     assert archive["seats"]["news"]["adj_final"] == 49.0
     nf = archive["nf_decision"]
     assert nf["decision_id"] == produced["decision_id"]
+    assert nf["decision_id"].endswith(":2025-01-27T18:00:00")   # frozen cutoff
     assert nf["archive_sha256"] == produced["archive_sha256"]
     # the identity block is sealed under the session archive_sha256
     forged = json.loads(json.dumps(archive, ensure_ascii=False))
@@ -195,25 +200,39 @@ def test_hook_on_consumed_seat_and_sealed_identity_block(tmp_path, monkeypatch):
     assert archive["complete"] is True
 
 
+def test_free_form_callback_is_dead(tmp_path, monkeypatch):
+    # BUMP re-review P1#1 (the reviewer's probe): a caller-supplied callable
+    # could bypass consumption, identity and cutoff binding entirely — the
+    # parameter now accepts ONLY the five-root mapping; anything else refuses
+    # before any seat runs
+    for bad in (lambda code, day: {"no_decision": True}, {}, {"ledger_dir": "x"},
+                {**_roots(tmp_path, tmp_path), "extra": 1}):
+        with pytest.raises(AC.VersionCollisionError, match="五根映射|自由回调"):
+            _attempt(tmp_path, bad, monkeypatch, [])
+
+
 def test_hook_no_decision_falls_back_to_inline_seat(tmp_path, monkeypatch):
-    def nf_news(code, day):
-        return {"seat": None, "nf_decision": None, "no_decision": True}
+    # a stock the committed chain never routed -> the ENGINE-derived consumption
+    # yields no_decision -> legacy inline seat runs
+    root = chain_store("full")
     calls: list = []
-    archive = _attempt(tmp_path, nf_news, monkeypatch, calls)
+    archive = _attempt(tmp_path, _roots(tmp_path, root), monkeypatch, calls,
+                       code="300750.SZ")
     assert calls == ["fund", "tech", "news"]           # legacy inline seat ran
     assert "nf_decision" not in archive
     assert archive["seats"]["news"]["final"] == 60.0
 
 
-def test_hook_error_seat_is_adopted_and_unpublishable(tmp_path, monkeypatch):
-    def nf_news(code, day):
-        return {"seat": {"final": None,
-                         "record": {"factor_scores": [], "penalty_scores": []},
-                         "scored_dims": 0, "total_dims": 0,
-                         "error": "nf_consume:load:RegistryError:x"},
-                "nf_decision": None, "no_decision": False}
+def test_hook_broken_producer_is_an_error_seat_not_fallback(tmp_path, monkeypatch):
+    # roots point at an EMPTY world: a decision that should be verifiable is not
+    # -> fail-closed error seat (never silent fallback), archive unpublishable
+    empty = tmp_path / "empty_world"
+    empty.mkdir()
+    roots = {"ledger_dir": tmp_path / "led", "prov_dir": tmp_path / "prov",
+             "archive_dir": tmp_path / "arch", "store_dir": empty,
+             "artifact_dir": empty}
     calls: list = []
-    archive = _attempt(tmp_path, nf_news, monkeypatch, calls)
+    archive = _attempt(tmp_path, roots, monkeypatch, calls)
     assert calls == ["fund", "tech"]                   # NO silent fallback
     assert archive["seats"]["news"]["error"] is not None
     assert archive["complete"] is False
@@ -224,3 +243,63 @@ def test_hook_default_off_is_pure_legacy(tmp_path, monkeypatch):
     archive = _attempt(tmp_path, None, monkeypatch, calls)
     assert calls == ["fund", "tech", "news"]
     assert "nf_decision" not in archive
+
+
+# ------------------------------------------ BUMP re-review P1#2/#3: value lock +
+# ------------------------------------------ consumer in the engine contract,
+# ------------------------------------------ proven on a REAL on-disk manifest
+
+def _freeze_manifest(tmp_path, nf_override=None):
+    import pandas as pd
+    bundle = AC.read_prompt_bundle()
+    m = AC.build_manifest(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(),
+                          bundle, ["20250127"], [SMIC])
+    if nf_override is not None:
+        m["nf_contract"] = nf_override
+    vdir = tmp_path / AC.CHAIN_VERSION
+    vdir.mkdir(parents=True, exist_ok=True)
+    AC.ensure_immutable_manifest(vdir, m)
+    return vdir
+
+
+def test_real_manifest_load_round_trip(tmp_path):
+    vdir = _freeze_manifest(tmp_path)
+    contract = AC.ChainContract.load(vdir)
+    assert dict(contract.nf) == AC.NF_CONTRACT
+    cut = nf_cutoff_for_day("20250127", contract)
+    assert cut.isoformat() == "2025-01-27T18:00:00"
+    c = nf_contract_from_chain(contract)
+    assert c.primary_decision_horizon == "1-3d"
+
+
+def test_value_locked_manifest_with_forged_cutoff_refused(tmp_path):
+    # the reviewer's probe: a hash-SELF-CONSISTENT v3.2 manifest with the cutoff
+    # moved to 17:00 passed shape validation. The value lock refuses it at load.
+    forged_nf = {**AC.NF_CONTRACT, "input_cutoff_time": "17:00:00"}
+    vdir = _freeze_manifest(tmp_path, nf_override=forged_nf)
+    with pytest.raises(AC.VersionCollisionError, match="冻结合同不符"):
+        AC.ChainContract.load(vdir)
+
+
+def test_consumer_is_inside_the_engine_contract_hash(tmp_path):
+    # BUMP re-review P1#3: news_session_embed.py (the C1 consumer the hook
+    # actually executes) must be hashed into engine_contract_sha256 — otherwise
+    # consumption/recompute/identity logic drifts silently within chain_v3.2
+    names = {p.name for p in AC._engine_contract_files()}
+    assert "news_session_embed.py" in names
+    # and the hash actually covers it: manifests built with/without differ
+    import hashlib as _h
+    import pandas as pd
+    bundle = AC.read_prompt_bundle()
+    m = AC.build_manifest(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(),
+                          bundle, ["20250127"], [SMIC])
+    h = _h.sha256()
+    for path in AC._engine_contract_files():
+        if path.name == "news_session_embed.py":
+            continue
+        rel = path.resolve().relative_to(
+            AC.C.PROJECT_ROOT.resolve()).as_posix()
+        h.update(rel.encode())
+        h.update(b"\0")
+        h.update(path.read_bytes())
+    assert m["engine_contract_sha256"] != h.hexdigest()
