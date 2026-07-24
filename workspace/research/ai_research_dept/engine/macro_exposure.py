@@ -48,29 +48,37 @@ MS_DIMENSIONS = (
     ("MS05", "external_shock_transmission"),
 )
 
-#: 行 schema(§0d m1 冻结 11 字段;多/少键 = 拒)
+#: 行 schema = §0d m1 冻结 11 字段 + **M1 修订新增 `row_id`**(GPT M1 round-1
+#: P2#1:不得把 12 键描述为逐字合规——修订记录在 NF_UNIT_M1_DESIGN.md,
+#: row_id 是 M2/M3 配对与渲染的行标识,属 M1 层的显式增字段)
 MS_ROW_KEYS = frozenset({
     "row_id", "mapping_id", "mapping_version", "mapping_sha256",
     "mapping_status", "exposure_type", "exposure_bucket", "exposure_value",
     "snapshot_effective_at", "ts_code", "dimension", "source",
 })
 
-#: 注册状态枚举(fail-closed:未注册状态不得出现)
+#: 注册状态枚举(fail-closed:未注册状态不得出现)。概念的快照省略**不是行
+#: 状态**——行业面仍 mapped,省略以 value 内 `concepts_omitted` 标记呈现
+#: (round-1 P2#1:实现语义保留,合同同步)。
 MS_STATUSES = frozenset({
     "mapped",                       # 有暴露,bucket/value 已填
     "mapped_no_exposure",           # 已映射但该行业无注册通道 → value=null
     "unmapped_industry",            # PIT 行业不可解析/不在映射键内
-    "no_contemporaneous_snapshot",  # THS 快照晚于决策日(M4 省略)
-    "metric_unavailable",           # 池指标缺该股/该列
+    "metric_unavailable",           # 池指标缺该股/该列/分布不可分桶
 })
 
 #: 池内三分位的规则描述符(MS01/MS02 的 mapping_sha256 哈希对象——档位规则
-#: 本身就是版本化资产;改规则 = 升版)
+#: 本身就是版本化资产;改规则 = 升版)。round-1 P2#2:tie/最小样本规则冻结
+#: 入描述符——非平凡三分位要求 ≥6 个非 NaN 且 ≥3 个不同值;边界并列取低档
+#: (value <= q 落 lower);退化分布 = 不可用,绝不产伪三分位。
 _TERCILE_RULE_V1 = {
     "method": "pool_tercile", "version": "v1",
     "ms01_metrics": ["float_mv", "vol_20d"],
     "ms02_metrics": ["turnover_20d"],
     "labels": ["low", "mid", "high"],
+    "min_observations": 6, "min_distinct": 3,
+    "tie_rule": "le_boundary_falls_lower",
+    "degenerate_distribution": "unavailable",
 }
 _TERCILE_RULE_SHA256 = hashlib.sha256(
     str(sorted(_TERCILE_RULE_V1.items())).encode()).hexdigest()
@@ -140,22 +148,63 @@ def load_default_mappings() -> dict:
     }
 
 
-def exposure_mapping_bundle_sha256(mappings: dict) -> str:
-    """全部映射(含档位规则)的束哈希——入 C16b 注册面(标签束哈希合同)。"""
-    parts = sorted([_TERCILE_RULE_SHA256,
-                    mappings["policy"]["mapping_sha256"],
-                    mappings["shock"]["mapping_sha256"]])
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+def select_ths_snapshot(ths_members, cutoff):
+    """选定**唯一、完整、一致**的 THS 快照(GPT M1 round-1 P1#1:旧码取
+    `fetched_at.iloc[0]` 判门却用整表取成员——混合新旧快照的帧会把未来概念漏进
+    历史行,且结果依赖行序)。
+
+    规则:按 `fetched_at` 分组,候选 = 全部 `<= cutoff` 的快照,取**最新**一个,
+    只使用该时点的完整成员;无候选(全部晚于 cutoff)→ (空帧, None, None)
+    = M4 省略。返回 `(snapshot_frame, effective_at_iso, content_sha256)`——
+    content_sha256 = 该快照 (板块, 个股) 有序对集合的规范哈希(同 fetched_at、
+    不同成员 → 不同哈希;round-1 P1#2 的快照内容身份)。"""
+    if not isinstance(ths_members, pd.DataFrame) or ths_members.empty \
+            or "fetched_at" not in ths_members.columns:
+        return pd.DataFrame(), None, None
+    cut_ts = pd.Timestamp(cutoff)
+    stamps = pd.to_datetime(ths_members["fetched_at"], errors="coerce")
+    ok = stamps.notna() & (stamps <= cut_ts)
+    if not ok.any():
+        return pd.DataFrame(), None, None
+    chosen = stamps[ok].max()
+    snap = ths_members[stamps == chosen]
+    pairs = sorted(zip(snap["ts_code"].astype(str),
+                       snap["con_code"].astype(str)))
+    content = hashlib.sha256(
+        "\n".join(f"{b}|{c}" for b, c in pairs).encode()).hexdigest()
+    return snap, chosen.isoformat(), content
+
+
+def exposure_mapping_bundle_sha256(mappings: dict, *, ths_snapshot=None) -> str:
+    """暴露身份束哈希——入 C16b 注册面(标签束哈希合同)。
+
+    round-1 P1#2:**带角色名的规范 JSON**(裸哈希排序会让 policy/shock 互换后
+    束不变),覆盖全部静态规则/映射;`ths_snapshot=(effective_at, content_sha)`
+    时把选定快照身份一并封入(M3 逐日封存用)。"""
+    body = {"tercile_rule": _TERCILE_RULE_SHA256,
+            "ms03_rule": _MS03_RULE_SHA256,
+            "policy_mapping": mappings["policy"]["mapping_sha256"],
+            "shock_mapping": mappings["shock"]["mapping_sha256"],
+            "ths_snapshot": (None if ths_snapshot is None
+                             else {"effective_at": ths_snapshot[0],
+                                   "content_sha256": ths_snapshot[1]})}
+    import json as _json
+    return hashlib.sha256(
+        _json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def _tercile(value, series: pd.Series) -> "str | None":
-    """池内三分位档(low/mid/high);值或分布不可用 → None。"""
+    """池内三分位档(low/mid/high);值/样本量/分布不可用 → None(round-1
+    P2#2 冻结规则:≥6 非 NaN、≥3 不同值、退化分布不可用、边界并列取低档)。"""
     if value is None or pd.isna(value):
         return None
     s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) < 3:
+    if len(s) < _TERCILE_RULE_V1["min_observations"] \
+            or s.nunique() < _TERCILE_RULE_V1["min_distinct"]:
         return None
     q1, q2 = s.quantile(1 / 3), s.quantile(2 / 3)
+    if q1 == q2:                                   # 退化分布 → 不可用
+        return None
     return "low" if value <= q1 else ("mid" if value <= q2 else "high")
 
 
@@ -204,20 +253,25 @@ def build_ms_exposure_rows(ts_code: str, day, *, cutoff, pool_metrics,
                         status="metric_unavailable", exposure_type=exposure_type,
                         bucket=None, value=None, snapshot_at=str(day_ts.date()),
                         ts_code=ts_code, source="pool_metrics_d_close")
+        # round-1 P1#3:**全有或全无**——任一必需指标不可分桶(NaN/样本不足/
+        # 退化分布)= 整行 metric_unavailable,绝不输出部分暴露(NaN float_mv
+        # 配有效 vol_20d 曾产出 mapped 的半行)
         buckets, values = {}, {}
         for m in metrics:
             t = _tercile(me[m], pool_metrics[m])
-            if t is not None:
-                buckets[m] = t
-                values[m] = float(me[m])
-        if not buckets:
-            return _row(row_id, dim, mapping_id=f"{row_id.lower()}_style_terciles",
-                        mapping_version=_TERCILE_RULE_V1["version"],
-                        mapping_sha256=_TERCILE_RULE_SHA256,
-                        status="metric_unavailable", exposure_type=exposure_type,
-                        bucket=None, value=None, snapshot_at=str(day_ts.date()),
-                        ts_code=ts_code, source="pool_metrics_d_close")
-        bucket = "|".join(f"{m}_{buckets[m]}" for m in metrics if m in buckets)
+            if t is None:
+                return _row(row_id, dim,
+                            mapping_id=f"{row_id.lower()}_style_terciles",
+                            mapping_version=_TERCILE_RULE_V1["version"],
+                            mapping_sha256=_TERCILE_RULE_SHA256,
+                            status="metric_unavailable",
+                            exposure_type=exposure_type,
+                            bucket=None, value=None,
+                            snapshot_at=str(day_ts.date()),
+                            ts_code=ts_code, source="pool_metrics_d_close")
+            buckets[m] = t
+            values[m] = float(me[m])
+        bucket = "|".join(f"{m}_{buckets[m]}" for m in metrics)
         return _row(row_id, dim, mapping_id=f"{row_id.lower()}_style_terciles",
                     mapping_version=_TERCILE_RULE_V1["version"],
                     mapping_sha256=_TERCILE_RULE_SHA256, status="mapped",
@@ -234,14 +288,15 @@ def build_ms_exposure_rows(ts_code: str, day, *, cutoff, pool_metrics,
     l1 = industry_as_of(ts_code, day_ts, "L1")
 
     # ---- MS03 行业·概念:PIT 行业 + THS 概念(快照门) ----
-    concepts, ths_snapshot = [], None
-    if isinstance(ths_members, pd.DataFrame) and len(ths_members):
-        fetched = pd.Timestamp(str(ths_members["fetched_at"].iloc[0]))
-        if fetched <= cut_ts:                      # M4:未来快照套历史 = 省略
-            ths_snapshot = fetched.isoformat()
-            concepts = sorted(
-                ths_members[ths_members["con_code"] == ts_code]["ts_code"]
-                .astype(str).unique().tolist())
+    # round-1 P1#1:经 select_ths_snapshot 选定**唯一最新 <= cutoff** 的完整
+    # 快照——混合新旧快照的帧不再漏未来概念,且与行序无关;快照内容哈希
+    # 进 value(P1#2 的内容身份)
+    snap, ths_snapshot, ths_content_sha = select_ths_snapshot(ths_members, cut_ts)
+    concepts = []
+    if ths_snapshot is not None:
+        concepts = sorted(
+            snap[snap["con_code"] == ts_code]["ts_code"]
+            .astype(str).unique().tolist())
     if l1 is None:
         rows.append(_row("MS03", "industry_concept_prosperity",
                          mapping_id="ms03_industry_concept_tags",
@@ -258,6 +313,8 @@ def build_ms_exposure_rows(ts_code: str, day, *, cutoff, pool_metrics,
             # 行业仍可映射;概念按 M4 省略——状态用 mapped(行业面成立),
             # value.concepts=[] + snapshot_at=None 忠实呈现省略
             val["concepts_omitted"] = "no_contemporaneous_snapshot"
+        else:
+            val["ths_content_sha256"] = ths_content_sha   # P1#2:快照内容身份
         rows.append(_row("MS03", "industry_concept_prosperity",
                          mapping_id="ms03_industry_concept_tags",
                          mapping_version=_MS03_RULE_V1["version"],

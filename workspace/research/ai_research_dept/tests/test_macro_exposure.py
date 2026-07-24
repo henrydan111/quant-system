@@ -36,12 +36,12 @@ def mappings():
     return load_default_mappings()
 
 
-def _pool(n=9, include=SMIC):
+def _pool(n=9, include=SMIC, **override):
     rows = [{"ts_code": f"00000{i}.SZ", "float_mv": (i + 1) * 1e9,
              "turnover_20d": (i + 1) * 0.5, "vol_20d": (i + 1) * 0.05}
             for i in range(n - 1)]
     rows.append({"ts_code": include, "float_mv": 5e9, "turnover_20d": 2.0,
-                 "vol_20d": 0.2})
+                 "vol_20d": 0.2, **override})
     return pd.DataFrame(rows)
 
 
@@ -170,6 +170,96 @@ def test_unmapped_industry_fail_closed(mappings, monkeypatch):
     for i in (2, 3, 4):
         assert rows[i]["mapping_status"] == "unmapped_industry"
         assert rows[i]["exposure_value"] is None
+
+
+# ------------------------------------------------ round-1 P1 regressions
+
+def test_mixed_snapshot_frame_uses_only_the_latest_eligible(mappings):
+    # P1#1 (the reviewer's probe): an old + a FUTURE snapshot in one frame —
+    # only the latest <= cutoff snapshot's members may be used, and the result
+    # must be identical under row reordering
+    import numpy as np
+    old = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+           "fetched_at": "2025-01-01T00:00:00"}
+    fut = {"ts_code": "FUTURE.TI", "con_code": SMIC, "con_name": "x",
+           "fetched_at": "2026-07-09T13:53:14"}
+    for order in ([old, fut], [fut, old]):
+        rows = build_ms_exposure_rows(
+            SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+            ths_members=pd.DataFrame(order), mappings=mappings)
+        ms03 = rows[2]
+        assert ms03["exposure_value"]["concepts"] == ["883300.TI"]
+        assert "FUTURE.TI" not in str(ms03["exposure_value"])
+        assert ms03["snapshot_effective_at"] == "2025-01-01T00:00:00"
+
+
+def test_older_of_two_eligible_snapshots_is_not_used(mappings):
+    # two PAST snapshots: only the LATEST one's membership counts
+    s1 = {"ts_code": "OLD.TI", "con_code": SMIC, "con_name": "x",
+          "fetched_at": "2024-06-01T00:00:00"}
+    s2 = {"ts_code": "NEW.TI", "con_code": SMIC, "con_name": "x",
+          "fetched_at": "2025-01-10T00:00:00"}
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=pd.DataFrame([s1, s2]),
+                                  mappings=mappings)
+    assert rows[2]["exposure_value"]["concepts"] == ["NEW.TI"]
+    assert rows[2]["snapshot_effective_at"] == "2025-01-10T00:00:00"
+
+
+def test_partial_metric_is_metric_unavailable_not_partial_mapped(mappings):
+    # P1#3 (the reviewer's probe): NaN float_mv with a valid vol_20d must be
+    # the WHOLE row metric_unavailable — never a partial 'mapped/vol_20d_high'
+    rows = build_ms_exposure_rows(
+        SMIC, DAY, cutoff=CUT, pool_metrics=_pool(float_mv=float("nan")),
+        ths_members=_ths(), mappings=mappings)
+    ms01 = rows[0]
+    assert ms01["mapping_status"] == "metric_unavailable"
+    assert ms01["exposure_bucket"] is None and ms01["exposure_value"] is None
+
+
+def test_bundle_is_role_labelled_and_complete(mappings):
+    # P1#2: swapping policy/shock roles must change the bundle; the MS03 rule
+    # and the selected THS snapshot identity are inside it
+    h = exposure_mapping_bundle_sha256(mappings)
+    swapped = {"policy": mappings["shock"], "shock": mappings["policy"]}
+    assert exposure_mapping_bundle_sha256(swapped) != h
+    with_snap = exposure_mapping_bundle_sha256(
+        mappings, ths_snapshot=("2025-01-01T00:00:00", "a" * 64))
+    assert with_snap != h
+    other_content = exposure_mapping_bundle_sha256(
+        mappings, ths_snapshot=("2025-01-01T00:00:00", "b" * 64))
+    assert other_content != with_snap                  # content identity counts
+
+
+def test_snapshot_content_sha_lands_in_ms03(mappings):
+    from workspace.research.ai_research_dept.engine.macro_exposure import (
+        select_ths_snapshot,
+    )
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=_ths(), mappings=mappings)
+    _, _, content = select_ths_snapshot(_ths(), CUT)
+    assert rows[2]["exposure_value"]["ths_content_sha256"] == content
+    assert len(content) == 64
+
+
+def test_degenerate_distribution_refuses_to_bucket(mappings):
+    # P2#2 frozen rule: all-equal pool values = no meaningful terciles
+    flat = pd.DataFrame([{"ts_code": f"0000{i:02d}.SZ", "float_mv": 1e9,
+                          "turnover_20d": 1.0, "vol_20d": 0.1}
+                         for i in range(8)]
+                        + [{"ts_code": SMIC, "float_mv": 1e9,
+                            "turnover_20d": 1.0, "vol_20d": 0.1}])
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=flat,
+                                  ths_members=_ths(), mappings=mappings)
+    assert rows[0]["mapping_status"] == "metric_unavailable"
+    assert rows[1]["mapping_status"] == "metric_unavailable"
+
+
+def test_tiny_pool_refuses_to_bucket(mappings):
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                  pool_metrics=_pool(n=4),
+                                  ths_members=_ths(), mappings=mappings)
+    assert rows[0]["mapping_status"] == "metric_unavailable"   # <6 observations
 
 
 def test_deterministic(mappings):
