@@ -33,6 +33,7 @@ ts_code / dimension / source`;`mapped_no_exposure → exposure_value=null`
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from pathlib import Path
 
@@ -158,23 +159,37 @@ def load_default_mappings() -> dict:
     }
 
 
+#: 字符串时间戳的规范格式(re-review#7 P1):**必须带显式时分秒**——
+#: `YYYY-MM-DD[T ]HH:MM:SS[.ffffff][Z|±HH:MM]`。日期串("2025-01-27"/
+#: "20250127")、自然语言("Jan 27 2025")、相对时间("today"/"now")、
+#: 纯时间("12:00")一律拒:与裸 date 同理,无时分秒证明不了早于含时刻的
+#: cutoff;相对串更会随运行时刻漂移。
+_FETCHED_AT_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?$")
+
+
 def _parse_fetched_at(v):
-    """`fetched_at` 的**正向允许列表**解析(re-review#6 P1)。只接受:
+    """`fetched_at` 的**正向允许列表**解析(re-review#6/#7 P1)。只接受:
 
-    - `str`:经 `pd.Timestamp` 解析,失败/NaT → None;
-    - `datetime.datetime` / `pd.Timestamp`:直接接受;
+    - `str` 且匹配 `_FETCHED_AT_RE`(规范格式、显式时分秒)——re-review#7:
+      宽松 `pd.Timestamp` 会把 "2025-01-27" 解析成午夜(与被拒的裸 date 同一
+      不充分性)、把 "today"/"12:00" 解析成**运行时刻**;类型允许 ≠ 完整时间
+      戳允许;
+    - `datetime.datetime` / `pd.Timestamp` 值:直接接受;
 
-    带时区值统一折算 Asia/Shanghai 后去 tz(NF canon 同约定——修掉"带时区源
-    对无时区 cutoff 抛 TypeError"的边界);**裸 `datetime.date` 拒**(默认
-    午夜的假设不足以对含具体时刻的 cutoff 证明 PIT);其余任何类型(NumPy
-    数值标量、int/float/bool、None、NaT…)一律 None = 源畸形。绝不整列
-    `pd.to_datetime`——数值会被当纳秒纪元解析成 1970 穿过 cutoff 门。"""
+    带时区值统一折算 Asia/Shanghai 后去 tz(NF canon 同约定);**裸
+    `datetime.date` 拒**(午夜假设不足以对含时刻的 cutoff 证明 PIT);其余
+    任何类型(NumPy 标量、int/float/bool、None、NaT…)一律 None = 源畸形。
+    绝不整列 `pd.to_datetime`——数值会被当纳秒纪元解析成 1970 穿过 cutoff 门。"""
     import datetime as _dt
     if isinstance(v, str):
-        try:
-            t = pd.Timestamp(v)
-        except (ValueError, TypeError):
+        if not _FETCHED_AT_RE.fullmatch(v.strip()):
             return None
+        try:
+            t = pd.Timestamp(v.strip())
+        except (ValueError, TypeError):
+            return None                            # 形合法但值非法(13 月等)
     elif isinstance(v, _dt.datetime):              # 含 pd.Timestamp
         t = pd.Timestamp(v)
     elif isinstance(v, _dt.date):

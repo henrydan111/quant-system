@@ -318,6 +318,30 @@ def test_numpy_scalar_timestamp_is_source_failure(mappings):
             assert "FUTURE.TI" not in str(rows[2]["exposure_value"])
 
 
+def test_ambiguous_string_timestamps_are_source_failure(mappings):
+    # re-review#7 P1 (the reviewer's probe): a date-only string parses to
+    # midnight (the same insufficiency as the refused bare date), and
+    # relative/time-only strings parse to the RUNTIME instant. All refuse; a
+    # canonical explicit-time string still works.
+    for bad in ("2025-01-27", "20250127", "Jan 27 2025", "today", "now",
+                "12:00"):
+        row = {"ts_code": "FUTURE.TI", "con_code": SMIC, "con_name": "x",
+               "fetched_at": bad}
+        rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT,
+                                      pool_metrics=_pool(),
+                                      ths_members=pd.DataFrame([row]),
+                                      mappings=mappings)
+        assert rows[2]["mapping_status"] == "source_unavailable", bad
+        assert "FUTURE.TI" not in str(rows[2]["exposure_value"])
+    ok = {"ts_code": "883300.TI", "con_code": SMIC, "con_name": "x",
+          "fetched_at": "2025-01-01 07:30:00"}      # space form, explicit time
+    rows = build_ms_exposure_rows(SMIC, DAY, cutoff=CUT, pool_metrics=_pool(),
+                                  ths_members=pd.DataFrame([ok]),
+                                  mappings=mappings)
+    assert rows[2]["mapping_status"] == "mapped"
+    assert rows[2]["exposure_value"]["concepts"] == ["883300.TI"]
+
+
 def test_tz_aware_and_bare_date_boundaries(mappings):
     # re-review#6 boundary rulings: tz-aware ISO strings normalize to CN-naive
     # (no TypeError, correct instant); a bare datetime.date refuses (midnight
